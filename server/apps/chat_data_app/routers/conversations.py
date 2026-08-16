@@ -681,6 +681,13 @@ async def _resume_question(
         raise AgentQuestionNotFoundError("待回答问题不存在")
     pending = await agent_inbox_service.get_pending_question(conversation_id, user_id)
     turn_id = str((pending or {}).get("turn_id") or "")
+    pending_run_id = str((pending or {}).get("run_id") or "")
+    if not pending_run_id:
+        raise AgentQuestionNotFoundError("待回答问题不存在")
+    # The interrupt status is written before question_requested/done are
+    # published. Wait for the old segment's done event so a different worker
+    # cannot start the resume subscription from inside the old segment.
+    await agent_run_event_service.wait_for_done(pending_run_id)
     run_id, runtime_context = await agent_inbox_service.claim_question_answer(
         conversation_id,
         user_id,

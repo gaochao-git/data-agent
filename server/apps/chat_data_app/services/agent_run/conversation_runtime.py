@@ -8,7 +8,6 @@ from typing import Any
 
 
 AsyncHook = Callable[[], Awaitable[None]]
-AsyncPredicate = Callable[[], Awaitable[bool]]
 AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]
 ResourceFinalizer = Callable[[bool], Awaitable[None]]
@@ -24,7 +23,6 @@ async def stream_agent_turn(
     before_stream: Callable[[], Awaitable[bool]] | None = None,
     after_turn: AsyncHook | None = None,
     after_stream: AsyncHook | None = None,
-    continue_stream: AsyncPredicate | None = None,
     on_interrupt: AsyncInterruptHook | None = None,
     on_disconnect: AsyncHook | None = None,
     finalize_stream_kwargs: dict[str, Any] | None = None,
@@ -39,39 +37,47 @@ async def stream_agent_turn(
     runs after the model stream but before ``message_end`` is emitted.
     """
     resources_finalized = False
+    user_persistence_task: asyncio.Task | None = None
+
+    async def wait_user_persistence() -> None:
+        if user_persistence_task is not None:
+            await user_persistence_task
+
     try:
-        await persist_user_message()
+        # The user message is already visible in the local UI. Persist it in
+        # parallel with Agent startup, but wait before final history is saved
+        # so the durable event order remains user -> assistant/tool events.
+        user_persistence_task = asyncio.create_task(persist_user_message())
         if before_stream and not await before_stream():
+            await wait_user_persistence()
             return
 
-        while True:
-            async for sse_event in stream_adapter.stream_events():
-                yield sse_event
+        async for sse_event in stream_adapter.stream_events():
+            yield sse_event
 
-            end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
-            await persist_turn_history()
-            if after_stream:
-                await after_stream()
-            pending_interrupt = getattr(stream_adapter, "pending_interrupt", None)
-            interrupt_payload = pending_interrupt() if callable(pending_interrupt) else None
-            if interrupt_payload:
-                if on_interrupt:
-                    await on_interrupt(interrupt_payload)
-                if finalize_resources:
-                    await finalize_resources(True)
-                    resources_finalized = True
-                yield format_sse("question_requested", interrupt_payload)
-                yield format_sse("done", "[DONE]")
-                return
-            if stream_adapter.disconnected:
-                if on_disconnect:
-                    await on_disconnect()
-                if finalize_resources:
-                    await finalize_resources(True)
-                    resources_finalized = True
-                return
-            if not continue_stream or not await continue_stream():
-                break
+        await wait_user_persistence()
+        end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
+        await persist_turn_history()
+        if after_stream:
+            await after_stream()
+        pending_interrupt = getattr(stream_adapter, "pending_interrupt", None)
+        interrupt_payload = pending_interrupt() if callable(pending_interrupt) else None
+        if interrupt_payload:
+            if on_interrupt:
+                await on_interrupt(interrupt_payload)
+            if finalize_resources:
+                await finalize_resources(True)
+                resources_finalized = True
+            yield format_sse("question_requested", interrupt_payload)
+            yield format_sse("done", "[DONE]")
+            return
+        if stream_adapter.disconnected:
+            if on_disconnect:
+                await on_disconnect()
+            if finalize_resources:
+                await finalize_resources(True)
+                resources_finalized = True
+            return
         if finalize_resources:
             await finalize_resources(True)
             resources_finalized = True
@@ -80,13 +86,22 @@ async def stream_agent_turn(
         yield format_sse("message_end", end_payload)
         yield format_sse("done", "[DONE]")
     except asyncio.CancelledError:
+        if user_persistence_task and not user_persistence_task.done():
+            user_persistence_task.cancel()
+        if user_persistence_task:
+            await asyncio.gather(user_persistence_task, return_exceptions=True)
         if finalize_resources:
             await finalize_resources(cleanup_success_on_cancel)
             resources_finalized = True
         raise
     except Exception:
+        if user_persistence_task:
+            await asyncio.gather(user_persistence_task, return_exceptions=True)
         await persist_partial_history()
         raise
     finally:
+        if user_persistence_task and not user_persistence_task.done():
+            user_persistence_task.cancel()
+            await asyncio.gather(user_persistence_task, return_exceptions=True)
         if finalize_resources and not resources_finalized:
             await finalize_resources(False)

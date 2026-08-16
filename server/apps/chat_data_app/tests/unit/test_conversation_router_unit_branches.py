@@ -13,6 +13,10 @@ def payload(response):
     return json.loads(response.body.decode("utf-8"))
 
 
+async def _async_value(value):
+    return value
+
+
 class FakeRequest:
     def __init__(self, path="/api/chatdata/conversations"):
         self.url = SimpleNamespace(path=path)
@@ -625,13 +629,14 @@ async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatc
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):
-        return {"question_id": "q1", "turn_id": "turn-1", "questions": []}
+        return {"run_id": "run-1", "question_id": "q1", "turn_id": "turn-1", "questions": []}
 
     async def duplicate(*_args, **_kwargs):
         raise conversation_router.AgentQuestionNotWaitingError("问题已回答或运行已恢复")
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", duplicate)
 
     response = await conversation_router.answer_question(
@@ -652,7 +657,7 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):
-        return {"question_id": "q1", "turn_id": "turn-1", "questions": []}
+        return {"run_id": "run-1", "question_id": "q1", "turn_id": "turn-1", "questions": []}
 
     async def claim(*_args, **_kwargs):
         return "run-1", {"query": "查询订单"}
@@ -665,6 +670,7 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "restore_question_answer", restore)
     monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", fail_resume)
@@ -675,3 +681,37 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
     # The HTTP request has no owner token. Runtime owns rollback/recovery after
     # it claims the pending resume, so the router must not mutate the Run here.
     assert calls == {}
+
+
+@pytest.mark.asyncio
+async def test_resume_question_subscribes_after_existing_question_events(router_state, monkeypatch):
+    calls = {}
+
+    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+        return "chat_data"
+
+    async def pending(_conversation_id, _user_id):
+        return {"run_id": "run-1", "question_id": "q1", "turn_id": "turn-1", "questions": []}
+
+    async def claim(*_args, **_kwargs):
+        return "run-1", {"query": "查询订单"}
+
+    async def resume(**kwargs):
+        calls["resume"] = kwargs
+        return "stream"
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
+    monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", resume)
+
+    result = await conversation_router._resume_question(
+        "conv-1",
+        "q1",
+        {"answers": []},
+        FakeRequest(),
+    )
+
+    assert result == "stream"
+    assert calls["resume"]["run_id"] == "run-1"

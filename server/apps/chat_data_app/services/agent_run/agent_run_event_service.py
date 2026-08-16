@@ -14,6 +14,7 @@ from .redis_event_bus import RedisEventBus, build_redis_event_bus
 
 _EVENT_NAME_RE = re.compile(r"(?:^|\n)event:\s*([^\n]+)")
 logger = get_logger(__name__)
+QUESTION_DONE_WAIT_SECONDS = 2.0
 
 
 class AgentRunEventService:
@@ -28,6 +29,10 @@ class AgentRunEventService:
         self._inbox_dao = inbox_dao
         self._event_dao = event_dao
         self._bus = bus or build_redis_event_bus()
+        # A Run is published by one owner in order. Avoid an EXISTS round trip
+        # for every token while still recovering the sequence on the first
+        # event handled by a new worker process.
+        self._sequence_initialized_runs: set[str] = set()
 
     @property
     def bus(self) -> RedisEventBus:
@@ -47,19 +52,67 @@ class AgentRunEventService:
         # transaction or lock the Run row for every visible event. Sequence
         # recovery is the only exceptional database read, needed after Redis
         # stream expiration or Redis data loss.
+        event_type = self._event_type(payload)
         initial_sequence = 0
-        if not await self._bus.sequence_exists(run_id):
+        needs_sequence_check = run_id not in self._sequence_initialized_runs
+        if needs_sequence_check and not await self._bus.sequence_exists(run_id):
             async with get_session() as session:
                 initial_sequence = await self._event_dao.get_max_sequence(session, run_id=run_id)
-        await self._bus.publish(
-            run_id=run_id,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            event_id=event_id,
-            event_type=self._event_type(payload),
-            payload=payload,
-            initial_sequence=initial_sequence,
-        )
+        try:
+            await self._bus.publish(
+                run_id=run_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                event_id=event_id,
+                event_type=event_type,
+                payload=payload,
+                initial_sequence=initial_sequence,
+            )
+        except Exception:
+            if needs_sequence_check:
+                self._sequence_initialized_runs.discard(run_id)
+            raise
+        self._sequence_initialized_runs.add(run_id)
+        if event_type == "done":
+            self._sequence_initialized_runs.discard(run_id)
+
+    async def latest_event_id(self, run_id: str) -> str:
+        """Get a resume cursor before a checkpoint run is resumed.
+
+        A waiting-user Run has already emitted its terminal SSE event. The
+        answer endpoint must start after that event, otherwise the old
+        question card and ``done`` event are replayed as if they were part of
+        the resumed answer.
+        """
+        try:
+            event_id = await self._bus.latest_run_event_id(run_id)
+            if event_id:
+                return event_id
+        except Exception:
+            logger.warning("读取 Redis Run 尾游标失败，回退持久化事件: run_id=%s", run_id, exc_info=True)
+
+        try:
+            async with get_session() as session:
+                event_id = await self._event_dao.get_latest_event_id(session, run_id=run_id)
+        except Exception:
+            logger.error("读取 Run 恢复游标失败: run_id=%s", run_id, exc_info=True)
+            raise
+        return event_id or "0-0"
+
+    async def wait_for_done(self, run_id: str, timeout: float = QUESTION_DONE_WAIT_SECONDS) -> bool:
+        """Wait briefly for the interrupt segment's terminal SSE event."""
+        deadline = asyncio.get_running_loop().time() + max(timeout, 0.0)
+        while True:
+            try:
+                event = await self._bus.latest_run_event(run_id)
+            except Exception:
+                logger.warning("等待问题 Run 终止事件失败，继续恢复: run_id=%s", run_id, exc_info=True)
+                return False
+            if event and event.get("event_type") == "done":
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
 
     async def stream(
         self,
@@ -139,6 +192,12 @@ class AgentRunEventService:
     async def _resolve_sequence(self, run_id: str, cursor: str) -> int:
         if cursor == "0-0":
             return 0
+        try:
+            sequence_no = await self._bus.run_event_sequence(run_id, cursor)
+            if sequence_no is not None:
+                return sequence_no
+        except Exception:
+            logger.warning("从 Redis 解析 Run 事件游标失败，回退持久化事件: run_id=%s", run_id, exc_info=True)
         try:
             async with get_session() as session:
                 return await self._event_dao.get_sequence_by_event_id(

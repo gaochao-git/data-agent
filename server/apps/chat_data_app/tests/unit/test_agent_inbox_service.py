@@ -89,8 +89,6 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
     assert [message.id for message in claimed.messages] == [first_id, second_id]
 
     await service.mark_consumed(run_id, [first_id, second_id])
-    final_claim = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一", owners[run_id])
-    assert final_claim.messages == []
     await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
 
     async with get_session() as session:
@@ -237,21 +235,23 @@ async def test_agent_question_validates_options_and_supports_cancel(inbox_servic
 
 
 @pytest.mark.asyncio
-async def test_agent_inbox_final_check_claims_message_before_finishing(inbox_service):
+async def test_agent_inbox_completion_schedules_next_run(inbox_service):
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "结束边界消息")
 
-    claimed = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一")
+    next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
 
-    assert [message.id for message in claimed.messages] == [message_id]
+    assert next_run_id
     async with get_session() as session:
-        run = (await session.execute(select(ChatDataAgentInbox).where(
-            ChatDataAgentInbox.run_id == run_id,
-            ChatDataAgentInbox.record_type == "run",
-        ))).scalar_one()
-    assert run.status == "active"
+        rows = list((await session.execute(
+            select(ChatDataAgentInbox).order_by(ChatDataAgentInbox.id)
+        )).scalars())
+    assert rows[0].status == "finished"
+    assert rows[1].run_id == next_run_id
+    assert rows[1].status == "claimed"
+    assert rows[1].message_id == message_id
 
 
 @pytest.mark.asyncio
@@ -360,9 +360,8 @@ async def test_cancelling_run_cannot_claim_messages(inbox_service):
     assert await service.cancel_active_run("conv-1", "user-1", "用户一", run_id) is True
 
     assert (await service.claim_pending_messages(run_id)).messages == []
-    assert (await service.claim_pending_or_finish_run(
-        "conv-1", "user-1", run_id, "用户一",
-    )).messages == []
+    assert await service.complete_run(run_id, "user-1", "用户一", owners[run_id]) is None
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
 
     async with get_session() as session:
         rows = list((await session.execute(
@@ -446,8 +445,8 @@ async def test_steering_middleware_persists_and_admits_next_step(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_steering_middleware_injects_before_plain_model_call(monkeypatch):
-    """放宽注入条件后，纯对话（HumanMessage 结尾）也会在模型调用前领取并注入。"""
+async def test_steering_middleware_does_not_inject_before_plain_model_call(monkeypatch):
+    """普通模型轮次结束前不领取 next-step，避免打断当前助手输出。"""
     claim_calls = 0
 
     class FakeInboxService:
@@ -480,9 +479,9 @@ async def test_steering_middleware_injects_before_plain_model_call(monkeypatch):
         "messages": [inbox_module.HumanMessage(content="普通对话")],
     }, None)
 
-    assert [message.content for message in update["messages"]] == ["追加要求"]
-    assert stream_events == [{"type": "inbox_admitted", "message_ids": ["message-2"]}]
-    assert claim_calls == 1
+    assert update is None
+    assert stream_events == []
+    assert claim_calls == 0
 
 
 @pytest.mark.asyncio
@@ -537,7 +536,10 @@ async def test_steering_middleware_does_not_ack_when_admission_persistence_fails
     )
 
     with pytest.raises(RuntimeError, match="event store unavailable"):
-        await middleware.abefore_model({"messages": [inbox_module.HumanMessage(content="原问题")]}, None)
+        await middleware.abefore_model({"messages": [
+            inbox_module.HumanMessage(content="原问题"),
+            ToolMessage(content="工具结果", tool_call_id="call-1"),
+        ]}, None)
 
     assert stream_events == []
     assert tracker.drain() == []
@@ -545,7 +547,7 @@ async def test_steering_middleware_does_not_ack_when_admission_persistence_fails
 
 @pytest.mark.asyncio
 async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_service):
-    service, create_thread, _get_session, owners = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
 
@@ -555,13 +557,20 @@ async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_s
     steer_claimed = await service.claim_pending_messages(run_id, queue_type="next-step")
     assert [message.id for message in steer_claimed.messages] == [steer_id]
 
-    turn_claimed = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一")
-    assert [message.id for message in turn_claimed.messages] == [next_id]
+    await service.mark_consumed(run_id, [steer_id])
+    next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+    assert next_run_id
+    async with get_session() as session:
+        row = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == next_run_id,
+            ChatDataAgentInbox.message_id == next_id,
+        ))).scalar_one()
+    assert row.status == "claimed"
 
 
 @pytest.mark.asyncio
 async def test_agent_inbox_enqueue_rejects_unknown_queue_type(inbox_service):
-    service, create_thread, _get_session, owners = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     await service.start_run("conv-1", "user-1", "用户一")
 
@@ -644,20 +653,27 @@ async def test_agent_inbox_update_requires_active_run_and_ownership(inbox_servic
 
 
 @pytest.mark.asyncio
-async def test_agent_inbox_turn_end_claims_all_next_step_and_one_next_turn(inbox_service):
-    service, create_thread, _get_session, owners = inbox_service
+async def test_agent_inbox_completion_claims_all_next_step_and_one_next_turn(inbox_service):
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     next_id = await service.enqueue_message("conv-1", "user-1", "用户一", "下一轮任务")
     next_id_2 = await service.enqueue_message("conv-1", "user-1", "用户一", "再下一轮任务")
     steer_id = await service.enqueue_message("conv-1", "user-1", "用户一", "来不及插入的立即任务", queue_type="next-step")
 
-    claimed = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一")
-
-    assert [message.id for message in claimed.messages] == [steer_id, next_id]
-    await service.mark_consumed(run_id, [steer_id, next_id])
-    next_claimed = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一")
-    assert [message.id for message in next_claimed.messages] == [next_id_2]
+    await service.claim_pending_messages(run_id, queue_type="next-step")
+    await service.mark_consumed(run_id, [steer_id])
+    next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+    assert next_run_id
+    async with get_session() as session:
+        rows = list((await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == next_run_id,
+            ChatDataAgentInbox.record_type == "message",
+        ).order_by(ChatDataAgentInbox.id))).scalars())
+    assert [(row.message_id, row.status) for row in rows] == [
+        (next_id, "claimed"),
+        (next_id_2, "pending"),
+    ]
 
 
 @pytest.mark.asyncio

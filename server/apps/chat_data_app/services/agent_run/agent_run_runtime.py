@@ -60,8 +60,11 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
-        if run_id in self._tasks:
+        existing = self._tasks.get(run_id)
+        if existing is not None and not existing.done():
             return
+        if existing is not None:
+            self._tasks.pop(run_id, None)
         task = asyncio.create_task(
             self._execute(
                 run_id=run_id,
@@ -72,7 +75,25 @@ class AgentRunRuntime:
             name=f"chatdata-agent-run-{run_id}",
         )
         self._tasks[run_id] = task
-        task.add_done_callback(lambda _task: self._tasks.pop(run_id, None))
+        task.add_done_callback(lambda completed: self._forget_task(run_id, completed))
+
+    def _forget_task(self, run_id: str, completed: asyncio.Task) -> None:
+        if self._tasks.get(run_id) is completed:
+            self._tasks.pop(run_id, None)
+
+    async def wait_for_existing_run(self, run_id: str) -> None:
+        """Wait for the previous execution segment before checkpoint resume."""
+        task = self._tasks.get(run_id)
+        if task is None or task is asyncio.current_task():
+            return
+        try:
+            # The HTTP/SSE subscriber must not cancel the background Run if it
+            # disconnects while waiting for the old question segment to close.
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return
+            raise
 
     async def stop(self) -> None:
         if self._poll_task:

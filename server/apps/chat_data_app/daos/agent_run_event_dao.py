@@ -106,5 +106,22 @@ class AgentRunEventDao:
         )
         return int(result or 0)
 
+    async def get_latest_event_id(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: str,
+    ) -> str | None:
+        result = await session.scalar(
+            select(ChatDataAgentRunEvent.event_id)
+            .where(
+                ChatDataAgentRunEvent.run_id == run_id,
+                ChatDataAgentRunEvent.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentRunEvent.sequence_no.desc())
+            .limit(1)
+        )
+        return str(result) if result else None
+
 
 agent_run_event_dao = AgentRunEventDao()

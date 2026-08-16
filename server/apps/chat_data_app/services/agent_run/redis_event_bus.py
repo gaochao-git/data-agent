@@ -128,6 +128,30 @@ class RedisEventBus:
     async def run_stream_exists(self, run_id: str) -> bool:
         return bool(await self.redis.exists(self.run_stream_key(run_id)))
 
+    async def latest_run_event_id(self, run_id: str) -> str | None:
+        """Return the current tail cursor without consuming the stream."""
+        event = await self.latest_run_event(run_id)
+        return event["stream_id"] if event else None
+
+    async def latest_run_event(self, run_id: str) -> dict[str, str] | None:
+        rows = await self.redis.xrevrange(self.run_stream_key(run_id), count=1)
+        if not rows:
+            return None
+        stream_id, fields = rows[0]
+        return self._decode_event(stream_id, fields)
+
+    async def run_event_sequence(self, run_id: str, event_id: str) -> int | None:
+        """Resolve a live Redis cursor to its Run-local sequence number."""
+        rows = await self.redis.xrange(
+            self.run_stream_key(run_id),
+            min=event_id,
+            max=event_id,
+            count=1,
+        )
+        if not rows:
+            return None
+        return int(rows[0][1].get("sequence_no") or 0)
+
     async def read_persistence_batch(
         self,
         *,

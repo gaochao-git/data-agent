@@ -84,7 +84,6 @@ def _stub_conversation_event_writes(monkeypatch):
 
     monkeypatch.setattr(handler_module.agent_inbox_service, "start_run", start_run)
     monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_messages", no_messages)
-    monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_or_finish_run", no_messages)
     monkeypatch.setattr(handler_module.agent_inbox_service, "mark_consumed", noop)
     monkeypatch.setattr(handler_module.agent_inbox_service, "finish_run", noop)
     monkeypatch.setattr(handler_module.agent_inbox_service, "complete_run", noop)

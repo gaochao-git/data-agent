@@ -4,6 +4,15 @@ from apps.chat_data_app.services.agent_run.agent_run_event_service import AgentR
 
 
 class _Bus:
+    async def latest_run_event(self, _run_id):
+        return {"stream_id": "1740000000000-0", "event_type": "done"}
+
+    async def run_event_sequence(self, _run_id, _cursor):
+        return 2
+
+    async def latest_run_event_id(self, _run_id):
+        return "1740000000000-0"
+
     async def read_run(self, _run_id, _cursor):
         return [{
             "stream_id": "1740000000000-0",
@@ -50,12 +59,160 @@ async def test_append_does_not_open_mysql_transaction_when_sequence_exists(monke
 
 
 @pytest.mark.asyncio
+async def test_append_checks_redis_sequence_only_once_per_run(monkeypatch):
+    class Bus:
+        def __init__(self):
+            self.sequence_checks = 0
+            self.published = []
+
+        async def sequence_exists(self, _run_id):
+            self.sequence_checks += 1
+            return True
+
+        async def publish(self, **kwargs):
+            self.published.append(kwargs)
+
+    bus = Bus()
+    service = AgentRunEventService(bus=bus)
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        lambda: (_ for _ in ()).throw(AssertionError("序号存在时不应访问 MySQL")),
+    )
+
+    for event_id in ("event-1", "event-2"):
+        await service.append(
+            run_id="run-1",
+            conversation_id="conversation-1",
+            user_id="user-1",
+            event_id=event_id,
+            payload="event: message\ndata: {}\n\n",
+            owner_token="owner-1",
+        )
+
+    assert bus.sequence_checks == 1
+    assert len(bus.published) == 2
+
+
+@pytest.mark.asyncio
 async def test_stream_stops_after_terminal_done_event():
     service = AgentRunEventService(bus=_Bus())
     events = [event async for event in service.stream(run_id="run-1")]
 
     assert len(events) == 1
     assert events[0]["event_type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_stream_after_resume_cursor_does_not_replay_old_question():
+    class ResumeBus:
+        async def run_event_sequence(self, _run_id, cursor):
+            assert cursor == "old-tail-0"
+            return 2
+
+        async def read_run(self, _run_id, cursor):
+            assert cursor == "old-tail-0"
+            return [
+                {
+                    "stream_id": "new-message-0",
+                    "event_type": "message",
+                    "sequence_no": "3",
+                    "payload": "event: message\ndata: {\"content\": \"继续\"}\n\n",
+                },
+                {
+                    "stream_id": "new-done-0",
+                    "event_type": "done",
+                    "sequence_no": "4",
+                    "payload": "event: done\ndata: [DONE]\n\n",
+                },
+            ]
+
+    service = AgentRunEventService(bus=ResumeBus())
+    events = [event async for event in service.stream(run_id="run-1", last_event_id="old-tail-0")]
+
+    assert [event["event_type"] for event in events] == ["message", "done"]
+    assert all("question_requested" not in event["payload"] for event in events)
+@pytest.mark.asyncio
+async def test_latest_event_id_prefers_redis_tail(monkeypatch):
+    class Bus:
+        async def latest_run_event_id(self, _run_id):
+            return "1740000000002-0"
+
+    service = AgentRunEventService(bus=Bus())
+
+    def unexpected_database_access():
+        raise AssertionError("Redis 可用时不应读取 MySQL 恢复游标")
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        unexpected_database_access,
+    )
+
+    assert await service.latest_event_id("run-1") == "1740000000002-0"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_done_waits_until_terminal_event():
+    class Bus:
+        def __init__(self):
+            self.calls = 0
+
+        async def latest_run_event(self, _run_id):
+            self.calls += 1
+            if self.calls == 1:
+                return {"event_type": "question_requested"}
+            return {"event_type": "done"}
+
+    service = AgentRunEventService(bus=Bus())
+    assert await service.wait_for_done("run-1", timeout=0.2) is True
+
+
+@pytest.mark.asyncio
+async def test_latest_event_id_falls_back_to_mysql_when_redis_unavailable(monkeypatch):
+    class Bus:
+        async def latest_run_event_id(self, _run_id):
+            raise ConnectionError("redis unavailable")
+
+    class EventDao:
+        async def get_latest_event_id(self, _session, *, run_id):
+            assert run_id == "run-1"
+            return "1740000000003-0"
+
+    service = AgentRunEventService(bus=Bus(), event_dao=EventDao())
+
+    class Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        lambda: Session(),
+    )
+
+    assert await service.latest_event_id("run-1") == "1740000000003-0"
+
+
+@pytest.mark.asyncio
+async def test_resolve_sequence_prefers_redis_before_async_mysql_persistence(monkeypatch):
+    class Bus:
+        async def run_event_sequence(self, _run_id, event_id):
+            assert event_id == "redis-tail-0"
+            return 7
+
+    service = AgentRunEventService(bus=Bus())
+
+    def unexpected_database_access():
+        raise AssertionError("Redis 中存在游标时不应依赖异步 MySQL 持久化")
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        unexpected_database_access,
+    )
+
+    assert await service._resolve_sequence("run-1", "redis-tail-0") == 7
 
 
 @pytest.mark.asyncio

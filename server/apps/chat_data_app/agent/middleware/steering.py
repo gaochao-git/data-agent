@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from langchain.agents.middleware import before_model
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.config import get_stream_writer
 
 from ...services.agent_run.agent_inbox_service import AgentInboxService
@@ -45,7 +45,11 @@ def create_steering_middleware(
     @before_model(name="SteeringMiddleware", state_schema=state_schema)
     async def inject_steering_messages(state, _runtime):
         messages = state.get("messages") or []
-        if not messages:
+        # A next-step steer is an interruption at the tool boundary. A plain
+        # model turn must finish first; otherwise a message sent while text is
+        # streaming gets injected into the same decision and corrupts the
+        # current assistant turn.
+        if not messages or not isinstance(messages[-1], ToolMessage):
             return None
         claimed = await inbox_service.claim_pending_messages(
             run_id,

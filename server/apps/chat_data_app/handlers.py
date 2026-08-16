@@ -1251,11 +1251,13 @@ async def _run_chat_data_agent_stream(
             message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
                 message_kwargs["skill_names"] = normalized_skill_names
-            user_message = None if resume_answer is not None else _build_user_message(
-                message_content,
-                semantic_selection_event,
-                **message_kwargs,
-            )
+            user_message = None
+            if resume_answer is None and (user_query.strip() or not adopted_messages):
+                user_message = _build_user_message(
+                    message_content,
+                    semantic_selection_event,
+                    **message_kwargs,
+                )
             if resume_answer is not None:
                 initial_state = Command(resume=resume_answer)
             else:
@@ -1263,7 +1265,7 @@ async def _run_chat_data_agent_stream(
                     user_id=user_id,
                     operator_name=username,
                     conversation_id=thread_id,
-                    messages=[*(adopted_messages or []), user_message],
+                    messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
                     execution_context={
                         "datasource_id": datasource_id,
                         "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
@@ -1303,7 +1305,7 @@ async def _run_chat_data_agent_stream(
                         conversation_id=thread_id,
                         user_id=user_id,
                         username=username,
-                        turn_id=resume_turn_id or str(user_message.id or ""),
+                        turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                         state_override=state,
                     )
 
@@ -1397,7 +1399,7 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=resume_turn_id or str(user_message.id or ""),
+                    turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                 )
 
             async def persist_partial_history() -> None:
@@ -1407,7 +1409,7 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=resume_turn_id or str(user_message.id or ""),
+                    turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                 )
 
             async def log_agent_stream_done() -> None:
@@ -1416,7 +1418,7 @@ async def _run_chat_data_agent_stream(
             async def mark_waiting_for_user(question: dict[str, Any]) -> None:
                 if not run_id:
                     return
-                question["turn_id"] = resume_turn_id or str(user_message.id or "")
+                question["turn_id"] = resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or "")
                 await agent_inbox_service.mark_waiting_for_user(
                     run_id,
                     question,
@@ -1428,26 +1430,6 @@ async def _run_chat_data_agent_stream(
             async def confirm_consumed_messages() -> None:
                 if run_id:
                     await agent_inbox_service.mark_consumed(run_id, steering_tracker.drain(), owner_token)
-
-            async def continue_with_pending_messages() -> bool:
-                if not run_id:
-                    return False
-                claimed = await agent_inbox_service.claim_pending_or_finish_run(
-                    thread_id,
-                    user_id or "system",
-                    run_id,
-                    username or user_id or "system",
-                    owner_token,
-                )
-                if not claimed.messages:
-                    return False
-                await admit_inbox_messages(claimed.messages)
-                steering_tracker.record([str(message.id or "") for message in claimed.messages])
-                stream_adapter.set_input_state({"messages": claimed.messages})
-                stream_adapter.queue_event(_format_sse("inbox_admitted", {
-                    "message_ids": [str(message.id or "") for message in claimed.messages],
-                }))
-                return True
 
             async def before_stream() -> bool:
                 if request and await request.is_disconnected():
@@ -1490,7 +1472,6 @@ async def _run_chat_data_agent_stream(
                 finalize_resources=finalize_resources,
                 after_turn=log_agent_stream_done,
                 after_stream=confirm_consumed_messages,
-                continue_stream=continue_with_pending_messages,
                 on_interrupt=mark_waiting_for_user,
                 on_disconnect=cancel_disconnected_run,
             ):
@@ -1603,14 +1584,31 @@ async def resume_chat_data_question_handler(
 ) -> StreamingResponse:
     """Queue a checkpoint resume and subscribe to its durable Run events."""
     _ = runtime_context, answer, turn_id
-    agent_run_runtime.submit(
-        run_id=run_id,
-        conversation_id=conversation_id,
-        user_id=user_id,
-        operator_name=username,
-    )
+
+    async def resumed_event_stream():
+        # The first execution may still be unwinding after emitting the
+        # question card. Wait for its terminal event to be published before
+        # taking the cursor; otherwise the old ``done`` can terminate the
+        # resumed SSE immediately.
+        await agent_run_runtime.wait_for_existing_run(run_id)
+        from .services.agent_run.agent_run_event_service import agent_run_event_service
+
+        last_event_id = await agent_run_event_service.latest_event_id(run_id)
+        agent_run_runtime.submit(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+        )
+        async for event in _stream_run_events(
+            run_id,
+            last_event_id=last_event_id,
+            request=request,
+        ):
+            yield event
+
     return StreamingResponse(
-        _stream_run_events(run_id, request=request),
+        resumed_event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

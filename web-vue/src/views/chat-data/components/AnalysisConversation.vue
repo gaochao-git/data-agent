@@ -88,6 +88,7 @@ const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
 const activeRunStatus = ref<string | null>(null)
+const activeRunIsContinuation = ref(false)
 const ownedRunStorageKey = 'chatdata-active-run-conversation'
 const activeRunId = ref<string | null>(null)
 const activeRunEventId = ref('0-0')
@@ -138,6 +139,7 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
     activeRunStatus.value = response.data?.run_status ?? null
+    activeRunIsContinuation.value = Boolean(response.data?.is_continuation)
     emit(
       'runStatusChanged',
       conversationId,
@@ -193,8 +195,8 @@ const recoverInterruptedPageRun = async () => {
   }
   const runId = activeRunId.value
   await submitAnalysisQuery('', {
-    appendUserMessage: false,
-    preserveAssistant: true,
+      appendUserMessage: false,
+      preserveAssistant: !activeRunIsContinuation.value,
     responseFactory: signal => streamRunEvents(
       conversationId,
       runId,
@@ -500,6 +502,7 @@ type AnalysisSubmitOptions = {
   responseFactory?: (signal: AbortSignal) => Promise<Response>
   preserveAssistant?: boolean
   interruptedQuestion?: PendingUserQuestion
+  autoResumeQueuedRun?: boolean
 }
 
 const resetTokenUsagePanel = (clearUsage = true) => {
@@ -2214,11 +2217,12 @@ const submitAnalysisQuery = async (
   }
   isGenerating.value = true
   activeToolCallId.value = null
+  let startedRunId: string | null = null
+  let convId: string | null = props.conversationId
   // Keep the previous request visible until the first usage event of this turn arrives.
   resetTokenUsagePanel(false)
 
   try {
-    let convId = props.conversationId
     if (!convId && props.ensureConversationId) {
       convId = await props.ensureConversationId()
       if (convId) {
@@ -2332,6 +2336,7 @@ const submitAnalysisQuery = async (
         if (active?.role === 'assistant') active.isStreaming = false
       },
       (runId) => {
+        startedRunId = runId
         if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
         activeRunId.value = runId
         saveOwnedRun(convId, runId)
@@ -2352,6 +2357,40 @@ const submitAnalysisQuery = async (
   } finally {
     isGenerating.value = false
     await restorePendingSteerQueue({ restartPolling: false })
+    if (options.autoResumeQueuedRun !== false && !options.interruptedQuestion) {
+      await resumeQueuedRunAfterCompletion(convId, startedRunId || activeRunId.value)
+    }
+  }
+}
+
+/**
+ * Successful Run completion creates the next Run transactionally when its
+ * inbox still has messages. Subscribe to that Run separately so one SSE
+ * stream never contains multiple assistant turns.
+ */
+const resumeQueuedRunAfterCompletion = async (conversationId: string | null, completedRunId: string | null) => {
+  if (!conversationId || !completedRunId || isStoppingRun.value) return
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise(resolve => window.setTimeout(resolve, 100))
+    await restorePendingSteerQueue({ restartPolling: false })
+    if (!hasActiveRun.value || !activeRunId.value || activeRunId.value === completedRunId) continue
+    if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
+    const nextRunId = activeRunId.value
+    // The previous assistant bubble is complete. The next Run gets its own
+    // bubble; its queued user messages arrive through inbox_admitted.
+    activeAssistantMessageId.value = null
+    await submitAnalysisQuery('', {
+      appendUserMessage: false,
+      preserveAssistant: false,
+      autoResumeQueuedRun: false,
+      responseFactory: signal => streamRunEvents(
+        conversationId,
+        nextRunId,
+        activeRunEventId.value,
+        signal,
+      ),
+    })
+    return
   }
 }
 

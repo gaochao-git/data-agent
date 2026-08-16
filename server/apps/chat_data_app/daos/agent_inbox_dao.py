@@ -196,6 +196,25 @@ class AgentInboxDao:
             message.run_id = run_id
             message.update_time = now
 
+    async def has_pending_messages(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+    ) -> bool:
+        result = await session.execute(
+            select(ChatDataAgentInbox.id)
+            .where(
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
+                ChatDataAgentInbox.record_type == "message",
+                ChatDataAgentInbox.status == "pending",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def get_active_run_by_id(
         self,
         session: AsyncSession,

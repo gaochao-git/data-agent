@@ -113,11 +113,14 @@ class AgentInboxService:
         """领取一个 pending Run，并返回重启后重建执行所需的上下文。"""
         now = datetime.now()
         async with get_session() as session:
+            run_snapshot = await self._dao.get_run_by_id(session, run_id)
+            if run_snapshot is None:
+                return None
+            thread = await self._dao.lock_thread(session, run_snapshot.conversation_id, run_snapshot.user_id)
+            if thread is None:
+                return None
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "pending":
-                return None
-            thread = await self._dao.lock_thread(session, run.conversation_id, run.user_id)
-            if thread is None:
                 return None
             active = await self._dao.get_active_run(session, run.conversation_id, run.user_id)
             if active is not None and active.run_id != run_id:
@@ -369,40 +372,6 @@ class AgentInboxService:
                 row.lease_expire_time = None
                 row.update_time = now
 
-    async def claim_pending_or_finish_run(
-        self,
-        conversation_id: str,
-        user_id: str,
-        run_id: str,
-        operator_name: str,
-        owner_token: str | None = None,
-    ) -> ClaimedAgentMessages:
-        """轮次收尾：领取全部 next-step 和一条 next-turn；无消息时结束运行。
-
-        next-step 是赶不上上一模型边界的即时引导；next-turn 严格按 FIFO 每轮一条，
-        避免多条普通用户消息被合并成同一次模型调用。
-        """
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
-        async with get_session() as session:
-            await self._dao.lock_thread(session, conversation_id, user_id)
-            run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run is None or run.run_id != run_id:
-                return ClaimedAgentMessages(run_id, [])
-            if run.status in {"active", "cancelling"}:
-                self._assert_owner(run, owner_token)
-            if run.status == "cancelling":
-                await self._cancel_run(session, run, now, user_id, operator_name)
-                return ClaimedAgentMessages(run_id, [])
-            if run.status != "active":
-                return ClaimedAgentMessages(run_id, [])
-            rows = await self._claim_step_and_turn(session, run_id, now)
-            if rows:
-                return ClaimedAgentMessages(run_id, [self._to_human_message(row) for row in rows])
-            # The caller emits message_end/done after this check. Keep the
-            # Run active until those terminal events have been published.
-            return ClaimedAgentMessages(run_id, [])
-
     async def finish_run(
         self,
         run_id: str,
@@ -439,14 +408,20 @@ class AgentInboxService:
         user_id: str,
         operator_name: str,
         owner_token: str | None = None,
-    ) -> None:
-        """在最后一个 SSE 事件已发布后收口成功 Run。"""
+    ) -> str | None:
+        """成功收口当前 Run，并原子调度该会话的下一轮 Run。"""
         owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
+            run_snapshot = await self._dao.get_run_by_id(session, run_id)
+            if run_snapshot is None:
+                return None
+            thread = await self._dao.lock_thread(session, run_snapshot.conversation_id, run_snapshot.user_id)
+            if thread is None:
+                return None
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status not in {"active", "pending"}:
-                return
+                return None
             self._assert_owner(run, owner_token)
             content = self._load_run_content(run.content)
             for key in ("pending_question", "resuming_question", "pending_answer", "resume_started"):
@@ -459,6 +434,44 @@ class AgentInboxService:
             run.update_by = user_id
             run.update_by_name = operator_name
             self._owner_tokens.pop(run_id, None)
+
+            if not await self._dao.has_pending_messages(session, run.conversation_id, run.user_id):
+                return None
+
+            next_run_id = uuid4().hex
+            runtime_context = content.get("runtime_context")
+            if not isinstance(runtime_context, dict):
+                runtime_context = {}
+            # The original user query was already persisted in this Run. The
+            # next Run must execute only its inbox messages, otherwise a
+            # refresh/queued turn would submit the original query twice.
+            runtime_context = {**runtime_context, "query": ""}
+            session.add(ChatDataAgentInbox(
+                conversation_id=run.conversation_id,
+                user_id=run.user_id,
+                run_id=next_run_id,
+                message_id=next_run_id,
+                record_type="run",
+                content=json.dumps({"runtime_context": runtime_context, "run_kind": "continuation"}, ensure_ascii=False),
+                status="pending",
+                lease_expire_time=None,
+                delete_flag=0,
+                create_time=now,
+                update_time=now,
+                create_by=user_id,
+                create_by_name=operator_name,
+                update_by=user_id,
+                update_by_name=operator_name,
+            ))
+            await self._dao.adopt_pending_messages(
+                session,
+                run.conversation_id,
+                run.user_id,
+                next_run_id,
+                now,
+            )
+            await self._claim_step_and_turn(session, next_run_id, now)
+            return next_run_id
 
     async def cancel_active_run(
         self,
@@ -575,10 +588,12 @@ class AgentInboxService:
             )
             latest_run = active_run or await self._dao.get_latest_run(session, conversation_id, user_id)
             rows = await self._dao.list_run_messages(session, latest_run.run_id) if latest_run else []
+            latest_content = self._load_run_content(latest_run.content) if latest_run else {}
             return {
                 "has_active_run": active_run is not None,
                 "run_id": latest_run.run_id if latest_run else None,
                 "run_status": latest_run.status if latest_run else None,
+                "is_continuation": latest_content.get("run_kind") == "continuation",
                 "messages": [
                     {
                         "message_id": row.message_id,
