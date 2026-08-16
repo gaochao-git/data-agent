@@ -29,6 +29,17 @@ def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
     return f"[{tool_name}]\n" + json_dumps(payload)
 
 
+def _tool_error(tool_name: str, exc: Exception) -> str:
+    """Return a model-correctable error without logging expected validation traces."""
+    message = str(exc) or exc.__class__.__name__
+    if isinstance(exc, (ValueError, FileNotFoundError, IsADirectoryError, NotADirectoryError)):
+        logger.warning("%s 工具错误: %s", tool_name, message)
+        return f"{tool_name} 工具错误: {message}"
+    else:
+        logger.error("%s 执行失败: %s", tool_name, message, exc_info=True)
+    return f"{tool_name} 工具错误: 工具执行失败，请稍后重试"
+
+
 def _validate_relative_glob(pattern: str, *, field_name: str) -> str:
     normalized = str(pattern or "").strip().replace("\\", "/")
     if not normalized:
@@ -120,8 +131,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
                 f"{format_lines(lines, start_line)}"
             )
         except Exception as exc:
-            logger.error("file_read 执行失败: %s", exc, exc_info=True)
-            return f"file_read 执行失败: {exc}"
+            return _tool_error("file_read", exc)
 
     @tool("file_edit")
     async def file_edit(
@@ -146,8 +156,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("file_edit", payload)
         except Exception as exc:
-            logger.error("file_edit 执行失败: %s", exc, exc_info=True)
-            return f"file_edit 执行失败: {exc}"
+            return _tool_error("file_edit", exc)
 
     @tool("file_write")
     async def file_write(
@@ -168,8 +177,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("file_write", payload)
         except Exception as exc:
-            logger.error("file_write 执行失败: %s", exc, exc_info=True)
-            return f"file_write 执行失败: {exc}"
+            return _tool_error("file_write", exc)
 
     @tool("file_move")
     async def file_move(source_path: str, destination_path: str) -> str:
@@ -181,8 +189,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("file_move", payload)
         except Exception as exc:
-            logger.error("file_move 执行失败: %s", exc, exc_info=True)
-            return f"file_move 执行失败: {exc}"
+            return _tool_error("file_move", exc)
 
     @tool("file_copy")
     async def file_copy(source_path: str, destination_path: str) -> str:
@@ -194,8 +201,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("file_copy", payload)
         except Exception as exc:
-            logger.error("file_copy 执行失败: %s", exc, exc_info=True)
-            return f"file_copy 执行失败: {exc}"
+            return _tool_error("file_copy", exc)
 
     @tool("file_delete")
     async def file_delete(file_path: str) -> str:
@@ -208,8 +214,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("file_delete", payload)
         except Exception as exc:
-            logger.error("file_delete 执行失败: %s", exc, exc_info=True)
-            return f"file_delete 执行失败: {exc}"
+            return _tool_error("file_delete", exc)
 
     @tool("file_glob")
     async def file_glob(
@@ -235,8 +240,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             }
             return _json_result("file_glob", payload)
         except Exception as exc:
-            logger.error("file_glob 执行失败: %s", exc, exc_info=True)
-            return f"file_glob 执行失败: {exc}"
+            return _tool_error("file_glob", exc)
 
     @tool("file_grep")
     async def file_grep(
@@ -276,8 +280,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             }
             return _json_result("file_grep", payload)
         except Exception as exc:
-            logger.error("file_grep 执行失败: %s", exc, exc_info=True)
-            return f"file_grep 执行失败: {exc}"
+            return _tool_error("file_grep", exc)
 
     @tool("dir_create")
     async def dir_create(path: str) -> str:
@@ -285,8 +288,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         try:
             return _json_result("dir_create", await workspace_runtime.create_dir(path=path))
         except Exception as exc:
-            logger.error("dir_create 执行失败: %s", exc, exc_info=True)
-            return f"dir_create 执行失败: {exc}"
+            return _tool_error("dir_create", exc)
 
     @tool("dir_list")
     async def dir_list(path: str = "workspace", max_depth: int = 2) -> str:
@@ -310,8 +312,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
                 )
             return "\n".join(lines)
         except Exception as exc:
-            logger.error("dir_list 执行失败: %s", exc, exc_info=True)
-            return f"dir_list 执行失败: {exc}"
+            return _tool_error("dir_list", exc)
 
     @tool("dir_delete")
     async def dir_delete(path: str, recursive: bool = False) -> str:
@@ -324,8 +325,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             )
             return _json_result("dir_delete", payload)
         except Exception as exc:
-            logger.error("dir_delete 执行失败: %s", exc, exc_info=True)
-            return f"dir_delete 执行失败: {exc}"
+            return _tool_error("dir_delete", exc)
 
     return [
         file_read,

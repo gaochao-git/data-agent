@@ -539,7 +539,7 @@ def _is_tool_result_error(content: Any) -> bool:
         payload = None
     if isinstance(payload, dict) and payload.get("type") == "query_result":
         return str(payload.get("status") or "").strip().lower() in {"failed", "cancelled"}
-    return "执行失败" in text or text.lower().startswith("error:")
+    return "执行失败" in text or "工具错误" in text or text.lower().startswith("error:")
 
 
 def _register_running_tool(running_tool_ids: list[str], tool_call_id: str) -> None:

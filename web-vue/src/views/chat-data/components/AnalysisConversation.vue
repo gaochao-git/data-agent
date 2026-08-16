@@ -1749,7 +1749,7 @@ const handleScroll = () => {
 
 const isToolErrorResult = (content?: string) => {
   const text = String(content || '').trim()
-  return text.includes('执行失败') || text.toLowerCase().startsWith('error:')
+  return text.includes('执行失败') || text.includes('工具错误') || text.toLowerCase().startsWith('error:')
 }
 
 type PresentedSkillArtifact = {

@@ -614,8 +614,8 @@ async def test_file_write_and_edit_reject_uploads(monkeypatch):
         "new_content": "y",
     })
 
-    assert write_result.startswith("file_write 执行失败: 只允许写入 workspace/ 或 outputs/")
-    assert edit_result.startswith("file_edit 执行失败: 只允许写入 workspace/ 或 outputs/")
+    assert write_result.startswith("file_write 工具错误: 只允许写入 workspace/ 或 outputs/")
+    assert edit_result.startswith("file_edit 工具错误: 只允许写入 workspace/ 或 outputs/")
 
 
 @pytest.mark.asyncio
@@ -1113,7 +1113,7 @@ async def test_file_read_rejects_workspace_root_outside_chat_data_home(monkeypat
 
     result = await tool.ainvoke({"file_path": "workspace/secret.txt"})
 
-    assert result.startswith("file_read 执行失败: 会话工作区不在 CHAT_DATA_HOME 内")
+    assert result.startswith("file_read 工具错误: 会话工作区不在 CHAT_DATA_HOME 内")
 
 
 @pytest.mark.asyncio
@@ -1144,7 +1144,7 @@ async def test_file_read_rejects_local_path_escape(monkeypatch):
 
     result = await tools["file_read"].ainvoke({"file_path": "../demo.txt"})
 
-    assert result.startswith("file_read 执行失败: 路径越界")
+    assert result.startswith("file_read 工具错误: 路径越界")
 
 
 @pytest.mark.asyncio
@@ -1183,7 +1183,7 @@ async def test_file_glob_rejects_path_patterns(monkeypatch):
 
     result = await tools["file_glob"].ainvoke({"pattern": "**/*.json"})
 
-    assert result.startswith("file_glob 执行失败: pattern 只能匹配文件名")
+    assert result.startswith("file_glob 工具错误: pattern 只能匹配文件名")
 
 
 @pytest.mark.asyncio
@@ -1366,7 +1366,7 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
         "new_content": "new",
     })
 
-    assert "file_edit 执行失败" in result
+    assert "file_edit 工具错误" in result
 
 
 @pytest.mark.asyncio
