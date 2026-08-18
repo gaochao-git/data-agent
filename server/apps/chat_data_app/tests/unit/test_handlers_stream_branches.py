@@ -501,6 +501,30 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
 
 
 @pytest.mark.asyncio
+async def test_latest_model_snapshot_writer_coalesces_pending_snapshots():
+    started = handlers.asyncio.Event()
+    release = handlers.asyncio.Event()
+    written_versions = []
+
+    async def write_snapshot(state):
+        written_versions.append(state["version"])
+        if state["version"] == 1:
+            started.set()
+            await release.wait()
+
+    writer = handlers._LatestModelSnapshotWriter(write_snapshot, task_name="snapshot-test")
+    writer.submit({"version": 1, "messages": []})
+    await started.wait()
+    writer.submit({"version": 2, "messages": []})
+    writer.submit({"version": 3, "messages": []})
+    release.set()
+
+    await writer.flush()
+
+    assert written_versions == [1, 3]
+
+
+@pytest.mark.asyncio
 async def test_persist_turn_history_merges_pre_compression_tools_with_final_state(monkeypatch):
     persisted = []
     user = HumanMessage(content="生成报告", id="turn-archive")

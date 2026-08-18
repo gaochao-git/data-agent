@@ -80,7 +80,7 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert payload["hard_input_guard_tokens"] == 1
 
 
-def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mutation():
+def test_sanitize_context_usage_for_response_redacts_and_deduplicates_without_mutation():
     usage = {
         "breakdown": [{
             "key": "system_prompt",
@@ -88,6 +88,7 @@ def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mu
             "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
         }],
         "llm_calls": [{
+            "input_tokens": 12,
             "breakdown": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
         }],
     }
@@ -96,9 +97,10 @@ def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mu
 
     assert sanitized["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
     assert sanitized["breakdown"][0]["children"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
-    assert sanitized["llm_calls"][0]["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["llm_calls"] == [{"input_tokens": 12}]
     assert "SECRET_SYSTEM_PROMPT" not in json.dumps(sanitized, ensure_ascii=False)
     assert usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+    assert "breakdown" in usage["llm_calls"][0]
 
 
 def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
@@ -117,7 +119,7 @@ def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypat
 
     sanitized = sanitize_context_usage_for_response(usage)
 
-    assert sanitized is usage
+    assert sanitized is not usage
     assert sanitized["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
 
 

@@ -188,16 +188,20 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
 
 
 def sanitize_context_usage_for_response(usage: Any) -> Any:
-    """返回给前端前隐藏 system prompt 明文，不改变原始 usage 对象。"""
-    if is_context_usage_system_prompt_visible() or not isinstance(usage, dict):
+    """Redact prompts and remove repeated per-call breakdowns for transport."""
+    if not isinstance(usage, dict):
         return usage
     sanitized = copy.deepcopy(usage)
-    _sanitize_breakdown(sanitized.get("breakdown"))
+    if not is_context_usage_system_prompt_visible():
+        _sanitize_breakdown(sanitized.get("breakdown"))
     llm_calls = sanitized.get("llm_calls")
     if isinstance(llm_calls, list):
         for call in llm_calls:
             if isinstance(call, dict):
-                _sanitize_breakdown(call.get("breakdown"))
+                # The top-level breakdown already describes the current model
+                # input. Keeping another complete message tree for every call
+                # makes a long run grow to multiple megabytes quadratically.
+                call.pop("breakdown", None)
     return sanitized
 
 
