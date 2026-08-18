@@ -205,6 +205,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       id: String(rawMessage.id || `assistant-history-${turnId || displayMessages.length}`),
       role: 'assistant',
       content: '',
+      turnId: turnId || undefined,
       timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
       segments: [],
     }
@@ -230,6 +231,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
         content: String(messagePayload.content || '').trim(),
+        turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
       })
       continue
@@ -243,6 +245,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         id: contextCompression.id,
         role: 'context_compression',
         content: '',
+        turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(contextCompression.timestamp) || undefined,
         contextCompression,
       })
@@ -469,19 +472,20 @@ export function useConversationHistory({
   const isFirstMessage = ref(true)
 
   // 加载历史消息
-  const loadHistory = async (convId: string) => {
+  const loadHistory = async (convId: string, force = false) => {
     // 已加载过，跳过
-    if (loadedConversationId.value === convId) {
+    if (!force && loadedConversationId.value === convId) {
       return
     }
 
     // 如果已有消息，说明是刚创建的新会话或正在对话中，不需要加载历史
-    if (messages.value.length > 0) {
+    if (!force && messages.value.length > 0) {
       loadedConversationId.value = convId
       return
     }
 
-    isLoadingHistory.value = true
+    const showLoading = !force || messages.value.length === 0
+    if (showLoading) isLoadingHistory.value = true
     try {
       const response = await getConversationHistory(convId)
 
@@ -502,7 +506,7 @@ export function useConversationHistory({
     } catch (error) {
       console.error('加载历史消息失败:', error)
     } finally {
-      isLoadingHistory.value = false
+      if (showLoading) isLoadingHistory.value = false
     }
   }
 

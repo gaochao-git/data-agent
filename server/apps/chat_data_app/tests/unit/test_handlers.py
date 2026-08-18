@@ -1081,16 +1081,28 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
         captured["conversation"] = args
         return {}
 
-    async def fake_stream(**kwargs):
-        captured["stream_kwargs"] = kwargs
-        yield _format_sse("done", "[DONE]")
+    async def fake_start_run(*args, **kwargs):
+        captured["start_run_args"] = args
+        captured["start_run_kwargs"] = kwargs
+        return "run-test", []
+
+    def fake_submit(**kwargs):
+        captured["submit_kwargs"] = kwargs
+
+    async def fake_event_stream(**kwargs):
+        captured["event_stream_kwargs"] = kwargs
+        yield {
+            "stream_id": "test-1-0",
+            "payload": _format_sse("done", "[DONE]"),
+        }
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", fake_get_or_create)
-    monkeypatch.setattr("apps.chat_data_app.handlers._generate_chat_data_stream", fake_stream)
     monkeypatch.setattr(
         "apps.chat_data_app.handlers.agent_inbox_service.start_run",
-        lambda *_args, **_kwargs: asyncio.sleep(0, result=("run-test", [])),
+        fake_start_run,
     )
+    monkeypatch.setattr("apps.chat_data_app.handlers.agent_run_runtime.submit", fake_submit)
+    monkeypatch.setattr("apps.chat_data_app.handlers.agent_run_event_service.stream", fake_event_stream)
 
     response = asyncio.run(sql_completion_handler(
         conversation_id="conv_sql",
@@ -1101,10 +1113,20 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     ))
     assert response.media_type == "text/event-stream"
     assert response.headers["X-ChatData-Run-Id"] == "run-test"
+    assert response.headers["X-Accel-Buffering"] == "no"
     assert captured["conversation"] == ("", "chat_data", "conv_sql", "u1")
     chunks = asyncio.run(_collect_async_iter(response.body_iterator))
-    assert chunks == ["event: done\ndata: [DONE]\n\n"]
-    assert captured["stream_kwargs"]["username"] == "测试用户"
-    assert captured["stream_kwargs"]["member_datasource_ids"] == ["m1"]
-    assert captured["stream_kwargs"]["run_id"] == "run-test"
-    assert captured["stream_kwargs"]["adopted_messages"] == []
+    assert chunks == ["id: test-1-0\nevent: done\ndata: [DONE]\n\n"]
+    runtime_context = captured["start_run_args"][3]
+    assert captured["start_run_args"][:3] == ("conv_sql", "u1", "测试用户")
+    assert runtime_context["member_datasource_ids"] == ["m1"]
+    assert runtime_context["semantic_config_id"] == "cfg"
+    assert runtime_context["model_id"] == "m1"
+    assert captured["submit_kwargs"] == {
+        "run_id": "run-test",
+        "conversation_id": "conv_sql",
+        "user_id": "u1",
+        "operator_name": "测试用户",
+    }
+    assert captured["event_stream_kwargs"]["run_id"] == "run-test"
+    assert captured["event_stream_kwargs"]["last_event_id"] == "0-0"

@@ -85,6 +85,7 @@ def build_standard_agent_middleware(
     context_usage_middleware: Any | None = None,
     tool_result_middleware: Any | None = None,
     tool_call_history_repair_middleware: Any | None = None,
+    tool_execution_fence_middleware: Any | None = None,
     steering_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
     include_response_timestamp: bool = False,
@@ -92,6 +93,11 @@ def build_standard_agent_middleware(
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。"""
     middleware: list[Any] = []
+    if tool_execution_fence_middleware is not None:
+        # Tool wrappers are composed first-to-last. Keep the lease fence
+        # outermost so ToolErrorMiddleware cannot turn ownership loss into an
+        # ordinary model-visible tool failure.
+        middleware.append(tool_execution_fence_middleware)
     if tool_call_history_repair_middleware is not None:
         middleware.append(tool_call_history_repair_middleware)
     if steering_middleware is not None:

@@ -33,6 +33,7 @@ from .services.agent_run.context_budget import ContextInputLimitExceededError, s
 from .services.agent_run.conversation_runtime import stream_agent_turn
 from .services.agent_run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service
+from .services.agent_run.agent_run_event_service import agent_run_event_service
 from .services.agent_run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
@@ -138,9 +139,15 @@ def _build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _build_user_message(content: str, semantic_selection_event: dict[str, Any] | None = None, **extra_kwargs: Any) -> HumanMessage:
+def _build_user_message(
+    content: str,
+    semantic_selection_event: dict[str, Any] | None = None,
+    *,
+    message_id: str | None = None,
+    **extra_kwargs: Any,
+) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。"""
-    reasoning_turn_id = str(uuid4())
+    reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs = {
         "timestamp": _get_timestamp(),
         "reasoning_turn_id": reasoning_turn_id,
@@ -422,6 +429,20 @@ def _stream_message_key(message: BaseMessage, index: int) -> tuple[Any, ...] | N
 
 def _stream_message_id(message: BaseMessage) -> str:
     return str(getattr(message, "id", "") or "").strip()
+
+
+def _checkpoint_message_ids(checkpoint_tuple: Any | None) -> set[str]:
+    """Read stable message IDs from a LangGraph checkpoint tuple."""
+    checkpoint = getattr(checkpoint_tuple, "checkpoint", None)
+    channel_values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+    messages = channel_values.get("messages") if isinstance(channel_values, dict) else None
+    if not isinstance(messages, list):
+        return set()
+    return {
+        message_id
+        for message in messages
+        if (message_id := _stream_message_id(message))
+    }
 
 
 async def _persist_partial_agent_turn_history(
@@ -986,7 +1007,10 @@ async def _generate_chat_data_stream(
     run_id: str | None = None,
     adopted_messages: list[HumanMessage] | None = None,
     resume_answer: dict[str, Any] | None = None,
+    resume_started: bool = False,
     resume_turn_id: str | None = None,
+    turn_id: str | None = None,
+    recovering: bool = False,
     owner_token: str | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
@@ -1039,7 +1063,10 @@ async def _generate_chat_data_stream(
             run_id=run_id,
             adopted_messages=adopted_messages,
             resume_answer=resume_answer,
+            resume_started=resume_started,
             resume_turn_id=resume_turn_id,
+            turn_id=turn_id,
+            recovering=recovering,
             owner_token=owner_token,
             log_phase=log_phase,
         ):
@@ -1088,17 +1115,24 @@ async def _heartbeat_agent_run(
         await asyncio.sleep(2)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
+            if heartbeat_status == "active" and owner_token:
+                await agent_run_event_service.renew_owner(run_id, owner_token)
         except AgentRunLeaseLostError:
             if owner_task and not owner_task.done():
                 owner_task.cancel("agent_run_lease_lost")
             return
+        except Exception:
+            logger.warning("ChatData Agent Run 心跳续约失败，下一周期重试: run_id=%s", run_id, exc_info=True)
+            continue
         if heartbeat_status == "cancelling":
             if owner_task and not owner_task.done():
                 owner_task.cancel("agent_run_cancelled")
             return
         if heartbeat_status != "active":
-            if owner_task and not owner_task.done():
-                owner_task.cancel("agent_run_lease_lost")
+            # waiting_user/finished are normal transitions performed by this
+            # execution. Stop renewing without cancelling the stream, which
+            # still needs to publish question_requested/done. A true takeover
+            # keeps status active and fails the owner-token assertion above.
             return
 
 
@@ -1121,7 +1155,10 @@ async def _run_chat_data_agent_stream(
     run_id: str | None,
     adopted_messages: list[HumanMessage] | None = None,
     resume_answer: dict[str, Any] | None = None,
+    resume_started: bool = False,
     resume_turn_id: str | None = None,
+    turn_id: str | None = None,
+    recovering: bool = False,
     owner_token: str | None = None,
     log_phase,
 ):
@@ -1255,15 +1292,39 @@ async def _run_chat_data_agent_stream(
             message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
                 message_kwargs["skill_names"] = normalized_skill_names
+            checkpoint_tuple = await checkpointer.aget_tuple(config) if recovering else None
+            checkpoint_message_ids = _checkpoint_message_ids(checkpoint_tuple)
+            current_turn_checkpointed = bool(turn_id and turn_id in checkpoint_message_ids)
+            resume_checkpointed = bool(
+                resume_answer is not None
+                and recovering
+                and checkpoint_tuple is not None
+                and resume_started
+            )
+            if recovering and current_turn_checkpointed and run_id and owner_token:
+                await agent_inbox_service.reconcile_recovered_messages(
+                    run_id,
+                    checkpoint_message_ids,
+                    owner_token,
+                )
+                # Checkpointed messages are already part of graph state; any
+                # claimed-but-uncheckpointed messages were returned to pending
+                # for the steering middleware to inject exactly once.
+                adopted_messages = []
             user_message = None
-            if resume_answer is None and (user_query.strip() or not adopted_messages):
+            if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
                 user_message = _build_user_message(
                     message_content,
                     semantic_selection_event,
+                    message_id=turn_id,
                     **message_kwargs,
                 )
-            if resume_answer is not None:
+            if resume_checkpointed:
+                initial_state = None
+            elif resume_answer is not None:
                 initial_state = Command(resume=resume_answer)
+            elif current_turn_checkpointed:
+                initial_state = None
             else:
                 initial_state = _build_agent_context_state(
                     user_id=user_id,
@@ -1309,7 +1370,7 @@ async def _run_chat_data_agent_stream(
                         conversation_id=thread_id,
                         user_id=user_id,
                         username=username,
-                        turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
+                        turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                         state_override=state,
                     )
 
@@ -1380,11 +1441,16 @@ async def _run_chat_data_agent_stream(
                     if resume_answer is not None and run_id
                     else None
                 ),
-                reasoning_turn_id=resume_turn_id or (
+                reasoning_turn_id=resume_turn_id or turn_id or (
                     str(user_message.additional_kwargs.get("reasoning_turn_id") or "") if user_message else None
                 ),
             )
             stream_adapter_ref["value"] = stream_adapter
+            if recovering:
+                stream_adapter.queue_event(_format_sse("run_restarted", {
+                    "run_id": run_id,
+                    "turn_id": turn_id,
+                }))
             async def persist_user_message() -> None:
                 if user_message is None:
                     return
@@ -1403,7 +1469,7 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
+                    turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                 )
 
             async def persist_partial_history() -> None:
@@ -1413,7 +1479,7 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
+                    turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                 )
 
             async def log_agent_stream_done() -> None:
@@ -1422,7 +1488,7 @@ async def _run_chat_data_agent_stream(
             async def mark_waiting_for_user(question: dict[str, Any]) -> None:
                 if not run_id:
                     return
-                question["turn_id"] = resume_turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or "")
+                question["turn_id"] = resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or "")
                 await agent_inbox_service.mark_waiting_for_user(
                     run_id,
                     question,
@@ -1554,6 +1620,7 @@ async def sql_completion_handler(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
             "X-ChatData-Run-Id": run_id,
         },
     )
@@ -1565,8 +1632,6 @@ async def _stream_run_events(
     request: Request | None = None,
 ):
     """订阅后台 Run 的 Redis Stream 事件。"""
-    from .services.agent_run.agent_run_event_service import agent_run_event_service
-
     async for event in agent_run_event_service.stream(
         run_id=run_id,
         last_event_id=last_event_id,
@@ -1584,20 +1649,13 @@ async def resume_chat_data_question_handler(
     runtime_context: dict[str, Any],
     answer: dict[str, Any],
     turn_id: str,
+    last_event_id: str,
     request: Request | None,
 ) -> StreamingResponse:
     """Queue a checkpoint resume and subscribe to its durable Run events."""
     _ = runtime_context, answer, turn_id
 
     async def resumed_event_stream():
-        # The first execution may still be unwinding after emitting the
-        # question card. Wait for its terminal event to be published before
-        # taking the cursor; otherwise the old ``done`` can terminate the
-        # resumed SSE immediately.
-        await agent_run_runtime.wait_for_existing_run(run_id)
-        from .services.agent_run.agent_run_event_service import agent_run_event_service
-
-        last_event_id = await agent_run_event_service.latest_event_id(run_id)
         agent_run_runtime.submit(
             run_id=run_id,
             conversation_id=conversation_id,
@@ -1617,6 +1675,7 @@ async def resume_chat_data_question_handler(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
             "X-ChatData-Run-Id": run_id,
         },
     )

@@ -9,12 +9,15 @@ from utils.database import get_session
 from utils.logger import get_logger
 from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from ...daos.agent_run_event_dao import AgentRunEventDao, agent_run_event_dao
-from .redis_event_bus import RedisEventBus, build_redis_event_bus
+from .agent_inbox_service import AgentRunLeaseLostError
+from .redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError, build_redis_event_bus
 
 
 _EVENT_NAME_RE = re.compile(r"(?:^|\n)event:\s*([^\n]+)")
 logger = get_logger(__name__)
-QUESTION_DONE_WAIT_SECONDS = 2.0
+QUESTION_DONE_WAIT_SECONDS = 10.0
+QUESTION_DONE_DURABLE_POLL_SECONDS = 0.5
+TERMINAL_PERSISTENCE_GRACE_SECONDS = 10.0
 
 
 class AgentRunEventService:
@@ -37,6 +40,24 @@ class AgentRunEventService:
     @property
     def bus(self) -> RedisEventBus:
         return self._bus
+
+    async def claim_owner(self, run_id: str, owner_token: str) -> None:
+        try:
+            await self._bus.claim_run_owner(run_id, owner_token)
+        except RedisRunOwnerMismatchError as exc:
+            raise AgentRunLeaseLostError(f"Run 所有权已变更: {run_id}") from exc
+        # A new execution segment may start after Redis stream expiry or data
+        # loss. Re-check the durable maximum before its first published event.
+        self._sequence_initialized_runs.discard(run_id)
+
+    async def release_owner(self, run_id: str, owner_token: str) -> None:
+        await self._bus.release_run_owner(run_id, owner_token)
+
+    async def renew_owner(self, run_id: str, owner_token: str) -> None:
+        try:
+            await self._bus.renew_run_owner(run_id, owner_token)
+        except RedisRunOwnerMismatchError as exc:
+            raise AgentRunLeaseLostError(f"Run 所有权已变更: {run_id}") from exc
 
     async def append(
         self,
@@ -66,8 +87,13 @@ class AgentRunEventService:
                 event_id=event_id,
                 event_type=event_type,
                 payload=payload,
+                owner_token=owner_token,
                 initial_sequence=initial_sequence,
             )
+        except RedisRunOwnerMismatchError as exc:
+            if needs_sequence_check:
+                self._sequence_initialized_runs.discard(run_id)
+            raise AgentRunLeaseLostError(f"Run 所有权已变更: {run_id}") from exc
         except Exception:
             if needs_sequence_check:
                 self._sequence_initialized_runs.discard(run_id)
@@ -101,16 +127,28 @@ class AgentRunEventService:
 
     async def wait_for_done(self, run_id: str, timeout: float = QUESTION_DONE_WAIT_SECONDS) -> bool:
         """Wait briefly for the interrupt segment's terminal SSE event."""
-        deadline = asyncio.get_running_loop().time() + max(timeout, 0.0)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout, 0.0)
+        next_durable_check = 0.0
         while True:
             try:
                 event = await self._bus.latest_run_event(run_id)
             except Exception:
-                logger.warning("等待问题 Run 终止事件失败，继续恢复: run_id=%s", run_id, exc_info=True)
-                return False
+                logger.warning("等待问题 Run 终止事件时 Redis 不可用，检查持久化事件: run_id=%s", run_id, exc_info=True)
+                event = None
             if event and event.get("event_type") == "done":
                 return True
-            if asyncio.get_running_loop().time() >= deadline:
+            now = loop.time()
+            if now >= next_durable_check:
+                try:
+                    async with get_session() as session:
+                        latest_event_type = await self._event_dao.get_latest_event_type(session, run_id=run_id)
+                    if latest_event_type == "done":
+                        return True
+                except Exception:
+                    logger.warning("等待问题 Run 终止事件时持久化查询失败: run_id=%s", run_id, exc_info=True)
+                next_durable_check = now + QUESTION_DONE_DURABLE_POLL_SECONDS
+            if now >= deadline:
                 return False
             await asyncio.sleep(0.05)
 
@@ -125,6 +163,7 @@ class AgentRunEventService:
         cursor = last_event_id or "0-0"
         after_seq = await self._resolve_sequence(run_id, cursor)
         redis_unavailable = False
+        terminal_detected_at: float | None = None
         while True:
             if is_disconnected and await is_disconnected():
                 return
@@ -187,7 +226,14 @@ class AgentRunEventService:
                 "cancelled",
                 "waiting_user",
             }:
-                return
+                now = asyncio.get_running_loop().time()
+                if terminal_detected_at is None:
+                    terminal_detected_at = now
+                if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
+                    return
+                await asyncio.sleep(0.2)
+                continue
+            terminal_detected_at = None
 
     async def _resolve_sequence(self, run_id: str, cursor: str) -> int:
         if cursor == "0-0":
@@ -244,6 +290,10 @@ class AgentRunEventService:
     def _event_type(payload: str) -> str:
         match = _EVENT_NAME_RE.search(payload or "")
         return match.group(1).strip() if match else "message"
+
+    @classmethod
+    def is_terminal_payload(cls, payload: str) -> bool:
+        return cls._event_type(payload) == "done"
 
 
 agent_run_event_service = AgentRunEventService()

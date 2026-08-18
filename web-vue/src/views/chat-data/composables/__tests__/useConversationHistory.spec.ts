@@ -108,6 +108,7 @@ describe('buildHistoryMessages', () => {
     ])
 
     expect(messages).toHaveLength(2)
+    expect(messages[1]!.turnId).toBe('turn-1')
     expect(messages[1]!.segments).toEqual([
       { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
       { type: 'toolCall', toolCallId: 'tool-1' },
@@ -136,6 +137,8 @@ describe('buildHistoryMessages', () => {
     ])
 
     expect(messages.map(message => message.role)).toEqual(['user', 'context_compression', 'assistant'])
+    expect(messages[1]!.turnId).toBe('turn-1')
+    expect(messages[2]!.turnId).toBe('turn-1')
     expect(messages[1]!.contextCompression).toMatchObject({
       id: 'context-compression-1',
       estimated_cleared_tokens: 49000,

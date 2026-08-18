@@ -229,6 +229,9 @@ class FakeCheckpointer:
     async def __aexit__(self, *_args):
         return False
 
+    async def aget_tuple(self, _config):
+        return None
+
 
 
 def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
@@ -789,10 +792,75 @@ async def test_heartbeat_cancels_owner_when_run_is_stopping(monkeypatch):
     owner = OwnerTask()
     monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
     monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", lambda *_args: None)
 
     await handlers._heartbeat_agent_run("run-1", owner)
 
     assert owner.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_does_not_cancel_owner_after_normal_inactive_transition(monkeypatch):
+    class OwnerTask:
+        cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self, *_args):
+            self.cancelled = True
+
+    async def no_wait(_seconds):
+        return None
+
+    async def heartbeat(_run_id, _owner_token=None):
+        return "inactive"
+
+    owner = OwnerTask()
+    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", lambda *_args: None)
+
+    await handlers._heartbeat_agent_run("run-1", owner)
+
+    assert owner.cancelled is False
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_renews_mysql_and_redis_owner(monkeypatch):
+    calls = []
+
+    class OwnerTask:
+        cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self, *_args):
+            self.cancelled = True
+
+    async def no_wait(_seconds):
+        return None
+
+    async def heartbeat(run_id, owner_token=None):
+        calls.append(("mysql", run_id, owner_token))
+        return "active" if len(calls) == 1 else "inactive"
+
+    async def renew(run_id, owner_token):
+        calls.append(("redis", run_id, owner_token))
+
+    owner = OwnerTask()
+    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", renew)
+
+    await handlers._heartbeat_agent_run("run-1", owner, "2:owner")
+
+    assert calls[:2] == [
+        ("mysql", "run-1", "2:owner"),
+        ("redis", "run-1", "2:owner"),
+    ]
+    assert owner.cancelled is False
 
 
 @pytest.mark.asyncio
@@ -858,6 +926,96 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     state_messages = graph.initial_state["messages"]
     assert [message.content for message in state_messages] == ["遗留排队消息", "新问题"]
     assert [str(message.id) for message in state_messages][0] == "adopted-1"
+
+
+@pytest.mark.asyncio
+async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monkeypatch):
+    class Checkpointer(FakeCheckpointer):
+        async def aget_tuple(self, _config):
+            return SimpleNamespace(checkpoint={
+                "channel_values": {"messages": [HumanMessage(content="当前问题", id="turn-1")]},
+            })
+
+    class Graph:
+        initial_state = "unset"
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={"messages": [HumanMessage(content="当前问题", id="turn-1")]}, tasks=[])
+
+        async def astream(self, initial_state, *_args, **_kwargs):
+            self.initial_state = initial_state
+            yield FakeChunk(content="恢复回答", msg_type="ai"), {"langgraph_node": "model"}
+
+    reconciled = []
+
+    async def reconcile(run_id, message_ids, owner_token):
+        reconciled.append((run_id, message_ids, owner_token))
+
+    async def complete(*_args, **_kwargs):
+        return None
+
+    graph = Graph()
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: Checkpointer())
+    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(handlers.agent_inbox_service, "reconcile_recovered_messages", reconcile)
+    monkeypatch.setattr(handlers.agent_inbox_service, "complete_run", complete)
+
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
+        thread_id="conv",
+        user_query="当前问题",
+        datasource_id="ds_a",
+        user_id="u1",
+        run_id="run-1",
+        owner_token="2:owner",
+        turn_id="turn-1",
+        recovering=True,
+    ))
+
+    assert graph.initial_state is None
+    assert reconciled == [("run-1", {"turn-1"}, "2:owner")]
+    assert "run_restarted" in "".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_recovery_rebuilds_input_when_checkpoint_is_from_previous_turn(monkeypatch):
+    class Checkpointer(FakeCheckpointer):
+        async def aget_tuple(self, _config):
+            return SimpleNamespace(checkpoint={
+                "channel_values": {"messages": [HumanMessage(content="旧问题", id="old-turn")]},
+            })
+
+    class Graph:
+        initial_state = None
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+        async def astream(self, initial_state, *_args, **_kwargs):
+            self.initial_state = initial_state
+            yield FakeChunk(content="新回答", msg_type="ai"), {"langgraph_node": "model"}
+
+    graph = Graph()
+
+    async def complete(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: Checkpointer())
+    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(handlers.agent_inbox_service, "complete_run", complete)
+
+    await collect_stream(handlers._generate_chat_data_stream(
+        thread_id="conv",
+        user_query="新问题",
+        datasource_id="ds_a",
+        user_id="u1",
+        run_id="run-1",
+        owner_token="2:owner",
+        turn_id="turn-1",
+        recovering=True,
+    ))
+
+    assert graph.initial_state is not None
+    assert [str(message.id) for message in graph.initial_state["messages"]] == ["turn-1"]
 
 
 @pytest.mark.asyncio

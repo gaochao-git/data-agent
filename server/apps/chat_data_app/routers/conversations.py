@@ -266,7 +266,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"创建对话失败: {e}", exc_info=True)
-        return business_response(msg=f"创建对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
+        return business_response(msg="创建对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
 
 
 @router.get("")
@@ -357,7 +357,7 @@ async def list_conversations(
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话列表失败: {e}", exc_info=True)
-        return business_response(msg=f"获取对话列表失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error")
+        return business_response(msg="获取对话列表失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error")
 
 
 @router.get("/{conversation_id}")
@@ -394,7 +394,7 @@ async def get_conversation_detail(conversation_id: str, req: Request):
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话详情失败: {e}", exc_info=True)
-        return business_response(msg=f"获取对话详情失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
+        return business_response(msg="获取对话详情失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
 
 
 @router.put("/{conversation_id}/title")
@@ -433,7 +433,7 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"更新标题失败: {e}", exc_info=True)
-        return business_response(msg=f"更新标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error")
+        return business_response(msg="更新标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/title")
@@ -471,7 +471,7 @@ async def generate_conversation_title(conversation_id: str, req: Request):
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"生成标题失败: {e}", exc_info=True)
-        return business_response(msg=f"生成标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error")
+        return business_response(msg="生成标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/favorite")
@@ -508,7 +508,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"切换收藏状态失败: {e}", exc_info=True)
-        return business_response(msg=f"切换收藏状态失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
+        return business_response(msg="切换收藏状态失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/completion", responses=SSE_RESPONSES)
@@ -565,7 +565,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
-        return business_response(msg=f"对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
+        return business_response(msg="对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/steer")
@@ -687,7 +687,9 @@ async def _resume_question(
     # The interrupt status is written before question_requested/done are
     # published. Wait for the old segment's done event so a different worker
     # cannot start the resume subscription from inside the old segment.
-    await agent_run_event_service.wait_for_done(pending_run_id)
+    if not await agent_run_event_service.wait_for_done(pending_run_id):
+        raise AgentQuestionNotWaitingError("当前回答仍在收口，请稍后重试")
+    last_event_id = await agent_run_event_service.latest_event_id(pending_run_id)
     run_id, runtime_context = await agent_inbox_service.claim_question_answer(
         conversation_id,
         user_id,
@@ -705,6 +707,7 @@ async def _resume_question(
         runtime_context=runtime_context,
         answer=answer,
         turn_id=turn_id,
+        last_event_id=last_event_id,
         request=req,
     )
 

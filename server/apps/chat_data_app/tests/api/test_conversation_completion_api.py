@@ -87,6 +87,7 @@ def _stub_conversation_event_writes(monkeypatch):
     monkeypatch.setattr(handler_module.agent_inbox_service, "mark_consumed", noop)
     monkeypatch.setattr(handler_module.agent_inbox_service, "finish_run", noop)
     monkeypatch.setattr(handler_module.agent_inbox_service, "complete_run", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "assert_run_owner", noop)
     monkeypatch.setattr(handler_module.agent_run_runtime, "submit", submit)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "stream", stream)
 

@@ -8,6 +8,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 from redis.backoff import ExponentialBackoff
+from redis.exceptions import ResponseError
 from redis.retry import Retry
 
 
@@ -31,6 +32,10 @@ REDIS_COMMAND_RETRY = Retry(
 )
 
 _PUBLISH_SCRIPT = """
+local current_owner = redis.call('GET', KEYS[5])
+if not current_owner or current_owner ~= ARGV[9] then
+  return redis.error_reply('RUN_OWNER_MISMATCH')
+end
 local existing_stream_id = redis.call('GET', KEYS[4])
 if existing_stream_id then
   return {existing_stream_id, 'duplicate'}
@@ -49,9 +54,50 @@ redis.call('XADD', KEYS[2], '*',
   'event_id', ARGV[4], 'event_type', ARGV[5], 'sequence_no', seq_text,
   'payload', ARGV[6], 'stream_id', stream_id)
 redis.call('EXPIRE', KEYS[1], ARGV[8])
+redis.call('EXPIRE', KEYS[3], ARGV[8])
+redis.call('EXPIRE', KEYS[5], ARGV[8])
 redis.call('SET', KEYS[4], stream_id, 'EX', ARGV[8])
 return {stream_id, seq_text}
 """
+
+_CLAIM_OWNER_SCRIPT = """
+local incoming = ARGV[1]
+local incoming_sep = string.find(incoming, ':')
+local incoming_generation = tonumber(string.sub(incoming, 1, incoming_sep - 1))
+local current = redis.call('GET', KEYS[1])
+if current then
+  if current == incoming then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+    return 1
+  end
+  local current_sep = string.find(current, ':')
+  local current_generation = current_sep and tonumber(string.sub(current, 1, current_sep - 1)) or 0
+  if current_generation >= incoming_generation then
+    return 0
+  end
+end
+redis.call('SET', KEYS[1], incoming, 'EX', ARGV[2])
+return 1
+"""
+
+_RELEASE_OWNER_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+_RENEW_OWNER_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+  return 1
+end
+return 0
+"""
+
+
+class RedisRunOwnerMismatchError(RuntimeError):
+    """The Redis event publisher no longer owns the Run."""
 
 
 class RedisEventBus:
@@ -94,25 +140,58 @@ class RedisEventBus:
         event_id: str,
         event_type: str,
         payload: str,
+        owner_token: str,
         initial_sequence: int = 0,
     ) -> str:
-        result = await self.redis.eval(
-            _PUBLISH_SCRIPT,
-            4,
-            self.run_stream_key(run_id),
-            PERSIST_STREAM_KEY,
-            f"{self.run_stream_key(run_id)}:sequence",
-            self.event_dedupe_key(run_id, event_id),
-            run_id,
-            conversation_id,
-            user_id,
-            event_id,
-            event_type,
-            payload,
-            str(initial_sequence),
+        try:
+            result = await self.redis.eval(
+                _PUBLISH_SCRIPT,
+                5,
+                self.run_stream_key(run_id),
+                PERSIST_STREAM_KEY,
+                f"{self.run_stream_key(run_id)}:sequence",
+                self.event_dedupe_key(run_id, event_id),
+                self.run_owner_key(run_id),
+                run_id,
+                conversation_id,
+                user_id,
+                event_id,
+                event_type,
+                payload,
+                str(initial_sequence),
+                str(STREAM_TTL_SECONDS),
+                owner_token,
+            )
+        except ResponseError as exc:
+            if "RUN_OWNER_MISMATCH" in str(exc):
+                raise RedisRunOwnerMismatchError(run_id) from exc
+            raise
+        return str(result[0])
+
+    async def claim_run_owner(self, run_id: str, owner_token: str) -> None:
+        claimed = await self.redis.eval(
+            _CLAIM_OWNER_SCRIPT,
+            1,
+            self.run_owner_key(run_id),
+            owner_token,
             str(STREAM_TTL_SECONDS),
         )
-        return str(result[0])
+        if int(claimed or 0) != 1:
+            raise RedisRunOwnerMismatchError(run_id)
+
+    async def release_run_owner(self, run_id: str, owner_token: str) -> None:
+        await self.redis.eval(_RELEASE_OWNER_SCRIPT, 1, self.run_owner_key(run_id), owner_token)
+
+    async def renew_run_owner(self, run_id: str, owner_token: str) -> None:
+        renewed = await self.redis.eval(
+            _RENEW_OWNER_SCRIPT,
+            1,
+            self.run_owner_key(run_id),
+            owner_token,
+            str(STREAM_TTL_SECONDS),
+        )
+        if int(renewed or 0) != 1:
+            raise RedisRunOwnerMismatchError(run_id)
 
     async def sequence_exists(self, run_id: str) -> bool:
         return bool(await self.redis.exists(f"{self.run_stream_key(run_id)}:sequence"))
@@ -189,6 +268,7 @@ class RedisEventBus:
     async def ack_persistence(self, stream_ids: list[str]) -> None:
         if stream_ids:
             await self.redis.xack(PERSIST_STREAM_KEY, PERSIST_GROUP, *stream_ids)
+            await self.redis.xdel(PERSIST_STREAM_KEY, *stream_ids)
 
     async def expire_run_stream(self, run_id: str) -> None:
         await self.redis.expire(self.run_stream_key(run_id), STREAM_TTL_SECONDS)
@@ -207,6 +287,10 @@ class RedisEventBus:
     @staticmethod
     def event_dedupe_key(run_id: str, event_id: str) -> str:
         return f"{RUN_STREAM_PREFIX}{run_id}:event:{event_id}"
+
+    @staticmethod
+    def run_owner_key(run_id: str) -> str:
+        return f"{RUN_STREAM_PREFIX}{run_id}:owner"
 
     @staticmethod
     def _decode_event(stream_id: str, fields: Mapping[str, Any]) -> dict[str, str]:

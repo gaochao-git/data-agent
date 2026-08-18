@@ -172,6 +172,27 @@ class AgentInboxDao:
             message.lease_expire_time = None
             message.update_time = now
 
+    async def renew_claimed_message_leases(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        lease_expire_time: datetime,
+        now: datetime,
+    ) -> None:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "message",
+                ChatDataAgentInbox.status == "claimed",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .with_for_update()
+        )
+        for message in result.scalars().all():
+            message.lease_expire_time = lease_expire_time
+            message.update_time = now
+
     async def adopt_pending_messages(
         self,
         session: AsyncSession,
@@ -232,23 +253,6 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none()
 
-    async def get_run_owner_for_update(
-        self,
-        session: AsyncSession,
-        run_id: str,
-    ) -> tuple[str | None, str | None] | None:
-        result = await session.execute(
-            select(ChatDataAgentInbox.status, ChatDataAgentInbox.owner_token)
-            .where(
-                ChatDataAgentInbox.run_id == run_id,
-                ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.delete_flag == 0,
-            )
-            .with_for_update()
-        )
-        row = result.one_or_none()
-        return (row[0], row[1]) if row else None
-
     async def get_run_by_id(
         self,
         session: AsyncSession,
@@ -263,12 +267,21 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none()
 
-    async def list_pending_runs(self, session: AsyncSession, limit: int = 20) -> list[ChatDataAgentInbox]:
+    async def list_runnable_runs(
+        self,
+        session: AsyncSession,
+        now: datetime,
+        limit: int = 20,
+    ) -> list[ChatDataAgentInbox]:
         result = await session.execute(
             select(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status == "pending",
+                or_(
+                    ChatDataAgentInbox.status == "pending",
+                    (ChatDataAgentInbox.status == "active")
+                    & (ChatDataAgentInbox.lease_expire_time <= now),
+                ),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.asc())
@@ -290,6 +303,7 @@ class AgentInboxDao:
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.asc())
+            .with_for_update()
         )
         return list(result.scalars().all())
 

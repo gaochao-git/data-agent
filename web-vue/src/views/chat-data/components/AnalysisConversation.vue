@@ -88,6 +88,7 @@ const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
 const activeRunStatus = ref<string | null>(null)
+const activeRunTurnId = ref<string | null>(null)
 const activeRunIsContinuation = ref(false)
 const ownedRunStorageKey = 'chatdata-active-run-conversation'
 const activeRunId = ref<string | null>(null)
@@ -139,6 +140,7 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
     activeRunStatus.value = response.data?.run_status ?? null
+    activeRunTurnId.value = response.data?.turn_id || null
     activeRunIsContinuation.value = Boolean(response.data?.is_continuation)
     emit(
       'runStatusChanged',
@@ -148,9 +150,17 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
         : null,
     )
     if (activeRunId.value) {
-      activeRunEventId.value = window.sessionStorage.getItem(runEventIdStorageKey(conversationId, activeRunId.value)) || '0-0'
+      const storedEventId = window.sessionStorage.getItem(runEventIdStorageKey(conversationId, activeRunId.value))
+      activeRunEventId.value = storedEventId || '0-0'
+      if (!storedEventId && activeRunTurnId.value) {
+        messages.value = messages.value.filter(message => (
+          message.turnId !== activeRunTurnId.value || message.role === 'user'
+        ))
+        syncHistoryToolCalls()
+      }
     } else {
       activeRunEventId.value = '0-0'
+      activeRunTurnId.value = null
     }
     const persistedMessageIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
     const reconciled = reconcileInboxSnapshot(
@@ -186,13 +196,13 @@ const restorePendingUserQuestion = async () => {
 }
 
 const recoverInterruptedPageRun = async () => {
+  while (isLoadingHistory.value) {
+    await new Promise(resolve => window.setTimeout(resolve, 50))
+  }
   await restorePendingSteerQueue({ restartPolling: false })
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId || !hasActiveRun.value || !activeRunId.value) return
   if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
-  while (isLoadingHistory.value) {
-    await new Promise(resolve => window.setTimeout(resolve, 50))
-  }
   const runId = activeRunId.value
   await submitAnalysisQuery('', {
       appendUserMessage: false,
@@ -1719,7 +1729,7 @@ const syncHistoryToolCalls = () => {
   toolCallsMap.value = nextMap
 }
 
-const { isLoadingHistory, loadedConversationId, resetHistory } = useConversationHistory({
+const { isLoadingHistory, loadedConversationId, loadHistory, resetHistory } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
   tokenUsage,
@@ -2218,7 +2228,7 @@ const submitAnalysisQuery = async (
   isGenerating.value = true
   activeToolCallId.value = null
   let startedRunId: string | null = null
-  let convId: string | null = props.conversationId
+  let convId: string | null = props.conversationId || null
   // Keep the previous request visible until the first usage event of this turn arrives.
   resetTokenUsagePanel(false)
 
@@ -2240,6 +2250,7 @@ const submitAnalysisQuery = async (
       if (options.messageSkill) selectedSkill.value = options.messageSkill
       return
     }
+    const resolvedConversationId = convId
     if (props.ensureConversationDatasource && !await props.ensureConversationDatasource()) {
       if (options.appendUserMessage !== false) {
         messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
@@ -2249,12 +2260,12 @@ const submitAnalysisQuery = async (
       if (options.messageSkill) selectedSkill.value = options.messageSkill
       return
     }
-    localConversationId.value = convId
+    localConversationId.value = resolvedConversationId
     await generateSqlStream(
       requestText,
       true,
       selectedDatasource.value,
-      convId,
+      resolvedConversationId,
       'query',
       (msg) => handleLangGraphMessage(msg),
       () => {
@@ -2329,7 +2340,7 @@ const submitAnalysisQuery = async (
       (question) => {
         pendingUserQuestion.value = question
         hasActiveRun.value = true
-        emit('runStatusChanged', convId, 'waiting_user')
+        emit('runStatusChanged', resolvedConversationId, 'waiting_user')
         const active = activeAssistantMessageId.value
           ? messages.value.find(item => item.id === activeAssistantMessageId.value)
           : null
@@ -2339,16 +2350,21 @@ const submitAnalysisQuery = async (
         startedRunId = runId
         if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
         activeRunId.value = runId
-        saveOwnedRun(convId, runId)
-        emit('runStatusChanged', convId, 'active')
+        saveOwnedRun(resolvedConversationId, runId)
+        emit('runStatusChanged', resolvedConversationId, 'active')
       },
       options.responseFactory,
       (eventId) => {
         activeRunEventId.value = eventId
-        window.sessionStorage.setItem(runEventIdStorageKey(convId, activeRunId.value || ''), eventId)
+        window.sessionStorage.setItem(runEventIdStorageKey(resolvedConversationId, activeRunId.value || ''), eventId)
       },
       () => {
-        if (isFirstMessage) emit('firstMessageStarted', convId)
+        if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
+      },
+      async () => {
+        activeAssistantMessageId.value = null
+        await loadHistory(resolvedConversationId, true)
+        syncHistoryToolCalls()
       },
     )
   } catch (err) {
@@ -2357,7 +2373,7 @@ const submitAnalysisQuery = async (
   } finally {
     isGenerating.value = false
     await restorePendingSteerQueue({ restartPolling: false })
-    if (options.autoResumeQueuedRun !== false && !options.interruptedQuestion) {
+    if (options.autoResumeQueuedRun !== false) {
       await resumeQueuedRunAfterCompletion(convId, startedRunId || activeRunId.value)
     }
   }

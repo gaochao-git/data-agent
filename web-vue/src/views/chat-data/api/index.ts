@@ -1360,6 +1360,7 @@ export function listSteerMessages(
   has_active_run: boolean
   run_id?: string | null
   run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  turn_id?: string | null
   is_continuation?: boolean
   messages: Array<{
     message_id: string

@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from datetime import datetime
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -26,7 +27,7 @@ def _max_concurrency() -> int:
 
 
 class AgentRunRuntime:
-    """单进程并发执行多个 Run；每个 Run 的事件先持久化再供 SSE 读取。"""
+    """单进程并发执行多个 Run；Redis 实时发布，MySQL 异步持久化。"""
 
     def __init__(
         self,
@@ -81,20 +82,6 @@ class AgentRunRuntime:
         if self._tasks.get(run_id) is completed:
             self._tasks.pop(run_id, None)
 
-    async def wait_for_existing_run(self, run_id: str) -> None:
-        """Wait for the previous execution segment before checkpoint resume."""
-        task = self._tasks.get(run_id)
-        if task is None or task is asyncio.current_task():
-            return
-        try:
-            # The HTTP/SSE subscriber must not cancel the background Run if it
-            # disconnects while waiting for the old question segment to close.
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if task.cancelled():
-                return
-            raise
-
     async def stop(self) -> None:
         if self._poll_task:
             self._poll_task.cancel()
@@ -117,8 +104,8 @@ class AgentRunRuntime:
             try:
                 available_slots = self._max_concurrency - len(self._tasks)
                 if available_slots > 0:
-                    pending = await self._list_pending_runs(available_slots)
-                    for run_id in pending:
+                    runnable = await self._list_runnable_runs(available_slots)
+                    for run_id in runnable:
                         if run_id in self._tasks:
                             continue
                         self.submit(
@@ -134,12 +121,12 @@ class AgentRunRuntime:
                 logger.error("ChatData Agent Run 调度失败", exc_info=True)
                 await asyncio.sleep(1)
 
-    async def _list_pending_runs(self, limit: int) -> list[str]:
+    async def _list_runnable_runs(self, limit: int) -> list[str]:
         from utils.database import get_session
         from ...daos.agent_inbox_dao import agent_inbox_dao
 
         async with get_session() as session:
-            rows = await agent_inbox_dao.list_pending_runs(session, limit)
+            rows = await agent_inbox_dao.list_runnable_runs(session, datetime.now(), limit)
             return [row.run_id for row in rows]
 
     @staticmethod
@@ -168,7 +155,10 @@ class AgentRunRuntime:
                 owner_token=prepared["owner_token"],
                 adopted_messages=prepared.get("messages") or [],
                 resume_answer=prepared.get("resume_answer"),
+                resume_started=bool(prepared.get("resume_started")),
                 resume_turn_id=prepared.get("resume_turn_id"),
+                turn_id=prepared.get("turn_id"),
+                recovering=bool(prepared.get("recovering")),
             )
 
         return factory
@@ -183,6 +173,8 @@ class AgentRunRuntime:
     ) -> None:
         async with self._semaphore:
             prepared = None
+            terminal_payload: str | None = None
+            terminal_ready = False
             try:
                 prepared = await self._inbox_service.prepare_pending_run(run_id)
                 if prepared is None:
@@ -190,8 +182,12 @@ class AgentRunRuntime:
                 conversation_id = prepared["conversation_id"]
                 user_id = prepared["user_id"]
                 operator_name = prepared.get("operator_name") or operator_name or user_id
+                await self._event_service.claim_owner(run_id, prepared["owner_token"])
                 stream_factory = self._build_stream_factory(prepared)
                 async for payload in stream_factory():
+                    if self._event_service.is_terminal_payload(payload):
+                        terminal_payload = payload
+                        continue
                     await self._event_service.append(
                         run_id=run_id,
                         conversation_id=conversation_id,
@@ -202,6 +198,7 @@ class AgentRunRuntime:
                         payload=payload,
                         owner_token=prepared["owner_token"],
                     )
+                terminal_ready = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -218,8 +215,29 @@ class AgentRunRuntime:
                             operator_name,
                             prepared["owner_token"],
                         )
+                        terminal_ready = True
                     except AgentRunLeaseLostError:
                         logger.info("ChatData Agent Run 失败收口时租约已丢失: run_id=%s", run_id)
+            finally:
+                if prepared is not None:
+                    if terminal_payload is not None and terminal_ready:
+                        try:
+                            await self._event_service.append(
+                                run_id=run_id,
+                                conversation_id=conversation_id,
+                                user_id=user_id,
+                                event_id=f"{run_id}:{uuid4().hex}",
+                                payload=terminal_payload,
+                                owner_token=prepared["owner_token"],
+                            )
+                        except AgentRunLeaseLostError:
+                            logger.info("ChatData Agent Run 终止事件发布时租约已丢失: run_id=%s", run_id)
+                        except Exception:
+                            logger.error("ChatData Agent Run 终止事件发布失败: run_id=%s", run_id, exc_info=True)
+                    try:
+                        await self._event_service.release_owner(run_id, prepared["owner_token"])
+                    except Exception:
+                        logger.warning("ChatData Agent Run Redis owner 清理失败: run_id=%s", run_id, exc_info=True)
 
 
 agent_run_runtime = AgentRunRuntime()

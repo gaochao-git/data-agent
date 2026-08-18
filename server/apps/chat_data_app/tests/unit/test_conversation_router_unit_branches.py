@@ -388,7 +388,7 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.conversation, "list_all", list_internal_raises)
     sanitized = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
     assert sanitized["code"] == ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED
-    assert sanitized["msg"] == "后端服务异常，请稍后重试"
+    assert sanitized["msg"] == "获取对话列表失败，请稍后重试"
     assert "62.234.152.217" not in sanitized["msg"]
 
     async def get_config(*_args, **_kwargs):
@@ -637,6 +637,7 @@ async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatc
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", lambda _run_id: _async_value("old-tail-0"))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", duplicate)
 
     response = await conversation_router.answer_question(
@@ -647,6 +648,37 @@ async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatc
     )
     assert payload(response)["code"] == ErrorCode.CHATDATA_QUESTION_NOT_WAITING
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_answer_question_does_not_claim_before_existing_run_done(router_state, monkeypatch):
+    calls = {"claim": 0}
+
+    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+        return "chat_data"
+
+    async def pending(_conversation_id, _user_id):
+        return {"run_id": "run-1", "question_id": "q1", "turn_id": "turn-1", "questions": []}
+
+    async def claim(*_args, **_kwargs):
+        calls["claim"] += 1
+        return "run-1", {"query": "查询订单"}
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(False))
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
+
+    response = await conversation_router.answer_question(
+        "conv-1",
+        "q1",
+        conversation_router.QuestionAnswerRequest(answers=[]),
+        FakeRequest(),
+    )
+
+    assert response.status_code == 409
+    assert payload(response)["code"] == ErrorCode.CHATDATA_QUESTION_NOT_WAITING
+    assert calls["claim"] == 0
 
 
 @pytest.mark.asyncio
@@ -671,6 +703,7 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", lambda _run_id: _async_value("old-tail-0"))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "restore_question_answer", restore)
     monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", fail_resume)
@@ -703,6 +736,7 @@ async def test_resume_question_subscribes_after_existing_question_events(router_
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", lambda _run_id: _async_value("old-tail-0"))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
     monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", resume)
 
@@ -715,3 +749,4 @@ async def test_resume_question_subscribes_after_existing_question_events(router_
 
     assert result == "stream"
     assert calls["resume"]["run_id"] == "run-1"
+    assert calls["resume"]["last_event_id"] == "old-tail-0"

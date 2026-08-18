@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.agent.middleware.steering import SteeringMessageTracker, create_steering_middleware
+from apps.chat_data_app.agent.middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from apps.chat_data_app.services.agent_run import agent_inbox_service as inbox_module
 from apps.chat_data_app.services.agent_run.agent_inbox_service import (
     AgentInboxService,
     AgentQuestionNotWaitingError,
     AgentRunConflictError,
+    AgentRunLeaseLostError,
     AgentRunNotActiveError,
 )
 from utils.models import Base, ChatDataAgentInbox, UserThread
@@ -253,6 +255,31 @@ async def test_agent_inbox_completion_schedules_next_run(inbox_service):
     assert rows[1].status == "claimed"
     assert rows[1].message_id == message_id
 
+    next_run = next(row for row in rows if row.record_type == "run" and row.run_id == next_run_id)
+    assert service._load_run_content(next_run.content)["turn_id"] == message_id
+
+
+@pytest.mark.asyncio
+async def test_continuation_turn_id_tracks_last_admitted_user_message(inbox_service):
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "立即补充", queue_type="next-step",
+    )
+    last_message_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "下一轮问题", queue_type="next-turn",
+    )
+
+    next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+
+    async with get_session() as session:
+        next_run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == next_run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert service._load_run_content(next_run.content)["turn_id"] == last_message_id
+
 
 @pytest.mark.asyncio
 async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
@@ -288,8 +315,8 @@ async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
 
 
 @pytest.mark.asyncio
-async def test_expired_run_requeues_claimed_messages_when_new_run_starts(inbox_service):
-    """模拟 worker 崩溃未收口：run lease 过期后，新 worker 接管同一消息。"""
+async def test_expired_run_is_reclaimed_with_same_run_and_messages(inbox_service):
+    """Worker 崩溃后由新 Worker 接管同一 Run，不创建并发 Run。"""
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -302,14 +329,19 @@ async def test_expired_run_requeues_claimed_messages_when_new_run_starts(inbox_s
         ))).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
-    assert [message.id for message in adopted] == [message_id]
-    claimed = await service.claim_pending_messages(next_run_id)
-    assert claimed.messages == []
+    with pytest.raises(AgentRunConflictError):
+        await service.start_run("conv-1", "user-1", "用户一")
+
+    prepared = await service.prepare_pending_run(run_id)
+    assert prepared is not None
+    assert prepared["run_id"] == run_id
+    assert prepared["recovering"] is True
+    assert [message.id for message in prepared["messages"]] == [message_id]
+    assert prepared["owner_token"].startswith("2:")
 
 
 @pytest.mark.asyncio
-async def test_expired_run_rejects_steer_and_allows_new_completion(inbox_service):
+async def test_expired_run_accepts_steer_for_recovery_and_rejects_parallel_completion(inbox_service):
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -320,12 +352,64 @@ async def test_expired_run_rejects_steer_and_allows_new_completion(inbox_service
         ))).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    with pytest.raises(AgentRunNotActiveError):
-        await service.enqueue_message("conv-1", "user-1", "用户一", "不应进入死队列")
+    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "恢复后继续处理")
+    assert message_id
+    with pytest.raises(AgentRunConflictError):
+        await service.start_run("conv-1", "user-1", "用户一")
 
-    next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
-    assert next_run_id != run_id
-    assert adopted == []
+
+@pytest.mark.asyncio
+async def test_recovered_messages_are_reconciled_against_checkpoint(inbox_service):
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    checkpointed_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "已写入 checkpoint", queue_type="next-step",
+    )
+    pending_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "尚未写入 checkpoint", queue_type="next-step",
+    )
+    await service.claim_pending_messages(run_id)
+
+    await service.reconcile_recovered_messages(
+        run_id,
+        {checkpointed_id},
+        owners[run_id],
+    )
+
+    async with get_session() as session:
+        rows = list((await session.execute(
+            select(ChatDataAgentInbox)
+            .where(ChatDataAgentInbox.record_type == "message")
+            .order_by(ChatDataAgentInbox.id)
+        )).scalars())
+    assert [(row.message_id, row.status) for row in rows] == [
+        (checkpointed_id, "consumed"),
+        (pending_id, "pending"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_fence_rejects_stale_owner_before_handler():
+    calls = {"handler": 0}
+
+    class Inbox:
+        async def assert_run_owner(self, _run_id, _owner_token):
+            raise AgentRunLeaseLostError("owner changed")
+
+    async def handler(_request):
+        calls["handler"] += 1
+        return ToolMessage(content="ok", tool_call_id="call-1")
+
+    middleware = create_tool_execution_fence_middleware(
+        run_id="run-1",
+        owner_token="1:stale",
+        inbox_service=Inbox(),
+    )
+
+    with pytest.raises(AgentRunLeaseLostError):
+        await middleware.awrap_tool_call(object(), handler)
+    assert calls["handler"] == 0
 
 
 @pytest.mark.asyncio

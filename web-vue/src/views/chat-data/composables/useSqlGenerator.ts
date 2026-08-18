@@ -105,6 +105,7 @@ export function useSqlGenerator() {
     responseFactory?: (signal: AbortSignal) => Promise<Response>,
     onRunEvent?: (eventId: string) => void,
     onFirstEvent?: () => void,
+    onRunRestarted?: () => void | Promise<void>,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -283,6 +284,11 @@ export function useSqlGenerator() {
             continue
           }
 
+          if (event === 'run_restarted') {
+            await onRunRestarted?.()
+            continue
+          }
+
           if (event === 'thinking') {
             try {
               const data = JSON.parse(dataStr)
@@ -367,12 +373,15 @@ export function useSqlGenerator() {
         if (streamEnded) break
       }
 
-      // 流结束，调用 onResult 通知完成
+      if (!streamEnded) {
+        throw new Error('流式连接意外中断，请重新进入会话继续接收')
+      }
+
+      // 只有明确收到 done 才通知完成。
       if (!interrupted) onResult?.({} as NL2SQLResult)
     } catch (err) {
-      // 用户主动取消不算错误
+      // 用户主动取消不算错误，也不应误报为成功。
       if (err instanceof DOMException && err.name === 'AbortError') {
-        onResult?.({} as NL2SQLResult)
         return
       }
       const errorMsg = err instanceof Error ? err.message : '请求失败'

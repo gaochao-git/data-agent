@@ -18,6 +18,7 @@ from .middleware.context_usage import (
 )
 from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.tool_result import create_tool_result_middleware
+from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.steering import SteeringMessageTracker, create_steering_middleware
 from .prompts.chat_data import build_unified_system_prompt
@@ -140,7 +141,13 @@ def create_data_agent(
         state_schema=ChatDataAgentState,
     )
     steering_middleware = None
+    tool_execution_fence_middleware = None
     if run_id and owner_token and inbox_service and admit_inbox_messages and steering_tracker:
+        tool_execution_fence_middleware = create_tool_execution_fence_middleware(
+            run_id=run_id,
+            owner_token=owner_token,
+            inbox_service=inbox_service,
+        )
         steering_middleware = create_steering_middleware(
             run_id=run_id,
             owner_token=owner_token,
@@ -157,6 +164,7 @@ def create_data_agent(
         )
     middleware = build_standard_agent_middleware(
         tools,
+        tool_execution_fence_middleware=tool_execution_fence_middleware,
         tool_call_history_repair_middleware=tool_call_history_repair_middleware,
         steering_middleware=steering_middleware,
         context_compression_middleware=context_compression_middleware,

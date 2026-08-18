@@ -1,6 +1,8 @@
 import pytest
 
+from apps.chat_data_app.services.agent_run.agent_inbox_service import AgentRunLeaseLostError
 from apps.chat_data_app.services.agent_run.agent_run_event_service import AgentRunEventService
+from apps.chat_data_app.services.agent_run.redis_event_bus import RedisRunOwnerMismatchError
 
 
 class _Bus:
@@ -95,6 +97,32 @@ async def test_append_checks_redis_sequence_only_once_per_run(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_claiming_new_owner_rechecks_sequence_state():
+    class Bus:
+        async def claim_run_owner(self, _run_id, _owner_token):
+            return None
+
+    service = AgentRunEventService(bus=Bus())
+    service._sequence_initialized_runs.add("run-1")
+
+    await service.claim_owner("run-1", "2:new-owner")
+
+    assert "run-1" not in service._sequence_initialized_runs
+
+
+@pytest.mark.asyncio
+async def test_claim_owner_maps_redis_fencing_to_run_lease_loss():
+    class Bus:
+        async def claim_run_owner(self, _run_id, _owner_token):
+            raise RedisRunOwnerMismatchError("run-1")
+
+    service = AgentRunEventService(bus=Bus())
+
+    with pytest.raises(AgentRunLeaseLostError):
+        await service.claim_owner("run-1", "1:stale")
+
+
+@pytest.mark.asyncio
 async def test_stream_stops_after_terminal_done_event():
     service = AgentRunEventService(bus=_Bus())
     events = [event async for event in service.stream(run_id="run-1")]
@@ -152,7 +180,7 @@ async def test_latest_event_id_prefers_redis_tail(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_wait_for_done_waits_until_terminal_event():
+async def test_wait_for_done_waits_until_terminal_event(monkeypatch):
     class Bus:
         def __init__(self):
             self.calls = 0
@@ -163,8 +191,51 @@ async def test_wait_for_done_waits_until_terminal_event():
                 return {"event_type": "question_requested"}
             return {"event_type": "done"}
 
-    service = AgentRunEventService(bus=Bus())
+    class EventDao:
+        async def get_latest_event_type(self, _session, *, run_id):
+            assert run_id == "run-1"
+            return None
+
+    service = AgentRunEventService(bus=Bus(), event_dao=EventDao())
+    class Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        lambda: Session(),
+    )
     assert await service.wait_for_done("run-1", timeout=0.2) is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_done_falls_back_to_durable_terminal_event(monkeypatch):
+    class Bus:
+        async def latest_run_event(self, _run_id):
+            return None
+
+    class EventDao:
+        async def get_latest_event_type(self, _session, *, run_id):
+            assert run_id == "run-1"
+            return "done"
+
+    class Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        lambda: Session(),
+    )
+    service = AgentRunEventService(bus=Bus(), event_dao=EventDao())
+
+    assert await service.wait_for_done("run-1", timeout=0) is True
 
 
 @pytest.mark.asyncio
