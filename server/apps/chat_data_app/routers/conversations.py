@@ -361,7 +361,11 @@ async def list_conversations(
 
 
 @router.get("/{conversation_id}")
-async def get_conversation_detail(conversation_id: str, req: Request):
+async def get_conversation_detail(
+    conversation_id: str,
+    req: Request,
+    view: Literal["full", "timeline"] = "full",
+):
     """
     获取会话详情
 
@@ -384,11 +388,15 @@ async def get_conversation_detail(conversation_id: str, req: Request):
 
         result = await conversation.get_detail(
             conversation_id,
-            user_id
+            user_id,
+            include_derived_history=view == "full",
         )
         if not result:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
+        if view == "timeline":
+            result.pop("messages", None)
+            result.pop("reasoning_segments", None)
         return business_response(data=result, msg="获取对话详情成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e

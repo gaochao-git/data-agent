@@ -122,6 +122,27 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
+  it('keeps assistant text before a tool call stored in the same AI message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '生成报告' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: {
+          id: 'assistant-1',
+          content: '为了生成报告，我需要您确认以下问题：',
+          tool_calls: [{ id: 'ask-1', name: 'ask_user_question', args: {} }],
+        },
+      },
+    ])
+
+    expect(messages[1]!.segments).toEqual([
+      { type: 'text', content: '为了生成报告，我需要您确认以下问题：' },
+      { type: 'toolCall', toolCallId: 'ask-1' },
+    ])
+  })
+
   it('replays context compression as a standalone timeline marker', () => {
     const messages = buildHistoryMessagesFromEvents([
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '继续分析' } },

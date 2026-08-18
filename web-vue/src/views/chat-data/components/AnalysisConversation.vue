@@ -285,7 +285,6 @@ const saveEditSteerMessage = async (item: { messageId?: string; content: string 
     editingSteerId.value = null
     ElMessage.success('消息已更新')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '修改队列消息失败')
     // 以系统为准：消息可能已被取走，同步服务端队列状态
     restorePendingSteerQueue()
   } finally {
@@ -308,7 +307,6 @@ const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType
     if (response.data?.queue_type) item.queueType = response.data.queue_type
     ElMessage.success(nextType === 'next-step' ? '已切换为立即插入' : '已切换为下一轮处理')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '切换队列类型失败')
     restorePendingSteerQueue()
   } finally {
     steerActionBusy.value = false
@@ -328,7 +326,6 @@ const removePendingSteerMessage = async (item: { clientId: string; messageId?: s
     pendingSteerMessages.value = pendingSteerMessages.value.filter(entry => entry.clientId !== item.clientId)
     if (editingSteerId.value === item.messageId) cancelEditSteer()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '移除队列消息失败')
     restorePendingSteerQueue()
   } finally {
     steerActionBusy.value = false
@@ -2791,7 +2788,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             <div class="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               <i class="fa-solid fa-chevron-down text-[9px]"></i>
               <span>{{ pendingSteerMessages.length }} 个队列任务</span>
-              <span class="ml-auto text-[10px] text-slate-400">发送默认下一轮处理，可手动立即插入</span>
+              <span class="ml-auto text-[10px] text-slate-400">
+                {{ activeRunStatus === 'waiting_user' ? '请先回答智能体问题，恢复后继续处理队列' : '发送默认下一轮处理，可手动立即插入' }}
+              </span>
             </div>
             <div class="max-h-[120px] overflow-y-auto">
               <div
@@ -2820,7 +2819,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <span v-else-if="item.status === 'claimed' || item.status === 'consumed'">处理中</span>
                   <span v-else>等待处理</span>
                   <button
-                    v-if="item.messageId"
+                    v-if="item.messageId && activeRunStatus !== 'waiting_user'"
                     type="button"
                     class="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
                     :class="item.queueType === 'next-step' ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-blue-50 text-[#1677FF] hover:bg-blue-100'"

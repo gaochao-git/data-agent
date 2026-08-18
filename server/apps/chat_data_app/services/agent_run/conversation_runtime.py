@@ -21,6 +21,7 @@ async def stream_agent_turn(
     persist_turn_history: AsyncHook,
     persist_partial_history: AsyncHook,
     before_stream: Callable[[], Awaitable[bool]] | None = None,
+    after_finish: AsyncHook | None = None,
     after_turn: AsyncHook | None = None,
     after_stream: AsyncHook | None = None,
     on_interrupt: AsyncInterruptHook | None = None,
@@ -57,6 +58,8 @@ async def stream_agent_turn(
 
         await wait_user_persistence()
         end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
+        if after_finish:
+            await after_finish()
         await persist_turn_history()
         if after_stream:
             await after_stream()

@@ -374,7 +374,9 @@ async def resolve_datasource_binding(
 
 async def get_detail(
     conversation_id: str,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    *,
+    include_derived_history: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """从业务表和事件表获取会话详情。"""
     # 从数据库获取会话元信息
@@ -387,6 +389,7 @@ async def get_detail(
     event_history = await conversation_event_service.load_history(
         conversation_id=conversation_id,
         user_id=str(thread.user_id),
+        include_derived=include_derived_history,
     )
     messages = [*(event_history.get("messages") or [])]
     history_events = [*(event_history.get("history_events") or [])]

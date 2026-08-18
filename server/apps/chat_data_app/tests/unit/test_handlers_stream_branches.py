@@ -77,6 +77,32 @@ def sse_event_name(event: str) -> str:
     return event.split("\n", 1)[0].removeprefix("event: ")
 
 
+def test_checkpoint_resume_status_uses_pending_interrupts():
+    assert handlers._checkpoint_resume_status(SimpleNamespace(
+        pending_writes=[("task-1", "__interrupt__", [])],
+    )) is False
+    assert handlers._checkpoint_resume_status(SimpleNamespace(pending_writes=[])) is True
+    assert handlers._checkpoint_resume_status(SimpleNamespace()) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monkeypatch):
+    async def fail_prepare(**_kwargs):
+        raise RuntimeError("semantic context failed")
+
+    monkeypatch.setattr(handlers, "prepare_semantic_conversation_context", fail_prepare)
+    events = []
+
+    with pytest.raises(RuntimeError, match="semantic context failed"):
+        async for event in handlers._generate_chat_data_stream(
+            thread_id="conv-1",
+            user_query="查询订单",
+        ):
+            events.append(event)
+
+    assert [sse_event_name(event) for event in events] == ["error", "done"]
+
+
 async def collect_stream(generator):
     return [chunk async for chunk in generator]
 

@@ -720,13 +720,13 @@ async def test_agent_inbox_cancel_pending_message(inbox_service):
 
 
 @pytest.mark.asyncio
-async def test_agent_inbox_update_requires_active_run_and_ownership(inbox_service):
+async def test_agent_inbox_update_requires_existing_message_and_ownership(inbox_service):
     service, create_thread, _get_session, owners = inbox_service
     await create_thread()
 
-    with pytest.raises(AgentRunNotActiveError):
+    with pytest.raises(inbox_module.SteerMessageNotFoundError):
         await service.update_pending_message("conv-1", "user-1", "用户一", "any-id", content="x")
-    with pytest.raises(AgentRunNotActiveError):
+    with pytest.raises(inbox_module.SteerMessageNotFoundError):
         await service.cancel_pending_message("conv-1", "user-1", "用户一", "any-id")
 
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -734,6 +734,24 @@ async def test_agent_inbox_update_requires_active_run_and_ownership(inbox_servic
 
     with pytest.raises(AgentRunNotActiveError):
         await service.update_pending_message("conv-1", "other-user", "其他用户", message_id, content="x")
+
+
+@pytest.mark.asyncio
+async def test_agent_inbox_can_delete_pending_message_after_run_cancelled(inbox_service):
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "停止后残留消息")
+
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一", owners[run_id])
+    await service.cancel_pending_message("conv-1", "user-1", "用户一", message_id)
+
+    async with get_session() as session:
+        row = (await session.execute(
+            select(ChatDataAgentInbox).where(ChatDataAgentInbox.message_id == message_id)
+        )).scalar_one()
+    assert row.status == "cancelled"
+    assert row.delete_flag == 1
 
 
 @pytest.mark.asyncio

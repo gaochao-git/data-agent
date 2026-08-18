@@ -445,6 +445,26 @@ def _checkpoint_message_ids(checkpoint_tuple: Any | None) -> set[str]:
     }
 
 
+def _checkpoint_resume_status(checkpoint_tuple: Any | None) -> bool | None:
+    """Return whether a resume interrupt is still pending in the checkpoint.
+
+    ``None`` means the checkpointer implementation did not expose pending
+    writes, so callers can fall back to the durable Run marker used by older
+    checkpoints. An explicit interrupt write is the authoritative indication
+    that ``Command(resume=...)`` still needs to be submitted.
+    """
+    pending_writes = getattr(checkpoint_tuple, "pending_writes", None)
+    if pending_writes is None:
+        return None
+    has_pending_interrupt = any(
+        isinstance(write, (tuple, list))
+        and len(write) >= 2
+        and str(write[1]) == "__interrupt__"
+        for write in pending_writes
+    )
+    return not has_pending_interrupt
+
+
 async def _persist_partial_agent_turn_history(
     stream_adapter: "_AgentSseStreamAdapter | None",
     *,
@@ -747,6 +767,7 @@ class _AgentSseStreamAdapter:
         self._first_visible_payload_seen = False
         self._first_token_timeout_alarm_emitted = False
         self._queued_events: list[str] = []
+        self.graph_started = False
 
     def set_input_state(self, input_state: dict[str, Any]) -> None:
         """设置下一次 graph 调用的增量输入。"""
@@ -771,6 +792,7 @@ class _AgentSseStreamAdapter:
             ):
                 if not stream_started:
                     stream_started = True
+                    self.graph_started = True
                     if self.on_stream_started:
                         await self.on_stream_started()
                 if await self._handle_disconnect():
@@ -1079,6 +1101,11 @@ async def _generate_chat_data_stream(
         terminal_status = "failed"
     except Exception:
         terminal_status = "failed"
+        # Preparation can fail before _run_chat_data_agent_stream enters its
+        # own guarded section. The background runtime still needs a terminal
+        # SSE pair so subscribers do not wait until their timeout.
+        yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
+        yield _format_sse("done", "[DONE]")
         raise
     finally:
         if heartbeat_task:
@@ -1295,11 +1322,15 @@ async def _run_chat_data_agent_stream(
             checkpoint_tuple = await checkpointer.aget_tuple(config) if recovering else None
             checkpoint_message_ids = _checkpoint_message_ids(checkpoint_tuple)
             current_turn_checkpointed = bool(turn_id and turn_id in checkpoint_message_ids)
+            checkpoint_resume_status = _checkpoint_resume_status(checkpoint_tuple)
             resume_checkpointed = bool(
                 resume_answer is not None
                 and recovering
                 and checkpoint_tuple is not None
-                and resume_started
+                and (
+                    checkpoint_resume_status is True
+                    or (checkpoint_resume_status is None and resume_started)
+                )
             )
             if recovering and current_turn_checkpointed and run_id and owner_token:
                 await agent_inbox_service.reconcile_recovered_messages(
@@ -1481,6 +1512,27 @@ async def _run_chat_data_agent_stream(
                     username=username,
                     turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                 )
+                # A stream can fail after LangGraph has checkpointed the
+                # answer but before the normal finish hook. Inspecting the
+                # durable state here prevents the old question from being
+                # resurrected on the next worker.
+                if (
+                    resume_answer is not None
+                    and run_id
+                    and stream_adapter.graph_started
+                    and stream_adapter.state is not None
+                    and not stream_adapter.pending_interrupt()
+                ):
+                    await agent_inbox_service.mark_question_resume_started(run_id, owner_token)
+
+            async def mark_resume_checkpointed() -> None:
+                if (
+                    resume_answer is not None
+                    and run_id
+                    and stream_adapter.graph_started
+                    and not stream_adapter.pending_interrupt()
+                ):
+                    await agent_inbox_service.mark_question_resume_started(run_id, owner_token)
 
             async def log_agent_stream_done() -> None:
                 log_phase("agent_stream_done")
@@ -1539,6 +1591,7 @@ async def _run_chat_data_agent_stream(
                 persist_turn_history=persist_turn_history,
                 persist_partial_history=persist_partial_history,
                 before_stream=before_stream,
+                after_finish=mark_resume_checkpointed,
                 finalize_resources=finalize_resources,
                 after_turn=log_agent_stream_done,
                 after_stream=confirm_consumed_messages,

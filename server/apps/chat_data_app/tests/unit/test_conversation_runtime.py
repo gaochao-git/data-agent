@@ -191,6 +191,27 @@ async def test_stream_agent_turn_emits_final_events_once():
     assert calls == ["user", "history", "after_stream"]
 
 
+@pytest.mark.asyncio
+async def test_stream_agent_turn_runs_after_finish_before_history():
+    calls: list[str] = []
+    adapter = _FakeStreamAdapter(["event: message\n\n"])
+
+    async def hook(name: str):
+        calls.append(name)
+
+    events = await _collect(stream_agent_turn(
+        stream_adapter=adapter,
+        format_sse=lambda event, _data: f"event: {event}\n\n",
+        persist_user_message=lambda: hook("user"),
+        persist_turn_history=lambda: hook("history"),
+        persist_partial_history=lambda: hook("partial"),
+        after_finish=lambda: hook("checkpointed"),
+    ))
+
+    assert events[-2:] == ["event: message_end\n\n", "event: done\n\n"]
+    assert calls == ["user", "checkpointed", "history"]
+
+
 async def _before_stream(calls: list[str]) -> bool:
     calls.append("before")
     return True

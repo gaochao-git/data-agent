@@ -83,7 +83,13 @@ class ConversationEventService:
             events=events,
         )
 
-    async def load_history(self, *, conversation_id: str, user_id: str) -> dict[str, Any]:
+    async def load_history(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        include_derived: bool = True,
+    ) -> dict[str, Any]:
         rows = await self._dao.list_visible_events(conversation_id=conversation_id, user_id=user_id)
         token_usage_payload = None
         try:
@@ -110,9 +116,9 @@ class ConversationEventService:
                 "event_type": row.event_type,
                 "payload": payload,
             })
-            if row.event_type == EVENT_REASONING:
+            if include_derived and row.event_type == EVENT_REASONING:
                 reasoning_segments.append(payload)
-            elif row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
+            elif include_derived and row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
                 messages.append(payload)
         return {
             "messages": messages,

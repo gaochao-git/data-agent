@@ -106,13 +106,15 @@ class AgentInboxDao:
     async def get_message_by_id(
         self,
         session: AsyncSession,
-        run_id: str,
+        conversation_id: str,
+        user_id: str,
         message_id: str,
     ) -> ChatDataAgentInbox | None:
         result = await session.execute(
             select(ChatDataAgentInbox)
             .where(
-                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.message_id == message_id,
                 ChatDataAgentInbox.record_type == "message",
                 ChatDataAgentInbox.delete_flag == 0,

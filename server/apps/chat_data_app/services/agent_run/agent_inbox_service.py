@@ -300,7 +300,7 @@ class AgentInboxService:
             return run.run_id, content.get("runtime_context") or {}
 
     async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
-        """Record that LangGraph has started processing the claimed answer."""
+        """Record that the checkpoint has advanced past the claimed answer."""
         owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
@@ -568,7 +568,7 @@ class AgentInboxService:
         content: str | None = None,
         queue_type: str | None = None,
     ) -> dict[str, str]:
-        """编辑仍在等待注入的消息内容或切换队列类型；已被领取的消息不可修改。"""
+        """编辑仍在等待注入的消息；Run 结束后遗留的 pending 消息也可修改。"""
         if content is not None and not content.strip():
             raise ValueError("消息内容不能为空")
         if queue_type is not None and queue_type not in INBOX_QUEUE_TYPES:
@@ -578,10 +578,12 @@ class AgentInboxService:
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
-            run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run is None:
-                raise AgentRunNotActiveError("当前会话没有运行中的任务")
-            message = await self._dao.get_message_by_id(session, run.run_id, message_id)
+            message = await self._dao.get_message_by_id(
+                session,
+                conversation_id,
+                user_id,
+                message_id,
+            )
             if message is None:
                 raise SteerMessageNotFoundError("队列消息不存在")
             if message.status != "pending":
@@ -606,16 +608,18 @@ class AgentInboxService:
         operator_name: str,
         message_id: str,
     ) -> None:
-        """删除仍在等待注入的消息；已被领取的消息不可删除。"""
+        """删除仍在等待注入的消息；Run 结束后遗留的 pending 消息也可删除。"""
         now = datetime.now()
         async with get_session() as session:
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
-            run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run is None:
-                raise AgentRunNotActiveError("当前会话没有运行中的任务")
-            message = await self._dao.get_message_by_id(session, run.run_id, message_id)
+            message = await self._dao.get_message_by_id(
+                session,
+                conversation_id,
+                user_id,
+                message_id,
+            )
             if message is None:
                 raise SteerMessageNotFoundError("队列消息不存在")
             if message.status != "pending":

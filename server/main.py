@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from utils.common_util import load_runtime_env
@@ -72,6 +73,7 @@ app.add_middleware(
     expose_headers=["X-ChatData-Run-Id"],
 )
 app.add_middleware(APIAccessLogMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(chat_data_router)
 
 

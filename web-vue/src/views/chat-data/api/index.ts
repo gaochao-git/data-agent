@@ -1446,7 +1446,8 @@ export function streamQuickSql(data: {
 /** 获取会话历史（流式接口） */
 export function getConversationHistory(conversationId: string): Promise<Response> {
   return requestStream({
-    url: `/agents/api/chatdata/conversations/${conversationId}`
+    url: `/agents/api/chatdata/conversations/${conversationId}`,
+    params: { view: 'timeline' },
   })
 }
 

@@ -278,6 +278,9 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
           reasoningTurnId: turnId || undefined,
         })
       }
+      // LangChain AIMessage content precedes its tool_calls. Live streaming
+      // naturally renders that order; replay must preserve it as well.
+      appendHistoryTextSegment(assistant, String(messagePayload.content || ''))
       const rawToolCalls = Array.isArray(messagePayload.tool_calls) ? messagePayload.tool_calls : []
       for (const rawToolCall of rawToolCalls) {
         const toolCall = getHistoryToolCall(rawToolCall)
@@ -285,7 +288,6 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         appendHistoryToolCall(assistant, toolCall)
         toolCallTargets.set(toolCall.tool_call_id, assistant)
       }
-      appendHistoryTextSegment(assistant, String(messagePayload.content || ''))
       continue
     }
 
@@ -400,6 +402,7 @@ export const buildHistoryMessages = (
         })
       }
 
+      appendHistoryTextSegment(assistant, String(rawMessage.content || ''))
       const rawToolCalls = Array.isArray(rawMessage.tool_calls) ? rawMessage.tool_calls : []
       for (const rawToolCall of rawToolCalls) {
         const toolCall = getHistoryToolCall(rawToolCall)
@@ -408,7 +411,6 @@ export const buildHistoryMessages = (
         toolCallTargets.set(toolCall.tool_call_id, assistant)
         visibleToolCallCount += 1
       }
-      appendHistoryTextSegment(assistant, String(rawMessage.content || ''))
       continue
     }
 
