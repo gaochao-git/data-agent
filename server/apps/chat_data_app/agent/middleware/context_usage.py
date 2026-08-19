@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 import weakref
 
@@ -72,6 +73,7 @@ def create_context_usage_middleware(
         records.append(record)
         _emit_context_usage(get_context_usage())
 
+        started_at_ms = _now_epoch_ms()
         try:
             response = await handler(_override_request(
                 request,
@@ -79,12 +81,34 @@ def create_context_usage_middleware(
                 messages=edited_messages,
             ))
         except Exception as exc:
+            logger.warning(
+                "[agent] 模型调用失败: index=%s model=%s started_at_ms=%s duration_ms=%s error=%s",
+                record["index"],
+                effective_model_id,
+                started_at_ms,
+                _now_epoch_ms() - started_at_ms,
+                exc,
+            )
             emit_llm_connection_alarm_if_needed(
                 exc,
                 ext1={"model_id": effective_model_id, "middleware": name},
             )
             raise
+        ended_at_ms = _now_epoch_ms()
+        record["started_at_ms"] = started_at_ms
+        record["ended_at_ms"] = ended_at_ms
         _merge_response_usage(record, response)
+        _stamp_response_timing(response, started_at_ms=started_at_ms, ended_at_ms=ended_at_ms)
+        logger.info(
+            "[agent] 模型调用完成: index=%s model=%s started_at_ms=%s ended_at_ms=%s duration_ms=%s input_tokens=%s output_tokens=%s",
+            record["index"],
+            effective_model_id,
+            started_at_ms,
+            ended_at_ms,
+            ended_at_ms - started_at_ms,
+            record.get("actual_input_tokens", record.get("input_tokens")),
+            record.get("output_tokens"),
+        )
         usage = get_context_usage()
         _emit_context_usage(usage)
         return ExtendedModelResponse(
@@ -398,6 +422,10 @@ def build_message_breakdown(
             # 前端凭 message_id 从已加载的会话消息中取正文，payload 本身不落正文。
             "message_id": getattr(message, "id", None),
             "tool_call_id": getattr(message, "tool_call_id", None),
+            # AI 消息为模型调用、工具消息为工具执行的起止时间（epoch 毫秒）；
+            # 其余消息无此字段，耗时由前端相减得出。
+            "started_at_ms": _optional_non_negative_int(additional_kwargs.get("started_at_ms")),
+            "ended_at_ms": _optional_non_negative_int(additional_kwargs.get("ended_at_ms")),
             "tokens": _scale_tokens(estimated_tokens, scale),
             "estimated_tokens": estimated_tokens,
             "estimated": True,
@@ -624,6 +652,32 @@ def _request_context_summary(request: Any) -> str | None:
         return None
     summary = str(state.get("context_summary") or "").strip()
     return summary or None
+
+
+def _now_epoch_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _stamp_response_timing(response: Any, *, started_at_ms: int, ended_at_ms: int) -> None:
+    """把模型调用起止时间（epoch 毫秒）盖进响应消息，随 checkpoint 持久化。
+
+    耗时由展示端相减得出；保留起止时间比只存时长信息更全（时间轴定位、间隔分析）。
+    """
+    message = _extract_response_message(response)
+    if message is None:
+        return
+    additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+    additional_kwargs["started_at_ms"] = started_at_ms
+    additional_kwargs["ended_at_ms"] = ended_at_ms
+    try:
+        message.additional_kwargs = additional_kwargs
+    except Exception:
+        logger.warning(
+            "模型调用起止时间写入响应消息失败: started_at_ms=%s ended_at_ms=%s",
+            started_at_ms,
+            ended_at_ms,
+            exc_info=True,
+        )
 
 
 def _merge_response_usage(record: dict[str, Any], response: Any) -> None:

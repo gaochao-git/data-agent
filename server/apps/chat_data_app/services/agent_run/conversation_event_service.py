@@ -386,6 +386,23 @@ def _timestamp(message: BaseMessage) -> str:
     return str((getattr(message, "additional_kwargs", None) or {}).get("timestamp") or "")
 
 
+def _execution_timing(message: BaseMessage) -> dict[str, int]:
+    """读取消息上盖章的执行起止时间（AI 为模型调用、tool 为工具执行，epoch 毫秒）。"""
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    timing: dict[str, int] = {}
+    for key in ("started_at_ms", "ended_at_ms"):
+        value = additional_kwargs.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            timestamp_ms = int(value)
+        except (TypeError, ValueError):
+            continue
+        if timestamp_ms >= 0:
+            timing[key] = timestamp_ms
+    return timing
+
+
 def _serialize_human_message(message: HumanMessage) -> dict[str, Any]:
     additional_kwargs = getattr(message, "additional_kwargs", None) or {}
     payload: dict[str, Any] = {
@@ -407,6 +424,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
         "content": message.content,
         "timestamp": _timestamp(message),
     }
+    payload.update(_execution_timing(message))
     tool_calls = []
     for tool_call in getattr(message, "tool_calls", None) or []:
         if not isinstance(tool_call, dict):
@@ -425,7 +443,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
 
 
 def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
-    return {
+    payload = {
         "id": _message_id(message),
         "role": "tool",
         "content": message.content,
@@ -433,6 +451,8 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
         "tool_name": str(getattr(message, "name", "") or ""),
         "timestamp": _timestamp(message),
     }
+    payload.update(_execution_timing(message))
+    return payload
 
 
 def _extract_reasoning_content(message: AIMessage) -> str:

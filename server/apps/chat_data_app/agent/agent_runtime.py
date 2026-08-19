@@ -98,6 +98,10 @@ def build_standard_agent_middleware(
         # outermost so ToolErrorMiddleware cannot turn ownership loss into an
         # ordinary model-visible tool failure.
         middleware.append(tool_execution_fence_middleware)
+    # 紧贴围栏内侧：起止时间覆盖结果卸载与 ToolErrorMiddleware 转换在内的完整
+    # 工具执行链路，成功和失败的 ToolMessage 都盖上 started_at_ms / ended_at_ms。
+    from .middleware.tool_timing import create_tool_timing_middleware
+    middleware.append(create_tool_timing_middleware())
     if tool_call_history_repair_middleware is not None:
         middleware.append(tool_call_history_repair_middleware)
     if steering_middleware is not None:

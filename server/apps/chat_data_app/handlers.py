@@ -738,6 +738,10 @@ class _ToolStreamState:
         msg_data["timestamp"] = _get_timestamp()
         msg_data["tool_name"] = self.tool_names.get(tool_call_id, msg_data.get("name") or "")
         msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content")) else "completed"
+        # ToolTimingMiddleware 盖在 additional_kwargs 里的执行起止时间，提升为顶层字段供前端展示。
+        tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
+        msg_data["started_at_ms"] = tool_additional_kwargs.get("started_at_ms")
+        msg_data["ended_at_ms"] = tool_additional_kwargs.get("ended_at_ms")
         if tool_call_id:
             msg_data["accumulated_args"] = _parse_tool_args_buffer(
                 self.args_buffer.get(tool_call_id, ""),

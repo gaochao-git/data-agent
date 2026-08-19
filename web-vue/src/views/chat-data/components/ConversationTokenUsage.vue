@@ -14,6 +14,8 @@ type TokenUsageRow = {
   role?: string
   round?: number
   messageIndex?: number
+  startedAtMs?: number | null
+  endedAtMs?: number | null
   children?: TokenUsageRow[]
 }
 
@@ -272,7 +274,31 @@ const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', ke
     role: item.role,
     round: item.round,
     messageIndex: item.message_index,
+    startedAtMs: item.started_at_ms,
+    endedAtMs: item.ended_at_ms,
   }
+}
+
+// AI 行为模型调用耗时、工具行为工具执行耗时（起止时间相减），其余行无值显示 -
+const formatDuration = (item: Pick<TokenUsageRow, 'startedAtMs' | 'endedAtMs'>): string => {
+  const { startedAtMs, endedAtMs } = item
+  if (
+    typeof startedAtMs !== 'number' || !Number.isFinite(startedAtMs)
+    || typeof endedAtMs !== 'number' || !Number.isFinite(endedAtMs)
+    || endedAtMs < startedAtMs
+  ) {
+    return '-'
+  }
+  const durationMs = endedAtMs - startedAtMs
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`
+  return `${(durationMs / 1000).toFixed(1)}s`
+}
+
+const formatTimingTitle = (item: TokenUsageRow): string => {
+  if (typeof item.startedAtMs !== 'number' || typeof item.endedAtMs !== 'number') return ''
+  const format = (ms: number) => new Date(ms).toLocaleTimeString('zh-CN', { hour12: false })
+  const scope = item.role === 'tool' ? '工具执行' : '模型调用'
+  return `${scope} ${format(item.startedAtMs)} ~ ${format(item.endedAtMs)}`
 }
 
 const messageRows = computed(() => {
@@ -488,15 +514,16 @@ defineExpose({
           </div>
         </div>
         <div class="max-h-[250px] overflow-auto rounded border border-gray-100 bg-white">
-          <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(88px,0.55fr)_34px_42px_48px] items-center gap-2 border-b border-gray-100 bg-slate-50 px-2 py-1 text-[10px] text-gray-400">
+          <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-b border-gray-100 bg-slate-50 px-2 py-1 text-[10px] text-gray-400">
             <span>内容</span>
             <span>占比</span>
             <span class="text-center">轮次</span>
             <span class="text-center">类型</span>
+            <span class="text-right">耗时</span>
             <span class="text-right">Token</span>
           </div>
           <div v-for="item in messageRows" :key="item.key" class="border-b border-gray-50 last:border-b-0">
-            <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(88px,0.55fr)_34px_42px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
+            <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
               <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="h-1 flex-1 overflow-hidden rounded-full bg-gray-100">
@@ -506,6 +533,7 @@ defineExpose({
               </span>
               <span class="text-center text-gray-400">{{ item.round || '-' }}</span>
               <span :class="['justify-self-center whitespace-nowrap rounded px-1 py-0.5 text-[10px]', getTypeClass(item)]" :title="getTypeTitle(item)">{{ getTypeLabel(item) }}</span>
+              <span class="text-right font-mono text-[10px] text-gray-400" :title="formatTimingTitle(item)">{{ formatDuration(item) }}</span>
               <span class="text-right font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
             </button>
             <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="space-y-1 border-t border-gray-100 bg-slate-50 px-2 py-1.5">

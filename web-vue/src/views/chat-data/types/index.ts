@@ -272,6 +272,9 @@ export interface ChatDataTokenUsageBreakdown {
   message_id?: string | null
   /** ToolMessage 对应的 tool_call_id，用于在 assistant.toolCalls 中反查工具结果 */
   tool_call_id?: string | null
+  /** 执行开始/结束时间（epoch 毫秒）：AI 行为模型调用、工具行为工具执行，其余行无值；耗时由两者相减得出 */
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
   estimated?: boolean
   content?: string
   description?: string

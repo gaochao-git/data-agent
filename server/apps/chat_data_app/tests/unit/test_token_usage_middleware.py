@@ -711,6 +711,59 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
+def test_create_request_context_usage_middleware_stamps_execution_timing():
+    """模型调用起止时间盖进 record 和响应消息，供面板/历史相减得耗时。"""
+    async def run():
+        middleware = create_request_context_usage_middleware()
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="系统提示"),
+            messages=[HumanMessage(content="统计订单数")],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen3.5-35b-a3b"),
+        )
+
+        async def handler(_request):
+            return AIMessage(content="ok")
+
+        response = await middleware.awrap_model_call(request, handler)
+        return middleware, response
+
+    import asyncio
+
+    middleware, response = asyncio.run(run())
+    record = middleware.context_usage_records[0]
+    assert isinstance(record["started_at_ms"], int)
+    assert isinstance(record["ended_at_ms"], int)
+    assert record["ended_at_ms"] >= record["started_at_ms"]
+    message = response.model_response.result[0]
+    assert message.additional_kwargs["started_at_ms"] == record["started_at_ms"]
+    assert message.additional_kwargs["ended_at_ms"] == record["ended_at_ms"]
+
+
+def test_build_message_breakdown_carries_execution_timing_only_when_stamped():
+    rows = build_message_breakdown([
+        HumanMessage(content="你好", id="msg-user-1"),
+        AIMessage(
+            content="分析完成",
+            id="msg-ai-1",
+            additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
+        ),
+        ToolMessage(
+            content="工具结果",
+            id="msg-tool-1",
+            tool_call_id="call-1",
+            additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
+        ),
+    ])
+
+    assert rows[0]["started_at_ms"] is None
+    assert rows[0]["ended_at_ms"] is None
+    assert rows[1]["started_at_ms"] == 1000
+    assert rows[1]["ended_at_ms"] == 3500
+    assert rows[2]["started_at_ms"] == 4000
+    assert rows[2]["ended_at_ms"] == 4200
+
+
 def test_compact_token_usage_for_state_removes_large_details_without_mutation():
     usage = {
         "used": 10,

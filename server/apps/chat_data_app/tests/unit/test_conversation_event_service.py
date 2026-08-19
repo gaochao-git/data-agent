@@ -360,3 +360,41 @@ async def test_token_usage_failure_does_not_clear_visible_history():
 
     assert history["messages"][0]["content"] == "保留消息"
     assert history["token_usage"] is None
+
+
+def test_serialized_messages_carry_execution_timing_only_when_stamped():
+    """AI/工具消息盖了起止时间才写入 payload；耗时由展示端相减得出。"""
+    from apps.chat_data_app.services.agent_run.conversation_event_service import (
+        _serialize_ai_message,
+        _serialize_tool_message,
+    )
+
+    stamped_ai = _serialize_ai_message(AIMessage(
+        content="分析完成",
+        id="msg-ai-1",
+        additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
+    ))
+    assert stamped_ai["started_at_ms"] == 1000
+    assert stamped_ai["ended_at_ms"] == 3500
+
+    plain_ai = _serialize_ai_message(AIMessage(content="无耗时", id="msg-ai-2"))
+    assert "started_at_ms" not in plain_ai
+    assert "ended_at_ms" not in plain_ai
+
+    stamped_tool = _serialize_tool_message(ToolMessage(
+        content="工具结果",
+        id="msg-tool-1",
+        tool_call_id="call-1",
+        additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
+    ))
+    assert stamped_tool["started_at_ms"] == 4000
+    assert stamped_tool["ended_at_ms"] == 4200
+
+    invalid_tool = _serialize_tool_message(ToolMessage(
+        content="非法时间戳",
+        id="msg-tool-2",
+        tool_call_id="call-2",
+        additional_kwargs={"started_at_ms": "bad", "ended_at_ms": None},
+    ))
+    assert "started_at_ms" not in invalid_tool
+    assert "ended_at_ms" not in invalid_tool
