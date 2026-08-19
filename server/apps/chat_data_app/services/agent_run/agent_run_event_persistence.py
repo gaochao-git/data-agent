@@ -12,6 +12,11 @@ from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
 
+# token_usage 是幂等的状态刷新事件：实时圆环走 Redis Stream，刷新后恢复走
+# chat_data_conversation_event 的最新快照，Run 结束后 MySQL 副本永远不被读。
+# 跳过落库避免每次模型调用写入两条大 payload。
+_SKIP_PERSIST_EVENT_TYPES = frozenset({"token_usage"})
+
 
 class AgentRunEventPersistence:
     """Persist Redis events asynchronously without slowing Agent token output."""
@@ -47,20 +52,26 @@ class AgentRunEventPersistence:
                 await asyncio.sleep(1)
 
     async def _persist(self, rows: list[tuple[str, dict[str, str]]]) -> None:
-        async with get_session() as session:
-            for _stream_id, event in rows:
-                await agent_run_event_dao.append(
-                    session,
-                    run_id=event["run_id"],
-                    conversation_id=event["conversation_id"],
-                    user_id=event["user_id"],
-                    sequence_no=int(event["sequence_no"]),
-                    # The Redis stream ID is the SSE cursor. Persist it as
-                    # the durable event key so a Redis-expired cursor can be
-                    # translated back to MySQL sequence_no.
-                    event_id=event["stream_id"],
-                    event_type=event["event_type"],
-                    payload=event["payload"],
-                    now=None,
-                )
+        durable_rows = [
+            (stream_id, event)
+            for stream_id, event in rows
+            if event.get("event_type") not in _SKIP_PERSIST_EVENT_TYPES
+        ]
+        if durable_rows:
+            async with get_session() as session:
+                for _stream_id, event in durable_rows:
+                    await agent_run_event_dao.append(
+                        session,
+                        run_id=event["run_id"],
+                        conversation_id=event["conversation_id"],
+                        user_id=event["user_id"],
+                        sequence_no=int(event["sequence_no"]),
+                        # The Redis stream ID is the SSE cursor. Persist it as
+                        # the durable event key so a Redis-expired cursor can be
+                        # translated back to MySQL sequence_no.
+                        event_id=event["stream_id"],
+                        event_type=event["event_type"],
+                        payload=event["payload"],
+                        now=None,
+                    )
         await self._bus.ack_persistence([stream_id for stream_id, _event in rows])

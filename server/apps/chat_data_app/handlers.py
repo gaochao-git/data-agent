@@ -348,11 +348,13 @@ async def _persist_agent_turn_history(
     ]
     if turn_id and turn_id not in turn_ids:
         turn_ids.insert(0, turn_id)
+    usage = (values or {}).get("token_usage")
+    latest_usage = getattr(stream_adapter, "latest_token_usage", None)
+    if isinstance(latest_usage, dict) and (latest_usage.get("breakdown") or latest_usage.get("llm_calls")):
+        usage = latest_usage
     for current_turn_id in turn_ids:
-        usage = (values or {}).get("token_usage")
-        latest_usage = getattr(stream_adapter, "latest_token_usage", None)
-        if isinstance(latest_usage, dict) and (latest_usage.get("breakdown") or latest_usage.get("llm_calls")):
-            usage = latest_usage
+        # token_usage 是会话级单行快照（event_key 固定），只随最后一轮写一次即可。
+        is_last_turn = current_turn_id == turn_ids[-1]
         await conversation_event_service.persist_turn(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -361,7 +363,7 @@ async def _persist_agent_turn_history(
             messages=messages,
             reasoning_segments=stream_adapter.reasoning_segments,
             context_compression_events=(values or {}).get("context_compression_events") or [],
-            token_usage=sanitize_context_usage_for_response(usage),
+            token_usage=sanitize_context_usage_for_response(usage) if is_last_turn else None,
         )
 
 

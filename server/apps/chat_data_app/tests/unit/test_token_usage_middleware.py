@@ -95,12 +95,61 @@ def test_sanitize_context_usage_for_response_redacts_and_deduplicates_without_mu
 
     sanitized = sanitize_context_usage_for_response(usage)
 
-    assert sanitized["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
-    assert sanitized["breakdown"][0]["children"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
-    assert sanitized["llm_calls"] == [{"input_tokens": 12}]
+    assert sanitized["breakdown"][0]["description"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["breakdown"][0]["redacted"] is True
+    assert "content" not in sanitized["breakdown"][0]
+    assert "content" not in sanitized["breakdown"][0]["children"][0]
+    assert "llm_calls" not in sanitized
     assert "SECRET_SYSTEM_PROMPT" not in json.dumps(sanitized, ensure_ascii=False)
     assert usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
     assert "breakdown" in usage["llm_calls"][0]
+
+
+def test_sanitize_context_usage_strips_content_but_keeps_counting_fields():
+    usage = {
+        "used": 90,
+        "total": 100,
+        "breakdown": [{
+            "key": "messages",
+            "label": "会话消息与工具上下文",
+            "tokens": 90,
+            "children": [{
+                "key": "message_1",
+                "label": "第 1 轮 · 用户消息",
+                "role": "human",
+                "round": 1,
+                "message_index": 1,
+                "message_id": "msg-1",
+                "tokens": 90,
+                "content": "很长的正文" * 100,
+            }],
+        }, {
+            "key": "tool_schema",
+            "label": "工具定义",
+            "tokens": 20,
+            "children": [{
+                "key": "tool_schema_0",
+                "label": "工具定义 · run_sql",
+                "role": "tool_schema",
+                "tokens": 20,
+                "content": '{"name": "run_sql"}',
+            }],
+        }],
+        "llm_calls": [{"input_tokens": 90}],
+    }
+
+    sanitized = sanitize_context_usage_for_response(usage)
+
+    child = sanitized["breakdown"][0]["children"][0]
+    assert "content" not in child
+    assert "llm_calls" not in sanitized
+    assert child["message_id"] == "msg-1"
+    assert child["tokens"] == 90
+    assert child["round"] == 1
+    assert child["role"] == "human"
+    # 工具定义无法从会话消息反查，保留完整 schema 正文。
+    tool_child = sanitized["breakdown"][1]["children"][0]
+    assert tool_child["content"] == '{"name": "run_sql"}'
 
 
 def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
@@ -252,6 +301,18 @@ def test_build_message_breakdown_includes_message_metadata_and_content():
     assert rows[1]["round"] == 1
     assert rows[1]["message_index"] == 1
     assert rows[1]["content"] == "我来分析"
+
+
+def test_build_message_breakdown_carries_message_id_and_tool_call_id_for_frontend_lookup():
+    rows = build_message_breakdown([
+        HumanMessage(content="你好", id="msg-user-1"),
+        ToolMessage(content="工具结果", id="msg-tool-1", tool_call_id="call-1"),
+    ])
+
+    assert rows[0]["message_id"] == "msg-user-1"
+    assert rows[0]["tool_call_id"] is None
+    assert rows[1]["message_id"] == "msg-tool-1"
+    assert rows[1]["tool_call_id"] == "call-1"
 
 
 def test_build_message_breakdown_keeps_system_message_content_by_default():

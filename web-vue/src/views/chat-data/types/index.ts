@@ -218,23 +218,6 @@ export interface ChatDataTokenUsage {
   compression_target_tokens?: number
   estimated?: boolean
   context_compression?: ChatDataContextCompressionInfo | null
-  llm_calls?: Array<{
-    index: number
-    model?: string | null
-    input_tokens: number
-    message_tokens?: number
-    tool_schema_tokens?: number
-    overhead_tokens?: number
-    output_tokens?: number
-    actual_input_tokens?: number
-    cached_input_tokens?: number
-    actual_total_tokens?: number
-    total_tokens?: number
-    estimated?: boolean
-    message_count?: number
-    context_compression?: ChatDataContextCompressionInfo | null
-    breakdown?: ChatDataTokenUsageBreakdown[]
-  }>
   breakdown?: ChatDataTokenUsageBreakdown[]
 }
 
@@ -285,9 +268,14 @@ export interface ChatDataTokenUsageBreakdown {
   role?: string
   round?: number
   message_index?: number
+  /** 后端消息 id，前端凭它从已加载的会话消息中取正文（payload 不再携带 content） */
+  message_id?: string | null
+  /** ToolMessage 对应的 tool_call_id，用于在 assistant.toolCalls 中反查工具结果 */
+  tool_call_id?: string | null
   estimated?: boolean
   content?: string
   description?: string
+  redacted?: boolean
   children?: ChatDataTokenUsageBreakdown[]
 }
 

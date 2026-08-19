@@ -292,7 +292,9 @@ def _build_turn_events(
     if isinstance(token_usage, dict) and token_usage:
         events.append(_event(
             turn_id=turn_id,
-            event_key=f"token_usage:{turn_id}",
+            # 固定 event_key：借助 append_events 的按 key 原地更新语义，
+            # 每会话仅保留一条最新 token_usage 快照，避免逐轮追加大 payload。
+            event_key="token_usage:latest",
             event_type=EVENT_TOKEN_USAGE,
             payload=token_usage,
         ))

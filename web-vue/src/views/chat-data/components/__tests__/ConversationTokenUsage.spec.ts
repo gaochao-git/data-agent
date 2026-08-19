@@ -160,4 +160,63 @@ describe('ConversationTokenUsage', () => {
     expect(wrapper.text()).toContain('file_read')
     wrapper.unmount()
   })
+
+  it('resolves row content from loaded conversation messages by message_id when payload has no content', async () => {
+    const wrapper = mount(ConversationTokenUsage, {
+      props: {
+        usage: {
+          used: 100,
+          total: 1000,
+          breakdown: [{
+            key: 'messages',
+            label: '会话消息与工具上下文',
+            tokens: 80,
+            children: [
+              {
+                key: 'message_1',
+                label: '第 1 轮 · 用户消息',
+                tokens: 35,
+                role: 'human',
+                round: 1,
+                message_id: 'msg-user-1',
+              },
+              {
+                key: 'message_2',
+                label: '第 1 轮 · 工具结果',
+                tokens: 45,
+                role: 'tool',
+                round: 1,
+                message_id: 'msg-tool-1',
+                tool_call_id: 'call-1',
+              },
+            ],
+          }],
+        },
+        messages: [
+          { id: 'msg-user-1', role: 'user', content: '今天销量怎么样' },
+          {
+            id: 'msg-ai-1',
+            role: 'assistant',
+            content: '',
+            toolCalls: [{
+              tool_call_id: 'call-1',
+              tool_name: 'run_sql',
+              args: {},
+              result: '销量共 1234 件',
+              status: 'completed',
+            }],
+          },
+        ],
+      },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.text()).toContain('今天销量怎么样')
+
+    const rows = wrapper.findAll('button[class*="grid"]')
+    await rows[1].trigger('click')
+    expect(wrapper.text()).toContain('销量共 1234 件')
+    wrapper.unmount()
+  })
 })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown } from '../types'
+import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../types'
 
 type TokenUsageSort = 'round' | 'desc' | 'asc'
 
@@ -19,11 +19,14 @@ type TokenUsageRow = {
 
 interface Props {
   usage: ChatDataTokenUsage | null
+  /** 会话已加载消息：token_usage 明细行不再携带正文，展开时凭 message_id 在这里取 */
+  messages?: Message[]
   compact?: boolean
   isGenerating?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  messages: () => [],
   compact: false,
   isGenerating: false,
 })
@@ -123,6 +126,7 @@ const togglePanel = () => {
 const closePanel = () => {
   panelOpen.value = false
   expandedMessageKeys.value = new Set()
+  expandedChildKeys.value = new Set()
 }
 
 const handleViewportChange = () => {
@@ -209,17 +213,67 @@ watch(
   { immediate: true },
 )
 
-const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => ({
-  key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
-  label: labelPrefix ? `${labelPrefix} · ${item.label}` : item.label,
-  tokens: item.tokens,
-  percentage: props.usage?.used ? Math.round((item.tokens / props.usage.used) * 1000) / 10 : 0,
-  description: item.description,
-  content: item.content || item.description,
-  role: item.role,
-  round: item.round,
-  messageIndex: item.message_index,
+const messageById = computed(() => {
+  const map = new Map<string, Message>()
+  for (const message of props.messages || []) {
+    if (message.id) map.set(message.id, message)
+  }
+  return map
 })
+
+const toolResultByCallId = computed(() => {
+  const map = new Map<string, string>()
+  for (const message of props.messages || []) {
+    if (message.role === 'tool' && message.toolCallId && message.content) {
+      map.set(message.toolCallId, message.content)
+    }
+    for (const call of message.toolCalls || []) {
+      if (call.tool_call_id && call.result != null && call.result !== '') {
+        map.set(call.tool_call_id, String(call.result))
+      }
+    }
+  }
+  return map
+})
+
+// token_usage payload 只带计数，正文从会话消息里按 message_id / tool_call_id 反查
+const resolveBreakdownContent = (item: ChatDataTokenUsageBreakdown): string => {
+  if (item.content) return item.content // 兼容仍携带正文的旧数据
+  if (item.redacted) return item.description || ''
+  if (item.tool_call_id) {
+    const result = toolResultByCallId.value.get(item.tool_call_id)
+    if (result) return result
+  }
+  if (item.message_id) {
+    const message = messageById.value.get(item.message_id)
+    if (message) {
+      const parts: string[] = []
+      if (message.content) parts.push(message.content)
+      for (const call of message.toolCalls || []) {
+        parts.push(`工具调用 ${call.tool_name} ${JSON.stringify(call.args ?? {})}`)
+      }
+      if (parts.length) return parts.join('\n')
+    }
+  }
+  return item.description || ''
+}
+
+const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => {
+  const content = resolveBreakdownContent(item)
+  // 子项 label 已含父项前缀时（如"工具定义 · file_read"）不再重复拼接
+  const label = labelPrefix && !item.label.startsWith(labelPrefix) ? `${labelPrefix} · ${item.label}` : item.label
+  return {
+    key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
+    label,
+    tokens: item.tokens,
+    percentage: props.usage?.used ? Math.round((item.tokens / props.usage.used) * 1000) / 10 : 0,
+    description: item.description || content.slice(0, 120),
+    content,
+    role: item.role,
+    round: item.round,
+    messageIndex: item.message_index,
+  }
+}
 
 const messageRows = computed(() => {
   const rows: TokenUsageRow[] = []
@@ -229,7 +283,11 @@ const messageRows = computed(() => {
       rows.push({
         ...toTokenUsageRow(item, '', item.key),
         messageIndex: rows.length,
-        children: item.children.map(child => toTokenUsageRow(child, item.label, item.key)),
+        // 父行已标明「工具定义」，子行只留工具名
+        children: item.children.map(child => ({
+          ...toTokenUsageRow(child, '', item.key),
+          label: child.label.replace(/^工具定义\s*·\s*/, ''),
+        })),
       })
       continue
     }
@@ -262,6 +320,18 @@ const toggleMessage = (key: string) => {
     next.add(key)
   }
   expandedMessageKeys.value = next
+}
+
+const expandedChildKeys = ref<Set<string>>(new Set())
+
+const toggleChild = (key: string) => {
+  const next = new Set(expandedChildKeys.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedChildKeys.value = next
 }
 
 const getTypeLabel = (item: TokenUsageRow): string => {
@@ -439,12 +509,22 @@ defineExpose({
               <span class="text-right font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
             </button>
             <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="space-y-1 border-t border-gray-100 bg-slate-50 px-2 py-1.5">
-              <div v-for="child in item.children" :key="child.key" class="rounded bg-white p-1.5">
-                <div class="flex items-center justify-between gap-2 text-[11px] text-gray-500">
-                  <span>{{ child.label }}</span>
-                  <span class="font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
-                </div>
-                <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-gray-600">{{ child.content || child.description || '' }}</pre>
+              <div v-for="child in item.children" :key="child.key" class="rounded bg-white">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-2 border-none bg-transparent p-1.5 text-left text-[11px] text-gray-500 cursor-pointer hover:bg-slate-50"
+                  @click="toggleChild(child.key)"
+                >
+                  <span class="flex min-w-0 items-center gap-1">
+                    <i :class="['fa-solid text-[9px] text-gray-400', expandedChildKeys.has(child.key) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+                    <span class="truncate">{{ child.label }}</span>
+                  </span>
+                  <span class="shrink-0 font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
+                </button>
+                <pre
+                  v-if="expandedChildKeys.has(child.key)"
+                  class="m-0 max-h-48 overflow-auto whitespace-pre-wrap border-t border-gray-100 px-1.5 py-1 text-[11px] leading-relaxed text-gray-600"
+                >{{ child.content || child.description || '' }}</pre>
               </div>
             </div>
             <pre v-else-if="expandedMessageKeys.has(item.key)" class="max-h-40 overflow-auto whitespace-pre-wrap border-t border-gray-100 bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>

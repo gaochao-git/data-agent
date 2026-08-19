@@ -188,21 +188,31 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
 
 
 def sanitize_context_usage_for_response(usage: Any) -> Any:
-    """Redact prompts and remove repeated per-call breakdowns for transport."""
+    """Redact prompts and strip message bodies so token_usage only carries counts."""
     if not isinstance(usage, dict):
         return usage
     sanitized = copy.deepcopy(usage)
-    if not is_context_usage_system_prompt_visible():
-        _sanitize_breakdown(sanitized.get("breakdown"))
-    llm_calls = sanitized.get("llm_calls")
-    if isinstance(llm_calls, list):
-        for call in llm_calls:
-            if isinstance(call, dict):
-                # The top-level breakdown already describes the current model
-                # input. Keeping another complete message tree for every call
-                # makes a long run grow to multiple megabytes quadratically.
-                call.pop("breakdown", None)
+    # llm_calls 前端零消费且随调用次数线性膨胀，直接移除。
+    sanitized.pop("llm_calls", None)
+    if is_context_usage_system_prompt_visible():
+        # 调试模式：system prompt 无法从会话消息反查，保留正文供面板展示。
+        return sanitized
+    _sanitize_breakdown(sanitized.get("breakdown"))
+    # 明细行只保留计数与标签：正文由前端凭 message_id 从已加载的会话消息中取。
+    _strip_breakdown_content(sanitized.get("breakdown"))
     return sanitized
+
+
+def _strip_breakdown_content(items: Any) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        # 工具定义无法从会话消息反查，保留完整 schema 正文；数量有界，体积可控。
+        if item.get("role") != "tool_schema":
+            item.pop("content", None)
+        _strip_breakdown_content(item.get("children"))
 
 
 def _sanitize_breakdown(items: Any) -> None:

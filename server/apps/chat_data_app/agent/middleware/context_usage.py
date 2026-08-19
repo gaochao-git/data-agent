@@ -305,7 +305,11 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
 
 
 def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
-    """按工具拆分 schema 估算 token。"""
+    """按工具拆分 schema 估算 token。
+
+    工具定义无法像消息正文一样从会话历史反查，因此保留完整 schema 正文；
+    工具数量有界（不随轮数增长），且 token_usage 每会话仅一行，体积可控。
+    """
     items = []
     for index, tool in enumerate(tools or []):
         try:
@@ -391,12 +395,18 @@ def build_message_breakdown(
             "role": "context_summary" if is_context_summary else message_type,
             "round": round_index or 1,
             "message_index": index,
+            # 前端凭 message_id 从已加载的会话消息中取正文，payload 本身不落正文。
+            "message_id": getattr(message, "id", None),
+            "tool_call_id": getattr(message, "tool_call_id", None),
             "tokens": _scale_tokens(estimated_tokens, scale),
             "estimated_tokens": estimated_tokens,
             "estimated": True,
             "content": content,
-            "description": "运行态上下文摘要，内容不对用户展示。" if is_context_summary else content[:120],
         }
+        if is_context_summary:
+            item["description"] = "运行态上下文摘要，内容不对用户展示。"
+        elif redacted:
+            item["description"] = SYSTEM_PROMPT_PLACEHOLDER
         if redacted:
             item["redacted"] = True
         items.append(item)

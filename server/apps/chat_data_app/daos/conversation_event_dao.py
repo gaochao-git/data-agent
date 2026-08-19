@@ -122,7 +122,7 @@ class ConversationEventDao:
             return list(result.scalars().all())
 
     async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
-        """读取最新一轮已脱敏的完整上下文占用。"""
+        """读取会话级 token_usage 快照（event_key 固定为 token_usage:latest 的单行 upsert）。"""
         async with self._session_context() as session:
             result = await session.execute(
                 select(ChatDataConversationEvent.payload)

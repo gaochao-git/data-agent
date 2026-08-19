@@ -143,6 +143,51 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
 
 
 @pytest.mark.asyncio
+async def test_token_usage_is_single_upserted_row_per_conversation(conversation_event_service):
+    service, create_thread = conversation_event_service
+    await create_thread("conv-usage", "user-1")
+
+    for turn_index, used in enumerate((80, 35, 60), start=1):
+        turn_id = f"turn-{turn_index}"
+        user = HumanMessage(content=f"问题 {turn_index}", id=turn_id)
+        await service.persist_user_message(
+            conversation_id="conv-usage",
+            user_id="user-1",
+            operator_name="用户一",
+            message=user,
+        )
+        await service.persist_turn(
+            conversation_id="conv-usage",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id=turn_id,
+            messages=[user, AIMessage(content=f"回答 {turn_index}", id=f"assistant-{turn_index}")],
+            reasoning_segments=[],
+            token_usage={"used": used, "total": 100},
+        )
+
+    # 多轮之后表中只应有一条 token_usage 行（event_key 固定 upsert），且为最新一轮的值。
+    from sqlalchemy import select
+
+    from utils.models import ChatDataConversationEvent
+
+    dao = service._dao
+    async with dao._session_context() as session:
+        rows = list((await session.scalars(
+            select(ChatDataConversationEvent).where(
+                ChatDataConversationEvent.conversation_id == "conv-usage",
+                ChatDataConversationEvent.event_type == "token_usage",
+            )
+        )).all())
+    assert len(rows) == 1
+    assert rows[0].event_key == "token_usage:latest"
+    assert rows[0].turn_id == "turn-3"
+
+    history = await service.load_history(conversation_id="conv-usage", user_id="user-1")
+    assert history["token_usage"] == {"used": 60, "total": 100}
+
+
+@pytest.mark.asyncio
 async def test_event_history_is_scoped_to_conversation_owner(conversation_event_service):
     service, create_thread = conversation_event_service
     await create_thread("conv-owner", "user-1")

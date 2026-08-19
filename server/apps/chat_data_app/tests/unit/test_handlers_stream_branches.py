@@ -611,7 +611,10 @@ def test_message_end_payload_prefers_persisted_ai_timestamp():
 
     assert payload["timestamp"] == "2026-06-21 07:14:44"
     assert payload["usage"]["total_tokens"] == 7
-    assert payload["usage"]["breakdown"][0]["content"] == "[系统提示词已隐藏]"
+    # 瘦身后 payload 不携带正文，system 项以 redacted 描述占位。
+    assert "content" not in payload["usage"]["breakdown"][0]
+    assert payload["usage"]["breakdown"][0]["description"] == "[系统提示词已隐藏]"
+    assert payload["usage"]["breakdown"][0]["redacted"] is True
     assert raw_usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
 
 

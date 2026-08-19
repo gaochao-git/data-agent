@@ -2926,6 +2926,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"
                 :usage="tokenUsage"
+                :messages="messages"
                 :is-generating="isGenerating"
                 compact
               />
