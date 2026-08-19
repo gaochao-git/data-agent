@@ -136,6 +136,9 @@ class AgentInboxService:
             content = self._load_run_content(run.content)
             owner_generation = int(content.get("owner_generation") or 0) + 1
             content["owner_generation"] = owner_generation
+            # 新执行段开始后，上一段的终止游标即失效；保留会让下一次
+            # 问答恢复把旧段的 done 误判为当前段已收口。
+            content.pop("terminal_event", None)
             run.content = json.dumps(content, ensure_ascii=False)
             owner_token = f"{owner_generation}:{uuid4().hex}"
             run.owner_token = owner_token
@@ -298,6 +301,24 @@ class AgentInboxService:
             run.update_by = user_id
             run.update_by_name = operator_name
             return run.run_id, content.get("runtime_context") or {}
+
+    async def record_terminal_event(self, run_id: str, stream_id: str) -> None:
+        """终止 SSE 事件发布成功后，把 Redis 游标持久化到 Run 行。
+
+        此时 Run 已进入终态（waiting_user/finished 等），owner_token 可能已被
+        mark_waiting_for_user 清空，因此不做 owner 断言——终止事件本身已被
+        Redis owner 脚本围栏，同一 Run 只有一个段能发布成功。该记录供问答
+        恢复在 Redis Stream 失效时做 done 检测与游标兜底。
+        """
+        now = datetime.now()
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None:
+                return
+            content = self._load_run_content(run.content)
+            content["terminal_event"] = {"stream_id": stream_id, "event_type": "done"}
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.update_time = now
 
     async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
         """Record that the checkpoint has advanced past the claimed answer."""

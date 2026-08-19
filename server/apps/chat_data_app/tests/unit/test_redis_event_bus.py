@@ -69,13 +69,15 @@ async def test_publish_sets_stream_ttl_in_same_redis_script():
     assert stream_id == "1740000000000-0"
     assert len(redis.eval_calls) == 1
     script, numkeys, args = redis.eval_calls[0]
-    assert numkeys == 5
-    assert "redis.call('EXPIRE', KEYS[1], ARGV[8])" in script
-    assert "redis.call('EXPIRE', KEYS[5], ARGV[8])" in script
-    assert "redis.call('GET', KEYS[4])" in script
-    assert "redis.call('SET', KEYS[4], stream_id, 'EX', ARGV[8])" in script
-    assert args[3] == "chatdata:run:run-1:event:event-1"
-    assert args[4] == "chatdata:run:run-1:owner"
+    assert numkeys == 4
+    assert "XADD" in script
+    assert script.count("XADD") == 1  # 只写实时 Stream，无持久化副本
+    assert "redis.call('EXPIRE', KEYS[1], ARGV[7])" in script
+    assert "redis.call('EXPIRE', KEYS[4], ARGV[7])" in script
+    assert "redis.call('GET', KEYS[3])" in script
+    assert "redis.call('SET', KEYS[3], stream_id, 'EX', ARGV[7])" in script
+    assert args[2] == "chatdata:run:run-1:event:event-1"
+    assert args[3] == "chatdata:run:run-1:owner"
     assert args[-2].isdigit()
     assert args[-1] == "1:owner-1"
 

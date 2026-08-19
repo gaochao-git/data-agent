@@ -814,3 +814,81 @@ async def test_agent_inbox_list_message_states_rejects_unowned(inbox_service):
 
     with pytest.raises(AgentRunNotActiveError):
         await service.list_message_states("conv-1", "other-user")
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_event_persists_cursor_without_owner(inbox_service):
+    """done 发布后 owner 可能已被 mark_waiting_for_user 清空，落游标不做 owner 断言。"""
+    import json
+
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "turn_id": "turn-1",
+        "questions": [{"id": "scope", "question": "选择范围", "options": [{"label": "全部"}], "multi_select": False}],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
+
+    await service.record_terminal_event(run_id, "1740000000000-0")
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert run.status == "waiting_user"
+    content = json.loads(run.content)
+    assert content["terminal_event"] == {"stream_id": "1740000000000-0", "event_type": "done"}
+    # pending_question 不受影响，问答仍可恢复。
+    assert content["pending_question"]["question_id"] == "question-1"
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_event_supports_finished_run(inbox_service):
+    import json
+
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+
+    await service.record_terminal_event(run_id, "1740000000001-0")
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert run.status == "finished"
+    assert json.loads(run.content)["terminal_event"]["stream_id"] == "1740000000001-0"
+
+
+@pytest.mark.asyncio
+async def test_prepare_pending_run_clears_stale_terminal_event(inbox_service):
+    """新执行段领取后，上一段的终止游标必须失效，避免误判新段已收口。"""
+    import json
+
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "turn_id": "turn-1",
+        "questions": [{"id": "scope", "question": "选择范围", "options": [{"label": "全部"}], "multi_select": False}],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
+    await service.record_terminal_event(run_id, "1740000000000-0")
+
+    answer = {"answers": [{"id": "scope", "selected": ["全部"], "custom": ""}]}
+    await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+    prepared = await service.prepare_pending_run(run_id)
+    owners[run_id] = prepared["owner_token"]
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert "terminal_event" not in json.loads(run.content)

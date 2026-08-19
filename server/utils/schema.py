@@ -85,29 +85,6 @@ CREATE TABLE `chat_data_agent_inbox` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 """
 
-MYSQL_CHAT_DATA_AGENT_RUN_EVENT_TABLE = """
-CREATE TABLE `chat_data_agent_run_event` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `run_id` varchar(64) NOT NULL COMMENT '运行ID',
-  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
-  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
-  `sequence_no` bigint(20) NOT NULL COMMENT '运行内严格递增事件序号',
-  `event_id` varchar(255) NOT NULL COMMENT '事件ID',
-  `event_type` varchar(32) NOT NULL COMMENT 'SSE事件类型',
-  `payload` mediumtext NOT NULL COMMENT '完整SSE事件文本',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_agent_run_event` (`run_id`, `event_id`),
-  KEY `idx_agent_run_event_seq` (`run_id`, `sequence_no`),
-  KEY `idx_agent_run_event_conv` (`conversation_id`, `user_id`, `create_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Agent运行事件';
-"""
 
 MYSQL_UPLOADED_FILES_TABLE = """
 CREATE TABLE `uploaded_files` (
@@ -561,7 +538,6 @@ MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
     MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,
     MYSQL_CHAT_DATA_AGENT_INBOX_TABLE,
-    MYSQL_CHAT_DATA_AGENT_RUN_EVENT_TABLE,
     MYSQL_UPLOADED_FILES_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_PANEL_TABLE,

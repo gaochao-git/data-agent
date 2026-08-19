@@ -14,8 +14,6 @@ from redis.retry import Retry
 
 RUN_STREAM_PREFIX = "chatdata:run:"
 RUN_STREAM_SUFFIX = ":events"
-PERSIST_STREAM_KEY = "chatdata:run-events:persist"
-PERSIST_GROUP = "chatdata-run-event-persistence"
 STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "86400")), 60)
 REDIS_HEALTH_CHECK_INTERVAL_SECONDS = max(
     int(os.getenv("CHAT_DATA_REDIS_HEALTH_CHECK_INTERVAL_SECONDS", "30")),
@@ -32,31 +30,24 @@ REDIS_COMMAND_RETRY = Retry(
 )
 
 _PUBLISH_SCRIPT = """
-local current_owner = redis.call('GET', KEYS[5])
-if not current_owner or current_owner ~= ARGV[9] then
+local current_owner = redis.call('GET', KEYS[4])
+if not current_owner or current_owner ~= ARGV[8] then
   return redis.error_reply('RUN_OWNER_MISMATCH')
 end
-local existing_stream_id = redis.call('GET', KEYS[4])
+local existing_stream_id = redis.call('GET', KEYS[3])
 if existing_stream_id then
   return {existing_stream_id, 'duplicate'}
 end
-if redis.call('EXISTS', KEYS[3]) == 0 and tonumber(ARGV[7]) > 0 then
-  redis.call('SET', KEYS[3], ARGV[7])
-end
-local seq = redis.call('INCR', KEYS[3])
+local seq = redis.call('INCR', KEYS[2])
 local seq_text = tostring(seq)
 local stream_id = redis.call('XADD', KEYS[1], '*',
   'run_id', ARGV[1], 'conversation_id', ARGV[2], 'user_id', ARGV[3],
   'event_id', ARGV[4], 'event_type', ARGV[5], 'sequence_no', seq_text,
   'payload', ARGV[6])
-redis.call('XADD', KEYS[2], '*',
-  'run_id', ARGV[1], 'conversation_id', ARGV[2], 'user_id', ARGV[3],
-  'event_id', ARGV[4], 'event_type', ARGV[5], 'sequence_no', seq_text,
-  'payload', ARGV[6], 'stream_id', stream_id)
-redis.call('EXPIRE', KEYS[1], ARGV[8])
-redis.call('EXPIRE', KEYS[3], ARGV[8])
-redis.call('EXPIRE', KEYS[5], ARGV[8])
-redis.call('SET', KEYS[4], stream_id, 'EX', ARGV[8])
+redis.call('EXPIRE', KEYS[1], ARGV[7])
+redis.call('EXPIRE', KEYS[2], ARGV[7])
+redis.call('EXPIRE', KEYS[4], ARGV[7])
+redis.call('SET', KEYS[3], stream_id, 'EX', ARGV[7])
 return {stream_id, seq_text}
 """
 
@@ -124,7 +115,6 @@ class RedisEventBus:
 
     async def start(self) -> None:
         await self.redis.ping()
-        await self._ensure_persistence_group()
 
     async def close(self) -> None:
         if self._redis is not None:
@@ -141,14 +131,12 @@ class RedisEventBus:
         event_type: str,
         payload: str,
         owner_token: str,
-        initial_sequence: int = 0,
     ) -> str:
         try:
             result = await self.redis.eval(
                 _PUBLISH_SCRIPT,
-                5,
+                4,
                 self.run_stream_key(run_id),
-                PERSIST_STREAM_KEY,
                 f"{self.run_stream_key(run_id)}:sequence",
                 self.event_dedupe_key(run_id, event_id),
                 self.run_owner_key(run_id),
@@ -158,7 +146,6 @@ class RedisEventBus:
                 event_id,
                 event_type,
                 payload,
-                str(initial_sequence),
                 str(STREAM_TTL_SECONDS),
                 owner_token,
             )
@@ -193,9 +180,6 @@ class RedisEventBus:
         if int(renewed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
-    async def sequence_exists(self, run_id: str) -> bool:
-        return bool(await self.redis.exists(f"{self.run_stream_key(run_id)}:sequence"))
-
     async def read_run(self, run_id: str, cursor: str, *, block_ms: int = 15000, count: int = 100) -> list[dict[str, str]]:
         result = await self.redis.xread(
             {self.run_stream_key(run_id): cursor},
@@ -219,66 +203,8 @@ class RedisEventBus:
         stream_id, fields = rows[0]
         return self._decode_event(stream_id, fields)
 
-    async def run_event_sequence(self, run_id: str, event_id: str) -> int | None:
-        """Resolve a live Redis cursor to its Run-local sequence number."""
-        rows = await self.redis.xrange(
-            self.run_stream_key(run_id),
-            min=event_id,
-            max=event_id,
-            count=1,
-        )
-        if not rows:
-            return None
-        return int(rows[0][1].get("sequence_no") or 0)
-
-    async def read_persistence_batch(
-        self,
-        *,
-        consumer: str,
-        count: int = 100,
-        block_ms: int = 5000,
-    ) -> list[tuple[str, dict[str, str]]]:
-        result = await self.redis.xreadgroup(
-            groupname=PERSIST_GROUP,
-            consumername=consumer,
-            streams={PERSIST_STREAM_KEY: ">"},
-            count=count,
-            block=block_ms,
-        )
-        return [(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
-
-    async def reclaim_persistence_batch(
-        self,
-        *,
-        consumer: str,
-        min_idle_ms: int = 60000,
-        count: int = 100,
-    ) -> list[tuple[str, dict[str, str]]]:
-        result = await self.redis.xautoclaim(
-            PERSIST_STREAM_KEY,
-            PERSIST_GROUP,
-            consumer,
-            min_idle_ms,
-            start_id="0-0",
-            count=count,
-        )
-        rows = result[1] if len(result) > 1 else []
-        return [(stream_id, fields) for stream_id, fields in rows]
-
-    async def ack_persistence(self, stream_ids: list[str]) -> None:
-        if stream_ids:
-            await self.redis.xack(PERSIST_STREAM_KEY, PERSIST_GROUP, *stream_ids)
-            await self.redis.xdel(PERSIST_STREAM_KEY, *stream_ids)
-
     async def expire_run_stream(self, run_id: str) -> None:
         await self.redis.expire(self.run_stream_key(run_id), STREAM_TTL_SECONDS)
-
-    async def _ensure_persistence_group(self) -> None:
-        try:
-            await self.redis.xgroup_create(PERSIST_STREAM_KEY, PERSIST_GROUP, id="0-0", mkstream=True)
-        except Exception as exc:
-            if "BUSYGROUP" not in str(exc):
-                raise
 
     @staticmethod
     def run_stream_key(run_id: str) -> str:

@@ -12,7 +12,6 @@ from uuid import uuid4
 from utils.logger import get_logger
 from .agent_inbox_service import AgentRunLeaseLostError, AgentInboxService, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service
-from .agent_run_event_persistence import AgentRunEventPersistence
 from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
@@ -27,7 +26,7 @@ def _max_concurrency() -> int:
 
 
 class AgentRunRuntime:
-    """单进程并发执行多个 Run；Redis 实时发布，MySQL 异步持久化。"""
+    """单进程并发执行多个 Run；事件经 Redis Stream 实时发布。"""
 
     def __init__(
         self,
@@ -36,20 +35,17 @@ class AgentRunRuntime:
         inbox_service: AgentInboxService = agent_inbox_service,
         event_service: AgentRunEventService = agent_run_event_service,
         event_bus: RedisEventBus | None = None,
-        event_persistence: AgentRunEventPersistence | None = None,
     ) -> None:
         self._max_concurrency = max_concurrency or _max_concurrency()
         self._inbox_service = inbox_service
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
-        self._event_persistence = event_persistence or AgentRunEventPersistence(self._event_bus)
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
         self._tasks: dict[str, asyncio.Task] = {}
         self._poll_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         await self._event_bus.start()
-        await self._event_persistence.start()
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = asyncio.create_task(self._poll_pending_runs(), name="chatdata-agent-run-dispatcher")
 
@@ -96,7 +92,6 @@ class AgentRunRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
-        await self._event_persistence.stop()
         await self._event_bus.close()
 
     async def _poll_pending_runs(self) -> None:
@@ -222,7 +217,7 @@ class AgentRunRuntime:
                 if prepared is not None:
                     if terminal_payload is not None and terminal_ready:
                         try:
-                            await self._event_service.append(
+                            terminal_stream_id = await self._event_service.append(
                                 run_id=run_id,
                                 conversation_id=conversation_id,
                                 user_id=user_id,
@@ -234,6 +229,17 @@ class AgentRunRuntime:
                             logger.info("ChatData Agent Run 终止事件发布时租约已丢失: run_id=%s", run_id)
                         except Exception:
                             logger.error("ChatData Agent Run 终止事件发布失败: run_id=%s", run_id, exc_info=True)
+                        else:
+                            # done 已进 Redis Stream；把游标落到 inbox 行，
+                            # 供问答恢复在 Redis 失效时做 done 检测与游标兜底。
+                            try:
+                                await self._inbox_service.record_terminal_event(run_id, terminal_stream_id)
+                            except Exception:
+                                logger.warning(
+                                    "ChatData Agent Run 终止游标落库失败（Redis 内 done 仍可用）: run_id=%s",
+                                    run_id,
+                                    exc_info=True,
+                                )
                     try:
                         await self._event_service.release_owner(run_id, prepared["owner_token"])
                     except Exception:
