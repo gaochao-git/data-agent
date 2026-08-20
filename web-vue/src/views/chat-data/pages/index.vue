@@ -1480,12 +1480,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- 高度 = 视口 - 主项目头部(导航栏50+标签栏32=82px)，按实际调整 -->
-  <el-config-provider :locale="zhCn">
-    <div
-      class="chatdata-root flex flex-col w-full"
-      style="height: calc(100vh - 82px); background: linear-gradient(to bottom, #F9FAFB 0%, #F3F4F6 100%)"
-    >
+  <!-- 根节点必须是单个真实 DOM 元素：宿主项目路由出口为 transition(mode="out-in") + keep-alive，
+       注释/组件在根级会编译成 Fragment 根，导致页面切换卡死，注释与 el-config-provider 均须置于根 div 内 -->
+  <div
+    class="chatdata-root flex flex-col w-full"
+    style="height: calc(100vh - 82px); background: linear-gradient(to bottom, #F9FAFB 0%, #F3F4F6 100%)"
+  >
+    <!-- 高度 = 视口 - 主项目头部(导航栏50+标签栏32=82px)，按实际调整 -->
+    <el-config-provider :locale="zhCn">
     <!-- 未匹配数据源提示 -->
     <div v-if="noMatchedDatasource" class="flex-1 flex items-center justify-center">
       <div class="text-center text-gray-400">
@@ -1975,8 +1977,8 @@ onUnmounted(() => {
       @datasources-updated="handleAdminDatasourcesUpdated"
       @open-semantic-config="handleOpenSemanticConfig"
     />
-    </div>
-  </el-config-provider>
+    </el-config-provider>
+  </div>
 </template>
 
 <style>
