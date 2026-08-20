@@ -1291,7 +1291,7 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
             </thead>
             <tbody>
               <tr
-                v-for="(row, idx) in displayResult.data.slice(0, 10)"
+                v-for="(row, idx) in displayResult.data"
                 :key="idx"
                 class="transition-colors duration-200 hover:bg-[var(--row-hover)]"
                 :style="{ '--row-hover': theme.tableRowHover }"
