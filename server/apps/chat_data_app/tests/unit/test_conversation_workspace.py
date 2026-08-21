@@ -17,6 +17,12 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_module
+from apps.chat_data_app.services.agent_run import (
+    workspace_local_backend as workspace_local_backend_module,
+)
+from apps.chat_data_app.services.agent_run import (
+    workspace_sandbox_backend as workspace_sandbox_backend_module,
+)
 from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
@@ -84,7 +90,7 @@ async def test_sandbox_backend_reuses_initialization_error_within_runtime(tmp_pa
     )
     monkeypatch.setattr(runtime, "_ensure_snapshot_async", no_op)
     monkeypatch.setattr(
-        conversation_workspace_module,
+        workspace_sandbox_backend_module,
         "get_workspace_execution_session",
         fail_to_create_session,
     )
@@ -834,7 +840,7 @@ async def test_file_read_keeps_content_and_reports_unknown_when_local_line_count
     def fail_line_count(_target):
         raise OSError("awk unavailable")
 
-    monkeypatch.setattr(conversation_workspace_module, "_count_local_text_lines", fail_line_count)
+    monkeypatch.setattr(workspace_local_backend_module, "_count_local_text_lines", fail_line_count)
 
     result = await tools["file_read"].ainvoke({"file_path": "workspace/report.txt"})
 
@@ -989,7 +995,7 @@ def test_text_page_content_body_respects_budget_and_preserves_source_order(tmp_p
     target = tmp_path / "rows.jsonl"
     target.write_text("ab\nabcdefghij\nxyz\nnext", encoding="utf-8")
 
-    result = conversation_workspace_module._read_text_page_from_path(
+    result = workspace_local_backend_module._read_text_page_from_path(
         target,
         "/workspace/rows.jsonl",
         offset=0,
@@ -1008,7 +1014,7 @@ def test_text_page_caps_each_line_and_total_body_chars(tmp_path):
     target = tmp_path / "rows.jsonl"
     target.write_text("a" * 600 + "\n" + "b" * 600 + "\nnext", encoding="utf-8")
 
-    result = conversation_workspace_module._read_text_page_from_path(
+    result = workspace_local_backend_module._read_text_page_from_path(
         target,
         "/workspace/rows.jsonl",
         offset=0,
@@ -1031,7 +1037,7 @@ def test_text_page_uses_standard_physical_line_semantics(tmp_path, separator):
     content = separator.join(["first", "second", "third"])
     target.write_text(content, encoding="utf-8", newline="")
 
-    result = conversation_workspace_module._read_text_page_from_path(
+    result = workspace_local_backend_module._read_text_page_from_path(
         target,
         "/workspace/separators.txt",
         offset=1,
@@ -1049,7 +1055,7 @@ def test_text_page_does_not_treat_control_characters_as_physical_lines(tmp_path)
     target = tmp_path / "control-separator.txt"
     target.write_text("first\u2028second\vthird", encoding="utf-8")
 
-    result = conversation_workspace_module._read_text_page_from_path(
+    result = workspace_local_backend_module._read_text_page_from_path(
         target,
         "/workspace/control-separator.txt",
         offset=0,
@@ -1071,13 +1077,13 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
         line_count = target.read_text(encoding="utf-8").count("\n") + 1
         return SimpleNamespace(returncode=0, stdout=f"{line_count}\n", stderr="")
 
-    conversation_workspace_module._count_local_text_lines_cached.cache_clear()
+    workspace_local_backend_module._count_local_text_lines_cached.cache_clear()
     monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
 
-    first = conversation_workspace_module._read_text_page_from_path(
+    first = workspace_local_backend_module._read_text_page_from_path(
         target, "/workspace/report with spaces.txt", offset=0, limit=1, max_chars=100,
     )
-    second = conversation_workspace_module._read_text_page_from_path(
+    second = workspace_local_backend_module._read_text_page_from_path(
         target, "/workspace/report with spaces.txt", offset=1, limit=1, max_chars=100,
     )
 
@@ -1088,7 +1094,7 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
     assert calls[0][1]["check"] is False
 
     target.write_text("first\nsecond\nthird\nfourth", encoding="utf-8")
-    third = conversation_workspace_module._read_text_page_from_path(
+    third = workspace_local_backend_module._read_text_page_from_path(
         target, "/workspace/report with spaces.txt", offset=2, limit=1, max_chars=100,
     )
 

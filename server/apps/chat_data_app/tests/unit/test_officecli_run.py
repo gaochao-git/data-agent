@@ -11,6 +11,9 @@ from apps.chat_data_app.agent.tools.officecli_run import (
     run_officecli_command,
 )
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
+from apps.chat_data_app.services.agent_run import (
+    workspace_sandbox_backend as sandbox_backend_module,
+)
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
@@ -284,9 +287,9 @@ async def test_sandbox_run_officecli_passes_command_and_validates_bounds(monkeyp
     async def fake_sync(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(cw, "get_workspace_execution_session", fake_get_session)
-    monkeypatch.setattr(cw, "run_command_in_sandbox", fake_run)
-    monkeypatch.setattr(cw, "sync_sandbox_working_trees", fake_sync)
+    monkeypatch.setattr(sandbox_backend_module, "get_workspace_execution_session", fake_get_session)
+    monkeypatch.setattr(sandbox_backend_module, "run_command_in_sandbox", fake_run)
+    monkeypatch.setattr(sandbox_backend_module, "sync_sandbox_working_trees", fake_sync)
 
     backend = SandboxWorkspaceBackend()
     runtime = _local_runtime(tmp_path)

@@ -62,6 +62,16 @@ def estimate_text_tokens(text: str) -> int:
     return count_messages_tokens([HumanMessage(content=text)])
 
 
+def merge_context_summaries(*summaries: str | None) -> str | None:
+    """合并多来源上下文摘要，去重并保持先后顺序；空结果返回 None。"""
+    unique_summaries: list[str] = []
+    for raw_summary in summaries:
+        summary = str(raw_summary or "").strip()
+        if summary and summary not in unique_summaries:
+            unique_summaries.append(summary)
+    return "\n\n".join(unique_summaries) or None
+
+
 def build_runtime_context_summary_message(summary: str | None) -> HumanMessage | None:
     """Build the hidden message used to carry the persisted runtime summary."""
     normalized_summary = str(summary or "").strip()

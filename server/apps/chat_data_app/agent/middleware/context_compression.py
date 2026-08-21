@@ -23,6 +23,7 @@ from ...services.agent_run.context_budget import (
     count_messages_tokens,
     get_model_context_budget,
     hard_input_guard_tokens,
+    merge_context_summaries,
 )
 from ...services.llm_config import (
     get_chat_data_llm,
@@ -62,7 +63,7 @@ async def compress_messages_for_state(
     """压缩旧历史和当前回合较早的完整工具链。"""
     cfg = _config_from_mapping(config)
     original_messages, legacy_summary = _extract_legacy_context_summary(messages)
-    effective_previous_summary = _merge_context_summaries(previous_summary, legacy_summary)
+    effective_previous_summary = merge_context_summaries(previous_summary, legacy_summary)
     static_tokens = max(int(static_input_tokens), 0)
     before_tokens = static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
     threshold_tokens = max(int(compression_trigger_tokens), 1)
@@ -269,7 +270,7 @@ def create_context_compression_middleware(
     async def context_compression_middleware(state, _runtime):
         messages = list((state or {}).get("messages") or [])
         _, legacy_summary = _extract_legacy_context_summary(messages)
-        previous_summary = _merge_context_summaries(
+        previous_summary = merge_context_summaries(
             str((state or {}).get("context_summary") or "").strip() or None,
             legacy_summary,
         )
@@ -713,15 +714,6 @@ def _strip_legacy_summary_prefix(summary: str) -> str:
     if normalized.startswith(prefix):
         return normalized[len(prefix):].lstrip("\n ")
     return normalized
-
-
-def _merge_context_summaries(*summaries: str | None) -> str | None:
-    unique_summaries: list[str] = []
-    for raw_summary in summaries:
-        summary = str(raw_summary or "").strip()
-        if summary and summary not in unique_summaries:
-            unique_summaries.append(summary)
-    return "\n\n".join(unique_summaries) or None
 
 
 def _partition_messages_for_compression(

@@ -30,6 +30,7 @@ from ...services.agent_run.context_budget import (
     estimate_tokens,
     get_model_context_budget,
     hard_input_guard_tokens,
+    merge_context_summaries,
     sanitize_context_usage_for_response,
 )
 from ...services.runtime_config import get_context_compression_config
@@ -574,7 +575,7 @@ def _merge_compression_summary_into_system_prompt(
 ) -> tuple[str, list[Any]]:
     """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
     cleaned_messages, legacy_summary = _extract_legacy_compression_summary(messages)
-    summary = _merge_context_summaries(context_summary, legacy_summary)
+    summary = merge_context_summaries(context_summary, legacy_summary)
     if not summary:
         return system_prompt, cleaned_messages
     summary_message = build_runtime_context_summary_message(summary)
@@ -599,15 +600,6 @@ def _extract_legacy_compression_summary(messages: list[Any]) -> tuple[list[Any],
             continue
         cleaned_messages.append(message)
     return cleaned_messages, "\n\n".join(summaries) or None
-
-
-def _merge_context_summaries(*summaries: str | None) -> str:
-    unique_summaries: list[str] = []
-    for raw_summary in summaries:
-        summary = str(raw_summary or "").strip()
-        if summary and summary not in unique_summaries:
-            unique_summaries.append(summary)
-    return "\n\n".join(unique_summaries)
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:
