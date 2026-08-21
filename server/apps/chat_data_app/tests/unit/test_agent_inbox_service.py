@@ -85,12 +85,12 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
 
     first_id = await service.enqueue_message("conv-1", "user-1", "用户一", "第一条", queue_type="next-step")
     second_id = await service.enqueue_message("conv-1", "user-1", "用户一", "第二条", queue_type="next-step")
-    claimed = await service.claim_pending_messages(run_id)
+    claimed = await service.claim_pending_messages(run_id, owner_token=owners[run_id])
 
     assert [message.content for message in claimed.messages] == ["第一条", "第二条"]
     assert [message.id for message in claimed.messages] == [first_id, second_id]
 
-    await service.mark_consumed(run_id, [first_id, second_id])
+    await service.mark_consumed(run_id, [first_id, second_id], owners[run_id])
     await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
 
     async with get_session() as session:
@@ -287,7 +287,7 @@ async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "重试消息", queue_type="next-step")
-    await service.claim_pending_messages(run_id)
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
 
     async with get_session() as session:
         row = (await session.execute(select(ChatDataAgentInbox).where(
@@ -295,7 +295,7 @@ async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
         ))).scalar_one()
         row.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    reclaimed = await service.claim_pending_messages(run_id)
+    reclaimed = await service.claim_pending_messages(run_id, owner_token=owners[run_id])
     assert [message.id for message in reclaimed.messages] == [message_id]
 
 
@@ -305,12 +305,12 @@ async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "失败后重试", queue_type="next-step")
-    await service.claim_pending_messages(run_id)
-    await service.finish_run(run_id, "failed", "user-1", "用户一")
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
+    await service.finish_run(run_id, "failed", "user-1", "用户一", owners[run_id])
 
     next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
     assert [message.id for message in adopted] == [message_id]
-    claimed = await service.claim_pending_messages(next_run_id)
+    claimed = await service.claim_pending_messages(next_run_id, owner_token=owners[next_run_id])
     assert claimed.messages == []
 
 
@@ -322,7 +322,7 @@ async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_serv
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "租约回收", queue_type="next-step")
-    await service.claim_pending_messages(run_id)
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
     async with get_session() as session:
         run = (await session.execute(select(ChatDataAgentInbox).where(
             ChatDataAgentInbox.run_id == run_id,
@@ -376,7 +376,7 @@ async def test_recovered_messages_are_reconciled_against_checkpoint(inbox_servic
     pending_id = await service.enqueue_message(
         "conv-1", "user-1", "用户一", "尚未写入 checkpoint", queue_type="next-step",
     )
-    await service.claim_pending_messages(run_id)
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
 
     await service.reconcile_recovered_messages(
         run_id,
@@ -427,13 +427,13 @@ async def test_cancel_active_run_waits_for_worker_and_preserves_queue(inbox_serv
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "停止后继续")
 
     assert await service.cancel_active_run("conv-1", "user-1", "用户一", run_id) is True
-    assert await service.heartbeat_run(run_id) == "cancelling"
+    assert await service.heartbeat_run(run_id, owners[run_id]) == "cancelling"
     with pytest.raises(AgentRunConflictError):
         await service.start_run("conv-1", "user-1", "用户一")
     with pytest.raises(AgentRunNotActiveError):
         await service.enqueue_message("conv-1", "user-1", "用户一", "停止中不能继续排队")
 
-    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一", owners[run_id])
     next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
     assert next_run_id != run_id
     assert [message.id for message in adopted] == [message_id]
@@ -450,9 +450,9 @@ async def test_cancelling_run_cannot_claim_messages(inbox_service):
     turn_id = await service.enqueue_message("conv-1", "user-1", "用户一", "下轮消息")
     assert await service.cancel_active_run("conv-1", "user-1", "用户一", run_id) is True
 
-    assert (await service.claim_pending_messages(run_id)).messages == []
+    assert (await service.claim_pending_messages(run_id, owner_token=owners[run_id])).messages == []
     assert await service.complete_run(run_id, "user-1", "用户一", owners[run_id]) is None
-    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一", owners[run_id])
 
     async with get_session() as session:
         rows = list((await session.execute(
@@ -471,7 +471,7 @@ async def test_stale_run_id_cannot_cancel_newer_run(inbox_service):
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     old_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
-    await service.finish_run(old_run_id, "cancelled", "user-1", "用户一")
+    await service.finish_run(old_run_id, "cancelled", "user-1", "用户一", owners[old_run_id])
     new_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
 
     assert await service.cancel_active_run("conv-1", "user-1", "用户一", old_run_id) is False
@@ -645,10 +645,10 @@ async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_s
     steer_id = await service.enqueue_message("conv-1", "user-1", "用户一", "立即插入", queue_type="next-step")
     next_id = await service.enqueue_message("conv-1", "user-1", "用户一", "下轮再说", queue_type="next-turn")
 
-    steer_claimed = await service.claim_pending_messages(run_id, queue_type="next-step")
+    steer_claimed = await service.claim_pending_messages(run_id, queue_type="next-step", owner_token=owners[run_id])
     assert [message.id for message in steer_claimed.messages] == [steer_id]
 
-    await service.mark_consumed(run_id, [steer_id])
+    await service.mark_consumed(run_id, [steer_id], owners[run_id])
     next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
     assert next_run_id
     async with get_session() as session:
@@ -700,7 +700,7 @@ async def test_agent_inbox_update_rejects_missing_and_claimed_messages(inbox_ser
     with pytest.raises(inbox_module.SteerMessageNotFoundError):
         await service.update_pending_message("conv-1", "user-1", "用户一", "missing-id", content="x")
 
-    await service.claim_pending_messages(run_id, queue_type="next-step")
+    await service.claim_pending_messages(run_id, queue_type="next-step", owner_token=owners[run_id])
     with pytest.raises(inbox_module.SteerMessageNotPendingError):
         await service.update_pending_message("conv-1", "user-1", "用户一", message_id, content="x")
     with pytest.raises(inbox_module.SteerMessageNotPendingError):
@@ -722,7 +722,7 @@ async def test_agent_inbox_cancel_pending_message(inbox_service):
         )).scalar_one()
     assert row.delete_flag == 1
 
-    claimed = await service.claim_pending_messages(run_id, queue_type="next-step")
+    claimed = await service.claim_pending_messages(run_id, queue_type="next-step", owner_token=owners[run_id])
     assert claimed.messages == []
 
 
@@ -770,8 +770,8 @@ async def test_agent_inbox_completion_claims_all_next_step_and_one_next_turn(inb
     next_id_2 = await service.enqueue_message("conv-1", "user-1", "用户一", "再下一轮任务")
     steer_id = await service.enqueue_message("conv-1", "user-1", "用户一", "来不及插入的立即任务", queue_type="next-step")
 
-    await service.claim_pending_messages(run_id, queue_type="next-step")
-    await service.mark_consumed(run_id, [steer_id])
+    await service.claim_pending_messages(run_id, queue_type="next-step", owner_token=owners[run_id])
+    await service.mark_consumed(run_id, [steer_id], owners[run_id])
     next_run_id = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
     assert next_run_id
     async with get_session() as session:
@@ -802,12 +802,12 @@ async def test_agent_inbox_lists_claimed_message_for_refresh_restore(inbox_servi
     assert [item["queue_type"] for item in queue["messages"]] == ["next-turn", "next-step"]
     assert all(item["message_id"] for item in queue["messages"])
 
-    await service.claim_pending_messages(run_id, queue_type="next-step")
+    await service.claim_pending_messages(run_id, queue_type="next-step", owner_token=owners[run_id])
     queue = await service.list_message_states("conv-1", "user-1")
     state = next(item for item in queue["messages"] if item["message_id"] == claimed_id)
     assert state["status"] == "claimed"
 
-    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一", owners[run_id])
     queue = await service.list_message_states("conv-1", "user-1")
     assert queue["has_active_run"] is False
     assert queue["run_id"] == run_id

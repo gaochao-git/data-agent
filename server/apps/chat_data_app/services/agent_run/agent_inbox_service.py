@@ -58,7 +58,6 @@ class ClaimedAgentMessages:
 class AgentInboxService:
     def __init__(self, dao: AgentInboxDao = agent_inbox_dao):
         self._dao = dao
-        self._owner_tokens: dict[str, str] = {}
 
     async def start_run(
         self,
@@ -72,8 +71,8 @@ class AgentInboxService:
         上一次运行遗留的排队消息（未消费的立即插入/下一轮消息）由新运行接管，
         并作为新一轮对话的首批输入；它们在本事务内被领取，避免被中间件重复注入。
         """
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -115,8 +114,8 @@ class AgentInboxService:
         只认领 pending：租约过期的 active Run 视为执行者已死亡，任务停止，
         由用户下一次交互经 _reap_expired_run 收口，不自动接管续跑。
         """
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run_snapshot = await self._dao.get_run_by_id(session, run_id)
             if run_snapshot is None:
                 return None
@@ -141,7 +140,6 @@ class AgentInboxService:
             run.content = json.dumps(content, ensure_ascii=False)
             owner_token = f"{owner_generation}:{uuid4().hex}"
             run.owner_token = owner_token
-            self._owner_tokens[run_id] = owner_token
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
             run.update_time = now
             rows = await self._dao.list_claimed_messages(session, run_id)
@@ -173,9 +171,8 @@ class AgentInboxService:
         owner_token: str | None = None,
     ) -> None:
         """Reconcile claimed inbox messages against a recovered checkpoint."""
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "active":
                 raise AgentRunNotActiveError("当前运行已结束")
@@ -193,9 +190,8 @@ class AgentInboxService:
                 row.update_time = now
 
     async def heartbeat_run(self, run_id: str, owner_token: str | None = None) -> str:
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_active_run_by_id(session, run_id)
             if run is None:
                 return "inactive"
@@ -214,7 +210,6 @@ class AgentInboxService:
 
     async def assert_run_owner(self, run_id: str, owner_token: str | None = None) -> None:
         """Fence a new tool side effect against a superseded Worker."""
-        owner_token = self._resolve_owner_token(run_id, owner_token)
         async with get_session() as session:
             run = await self._dao.get_run_by_id(session, run_id)
             if run is None or run.status != "active":
@@ -229,9 +224,8 @@ class AgentInboxService:
         operator_name: str,
         owner_token: str | None = None,
     ) -> None:
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "active":
                 raise AgentRunNotActiveError("当前运行已结束")
@@ -247,11 +241,10 @@ class AgentInboxService:
             run.update_time = now
             run.update_by = user_id
             run.update_by_name = operator_name
-            self._owner_tokens.pop(run_id, None)
 
     async def get_pending_question(self, conversation_id: str, user_id: str) -> dict[str, Any] | None:
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -269,8 +262,8 @@ class AgentInboxService:
         question_id: str,
         answer: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentQuestionNotFoundError("待回答问题不存在")
@@ -309,8 +302,8 @@ class AgentInboxService:
         Redis owner 脚本围栏，同一 Run 只有一个段能发布成功。该记录供问答
         恢复在 Redis Stream 失效时做 done 检测与游标兜底。
         """
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None:
                 return
@@ -321,9 +314,8 @@ class AgentInboxService:
 
     async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
         """Record that the checkpoint has advanced past the claimed answer."""
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status not in {"active", "pending"}:
                 return
@@ -343,9 +335,8 @@ class AgentInboxService:
         owner_token: str | None = None,
     ) -> None:
         """Roll back a claim when the resume stream could not be created."""
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status not in {"active", "pending"}:
                 return
@@ -377,8 +368,8 @@ class AgentInboxService:
         normalized_content = (content or "").strip()
         if not normalized_content:
             raise ValueError("消息内容不能为空")
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -413,9 +404,8 @@ class AgentInboxService:
         queue_type: str | None = "next-step",
         owner_token: str | None = None,
     ) -> ClaimedAgentMessages:
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "active":
                 return ClaimedAgentMessages(run_id, [])
@@ -432,9 +422,8 @@ class AgentInboxService:
     async def mark_consumed(self, run_id: str, message_ids: list[str], owner_token: str | None = None) -> None:
         if not message_ids:
             return
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None:
                 return
@@ -454,9 +443,8 @@ class AgentInboxService:
         operator_name: str,
         owner_token: str | None = None,
     ) -> None:
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run and run.status in {"pending", "active", "cancelling"}:
                 self._assert_owner(run, owner_token)
@@ -474,7 +462,6 @@ class AgentInboxService:
                 run.update_time = now
                 run.update_by = user_id
                 run.update_by_name = operator_name
-                self._owner_tokens.pop(run_id, None)
 
     async def complete_run(
         self,
@@ -484,9 +471,8 @@ class AgentInboxService:
         owner_token: str | None = None,
     ) -> str | None:
         """成功收口当前 Run，并原子调度该会话的下一轮 Run。"""
-        owner_token = self._resolve_owner_token(run_id, owner_token)
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             run_snapshot = await self._dao.get_run_by_id(session, run_id)
             if run_snapshot is None:
                 return None
@@ -507,7 +493,6 @@ class AgentInboxService:
             run.update_time = now
             run.update_by = user_id
             run.update_by_name = operator_name
-            self._owner_tokens.pop(run_id, None)
 
             if not await self._dao.has_pending_messages(session, run.conversation_id, run.user_id):
                 return None
@@ -560,8 +545,8 @@ class AgentInboxService:
         run_id: str,
     ) -> bool:
         """显式停止当前执行；保留 pending，并把 claimed 恢复为 pending 供下一轮接管。"""
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -593,8 +578,8 @@ class AgentInboxService:
             raise ValueError("消息内容不能为空")
         if queue_type is not None and queue_type not in INBOX_QUEUE_TYPES:
             raise ValueError(f"非法队列类型: {queue_type}")
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -629,8 +614,8 @@ class AgentInboxService:
         message_id: str,
     ) -> None:
         """删除仍在等待注入的消息；Run 结束后遗留的 pending 消息也可删除。"""
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -656,8 +641,8 @@ class AgentInboxService:
         user_id: str,
     ) -> dict[str, Any]:
         """读取当前 active run 的完整队列状态，供刷新和断线重连恢复。"""
-        now = datetime.now()
         async with get_session() as session:
+            now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
@@ -757,7 +742,6 @@ class AgentInboxService:
         run.update_time = now
         run.update_by = user_id
         run.update_by_name = operator_name
-        self._owner_tokens.pop(run.run_id, None)
         return run if run.status == "waiting_user" else None
 
     @staticmethod
@@ -767,9 +751,6 @@ class AgentInboxService:
         except (TypeError, json.JSONDecodeError):
             return {}
         return value if isinstance(value, dict) else {}
-
-    def _resolve_owner_token(self, run_id: str, owner_token: str | None) -> str | None:
-        return owner_token or self._owner_tokens.get(run_id)
 
     @staticmethod
     def _assert_owner(run: ChatDataAgentInbox, owner_token: str | None) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.models import ChatDataAgentInbox, UserThread
@@ -12,6 +12,18 @@ from utils.models import ChatDataAgentInbox, UserThread
 
 class AgentInboxDao:
     """只负责事务内的运行记录和追加消息读写。"""
+
+    async def now(self, session: AsyncSession) -> datetime:
+        """租约统一使用数据库时钟，避免多进程 / 多机时钟漂移造成误判。
+
+        非 MySQL（单测 SQLite）回退应用时钟：SQLite CURRENT_TIMESTAMP 为 UTC，
+        与测试内 datetime.now() 基准不一致。
+        """
+        bind = session.get_bind()
+        if bind is None or bind.dialect.name != "mysql":
+            return datetime.now()
+        value = (await session.execute(select(func.now()))).scalar()
+        return value if isinstance(value, datetime) else datetime.now()
 
     async def lock_thread(self, session: AsyncSession, conversation_id: str, user_id: str) -> UserThread | None:
         result = await session.execute(
