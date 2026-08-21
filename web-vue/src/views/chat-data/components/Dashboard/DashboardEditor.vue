@@ -32,7 +32,6 @@ const {
   saving,
   panelDataState,
   selectedBgId,
-  autoRefreshEnabled,
   currentTheme,
   theme,
   currentBackground,
@@ -554,12 +553,15 @@ onUnmounted(() => {
               <i class="fa-solid fa-image w-4 text-center opacity-80"></i>
               <span>更换背景</span>
             </button>
-            <!-- 自动刷新 -->
-            <label class="flex items-center gap-2.5 w-full px-3 py-2.5 border-none bg-transparent rounded-md text-[13px] cursor-pointer text-left transition-all duration-200 hover:bg-white/10 justify-start" :style="{ color: theme.textColor }">
+            <!-- 手动刷新全部 -->
+            <button
+              class="flex items-center gap-2.5 w-full px-3 py-2.5 border-none bg-transparent rounded-md text-[13px] cursor-pointer text-left transition-all duration-200 hover:bg-white/10 justify-start"
+              :style="{ color: theme.textColor }"
+              @click="runAllPanels"
+            >
               <i class="fa-solid fa-sync-alt w-4 text-center opacity-80"></i>
-              <span>自动刷新</span>
-              <input type="checkbox" v-model="autoRefreshEnabled" class="ml-auto cursor-pointer" />
-            </label>
+              <span>刷新全部</span>
+            </button>
           </div>
         </div>
 
