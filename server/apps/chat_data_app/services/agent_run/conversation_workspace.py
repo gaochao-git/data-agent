@@ -33,6 +33,7 @@ from .runtime_skill_snapshot import (
 )
 from ... import AGENT_ID
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
+from .workspace_text_budget import allocate_file_read_line_budgets
 from .workspace_special_services import (
     semantic_model_workspace_service,
     workspace_artifact_service,
@@ -914,7 +915,6 @@ async def read_conversation_query_result(
 
 _TEXT_READ_CHUNK_CHARS = 64 * 1024
 _TEXT_LINE_SEPARATOR_RE = re.compile(r"\n")
-MAX_FILE_READ_LINE_CHARS = 500
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
@@ -945,26 +945,6 @@ def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
     target = Path(workspace_root).expanduser().resolve()
     if target != root and root not in target.parents:
         raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
-
-
-def _allocate_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
-    """按源顺序分配正文预算，单行最多保留固定字符数。"""
-    budgets: list[int] = []
-    remaining = max(0, int(max_chars))
-    for original_length in line_lengths:
-        separator_chars = 1 if budgets else 0
-        if remaining < separator_chars:
-            break
-        desired_chars = min(max(0, int(original_length)), MAX_FILE_READ_LINE_CHARS)
-        available_chars = remaining - separator_chars
-        if desired_chars > available_chars:
-            if available_chars <= 0 and desired_chars > 0:
-                break
-            budgets.append(max(0, available_chars))
-            break
-        budgets.append(desired_chars)
-        remaining -= desired_chars + separator_chars
-    return budgets
 
 
 def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict[str, Any]:
@@ -1107,7 +1087,7 @@ def _read_text_page_from_path(
             "empty": target.stat().st_size == 0,
             "offset_out_of_range": target.stat().st_size > 0,
         }
-    budgets = _allocate_line_budgets(
+    budgets = allocate_file_read_line_budgets(
         [item["original_chars"] for item in selected_lines],
         max_chars,
     )

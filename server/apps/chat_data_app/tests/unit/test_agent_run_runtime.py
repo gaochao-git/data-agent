@@ -170,3 +170,38 @@ async def test_terminal_record_failure_does_not_break_owner_release(monkeypatch)
     await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
 
     assert order == ["done_published", "owner_released"]
+
+
+def test_build_stream_factory_requires_injected_stream_generator():
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    with pytest.raises(RuntimeError, match="stream_generator"):
+        runtime._build_stream_factory(_prepared())
+
+
+def test_set_stream_generator_is_used_by_stream_factory():
+    captured = {}
+
+    def fake_stream_generator(**kwargs):
+        captured.update(kwargs)
+
+        async def stream():
+            yield "event: done\ndata: [DONE]\n\n"
+
+        return stream()
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    runtime.set_stream_generator(fake_stream_generator)
+    factory = runtime._build_stream_factory(_prepared())
+    stream = factory()
+    assert captured["run_id"] == "run-1"
+    assert captured["owner_token"] == "1:owner"
+    assert captured["thread_id"] == "conv-1"
+    stream.aclose()

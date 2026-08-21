@@ -1758,3 +1758,7 @@ async def resume_chat_data_question_handler(
             "X-ChatData-Run-Id": run_id,
         },
     )
+
+
+# 启动装配：AgentRunRuntime 通过注入获得 Run 流生成器，服务层不反向 import 本模块。
+agent_run_runtime.set_stream_generator(_generate_chat_data_stream)

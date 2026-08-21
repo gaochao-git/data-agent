@@ -35,14 +35,20 @@ class AgentRunRuntime:
         inbox_service: AgentInboxService = agent_inbox_service,
         event_service: AgentRunEventService = agent_run_event_service,
         event_bus: RedisEventBus | None = None,
+        stream_generator: Callable[..., AsyncIterator[str]] | None = None,
     ) -> None:
         self._max_concurrency = max_concurrency or _max_concurrency()
         self._inbox_service = inbox_service
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
+        self._stream_generator = stream_generator
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
         self._tasks: dict[str, asyncio.Task] = {}
         self._poll_task: asyncio.Task | None = None
+
+    def set_stream_generator(self, stream_generator: Callable[..., AsyncIterator[str]]) -> None:
+        """由上层（handlers）在启动装配时注入 Run 流生成器，避免服务层反向 import。"""
+        self._stream_generator = stream_generator
 
     async def start(self) -> None:
         await self._event_bus.start()
@@ -124,14 +130,14 @@ class AgentRunRuntime:
             rows = await agent_inbox_dao.list_runnable_runs(session, datetime.now(), limit)
             return [row.run_id for row in rows]
 
-    @staticmethod
-    def _build_stream_factory(prepared: dict) -> Callable[[], AsyncIterator[str]]:
+    def _build_stream_factory(self, prepared: dict) -> Callable[[], AsyncIterator[str]]:
         context = prepared["runtime_context"]
+        stream_generator = self._stream_generator
+        if stream_generator is None:
+            raise RuntimeError("AgentRunRuntime 未装配 stream_generator，请在启动时调用 set_stream_generator()")
 
         def factory() -> AsyncIterator[str]:
-            from ...handlers import _generate_chat_data_stream
-
-            return _generate_chat_data_stream(
+            return stream_generator(
                 thread_id=prepared["conversation_id"],
                 user_query=str(context.get("query") or ""),
                 datasource_id=context.get("datasource_id"),

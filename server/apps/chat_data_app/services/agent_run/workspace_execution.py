@@ -24,12 +24,12 @@ from utils.storage_paths import CHAT_DATA_HOME
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from .artifact_registry import parse_output_artifact
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
+from .workspace_text_budget import MAX_FILE_READ_LINE_CHARS, allocate_file_read_line_budgets
 
 logger = get_logger(__name__)
 
 OPENSANDBOX_BACKEND = "opensandbox"
 MAX_OUTPUT_CHARS = 12000
-MAX_FILE_READ_LINE_CHARS = 500
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_OFFICE_HTML_CHARS = 12 * 1024 * 1024
 # OpenSandbox execd parses permission values as base-8 *strings*.  These must
@@ -1226,26 +1226,6 @@ async def _sandbox_path_kind(
     return "dir"
 
 
-def _allocate_file_read_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
-    """Allocate the shared file_read body budget in source-line order."""
-    budgets: list[int] = []
-    remaining = max(0, int(max_chars))
-    for original_length in line_lengths:
-        separator_chars = 1 if budgets else 0
-        if remaining < separator_chars:
-            break
-        desired_chars = min(max(0, int(original_length)), MAX_FILE_READ_LINE_CHARS)
-        available_chars = remaining - separator_chars
-        if desired_chars > available_chars:
-            if available_chars <= 0 and desired_chars > 0:
-                break
-            budgets.append(max(0, available_chars))
-            break
-        budgets.append(desired_chars)
-        remaining -= desired_chars + separator_chars
-    return budgets
-
-
 async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, file_path: str) -> dict[str, Any]:
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
@@ -1419,7 +1399,7 @@ async def sandbox_read_text_file(
                 "empty": int(getattr(entry, "size", 0) or 0) == 0,
                 "offset_out_of_range": int(getattr(entry, "size", 0) or 0) > 0,
             }
-        budgets = _allocate_file_read_line_budgets(
+        budgets = allocate_file_read_line_budgets(
             [len(line) for line in selected_source_lines],
             max_chars,
         )
