@@ -84,6 +84,19 @@ class AgentRunRuntime:
         if self._tasks.get(run_id) is completed:
             self._tasks.pop(run_id, None)
 
+    def cancel_local(self, run_id: str) -> bool:
+        """停止请求恰好落在执行者进程时，直接取消本地任务（毫秒级 fast path）。
+
+        只触发取消，不代写状态：收口仍由执行段按取消原因走 finally 完成，
+        与心跳读到 cancelling 后自取消是同一条收口路径。任务不在本进程时
+        返回 False，由执行者心跳（2 秒周期）兜底。
+        """
+        task = self._tasks.get(run_id)
+        if task is None or task.done():
+            return False
+        task.cancel("agent_run_cancelled")
+        return True
+
     async def stop(self) -> None:
         if self._poll_task:
             self._poll_task.cancel()

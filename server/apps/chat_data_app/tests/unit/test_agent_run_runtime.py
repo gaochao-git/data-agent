@@ -205,3 +205,50 @@ def test_set_stream_generator_is_used_by_stream_factory():
     assert captured["owner_token"] == "1:owner"
     assert captured["thread_id"] == "conv-1"
     stream.aclose()
+
+@pytest.mark.asyncio
+async def test_cancel_local_cancels_in_process_task_with_cancel_reason():
+    import asyncio
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    reason = {}
+
+    async def running():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError as exc:
+            reason["args"] = exc.args
+            raise
+
+    task = asyncio.create_task(running())
+    runtime._tasks["run-1"] = task
+    await asyncio.sleep(0)
+
+    assert runtime.cancel_local("run-1") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert reason["args"] == ("agent_run_cancelled",)
+
+
+@pytest.mark.asyncio
+async def test_cancel_local_returns_false_when_task_absent_or_done():
+    import asyncio
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    assert runtime.cancel_local("missing") is False
+
+    async def finished():
+        return None
+
+    task = asyncio.create_task(finished())
+    await task
+    runtime._tasks["run-2"] = task
+    assert runtime.cancel_local("run-2") is False
