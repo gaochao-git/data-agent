@@ -110,7 +110,11 @@ class AgentInboxService:
             return run_id, [self._to_human_message(row) for row in rows]
 
     async def prepare_pending_run(self, run_id: str) -> dict[str, Any] | None:
-        """领取 pending 或租约已过期的 active Run，并返回重建上下文。"""
+        """领取 pending Run 并返回重建上下文。
+
+        只认领 pending：租约过期的 active Run 视为执行者已死亡，任务停止，
+        由用户下一次交互经 _reap_expired_run 收口，不自动接管续跑。
+        """
         now = datetime.now()
         async with get_session() as session:
             run_snapshot = await self._dao.get_run_by_id(session, run_id)
@@ -122,12 +126,7 @@ class AgentInboxService:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None:
                 return None
-            is_expired_active = (
-                run.status == "active"
-                and run.lease_expire_time is not None
-                and run.lease_expire_time <= now
-            )
-            if run.status != "pending" and not is_expired_active:
+            if run.status != "pending":
                 return None
             active = await self._dao.get_active_run(session, run.conversation_id, run.user_id)
             if active is not None and active.run_id != run_id:
@@ -156,7 +155,7 @@ class AgentInboxService:
                 "operator_name": content.get("runtime_context", {}).get("operator_name") or run.user_id,
                 "runtime_context": content.get("runtime_context") or {},
                 "turn_id": str(content.get("turn_id") or run_id),
-                "recovering": is_expired_active,
+                "recovering": False,
                 "messages": [self._to_human_message(row) for row in rows],
                 "resume_answer": pending_answer if isinstance(pending_answer, dict) else None,
                 "resume_started": content.get("resume_started") is True,
@@ -738,25 +737,27 @@ class AgentInboxService:
         user_id: str,
         operator_name: str,
     ) -> ChatDataAgentInbox | None:
-        """收口停止中的过期 Run；active Run 交给后台调度器恢复。"""
+        """收口租约过期的 Run：执行者已死亡，任务停止，不自动续跑。
+
+        排队消息退回 pending 由下一个新 Run 接管；有未开始的待答问题则还原为
+        waiting_user，否则 active 收口为 failed、cancelling 收口为 cancelled。
+        """
         if run is None or run.status not in {"active", "cancelling"}:
             return run
         if run.lease_expire_time is None or run.lease_expire_time > now:
             return run
-        if run.status == "active":
-            # 查询历史、队列状态或发起新消息都不能抢先把可恢复 Run
-            # 标记失败。Runtime 会通过同一行锁和 owner generation 接管。
-            return run
+        dead_status = "failed" if run.status == "active" else "cancelled"
         await self._dao.requeue_messages(session, run.run_id, now)
         content = self._load_run_content(run.content)
         self._restore_unstarted_question(content)
         run.content = json.dumps(content, ensure_ascii=False)
-        run.status = "waiting_user" if content.get("pending_question") else "cancelled"
+        run.status = "waiting_user" if content.get("pending_question") else dead_status
         run.owner_token = None
         run.lease_expire_time = None
         run.update_time = now
         run.update_by = user_id
         run.update_by_name = operator_name
+        self._owner_tokens.pop(run.run_id, None)
         return run if run.status == "waiting_user" else None
 
     @staticmethod

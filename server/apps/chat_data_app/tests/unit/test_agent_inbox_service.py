@@ -315,8 +315,9 @@ async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
 
 
 @pytest.mark.asyncio
-async def test_expired_run_is_reclaimed_with_same_run_and_messages(inbox_service):
-    """Worker 崩溃后由新 Worker 接管同一 Run，不创建并发 Run。"""
+async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_service):
+    """Worker 崩溃（租约过期）后任务停止：不自动续跑，旧 Run 收口为 failed，
+    排队消息退回 pending 由用户下一次发起的新 Run 接管。"""
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -329,19 +330,25 @@ async def test_expired_run_is_reclaimed_with_same_run_and_messages(inbox_service
         ))).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    with pytest.raises(AgentRunConflictError):
-        await service.start_run("conv-1", "user-1", "用户一")
+    # 调度器不接管过期 active Run
+    assert await service.prepare_pending_run(run_id) is None
 
-    prepared = await service.prepare_pending_run(run_id)
-    assert prepared is not None
-    assert prepared["run_id"] == run_id
-    assert prepared["recovering"] is True
-    assert [message.id for message in prepared["messages"]] == [message_id]
-    assert prepared["owner_token"].startswith("2:")
+    # 用户下一次发起会话：旧 Run 就地收口，新 Run 创建并接管退回的消息
+    new_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
+    assert new_run_id != run_id
+    assert [message.id for message in adopted] == [message_id]
+    async with get_session() as session:
+        old_run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert old_run.status == "failed"
+    assert old_run.owner_token is None
 
 
 @pytest.mark.asyncio
-async def test_expired_run_accepts_steer_for_recovery_and_rejects_parallel_completion(inbox_service):
+async def test_expired_run_rejects_steer_and_allows_new_run(inbox_service):
+    """租约过期的 Run 已死亡：追加消息就地收口该 Run 并拒绝入队，随后可发起新 Run。"""
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -352,10 +359,10 @@ async def test_expired_run_accepts_steer_for_recovery_and_rejects_parallel_compl
         ))).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "恢复后继续处理")
-    assert message_id
-    with pytest.raises(AgentRunConflictError):
-        await service.start_run("conv-1", "user-1", "用户一")
+    with pytest.raises(AgentRunNotActiveError):
+        await service.enqueue_message("conv-1", "user-1", "用户一", "恢复后继续处理")
+    new_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    assert new_run_id != run_id
 
 
 @pytest.mark.asyncio

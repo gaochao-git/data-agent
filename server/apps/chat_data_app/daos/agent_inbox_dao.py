@@ -275,15 +275,13 @@ class AgentInboxDao:
         now: datetime,
         limit: int = 20,
     ) -> list[ChatDataAgentInbox]:
+        # 只调度 pending：租约过期的 active Run 视为执行者死亡，任务停止，
+        # 由用户下一次交互收口，不自动续跑。
         result = await session.execute(
             select(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.record_type == "run",
-                or_(
-                    ChatDataAgentInbox.status == "pending",
-                    (ChatDataAgentInbox.status == "active")
-                    & (ChatDataAgentInbox.lease_expire_time <= now),
-                ),
+                ChatDataAgentInbox.status == "pending",
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.asc())
