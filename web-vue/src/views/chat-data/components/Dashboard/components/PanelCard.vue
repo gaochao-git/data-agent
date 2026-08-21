@@ -1453,10 +1453,12 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                   <span>{{ currentChartTypeMeta.label }}</span>
                 </div>
                 <div class="mt-1 text-[12px] leading-5 text-blue-700/90">{{ currentChartTypeHelp.summary }}</div>
-                <div class="mt-1 text-[12px] leading-5 text-blue-600">场景：{{ currentChartTypeHelp.example.replace(/^示例：/, '') }}</div>
-                <div class="mt-1 flex min-w-0 items-start gap-1.5 text-[12px] leading-5 text-blue-600">
-                  <span class="shrink-0">SQL：</span>
-                  <code class="min-w-0 flex-1 whitespace-normal break-words rounded bg-white/80 px-1.5 py-0.5 font-mono text-[11px] text-blue-700">{{ currentChartTypeHelp.sql }}</code>
+                <div v-for="(item, idx) in currentChartTypeHelp.examples" :key="idx" class="mt-1">
+                  <div class="text-[12px] leading-5 text-blue-600">场景{{ currentChartTypeHelp.examples.length > 1 ? ` ${idx + 1}` : '' }}：{{ item.scene }}</div>
+                  <div class="mt-0.5 flex min-w-0 items-start gap-1.5 text-[12px] leading-5 text-blue-600">
+                    <span class="shrink-0">SQL：</span>
+                    <code class="min-w-0 flex-1 whitespace-normal break-words rounded bg-white/80 px-1.5 py-0.5 font-mono text-[11px] text-blue-700">{{ item.sql }}</code>
+                  </div>
                 </div>
               </div>
             </section>

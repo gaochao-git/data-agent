@@ -146,7 +146,7 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
     textMuted: '#8393bc',
     accentColor: '#00e5ff',
     accentGlow: 'rgba(0, 229, 255, 0.15)',
-    decorLine: 'linear-gradient(90deg, transparent, #00e5ff 18%, #7c4dff 58%, transparent)',
+    decorLine: 'linear-gradient(90deg, transparent, #00e5ff 18%, #36CFC9 58%, transparent)',
     chartTooltipBg: 'rgba(8, 8, 18, 0.95)',
     chartTooltipBorder: 'rgba(0, 229, 255, 0.42)',
     chartTooltipText: '#eef7ff',
@@ -161,7 +161,7 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
     emptyBorder: 'rgba(0, 229, 255, 0.32)',
     emptyBg: 'rgba(13, 13, 30, 0.5)',
     cardBg: '#0d0d1e',
-    chartPalette: ['#00e5ff', '#7c4dff', '#00dc75', '#ffdc3d', '#ff3d00'],
+    chartPalette: ['#00e5ff', '#36CFC9', '#00dc75', '#ffdc3d', '#ff3d00'],
   },
   'monitor-forest-emerald': {
     pageBg: '#040e09',
@@ -215,7 +215,7 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
     emptyBorder: 'rgba(167, 139, 250, 0.32)',
     emptyBg: 'rgba(16, 12, 30, 0.5)',
     cardBg: '#100c1e',
-    chartPalette: ['#a78bfa', '#ded9fe', '#34d399', '#fbbf24', '#fb7185'],
+    chartPalette: ['#36CFC9', '#34d399', '#fbbf24', '#60a5fa', '#fb7185'],
   },
 }
 
