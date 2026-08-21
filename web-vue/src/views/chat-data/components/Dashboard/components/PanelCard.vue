@@ -429,6 +429,8 @@ const handleKpiReset = () => {
 
 // 图表样式配置
 const editChartColor = computed(() => (editState.chartConfig?.chartColor as string) || defaultAccentColor.value)
+// 组合图折线指标单独调色；未配置时跟随主题调色板第 2 色（与渲染兜底一致）
+const editComboLineColor = computed(() => (editState.chartConfig?.comboLineColor as string) || themeChartPalette.value[1] || defaultAccentColor.value)
 const chartColorOptions = computed(() => buildColorOptions(themeChartPalette.value, CHART_COLOR_OPTIONS))
 const editLineStyle = computed(() => (editState.chartConfig?.lineStyle as string) || 'smooth')
 
@@ -458,6 +460,32 @@ const handleChartColorSelect = (color: string) => {
   editState.chartConfig = { ...editState.chartConfig, chartColor: color }
 }
 
+const handleComboLineColorSelect = (color: string) => {
+  editState.chartConfig = { ...editState.chartConfig, comboLineColor: color }
+}
+
+// 面板名称对齐方式（默认居左，存 chart_config.titleAlign）
+const editTitleAlign = computed(() => (editState.chartConfig?.titleAlign as string) || 'left')
+const handleTitleAlignSelect = (align: string) => {
+  const newConfig = { ...editState.chartConfig }
+  if (align === 'left') {
+    delete newConfig.titleAlign
+  } else {
+    newConfig.titleAlign = align
+  }
+  editState.chartConfig = newConfig
+}
+
+// 点击色号文字复制，方便跨面板统一用色
+const copyColorCode = async (color: string) => {
+  try {
+    await navigator.clipboard.writeText(color)
+    ElMessage.success(`已复制色号 ${color}`)
+  } catch {
+    ElMessage.warning('复制失败，请手动复制')
+  }
+}
+
 const handleLineStyleSelect = (styleId: string) => {
   editState.chartConfig = { ...editState.chartConfig, lineStyle: styleId }
 }
@@ -465,6 +493,7 @@ const handleLineStyleSelect = (styleId: string) => {
 const handleChartStyleReset = () => {
   const newConfig = { ...editState.chartConfig }
   delete newConfig.chartColor
+  delete newConfig.comboLineColor
   delete newConfig.lineStyle
   editState.chartConfig = newConfig
 }
@@ -721,6 +750,10 @@ const chartOption = computed(() => {
 
     return {
       ...baseOption,
+      // 多系列时显示图例，说明每个系列的含义；单系列不占空间
+      legend: series.length > 1
+        ? { top: 4, left: 'center', itemWidth: 14, itemHeight: 8, textStyle: { color: theme.chartAxisText, fontSize: 12 } }
+        : undefined,
       xAxis: isHorizontal
         ? { type: 'value', axisLabel: { color: theme.chartAxisText }, splitLine: splitLineStyle }
         : { type: 'category', data: xData, axisLabel: { color: theme.chartAxisText }, splitLine: { show: false } },
@@ -738,6 +771,7 @@ const chartOption = computed(() => {
       : null
     const xData = grouped?.xValues ?? data.map(row => String(row[xField] || ''))
     const configuredColor = props.panel.chart_config?.chartColor as string | undefined
+    const configuredLineColor = props.panel.chart_config?.comboLineColor as string | undefined
     const lineStyleId = (props.panel.chart_config?.lineStyle as string) || 'smooth'
     const lineStyleConfig = LINE_STYLES.find(s => s.id === lineStyleId) ?? LINE_STYLES[0]!
     const defaultColors = themeChartPalette.value
@@ -746,7 +780,10 @@ const chartOption = computed(() => {
       : yFields.map(field => ({ name: field, field, data: data.map(row => parseNumericValue(row[field]) ?? 0) }))
     const useDualAxisCombo = chartType === 'combo' && !grouped && seriesSource.length > 1
     const series = seriesSource.map((item, idx) => {
-      const color = configuredColor && idx === 0 ? configuredColor : defaultColors[idx % defaultColors.length]!
+      // 组合图柱/线各自调色：chartColor 管柱状（idx 0），comboLineColor 管折线（idx >= 1）
+      const color = chartType === 'combo' && idx >= 1 && configuredLineColor
+        ? configuredLineColor
+        : configuredColor && idx === 0 ? configuredColor : defaultColors[idx % defaultColors.length]!
       const isComboBar = chartType === 'combo' && idx === 0
       return {
         name: item.name,
@@ -781,6 +818,10 @@ const chartOption = computed(() => {
 
     return {
       ...baseOption,
+      // 多系列时显示图例，说明柱/线各自代表的指标；单系列不占空间
+      legend: series.length > 1
+        ? { top: 4, left: 'center', itemWidth: 14, itemHeight: 8, textStyle: { color: theme.chartAxisText, fontSize: 12 } }
+        : undefined,
       xAxis: { type: 'category', data: xData, axisLabel: { color: theme.chartAxisText }, splitLine: { show: false } },
       yAxis: useDualAxisCombo
         ? [
@@ -1163,20 +1204,14 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
     }"
   >
     <!-- 面板头部 -->
-    <div :class="['flex items-center justify-between px-2.5 py-2 gap-2 min-h-10', !isPreviewMode && 'drag-handle cursor-move']" :style="{ background: theme.panelHeaderBg }">
-      <div class="flex items-center gap-2 text-[13px] font-medium min-w-0 flex-1" :style="{ color: theme.textColor }">
-        <span
-          v-if="panel.chart_type !== 'kpi'"
-          class="w-[3px] h-3.5 rounded-sm flex-shrink-0"
-          :class="{
-            'bg-indigo-500': panel.chart_type === 'table',
-            'bg-blue-500': panel.chart_type === 'bar' || panel.chart_type === 'horizontal_bar',
-            'bg-amber-500': panel.chart_type === 'line' || panel.chart_type === 'area' || panel.chart_type === 'combo',
-            'bg-emerald-500': panel.chart_type === 'pie',
-            'bg-teal-500': panel.chart_type === 'map' || panel.chart_type === 'funnel',
-            'bg-violet-500': panel.chart_type === 'graph'
-          }"
-        ></span>
+    <div :class="['relative flex items-center justify-end px-2.5 py-2 gap-2 min-h-10', !isPreviewMode && 'drag-handle cursor-move']" :style="{ background: theme.panelHeaderBg }">
+      <div
+        class="flex items-center gap-2 text-[13px] font-medium min-w-0 flex-1"
+        :class="panel.chart_config?.titleAlign === 'center'
+          ? 'pointer-events-none absolute inset-x-0 justify-center px-16'
+          : ''"
+        :style="{ color: theme.textColor }"
+      >
         <span class="overflow-hidden text-ellipsis whitespace-nowrap">{{ panel.name }}</span>
       </div>
       <div v-if="!isPreviewMode" class="flex gap-0.5 flex-shrink-0">
@@ -1328,7 +1363,22 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
         <el-tab-pane label="基础" name="basic">
           <div class="space-y-4">
             <div>
-              <label class="mb-1.5 block text-[13px] text-gray-500">面板名称</label>
+              <div class="mb-1.5 flex items-center justify-between">
+                <label class="block text-[13px] text-gray-500">面板名称</label>
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="item in [{ id: 'left', icon: 'fa-align-left', label: '居左' }, { id: 'center', icon: 'fa-align-center', label: '居中' }]"
+                    :key="item.id"
+                    type="button"
+                    class="inline-flex h-7 items-center gap-1 rounded border border-solid px-2 text-[12px] transition-all duration-200"
+                    :class="editTitleAlign === item.id ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-500 hover:border-blue-300'"
+                    @click="handleTitleAlignSelect(item.id)"
+                    :title="`名称${item.label}`"
+                  >
+                    <i :class="['fa-solid', item.icon]"></i>{{ item.label }}
+                  </button>
+                </div>
+              </div>
               <el-input
                 v-model="editState.name"
                 maxlength="24"
@@ -1421,7 +1471,7 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
               </div>
 
               <div>
-                <div class="mb-2 text-[12px] text-gray-500">颜色</div>
+                <div class="mb-2 text-[12px] text-gray-500">{{ editState.chartType === 'combo' ? '柱状颜色' : '颜色' }}</div>
                 <div class="flex flex-wrap gap-2.5">
                   <button
                     v-for="item in editState.chartType === 'kpi' ? kpiColorOptions : chartColorOptions"
@@ -1435,17 +1485,59 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                   >
                     <i v-if="(editState.chartType === 'kpi' ? editKpiColor : editChartColor) === item.color" class="fa-solid fa-check"></i>
                   </button>
+                  <div class="flex items-center gap-1.5">
+                    <el-color-picker
+                      :model-value="editState.chartType === 'kpi' ? editKpiColor : editChartColor"
+                      :predefine="(editState.chartType === 'kpi' ? kpiColorOptions : chartColorOptions).map(item => item.color)"
+                      @change="(val: string | null) => val && (editState.chartType === 'kpi' ? handleKpiColorSelect(val) : handleChartColorSelect(val))"
+                    />
+                    <span
+                      class="cursor-pointer font-mono text-[12px] text-gray-500 hover:text-blue-500"
+                      title="点击复制色号"
+                      @click="copyColorCode(editState.chartType === 'kpi' ? editKpiColor : editChartColor)"
+                    >{{ editState.chartType === 'kpi' ? editKpiColor : editChartColor }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="editState.chartType === 'combo'" class="mt-4">
+                <div class="mb-2 text-[12px] text-gray-500">折线颜色</div>
+                <div class="flex flex-wrap gap-2.5">
+                  <button
+                    v-for="item in chartColorOptions"
+                    :key="item.color"
+                    type="button"
+                    class="flex h-9 w-9 items-center justify-center rounded-full border-2 border-transparent text-xs text-white transition-all duration-200 hover:scale-105"
+                    :class="{ 'border-gray-300 shadow-[0_0_8px_currentColor]': editComboLineColor === item.color }"
+                    :style="{ background: item.color }"
+                    @click="handleComboLineColorSelect(item.color)"
+                    :title="item.label"
+                  >
+                    <i v-if="editComboLineColor === item.color" class="fa-solid fa-check"></i>
+                  </button>
+                  <div class="flex items-center gap-1.5">
+                    <el-color-picker
+                      :model-value="editComboLineColor"
+                      :predefine="chartColorOptions.map(item => item.color)"
+                      @change="(val: string | null) => val && handleComboLineColorSelect(val)"
+                    />
+                    <span
+                      class="cursor-pointer font-mono text-[12px] text-gray-500 hover:text-blue-500"
+                      title="点击复制色号"
+                      @click="copyColorCode(editComboLineColor)"
+                    >{{ editComboLineColor }}</span>
+                  </div>
                 </div>
               </div>
 
               <div v-if="['line', 'area', 'combo'].includes(editState.chartType)" class="mt-4">
                 <div class="mb-2 text-[12px] text-gray-500">线条样式</div>
-                <div class="grid grid-cols-3 gap-2">
+                <div class="grid grid-cols-4 gap-2">
                   <button
                     v-for="item in LINE_STYLES"
                     :key="item.id"
                     type="button"
-                    class="rounded-lg border border-solid px-4 py-2.5 text-left text-[13px] transition-all duration-200"
+                    class="rounded-lg border border-solid px-3 py-2.5 text-center text-[13px] transition-all duration-200"
                     :class="editLineStyle === item.id ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'"
                     @click="handleLineStyleSelect(item.id)"
                   >

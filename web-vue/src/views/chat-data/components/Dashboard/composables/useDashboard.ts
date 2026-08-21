@@ -36,8 +36,6 @@ export function useDashboard(
   const saving = ref(false)
   const panelDataState = ref<PanelDataStateMap>({})
   const selectedBgId = ref('monitor-midnight-cyan')
-  const autoRefreshEnabled = ref(false)
-  const autoRefreshTimers = new Map<string, ReturnType<typeof setInterval>>()
   let batchLoadController: AbortController | null = null
 
   // 派生状态
@@ -369,11 +367,6 @@ export function useDashboard(
 
       // 清除面板状态
       delete panelDataState.value[panelId]
-      const timer = autoRefreshTimers.get(panelId)
-      if (timer) {
-        clearInterval(timer)
-        autoRefreshTimers.delete(panelId)
-      }
 
       ElMessage.success('面板已删除')
       return true
@@ -392,6 +385,18 @@ export function useDashboard(
 
   // 运行全部面板
   const runAllPanels = async () => {
+    // 先静默重拉看板元数据：其它入口（查询页"保存到看板"）新增的面板才能被刷新到
+    if (dashboardId) {
+      try {
+        const data = await getDashboard(dashboardId)
+        dashboard.value = data
+        if (data.background_id) {
+          selectedBgId.value = data.background_id
+        }
+      } catch (err) {
+        console.error('刷新看板信息失败:', err)
+      }
+    }
     if (!dashboard.value?.panels?.length) return
     const panelIds = dashboard.value.panels.map(p => p.id)
     const summary = await loadAllPanelData(panelIds, buildPanelMemberDatasourceIds(panelIds))
@@ -409,32 +414,10 @@ export function useDashboard(
     ElMessage.success('所有面板已刷新')
   }
 
-  // 自动刷新控制
-  watch(autoRefreshEnabled, (enabled) => {
-    // 清除所有定时器
-    autoRefreshTimers.forEach(timer => clearInterval(timer))
-    autoRefreshTimers.clear()
-
-    if (!enabled || !dashboard.value?.panels) return
-
-    // 为有刷新间隔的面板设置定时器
-    dashboard.value.panels.forEach(panel => {
-      const interval = panel.refresh_interval
-      if (interval && interval > 0) {
-        const timer = setInterval(() => {
-          loadPanelData(panel.id, getPanelMemberDatasourceId?.(panel.id))
-        }, interval * 1000)
-        autoRefreshTimers.set(panel.id, timer)
-      }
-    })
-  })
-
   // 清理
   onUnmounted(() => {
     batchLoadController?.abort()
     batchLoadController = null
-    autoRefreshTimers.forEach(timer => clearInterval(timer))
-    autoRefreshTimers.clear()
   })
 
   return {
@@ -444,7 +427,6 @@ export function useDashboard(
     saving,
     panelDataState,
     selectedBgId,
-    autoRefreshEnabled,
     // 计算属性
     currentTheme,
     theme,
