@@ -476,6 +476,18 @@ const handleTitleAlignSelect = (align: string) => {
   editState.chartConfig = newConfig
 }
 
+// 面板名称颜色（默认跟随主题文字色，存 chart_config.titleColor；清空恢复默认）
+const editTitleColor = computed(() => (editState.chartConfig?.titleColor as string) || props.theme.textColor)
+const handleTitleColorSelect = (color: string | null) => {
+  const newConfig = { ...editState.chartConfig }
+  if (!color || color === props.theme.textColor) {
+    delete newConfig.titleColor
+  } else {
+    newConfig.titleColor = color
+  }
+  editState.chartConfig = newConfig
+}
+
 // 点击色号文字复制，方便跨面板统一用色
 const copyColorCode = async (color: string) => {
   try {
@@ -1210,7 +1222,7 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
         :class="panel.chart_config?.titleAlign === 'center'
           ? 'pointer-events-none absolute inset-x-0 justify-center px-16'
           : ''"
-        :style="{ color: theme.textColor }"
+        :style="{ color: (panel.chart_config?.titleColor as string) || theme.textColor }"
       >
         <span class="overflow-hidden text-ellipsis whitespace-nowrap">{{ panel.name }}</span>
       </div>
@@ -1377,6 +1389,13 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                   >
                     <i :class="['fa-solid', item.icon]"></i>{{ item.label }}
                   </button>
+                  <el-color-picker
+                    :model-value="editTitleColor"
+                    size="small"
+                    :predefine="chartColorOptions.map(item => item.color)"
+                    title="标题颜色（清空恢复默认）"
+                    @change="handleTitleColorSelect"
+                  />
                 </div>
               </div>
               <el-input
