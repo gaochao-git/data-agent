@@ -27,12 +27,26 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     estimate_text_tokens,
     estimate_tokens,
     invoke_with_context_usage,
-    _build_request_messages,
     _extract_result_messages,
     _get_agent_context_usage,
     _merge_response_usage,
     _request_model_name,
 )
+
+from langchain_core.messages import BaseMessage
+
+
+def _build_request_messages(request):
+    """测试辅助：拼装 request 的 system + messages（原生产模块内已无调用方）。"""
+    messages = []
+    system_message = getattr(request, "system_message", None)
+    if isinstance(system_message, BaseMessage):
+        messages.append(system_message)
+    messages.extend(
+        message for message in list(getattr(request, "messages", None) or [])
+        if isinstance(message, BaseMessage)
+    )
+    return messages
 from apps.chat_data_app.services.agent_run.context_budget import (
     ContextInputLimitExceededError,
     ContextBudget,

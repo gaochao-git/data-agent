@@ -21,6 +21,7 @@ from ...services.agent_run.context_budget import (
     ContextRequestBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,
+    extract_legacy_context_summary,
     get_model_context_budget,
     hard_input_guard_tokens,
     merge_context_summaries,
@@ -62,7 +63,7 @@ async def compress_messages_for_state(
 ) -> tuple[list[BaseMessage], str | None, dict[str, Any]]:
     """压缩旧历史和当前回合较早的完整工具链。"""
     cfg = _config_from_mapping(config)
-    original_messages, legacy_summary = _extract_legacy_context_summary(messages)
+    original_messages, legacy_summary = extract_legacy_context_summary(messages)
     effective_previous_summary = merge_context_summaries(previous_summary, legacy_summary)
     static_tokens = max(int(static_input_tokens), 0)
     before_tokens = static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
@@ -269,7 +270,7 @@ def create_context_compression_middleware(
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
     async def context_compression_middleware(state, _runtime):
         messages = list((state or {}).get("messages") or [])
-        _, legacy_summary = _extract_legacy_context_summary(messages)
+        _, legacy_summary = extract_legacy_context_summary(messages)
         previous_summary = merge_context_summaries(
             str((state or {}).get("context_summary") or "").strip() or None,
             legacy_summary,
@@ -691,29 +692,6 @@ def _non_negative_int(value: Any) -> int:
         return max(int(value or 0), 0)
     except (TypeError, ValueError):
         return 0
-
-
-def _extract_legacy_context_summary(messages: list[BaseMessage] | None) -> tuple[list[BaseMessage], str | None]:
-    """将旧 checkpoint 中的摘要 SystemMessage 迁移到独立 state 字段。"""
-    cleaned_messages: list[BaseMessage] = []
-    summaries: list[str] = []
-    for message in list(messages or []):
-        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-        if isinstance(message, SystemMessage) and additional_kwargs.get("context_compression"):
-            content = _strip_legacy_summary_prefix(str(getattr(message, "content", "") or ""))
-            if content:
-                summaries.append(content)
-            continue
-        cleaned_messages.append(message)
-    return cleaned_messages, "\n\n".join(summaries) or None
-
-
-def _strip_legacy_summary_prefix(summary: str) -> str:
-    prefix = "[历史对话摘要]"
-    normalized = str(summary or "").strip()
-    if normalized.startswith(prefix):
-        return normalized[len(prefix):].lstrip("\n ")
-    return normalized
 
 
 def _partition_messages_for_compression(

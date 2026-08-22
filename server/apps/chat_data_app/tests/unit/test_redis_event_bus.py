@@ -32,7 +32,7 @@ class _FakeRedis:
 
 @pytest.mark.asyncio
 async def test_read_run_preserves_redis_stream_id():
-    bus = RedisEventBus("redis://unused")
+    bus = RedisEventBus()
     bus._redis = _FakeRedis()
 
     events = await bus.read_run("run-1", "0-0")
@@ -53,7 +53,7 @@ async def test_publish_sets_stream_ttl_in_same_redis_script():
             return ["1740000000000-0", "1"]
 
     redis = PublishRedis()
-    bus = RedisEventBus("redis://unused")
+    bus = RedisEventBus()
     bus._redis = redis
 
     stream_id = await bus.publish(
@@ -82,22 +82,6 @@ async def test_publish_sets_stream_ttl_in_same_redis_script():
     assert args[-1] == "1:owner-1"
 
 
-def test_redis_client_uses_health_check_keepalive_and_retry_settings():
-    bus = RedisEventBus("redis://unused")
-    with patch(
-        "apps.chat_data_app.services.agent_run.redis_event_bus.Redis.from_url",
-        return_value=object(),
-    ) as from_url:
-        assert bus.redis is not None
-
-    kwargs = from_url.call_args.kwargs
-    assert kwargs["decode_responses"] is True
-    assert kwargs["health_check_interval"] == 30
-    assert kwargs["socket_keepalive"] is True
-    assert kwargs["socket_connect_timeout"] == 5.0
-    assert kwargs["retry"]._retries == 2
-
-
 @pytest.mark.asyncio
 async def test_newer_owner_generation_fences_old_publisher():
     class OwnerRedis:
@@ -121,7 +105,7 @@ async def test_newer_owner_generation_fences_old_publisher():
             return 0
 
     redis = OwnerRedis()
-    bus = RedisEventBus("redis://unused")
+    bus = RedisEventBus()
     bus._redis = redis
 
     await bus.claim_run_owner("run-1", "1:old")
@@ -158,9 +142,81 @@ async def test_renew_run_owner_requires_exact_owner_token():
             assert "EXPIRE" in script
             return 1 if _args[1] == self.owner else 0
 
-    bus = RedisEventBus("redis://unused")
+    bus = RedisEventBus()
     bus._redis = OwnerRedis()
 
     await bus.renew_run_owner("run-1", "2:current")
     with pytest.raises(RedisRunOwnerMismatchError):
         await bus.renew_run_owner("run-1", "1:stale")
+
+
+# ---------------------------------------------------------------------------
+# 哨兵模式连接
+# ---------------------------------------------------------------------------
+
+def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379, 10.0.0.2:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+    monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", "secret")
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        assert bus.redis is not None
+
+    addrs, kwargs = sentinel_cls.call_args.args[0], sentinel_cls.call_args.kwargs
+    assert addrs == [("10.0.0.1", 26379), ("10.0.0.2", 26379)]
+    assert kwargs["password"] == "secret"
+    assert kwargs["sentinel_kwargs"]["password"] == "secret"
+    assert kwargs["socket_connect_timeout"] == 5.0
+
+    master_kwargs = sentinel_cls.return_value.master_for.call_args.kwargs
+    assert sentinel_cls.return_value.master_for.call_args.args == ("chatdata-master",)
+    assert master_kwargs["decode_responses"] is True
+    assert master_kwargs["db"] == 0  # 缺省逻辑库 0，等价于旧 URL 无 /N 后缀
+    assert master_kwargs["health_check_interval"] == 30
+    assert master_kwargs["socket_keepalive"] is True
+    # 必须大于 XREAD 最长阻塞 15s，否则正常阻塞读会被误判超时
+    assert master_kwargs["socket_timeout"] > 15.0
+    assert master_kwargs["retry"]._retries == 2
+    # failover 窗口旧连接收到 READONLY 错误必须可重试自愈
+    from redis.exceptions import ReadOnlyError
+    assert ReadOnlyError in master_kwargs["retry"]._supported_errors
+
+
+def test_sentinel_mode_selects_db(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+    monkeypatch.setenv("CHAT_DATA_REDIS_DB", "3")
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        assert bus.redis is not None
+
+    assert sentinel_cls.return_value.master_for.call_args.kwargs["db"] == 3
+
+
+def test_sentinel_mode_requires_master_name(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.delenv("CHAT_DATA_REDIS_MASTER_NAME", raising=False)
+    bus = RedisEventBus()
+    with pytest.raises(ValueError, match="CHAT_DATA_REDIS_MASTER_NAME"):
+        _ = bus.redis
+
+
+def test_missing_sentinels_raises(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_REDIS_SENTINELS", raising=False)
+    bus = RedisEventBus()
+    with pytest.raises(ValueError, match="CHAT_DATA_REDIS_SENTINELS"):
+        _ = bus.redis
+
+
+def test_invalid_sentinel_addr_raises(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "no-port-here")
+    with pytest.raises(ValueError, match="host:port"):
+        RedisEventBus()

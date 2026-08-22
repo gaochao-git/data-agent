@@ -14,13 +14,17 @@ from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_con
 
 
 def _assert_thinking_extra_body(extra_body, enabled: bool):
-    assert extra_body == {
+    expected = {
         "enable_thinking": enabled,
         "chat_template_kwargs": {
             "enable_thinking": enabled,
         },
-        "reasoning_effort": "high" if enabled else "none",
     }
+    # 开思考时统一带 reasoning_effort=high；关思考时非 deepseek 模型省略该键
+    # （强制推理端点收到 "none" 会 400）
+    if enabled:
+        expected["reasoning_effort"] = "high"
+    assert extra_body == expected
 
 
 def _set_models(monkeypatch, value: str) -> None:
@@ -301,3 +305,21 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
     assert "ToolCallNameNormalizerMiddleware" in middleware_names
     assert "ToolErrorMiddleware" in middleware_names
     assert captured["state_schema"] is ChatDataAgentState
+
+
+def test_non_deepseek_thinking_off_omits_reasoning_effort(monkeypatch):
+    """强制推理端点（如 stealth/ox-alpha）关思考时不能发 reasoning_effort=none。"""
+    captured = {}
+
+    def fake_get_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    _set_models(monkeypatch, "stealth/ox-alpha;0.2;256000;vlm-on")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
+    llm_config.get_chat_data_llm(enable_thinking=False)
+    assert "reasoning_effort" not in captured["extra_body"]
+
+    llm_config.get_chat_data_llm(enable_thinking=True)
+    assert captured["extra_body"]["reasoning_effort"] == "high"

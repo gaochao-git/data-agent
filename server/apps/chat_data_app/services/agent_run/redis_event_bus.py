@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import socket
 from collections.abc import Mapping
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.asyncio.sentinel import Sentinel
 from redis.backoff import ExponentialBackoff
-from redis.exceptions import ResponseError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ReadOnlyError, ResponseError, TimeoutError
 from redis.retry import Retry
 
 
@@ -24,9 +27,20 @@ REDIS_CONNECT_TIMEOUT_SECONDS = max(
     1.0,
 )
 REDIS_COMMAND_RETRIES = max(int(os.getenv("CHAT_DATA_REDIS_COMMAND_RETRIES", "2")), 0)
+# ReadOnlyError 必须进重试列表：failover 窗口期连接池里的旧连接打到已降级的
+# 旧主上会收到 READONLY 错误（ResponseError 子类，默认重试不覆盖），重试触发
+# 重建连接后 master_for 会解析到新主，切换窗口内自愈。
 REDIS_COMMAND_RETRY = Retry(
     ExponentialBackoff(base=0.1, cap=1.0),
     retries=REDIS_COMMAND_RETRIES,
+    supported_errors=(RedisConnectionError, TimeoutError, ReadOnlyError, socket.timeout),
+)
+# 单次命令的 socket 读写超时：必须大于 XREAD 的最长阻塞时间（15s），
+# 否则正常阻塞等待会被误判超时。作用是让被 NAT/防火墙静默掐断的死连接
+# 在秒级暴露并走重试换新连接，而不是等 OS 层 TCP 超时卡住几十秒。
+REDIS_SOCKET_TIMEOUT_SECONDS = max(
+    float(os.getenv("CHAT_DATA_REDIS_SOCKET_TIMEOUT_SECONDS", "20")),
+    16.0,
 )
 
 _PUBLISH_SCRIPT = """
@@ -91,24 +105,72 @@ class RedisRunOwnerMismatchError(RuntimeError):
     """The Redis event publisher no longer owns the Run."""
 
 
-class RedisEventBus:
-    """Publish and consume Run events using Redis Streams."""
+def _parse_sentinel_addrs(raw: str) -> list[tuple[str, int]]:
+    """解析 ``host:port[,host:port...]``；空串返回空列表，格式错误抛 ValueError。"""
+    addrs: list[tuple[str, int]] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        host, sep, port = part.rpartition(":")
+        if not sep or not host:
+            raise ValueError(f"CHAT_DATA_REDIS_SENTINELS 条目格式应为 host:port: {part!r}")
+        try:
+            addrs.append((host, int(port)))
+        except ValueError as exc:
+            raise ValueError(f"CHAT_DATA_REDIS_SENTINELS 端口无效: {part!r}") from exc
+    return addrs
 
-    def __init__(self, url: str | None = None) -> None:
-        self._url = url or os.getenv("CHAT_DATA_REDIS_URL", "").strip()
+
+class RedisEventBus:
+    """Publish and consume Run events using Redis Streams.
+
+    仅支持哨兵模式：``CHAT_DATA_REDIS_SENTINELS=host:port[,host:port...]`` +
+    ``CHAT_DATA_REDIS_MASTER_NAME``，密码经 ``CHAT_DATA_REDIS_PASSWORD``
+    （master 与 sentinel 共用；不同密码用 ``CHAT_DATA_REDIS_SENTINEL_PASSWORD``
+    单独指定 sentinel 的），逻辑库经 ``CHAT_DATA_REDIS_DB`` 选择（缺省 0）。
+    master 地址在连接建立时向 sentinel 解析；failover 后旧连接上的命令会
+    收到 ConnectionError/ReadOnlyError，由命令级重试重建连接跟随新主。
+    """
+
+    def __init__(self) -> None:
+        self._sentinel_addrs = _parse_sentinel_addrs(
+            os.getenv("CHAT_DATA_REDIS_SENTINELS", "")
+        )
+        self._master_name = os.getenv("CHAT_DATA_REDIS_MASTER_NAME", "").strip()
+        # 逻辑库编号：等价于旧 CHAT_DATA_REDIS_URL 的 /N 后缀，缺省 0 行为不变
+        self._db = max(int(os.getenv("CHAT_DATA_REDIS_DB", "0")), 0)
+        self._password = os.getenv("CHAT_DATA_REDIS_PASSWORD", "").strip() or None
+        self._sentinel_password = (
+            os.getenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", "").strip()
+            or self._password
+        )
         self._redis: Redis | None = None
 
     @property
     def redis(self) -> Redis:
         if self._redis is None:
-            if not self._url:
-                raise ValueError("CHAT_DATA_REDIS_URL 未配置")
-            self._redis = Redis.from_url(
-                self._url,
+            if not self._sentinel_addrs:
+                raise ValueError("CHAT_DATA_REDIS_SENTINELS 未配置")
+            if not self._master_name:
+                raise ValueError("CHAT_DATA_REDIS_MASTER_NAME 未配置")
+            sentinel = Sentinel(
+                self._sentinel_addrs,
+                sentinel_kwargs={
+                    "password": self._sentinel_password,
+                    "socket_connect_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+                    "socket_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+                },
+                password=self._password,
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+            )
+            self._redis = sentinel.master_for(
+                self._master_name,
+                db=self._db,
                 decode_responses=True,
                 health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
-                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
                 socket_keepalive=True,
+                socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
                 retry=REDIS_COMMAND_RETRY,
             )
         return self._redis

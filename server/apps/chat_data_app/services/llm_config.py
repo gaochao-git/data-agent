@@ -159,17 +159,25 @@ def get_chat_data_temperature(model: str | None = None) -> float:
     return float(get_chat_data_model_config(model).get("temperature", DEFAULT_MODEL_TEMPERATURE))
 
 
-def _get_chat_data_extra_body(enable_thinking: bool | None = None) -> dict[str, Any]:
+def _get_chat_data_extra_body(
+    enable_thinking: bool | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     thinking_enabled = bool(enable_thinking)
-    return {
+    extra_body: dict[str, Any] = {
         "enable_thinking": thinking_enabled,
         "chat_template_kwargs": {
             "enable_thinking": thinking_enabled,
         },
-        # DeepSeek 不认 enable_thinking，需通过 reasoning_effort 控制思考强度；
-        # qwen/glm 会忽略该键，无副作用。三键合并由各自模型认领自己支持的键。
-        "reasoning_effort": "high" if thinking_enabled else "none",
     }
+    # DeepSeek 不认 enable_thinking，需通过 reasoning_effort 控制思考强度。
+    # 关闭思考时只对 deepseek 系发 "none"：强制推理端点（如 OpenRouter 部分
+    # 模型）收到 "none" 会直接 400 拒绝，省略该键则由端点按默认行为处理。
+    if thinking_enabled:
+        extra_body["reasoning_effort"] = "high"
+    elif "deepseek" in str(model or "").lower():
+        extra_body["reasoning_effort"] = "none"
+    return extra_body
 
 
 def _get_chat_data_api_key() -> str | None:
@@ -216,5 +224,8 @@ def get_chat_data_llm(
         timeout=timeout,
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),
-        extra_body=_get_chat_data_extra_body(enable_thinking=enable_thinking),
+        extra_body=_get_chat_data_extra_body(
+            enable_thinking=enable_thinking,
+            model=selected_model,
+        ),
     )

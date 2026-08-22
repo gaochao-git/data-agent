@@ -820,7 +820,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
     )
     monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 7000)
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
-    middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")
+    middleware = context_usage.create_request_context_usage_middleware(tools=[], model_id="qwen-test")
     captured = {}
 
     async def handler(request):
@@ -872,7 +872,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
     monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 100)
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
 
-    middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")
+    middleware = context_usage.create_request_context_usage_middleware(tools=[], model_id="qwen-test")
     captured = {}
 
     async def handler(request):
@@ -925,7 +925,7 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
 async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standard_normalizer(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
     tool = SimpleNamespace(name="semantic_search")
-    middleware = context_usage.create_chat_data_context_usage_middleware([tool])
+    middleware = context_usage.create_request_context_usage_middleware(tools=[tool])
 
     async def handler(_request):
         return ModelResponse(result=[
@@ -956,7 +956,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
 @pytest.mark.asyncio
 async def test_chat_data_context_usage_middleware_raises_when_model_fails(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
-    middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="bad_model")
+    middleware = context_usage.create_request_context_usage_middleware(tools=[], model_id="bad_model")
 
     async def handler(_request):
         raise RuntimeError("模型不可用")

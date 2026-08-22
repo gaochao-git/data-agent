@@ -90,6 +90,30 @@ def build_runtime_context_summary_message(summary: str | None) -> HumanMessage |
     )
 
 
+LEGACY_CONTEXT_SUMMARY_PREFIX = "[历史对话摘要]"
+
+
+def extract_legacy_context_summary(messages: list[BaseMessage]) -> tuple[list[BaseMessage], str | None]:
+    """剥离旧 checkpoint 中以 SystemMessage 形式内嵌的压缩摘要。
+
+    旧版本把摘要作为带 ``context_compression`` 标记的 SystemMessage 混在消息流里；
+    现行实现将其迁移到独立的 state 字段。返回 ``(清理后消息, 合并摘要)``。
+    """
+    cleaned_messages: list[BaseMessage] = []
+    summaries: list[str] = []
+    for message in list(messages or []):
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        if isinstance(message, SystemMessage) and additional_kwargs.get("context_compression"):
+            normalized = str(getattr(message, "content", "") or "").strip()
+            if normalized.startswith(LEGACY_CONTEXT_SUMMARY_PREFIX):
+                normalized = normalized[len(LEGACY_CONTEXT_SUMMARY_PREFIX):].lstrip("\n ")
+            if normalized:
+                summaries.append(normalized)
+            continue
+        cleaned_messages.append(message)
+    return cleaned_messages, "\n\n".join(summaries) or None
+
+
 def count_tools_tokens(tools: list[Any] | None) -> int:
     """估算工具 schema 的 token 数。"""
     total = 0

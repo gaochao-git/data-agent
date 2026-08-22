@@ -28,6 +28,7 @@ from ...services.agent_run.context_budget import (
     count_tools_tokens,
     estimate_text_tokens,
     estimate_tokens,
+    extract_legacy_context_summary,
     get_model_context_budget,
     hard_input_guard_tokens,
     merge_context_summaries,
@@ -48,7 +49,7 @@ def create_context_usage_middleware(
     state_schema: Any | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
-    """创建统一的上下文裁剪和 token usage middleware。"""
+    """创建统一的上下文计量与 token usage middleware。"""
     records: list[dict[str, Any]] = []
     request_budget = context_request_budget or ContextRequestBudget(model_id)
 
@@ -132,7 +133,7 @@ def create_request_context_usage_middleware(
     context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
 ):
-    """创建每次模型请求前的当前上下文裁剪和 token usage middleware。"""
+    """创建每次模型请求前的上下文计量与 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
         tools=tools,
@@ -227,21 +228,6 @@ def compact_token_usage_for_state(usage: dict[str, Any] | None) -> dict[str, Any
         if compact_compression:
             compact["context_compression"] = compact_compression
     return compact or None
-
-
-def create_chat_data_context_usage_middleware(
-    tools: list,
-    model_id: str | None = None,
-    context_request_budget: ContextRequestBudget | None = None,
-    state_schema: Any | None = None,
-) -> Any:
-    """创建智能问数上下文裁剪和 token usage middleware。"""
-    return create_context_usage_middleware(
-        model_id=model_id,
-        tools=tools,
-        context_request_budget=context_request_budget,
-        state_schema=state_schema,
-    )
 
 
 def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
@@ -574,7 +560,7 @@ def _merge_compression_summary_into_system_prompt(
     context_summary: str | None = None,
 ) -> tuple[str, list[Any]]:
     """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
-    cleaned_messages, legacy_summary = _extract_legacy_compression_summary(messages)
+    cleaned_messages, legacy_summary = extract_legacy_context_summary(messages)
     summary = merge_context_summaries(context_summary, legacy_summary)
     if not summary:
         return system_prompt, cleaned_messages
@@ -582,24 +568,6 @@ def _merge_compression_summary_into_system_prompt(
     if summary_message is None:
         return system_prompt, cleaned_messages
     return system_prompt, [summary_message, *cleaned_messages]
-
-
-def _extract_legacy_compression_summary(messages: list[Any]) -> tuple[list[Any], str | None]:
-    """兼容旧 checkpoint 摘要，确保模型调用不会附带第二条 system 消息。"""
-    cleaned_messages: list[Any] = []
-    summaries: list[str] = []
-    for message in list(messages or []):
-        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-        if isinstance(message, SystemMessage) and additional_kwargs.get("context_compression"):
-            content = str(getattr(message, "content", "") or "").strip()
-            prefix = "[历史对话摘要]"
-            if content.startswith(prefix):
-                content = content[len(prefix):].lstrip("\n ")
-            if content:
-                summaries.append(content)
-            continue
-        cleaned_messages.append(message)
-    return cleaned_messages, "\n\n".join(summaries) or None
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:
@@ -610,15 +578,6 @@ def _emit_context_usage(usage: dict[str, Any] | None) -> None:
         get_stream_writer()({"type": "token_usage", "usage": sanitize_context_usage_for_response(usage)})
     except Exception:
         logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
-
-
-def _build_request_messages(request: Any) -> list[BaseMessage]:
-    messages = []
-    system_message = getattr(request, "system_message", None)
-    if isinstance(system_message, BaseMessage):
-        messages.append(system_message)
-    messages.extend(message for message in list(getattr(request, "messages", None) or []) if isinstance(message, BaseMessage))
-    return messages
 
 
 def _request_model_name(request: Any) -> str | None:
