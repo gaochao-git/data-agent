@@ -64,12 +64,23 @@ def test_compression_trigger_ratio_rejects_invalid_startup_config(monkeypatch):
             runtime_config.read_compression_trigger_ratio_env()
 
 
-def test_context_window_reads_chat_data_model_config(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1;0.2;128000;vlm-off,kimi-k2.5;0.1;256000;vlm-off")
+def test_context_window_reads_chat_data_model_config(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "glm-5.1", "temperature": 0.2, "context_window": 128000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+        {"id": "kimi-k2.5", "temperature": 0.1, "context_window": 256000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     assert runtime_config.get_context_window("") == 128000
     assert runtime_config.get_context_window("glm-5.1") == 128000
     assert runtime_config.get_context_window("kimi-k2.5") == 256000
-    assert runtime_config.get_context_window("unknown") == 128000
+    # fail-fast：未注册模型报错而非静默回退
+    with pytest.raises(ValueError, match="不在"):
+        runtime_config.get_context_window("unknown")
 
 
 def test_get_context_compression_config_returns_runtime_values(monkeypatch):

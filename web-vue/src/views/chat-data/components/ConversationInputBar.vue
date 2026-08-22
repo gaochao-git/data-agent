@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+interface ModelThinkingOption {
+  mode: 'none' | 'optional' | 'forced'
+  efforts: string[]
+  default_on: boolean
+  default_effort: string | null
+}
+
 interface ModelOption {
   id: string
   label: string
+  /** 思考能力声明（/config 下发）；缺省按 optional 处理。 */
+  thinking?: ModelThinkingOption
 }
 
 export interface ChatDataRuntimeOptions {
@@ -17,7 +26,8 @@ interface Props {
   selectedSkillTitle?: string
   selectedModel: string
   modelOptions: ModelOption[]
-  enableDeepThinking: boolean
+  /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
+  enableDeepThinking: boolean | null
   isGenerating: boolean
   canSubmit: boolean
   inputFocused?: boolean
@@ -136,8 +146,32 @@ const selectModel = (modelId: string) => {
   modelMenuOpen.value = false
 }
 
+/** 当前选中模型的思考能力声明。 */
+const selectedModelThinking = computed(
+  () => props.modelOptions.find(item => item.id === props.selectedModel)?.thinking ?? null
+)
+/** forced / none 模型锁定开关：思考与否由注册表决定，用户切换无意义。 */
+const thinkingLocked = computed(() => {
+  const mode = selectedModelThinking.value?.mode
+  return mode === 'forced' || mode === 'none'
+})
+/** 开关展示态：forced 恒亮、none 恒灭；optional 用户显式选择优先，未触碰回退 default_on。 */
+const thinkingDisplayOn = computed(() => {
+  const mode = selectedModelThinking.value?.mode
+  if (mode === 'forced') return true
+  if (mode === 'none') return false
+  return props.enableDeepThinking ?? !!selectedModelThinking.value?.default_on
+})
+const deepThinkingTitle = computed(() => {
+  const mode = selectedModelThinking.value?.mode
+  if (mode === 'forced') return '当前模型始终深度思考'
+  if (mode === 'none') return '当前模型不支持深度思考'
+  return thinkingDisplayOn.value ? '关闭深度思考' : '开启深度思考'
+})
+
 const toggleDeepThinking = () => {
-  emit('update:enableDeepThinking', !props.enableDeepThinking)
+  if (thinkingLocked.value) return
+  emit('update:enableDeepThinking', !thinkingDisplayOn.value)
 }
 
 const handleDocumentClick = (event: MouseEvent) => {
@@ -302,7 +336,7 @@ onBeforeUnmount(() => {
                 <i
                   :class="[
                     'fa-solid fa-microchip text-[10px]',
-                    enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
+                    thinkingDisplayOn ? 'text-blue-500' : 'text-gray-400'
                   ]"
                 ></i>
               </slot>
@@ -348,21 +382,25 @@ onBeforeUnmount(() => {
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-3 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+                  :class="thinkingLocked && 'cursor-not-allowed opacity-60 hover:bg-transparent'"
                   role="switch"
-                  :aria-checked="enableDeepThinking"
-                  :title="enableDeepThinking ? '关闭深度思考' : '开启深度思考'"
+                  :aria-checked="thinkingDisplayOn"
+                  :aria-disabled="thinkingLocked"
+                  :title="deepThinkingTitle"
                   @click="toggleDeepThinking"
                 >
                   <span class="flex min-w-0 items-center gap-1.5">
                     <i
                       :class="[
                         'fa-solid fa-brain text-[10px]',
-                        enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
+                        thinkingDisplayOn ? 'text-blue-500' : 'text-gray-400'
                       ]"
                     ></i>
                     <span class="truncate">深度思考</span>
+                    <span v-if="selectedModelThinking?.mode === 'forced'" class="shrink-0 text-[10px] text-gray-400">始终开启</span>
+                    <span v-else-if="selectedModelThinking?.mode === 'none'" class="shrink-0 text-[10px] text-gray-400">不支持</span>
                   </span>
-                  <span :class="['deep-thinking-switch', enableDeepThinking && 'deep-thinking-switch-on']">
+                  <span :class="['deep-thinking-switch', thinkingDisplayOn && 'deep-thinking-switch-on', thinkingLocked && 'opacity-50']">
                     <span class="deep-thinking-switch-thumb"></span>
                   </span>
                 </button>

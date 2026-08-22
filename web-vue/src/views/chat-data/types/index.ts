@@ -146,11 +146,20 @@ export interface SkillVersionInfo {
   update_time?: string
 }
 
+/** 模型思考能力声明（来自服务端 models.json 注册表，经 /config 下发）。 */
+export interface ChatDataModelThinking {
+  mode: 'none' | 'optional' | 'forced'
+  efforts: string[]
+  default_on: boolean
+  default_effort: string | null
+}
+
 export interface ChatDataModelOption {
   id: string
   label: string
   value: string
   is_default?: boolean
+  thinking?: ChatDataModelThinking
 }
 
 // 表选择信息

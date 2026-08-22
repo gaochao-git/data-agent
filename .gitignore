@@ -79,7 +79,9 @@ temp/
 
 # 环境与配置
 server/.env
-server/conf/
+server/conf/*
+# 模型注册表按供应商分文件、不含密钥，作为模板入库；切换供应商改 .env-{env} 里的指针
+!server/conf/models*.json
 
 # 测试产物
 server/apps/chat_data_app/tests/reports/*

@@ -94,7 +94,7 @@ export function useSqlGenerator() {
     onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
     onTokenUsage?: (payload: ChatDataTokenUsage) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
-    enableThinking?: boolean,
+    enableThinking?: boolean | null,
     runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null,
     onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
     fileIds?: string[],
@@ -122,7 +122,10 @@ export function useSqlGenerator() {
       const options: Record<string, unknown> = {
         datasource_id: datasourceId,
         mode,  // generate: 仅生成SQL, query: 生成并执行
-        enable_thinking: enableThinking === true,
+      }
+      // 三态：仅用户显式选择时携带；未触碰（null）交给服务端按注册表 default_on 落点
+      if (enableThinking === true || enableThinking === false) {
+        options.enable_thinking = enableThinking
       }
 
       // 仅当服务端允许用户覆盖时，runtime_options 才会改变实际运行配置。

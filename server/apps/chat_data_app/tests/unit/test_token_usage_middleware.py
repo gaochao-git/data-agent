@@ -72,8 +72,11 @@ def test_estimate_tokens_applies_byte_floor_to_unbroken_ascii():
 def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert estimate_text_tokens("") == 0
     assert get_context_window("") == 128000
-    assert get_context_window("unknown-model") == 128000
-    assert get_context_window("QWEN-Plus") == 128000
+    # fail-fast：未注册模型报错而非静默回退
+    with pytest.raises(ValueError, match="不在"):
+        get_context_window("unknown-model")
+    with pytest.raises(ValueError, match="不在"):
+        get_context_window("QWEN-Plus")
 
     payload = build_context_usage_payload(
         ContextBudget(
@@ -215,8 +218,15 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
     assert count_tools_tokens([BadTool()]) == estimate_tokens('"bad tool schema"')
 
 
-def test_estimate_prompt_usage_marks_estimated(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b;0.2;256000;vlm-off")
+def test_estimate_prompt_usage_marks_estimated(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "qwen3.5-35b-a3b", "temperature": 0.2, "context_window": 256000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
 
     assert usage["used"] > 0
@@ -231,8 +241,15 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
     assert usage["estimated"] is True
 
 
-def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000;vlm-off")
+def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
     budget = get_model_context_budget("budget-model")
@@ -243,8 +260,15 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
     assert budget.compression_target_tokens == 21000
 
 
-def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000;vlm-off")
+def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
     monkeypatch.setattr(
         "apps.chat_data_app.services.agent_run.context_budget.get_context_compression_config",

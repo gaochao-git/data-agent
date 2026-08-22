@@ -72,11 +72,18 @@ def load_default_env() -> None:
 
 
 def _default_model_id() -> str | None:
-    """从 CHAT_DATA_MODEL 统一配置中提取默认模型名。"""
-    first_item = str(os.getenv("CHAT_DATA_MODEL") or "").split(",", 1)[0].strip()
-    if not first_item:
+    """从 CHAT_DATA_MODELS_FILE 注册表中提取默认（首项）模型名。"""
+    path = str(os.getenv("CHAT_DATA_MODELS_FILE") or "").strip()
+    if not path:
         return None
-    return first_item.split(";", 1)[0].strip().strip("\"'") or None
+    try:
+        with open(path, encoding="utf-8") as fp:
+            entries = json.load(fp)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entries, list) or not entries:
+        return None
+    return str(entries[0].get("id") or "").strip() or None
 
 
 def _default_service_token() -> str:

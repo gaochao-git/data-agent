@@ -513,3 +513,25 @@ def sample_query_task():
 @pytest.fixture()
 def fake_user():
     return SimpleNamespace(user_id="user_a", username="测试用户")
+
+
+# 模型注册表 fail-fast 后，API 测试未显式配置时提供默认清单
+import json as _json  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_models_registry(monkeypatch, tmp_path):
+    monkeypatch.delenv("CHAT_DATA_MODEL", raising=False)
+    if str(os.getenv("CHAT_DATA_MODELS_FILE") or "").strip():
+        yield
+        return
+    path = tmp_path / "default_models.json"
+    path.write_text(_json.dumps([
+        {"id": "gpt-4o-mini", "temperature": 0.2, "context_window": 128000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+        {"id": "stealth/ox-alpha", "temperature": 0.2, "context_window": 256000, "vlm": True,
+         "thinking": {"mode": "forced", "dialect": "openrouter",
+                      "efforts": ["low", "medium", "high"], "default_effort": "high"}},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
+    yield

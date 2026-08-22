@@ -1,0 +1,25 @@
+[
+  {
+    "id": "stealth/ox-alpha",
+    "temperature": 0.2,
+    "context_window": 256000,
+    "vlm": true,
+    "thinking": {
+      "mode": "forced",
+      "dialect": "openrouter",
+      "efforts": ["low", "medium", "high"],
+      "default_effort": "high"
+    }
+  },
+  {
+    "id": "z-ai/glm-5.2:free",
+    "temperature": 0.2,
+    "context_window": 256000,
+    "vlm": false,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "openrouter",
+      "default_on": false
+    }
+  }
+]

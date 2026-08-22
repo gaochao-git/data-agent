@@ -1,0 +1,35 @@
+[
+  {
+    "id": "Qwen3.6-35B-A3B-4bit",
+    "temperature": 0.2,
+    "context_window": 48000,
+    "vlm": true,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "chat_template",
+      "default_on": false
+    }
+  },
+  {
+    "id": "Qwen3.8-27B-MLX-4bit",
+    "temperature": 0.2,
+    "context_window": 48000,
+    "vlm": true,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "chat_template",
+      "default_on": false
+    }
+  },
+  {
+    "id": "Ornith-1.5-35B-A3B-MLX-4bit",
+    "temperature": 0.2,
+    "context_window": 48000,
+    "vlm": true,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "chat_template",
+      "default_on": false
+    }
+  }
+]
