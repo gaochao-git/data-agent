@@ -1,6 +1,5 @@
 """ChatData completion handler."""
 
-import base64
 import json
 import asyncio
 import time
@@ -26,6 +25,7 @@ from utils.logger import get_logger
 from utils import conversation
 from .agent import (
     create_data_agent,
+    AgentRunControls,
     resolve_agent_runtime_options,
     build_unified_system_prompt,
     get_checkpointer,
@@ -39,15 +39,12 @@ from .services.agent_run.agent_run_event_service import agent_run_event_service
 from .services.agent_run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
-from .services.llm_config import get_chat_data_model_config
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
-from .services.agent_run.uploaded_file_service import (
-    IMAGE_EXTENSIONS,
-    MAX_IMAGES_PER_MESSAGE,
-    MAX_IMAGE_SIZE,
-    get_file_content,
-    get_file_info,
+from .services.agent_run.message_compose import (
+    build_file_attachment_text,
+    build_multimodal_message_content,
 )
+from .services.agent_run.uploaded_file_service import get_file_info
 from .services.agent_run.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
@@ -128,89 +125,6 @@ def _format_sse(event: str, data: dict | str) -> str:
         data_str = data
     return f"event: {event}\ndata: {data_str}\n\n"
 
-
-def _build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
-    """构造追加到用户消息末尾的附件路径占位。
-
-    仅输出短占位 ``[attachment] /mnt/user-data/uploads/<原始文件>`` 或
-    ``[attachment] /mnt/user-data/outputs/<已转文件>``，不再附加大段说明；
-    agent 处理用户附件的策略（先 file_read，读不了再 parse_document）由
-    ``agent/prompts/chat_data.py`` 的工作区流程块统一提供，重复说明反而冗余。
-    前端识别该占位并在消息气泡中隐藏，避免查看历史会话时再次渲染冗长文本。
-    """
-    if not file_attachments:
-        return ""
-    lines = [""]
-    for item in file_attachments:
-        path = item.get("virtual_path") or item.get("parsed_path")
-        if path:
-            lines.append(f"[attachment] {path}")
-    return "\n".join(lines)
-
-
-_IMAGE_MIME_TYPES = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "webp": "image/webp",
-    "gif": "image/gif",
-}
-
-
-def _is_image_attachment(item: dict[str, Any]) -> bool:
-    """判断附件是否为可作为 vision 输入的图片类型。"""
-    file_type = str(item.get("file_type") or "").lower()
-    if file_type not in IMAGE_EXTENSIONS or item.get("file_id") is None:
-        return False
-    try:
-        return int(item.get("file_size") or 0) <= MAX_IMAGE_SIZE
-    except (TypeError, ValueError):
-        return False
-
-
-async def _build_multimodal_message_content(
-    text_content: str,
-    file_attachments: list[dict[str, Any]],
-    *,
-    user_id: str,
-    thread_id: str,
-    model_id: str | None = None,
-) -> tuple[Any, list[dict[str, Any]]]:
-    """按本轮模型能力位把合规图片附件升级为 content blocks。
-
-    返回 ``(消息内容, 未消化的附件列表)``：消息内容为纯字符串（无图片，
-    或本轮模型未开启 vlm 时保持旧行为）或 ``[text_block, image_block...]``
-    列表；超出数量/大小限制或读取失败的图片退回附件文本引用路径。
-    """
-    vlm_enabled = bool(get_chat_data_model_config(model_id).get("vlm"))
-    if not vlm_enabled:
-        return text_content, file_attachments
-
-    image_items = [item for item in file_attachments if _is_image_attachment(item)]
-    leftover = [item for item in file_attachments if item not in image_items]
-    admitted = image_items[:MAX_IMAGES_PER_MESSAGE]
-    leftover.extend(image_items[MAX_IMAGES_PER_MESSAGE:])
-    if not admitted:
-        return text_content, leftover
-
-    blocks: list[dict[str, Any]] = [{"type": "text", "text": text_content}] if text_content else []
-    for item in admitted:
-        data = await get_file_content(
-            str(item["file_id"]), user_id=user_id, thread_id=thread_id
-        )
-        if not data:
-            logger.warning("图片附件读取失败，退回文本引用: file_id=%s", item.get("file_id"))
-            leftover.append(item)
-            continue
-        mime = _IMAGE_MIME_TYPES.get(str(item.get("file_type") or "").lower(), "application/octet-stream")
-        blocks.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"},
-        })
-    if not any(block.get("type") == "image_url" for block in blocks):
-        # 没有任何图片成功升级（如全部读取失败），保持纯字符串旧行为
-        return text_content, leftover
-    return blocks, leftover
 
 
 def _build_user_message(
@@ -1433,7 +1347,7 @@ async def _run_chat_data_agent_stream(
         async with get_checkpointer() as checkpointer:
             log_phase("open_checkpointer")
             # 构造用户消息内容：原始内容 + 文件引用（本轮模型带 vlm 能力时图片升级为 content blocks）
-            message_content, _ = await _build_multimodal_message_content(
+            message_content, _ = await build_multimodal_message_content(
                 user_message_content,
                 file_attachments,
                 user_id=user_id or "system",
@@ -1442,7 +1356,7 @@ async def _run_chat_data_agent_stream(
             )
             # 附件引用文本覆盖全部附件（含已升级为图片块的）：占位行随消息持久化，
             # 历史会话回放靠它合成附件卡片；对模型也只是多一行路径信息，无副作用。
-            attachment_text = _build_file_attachment_text(file_attachments)
+            attachment_text = build_file_attachment_text(file_attachments)
             if attachment_text:
                 if isinstance(message_content, list):
                     text_block = next(
@@ -1568,11 +1482,13 @@ async def _run_chat_data_agent_stream(
                 datasource_group_context=prompt_context["datasource_group_context"],
                 workspace_runtime=workspace_runtime,
                 source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
-                run_id=run_id,
-                owner_token=owner_token,
-                inbox_service=agent_inbox_service,
-                admit_inbox_messages=admit_inbox_messages,
-                steering_tracker=steering_tracker,
+                run_controls=AgentRunControls(
+                    run_id=run_id,
+                    owner_token=owner_token,
+                    inbox_service=agent_inbox_service,
+                    admit_inbox_messages=admit_inbox_messages,
+                    steering_tracker=steering_tracker,
+                ),
                 persist_model_snapshot=persist_model_snapshot,
             )
             log_phase("create_agent")

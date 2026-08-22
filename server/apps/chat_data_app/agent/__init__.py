@@ -20,6 +20,7 @@ from .runtime_options import (
     resolve_agent_runtime_options,
 )
 from .data_agent import (
+    AgentRunControls,
     create_data_agent,
     get_data_agent_graph,
 )
@@ -30,6 +31,7 @@ from utils.checkpoint import get_checkpointer, DB_PATH
 __all__ = [
     "ChatDataAgentState",
     "AgentRuntimeOptions",
+    "AgentRunControls",
     "get_chat_data_default_runtime_options",
     "resolve_agent_runtime_options",
     "create_data_agent",

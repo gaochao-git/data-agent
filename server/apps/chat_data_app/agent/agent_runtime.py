@@ -83,6 +83,25 @@ def _on_tool_error(exc: Exception, _request: Any) -> str:
     return _format_tool_error(exc)
 
 
+# 中间件规范顺序（外层 -> 内层，按注册名）。新增 middleware 必须先在此表登记
+# 位置并写明原因；tests/unit/test_middleware_ordering.py 枚举全部启用组合，
+# 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
+MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
+    "ToolExecutionFenceMiddleware",     # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "ImageInjectionMiddleware",         # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
+    "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
+    "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
+    "SteeringMiddleware",               # 在压缩之前注入插话，避免被摘要吞掉
+    "AfterModelHistoryMiddleware",      # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
+    "ContextCompressionMiddleware",
+    "ContextUsageMiddleware",
+    "ResponseTimestampMiddleware",
+    "ToolCallNameNormalizerMiddleware",
+    "ToolResultMiddleware",
+    "ToolErrorMiddleware",              # 恒为最内层兜底
+)
+
+
 def build_standard_agent_middleware(
     tools: list[Any],
     *,
@@ -99,41 +118,29 @@ def build_standard_agent_middleware(
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。
 
+    顺序由 ``MIDDLEWARE_CANONICAL_ORDER`` 唯一决定：本函数只负责"按注册名
+    建槽位、按权威顺序表出列"，不出现任何位置性的 if/append——新增中间件
+    只需在顺序表登记并在下方槽位表提供实例，位置写错在类型上即不可能。
+
     注意各类 hook 的执行语义与列表位置的关系（LangChain create_agent）：
     wrap_tool_call / wrap_model_call 先进为最外层；before_model 按列表顺序执行；
     after_model 按列表**逆序**执行——将来若加入第二个 after_model middleware，
     列表顺序与执行顺序相反，不能按直觉排列。
     """
-    middleware: list[Any] = []
-    if tool_execution_fence_middleware is not None:
-        # Tool wrappers are composed first-to-last. Keep the lease fence
-        # outermost so ToolErrorMiddleware cannot turn ownership loss into an
-        # ordinary model-visible tool failure.
-        middleware.append(tool_execution_fence_middleware)
-    if image_injection_middleware is not None:
-        # 图片注入必须在 context_compression / context_usage 外层：
-        # 注入后的消息（图片按 IMAGE_TOKEN_ESTIMATE 计费）才能被压缩与预算正确统计。
-        middleware.append(image_injection_middleware)
-    # 紧贴围栏内侧：起止时间覆盖结果卸载与 ToolErrorMiddleware 转换在内的完整
-    # 工具执行链路，成功和失败的 ToolMessage 都盖上 started_at_ms / ended_at_ms。
-    # 计时与末尾的 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，
-    # 不走调用方注入；其余 middleware 均由调用方按需注入。
-    middleware.append(create_tool_timing_middleware())
-    if tool_call_history_repair_middleware is not None:
-        middleware.append(tool_call_history_repair_middleware)
-    if steering_middleware is not None:
-        middleware.append(steering_middleware)
-    if after_model_history_middleware is not None:
-        middleware.append(after_model_history_middleware)
-    if context_compression_middleware is not None:
-        middleware.append(context_compression_middleware)
-    if context_usage_middleware is not None:
-        middleware.append(context_usage_middleware)
-    if include_response_timestamp:
-        middleware.append(create_response_timestamp_middleware())
-    if include_tool_call_normalizer:
-        middleware.append(create_tool_call_name_normalizer_middleware(tools))
-    if tool_result_middleware is not None:
-        middleware.append(tool_result_middleware)
-    middleware.append(ToolErrorMiddleware(_on_tool_error))
-    return middleware
+    # 计时与 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，
+    # 不走调用方注入；其余 middleware 均由调用方按需注入（None = 不启用）。
+    slots: dict[str, Any] = {
+        "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
+        "ImageInjectionMiddleware": image_injection_middleware,
+        "ToolTimingMiddleware": create_tool_timing_middleware(),
+        "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,
+        "SteeringMiddleware": steering_middleware,
+        "AfterModelHistoryMiddleware": after_model_history_middleware,
+        "ContextCompressionMiddleware": context_compression_middleware,
+        "ContextUsageMiddleware": context_usage_middleware,
+        "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
+        "ToolCallNameNormalizerMiddleware": (create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None),
+        "ToolResultMiddleware": tool_result_middleware,
+        "ToolErrorMiddleware": ToolErrorMiddleware(_on_tool_error),
+    }
+    return [slots[name] for name in MIDDLEWARE_CANONICAL_ORDER if slots[name] is not None]

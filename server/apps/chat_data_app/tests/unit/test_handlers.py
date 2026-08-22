@@ -1136,17 +1136,17 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
 
 import base64 as _base64
 
-from apps.chat_data_app.handlers import (
-    _build_file_attachment_text,
-    _build_multimodal_message_content,
-    _is_image_attachment,
+from apps.chat_data_app.services.agent_run.message_compose import (
+    build_file_attachment_text as _build_file_attachment_text,
+    build_multimodal_message_content as _build_multimodal_message_content,
+    is_image_attachment as _is_image_attachment,
 )
 from apps.chat_data_app.services.agent_run.conversation_event_service import _extract_text_content
 
 
 def _vlm_model_config(monkeypatch, vlm: bool = True):
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.get_chat_data_model_config",
+        "apps.chat_data_app.services.agent_run.message_compose.get_chat_data_model_config",
         lambda model_id=None: {"id": model_id, "temperature": 0.2, "context_window": 256000, "vlm": vlm},
     )
 
@@ -1184,7 +1184,7 @@ async def test_multimodal_content_upgrades_images_and_keeps_attachment_text(monk
     async def fake_read(file_id, user_id="system", thread_id=""):
         return png if file_id == "img1" else b"pdf"
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fake_read)
+    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fake_read)
     content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")
     assert isinstance(content, list)
     assert [block["type"] for block in content] == ["text", "image_url"]
@@ -1208,7 +1208,7 @@ async def test_multimodal_content_image_only_message_inserts_text_block(monkeypa
     async def fake_read(file_id, user_id="system", thread_id=""):
         return png
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fake_read)
+    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fake_read)
     content, leftover = await _build_multimodal_message_content("", atts, user_id="u", thread_id="t")
     assert isinstance(content, list) and [b["type"] for b in content] == ["image_url"]
     assert leftover == []
@@ -1227,7 +1227,7 @@ async def test_multimodal_content_read_failure_falls_back_to_string(monkeypatch)
     async def fail_read(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fail_read)
+    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fail_read)
     atts = [{"file_id": "img1", "original_filename": "a.png", "file_type": "png",
              "file_size": 10, "virtual_path": "/mnt/user-data/uploads/a.png"}]
     content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")

@@ -1,5 +1,8 @@
 """ChatData 单一 Agent 的构建与工具装配。"""
 
+from dataclasses import dataclass
+from typing import Any
+
 from langchain.agents import create_agent
 
 from ..services.agent_run.context_budget import ContextRequestBudget
@@ -21,7 +24,7 @@ from .middleware.image_injection import create_image_injection_middleware
 from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
-from .middleware.steering import SteeringMessageTracker, create_steering_middleware
+from .middleware.steering import create_steering_middleware
 from .prompts.chat_data import build_unified_system_prompt
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
@@ -35,6 +38,31 @@ from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.semantic_search import create_semantic_search
 from .tools.ask_user_question import ask_user_question_tool
+
+
+@dataclass(frozen=True)
+class AgentRunControls:
+    """一次 agent run 的控制面对象。
+
+    工具租约围栏（tool_execution_fence）与 steering 注入总是成组出现：
+    五个字段全部非空才启用，缺任何一个都视为本次运行不支持中断续跑，
+    静默降级为无围栏、无 steering 的普通运行。
+    """
+
+    run_id: str
+    owner_token: str
+    inbox_service: Any
+    admit_inbox_messages: Any
+    steering_tracker: Any
+
+    def is_complete(self) -> bool:
+        return bool(
+            self.run_id
+            and self.owner_token
+            and self.inbox_service is not None
+            and self.admit_inbox_messages is not None
+            and self.steering_tracker is not None
+        )
 
 
 def assemble_tools(
@@ -92,11 +120,7 @@ def create_data_agent(
     datasource_group_context: str | None = None,
     source_type: str | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
-    run_id: str | None = None,
-    owner_token: str | None = None,
-    inbox_service=None,
-    admit_inbox_messages=None,
-    steering_tracker: SteeringMessageTracker | None = None,
+    run_controls: AgentRunControls | None = None,
     persist_model_snapshot=None,
 ):
     """创建唯一的 ``chat_data`` Agent。"""
@@ -149,18 +173,18 @@ def create_data_agent(
     )
     steering_middleware = None
     tool_execution_fence_middleware = None
-    if run_id and owner_token and inbox_service and admit_inbox_messages and steering_tracker:
+    if run_controls is not None and run_controls.is_complete():
         tool_execution_fence_middleware = create_tool_execution_fence_middleware(
-            run_id=run_id,
-            owner_token=owner_token,
-            inbox_service=inbox_service,
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
         )
         steering_middleware = create_steering_middleware(
-            run_id=run_id,
-            owner_token=owner_token,
-            inbox_service=inbox_service,
-            admit_messages=admit_inbox_messages,
-            tracker=steering_tracker,
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
+            admit_messages=run_controls.admit_inbox_messages,
+            tracker=run_controls.steering_tracker,
             state_schema=ChatDataAgentState,
         )
     after_model_history_middleware = None
