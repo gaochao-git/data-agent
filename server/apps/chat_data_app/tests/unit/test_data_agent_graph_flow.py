@@ -13,7 +13,12 @@ from langchain_core.messages import AIMessage
 
 from apps.chat_data_app.agent import data_agent
 from apps.chat_data_app.agent.agent_state import ChatDataAgentState
-from apps.chat_data_app.agent.data_agent import assemble_tools
+from apps.chat_data_app.agent.data_agent import (
+    DatasourceContext,
+    IdentityContext,
+    ModelInvocationConfig,
+    assemble_tools,
+)
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
@@ -44,10 +49,14 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     _, with_bash = _runtime(tmp_path, bash_enabled=True)
 
     tool_names = [tool.name for tool in assemble_tools(
-        without_bash, runtime, datasource_id="ds_a", user_id="u1", operator_name="测试用户",
+        without_bash, runtime,
+        identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
     )]
     bash_tool_names = [tool.name for tool in assemble_tools(
-        with_bash, runtime, datasource_id="ds_a", user_id="u1", operator_name="测试用户",
+        with_bash, runtime,
+        identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
     )]
 
     assert tool_names == [
@@ -85,9 +94,9 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     agent = data_agent.create_data_agent(
         options,
         workspace_runtime=runtime,
-        system_prompt="system",
-        model_id="primary-model",
-        datasource_id="ds_a",
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
     assert agent.name == "agent"
@@ -124,9 +133,9 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
     data_agent.create_data_agent(
         options,
         workspace_runtime=runtime,
-        system_prompt="system",
-        model_id="primary-model",
-        datasource_id="ds_a",
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
         persist_model_snapshot=persist_snapshot,
     )
 

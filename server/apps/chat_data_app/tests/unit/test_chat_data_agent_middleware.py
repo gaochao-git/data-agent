@@ -1008,10 +1008,11 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
 
     agent = data_agent.create_data_agent(
         checkpointer="ckpt",
-        datasource_id="ds_a",
-        system_prompt="智能问数系统提示词",
-        model_id="m1",
-        user_id="u1",
+        identity_context=data_agent.IdentityContext(user_id="u1"),
+        datasource_context=data_agent.DatasourceContext(datasource_id="ds_a"),
+        model_invocation=data_agent.ModelInvocationConfig(
+            system_prompt="智能问数系统提示词", model_id="m1"
+        ),
     )
 
     assert agent.name == "agent"
@@ -1058,7 +1059,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert captured["middleware"][6].name == "ToolCallNameNormalizerMiddleware"
     assert captured["middleware"][7].name == "ToolResultMiddleware"
     assert captured["middleware"][8].name == "ToolErrorMiddleware"
-    assert data_agent.create_data_agent(AgentRuntimeOptions(), model_id="m1").name == "agent"
+    assert data_agent.create_data_agent(AgentRuntimeOptions(), model_invocation=data_agent.ModelInvocationConfig(model_id="m1")).name == "agent"
     assert "智能问数与数据分析助手" in captured["system_prompt"]
 
 

@@ -251,3 +251,106 @@ async def test_injection_dedupes_same_file_and_caps_count(monkeypatch, tmp_path)
     assert len(image_blocks) == image_injection.MAX_INJECTED_IMAGES
     # 去重：img-0 只出现一次；保留的是最近的几张
     assert len(urls) == len(set(urls))
+
+
+# ---------------------------------------------------------------------------
+# 用户上传图片附件（vision_attachments 标记来源）
+# ---------------------------------------------------------------------------
+
+def _marked_user_message(paths_list, content="看图"):
+    """构造带 vision_attachments 路径标记的用户消息。"""
+    return HumanMessage(
+        content=content,
+        additional_kwargs={"vision_attachments": list(paths_list)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_injection_loads_user_vision_attachments(monkeypatch, tmp_path):
+    paths = _init_workspace(monkeypatch, tmp_path)
+    (Path(paths["uploads"]) / "photo.png").write_bytes(PNG_BYTES)
+    request = _request(paths)
+    request.messages = [_marked_user_message(["/mnt/user-data/uploads/photo.png"])]
+
+    captured = {}
+    await _middleware(monkeypatch=monkeypatch).awrap_model_call(request, _handler_capturing(captured))
+
+    injected = captured["request"].messages[-1]
+    assert isinstance(injected, HumanMessage)
+    assert injected.additional_kwargs.get("image_injection") is True
+    text_blocks = [block for block in injected.content if block.get("type") == "text"]
+    image_blocks = [block for block in injected.content if block.get("type") == "image_url"]
+    assert "用户上传附件" in text_blocks[0]["text"]
+    expected_url = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode("ascii")
+    assert [block["image_url"]["url"] for block in image_blocks] == [expected_url]
+
+
+@pytest.mark.asyncio
+async def test_injection_user_attachments_pass_through_when_vlm_off(monkeypatch, tmp_path):
+    paths = _init_workspace(monkeypatch, tmp_path)
+    (Path(paths["uploads"]) / "a.png").write_bytes(PNG_BYTES)
+    request = _request(paths)
+    request.messages = [_marked_user_message(["/mnt/user-data/uploads/a.png"])]
+
+    captured = {}
+    await _middleware(monkeypatch=monkeypatch, vlm=False).awrap_model_call(request, _handler_capturing(captured))
+
+    # 用户附件在 vlm-off 下静默跳过，请求原样透传
+    assert captured["request"].messages == request.messages
+
+
+@pytest.mark.asyncio
+async def test_injection_merges_sources_dedupes_by_physical_path(monkeypatch, tmp_path):
+    paths = _init_workspace(monkeypatch, tmp_path)
+    (Path(paths["uploads"]) / "same.png").write_bytes(PNG_BYTES)
+    request = _request(paths)
+    request.messages = [
+        *_read_image_exchange("/mnt/user-data/uploads/same.png"),
+        _marked_user_message(["/mnt/user-data/uploads/same.png"]),
+    ]
+
+    captured = {}
+    await _middleware(monkeypatch=monkeypatch).awrap_model_call(request, _handler_capturing(captured))
+
+    injected = captured["request"].messages[-1]
+    image_blocks = [block for block in injected.content if block.get("type") == "image_url"]
+    # 双来源同一物理文件只注入一次，归属最新来源（用户上传）
+    assert len(image_blocks) == 1
+    text_blocks = [block for block in injected.content if block.get("type") == "text"]
+    assert "用户上传附件" in text_blocks[0]["text"]
+    assert "read_image 加载" not in text_blocks[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_injection_rolling_window_across_turns(monkeypatch, tmp_path):
+    paths = _init_workspace(monkeypatch, tmp_path)
+    uploads_dir = Path(paths["uploads"])
+    for index in range(6):
+        (uploads_dir / f"u-{index}.png").write_bytes(PNG_BYTES + bytes([index]))
+
+    request = _request(paths)
+    # 两轮历史消息共带 6 个标记路径，只应注入最近 4 张
+    request.messages = [
+        _marked_user_message([
+            "/mnt/user-data/uploads/u-0.png",
+            "/mnt/user-data/uploads/u-1.png",
+            "/mnt/user-data/uploads/u-2.png",
+        ], content="第一批"),
+        AIMessage(content="收到"),
+        _marked_user_message([
+            "/mnt/user-data/uploads/u-3.png",
+            "/mnt/user-data/uploads/u-4.png",
+            "/mnt/user-data/uploads/u-5.png",
+        ], content="第二批"),
+    ]
+
+    captured = {}
+    await _middleware(monkeypatch=monkeypatch).awrap_model_call(request, _handler_capturing(captured))
+
+    injected = captured["request"].messages[-1]
+    image_blocks = [block for block in injected.content if block.get("type") == "image_url"]
+    assert len(image_blocks) == image_injection.MAX_INJECTED_IMAGES
+    text_blocks = [block for block in injected.content if block.get("type") == "text"]
+    # 最新优先：第二批全部保留，最早的 u-0 被挤出窗口
+    assert "u-0.png" not in text_blocks[0]["text"]
+    assert "u-5.png" in text_blocks[0]["text"]

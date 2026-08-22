@@ -408,13 +408,40 @@ def _serialize_human_message(message: HumanMessage) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": _message_id(message),
         "role": "user",
-        "content": message.content,
+        "content": _sanitize_user_message_content(message.content),
         "timestamp": _timestamp(message),
     }
-    for key in ("file_ids", "semantic_config_selection", "reasoning_turn_id"):
+    # vision_attachments 与 message_compose.select_vision_attachments 对应；
+    # 不直接 import 是为了避免 services 反向依赖 agent.middleware。
+    for key in ("file_ids", "semantic_config_selection", "reasoning_turn_id", "vision_attachments"):
         if additional_kwargs.get(key):
             payload[key] = additional_kwargs[key]
     return payload
+
+
+def _sanitize_user_message_content(content: Any) -> Any:
+    """保险丝：用户消息若为多模态 blocks，剥掉非文本块、降级为占位说明。
+
+    正常链路下用户消息恒为纯字符串（图片附件走 ``vision_attachments``
+    路径标记 + ImageInjectionMiddleware 请求层装载）。此防御保证未来任何
+    代码路径再把大 blob 塞进用户消息时，事件表也不会落 base64。
+    """
+    if not isinstance(content, list):
+        return content
+    texts: list[str] = []
+    image_count = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "image_url":
+            image_count += 1
+        elif block.get("type") == "text" and str(block.get("text") or "").strip():
+            texts.append(str(block["text"]))
+    text = "\n".join(texts)
+    if image_count:
+        note = f"[图片内容已省略，共 {image_count} 张]"
+        text = f"{text}\n{note}" if text else note
+    return text or "[非文本内容已省略]"
 
 
 def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:

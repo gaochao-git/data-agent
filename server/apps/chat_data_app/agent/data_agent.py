@@ -65,24 +65,51 @@ class AgentRunControls:
         )
 
 
+@dataclass(frozen=True)
+class IdentityContext:
+    """谁在问——来自认证层，一次登录内不变。"""
+
+    user_id: str | None = None
+    operator_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasourceContext:
+    """问哪个数据域——ChatData 业务概念，每轮请求可变。"""
+
+    datasource_id: str | None = None
+    source_type: str | None = None
+    datasource_group_context: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelInvocationConfig:
+    """模型怎么调——与业务无关的 LLM 调用参数。"""
+
+    system_prompt: str | None = None
+    model_id: str | None = None
+    enable_thinking: bool | None = None
+
+
 def assemble_tools(
     runtime_options: AgentRuntimeOptions,
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
-    datasource_id: str | None = None,
-    user_id: str = "system",
-    operator_name: str | None = None,
-    model_id: str | None = None,
-    datasource_group_context: str | None = None,
-    source_type: str | None = None,
+    identity_context: IdentityContext | None = None,
+    datasource_context: DatasourceContext | None = None,
+    model_invocation: ModelInvocationConfig | None = None,
 ) -> list:
     """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
+    identity = identity_context or IdentityContext()
+    datasource = datasource_context or DatasourceContext()
+    invocation = model_invocation or ModelInvocationConfig()
+    user_id = identity.user_id if identity.user_id is not None else "system"
     semantic_search = create_semantic_search(
-        model_id=model_id,
-        datasource_id=datasource_id,
+        model_id=invocation.model_id,
+        datasource_id=datasource.datasource_id,
         user_id=user_id,
-        datasource_group_context=datasource_group_context,
-        source_type=source_type,
+        datasource_group_context=datasource.datasource_group_context,
+        source_type=datasource.source_type,
         workspace_runtime=workspace_runtime,
     )
     tools = [
@@ -93,9 +120,9 @@ def assemble_tools(
         get_current_time_tool,
         semantic_search,
         create_dsl2sql_tool(
-            datasource_id,
+            datasource.datasource_id,
             user_id=user_id,
-            operator_name=operator_name,
+            operator_name=identity.operator_name,
         ),
         semantic_query_tool,
         calculator_tool,
@@ -111,20 +138,27 @@ def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
-    datasource_id: str | None = None,
-    system_prompt: str | None = None,
-    model_id: str | None = None,
-    enable_thinking: bool | None = None,
-    user_id: str | None = None,
-    operator_name: str | None = None,
-    datasource_group_context: str | None = None,
-    source_type: str | None = None,
+    identity_context: IdentityContext | None = None,
+    datasource_context: DatasourceContext | None = None,
+    model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
     persist_model_snapshot=None,
 ):
-    """创建唯一的 ``chat_data`` Agent。"""
+    """创建唯一的 ``chat_data`` Agent。
+
+    参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
+    （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
+    （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
+    """
     options = runtime_options or get_chat_data_default_runtime_options()
+    identity = identity_context or IdentityContext()
+    datasource = datasource_context or DatasourceContext()
+    invocation = model_invocation or ModelInvocationConfig()
+    user_id = identity.user_id
+    operator_name = identity.operator_name
+    model_id = invocation.model_id
+    enable_thinking = invocation.enable_thinking
     runtime = workspace_runtime
     if runtime is None:
         workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
@@ -137,14 +171,11 @@ def create_data_agent(
     tools = assemble_tools(
         options,
         runtime,
-        datasource_id=datasource_id,
-        user_id=user_id or "",
-        operator_name=operator_name,
-        model_id=model_id,
-        datasource_group_context=datasource_group_context,
-        source_type=source_type,
+        identity_context=identity,
+        datasource_context=datasource,
+        model_invocation=invocation,
     )
-    effective_system_prompt = system_prompt or build_unified_system_prompt(
+    effective_system_prompt = invocation.system_prompt or build_unified_system_prompt(
         options,
         workspace_root=runtime.workspace_root,
     )

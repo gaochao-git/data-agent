@@ -24,7 +24,7 @@ from apps.chat_data_app.services.agent_run import (
     workspace_sandbox_backend as workspace_sandbox_backend_module,
 )
 from utils import tool_result_store
-from apps.chat_data_app.agent.data_agent import assemble_tools
+from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.agent_run.workspace_execution import _artifact_payload_from_bytes
@@ -166,7 +166,12 @@ def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
     )
     return {
         tool.name: tool
-        for tool in assemble_tools(AgentRuntimeOptions(), runtime, **kwargs)
+        for tool in assemble_tools(
+            AgentRuntimeOptions(),
+            runtime,
+            datasource_context=DatasourceContext(datasource_id=kwargs.pop("datasource_id", None)),
+            **kwargs,
+        )
     }
 
 

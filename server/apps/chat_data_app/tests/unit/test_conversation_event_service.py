@@ -398,3 +398,33 @@ def test_serialized_messages_carry_execution_timing_only_when_stamped():
     ))
     assert "started_at_ms" not in invalid_tool
     assert "ended_at_ms" not in invalid_tool
+
+
+def test_human_message_payload_strips_blocks_and_carries_vision_attachments():
+    """保险丝：blocks 里的图片降级为占位文本；vision_attachments 标记随行。"""
+    from apps.chat_data_app.services.agent_run.conversation_event_service import (
+        _serialize_human_message,
+    )
+
+    blocked = _serialize_human_message(HumanMessage(
+        id="turn-img",
+        content=[
+            {"type": "text", "text": "看这张图"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}},
+        ],
+        additional_kwargs={"vision_attachments": ["/mnt/user-data/uploads/a.png"]},
+    ))
+    assert blocked["content"] == "看这张图\n[图片内容已省略，共 2 张]"
+    assert blocked["vision_attachments"] == ["/mnt/user-data/uploads/a.png"]
+    # payload 全文不出现 base64
+    assert "base64" not in str(blocked)
+
+    pure_image = _serialize_human_message(HumanMessage(
+        content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,CCCC"}}],
+    ))
+    assert pure_image["content"] == "[图片内容已省略，共 1 张]"
+
+    plain = _serialize_human_message(HumanMessage(content="普通文本消息"))
+    assert plain["content"] == "普通文本消息"
+    assert "vision_attachments" not in plain

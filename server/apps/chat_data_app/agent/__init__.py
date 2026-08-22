@@ -21,6 +21,9 @@ from .runtime_options import (
 )
 from .data_agent import (
     AgentRunControls,
+    DatasourceContext,
+    IdentityContext,
+    ModelInvocationConfig,
     create_data_agent,
     get_data_agent_graph,
 )
@@ -32,6 +35,9 @@ __all__ = [
     "ChatDataAgentState",
     "AgentRuntimeOptions",
     "AgentRunControls",
+    "DatasourceContext",
+    "IdentityContext",
+    "ModelInvocationConfig",
     "get_chat_data_default_runtime_options",
     "resolve_agent_runtime_options",
     "create_data_agent",

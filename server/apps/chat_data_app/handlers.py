@@ -26,6 +26,9 @@ from utils import conversation
 from .agent import (
     create_data_agent,
     AgentRunControls,
+    DatasourceContext,
+    IdentityContext,
+    ModelInvocationConfig,
     resolve_agent_runtime_options,
     build_unified_system_prompt,
     get_checkpointer,
@@ -42,7 +45,7 @@ from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
-    build_multimodal_message_content,
+    select_vision_attachments,
 )
 from .services.agent_run.uploaded_file_service import get_file_info
 from .services.agent_run.runtime_skill_snapshot import (
@@ -136,7 +139,8 @@ def _build_user_message(
 ) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。
 
-    content 为纯字符串或多模态 content blocks（``[text_block, image_block...]``）。
+    content 为纯字符串（正文 + 附件占位行）；图片附件经 additional_kwargs
+    的 ``vision_attachments`` 路径标记由 middleware 在请求层装载。
     """
     reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs = {
@@ -1346,28 +1350,12 @@ async def _run_chat_data_agent_stream(
     try:
         async with get_checkpointer() as checkpointer:
             log_phase("open_checkpointer")
-            # 构造用户消息内容：原始内容 + 文件引用（本轮模型带 vlm 能力时图片升级为 content blocks）
-            message_content, _ = await build_multimodal_message_content(
-                user_message_content,
-                file_attachments,
-                user_id=user_id or "system",
-                thread_id=thread_id,
-                model_id=model_id,
-            )
-            # 附件引用文本覆盖全部附件（含已升级为图片块的）：占位行随消息持久化，
-            # 历史会话回放靠它合成附件卡片；对模型也只是多一行路径信息，无副作用。
+            # 用户消息保持纯文本（正文 + 附件占位行）；合规图片附件只打
+            # vision_attachments 路径标记，由 ImageInjectionMiddleware 在模型
+            # 请求层按当轮 vlm 能力位装载——base64 不进入 state/checkpoint/事件表。
+            vision_attachments = select_vision_attachments(file_attachments)
             attachment_text = build_file_attachment_text(file_attachments)
-            if attachment_text:
-                if isinstance(message_content, list):
-                    text_block = next(
-                        (block for block in message_content if block.get("type") == "text"), None
-                    )
-                    if text_block is None:
-                        text_block = {"type": "text", "text": ""}
-                        message_content.insert(0, text_block)
-                    text_block["text"] += attachment_text
-                else:
-                    message_content = f"{message_content}{attachment_text}"
+            message_content = f"{user_message_content}{attachment_text}"
 
             message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
@@ -1401,6 +1389,7 @@ async def _run_chat_data_agent_stream(
                     message_content,
                     semantic_selection_event,
                     message_id=turn_id,
+                    vision_attachments=vision_attachments,
                     **message_kwargs,
                 )
             if resume_checkpointed:
@@ -1473,15 +1462,21 @@ async def _run_chat_data_agent_stream(
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
-                datasource_id=datasource_id,
-                system_prompt=system_prompt,
-                model_id=model_id,
-                enable_thinking=enable_thinking,
-                user_id=user_id,
-                operator_name=username,
-                datasource_group_context=prompt_context["datasource_group_context"],
+                identity_context=IdentityContext(
+                    user_id=user_id,
+                    operator_name=username,
+                ),
+                datasource_context=DatasourceContext(
+                    datasource_id=datasource_id,
+                    source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                    datasource_group_context=prompt_context["datasource_group_context"],
+                ),
+                model_invocation=ModelInvocationConfig(
+                    system_prompt=system_prompt,
+                    model_id=model_id,
+                    enable_thinking=enable_thinking,
+                ),
                 workspace_runtime=workspace_runtime,
-                source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
                 run_controls=AgentRunControls(
                     run_id=run_id,
                     owner_token=owner_token,

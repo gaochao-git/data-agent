@@ -1,17 +1,18 @@
-"""用户消息的多模态构造：附件占位文本与图片 content blocks 升级。
+"""用户消息的多模态构造：附件占位文本与图片附件准入。
 
-从 handlers 拆出的纯函数族——只依赖配置与文件服务，不接触 SSE 编排、
-会话生命周期等 handler 状态。两条输出路径：
+从 handlers 拆出的纯函数族——只依赖配置与文件服务元数据，不接触 SSE 编排、
+会话生命周期等 handler 状态。两条输出：
 
 - 附件占位 ``[attachment] <虚拟路径>``：随消息持久化，历史会话回放靠它
   合成附件卡片（前端识别后隐藏正文中的该行）。
-- 图片升级：当前模型能力位为 vlm 时，把合规图片转为 ``image_url``
-  content block；不合规或读取失败的一律退回附件占位文本引用。
+- 图片准入：``select_vision_attachments`` 按类型/大小/数量规则选出可注入
+  视觉的图片附件虚拟路径，调用方写入消息 additional_kwargs 标记；真正的
+  base64 装载由 ``ImageInjectionMiddleware`` 在模型请求层按当轮模型能力位
+  完成——state/checkpoint/事件表全程不出现 base64。
 """
 
 from __future__ import annotations
 
-import base64
 from typing import Any
 
 from utils.logger import get_logger
@@ -19,19 +20,9 @@ from .uploaded_file_service import (
     IMAGE_EXTENSIONS,
     MAX_IMAGES_PER_MESSAGE,
     MAX_IMAGE_SIZE,
-    get_file_content,
 )
-from ..llm_config import get_chat_data_model_config
 
 logger = get_logger(__name__)
-
-IMAGE_MIME_TYPES = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "webp": "image/webp",
-    "gif": "image/gif",
-}
 
 
 def build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
@@ -64,46 +55,21 @@ def is_image_attachment(item: dict[str, Any]) -> bool:
         return False
 
 
-async def build_multimodal_message_content(
-    text_content: str,
-    file_attachments: list[dict[str, Any]],
-    *,
-    user_id: str,
-    thread_id: str,
-    model_id: str | None = None,
-) -> tuple[Any, list[dict[str, Any]]]:
-    """按本轮模型能力位把合规图片附件升级为 content blocks。
+def select_vision_attachments(file_attachments: list[dict[str, Any]]) -> list[str]:
+    """选出可注入视觉的图片附件虚拟路径（纯元数据判断，不读文件、不判 vlm）。
 
-    返回 ``(消息内容, 未消化的附件列表)``：消息内容为纯字符串（无图片，
-    或本轮模型未开启 vlm 时保持旧行为）或 ``[text_block, image_block...]``
-    列表；超出数量/大小限制或读取失败的图片退回附件文本引用路径。
+    准入规则：类型 ∈ IMAGE_EXTENSIONS、携带 file_id、大小 ≤ MAX_IMAGE_SIZE，
+    数量上限 MAX_IMAGES_PER_MESSAGE。返回虚拟路径列表（可能为空）；调用方
+    将其写入消息 additional_kwargs 的 ``vision_attachments`` 标记，由
+    ImageInjectionMiddleware 在模型请求层按当轮 vlm 能力位装载图片。
     """
-    vlm_enabled = bool(get_chat_data_model_config(model_id).get("vlm"))
-    if not vlm_enabled:
-        return text_content, file_attachments
-
-    image_items = [item for item in file_attachments if is_image_attachment(item)]
-    leftover = [item for item in file_attachments if item not in image_items]
-    admitted = image_items[:MAX_IMAGES_PER_MESSAGE]
-    leftover.extend(image_items[MAX_IMAGES_PER_MESSAGE:])
-    if not admitted:
-        return text_content, leftover
-
-    blocks: list[dict[str, Any]] = [{"type": "text", "text": text_content}] if text_content else []
-    for item in admitted:
-        data = await get_file_content(
-            str(item["file_id"]), user_id=user_id, thread_id=thread_id
-        )
-        if not data:
-            logger.warning("图片附件读取失败，退回文本引用: file_id=%s", item.get("file_id"))
-            leftover.append(item)
+    paths: list[str] = []
+    for item in file_attachments:
+        if len(paths) >= MAX_IMAGES_PER_MESSAGE:
+            break
+        if not is_image_attachment(item):
             continue
-        mime = IMAGE_MIME_TYPES.get(str(item.get("file_type") or "").lower(), "application/octet-stream")
-        blocks.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"},
-        })
-    if not any(block.get("type") == "image_url" for block in blocks):
-        # 没有任何图片成功升级（如全部读取失败），保持纯字符串旧行为
-        return text_content, leftover
-    return blocks, leftover
+        path = item.get("virtual_path") or item.get("parsed_path")
+        if path:
+            paths.append(str(path))
+    return paths

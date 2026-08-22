@@ -289,8 +289,10 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
             user_id="u1",
             backend="local",
         ),
-        system_prompt="test",
-        model_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        model_invocation=data_agent.ModelInvocationConfig(
+            system_prompt="test",
+            model_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        ),
     )
 
     assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507"]

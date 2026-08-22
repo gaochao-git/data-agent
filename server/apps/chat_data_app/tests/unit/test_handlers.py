@@ -378,7 +378,7 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     joined = "".join(events)
     assert "5+5=10" in joined
     assert "prompt_context" not in fake_graph.initial_state
-    assert "## 当前可见指标集目录\n1. 名称：订单分析" in captured_agent_kwargs["system_prompt"]
+    assert "## 当前可见指标集目录\n1. 名称：订单分析" in captured_agent_kwargs["model_invocation"].system_prompt
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
 
@@ -426,7 +426,7 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
     )))
 
     assert "完成" in "".join(events)
-    system_prompt = captured_agent_kwargs["system_prompt"]
+    system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
     assert "<name>runtime-skill</name>" in system_prompt
     assert "<title>Runtime skill</title>" in system_prompt
     assert "stale-management-name" not in system_prompt
@@ -886,7 +886,7 @@ def test_generate_chat_data_stream_projects_visible_members_from_shared_context(
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
-    datasource_group_context = captured_agent_kwargs["datasource_group_context"]
+    datasource_group_context = captured_agent_kwargs["datasource_context"].datasource_group_context
     assert "当前用户已选择的执行对象数据源" in datasource_group_context
     assert "member_datasource_id: m1" in datasource_group_context
     assert "m2" not in datasource_group_context
@@ -925,7 +925,7 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
     assert "prompt_context" not in fake_graph.initial_state
-    assert captured_agent_kwargs["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
+    assert captured_agent_kwargs["datasource_context"].datasource_group_context == "当前数据源组按执行对象数据源分库"
 
 
 def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_context(monkeypatch):
@@ -955,7 +955,7 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
     )))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-    datasource_group_context = captured_agent_kwargs["datasource_group_context"]
+    datasource_group_context = captured_agent_kwargs["datasource_context"].datasource_group_context
     assert "当前用户已选择的执行对象数据源" in datasource_group_context
     assert "member_datasource_id: m1" in datasource_group_context
     assert "m2" not in datasource_group_context
@@ -1132,23 +1132,15 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert captured["event_stream_kwargs"]["last_event_id"] == "0-0"
 
 
-# ---- 多模态消息构造（content blocks 升级与降级） ----
-
-import base64 as _base64
+# ---- 图片附件准入（vision_attachments 路径标记，base64 由 middleware 请求层装载） ----
 
 from apps.chat_data_app.services.agent_run.message_compose import (
     build_file_attachment_text as _build_file_attachment_text,
-    build_multimodal_message_content as _build_multimodal_message_content,
     is_image_attachment as _is_image_attachment,
+    select_vision_attachments as _select_vision_attachments,
 )
+from apps.chat_data_app.services.agent_run.uploaded_file_service import MAX_IMAGES_PER_MESSAGE
 from apps.chat_data_app.services.agent_run.conversation_event_service import _extract_text_content
-
-
-def _vlm_model_config(monkeypatch, vlm: bool = True):
-    monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.message_compose.get_chat_data_model_config",
-        lambda model_id=None: {"id": model_id, "temperature": 0.2, "context_window": 256000, "vlm": vlm},
-    )
 
 
 def test_is_image_attachment_checks_type_and_size():
@@ -1161,77 +1153,40 @@ def test_is_image_attachment_checks_type_and_size():
     assert not _is_image_attachment({"original_filename": "input.txt", "parsed_path": "/mnt/x"})
 
 
-@pytest.mark.asyncio
-async def test_multimodal_content_vlm_off_keeps_legacy_behavior(monkeypatch):
-    _vlm_model_config(monkeypatch, vlm=False)
-    atts = [{"file_id": "f1", "original_filename": "a.png", "file_type": "png", "file_size": 10}]
-    content, leftover = await _build_multimodal_message_content("你好", atts, user_id="u", thread_id="t")
-    assert content == "你好"
-    assert leftover == atts
-
-
-@pytest.mark.asyncio
-async def test_multimodal_content_upgrades_images_and_keeps_attachment_text(monkeypatch):
-    _vlm_model_config(monkeypatch, vlm=True)
-    png = b"\x89PNG fake"
+def test_select_vision_attachments_returns_image_paths_only():
     atts = [
         {"file_id": "img1", "original_filename": "a.png", "file_type": "png",
-         "file_size": len(png), "virtual_path": "/mnt/user-data/uploads/a.png"},
+         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/a.png"},
         {"file_id": "doc1", "original_filename": "b.pdf", "file_type": "pdf",
          "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
+        {"file_id": "img2", "original_filename": "c.jpg", "file_type": "jpg",
+         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/c.jpg"},
     ]
-
-    async def fake_read(file_id, user_id="system", thread_id=""):
-        return png if file_id == "img1" else b"pdf"
-
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fake_read)
-    content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")
-    assert isinstance(content, list)
-    assert [block["type"] for block in content] == ["text", "image_url"]
-    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert leftover == [atts[1]]
-    # 组装处逻辑：占位文本注入 text 块，覆盖全部附件
-    text_block = next(b for b in content if b["type"] == "text")
-    text_block["text"] += _build_file_attachment_text(atts)
-    assert "[attachment] /mnt/user-data/uploads/a.png" in text_block["text"]
-    assert "[attachment] /mnt/user-data/uploads/b.pdf" in text_block["text"]
+    paths = _select_vision_attachments(atts)
+    assert paths == ["/mnt/user-data/uploads/a.png", "/mnt/user-data/uploads/c.jpg"]
 
 
-@pytest.mark.asyncio
-async def test_multimodal_content_image_only_message_inserts_text_block(monkeypatch):
-    """纯图片无文字：blocks 应为 [image]，组装时补建 text 块承载占位行。"""
-    _vlm_model_config(monkeypatch, vlm=True)
-    png = b"\x89PNG fake"
-    atts = [{"file_id": "img1", "original_filename": "a.png", "file_type": "png",
-             "file_size": len(png), "virtual_path": "/mnt/user-data/uploads/a.png"}]
-
-    async def fake_read(file_id, user_id="system", thread_id=""):
-        return png
-
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fake_read)
-    content, leftover = await _build_multimodal_message_content("", atts, user_id="u", thread_id="t")
-    assert isinstance(content, list) and [b["type"] for b in content] == ["image_url"]
-    assert leftover == []
-    text_block = next((b for b in content if b["type"] == "text"), None)
-    if text_block is None:
-        text_block = {"type": "text", "text": ""}
-        content.insert(0, text_block)
-    text_block["text"] += _build_file_attachment_text(atts)
-    assert content[0]["type"] == "text"
+def test_select_vision_attachments_caps_at_limit_and_skips_invalid():
+    images = [
+        {"file_id": f"img{i}", "original_filename": f"{i}.png", "file_type": "png",
+         "file_size": 10, "virtual_path": f"/mnt/user-data/uploads/{i}.png"}
+        for i in range(MAX_IMAGES_PER_MESSAGE + 2)
+    ]
+    oversized = [{"file_id": "big", "original_filename": "big.png", "file_type": "png",
+                  "file_size": 99 * 1024 * 1024, "virtual_path": "/mnt/user-data/uploads/big.png"}]
+    paths = _select_vision_attachments(oversized + images)
+    assert len(paths) == MAX_IMAGES_PER_MESSAGE
+    assert all(path.startswith("/mnt/user-data/uploads/") for path in paths)
 
 
-@pytest.mark.asyncio
-async def test_multimodal_content_read_failure_falls_back_to_string(monkeypatch):
-    _vlm_model_config(monkeypatch, vlm=True)
-
-    async def fail_read(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.message_compose.get_file_content", fail_read)
-    atts = [{"file_id": "img1", "original_filename": "a.png", "file_type": "png",
-             "file_size": 10, "virtual_path": "/mnt/user-data/uploads/a.png"}]
-    content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")
-    assert content == "看图" and leftover == atts
+def test_select_vision_attachments_empty_without_images():
+    atts = [
+        {"file_id": "doc1", "original_filename": "b.pdf", "file_type": "pdf",
+         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
+        {"original_filename": "input.txt", "parsed_path": "/mnt/x"},
+    ]
+    assert _select_vision_attachments([]) == []
+    assert _select_vision_attachments(atts) == []
 
 
 def test_extract_text_content_strips_attachment_lines():
