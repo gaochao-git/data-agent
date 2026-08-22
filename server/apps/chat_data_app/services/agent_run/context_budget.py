@@ -27,6 +27,9 @@ from ..runtime_config import (
 REQUEST_OVERHEAD_TOKENS = 3
 SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
 HARD_INPUT_GUARD_RATIO = 0.95
+# 单张图片的保守 token 预估值：取主流 vision 模型单图上限口径
+# （Anthropic ~1600、OpenAI ~1536），宁可高估不误放行。
+IMAGE_TOKEN_ESTIMATE = 1600
 
 
 class ContextInputLimitExceededError(ValueError):
@@ -99,12 +102,29 @@ def count_tools_tokens(tools: list[Any] | None) -> int:
     return int(total)
 
 
+def _content_blocks_tokens(content: list) -> int:
+    """估算多模态 content blocks：文本块按文本算，图片块按固定常数。"""
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            # 非 dict 的块退回字符串序列化，保持旧行为
+            total += estimate_tokens(json.dumps(block, ensure_ascii=False, default=str))
+            continue
+        if block.get("type") == "image_url":
+            total += IMAGE_TOKEN_ESTIMATE
+        else:
+            total += estimate_tokens(json.dumps(block, ensure_ascii=False, default=str))
+    return total
+
+
 def _message_tokens(message: BaseMessage) -> int:
     total = 4
     content = getattr(message, "content", None)
     if content:
         if isinstance(content, str):
             total += estimate_tokens(content)
+        elif isinstance(content, list):
+            total += _content_blocks_tokens(content)
         else:
             total += estimate_tokens(json.dumps(content, ensure_ascii=False, default=str))
     tool_calls = getattr(message, "tool_calls", None)

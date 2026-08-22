@@ -25,6 +25,22 @@ const normalizeReasoningContent = (value: unknown): string => {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+// 用户消息 content 兼容两种形态：纯字符串（历史）与 content blocks 数组（多模态）。
+// blocks 时只抽取 text 拼为正文；image 块不内联渲染，图片统一走附件卡片/工作区面板查看。
+const normalizeUserMessageContent = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim()
+  if (!Array.isArray(value)) return ''
+  const texts: string[] = []
+  for (const block of value) {
+    if (!block || typeof block !== 'object') continue
+    const data = block as Record<string, unknown>
+    if (data.type === 'text' && typeof data.text === 'string' && data.text.trim()) {
+      texts.push(data.text.trim())
+    }
+  }
+  return texts.join('\n\n')
+}
+
 const normalizeReasoningSegments = (value: unknown): ThinkingSegment[] => {
   if (!Array.isArray(value)) return []
   const result: ThinkingSegment[] = []
@@ -227,10 +243,11 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     if (eventType === 'user_message') {
       activeAssistant = null
       pendingSemanticConfigSelection = normalizeSemanticConfigSelection(messagePayload.semantic_config_selection)
+      const userContent = normalizeUserMessageContent(messagePayload.content)
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
-        content: String(messagePayload.content || '').trim(),
+        content: userContent,
         turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
       })

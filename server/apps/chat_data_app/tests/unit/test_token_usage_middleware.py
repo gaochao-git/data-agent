@@ -202,7 +202,7 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
 
 
 def test_estimate_prompt_usage_marks_estimated(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b;0.2;256000")
+    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b;0.2;256000;vlm-off")
     usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
 
     assert usage["used"] > 0
@@ -218,7 +218,7 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
 
 
 def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
+    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000;vlm-off")
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
     budget = get_model_context_budget("budget-model")
@@ -230,7 +230,7 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
 
 
 def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
+    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000;vlm-off")
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
     monkeypatch.setattr(
         "apps.chat_data_app.services.agent_run.context_budget.get_context_compression_config",

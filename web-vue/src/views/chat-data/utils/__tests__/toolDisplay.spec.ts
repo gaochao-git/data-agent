@@ -12,6 +12,7 @@ describe('toolDisplay', () => {
       file_copy: '复制文件',
       file_delete: '删除文件',
       parse_document: '解析文档',
+      read_image: '读取图片',
       file_glob: '查找文件',
       file_grep: '搜索文本',
       dir_create: '创建目录',
@@ -92,6 +93,9 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('ask_user_question', {
       questions: [{ question: '请选择统计范围' }],
     })).toBe('请选择统计范围')
+    expect(getToolCompactDescription('read_image', {
+      file_path: '/mnt/user-data/uploads/登录页面.png',
+    })).toBe('/mnt/user-data/uploads/登录页面.png')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 })

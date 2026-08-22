@@ -65,7 +65,7 @@ def test_compression_trigger_ratio_rejects_invalid_startup_config(monkeypatch):
 
 
 def test_context_window_reads_chat_data_model_config(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1;0.2;128000,kimi-k2.5;0.1;256000")
+    monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1;0.2;128000;vlm-off,kimi-k2.5;0.1;256000;vlm-off")
     assert runtime_config.get_context_window("") == 128000
     assert runtime_config.get_context_window("glm-5.1") == 128000
     assert runtime_config.get_context_window("kimi-k2.5") == 256000

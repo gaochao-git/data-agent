@@ -34,7 +34,7 @@ def test_chat_data_thinking_disabled_by_default(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -51,7 +51,7 @@ def test_chat_data_qwen_can_enable_thinking(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm(enable_thinking=True)
@@ -66,7 +66,7 @@ def test_chat_data_glm_uses_same_thinking_payload(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "glm-5.1;0.2;128000")
+    _set_models(monkeypatch, "glm-5.1;0.2;128000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm(enable_thinking=True)
@@ -82,7 +82,7 @@ def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "gpt-4o-mini;0.2;128000")
+    _set_models(monkeypatch, "gpt-4o-mini;0.2;128000;vlm-off")
     monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
@@ -99,7 +99,7 @@ def test_chat_data_reasoning_effort_carried_for_thinking_toggle(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "deepseek-reasoner;0.2;64000")
+    _set_models(monkeypatch, "deepseek-reasoner;0.2;64000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm(enable_thinking=True)
@@ -126,7 +126,7 @@ def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch):
 
 
 def test_chat_data_model_options_reads_model_configs(monkeypatch):
-    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000,qwen3.5-36b-a3b;0.1;256000")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000;vlm-off,qwen3.5-36b-a3b;0.1;256000;vlm-off")
 
     result = llm_config.get_chat_data_model_options()
 
@@ -139,7 +139,44 @@ def test_chat_data_model_options_reads_model_configs(monkeypatch):
         "id": "qwen3.5-36b-a3b",
         "temperature": 0.1,
         "context_window": 256000,
+        "vlm": False,
     }
+
+
+def test_chat_data_model_config_parses_vlm_capability(monkeypatch):
+    _set_models(
+        monkeypatch,
+        "stealth/ox-alpha;0.2;256000;vlm-on,z-ai/glm-5.2:free;0.2;256000;vlm-off",
+    )
+
+    configs = llm_config.get_chat_data_model_configs()
+
+    assert configs[0] == {
+        "id": "stealth/ox-alpha",
+        "temperature": 0.2,
+        "context_window": 256000,
+        "vlm": True,
+    }
+    assert configs[1] == {
+        "id": "z-ai/glm-5.2:free",
+        "temperature": 0.2,
+        "context_window": 256000,
+        "vlm": False,
+    }
+
+
+def test_chat_data_model_config_requires_capability_segment(monkeypatch):
+    _set_models(monkeypatch, "stealth/ox-alpha;0.2;256000")
+
+    with pytest.raises(ValueError, match="格式错误"):
+        llm_config.get_chat_data_model_configs()
+
+
+def test_chat_data_model_config_rejects_unknown_capability(monkeypatch):
+    _set_models(monkeypatch, "stealth/ox-alpha;0.2;256000;vision")
+
+    with pytest.raises(ValueError, match="能力位不支持"):
+        llm_config.get_chat_data_model_configs()
 
 
 def test_context_compression_summary_output_max_tokens_reads_own_environment_variable(monkeypatch):
@@ -160,7 +197,7 @@ def test_context_compression_summary_output_max_tokens_rejects_invalid_values(mo
 
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch):
-    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;256000")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;256000;vlm-off")
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
@@ -181,7 +218,7 @@ def test_chat_data_llm_uses_first_configured_model(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000,qwen3.6-35b-a3b;0.1;256000")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000;vlm-off,qwen3.6-35b-a3b;0.1;256000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -196,7 +233,7 @@ def test_chat_data_llm_temperature_reads_model_config(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.35;128000")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.35;128000;vlm-off")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -240,7 +277,7 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
         captured.update(kwargs)
         return object()
 
-    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000;vlm-off")
     monkeypatch.setattr(data_agent, "get_chat_data_llm", fake_get_chat_data_llm)
     monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(data_agent, "assemble_tools", lambda *args, **kwargs: [])

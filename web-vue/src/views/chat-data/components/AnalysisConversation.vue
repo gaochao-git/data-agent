@@ -346,7 +346,7 @@ onUnmounted(() => {
 const isNearBottom = ref(true)
 
 // ---- 文件上传 ----
-const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.xlsx', '.pptx', '.pdf']
+const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.xlsx', '.pptx', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
 const MAX_FILE_SIZE = 50 * 1024 * 1024
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
 const MAX_INPUT_CHARS = 4000

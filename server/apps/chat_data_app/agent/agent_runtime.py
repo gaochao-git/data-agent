@@ -91,6 +91,7 @@ def build_standard_agent_middleware(
     tool_result_middleware: Any | None = None,
     tool_call_history_repair_middleware: Any | None = None,
     tool_execution_fence_middleware: Any | None = None,
+    image_injection_middleware: Any | None = None,
     steering_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
     include_response_timestamp: bool = False,
@@ -109,6 +110,10 @@ def build_standard_agent_middleware(
         # outermost so ToolErrorMiddleware cannot turn ownership loss into an
         # ordinary model-visible tool failure.
         middleware.append(tool_execution_fence_middleware)
+    if image_injection_middleware is not None:
+        # 图片注入必须在 context_compression / context_usage 外层：
+        # 注入后的消息（图片按 IMAGE_TOKEN_ESTIMATE 计费）才能被压缩与预算正确统计。
+        middleware.append(image_injection_middleware)
     # 紧贴围栏内侧：起止时间覆盖结果卸载与 ToolErrorMiddleware 转换在内的完整
     # 工具执行链路，成功和失败的 ToolMessage 都盖上 started_at_ms / ended_at_ms。
     # 计时与末尾的 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，

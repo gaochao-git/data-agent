@@ -1130,3 +1130,117 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     }
     assert captured["event_stream_kwargs"]["run_id"] == "run-test"
     assert captured["event_stream_kwargs"]["last_event_id"] == "0-0"
+
+
+# ---- 多模态消息构造（content blocks 升级与降级） ----
+
+import base64 as _base64
+
+from apps.chat_data_app.handlers import (
+    _build_file_attachment_text,
+    _build_multimodal_message_content,
+    _is_image_attachment,
+)
+from apps.chat_data_app.services.agent_run.conversation_event_service import _extract_text_content
+
+
+def _vlm_model_config(monkeypatch, vlm: bool = True):
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.get_chat_data_model_config",
+        lambda model_id=None: {"id": model_id, "temperature": 0.2, "context_window": 256000, "vlm": vlm},
+    )
+
+
+def test_is_image_attachment_checks_type_and_size():
+    ok = {"file_id": "f1", "file_type": "png", "file_size": 1024}
+    assert _is_image_attachment(ok)
+    assert not _is_image_attachment({"file_id": "f2", "file_type": "pdf", "file_size": 1024})
+    assert not _is_image_attachment({"file_type": "png", "file_size": 1024})  # 无 file_id
+    assert not _is_image_attachment({**ok, "file_size": 99 * 1024 * 1024})  # 超大小上限
+    # 输入卸载附件（无 file_id 的 parsed_path 条目）
+    assert not _is_image_attachment({"original_filename": "input.txt", "parsed_path": "/mnt/x"})
+
+
+@pytest.mark.asyncio
+async def test_multimodal_content_vlm_off_keeps_legacy_behavior(monkeypatch):
+    _vlm_model_config(monkeypatch, vlm=False)
+    atts = [{"file_id": "f1", "original_filename": "a.png", "file_type": "png", "file_size": 10}]
+    content, leftover = await _build_multimodal_message_content("你好", atts, user_id="u", thread_id="t")
+    assert content == "你好"
+    assert leftover == atts
+
+
+@pytest.mark.asyncio
+async def test_multimodal_content_upgrades_images_and_keeps_attachment_text(monkeypatch):
+    _vlm_model_config(monkeypatch, vlm=True)
+    png = b"\x89PNG fake"
+    atts = [
+        {"file_id": "img1", "original_filename": "a.png", "file_type": "png",
+         "file_size": len(png), "virtual_path": "/mnt/user-data/uploads/a.png"},
+        {"file_id": "doc1", "original_filename": "b.pdf", "file_type": "pdf",
+         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
+    ]
+
+    async def fake_read(file_id, user_id="system", thread_id=""):
+        return png if file_id == "img1" else b"pdf"
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fake_read)
+    content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")
+    assert isinstance(content, list)
+    assert [block["type"] for block in content] == ["text", "image_url"]
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert leftover == [atts[1]]
+    # 组装处逻辑：占位文本注入 text 块，覆盖全部附件
+    text_block = next(b for b in content if b["type"] == "text")
+    text_block["text"] += _build_file_attachment_text(atts)
+    assert "[attachment] /mnt/user-data/uploads/a.png" in text_block["text"]
+    assert "[attachment] /mnt/user-data/uploads/b.pdf" in text_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_content_image_only_message_inserts_text_block(monkeypatch):
+    """纯图片无文字：blocks 应为 [image]，组装时补建 text 块承载占位行。"""
+    _vlm_model_config(monkeypatch, vlm=True)
+    png = b"\x89PNG fake"
+    atts = [{"file_id": "img1", "original_filename": "a.png", "file_type": "png",
+             "file_size": len(png), "virtual_path": "/mnt/user-data/uploads/a.png"}]
+
+    async def fake_read(file_id, user_id="system", thread_id=""):
+        return png
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fake_read)
+    content, leftover = await _build_multimodal_message_content("", atts, user_id="u", thread_id="t")
+    assert isinstance(content, list) and [b["type"] for b in content] == ["image_url"]
+    assert leftover == []
+    text_block = next((b for b in content if b["type"] == "text"), None)
+    if text_block is None:
+        text_block = {"type": "text", "text": ""}
+        content.insert(0, text_block)
+    text_block["text"] += _build_file_attachment_text(atts)
+    assert content[0]["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_multimodal_content_read_failure_falls_back_to_string(monkeypatch):
+    _vlm_model_config(monkeypatch, vlm=True)
+
+    async def fail_read(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_file_content", fail_read)
+    atts = [{"file_id": "img1", "original_filename": "a.png", "file_type": "png",
+             "file_size": 10, "virtual_path": "/mnt/user-data/uploads/a.png"}]
+    content, leftover = await _build_multimodal_message_content("看图", atts, user_id="u", thread_id="t")
+    assert content == "看图" and leftover == atts
+
+
+def test_extract_text_content_strips_attachment_lines():
+    blocks = [
+        {"type": "text", "text": "你好\n[attachment] /mnt/user-data/uploads/a.png"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}},
+    ]
+    assert _extract_text_content(blocks) == "你好"
+    # 纯字符串历史消息同样剔除占位行
+    assert _extract_text_content("查订单\n[attachment] /mnt/x.xlsx") == "查订单"
+    # 只发文件无文字 → 空字符串（标题生成走兜底）
+    assert _extract_text_content([{"type": "text", "text": "[attachment] /x/a.png"}]) == ""

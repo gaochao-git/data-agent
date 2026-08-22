@@ -15,6 +15,9 @@ DEFAULT_CHAT_DATA_MODEL = "gpt-4o-mini"
 DEFAULT_MODEL_TEMPERATURE = 0.2
 DEFAULT_CHAT_DATA_CONTEXT_WINDOW = 128000
 
+# 第 4 段支持的能力值：vlm-on 接受图片输入，vlm-off 显式关闭。
+_KNOWN_CAPABILITIES = {"vlm-on": True, "vlm-off": False}
+
 
 def _read_positive_int_env(name: str, default: int) -> int:
     """读取正整数配置，非法值回退默认值。"""
@@ -72,16 +75,34 @@ def _parse_context_window(raw: str, *, model: str) -> int:
     return value
 
 
+def _parse_capabilities(raw: str, *, model: str) -> bool:
+    """解析模型能力位（第 4 段），未知值直接抛出。
+
+    当前仅支持 vlm-on / vlm-off。新能力参数只允许追加到段尾；
+    将来增加第 5 段时，段数校验同步放宽为 5 段。
+    """
+    text = str(raw or "").strip()
+    if text in _KNOWN_CAPABILITIES:
+        return _KNOWN_CAPABILITIES[text]
+    raise ValueError(
+        f"CHAT_DATA_MODEL 中模型 {model} 的能力位不支持: {raw!r}（支持: vlm-on, vlm-off）"
+    )
+
+
 def _parse_model_config_item(item: str) -> dict[str, Any]:
-    """解析单个模型配置项：model;temperature;context_window。"""
+    """解析单个模型配置项：model;temperature;context_window;capabilities。"""
     parts = [part.strip().strip("\"'") for part in str(item or "").split(";")]
-    if len(parts) != 3 or not parts[0]:
-        raise ValueError("CHAT_DATA_MODEL 格式错误，应为 model;temperature;context_window，多个模型用逗号分隔")
+    if len(parts) != 4 or not parts[0]:
+        raise ValueError(
+            "CHAT_DATA_MODEL 格式错误，应为 model;temperature;context_window;capabilities，"
+            "capabilities 为 vlm-on/vlm-off，多个模型用逗号分隔"
+        )
     model = parts[0]
     return {
         "id": model,
         "temperature": _parse_temperature(parts[1], model=model),
         "context_window": _parse_context_window(parts[2], model=model),
+        "vlm": _parse_capabilities(parts[3], model=model),
     }
 
 
@@ -93,6 +114,7 @@ def get_chat_data_model_configs() -> list[dict[str, Any]]:
             "id": DEFAULT_CHAT_DATA_MODEL,
             "temperature": DEFAULT_MODEL_TEMPERATURE,
             "context_window": DEFAULT_CHAT_DATA_CONTEXT_WINDOW,
+            "vlm": False,
         }]
     configs = []
     seen = set()
@@ -128,6 +150,7 @@ def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
         "id": selected,
         "temperature": DEFAULT_MODEL_TEMPERATURE,
         "context_window": DEFAULT_CHAT_DATA_CONTEXT_WINDOW,
+        "vlm": False,
     }
 
 

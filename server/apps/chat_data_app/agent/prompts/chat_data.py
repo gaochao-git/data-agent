@@ -189,6 +189,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 工作区与交付
 - 修改已有文件前先读取最新内容；局部修改使用 `file_edit` 的唯一精确匹配，整体新建或覆盖使用 `file_write`。
 - 目录浏览、文本搜索、文件读取、复制、移动和删除分别使用对应工具；文件删除、移动和复制只能操作 `workspace` 或 `outputs`，不得修改 `uploads`。
 - 用户上传文件位于 `uploads` 且未预解析：纯文本可直接读取；二进制文档先使用 `parse_document` 转为 `workspace` 中的可读文件，再继续处理。
+- 图片文件无法按文本阅读；需要查看 `uploads`、`workspace`、`outputs` 中的图片内容时，调用 `read_image(file_path=...)`，图片会自动附加到你的视觉上下文，随后直接基于图片内容回答。
 - 技能文件只能从当前可用技能声明的 `skill_file` 及其所属目录读取；技能目录只读，不得把技能文件当作会话产物修改或展示。
 - 中间文件写入 `workspace`，最终交付文件写入 `outputs`。真实会话路径优先使用 `/mnt/user-data/workspace/`、`/mnt/user-data/outputs/` 和 `/mnt/user-data/uploads/`。
 - 只有写入 `outputs` 并成功调用 `present_artifacts` 后，才能声明产物已生成预览；工具失败或结果不确定时如实说明。

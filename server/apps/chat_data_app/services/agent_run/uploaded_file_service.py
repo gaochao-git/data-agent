@@ -20,6 +20,11 @@ logger = get_logger(__name__)
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
+# 多模态图片附件限制：作为 content blocks 直接进入模型消息的准入条件
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_IMAGES_PER_MESSAGE = 4
+
 
 def _unique_storage_name(uploads_root: Path, original_filename: str) -> str:
     """生成 uploads 根目录下不重名的存储文件名（保留原始文件名，重名加 -N 后缀）。"""

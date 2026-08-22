@@ -26,8 +26,9 @@ from . import BINARY_RESPONSES, JSON_API_RESPONSES
 
 router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], responses=JSON_API_RESPONSES)
 
-# 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）
-ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf"}
+# 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）。
+# 图片类型（png/jpg/jpeg/webp/gif）不进入文档解析，作为 vision 输入直接使用。
+ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf", "png", "jpg", "jpeg", "webp", "gif"}
 
 
 @router.post("/upload", operation_id="upload_chatdata_file")

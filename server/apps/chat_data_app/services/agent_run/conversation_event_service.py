@@ -138,7 +138,7 @@ class ConversationEventService:
             logger.exception("读取会话首条用户消息失败: conversation_id=%s", conversation_id)
             return None
         payload = _load_payload(raw_payload)
-        content = str((payload or {}).get("content") or "").strip()
+        content = _extract_text_content((payload or {}).get("content"))
         return content or None
 
     async def _append_events(
@@ -475,6 +475,30 @@ def _load_payload(raw_payload: str | None) -> dict[str, Any] | None:
         logger.warning("会话历史事件 payload 非法，已跳过")
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _extract_text_content(content: Any) -> str:
+    """提取消息正文文本：兼容纯字符串与多模态 content blocks（只取 text 块）。
+
+    剔除 ``[attachment]`` 附件占位行——那是给历史会话回放合成附件卡片用的，
+    不属于用户正文（会话标题等场景不应出现）。
+    """
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        texts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                block_text = str(block.get("text") or "").strip()
+                if block_text:
+                    texts.append(block_text)
+        text = "\n".join(texts).strip()
+    else:
+        return ""
+    if not text:
+        return ""
+    lines = [line for line in text.splitlines() if not line.strip().startswith("[attachment]")]
+    return "\n".join(lines).strip()
 
 
 conversation_event_service = ConversationEventService()
