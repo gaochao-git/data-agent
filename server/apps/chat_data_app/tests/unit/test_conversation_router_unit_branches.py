@@ -750,3 +750,33 @@ async def test_resume_question_subscribes_after_existing_question_events(router_
     assert result == "stream"
     assert calls["resume"]["run_id"] == "run-1"
     assert calls["resume"]["last_event_id"] == "old-tail-0"
+
+
+# ============ 入口长度防线（防止超长输入进 checkpoint 膨胀） ============
+
+from pydantic import ValidationError
+
+
+def test_steer_request_rejects_overlong_query():
+    with pytest.raises(ValidationError):
+        conversation_router.SteerRequest(query="x" * 4001)
+    # 边界值合法
+    request = conversation_router.SteerRequest(query="x" * 4000)
+    assert len(request.query) == 4000
+
+
+def test_steer_message_update_request_rejects_overlong_content():
+    with pytest.raises(ValidationError):
+        conversation_router.SteerMessageUpdateRequest(content="x" * 4001)
+    assert conversation_router.SteerMessageUpdateRequest(content="x" * 4000).content == "x" * 4000
+    # 可选字段缺省不受影响
+    assert conversation_router.SteerMessageUpdateRequest().content is None
+
+
+def test_quick_sql_request_rejects_overlong_query():
+    from apps.chat_data_app.schema import QuickSqlRequest
+
+    kwargs = {"datasource_id": "ds-1"}
+    with pytest.raises(ValidationError):
+        QuickSqlRequest(query="x" * 4001, **kwargs)
+    assert QuickSqlRequest(query="x" * 4000, **kwargs).query == "x" * 4000

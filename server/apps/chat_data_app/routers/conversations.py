@@ -58,13 +58,16 @@ SteerQueueType = Literal["next-step", "next-turn"]
 
 class SteerRequest(BaseModel):
     """运行中追加纯文本消息。"""
-    query: str
+    # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD 对齐：steering 语义是运行中追加短指令，
+    # 超长输入会原样进 state/checkpoint 每步重复落库，必须在入口拦下
+    query: str = Field(..., min_length=1, max_length=4000)
     queue_type: Optional[SteerQueueType] = None  # 缺省 next-turn：本轮结束后作为下一轮处理
 
 
 class SteerMessageUpdateRequest(BaseModel):
     """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
-    content: Optional[str] = None
+    # 编辑后的内容同样经 inbox 进 state/checkpoint，与 SteerRequest 同限
+    content: Optional[str] = Field(default=None, min_length=1, max_length=4000)
     queue_type: Optional[SteerQueueType] = None
 
 

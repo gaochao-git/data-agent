@@ -1685,6 +1685,52 @@
         "title": "QueryTaskCreateRequest",
         "type": "object"
       },
+      "QuestionAnswerItem": {
+        "properties": {
+          "custom": {
+            "default": "",
+            "title": "Custom",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "selected": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected",
+            "type": "array"
+          },
+          "skipped": {
+            "default": false,
+            "title": "Skipped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "QuestionAnswerItem",
+        "type": "object"
+      },
+      "QuestionAnswerRequest": {
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionAnswerItem"
+            },
+            "title": "Answers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answers"
+        ],
+        "title": "QuestionAnswerRequest",
+        "type": "object"
+      },
       "QuickSqlRequest": {
         "description": "快速 SQL 生成请求（用于 SQL 编辑器的 AI 辅助）",
         "properties": {
@@ -1715,6 +1761,7 @@
           },
           "query": {
             "description": "自然语言查询",
+            "maxLength": 4000,
             "minLength": 1,
             "title": "Query",
             "type": "string"
@@ -2651,6 +2698,72 @@
           "skill_title"
         ],
         "title": "SkillUpdateRequest",
+        "type": "object"
+      },
+      "SteerMessageUpdateRequest": {
+        "description": "编辑排队中的追加消息；content 和 queue_type 至少提供一个。",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "queue_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "next-step",
+                  "next-turn"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Type"
+          }
+        },
+        "title": "SteerMessageUpdateRequest",
+        "type": "object"
+      },
+      "SteerRequest": {
+        "description": "运行中追加纯文本消息。",
+        "properties": {
+          "query": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "queue_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "next-step",
+                  "next-turn"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Type"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SteerRequest",
         "type": "object"
       },
       "TableIndexItem": {
@@ -5172,7 +5285,7 @@
     },
     "/api/chatdata/conversations": {
       "get": {
-        "description": "获取会话列表\n\nGET /api/chatdata/conversations?agent_id=xxx&page=1&page_size=20\n\n参数：\n- agent_id: 可选，指定则只返回该智能体的会话，不指定则返回所有会话\n- agent_ids: 可选，逗号分隔，指定则返回这些智能体合并后的会话\n- page: 页码，从 1 开始\n- page_size: 每页数量\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"conversations\": [...], \"page\": 1, \"page_size\": 20, \"has_more\": false}\n}",
+        "description": "获取会话列表\n\nGET /api/chatdata/conversations?agent_id=xxx&page=1&page_size=20\n\n参数：\n- agent_id: 可选，指定则只返回该智能体的会话，不指定则返回所有会话\n- agent_ids: 可选，逗号分隔，指定则返回这些智能体合并后的会话\n- page: 平铺模式页码；分组模式仅作为前端展示页码\n- page_size: 每页数量\n- view: flat 为平铺列表，grouped 为按置顶/数据源分组\n- group_key: grouped 模式下指定分组时，仅查询该分组下一页\n- cursor: grouped 分组翻页游标，使用上一页返回的 next_cursor\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"conversations\": [...], \"page\": 1, \"page_size\": 20, \"has_more\": false}\n}\n\ngrouped 首屏返回全部分组的第一页；每个分组包含 has_more 和 next_cursor。",
         "operationId": "list_conversations_api_chatdata_conversations_get",
         "parameters": [
           {
@@ -5214,6 +5327,52 @@
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "flat",
+              "enum": [
+                "flat",
+                "grouped"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -5306,6 +5465,20 @@
             "required": true,
             "schema": {
               "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "full",
+              "enum": [
+                "full",
+                "timeline"
+              ],
+              "title": "View",
               "type": "string"
             }
           }
@@ -5500,6 +5673,54 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/pending-question": {
+      "get": {
+        "description": "读取 checkpoint 中等待当前用户回答的问题。",
+        "operationId": "get_pending_question_api_chatdata_conversations__conversation_id__pending_question_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Pending Question",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/query-results/{result_id}": {
       "get": {
         "description": "读取当前用户会话内卸载的大查询结果。",
@@ -5554,6 +5775,480 @@
         "summary": "Get Conversation Query Result",
         "tags": [
           "ChatData 会话工作区文件"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/questions/{question_id}/answer": {
+      "post": {
+        "description": "原子领取待回答问题并恢复原 LangGraph 运行。",
+        "operationId": "answer_question_api_chatdata_conversations__conversation_id__questions__question_id__answer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Answer Question",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/questions/{question_id}/cancel": {
+      "post": {
+        "description": "取消当前问题并让 Agent 自行决定如何收尾。",
+        "operationId": "cancel_question_api_chatdata_conversations__conversation_id__questions__question_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Cancel Question",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/run": {
+      "delete": {
+        "description": "停止当前 Agent 执行；未消费的队列消息保留给下一次 completion。",
+        "operationId": "cancel_active_run_api_chatdata_conversations__conversation_id__run_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Cancel Active Run",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/runs/{run_id}/events": {
+      "get": {
+        "description": "重新订阅后台 Run 的可重放 SSE 事件。",
+        "operationId": "stream_run_events_api_chatdata_conversations__conversation_id__runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Stream Run Events",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/steer": {
+      "get": {
+        "description": "读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。",
+        "operationId": "list_steer_messages_api_chatdata_conversations__conversation_id__steer_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Steer Messages",
+        "tags": [
+          "ChatData 会话"
+        ]
+      },
+      "post": {
+        "description": "向当前用户正在运行的 ChatData Agent 追加一条纯文本消息。",
+        "operationId": "steer_api_chatdata_conversations__conversation_id__steer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Steer",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/steer/{message_id}": {
+      "delete": {
+        "description": "删除仍在排队等待注入的追加消息。",
+        "operationId": "cancel_steer_message_api_chatdata_conversations__conversation_id__steer__message_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Cancel Steer Message",
+        "tags": [
+          "ChatData 会话"
+        ]
+      },
+      "put": {
+        "description": "编辑排队中的追加消息内容或切换队列类型。",
+        "operationId": "update_steer_message_api_chatdata_conversations__conversation_id__steer__message_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteerMessageUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Update Steer Message",
+        "tags": [
+          "ChatData 会话"
         ]
       }
     },

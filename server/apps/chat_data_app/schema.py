@@ -87,7 +87,8 @@ class NL2SQLRequest(BaseModel):
 
 class QuickSqlRequest(BaseModel):
     """快速 SQL 生成请求（用于 SQL 编辑器的 AI 辅助）"""
-    query: str = Field(..., min_length=1, description="自然语言查询")
+    # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD(4000) 对齐，防止超长输入进 checkpoint 膨胀
+    query: str = Field(..., min_length=1, max_length=4000, description="自然语言查询")
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
     conversation_id: Optional[str] = Field(default=None, description="SQL 辅助会话ID")
