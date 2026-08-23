@@ -43,6 +43,7 @@ def create_streaming_chat_model(
     *,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
     stream_usage: bool = False,
     llm_factory: Callable[..., BaseChatModel] = get_chat_data_llm,
 ) -> BaseChatModel:
@@ -51,6 +52,7 @@ def create_streaming_chat_model(
         "model": model_id,
         "streaming": True,
         "enable_thinking": enable_thinking,
+        "thinking_effort": thinking_effort,
     }
     if stream_usage:
         kwargs["stream_usage"] = True

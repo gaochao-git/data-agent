@@ -89,6 +89,7 @@ class ModelInvocationConfig:
     system_prompt: str | None = None
     model_id: str | None = None
     enable_thinking: bool | None = None
+    thinking_effort: str | None = None
 
 
 def assemble_tools(
@@ -159,6 +160,7 @@ def create_data_agent(
     operator_name = identity.operator_name
     model_id = invocation.model_id
     enable_thinking = invocation.enable_thinking
+    thinking_effort = invocation.thinking_effort
     runtime = workspace_runtime
     if runtime is None:
         workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
@@ -241,6 +243,7 @@ def create_data_agent(
         model=create_streaming_chat_model(
             model_id=model_id,
             enable_thinking=enable_thinking,
+            thinking_effort=thinking_effort,
             stream_usage=True,
             llm_factory=get_chat_data_llm,
         ),

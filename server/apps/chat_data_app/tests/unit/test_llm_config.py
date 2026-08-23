@@ -208,6 +208,30 @@ def test_resolve_thinking_matrix(capability, user_enabled, expected):
     assert llm_config.resolve_thinking(capability, user_enabled) == expected
 
 
+@pytest.mark.parametrize(
+    "capability,user_enabled,user_effort,expected",
+    [
+        # 用户档位在 efforts 内：生效
+        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
+                            efforts=("low", "medium", "high"), default_effort="high"),
+         True, "low", ("on", "low")),
+        # forced 也接受用户档位
+        (ThinkingCapability(mode="forced", dialect="openrouter",
+                            efforts=("low", "medium", "high"), default_effort="high"),
+         None, "medium", ("on", "medium")),
+        # 非法档位回退 default_effort
+        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
+                            efforts=("low", "high"), default_effort="high"),
+         True, "ultra", ("on", "high")),
+        # 模型未声明 efforts：用户档位被忽略
+        (ThinkingCapability(mode="forced", dialect="openrouter", default_effort=None),
+         None, "low", ("on", None)),
+    ],
+)
+def test_resolve_thinking_user_effort(capability, user_enabled, user_effort, expected):
+    assert llm_config.resolve_thinking(capability, user_enabled, user_effort) == expected
+
+
 # ---------------------------------------------------------------------------
 # 协议层：方言 × 决策 → extra_body 矩阵
 # ---------------------------------------------------------------------------

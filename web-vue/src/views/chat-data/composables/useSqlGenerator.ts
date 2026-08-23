@@ -72,41 +72,77 @@ export function useSqlGenerator() {
   }
 
   /**
-   * 流式生成 SQL（SSE）
+   * 流式生成 SQL（SSE）。
+   *
+   * 仅 4 个请求主体参数走位置传参；其余回调与可选项统一收进 options，
+   * 避免位置参数膨胀导致插参错位。
    */
   const generateSqlStream = async (
     query: string,
     returnMetadata: boolean,
     datasourceId: string | null,
     conversationId: string | null | undefined,
-    mode: 'generate' | 'query' = 'query',
-    onMessage?: (message: LangGraphMessage) => void,
-    onResult?: (result: NL2SQLResult) => void,
-    onStatus?: (status: string, message: string) => void,
-    onError?: (error: string) => void,
-    onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void,
-    semanticConfigId?: string | null,
-    modelId?: string | null,
-    memberDatasourceIds?: string[],
-    agentId: string = 'chat_data',
-    skillName?: string | null,
-    onDashboardSpec?: (payload: DashboardSpecPayload) => void,
-    onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
-    onTokenUsage?: (payload: ChatDataTokenUsage) => void,
-    semanticConfigSelection?: SemanticConfigSelectionInfo | null,
-    enableThinking?: boolean | null,
-    runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null,
-    onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
-    fileIds?: string[],
-    onToolLifecycle?: (payload: ToolLifecycleEventData) => void,
-    onInboxAdmitted?: (messageIds: string[]) => void,
-    onQuestionRequested?: (question: PendingUserQuestion) => void,
-    onRunStarted?: (runId: string) => void,
-    responseFactory?: (signal: AbortSignal) => Promise<Response>,
-    onRunEvent?: (eventId: string) => void,
-    onFirstEvent?: () => void,
-    onRunRestarted?: () => void | Promise<void>,
+    options: {
+      mode?: 'generate' | 'query'
+      onMessage?: (message: LangGraphMessage) => void
+      onResult?: (result: NL2SQLResult) => void
+      onStatus?: (status: string, message: string) => void
+      onError?: (error: string) => void
+      onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void
+      semanticConfigId?: string | null
+      modelId?: string | null
+      memberDatasourceIds?: string[]
+      agentId?: string
+      skillName?: string | null
+      onDashboardSpec?: (payload: DashboardSpecPayload) => void
+      onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
+      onTokenUsage?: (payload: ChatDataTokenUsage) => void
+      semanticConfigSelection?: SemanticConfigSelectionInfo | null
+      enableThinking?: boolean | null
+      thinkingEffort?: string | null
+      runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
+      onContextCompression?: (payload: ChatDataContextCompressionEvent) => void
+      fileIds?: string[]
+      onToolLifecycle?: (payload: ToolLifecycleEventData) => void
+      onInboxAdmitted?: (messageIds: string[]) => void
+      onQuestionRequested?: (question: PendingUserQuestion) => void
+      onRunStarted?: (runId: string) => void
+      responseFactory?: (signal: AbortSignal) => Promise<Response>
+      onRunEvent?: (eventId: string) => void
+      onFirstEvent?: () => void
+      onRunRestarted?: () => void | Promise<void>
+    } = {},
   ): Promise<void> => {
+    const {
+      mode = 'query',
+      onMessage,
+      onResult,
+      onStatus,
+      onError,
+      onRunningTool,
+      semanticConfigId,
+      modelId,
+      memberDatasourceIds,
+      agentId = 'chat_data',
+      skillName,
+      onDashboardSpec,
+      onMessageEnd,
+      onTokenUsage,
+      semanticConfigSelection,
+      enableThinking,
+      thinkingEffort,
+      runtimeOptions,
+      onContextCompression,
+      fileIds,
+      onToolLifecycle,
+      onInboxAdmitted,
+      onQuestionRequested,
+      onRunStarted,
+      responseFactory,
+      onRunEvent,
+      onFirstEvent,
+      onRunRestarted,
+    } = options
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
       return
@@ -126,6 +162,10 @@ export function useSqlGenerator() {
       // 三态：仅用户显式选择时携带；未触碰（null）交给服务端按注册表 default_on 落点
       if (enableThinking === true || enableThinking === false) {
         options.enable_thinking = enableThinking
+      }
+      // 档位：用户显式选择时携带，非法值由后端回退 default_effort
+      if (thinkingEffort) {
+        options.thinking_effort = thinkingEffort
       }
 
       // 仅当服务端允许用户覆盖时，runtime_options 才会改变实际运行配置。

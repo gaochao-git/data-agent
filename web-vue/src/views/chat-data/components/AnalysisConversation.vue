@@ -75,7 +75,7 @@ const selectedModel = computed({
   get: () => props.selectedModelId || '',
   set: (value: string) => emit('update:selectedModelId', value),
 })
-const { enableDeepThinking } = useDeepThinking()
+const { enableDeepThinking, thinkingEffort } = useDeepThinking()
 
 const messages = ref<Message[]>([])
 const input = ref('')
@@ -2263,105 +2263,107 @@ const submitAnalysisQuery = async (
       true,
       selectedDatasource.value,
       resolvedConversationId,
-      'query',
-      (msg) => handleLangGraphMessage(msg),
-      () => {
-        finalizeUnfinishedToolCalls('completed')
-        finishStreamingMessages()
-        scheduleWorkspaceFilesRefresh()
-      },
-      () => {},
-      (error) => {
-        if (options.interruptedQuestion) {
-          pendingUserQuestion.value = options.interruptedQuestion
+      {
+        mode: 'query',
+        onMessage: (msg) => handleLangGraphMessage(msg),
+        onResult: () => {
+          finalizeUnfinishedToolCalls('completed')
+          finishStreamingMessages()
+          scheduleWorkspaceFilesRefresh()
+        },
+        onStatus: () => {},
+        onError: (error) => {
+          if (options.interruptedQuestion) {
+            pendingUserQuestion.value = options.interruptedQuestion
+            const active = activeAssistantMessageId.value
+              ? messages.value.find(item => item.id === activeAssistantMessageId.value)
+              : null
+            if (active?.role === 'assistant') active.isStreaming = false
+            ElMessage.error(error || '提交回答失败')
+            return
+          }
+          finalizeUnfinishedToolCalls('error', error)
+          setActiveAssistantError(error)
+        },
+        onRunningTool: (toolInfo) => {
+          if (!toolInfo.tool_call_id) return
+          const existing = toolCallsMap.value.get(toolInfo.tool_call_id)
+          const updated: ToolCallInfo = {
+            tool_call_id: toolInfo.tool_call_id,
+            tool_name: toolInfo.tool_name || existing?.tool_name || 'tool_call',
+            args: { ...(existing?.args || {}), ...(toolInfo.args || {}) },
+            result: existing?.result,
+            status: 'running',
+          }
+          upsertToolMessage(updated)
+        },
+        semanticConfigId: options.semanticConfigIdOverride !== undefined ? options.semanticConfigIdOverride : (props.semanticConfigId || null),
+        modelId: selectedModelValue.value,
+        memberDatasourceIds: selectedMemberDatasourceIds.value,
+        agentId: 'chat_data',
+        skillName: options.skillName || null,
+        onMessageEnd: (payload) => {
+          if (payload.usage) tokenUsage.value = payload.usage
+          updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
+        },
+        onTokenUsage: (usage) => {
+          tokenUsage.value = usage
+        },
+        semanticConfigSelection: effectiveSemanticConfigSelection,
+        enableThinking: enableDeepThinking.value,
+        thinkingEffort: thinkingEffort.value,
+        runtimeOptions: selectedRuntimeOptions.value,
+        onContextCompression: (event) => appendContextCompressionEvent(event),
+        fileIds: options.fileIds,
+        onToolLifecycle: (event) => {
+          if (!event.tool_call_id) return
+          const existing = toolCallsMap.value.get(event.tool_call_id)
+          const isFailed = event.type === 'tool_failed'
+          const isCompleted = event.type === 'tool_completed'
+          const toolInfo: ToolCallInfo = {
+            tool_call_id: event.tool_call_id,
+            tool_name: event.tool_name || existing?.tool_name || 'tool_call',
+            args: { ...(existing?.args || {}), ...(event.args || {}) },
+            result: event.content || event.result || existing?.result,
+            progressMessage: event.message || existing?.progressMessage,
+            progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
+            status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
+          }
+          upsertToolMessage(toolInfo)
+        },
+        onInboxAdmitted: (messageIds) => {
+          admittedInboxMessageIds.value = new Set([...admittedInboxMessageIds.value, ...messageIds])
+          admitPendingMessages(messageIds)
+        },
+        onQuestionRequested: (question) => {
+          pendingUserQuestion.value = question
+          hasActiveRun.value = true
+          emit('runStatusChanged', resolvedConversationId, 'waiting_user')
           const active = activeAssistantMessageId.value
             ? messages.value.find(item => item.id === activeAssistantMessageId.value)
             : null
           if (active?.role === 'assistant') active.isStreaming = false
-          ElMessage.error(error || '提交回答失败')
-          return
-        }
-        finalizeUnfinishedToolCalls('error', error)
-        setActiveAssistantError(error)
-      },
-      (toolInfo) => {
-        if (!toolInfo.tool_call_id) return
-        const existing = toolCallsMap.value.get(toolInfo.tool_call_id)
-        const updated: ToolCallInfo = {
-          tool_call_id: toolInfo.tool_call_id,
-          tool_name: toolInfo.tool_name || existing?.tool_name || 'tool_call',
-          args: { ...(existing?.args || {}), ...(toolInfo.args || {}) },
-          result: existing?.result,
-          status: 'running',
-        }
-        upsertToolMessage(updated)
-      },
-      options.semanticConfigIdOverride !== undefined ? options.semanticConfigIdOverride : (props.semanticConfigId || null),
-      selectedModelValue.value,
-      selectedMemberDatasourceIds.value,
-      'chat_data',
-      options.skillName || null,
-      undefined,
-      (payload) => {
-        if (payload.usage) tokenUsage.value = payload.usage
-        updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
-      },
-      (usage) => {
-        tokenUsage.value = usage
-      },
-      effectiveSemanticConfigSelection,
-      enableDeepThinking.value,
-      selectedRuntimeOptions.value,
-      (event) => appendContextCompressionEvent(event),
-      options.fileIds,
-      (event) => {
-        if (!event.tool_call_id) return
-        const existing = toolCallsMap.value.get(event.tool_call_id)
-        const isFailed = event.type === 'tool_failed'
-        const isCompleted = event.type === 'tool_completed'
-        const toolInfo: ToolCallInfo = {
-          tool_call_id: event.tool_call_id,
-          tool_name: event.tool_name || existing?.tool_name || 'tool_call',
-          args: { ...(existing?.args || {}), ...(event.args || {}), ...(event.accumulated_args || {}) },
-          result: event.content || event.result || existing?.result,
-          progressMessage: event.message || existing?.progressMessage,
-          progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
-          status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
-        }
-        upsertToolMessage(toolInfo)
-      },
-      (messageIds) => {
-        admittedInboxMessageIds.value = new Set([...admittedInboxMessageIds.value, ...messageIds])
-        admitPendingMessages(messageIds)
-      },
-      (question) => {
-        pendingUserQuestion.value = question
-        hasActiveRun.value = true
-        emit('runStatusChanged', resolvedConversationId, 'waiting_user')
-        const active = activeAssistantMessageId.value
-          ? messages.value.find(item => item.id === activeAssistantMessageId.value)
-          : null
-        if (active?.role === 'assistant') active.isStreaming = false
-      },
-      (runId) => {
-        startedRunId = runId
-        if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
-        activeRunId.value = runId
-        saveOwnedRun(resolvedConversationId, runId)
-        emit('runStatusChanged', resolvedConversationId, 'active')
-      },
-      options.responseFactory,
-      (eventId) => {
-        activeRunEventId.value = eventId
-        window.sessionStorage.setItem(runEventIdStorageKey(resolvedConversationId, activeRunId.value || ''), eventId)
-      },
-      () => {
-        if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
-      },
-      async () => {
-        activeAssistantMessageId.value = null
-        await loadHistory(resolvedConversationId, true)
-        syncHistoryToolCalls()
+        },
+        onRunStarted: (runId) => {
+          startedRunId = runId
+          if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
+          activeRunId.value = runId
+          saveOwnedRun(resolvedConversationId, runId)
+          emit('runStatusChanged', resolvedConversationId, 'active')
+        },
+        responseFactory: options.responseFactory,
+        onRunEvent: (eventId) => {
+          activeRunEventId.value = eventId
+          window.sessionStorage.setItem(runEventIdStorageKey(resolvedConversationId, activeRunId.value || ''), eventId)
+        },
+        onFirstEvent: () => {
+          if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
+        },
+        onRunRestarted: async () => {
+          activeAssistantMessageId.value = null
+          await loadHistory(resolvedConversationId, true)
+          syncHistoryToolCalls()
+        },
       },
     )
   } catch (err) {
@@ -2902,6 +2904,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             v-model:input="input"
             v-model:selected-model="selectedModel"
             v-model:enable-deep-thinking="enableDeepThinking"
+            v-model:thinking-effort="thinkingEffort"
             :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能' : '请输入任务，输入 / 可选择技能'"
             :selected-skill-title="selectedSkillTitle"
             :runtime-options="selectedRuntimeOptions"

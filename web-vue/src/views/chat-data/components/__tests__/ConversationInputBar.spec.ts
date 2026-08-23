@@ -10,6 +10,7 @@ const mountInput = (isGenerating: boolean) => mount(ConversationInputBar, {
     selectedModel: 'model-a',
     modelOptions: [{ id: 'model-a', label: '模型 A' }],
     enableDeepThinking: false,
+    thinkingEffort: null,
     isGenerating,
     canSubmit: false,
   },
@@ -33,6 +34,7 @@ describe('ConversationInputBar deep thinking switch', () => {
   const mountWithThinking = (
     enableDeepThinking: boolean | null,
     thinking?: { mode: 'none' | 'optional' | 'forced'; efforts: string[]; default_on: boolean; default_effort: string | null },
+    thinkingEffort: string | null = null,
   ) => mount(ConversationInputBar, {
     props: {
       input: '',
@@ -40,6 +42,7 @@ describe('ConversationInputBar deep thinking switch', () => {
       selectedModel: 'model-a',
       modelOptions: [{ id: 'model-a', label: '模型 A', thinking }],
       enableDeepThinking,
+      thinkingEffort,
       isGenerating: false,
       canSubmit: false,
     },
@@ -87,5 +90,76 @@ describe('ConversationInputBar deep thinking switch', () => {
     await sw.trigger('click')
 
     expect(wrapper.emitted('update:enableDeepThinking')).toBeUndefined()
+  })
+})
+
+describe('ConversationInputBar thinking effort selector', () => {
+  const mountWithEfforts = (
+    thinkingEffort: string | null,
+    enableDeepThinking: boolean | null = null,
+  ) => mount(ConversationInputBar, {
+    props: {
+      input: '',
+      placeholder: '输入问题',
+      selectedModel: 'model-a',
+      modelOptions: [{
+        id: 'model-a',
+        label: '模型 A',
+        thinking: { mode: 'forced', efforts: ['low', 'medium', 'high'], default_on: true, default_effort: 'high' },
+      }],
+      enableDeepThinking,
+      thinkingEffort,
+      isGenerating: false,
+      canSubmit: false,
+    },
+  })
+
+  const openMenuAndFindSelector = async (wrapper: ReturnType<typeof mountWithEfforts>) => {
+    // 档位选择器位于模型设置下拉内，需先展开
+    await wrapper.find('[title="模型设置"]').trigger('click')
+    return wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考等级'))
+  }
+
+  it('hides the selector when model declares no efforts', async () => {
+    const wrapper = mount(ConversationInputBar, {
+      props: {
+        input: '',
+        placeholder: '输入问题',
+        selectedModel: 'model-a',
+        modelOptions: [{
+          id: 'model-a',
+          label: '模型 A',
+          thinking: { mode: 'optional', efforts: [], default_on: false, default_effort: null },
+        }],
+        enableDeepThinking: null,
+        thinkingEffort: null,
+        isGenerating: false,
+        canSubmit: false,
+      },
+    })
+
+    await wrapper.find('[title="模型设置"]').trigger('click')
+
+    expect((await openMenuAndFindSelector(wrapper)).length).toBe(0)
+  })
+
+  it('falls back to default_effort for highlight when user has not chosen', async () => {
+    const wrapper = mountWithEfforts(null)
+
+    const buttons = await openMenuAndFindSelector(wrapper)
+
+    const highlighted = buttons.find(b => b.classes().includes('text-blue-600'))
+    expect(highlighted?.text()).toBe('高')
+  })
+
+  it('emits the picked effort on click', async () => {
+    const wrapper = mountWithEfforts(null)
+
+    const buttons = await openMenuAndFindSelector(wrapper)
+    const low = buttons.find(b => b.text() === '低')!
+
+    await low.trigger('click')
+
+    expect(wrapper.emitted('update:thinkingEffort')?.[0]).toEqual(['low'])
   })
 })

@@ -28,6 +28,8 @@ interface Props {
   modelOptions: ModelOption[]
   /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
   enableDeepThinking: boolean | null
+  /** 思考档位；null 未选择（展示回退模型 default_effort）。 */
+  thinkingEffort: string | null
   isGenerating: boolean
   canSubmit: boolean
   inputFocused?: boolean
@@ -66,6 +68,7 @@ const emit = defineEmits<{
   'update:input': [value: string]
   'update:selectedModel': [value: string]
   'update:enableDeepThinking': [value: boolean]
+  'update:thinkingEffort': [value: string]
   'update:runtime-options': [value: ChatDataRuntimeOptions]
 }>()
 
@@ -172,6 +175,21 @@ const deepThinkingTitle = computed(() => {
 const toggleDeepThinking = () => {
   if (thinkingLocked.value) return
   emit('update:enableDeepThinking', !thinkingDisplayOn.value)
+}
+
+// ---- 思考档位选择器：仅模型声明了 efforts 且思考展示为开时出现 ----
+const EFFORT_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' }
+const thinkingEffortOptions = computed(() => selectedModelThinking.value?.efforts ?? [])
+/** 档位展示态：用户显式选择优先，未选择回退模型 default_effort。 */
+const thinkingEffortDisplay = computed(
+  () => props.thinkingEffort ?? selectedModelThinking.value?.default_effort ?? null
+)
+const showEffortSelector = computed(
+  () => thinkingDisplayOn.value && thinkingEffortOptions.value.length > 0
+)
+
+const selectThinkingEffort = (effort: string) => {
+  emit('update:thinkingEffort', effort)
 }
 
 const handleDocumentClick = (event: MouseEvent) => {
@@ -350,7 +368,7 @@ onBeforeUnmount(() => {
                 <span
                   :class="[
                     'model-trigger-label max-w-[150px] truncate',
-                    enableDeepThinking ? 'text-blue-600' : 'text-gray-500'
+                    thinkingDisplayOn ? 'text-blue-600' : 'text-gray-500'
                   ]"
                 >
                   {{ selectedModelLabel }}
@@ -397,13 +415,32 @@ onBeforeUnmount(() => {
                       ]"
                     ></i>
                     <span class="truncate">深度思考</span>
-                    <span v-if="selectedModelThinking?.mode === 'forced'" class="shrink-0 text-[10px] text-gray-400">始终开启</span>
-                    <span v-else-if="selectedModelThinking?.mode === 'none'" class="shrink-0 text-[10px] text-gray-400">不支持</span>
                   </span>
                   <span :class="['deep-thinking-switch', thinkingDisplayOn && 'deep-thinking-switch-on', thinkingLocked && 'opacity-50']">
                     <span class="deep-thinking-switch-thumb"></span>
                   </span>
                 </button>
+                <!-- 思考档位：模型声明了 efforts 且思考开启时展示 -->
+                <div v-if="showEffortSelector" class="mt-1.5 flex items-center gap-1.5 px-2 pb-0.5">
+                  <span class="shrink-0 text-[10px] text-gray-400">思考等级</span>
+                  <div class="flex flex-1 items-center gap-0.5 rounded-md bg-gray-100 p-0.5">
+                    <button
+                      v-for="effort in thinkingEffortOptions"
+                      :key="effort"
+                      type="button"
+                      class="flex-1 rounded-[5px] border-none px-1.5 py-1 text-[11px] leading-none cursor-pointer transition-colors duration-150"
+                      :class="
+                        thinkingEffortDisplay === effort
+                          ? 'bg-white text-blue-600 shadow-[0_1px_3px_rgba(0,0,0,0.12)] font-medium'
+                          : 'bg-transparent text-gray-500 hover:text-gray-700'
+                      "
+                      :title="`思考等级：${EFFORT_LABELS[effort] ?? effort}`"
+                      @click="selectThinkingEffort(effort)"
+                    >
+                      {{ EFFORT_LABELS[effort] ?? effort }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

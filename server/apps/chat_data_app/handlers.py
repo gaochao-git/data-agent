@@ -288,6 +288,14 @@ def _normalize_enable_thinking(value: Any) -> bool | None:
     return None
 
 
+def _normalize_thinking_effort(value: Any) -> str | None:
+    """归一化思考档位；非法值返回 None（由 resolve_thinking 回退 default_effort）。"""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized or None
+    return None
+
+
 async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any], state: Any | None) -> Any | None:
     """为 create_agent 产生的最新 AIMessage 补充完成时间，保持历史消息时间口径一致。"""
     values = getattr(state, "values", None) if state is not None else None
@@ -1065,6 +1073,7 @@ async def _generate_chat_data_stream(
     model_id: str | None = None,
     semantic_config_selection: dict | None = None,
     enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
     skill_names: list[str] | None = None,
     options: Optional[Dict[str, Any]] = None,
     file_ids: list[str] | None = None,
@@ -1121,6 +1130,7 @@ async def _generate_chat_data_stream(
             model_id=model_id,
             semantic_config_selection=semantic_config_selection,
             enable_thinking=enable_thinking,
+            thinking_effort=thinking_effort,
             skill_names=normalized_skill_names,
             options=options,
             file_ids=file_ids,
@@ -1218,6 +1228,7 @@ async def _run_chat_data_agent_stream(
     model_id: str | None,
     semantic_config_selection: dict | None,
     enable_thinking: bool | None,
+    thinking_effort: str | None,
     skill_names: list[str],
     options: Optional[Dict[str, Any]],
     file_ids: list[str] | None,
@@ -1475,6 +1486,7 @@ async def _run_chat_data_agent_stream(
                     system_prompt=system_prompt,
                     model_id=model_id,
                     enable_thinking=enable_thinking,
+                    thinking_effort=thinking_effort,
                 ),
                 workspace_runtime=workspace_runtime,
                 run_controls=AgentRunControls(
@@ -1659,6 +1671,7 @@ async def sql_completion_handler(
     semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None  # 语义配置 ID（可选）
     model_id = options_data.get("model_id")  # 模型选择（可选）
     enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
+    thinking_effort = _normalize_thinking_effort(options_data.get("thinking_effort"))
     member_datasource_ids = options_data.get("member_datasource_ids") or []
     semantic_config_selection = options_data.get("semantic_config_selection")
     raw_skill_names = options_data.get("skill_names") or []
@@ -1679,6 +1692,7 @@ async def sql_completion_handler(
         "model_id": model_id,
         "semantic_config_selection": semantic_config_selection,
         "enable_thinking": enable_thinking,
+        "thinking_effort": thinking_effort,
         "skill_names": skill_names,
         "operator_name": username or user_id,
         "options": options_data,

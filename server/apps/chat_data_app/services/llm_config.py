@@ -264,27 +264,37 @@ def get_chat_data_temperature(model: str | None = None) -> float:
 def resolve_thinking(
     capability: ThinkingCapability,
     user_enabled: bool | None,
+    user_effort: str | None = None,
 ) -> tuple[str, str | None]:
     """唯一裁决点：模型能力 × 用户意图 → ('omit', None) | ('on', level|None) | ('off', None)。
 
     forced 模式忽略用户关闭请求（永不产生"关"形态）；optional 未传时按
-    default_on 落点；none 一律不发。
+    default_on 落点；none 一律不发。用户档位仅在模型声明了 efforts 且
+    包含该档位时生效，否则回退 default_effort。
     """
     if capability.mode == THINKING_MODE_NONE:
         return ("omit", None)
     if capability.mode == THINKING_MODE_FORCED:
-        return ("on", capability.default_effort)
+        return ("on", _pick_effort(capability, user_effort))
     # optional
     wants = capability.default_on if user_enabled is None else bool(user_enabled)
-    return ("on", capability.default_effort) if wants else ("off", None)
+    return ("on", _pick_effort(capability, user_effort)) if wants else ("off", None)
+
+
+def _pick_effort(capability: ThinkingCapability, user_effort: str | None) -> str | None:
+    """档位裁决：用户显式选择优先，但必须在注册表声明的 efforts 内。"""
+    if user_effort and user_effort in capability.efforts:
+        return user_effort
+    return capability.default_effort
 
 
 def _get_chat_data_extra_body(
     capability: ThinkingCapability,
     enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
 ) -> dict[str, Any]:
     """按方言把思考决策序列化为 extra_body；omit 时不含任何思考键。"""
-    decision, level = resolve_thinking(capability, enable_thinking)
+    decision, level = resolve_thinking(capability, enable_thinking, thinking_effort)
     extra_body: dict[str, Any] = {}
     if decision == "omit":
         return extra_body
@@ -342,6 +352,7 @@ def get_chat_data_llm(
     max_tokens: int | None = None,
     timeout: int | None = None,
     enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
 ) -> BaseChatModel:
     """读取模型注册表创建智能问数专用 LLM。"""
     selected_model = model or get_default_chat_data_model()
@@ -356,6 +367,8 @@ def get_chat_data_llm(
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),
         extra_body=_get_chat_data_extra_body(
-            selected_config["thinking"], enable_thinking=enable_thinking
+            selected_config["thinking"],
+            enable_thinking=enable_thinking,
+            thinking_effort=thinking_effort,
         ),
     )

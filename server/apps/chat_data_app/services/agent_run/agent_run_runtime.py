@@ -162,6 +162,7 @@ class AgentRunRuntime:
                 model_id=context.get("model_id"),
                 semantic_config_selection=context.get("semantic_config_selection"),
                 enable_thinking=context.get("enable_thinking"),
+                thinking_effort=context.get("thinking_effort"),
                 skill_names=context.get("skill_names") or [],
                 options=context.get("options") or {},
                 file_ids=context.get("file_ids"),
