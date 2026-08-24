@@ -35,6 +35,31 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ## 核心查询链路
 
+三条 SQL 来源链路（SQL 查询、可视化查询、数据智能体）在服务端汇入同一执行内核，安全校验、执行记录、缓存与历史能力全链路共用：
+
+```text
+SQL 查询（人工写 SQL）──────────────┐
+                                    │
+可视化查询（前端配置）─ 编译 DSL→SQL ─┤
+                                    ├──> prepare 校验（单语句 + 类型白名单 + 危险 SQL 告警）
+数据智能体（模型写 SQL 或 DSL）──────┘         │
+  ├─ 模型直接写 SQL：原文进校验                ↓
+  └─ 模型写 DSL：compile_semantic_ai_dsl   create_query_task + 预创建执行记录（查询历史可见）
+       编译成 SQL 后同样进校验                ↓
+                                          execute_sql_for_member（并发执行各成员数据源）
+                                            ├─ 结果缓存（含 HTTP 远端引用缓存与失效重查降级）
+                                            ├─ executor 边界二次校验 + 自动追加 LIMIT + 超时控制
+                                            └─ 取消检查（语句间 + 执行前双重检查）
+                                               ↓
+                                          任务状态聚合 + 结果落库 + 查询历史
+```
+
+要点：
+
+- 差异只在 SQL 来源；来源之后所有链路走同一套 `prepare_sql_request_for_execution()` → `execute_sql_for_member()` 管道，不存在绕过安全边界的旁路。
+- 可视化查询与数据智能体的 DSL 编译分别在服务端完成（`compile_semantic_builder_sql()` / `compile_semantic_ai_dsl()`），编译产物 SQL 与人工 SQL 适用完全相同的校验标准。
+- 各链路的详细调用链见下方分节。
+
 ## 会话历史与上下文压缩
 
 智能问数与智能分析将模型运行态和用户可见历史分开保存：
