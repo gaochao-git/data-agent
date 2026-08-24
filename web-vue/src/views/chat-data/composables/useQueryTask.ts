@@ -1,6 +1,5 @@
-import { cancelQueryTask, createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
+import { createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
 const DEFAULT_POLL_INTERVAL_MS = 1500
 
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
@@ -21,7 +20,6 @@ interface SubmitSqlTaskParams {
 
 interface WaitTaskOptions {
   pollIntervalMs?: number
-  timeoutMs?: number
   returnTerminalTask?: boolean
   onProgress?: (task: QueryTaskStatusResult) => void
 }
@@ -29,9 +27,9 @@ interface WaitTaskOptions {
 export function useQueryTask() {
   const waitForTask = async (taskId: string, options: WaitTaskOptions = {}) => {
     const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-    const startedAt = Date.now()
 
+    // 查询超时由后端 executor 层控制（MySQL/Hive 各有默认超时，可配置）。
+    // 前端只负责轮询到终态，不主动停止任务；长任务可在查询历史中手动停止。
     while (true) {
       const response = await getQueryTask(taskId)
       const task = response.data
@@ -50,14 +48,6 @@ export function useQueryTask() {
       if (task.status === 'failed') {
         if (options.returnTerminalTask) return task
         throw new Error(task.error_message || '任务执行失败')
-      }
-      if (Date.now() - startedAt > timeoutMs) {
-        try {
-          await cancelQueryTask(taskId)
-        } catch {
-          // 取消失败不覆盖超时提示，任务仍可从查询历史中手动停止。
-        }
-        throw new Error('任务执行超时，已提交停止请求')
       }
 
       await sleep(Math.max(500, pollIntervalMs))
