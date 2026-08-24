@@ -568,13 +568,10 @@ def _normalize_dashboard_style_color(value: Any) -> Optional[str]:
 
 def normalize_dashboard_card_chart_config(card: Dict[str, Any]) -> Dict[str, Any]:
     """提取模型可选择的前端图表样式配置。"""
-    dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     chart_config = card.get("chart_config") if isinstance(card.get("chart_config"), dict) else {}
     result: Dict[str, Any] = {
         "purpose": card.get("purpose") or "",
         "diagnosis": card.get("diagnosis") or "",
-        "metrics": card.get("metrics") or dsl.get("metrics") or [],
-        "dimensions": card.get("dimensions") or dsl.get("dimensions") or [],
     }
     kpi_icon = str(chart_config.get("kpiIcon") or "").strip()
     if kpi_icon in DASHBOARD_ALLOWED_KPI_ICONS:

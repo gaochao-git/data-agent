@@ -381,15 +381,15 @@ def test_normalize_dashboard_card_chart_config_keeps_allowed_style_options():
             "lineStyle": "smooth",
             "unsafe": "ignored",
         },
-        "dsl": {"metrics": ["风险事件数"], "dimensions": []},
     })
 
     assert config["kpiIcon"] == "fa-bolt"
     assert config["kpiColor"] == "#ffdc3d"
     assert config["chartColor"] == "#00e5ff"
     assert config["lineStyle"] == "smooth"
-    assert config["metrics"] == ["风险事件数"]
     assert "unsafe" not in config
+    assert "metrics" not in config
+    assert "dimensions" not in config
 
 
 def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
@@ -401,7 +401,6 @@ def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
             "lineStyle": "curved",
             "xField": "月份",
         },
-        "dsl": {"metrics": ["订单金额"], "dimensions": ["月份"]},
     })
 
     assert "kpiIcon" not in config
