@@ -41,8 +41,10 @@ timeout = _env_int("GUNICORN_TIMEOUT", 900)
 graceful_timeout = _env_int("GUNICORN_GRACEFUL_TIMEOUT", 30)
 keepalive = _env_int("GUNICORN_KEEPALIVE", 5)
 
-max_requests = _env_int("GUNICORN_MAX_REQUESTS", 1000)
-max_requests_jitter = _env_int("GUNICORN_MAX_REQUESTS_JITTER", 50)
+# Agent Run 在 worker 进程内以 asyncio task 长时间运行；按请求数回收 worker
+# 会在长任务未完成时触发计划内中断。内存治理交给进程级监控和发布重启。
+max_requests = 0
+max_requests_jitter = 0
 preload_app = False
 
 accesslog = None
