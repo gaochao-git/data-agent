@@ -479,12 +479,20 @@ interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>
   messages: Ref<Message[]>
   tokenUsage?: Ref<ChatDataTokenUsage | null>
+  onActiveRunLoaded?: (activeRun: {
+    run_id: string
+    status: string
+    turn_id?: string | null
+    is_continuation?: boolean
+    history_checkpoint?: { run_id?: string; stream_id?: string } | null
+  } | null) => void
 }
 
 export function useConversationHistory({
   conversationId,
   messages,
   tokenUsage,
+  onActiveRunLoaded,
 }: UseConversationHistoryOptions) {
   const isLoadingHistory = ref(false)
   const loadedConversationId = ref<string | null>(null)
@@ -515,6 +523,7 @@ export function useConversationHistory({
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
         const historyTokenUsage = data.data?.token_usage
         tokenUsage && (tokenUsage.value = historyTokenUsage && typeof historyTokenUsage === 'object' ? historyTokenUsage as ChatDataTokenUsage : null)
+        onActiveRunLoaded?.(normalizeActiveRun(data.data?.active_run))
 
         messages.value = Array.isArray(historyEvents) && historyEvents.length > 0
           ? buildHistoryMessagesFromEvents(historyEvents)
@@ -559,6 +568,34 @@ export function useConversationHistory({
     isFirstMessage,
     loadHistory,
     resetHistory,
+  }
+}
+
+const normalizeActiveRun = (value: unknown): {
+  run_id: string
+  status: string
+  turn_id?: string | null
+  is_continuation?: boolean
+  history_checkpoint?: { run_id?: string; stream_id?: string } | null
+} | null => {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const runId = String(raw.run_id || '').trim()
+  const status = String(raw.status || '').trim()
+  if (!runId || !status) return null
+  const rawCheckpoint = raw.history_checkpoint
+  const checkpoint = rawCheckpoint && typeof rawCheckpoint === 'object'
+    ? rawCheckpoint as Record<string, unknown>
+    : null
+  const streamId = String(checkpoint?.stream_id || '').trim()
+  return {
+    run_id: runId,
+    status,
+    turn_id: String(raw.turn_id || '').trim() || null,
+    is_continuation: raw.is_continuation === true,
+    history_checkpoint: streamId
+      ? { run_id: String(checkpoint?.run_id || runId), stream_id: streamId }
+      : null,
   }
 }
 

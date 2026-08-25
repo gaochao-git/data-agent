@@ -1,15 +1,18 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from apps.chat_data_app.services.agent_run.conversation_event_service import ConversationEventService
-from utils.models import Base, UserThread
+from apps.chat_data_app.services.agent_run.agent_inbox_service import AgentRunLeaseLostError
+from utils.models import Base, ChatDataAgentInbox, ChatDataConversationEvent, UserThread
 
 
 @pytest.fixture()
@@ -47,13 +50,14 @@ def conversation_event_service():
                 update_by_name=user_id,
             ))
 
-    yield ConversationEventService(ConversationEventDao(session_context=lambda: get_test_session())), create_thread
+    service = ConversationEventService(ConversationEventDao(session_context=lambda: get_test_session()))
+    yield service, create_thread, get_test_session
     asyncio.run(engine.dispose())
 
 
 @pytest.mark.asyncio
 async def test_event_history_is_ordered_and_idempotent_across_turns(conversation_event_service):
-    service, create_thread = conversation_event_service
+    service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-1", "user-1")
 
     first_user = HumanMessage(content="查询订单", id="turn-1", additional_kwargs={"timestamp": "2026-07-24 10:00:00"})
@@ -144,7 +148,7 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
 
 @pytest.mark.asyncio
 async def test_token_usage_is_single_upserted_row_per_conversation(conversation_event_service):
-    service, create_thread = conversation_event_service
+    service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-usage", "user-1")
 
     for turn_index, used in enumerate((80, 35, 60), start=1):
@@ -189,7 +193,7 @@ async def test_token_usage_is_single_upserted_row_per_conversation(conversation_
 
 @pytest.mark.asyncio
 async def test_event_history_is_scoped_to_conversation_owner(conversation_event_service):
-    service, create_thread = conversation_event_service
+    service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-owner", "user-1")
     message = HumanMessage(content="只属于用户一", id="turn-owner")
 
@@ -206,7 +210,7 @@ async def test_event_history_is_scoped_to_conversation_owner(conversation_event_
 
 @pytest.mark.asyncio
 async def test_context_compression_event_is_anchored_and_idempotent(conversation_event_service):
-    service, create_thread = conversation_event_service
+    service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-compression", "user-1")
     user_message = HumanMessage(content="继续分析", id="turn-1")
     tool_message = ToolMessage(
@@ -264,7 +268,7 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
 
 @pytest.mark.asyncio
 async def test_repeated_turn_snapshot_updates_existing_message(conversation_event_service):
-    service, create_thread = conversation_event_service
+    service, create_thread, get_session = conversation_event_service
     await create_thread("conv-snapshot", "user-1")
     user_message = HumanMessage(content="持续输出", id="turn-snapshot")
 
@@ -298,6 +302,285 @@ async def test_repeated_turn_snapshot_updates_existing_message(conversation_even
         "assistant_message",
     ]
     assert history["messages"][-1]["content"] == "第一阶段的完整回答"
+
+
+async def _create_run(get_session, conversation_id: str, run_id: str, owner_token: str) -> None:
+    async with get_session() as session:
+        now = datetime.now()
+        session.add(ChatDataAgentInbox(
+            conversation_id=conversation_id,
+            user_id="user-1",
+            run_id=run_id,
+            owner_token=owner_token,
+            message_id=run_id,
+            record_type="run",
+            content=json.dumps({"turn_id": "turn-checkpoint"}, ensure_ascii=False),
+            status="active",
+            delete_flag=0,
+            create_time=now,
+            update_time=now,
+            create_by="user-1",
+            create_by_name="用户一",
+            update_by="user-1",
+            update_by_name="用户一",
+        ))
+
+
+async def _update_run_content(get_session, run_id: str, content: dict, *, status: str = "active") -> None:
+    async with get_session() as session:
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id))
+        run.content = json.dumps(content, ensure_ascii=False)
+        run.status = status
+
+
+@pytest.mark.asyncio
+async def test_turn_checkpoint_is_committed_with_history(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-checkpoint", "user-1")
+    await _create_run(get_session, "conv-checkpoint", "run-checkpoint", "owner-1")
+    user = HumanMessage(content="检查恢复", id="turn-checkpoint")
+
+    checkpoint = await service.persist_turn_with_checkpoint(
+        conversation_id="conv-checkpoint",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-checkpoint",
+        messages=[user, AIMessage(content="已保存", id="assistant-checkpoint")],
+        reasoning_segments=[],
+        run_id="run-checkpoint",
+        owner_token="owner-1",
+        stream_id="1787629922140-7",
+    )
+
+    assert checkpoint == {
+        "run_id": "run-checkpoint",
+        "turn_id": "turn-checkpoint",
+        "history_sequence_no": 2,
+        "stream_id": "1787629922140-7",
+    }
+    async with get_session() as session:
+        rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-checkpoint"))
+    assert len(rows) == 2
+    assert json.loads(run.content)["history_checkpoint"] == checkpoint
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_failure_rolls_back_history(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-checkpoint-rollback", "user-1")
+    await _create_run(get_session, "conv-checkpoint-rollback", "run-rollback", "owner-1")
+    user = HumanMessage(content="不要丢失", id="turn-rollback")
+
+    with pytest.raises(AgentRunLeaseLostError):
+        await service.persist_turn_with_checkpoint(
+            conversation_id="conv-checkpoint-rollback",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-rollback",
+            messages=[user, AIMessage(content="不应提交", id="assistant-rollback")],
+            reasoning_segments=[],
+            run_id="run-rollback",
+            owner_token="old-owner",
+            stream_id="1787629922140-7",
+        )
+
+    async with get_session() as session:
+        rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-rollback"))
+    assert rows == []
+    assert "history_checkpoint" not in json.loads(run.content)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_is_not_written_without_redis_cursor(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-no-cursor", "user-1")
+    await _create_run(get_session, "conv-no-cursor", "run-no-cursor", "owner-1")
+    user = HumanMessage(content="只写历史", id="turn-no-cursor")
+
+    assert await service.persist_turn_with_checkpoint(
+        conversation_id="conv-no-cursor",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-no-cursor",
+        messages=[user, AIMessage(content="历史已写", id="assistant-no-cursor")],
+        reasoning_segments=[],
+        run_id="run-no-cursor",
+        owner_token="owner-1",
+        stream_id=None,
+    ) is None
+    async with get_session() as session:
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-no-cursor"))
+    assert "history_checkpoint" not in json.loads(run.content)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_requires_published_redis_cursor_and_worker_owner(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-invalid-cursor", "user-1")
+    await _create_run(get_session, "conv-invalid-cursor", "run-invalid-cursor", "owner-1")
+    user = HumanMessage(content="非法游标", id="turn-invalid-cursor")
+
+    assert await service.persist_turn_with_checkpoint(
+        conversation_id="conv-invalid-cursor",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-invalid-cursor",
+        messages=[user, AIMessage(content="历史仍可保存", id="assistant-invalid-cursor")],
+        reasoning_segments=[],
+        run_id="run-invalid-cursor",
+        owner_token="owner-1",
+        stream_id="0-0",
+    ) is None
+
+    async with get_session() as session:
+        rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-invalid-cursor"))
+    assert len(rows) == 2
+    assert "history_checkpoint" not in json.loads(run.content)
+
+    with pytest.raises(AgentRunLeaseLostError):
+        await service.persist_turn_with_checkpoint(
+            conversation_id="conv-invalid-cursor",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-invalid-cursor",
+            messages=[user, AIMessage(content="旧 Worker 不得写入", id="assistant-old-owner")],
+            reasoning_segments=[],
+            run_id="run-invalid-cursor",
+            owner_token="old-owner",
+            stream_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_history_recovery_returns_only_valid_checkpoint_for_active_run(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-recovery", "user-1")
+    await _create_run(get_session, "conv-recovery", "run-recovery", "owner-1")
+    await _update_run_content(get_session, "run-recovery", {
+        "turn_id": "turn-recovery",
+        "history_checkpoint": {
+            "run_id": "run-recovery",
+            "turn_id": "turn-recovery",
+            "history_sequence_no": 2,
+            "stream_id": "1787629922140-7",
+        },
+    })
+
+    history = await service.load_history_with_recovery(
+        conversation_id="conv-recovery",
+        user_id="user-1",
+    )
+
+    assert history["active_run"]["run_id"] == "run-recovery"
+    assert history["active_run"]["history_checkpoint"]["stream_id"] == "1787629922140-7"
+
+    await _update_run_content(get_session, "run-recovery", {
+        "turn_id": "turn-recovery",
+        "history_checkpoint": {
+            "run_id": "another-run",
+            "stream_id": "not-a-stream-id",
+        },
+    }, status="finished")
+    finished_history = await service.load_history_with_recovery(
+        conversation_id="conv-recovery",
+        user_id="user-1",
+    )
+    assert finished_history["active_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_history_recovery_hides_malformed_checkpoint_on_active_run(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-malformed-recovery", "user-1")
+    await _create_run(get_session, "conv-malformed-recovery", "run-malformed-recovery", "owner-1")
+    await _update_run_content(get_session, "run-malformed-recovery", {
+        "turn_id": "turn-malformed-recovery",
+        "history_checkpoint": {
+            "run_id": "run-malformed-recovery",
+            "history_sequence_no": 3,
+            "stream_id": "not-a-redis-id",
+        },
+    })
+
+    history = await service.load_history_with_recovery(
+        conversation_id="conv-malformed-recovery",
+        user_id="user-1",
+    )
+
+    assert history["active_run"]["run_id"] == "run-malformed-recovery"
+    assert history["active_run"]["history_checkpoint"] is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_rejects_run_that_finished_before_snapshot(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-finished-checkpoint", "user-1")
+    await _create_run(get_session, "conv-finished-checkpoint", "run-finished-checkpoint", "owner-1")
+    await _update_run_content(
+        get_session,
+        "run-finished-checkpoint",
+        {"turn_id": "turn-finished-checkpoint"},
+        status="finished",
+    )
+
+    with pytest.raises(AgentRunLeaseLostError):
+        await service.persist_turn_with_checkpoint(
+            conversation_id="conv-finished-checkpoint",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-finished-checkpoint",
+            messages=[
+                HumanMessage(content="迟到的写入", id="turn-finished-checkpoint"),
+                AIMessage(content="不能追加", id="assistant-finished-checkpoint"),
+            ],
+            reasoning_segments=[],
+            run_id="run-finished-checkpoint",
+            owner_token="owner-1",
+            stream_id="1787629922140-7",
+        )
+
+    async with get_session() as session:
+        rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_does_not_move_backwards(conversation_event_service):
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-cursor-order", "user-1")
+    await _create_run(get_session, "conv-cursor-order", "run-cursor-order", "owner-1")
+    first_user = HumanMessage(content="第一步", id="turn-cursor-order")
+
+    first = await service.persist_turn_with_checkpoint(
+        conversation_id="conv-cursor-order",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-cursor-order",
+        messages=[first_user, AIMessage(content="第一版", id="assistant-cursor-1")],
+        reasoning_segments=[],
+        run_id="run-cursor-order",
+        owner_token="owner-1",
+        stream_id="1787629922140-7",
+    )
+    second = await service.persist_turn_with_checkpoint(
+        conversation_id="conv-cursor-order",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-cursor-order",
+        messages=[first_user, AIMessage(content="第二版", id="assistant-cursor-2")],
+        reasoning_segments=[],
+        run_id="run-cursor-order",
+        owner_token="owner-1",
+        stream_id="1787629922139-9",
+    )
+
+    assert second == first
+    async with get_session() as session:
+        run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-cursor-order"))
+    assert json.loads(run.content)["history_checkpoint"] == first
 
 
 @pytest.mark.asyncio

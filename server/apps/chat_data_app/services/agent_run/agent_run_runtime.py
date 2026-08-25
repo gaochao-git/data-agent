@@ -168,6 +168,7 @@ class AgentRunRuntime:
                 file_ids=context.get("file_ids"),
                 run_id=prepared["run_id"],
                 owner_token=prepared["owner_token"],
+                stream_event_id_provider=prepared.get("stream_event_id_provider"),
                 adopted_messages=prepared.get("messages") or [],
                 resume_answer=prepared.get("resume_answer"),
                 resume_started=bool(prepared.get("resume_started")),
@@ -198,12 +199,14 @@ class AgentRunRuntime:
                 user_id = prepared["user_id"]
                 operator_name = prepared.get("operator_name") or operator_name or user_id
                 await self._event_service.claim_owner(run_id, prepared["owner_token"])
+                event_cursor: dict[str, str | None] = {"stream_id": None}
+                prepared["stream_event_id_provider"] = lambda: event_cursor["stream_id"]
                 stream_factory = self._build_stream_factory(prepared)
                 async for payload in stream_factory():
                     if self._event_service.is_terminal_payload(payload):
                         terminal_payload = payload
                         continue
-                    await self._event_service.append(
+                    stream_id = await self._event_service.append(
                         run_id=run_id,
                         conversation_id=conversation_id,
                         user_id=user_id,
@@ -213,6 +216,7 @@ class AgentRunRuntime:
                         payload=payload,
                         owner_token=prepared["owner_token"],
                     )
+                    event_cursor["stream_id"] = stream_id
                 terminal_ready = True
             except asyncio.CancelledError:
                 raise

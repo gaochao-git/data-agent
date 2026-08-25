@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -19,6 +20,33 @@ RUN_LEASE_SECONDS = 120
 
 # next-step 在下一次模型调用前注入；next-turn 每个新轮次按 FIFO 领取一条。
 INBOX_QUEUE_TYPES = {"next-step", "next-turn"}
+REDIS_STREAM_ID_PATTERN = re.compile(r"^[0-9]+-[0-9]+$")
+
+
+def is_valid_redis_stream_id(value: str | None) -> bool:
+    """判断值是否为已发布事件的 Redis Stream ID。"""
+    normalized = str(value or "").strip()
+    return bool(REDIS_STREAM_ID_PATTERN.fullmatch(normalized)) and normalized != "0-0"
+
+
+def normalize_history_checkpoint(content: dict[str, Any], run_id: str | None) -> dict[str, Any] | None:
+    """只向外暴露归属于当前 Run 且格式有效的历史恢复水位。"""
+    checkpoint = content.get("history_checkpoint")
+    if not isinstance(checkpoint, dict) or str(checkpoint.get("run_id") or "") != str(run_id or ""):
+        return None
+    stream_id = str(checkpoint.get("stream_id") or "").strip()
+    if not is_valid_redis_stream_id(stream_id):
+        return None
+    try:
+        history_sequence_no = max(int(checkpoint.get("history_sequence_no") or 0), 0)
+    except (TypeError, ValueError):
+        history_sequence_no = 0
+    return {
+        "run_id": str(run_id),
+        "turn_id": str(checkpoint.get("turn_id") or ""),
+        "history_sequence_no": history_sequence_no,
+        "stream_id": stream_id,
+    }
 
 
 class AgentRunConflictError(RuntimeError):
@@ -663,6 +691,7 @@ class AgentInboxService:
                 "run_status": latest_run.status if latest_run else None,
                 "turn_id": str(latest_content.get("turn_id") or "") or None,
                 "is_continuation": latest_content.get("run_kind") == "continuation",
+                "history_checkpoint": self._history_checkpoint(latest_content, latest_run.run_id if latest_run else None),
                 "messages": [
                     {
                         "message_id": row.message_id,
@@ -692,6 +721,10 @@ class AgentInboxService:
                 "conversation_id": run.conversation_id,
                 "user_id": run.user_id,
                 "status": run.status,
+                "history_checkpoint": self._history_checkpoint(
+                    self._load_run_content(run.content),
+                    run.run_id,
+                ),
             }
 
     async def _cancel_run(
@@ -762,6 +795,10 @@ class AgentInboxService:
         if not isinstance(question, dict):
             return None
         return {"run_id": run.run_id, **question}
+
+    @staticmethod
+    def _history_checkpoint(content: dict[str, Any], run_id: str | None) -> dict[str, Any] | None:
+        return normalize_history_checkpoint(content, run_id)
 
     @staticmethod
     def _restore_unstarted_question(content: dict[str, Any]) -> None:

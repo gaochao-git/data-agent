@@ -13,6 +13,8 @@ from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
 from ...daos.conversation_event_dao import ConversationEventDao
+from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+from .agent_inbox_service import AgentRunLeaseLostError, is_valid_redis_stream_id, normalize_history_checkpoint
 
 logger = get_logger(__name__)
 
@@ -25,11 +27,38 @@ EVENT_TOKEN_USAGE = "token_usage"
 EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
 
+
+def _load_run_content(content: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(content or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _compare_stream_ids(left: str, right: str) -> int:
+    """按 Redis Stream 的时间和序号比较游标。"""
+    def key(value: str) -> tuple[int, int, str]:
+        parts = value.split("-", 1)
+        try:
+            return int(parts[0]), int(parts[1]), ""
+        except (IndexError, TypeError, ValueError):
+            return 0, 0, value
+
+    left_key = key(left)
+    right_key = key(right)
+    return (left_key > right_key) - (left_key < right_key)
+
 class ConversationEventService:
     """将 Agent 完整消息转换为追加式历史事件。"""
 
-    def __init__(self, dao: ConversationEventDao | None = None):
+    def __init__(
+        self,
+        dao: ConversationEventDao | None = None,
+        inbox_dao: AgentInboxDao = agent_inbox_dao,
+    ):
         self._dao = dao or ConversationEventDao(session_context=lambda: get_session())
+        self._inbox_dao = inbox_dao
 
     async def persist_user_message(
         self,
@@ -83,6 +112,93 @@ class ConversationEventService:
             events=events,
         )
 
+    async def persist_turn_with_checkpoint(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        turn_id: str,
+        messages: Iterable[BaseMessage],
+        reasoning_segments: Iterable[dict[str, Any]],
+        context_compression_events: Iterable[dict[str, Any]] = (),
+        token_usage: dict[str, Any] | None = None,
+        run_id: str,
+        stream_id: str | None,
+        owner_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """原子提交历史快照与 Run 的 Redis 恢复水位。
+
+        Redis 发布和 MySQL 不在同一事务中，因此调用方必须先发布事件，再调用本方法。
+        事务内先写会话事件，再推进 checkpoint；失败时两者一起回滚，恢复最多重复读取，
+        不会因为游标提前推进而丢失历史事件。
+        """
+        events = _build_turn_events(
+            turn_id=turn_id,
+            messages=list(messages or []),
+            reasoning_segments=list(reasoning_segments or []),
+            context_compression_events=list(context_compression_events or []),
+            token_usage=token_usage,
+        )
+        if not events:
+            return None
+        normalized_stream_id = self._normalize_stream_id(stream_id)
+        for attempt in range(1, EVENT_APPEND_MAX_ATTEMPTS + 1):
+            try:
+                async with self._dao.session_context() as session:
+                    await self._dao.append_events_in_session(
+                        session,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        operator_name=operator_name,
+                        events=events,
+                        now=datetime.now(),
+                    )
+                    # append_events_in_session locks the conversation row first.
+                    # Keep the same conversation -> Run lock order as start_run
+                    # and complete_run to avoid cross-process deadlocks. If the
+                    # owner check fails, the surrounding transaction rolls back
+                    # the provisional history append.
+                    run = await self._inbox_dao.get_run_by_id_for_update(session, run_id)
+                    self._validate_run_for_checkpoint(
+                        run,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        run_id=run_id,
+                        owner_token=owner_token,
+                    )
+                    history_sequence_no = await self._dao.get_max_sequence_in_session(session, conversation_id)
+                    checkpoint = await self._update_history_checkpoint(
+                        run_id=run_id,
+                        turn_id=turn_id,
+                        history_sequence_no=history_sequence_no,
+                        stream_id=normalized_stream_id,
+                        run=run,
+                    )
+                    return checkpoint
+            except AgentRunLeaseLostError:
+                raise
+            except Exception as exc:
+                should_retry = is_mysql_connection_error(exc) and attempt < EVENT_APPEND_MAX_ATTEMPTS
+                if not should_retry:
+                    logger.exception(
+                        "追加会话历史并更新恢复水位失败: conversation_id=%s run_id=%s attempt=%s",
+                        conversation_id,
+                        run_id,
+                        attempt,
+                    )
+                    raise
+                logger.warning(
+                    "追加会话历史遇到连接错误，准备重试: conversation_id=%s run_id=%s attempt=%s",
+                    conversation_id,
+                    run_id,
+                    attempt,
+                    exc_info=True,
+                )
+                await asyncio.sleep(EVENT_APPEND_RETRY_DELAY_SECONDS)
+
+        return None
+
     async def load_history(
         self,
         *,
@@ -125,6 +241,86 @@ class ConversationEventService:
             "reasoning_segments": reasoning_segments,
             "history_events": history_events,
             "token_usage": _load_payload(token_usage_payload),
+        }
+
+    async def load_history_with_recovery(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        include_derived: bool = True,
+    ) -> dict[str, Any]:
+        """在同一事务读取历史和活跃 Run 的恢复水位。"""
+        async with self._dao.session_context() as session:
+            rows = await self._dao.list_visible_events_in_session(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+            try:
+                token_usage_payload = await self._dao.get_latest_token_usage_payload_in_session(
+                    session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.warning(
+                    "读取会话 token 占用失败，历史消息继续返回: conversation_id=%s",
+                    conversation_id,
+                    exc_info=True,
+                )
+                token_usage_payload = None
+            active_run = await self._inbox_dao.get_active_run_snapshot(
+                session,
+                conversation_id,
+                user_id,
+            )
+            return {
+                **self._build_history_payload(rows, token_usage_payload, include_derived),
+                "active_run": self._active_run_payload(active_run),
+            }
+
+    @staticmethod
+    def _build_history_payload(
+        rows: list[Any],
+        token_usage_payload: str | None,
+        include_derived: bool,
+    ) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = []
+        reasoning_segments: list[dict[str, Any]] = []
+        history_events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _load_payload(row.payload)
+            if not payload:
+                continue
+            history_events.append({
+                "sequence_no": int(row.sequence_no),
+                "turn_id": row.turn_id,
+                "event_type": row.event_type,
+                "payload": payload,
+            })
+            if include_derived and row.event_type == EVENT_REASONING:
+                reasoning_segments.append(payload)
+            elif include_derived and row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
+                messages.append(payload)
+        return {
+            "messages": messages,
+            "reasoning_segments": reasoning_segments,
+            "history_events": history_events,
+            "token_usage": _load_payload(token_usage_payload),
+        }
+
+    @staticmethod
+    def _active_run_payload(run: Any | None) -> dict[str, Any] | None:
+        if run is None:
+            return None
+        content = _load_run_content(run.content)
+        return {
+            "run_id": run.run_id,
+            "status": run.status,
+            "turn_id": str(content.get("turn_id") or "") or None,
+            "is_continuation": content.get("run_kind") == "continuation",
+            "history_checkpoint": normalize_history_checkpoint(content, run.run_id),
         }
 
     async def get_first_user_message(self, *, conversation_id: str, user_id: str) -> str | None:
@@ -175,6 +371,63 @@ class ConversationEventService:
                     exc_info=True,
                 )
                 await asyncio.sleep(EVENT_APPEND_RETRY_DELAY_SECONDS)
+
+    async def _update_history_checkpoint(
+        self,
+        *,
+        run_id: str,
+        turn_id: str,
+        history_sequence_no: int,
+        stream_id: str | None,
+        run: Any,
+    ) -> dict[str, Any] | None:
+        """在同一事务内推进当前 Run 的历史水位。"""
+        if not stream_id:
+            return None
+        content = _load_run_content(run.content)
+        previous = content.get("history_checkpoint")
+        if isinstance(previous, dict) and str(previous.get("run_id") or "") not in {"", run_id}:
+            raise AgentRunLeaseLostError(f"当前运行恢复水位归属已变化: {run_id}")
+        previous_stream_id = str((previous or {}).get("stream_id") or "")
+        if previous_stream_id and _compare_stream_ids(stream_id, previous_stream_id) < 0:
+            return previous
+        checkpoint = {
+            "run_id": run_id,
+            "turn_id": turn_id,
+            "history_sequence_no": history_sequence_no,
+            "stream_id": stream_id,
+        }
+        content["history_checkpoint"] = checkpoint
+        run.content = json.dumps(content, ensure_ascii=False)
+        return checkpoint
+
+    @staticmethod
+    def _normalize_stream_id(stream_id: str | None) -> str | None:
+        normalized = str(stream_id or "").strip()
+        return normalized if is_valid_redis_stream_id(normalized) else None
+
+    @staticmethod
+    def _validate_run_for_checkpoint(
+        run: Any | None,
+        *,
+        conversation_id: str,
+        user_id: str,
+        run_id: str,
+        owner_token: str | None,
+    ) -> None:
+        if run is None or run.conversation_id != conversation_id or run.user_id != user_id:
+            raise AgentRunLeaseLostError(f"当前运行不存在或归属已变化: {run_id}")
+        if run.status not in {"pending", "active"}:
+            raise AgentRunLeaseLostError(f"当前运行已结束，禁止追加历史: {run_id}")
+        # An active Run must still be owned by the Worker writing its snapshot.
+        # A missing owner is only tolerated for a pending compatibility path;
+        # the runtime claims the Run before it starts producing events.
+        if run.status == "active" and (not owner_token or run.owner_token != owner_token):
+            raise AgentRunLeaseLostError(f"当前运行已由其他 Worker 接管: {run_id}")
+        content = _load_run_content(run.content)
+        previous = content.get("history_checkpoint")
+        if isinstance(previous, dict) and str(previous.get("run_id") or "") not in {"", run_id}:
+            raise AgentRunLeaseLostError(f"当前运行恢复水位归属已变化: {run_id}")
 
 
 def _build_turn_events(

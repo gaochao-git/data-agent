@@ -329,6 +329,10 @@ async def _persist_agent_turn_history(
     username: str | None,
     turn_id: str,
     state_override: dict[str, Any] | None = None,
+    run_id: str | None = None,
+    owner_token: str | None = None,
+    stream_event_id_provider: Callable[[], str | None] | None = None,
+    snapshot_stream_id: str | None = None,
 ) -> None:
     """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
     values = state_override
@@ -357,16 +361,29 @@ async def _persist_agent_turn_history(
     for current_turn_id in turn_ids:
         # token_usage 是会话级单行快照（event_key 固定），只随最后一轮写一次即可。
         is_last_turn = current_turn_id == turn_ids[-1]
-        await conversation_event_service.persist_turn(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            operator_name=username or user_id,
-            turn_id=current_turn_id,
-            messages=messages,
-            reasoning_segments=stream_adapter.reasoning_segments,
-            context_compression_events=(values or {}).get("context_compression_events") or [],
-            token_usage=sanitize_context_usage_for_response(usage) if is_last_turn else None,
-        )
+        persist_kwargs = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "operator_name": username or user_id,
+            "turn_id": current_turn_id,
+            "messages": messages,
+            "reasoning_segments": stream_adapter.reasoning_segments,
+            "context_compression_events": (values or {}).get("context_compression_events") or [],
+            "token_usage": sanitize_context_usage_for_response(usage) if is_last_turn else None,
+        }
+        if run_id and stream_event_id_provider is not None:
+            await conversation_event_service.persist_turn_with_checkpoint(
+                **persist_kwargs,
+                run_id=run_id,
+                owner_token=owner_token,
+                stream_id=(
+                    snapshot_stream_id
+                    if snapshot_stream_id is not None
+                    else stream_event_id_provider() if stream_event_id_provider else None
+                ),
+            )
+        else:
+            await conversation_event_service.persist_turn(**persist_kwargs)
 
 
 class _LatestModelSnapshotWriter:
@@ -518,6 +535,9 @@ async def _persist_partial_agent_turn_history(
     user_id: str,
     username: str | None,
     turn_id: str,
+    run_id: str | None = None,
+    owner_token: str | None = None,
+    stream_event_id_provider: Callable[[], str | None] | None = None,
 ) -> None:
     """流中断时尽力保存已写入 checkpoint 的可见历史，不影响原始异常。"""
     if stream_adapter is None:
@@ -531,6 +551,9 @@ async def _persist_partial_agent_turn_history(
             user_id=user_id,
             username=username,
             turn_id=turn_id,
+            run_id=run_id,
+            owner_token=owner_token,
+            stream_event_id_provider=stream_event_id_provider,
         )
     except Exception:
         logger.warning("流异常后的会话历史补写失败: conversation_id=%s", conversation_id, exc_info=True)
@@ -1085,6 +1108,7 @@ async def _generate_chat_data_stream(
     turn_id: str | None = None,
     recovering: bool = False,
     owner_token: str | None = None,
+    stream_event_id_provider: Callable[[], str | None] | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -1142,6 +1166,7 @@ async def _generate_chat_data_stream(
             turn_id=turn_id,
             recovering=recovering,
             owner_token=owner_token,
+            stream_event_id_provider=stream_event_id_provider,
             log_phase=log_phase,
         ):
             yield event
@@ -1240,6 +1265,7 @@ async def _run_chat_data_agent_stream(
     turn_id: str | None = None,
     recovering: bool = False,
     owner_token: str | None = None,
+    stream_event_id_provider: Callable[[], str | None] | None = None,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
@@ -1448,6 +1474,7 @@ async def _run_chat_data_agent_stream(
                 adapter = stream_adapter_ref.get("value")
                 if adapter is None:
                     return
+                snapshot_stream_id = state.get("__history_stream_id") if isinstance(state, dict) else None
                 await _persist_agent_turn_history(
                     adapter,
                     conversation_id=thread_id,
@@ -1455,6 +1482,10 @@ async def _run_chat_data_agent_stream(
                     username=username,
                     turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
                     state_override=state,
+                    run_id=run_id,
+                    owner_token=owner_token,
+                    stream_event_id_provider=stream_event_id_provider,
+                    snapshot_stream_id=snapshot_stream_id,
                 )
 
             model_snapshot_writer = _LatestModelSnapshotWriter(
@@ -1464,7 +1495,14 @@ async def _run_chat_data_agent_stream(
 
             async def persist_model_snapshot(state: dict[str, Any]) -> None:
                 """Queue the latest snapshot so model-to-tool transition stays immediate."""
-                model_snapshot_writer.submit(state)
+                snapshot = dict(state or {})
+                # after_model 是异步合并写入。游标必须在提交快照时捕获，
+                # 不能等后台 writer 真正写库时再读取，否则可能跨过未包含
+                # 在该快照内的 Redis 事件，恢复时会跳过内容。
+                snapshot["__history_stream_id"] = (
+                    stream_event_id_provider() if stream_event_id_provider else None
+                )
+                model_snapshot_writer.submit(snapshot)
 
             async def flush_model_snapshots() -> None:
                 """Wait until the newest submitted snapshot is durable."""
@@ -1543,6 +1581,9 @@ async def _run_chat_data_agent_stream(
                     user_id=user_id,
                     username=username,
                     turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
+                    run_id=run_id,
+                    owner_token=owner_token,
+                    stream_event_id_provider=stream_event_id_provider,
                 )
 
             async def persist_partial_history() -> None:
@@ -1553,6 +1594,9 @@ async def _run_chat_data_agent_stream(
                     user_id=user_id,
                     username=username,
                     turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
+                    run_id=run_id,
+                    owner_token=owner_token,
+                    stream_event_id_provider=stream_event_id_provider,
                 )
                 # A stream can fail after LangGraph has checkpointed the
                 # answer but before the normal finish hook. Inspecting the

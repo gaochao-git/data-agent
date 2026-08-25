@@ -93,7 +93,7 @@ const activeRunIsContinuation = ref(false)
 const ownedRunStorageKey = 'chatdata-active-run-conversation'
 const activeRunId = ref<string | null>(null)
 const activeRunEventId = ref('0-0')
-const runEventIdStorageKey = (conversationId: string, runId: string) => `chatdata-run-event-id:${conversationId}:${runId}`
+const activeRunResumeRunId = ref<string | null>(null)
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
@@ -131,7 +131,10 @@ const startEditSteerMessage = (item: { content: string; messageId?: string }) =>
 }
 
 /** 以服务端状态和持久历史共同恢复队列，不以 pending 暂时缺失作为删除依据。 */
-const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) => {
+const restorePendingSteerQueue = async (options?: {
+  restartPolling?: boolean
+  preserveResumeCursor?: boolean
+}) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
   try {
@@ -150,9 +153,11 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
         : null,
     )
     if (activeRunId.value) {
-      const storedEventId = window.sessionStorage.getItem(runEventIdStorageKey(conversationId, activeRunId.value))
-      activeRunEventId.value = storedEventId || '0-0'
-      if (!storedEventId && activeRunTurnId.value) {
+      if (activeRunResumeRunId.value !== activeRunId.value || !options?.preserveResumeCursor) {
+        activeRunEventId.value = response.data?.history_checkpoint?.stream_id || '0-0'
+        activeRunResumeRunId.value = activeRunId.value
+      }
+      if (activeRunTurnId.value && activeRunResumeRunId.value === activeRunId.value && activeRunEventId.value === '0-0') {
         messages.value = messages.value.filter(message => (
           message.turnId !== activeRunTurnId.value || message.role === 'user'
         ))
@@ -160,6 +165,7 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
       }
     } else {
       activeRunEventId.value = '0-0'
+      activeRunResumeRunId.value = null
       activeRunTurnId.value = null
     }
     const persistedMessageIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
@@ -199,7 +205,7 @@ const recoverInterruptedPageRun = async () => {
   while (isLoadingHistory.value) {
     await new Promise(resolve => window.setTimeout(resolve, 50))
   }
-  await restorePendingSteerQueue({ restartPolling: false })
+  await restorePendingSteerQueue({ restartPolling: false, preserveResumeCursor: true })
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId || !hasActiveRun.value || !activeRunId.value) return
   if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
@@ -1730,6 +1736,14 @@ const { isLoadingHistory, loadedConversationId, loadHistory, resetHistory } = us
   conversationId: conversationIdRef,
   messages,
   tokenUsage,
+  onActiveRunLoaded: (activeRun) => {
+    activeRunId.value = activeRun?.run_id || null
+    activeRunStatus.value = activeRun?.status || null
+    activeRunTurnId.value = activeRun?.turn_id || null
+    activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
+    activeRunResumeRunId.value = activeRun?.run_id || null
+    activeRunEventId.value = activeRun?.history_checkpoint?.stream_id || '0-0'
+  },
 })
 
 watch(
@@ -2346,15 +2360,19 @@ const submitAnalysisQuery = async (
         },
         onRunStarted: (runId) => {
           startedRunId = runId
-          if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
+          if (activeRunId.value !== runId) {
+            activeRunEventId.value = '0-0'
+            activeRunResumeRunId.value = runId
+          }
           activeRunId.value = runId
           saveOwnedRun(resolvedConversationId, runId)
           emit('runStatusChanged', resolvedConversationId, 'active')
         },
         responseFactory: options.responseFactory,
         onRunEvent: (eventId) => {
-          activeRunEventId.value = eventId
-          window.sessionStorage.setItem(runEventIdStorageKey(resolvedConversationId, activeRunId.value || ''), eventId)
+          // 事件游标只由服务端数据库 checkpoint 提供，避免浏览器内存状态
+          // 在断线恢复时跳过尚未随历史一起读取的事件。
+          void eventId
         },
         onFirstEvent: () => {
           if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)

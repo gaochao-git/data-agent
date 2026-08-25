@@ -17,7 +17,7 @@ from redis.retry import Retry
 
 RUN_STREAM_PREFIX = "chatdata:run:"
 RUN_STREAM_SUFFIX = ":events"
-STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "86400")), 60)
+STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "3600")), 60)
 REDIS_HEALTH_CHECK_INTERVAL_SECONDS = max(
     int(os.getenv("CHAT_DATA_REDIS_HEALTH_CHECK_INTERVAL_SECONDS", "30")),
     0,

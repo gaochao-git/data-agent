@@ -1362,6 +1362,12 @@ export function listSteerMessages(
   run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
   turn_id?: string | null
   is_continuation?: boolean
+  history_checkpoint?: {
+    run_id: string
+    turn_id?: string | null
+    history_sequence_no?: number
+    stream_id: string
+  } | null
   messages: Array<{
     message_id: string
     content: string

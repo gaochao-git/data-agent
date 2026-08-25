@@ -58,6 +58,27 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none()
 
+    async def get_active_run_snapshot(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+    ) -> ChatDataAgentInbox | None:
+        """读取活跃 Run，不加锁，供会话详情返回恢复信息。"""
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.status.in_(("pending", "active", "cancelling", "waiting_user")),
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_latest_run(
         self,
         session: AsyncSession,

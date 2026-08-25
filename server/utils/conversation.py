@@ -386,7 +386,7 @@ async def get_detail(
     title = thread.thread_title
     is_favorited = bool(thread.is_favorited) if thread.is_favorited is not None else False
 
-    event_history = await conversation_event_service.load_history(
+    event_history = await conversation_event_service.load_history_with_recovery(
         conversation_id=conversation_id,
         user_id=str(thread.user_id),
         include_derived=include_derived_history,
@@ -402,6 +402,7 @@ async def get_detail(
         "history_events": history_events,
         "reasoning_segments": reasoning_segments,
         "token_usage": event_history.get("token_usage"),
+        "active_run": event_history.get("active_run"),
         "is_favorited": is_favorited,
     }
 
