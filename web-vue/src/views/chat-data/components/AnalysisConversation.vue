@@ -2437,6 +2437,7 @@ const submitAnalysisQuery = async (
         },
         onRunStarted: (runId) => {
           startedRunId = runId
+          hasActiveRun.value = true
           if (activeRunId.value !== runId) {
             activeRunEventId.value = '0-0'
             activeRunResumeRunId.value = runId
@@ -2954,7 +2955,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <span v-else-if="item.status === 'claimed' || item.status === 'consumed'">处理中</span>
                   <span v-else>等待处理</span>
                   <button
-                    v-if="item.messageId && item.status === 'pending' && !hasActiveRun"
+                    v-if="item.messageId && item.status === 'pending' && !hasActiveRun && !isGenerating"
                     type="button"
                     class="flex shrink-0 items-center gap-1 rounded bg-[#1677FF] px-1.5 py-0.5 text-[10px] text-white transition-colors hover:bg-[#1677FF]/85 disabled:cursor-not-allowed disabled:opacity-50"
                     :disabled="Boolean(executingQueueMessageId) || steerActionBusy"
