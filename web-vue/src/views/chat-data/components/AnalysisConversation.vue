@@ -2488,11 +2488,14 @@ const submitAnalysisQuery = async (
       if (conversationIdForNextRun && nextRunId && completedRunStatus === 'finished' && !isStoppingRun.value) {
         // 服务端在 done 中直接给出了下一轮 Run ID（事务性创建已完成），
         // 跳过轮询，立刻接续订阅。新 Run 从头回放，游标从 '0-0' 开始。
+        // 注意必须保持 autoResumeQueuedRun 默认开启：多条队列时每轮
+        // continuation 的 done 都会携带下一个 next_run_id，链式订阅要
+        // 逐轮传递下去；队列清空后 complete_run 返回 next_run_id=None，
+        // 链条自然终止，不存在无限循环。
         activeAssistantMessageId.value = null
         await submitAnalysisQuery('', {
           appendUserMessage: false,
           preserveAssistant: false,
-          autoResumeQueuedRun: false,
           responseFactory: signal => streamRunEvents(
             conversationIdForNextRun,
             nextRunId,
