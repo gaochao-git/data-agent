@@ -207,6 +207,25 @@ def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch
     assert kwargs["sentinel_kwargs"]["password"] == "sentinel-pwd"
 
 
+def test_sentinel_mode_supports_no_password(monkeypatch):
+    """哨兵未开认证：两个密码变量都不配置即可，password 传 None。"""
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+    monkeypatch.delenv("CHAT_DATA_REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", raising=False)
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        assert bus.redis is not None
+
+    kwargs = sentinel_cls.call_args.kwargs
+    assert kwargs["password"] is None
+    assert kwargs["sentinel_kwargs"]["password"] is None
+
+
 def test_sentinel_mode_selects_db(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
     monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
