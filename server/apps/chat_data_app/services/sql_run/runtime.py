@@ -18,7 +18,7 @@ from sqlalchemy import select
 from utils.database import get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
-from utils.alarm import emit_dangerous_sql_alarm
+from utils.alarm import SQL_BLOCK_MULTI_STATEMENT, emit_dangerous_sql_alarm
 
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from . import cache as query_cache
@@ -71,6 +71,7 @@ def _validate_sql_before_task_submit(
             datasource_id=str(getattr(request, "datasource_id", "") or ""),
             user_id=str(getattr(request, "user_id", "") or ""),
             execution_scope="task_submit",
+            reason_code=SQL_BLOCK_MULTI_STATEMENT,
         )
         raise ValueError(error_msg)
     is_valid, error_msg = validate_sql(sql, source_type=source_type)

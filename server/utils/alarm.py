@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Iterable
 
-from utils.logger import get_alarm_logger
+from utils.logger import get_alarm_logger, get_logger
 
+
+logger = get_logger(__name__)
 
 MAX_ALARM_MESSAGE_LENGTH = 500
 MAX_ALARM_EXT_LENGTH = 1000
@@ -106,6 +108,29 @@ def emit_checkpoint_connection_alarm(message: str, *, ext1: Any = None, ext2: An
     )
 
 
+# 高危 SQL 拦截的细分原因码（写入报警日志 error_code 字段，供检索与统计）。
+# 注意：alarm_id="DANGEROUS_SQL_BLOCKED" 对应 OMS 告警配置中的告警名称，
+# 属于平台契约，不可随意改名；细分原因只允许落在 error_code。
+# 仅两类属于安全拦截；语法写错等普通校验失败（如 SQL 解析失败）不算高危，
+# 照常拒绝执行但不发本告警（见 _infer_sql_block_reason 返回 None 的语义）。
+SQL_BLOCK_MULTI_STATEMENT = "MULTI_STATEMENT_BLOCKED"
+SQL_BLOCK_TYPE_NOT_ALLOWED = "SQL_TYPE_NOT_ALLOWED"
+
+
+def _infer_sql_block_reason(reason: str) -> str | None:
+    """根据拦截文案推断细分原因码（文案来自 sql_run 固定拦截分支）。
+
+    仅多语句与类型越权属于安全拦截；其余文案（sqlglot 解析异常、SQL 为空等
+    普通校验失败）返回 None，调用方不应为此发 DANGEROUS_SQL_BLOCKED 告警。
+    """
+    text = str(reason or "")
+    if "一次只能执行一条 SQL" in text:
+        return SQL_BLOCK_MULTI_STATEMENT
+    if text.startswith("只允许执行以下类型的 SQL"):
+        return SQL_BLOCK_TYPE_NOT_ALLOWED
+    return None
+
+
 def emit_dangerous_sql_alarm(
     sql: str,
     reason: str,
@@ -114,12 +139,23 @@ def emit_dangerous_sql_alarm(
     datasource_id: str | None = None,
     user_id: str | None = None,
     execution_scope: str | None = None,
+    reason_code: str | None = None,
 ) -> None:
+    resolved_code = reason_code or _infer_sql_block_reason(reason)
+    if not resolved_code:
+        # 非安全拦截（解析失败等普通校验失败）：拒绝执行由业务错误路径负责，
+        # 不占用高危告警。warning 便于发现新增拦截分支漏传 reason_code。
+        logger.warning(
+            "[alarm] 跳过 DANGEROUS_SQL_BLOCKED 告警（非安全拦截）: reason=%s",
+            str(reason or "")[:200],
+        )
+        return
     emit_alarm(
         "高危 SQL 已拦截",
+        # OMS 契约字段：与告警配置中的告警名称一致，勿改。
         alarm_id="DANGEROUS_SQL_BLOCKED",
         request_type="SQL",
-        error_code="DANGEROUS_SQL_BLOCKED",
+        error_code=resolved_code,
         ext1={
             "source_type": source_type or "",
             "datasource_id": datasource_id or "",

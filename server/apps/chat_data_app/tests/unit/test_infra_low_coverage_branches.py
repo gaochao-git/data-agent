@@ -103,6 +103,35 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
 
 
+def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
+    """alarm_id 固定为 OMS 契约值，细分原因落在 error_code。"""
+    records = []
+    warnings = []
+    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+    monkeypatch.setattr(alarm_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
+
+    cases = [
+        ("一次只能执行一条 SQL，请拆分后分别执行", None, alarm_module.SQL_BLOCK_MULTI_STATEMENT),
+        ("只允许执行以下类型的 SQL: SELECT, SHOW", None, alarm_module.SQL_BLOCK_TYPE_NOT_ALLOWED),
+        # 显式传入的 reason_code 优先于推断。
+        ("任意文案", "CUSTOM_CODE", "CUSTOM_CODE"),
+    ]
+    for reason, reason_code, expected in cases:
+        records.clear()
+        alarm_module.emit_dangerous_sql_alarm("select 1", reason, reason_code=reason_code)
+        extra = records[0][1]["extra"]
+        assert extra["alarm_id"] == "DANGEROUS_SQL_BLOCKED"
+        assert extra["error_code"] == expected
+
+    # 解析失败等普通校验失败不算高危：不发 DANGEROUS_SQL_BLOCKED，仅记 warning。
+    for reason in ("SQL 解析失败", "SQL 为空", 'Expecting "(" ...'):
+        records.clear()
+        warnings.clear()
+        alarm_module.emit_dangerous_sql_alarm("select 1", reason)
+        assert records == []
+        assert len(warnings) == 1
+
+
 def test_service_token_and_forwarded_user_auth_branches(monkeypatch):
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "")
     with pytest.raises(auth.AuthenticationError, match="service token"):
