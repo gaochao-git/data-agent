@@ -258,7 +258,7 @@ async def test_latest_event_id_defaults_to_zero_cursor_without_terminal_record(m
 
 @pytest.mark.asyncio
 async def test_stream_ends_after_terminal_grace_when_stream_expired(monkeypatch):
-    """Redis Stream 过期且 Run 已终态：不做 MySQL 补偿，宽限后结束订阅。"""
+    """Redis Stream 过期且 Run 已终态：由 MySQL 权威终态补发结构化 done。"""
 
     class ExpiredBus:
         async def read_run(self, _run_id, _cursor):
@@ -267,7 +267,10 @@ async def test_stream_ends_after_terminal_grace_when_stream_expired(monkeypatch)
         async def run_stream_exists(self, _run_id):
             return False
 
-    service = AgentRunEventService(bus=ExpiredBus(), inbox_dao=_InboxDao(content={}, status="finished"))
+    service = AgentRunEventService(
+        bus=ExpiredBus(),
+        inbox_dao=_InboxDao(content={"next_run_id": "run-2"}, status="finished"),
+    )
 
     async def no_sleep(_seconds):
         return None
@@ -284,7 +287,10 @@ async def test_stream_ends_after_terminal_grace_when_stream_expired(monkeypatch)
 
     events = [event async for event in service.stream(run_id="run-1")]
 
-    assert events == []
+    assert len(events) == 1
+    assert events[0]["event_type"] == "done"
+    assert '"status": "finished"' in events[0]["payload"]
+    assert '"next_run_id": "run-2"' in events[0]["payload"]
 
 
 @pytest.mark.asyncio

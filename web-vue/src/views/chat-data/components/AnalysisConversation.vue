@@ -6,7 +6,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo, UserQuestionAnswer } from '../types'
-import { useSqlGenerator } from '../composables/useSqlGenerator'
+import { useSqlGenerator, type RunDoneStatus } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
@@ -65,7 +65,7 @@ const emit = defineEmits<{
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
 }>()
 
-const { generateSqlStream, stopGeneration } = useSqlGenerator()
+const { generateSqlStream } = useSqlGenerator()
 
 const userOverridable = ref(false)
 const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
@@ -124,6 +124,69 @@ const admitPendingMessages = (messageIds: string[]) => {
   }
 }
 
+/**
+ * done 已经代表后端完成了当前 Run 的收口。这里仅同步本地 UI，不能再用
+ * GET /steer 重新确认同一个终态；下一轮由 done.next_run_id 直接订阅。
+ */
+const applyRunDoneState = (
+  conversationId: string,
+  status: RunDoneStatus,
+  nextRunId: string | null,
+  currentRunId: string | null,
+) => {
+  stopSteerRestorePolling()
+  isStoppingRun.value = false
+
+  if (status === 'finished') {
+    finalizeUnfinishedToolCalls('completed')
+    finishStreamingMessages()
+    scheduleWorkspaceFilesRefresh()
+  } else if (status === 'cancelled') {
+    finalizeUnfinishedToolCalls('error', '已停止')
+    finishStreamingMessages()
+    activeAssistantMessageId.value = null
+  } else if (status === 'waiting_user') {
+    finishStreamingMessages()
+  }
+
+  if (status === 'finished' && nextRunId) {
+    hasActiveRun.value = true
+    activeRunId.value = nextRunId
+    activeRunStatus.value = 'pending'
+    activeRunTurnId.value = null
+    activeRunIsContinuation.value = true
+    activeRunEventId.value = '0-0'
+    activeRunResumeRunId.value = nextRunId
+    saveOwnedRun(conversationId, nextRunId)
+    emit('runStatusChanged', conversationId, 'pending')
+    return
+  }
+
+  if (status === 'waiting_user') {
+    hasActiveRun.value = true
+    activeRunStatus.value = 'waiting_user'
+    emit('runStatusChanged', conversationId, 'waiting_user')
+    return
+  }
+
+  // failed/cancelled 会把未确认消费的消息退回 pending；本地队列已有这些
+  // 消息时直接更新状态，避免为展示状态再发一次网络请求。
+  if (status === 'failed' || status === 'cancelled') {
+    pendingSteerMessages.value = pendingSteerMessages.value.map(item => (
+      item.status === 'claimed' ? { ...item, status: 'pending' } : item
+    ))
+  }
+  hasActiveRun.value = false
+  activeRunId.value = null
+  activeRunStatus.value = null
+  activeRunTurnId.value = null
+  activeRunIsContinuation.value = false
+  activeRunEventId.value = '0-0'
+  activeRunResumeRunId.value = null
+  clearOwnedRun(currentRunId || undefined)
+  emit('runStatusChanged', conversationId, null)
+}
+
 const startEditSteerMessage = (item: { content: string; messageId?: string }) => {
   if (!item.messageId || editingSteerId.value === item.messageId) return
   editingSteerId.value = item.messageId
@@ -134,6 +197,7 @@ const startEditSteerMessage = (item: { content: string; messageId?: string }) =>
 const restorePendingSteerQueue = async (options?: {
   restartPolling?: boolean
   preserveResumeCursor?: boolean
+  applyTerminal?: boolean
 }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
@@ -178,6 +242,20 @@ const restorePendingSteerQueue = async (options?: {
     pendingSteerMessages.value = reconciled.queue
     admitPendingMessages(reconciled.admittedMessageIds)
     reconcileOwnedRunMarker(conversationId)
+    const terminalStatus = response.data?.run_status
+    if (
+      options?.applyTerminal
+      && !hasActiveRun.value
+      && terminalStatus
+      && ['finished', 'failed', 'cancelled', 'waiting_user'].includes(terminalStatus)
+    ) {
+      applyRunDoneState(
+        conversationId,
+        terminalStatus as RunDoneStatus,
+        response.data?.next_run_id || null,
+        response.data?.run_id || null,
+      )
+    }
   } catch {
     // 恢复失败保持本地现状，不打断用户操作
   }
@@ -265,16 +343,11 @@ const startSteerRestorePolling = () => {
       stopSteerRestorePolling()
       return
     }
-    restorePendingSteerQueue({ restartPolling: false })
+    // 仅用于页面恢复或 SSE 异常断线。若 Run 已收口，快照中的
+    // MySQL Run 终态必须驱动与实时 done 相同的 UI 收口。
+    restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
   }, 5000)
 }
-
-watch(isGenerating, (generating) => {
-  if (!generating) {
-    // 本轮结束：队列消息可能已被系统取走或新增，同步一次
-    restorePendingSteerQueue()
-  }
-})
 
 const saveEditSteerMessage = async (item: { messageId?: string; content: string }) => {
   const conversationId = localConversationId.value || props.conversationId
@@ -2239,6 +2312,8 @@ const submitAnalysisQuery = async (
   isGenerating.value = true
   activeToolCallId.value = null
   let startedRunId: string | null = null
+  let completedNextRunId: string | null = null
+  let completedRunStatus: RunDoneStatus | null = null
   let convId: string | null = props.conversationId || null
   // Keep the previous request visible until the first usage event of this turn arrives.
   resetTokenUsagePanel(false)
@@ -2280,11 +2355,7 @@ const submitAnalysisQuery = async (
       {
         mode: 'query',
         onMessage: (msg) => handleLangGraphMessage(msg),
-        onResult: () => {
-          finalizeUnfinishedToolCalls('completed')
-          finishStreamingMessages()
-          scheduleWorkspaceFilesRefresh()
-        },
+        onResult: () => {},
         onStatus: () => {},
         onError: (error) => {
           if (options.interruptedQuestion) {
@@ -2382,6 +2453,16 @@ const submitAnalysisQuery = async (
           await loadHistory(resolvedConversationId, true)
           syncHistoryToolCalls()
         },
+        onRunCompleted: (info) => {
+          completedRunStatus = info.status
+          completedNextRunId = info.nextRunId || null
+          applyRunDoneState(
+            resolvedConversationId,
+            info.status,
+            info.status === 'finished' ? info.nextRunId || null : null,
+            startedRunId,
+          )
+        },
       },
     )
   } catch (err) {
@@ -2389,41 +2470,32 @@ const submitAnalysisQuery = async (
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
-    await restorePendingSteerQueue({ restartPolling: false })
-    if (options.autoResumeQueuedRun !== false) {
-      await resumeQueuedRunAfterCompletion(convId, startedRunId || activeRunId.value)
-    }
-  }
-}
 
-/**
- * Successful Run completion creates the next Run transactionally when its
- * inbox still has messages. Subscribe to that Run separately so one SSE
- * stream never contains multiple assistant turns.
- */
-const resumeQueuedRunAfterCompletion = async (conversationId: string | null, completedRunId: string | null) => {
-  if (!conversationId || !completedRunId || isStoppingRun.value) return
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise(resolve => window.setTimeout(resolve, 100))
-    await restorePendingSteerQueue({ restartPolling: false })
-    if (!hasActiveRun.value || !activeRunId.value || activeRunId.value === completedRunId) continue
-    if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
-    const nextRunId = activeRunId.value
-    // The previous assistant bubble is complete. The next Run gets its own
-    // bubble; its queued user messages arrive through inbox_admitted.
-    activeAssistantMessageId.value = null
-    await submitAnalysisQuery('', {
-      appendUserMessage: false,
-      preserveAssistant: false,
-      autoResumeQueuedRun: false,
-      responseFactory: signal => streamRunEvents(
-        conversationId,
-        nextRunId,
-        activeRunEventId.value,
-        signal,
-      ),
-    })
-    return
+    // 结构化 done 已包含终态和下一轮 Run，不再查询队列。只有旧协议或
+    // SSE 意外中断时没有足够信息，才用一次服务端快照恢复状态。
+    if (startedRunId && (completedRunStatus === null || completedRunStatus === 'legacy')) {
+      await restorePendingSteerQueue({ restartPolling: true, applyTerminal: true })
+    }
+    if (options.autoResumeQueuedRun !== false) {
+      const nextRunId = completedNextRunId
+      const conversationIdForNextRun = convId
+      if (conversationIdForNextRun && nextRunId && completedRunStatus === 'finished' && !isStoppingRun.value) {
+        // 服务端在 done 中直接给出了下一轮 Run ID（事务性创建已完成），
+        // 跳过轮询，立刻接续订阅。新 Run 从头回放，游标从 '0-0' 开始。
+        activeAssistantMessageId.value = null
+        await submitAnalysisQuery('', {
+          appendUserMessage: false,
+          preserveAssistant: false,
+          autoResumeQueuedRun: false,
+          responseFactory: signal => streamRunEvents(
+            conversationIdForNextRun,
+            nextRunId,
+            '0-0',
+            signal,
+          ),
+        })
+      }
+    }
   }
 }
 
@@ -2488,6 +2560,7 @@ const handleSubmit = async () => {
       input.value = query
       await restorePendingSteerQueue({ restartPolling: false })
       if (!hasActiveRun.value) {
+        if (isStoppingRun.value) return // 停止竞态下不得重新发起任务
         void submitAnalysisQuery(query)
         return
       }
@@ -2579,26 +2652,25 @@ const handleSubmit = async () => {
 const handleStop = async () => {
   if (isStoppingRun.value) return
   const conversationId = localConversationId.value || props.conversationId
+  const runId = activeRunId.value
+  if (!conversationId || !runId) return
   isStoppingRun.value = true
-  stopGeneration()
-  finalizeUnfinishedToolCalls('error', '已停止')
-  finishStreamingMessages()
-  activeAssistantMessageId.value = null
   try {
-    if (conversationId) {
-      if (activeRunId.value) await cancelConversationRun(conversationId, activeRunId.value)
-      for (let attempt = 0; attempt < 24; attempt += 1) {
-        await new Promise(resolve => window.setTimeout(resolve, 250))
-        await restorePendingSteerQueue({ restartPolling: false })
-        if (!hasActiveRun.value) break
-      }
+    const response = await cancelConversationRun(conversationId, runId)
+    if (!response.data?.cancelled) {
+      await restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
+      isStoppingRun.value = false
+      return
+    }
+    // 接口响应只代表后端已接受取消。若 done 尚未先到达，则显示停止中；
+    // 气泡、工具和历史终态全部由结构化 done 的统一回调收口。
+    if (hasActiveRun.value && activeRunId.value === runId) {
+      activeRunStatus.value = 'cancelling'
+      emit('runStatusChanged', conversationId, 'cancelling')
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
-  } finally {
-    isGenerating.value = false
     isStoppingRun.value = false
-    await restorePendingSteerQueue({ restartPolling: false })
+    ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
   }
 }
 

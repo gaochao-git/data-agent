@@ -486,7 +486,7 @@ def steer_router_state(router_state, monkeypatch):
             ],
         }
 
-    async def cancel_run(conversation_id, user_id, operator_name, run_id):
+    async def cancel_run(*, conversation_id, user_id, operator_name, run_id):
         calls["cancel_run"] = {
             "conversation_id": conversation_id,
             "user_id": user_id,
@@ -500,7 +500,7 @@ def steer_router_state(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.agent_inbox_service, "update_pending_message", update)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_pending_message", cancel)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "list_message_states", list_pending)
-    monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_active_run", cancel_run)
+    monkeypatch.setattr(conversation_router.agent_run_runtime, "cancel_run", cancel_run)
     return calls
 
 

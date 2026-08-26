@@ -352,7 +352,12 @@ class AgentInboxDao:
                 ChatDataAgentInbox.record_type == "run",
                 ChatDataAgentInbox.delete_flag == 0,
             )
+            # populate_existing：同事务内此前可能已普通读过该行（身份映射缓存了
+            # 旧属性），锁定读必须强制刷新，否则锁内状态校验读到的是加锁前的
+            # 过期值，多进程并发 prepare 会全部放行（REPEATABLE READ 下同样
+            # 看不到他事务已提交的 status=active）。
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 

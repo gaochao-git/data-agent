@@ -1,5 +1,9 @@
 import pytest
 
+from apps.chat_data_app.services.agent_run.agent_inbox_service import (
+    AgentRunCancellationResult,
+    AgentRunCompletionResult,
+)
 from apps.chat_data_app.services.agent_run.agent_run_runtime import AgentRunRuntime
 
 
@@ -22,13 +26,28 @@ def _prepared():
     }
 
 
+def _completion(status: str = "finished", next_run_id: str | None = None) -> AgentRunCompletionResult:
+    return AgentRunCompletionResult(status, next_run_id)
+
+
+class _ActiveInbox:
+    async def heartbeat_run(self, _run_id, _owner_token):
+        return "active"
+
+
 @pytest.mark.asyncio
 async def test_done_is_published_after_successful_generator_finalization(monkeypatch):
+    """正常结束：先 complete_run 落库，再发布唯一的结构化 done（含 next_run_id）。"""
     order = []
+    published_done = []
 
-    class Inbox:
+    class Inbox(_ActiveInbox):
         async def prepare_pending_run(self, _run_id):
             return _prepared()
+
+        async def complete_run(self, _run_id, _user_id, _operator_name, _owner_token):
+            order.append("run_completed")
+            return _completion(next_run_id="run-2")
 
         async def record_terminal_event(self, _run_id, stream_id):
             assert stream_id == "done-stream-0"
@@ -43,20 +62,16 @@ async def test_done_is_published_after_successful_generator_finalization(monkeyp
         async def release_owner(self, _run_id, _owner_token):
             order.append("owner_released")
 
-        @staticmethod
-        def is_terminal_payload(payload):
-            return "event: done" in payload
-
         async def append(self, **kwargs):
             if "event: done" in kwargs["payload"]:
                 order.append("done_published")
+                published_done.append(kwargs["payload"])
                 return "done-stream-0"
             order.append("message_published")
             return "message-stream-0"
 
     async def stream():
         yield "event: message\ndata: {}\n\n"
-        yield "event: done\ndata: [DONE]\n\n"
         order.append("generator_finalized")
 
     runtime = AgentRunRuntime(
@@ -68,22 +83,71 @@ async def test_done_is_published_after_successful_generator_finalization(monkeyp
 
     await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
 
-    assert order.index("generator_finalized") < order.index("done_published")
-    # done 进入 Redis 后才把终止游标写入 inbox 行，供问答恢复兜底。
+    # 终态顺序契约：执行结束 → 落库收口 → 发布 done → 游标落库 → 释放租约。
+    assert order.index("generator_finalized") < order.index("run_completed")
+    assert order.index("run_completed") < order.index("done_published")
     assert order.index("done_published") < order.index("terminal_recorded")
     assert order[-1] == "owner_released"
+    assert '"status": "finished"' in published_done[0]
+    assert '"next_run_id": "run-2"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_completion_honors_concurrent_cancellation(monkeypatch):
+    """流结束与停止并发时，以 MySQL 定稿的 cancelled 为准，不能误发 finished。"""
+    published_done = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def complete_run(self, *_args, **_kwargs):
+            return _completion(status="cancelled")
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            return None
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            return None
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                published_done.append(kwargs["payload"])
+            return "stream-0"
+
+    async def stream():
+        yield "event: message\ndata: {}\n\n"
+
+    runtime = AgentRunRuntime(inbox_service=Inbox(), event_service=Events(), event_bus=Events.bus)
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert len(published_done) == 1
+    assert '"status": "cancelled"' in published_done[0]
+    assert '"status": "finished"' not in published_done[0]
 
 
 @pytest.mark.asyncio
 async def test_done_is_published_after_failed_run_is_closed(monkeypatch):
+    """失败结束：finish_run("failed") 先落库，再发布 status=failed 的 done。"""
     order = []
+    published_done = []
 
-    class Inbox:
+    class Inbox(_ActiveInbox):
         async def prepare_pending_run(self, _run_id):
             return _prepared()
 
-        async def finish_run(self, *_args):
+        async def finish_run(self, run_id, status, *_args, **_kwargs):
+            assert status == "failed"
             order.append("run_failed")
+            return "failed"
 
         async def record_terminal_event(self, _run_id, _stream_id):
             order.append("terminal_recorded")
@@ -97,20 +161,16 @@ async def test_done_is_published_after_failed_run_is_closed(monkeypatch):
         async def release_owner(self, _run_id, _owner_token):
             order.append("owner_released")
 
-        @staticmethod
-        def is_terminal_payload(payload):
-            return "event: done" in payload
-
         async def append(self, **kwargs):
             if "event: done" in kwargs["payload"]:
                 order.append("done_published")
+                published_done.append(kwargs["payload"])
                 return "done-stream-0"
             order.append("event_published")
             return "event-stream-0"
 
     async def stream():
         yield "event: error\ndata: {}\n\n"
-        yield "event: done\ndata: [DONE]\n\n"
         raise RuntimeError("agent failed")
 
     runtime = AgentRunRuntime(
@@ -125,16 +185,230 @@ async def test_done_is_published_after_failed_run_is_closed(monkeypatch):
     assert order.index("run_failed") < order.index("done_published")
     assert order.index("done_published") < order.index("terminal_recorded")
     assert order[-1] == "owner_released"
+    assert '"status": "failed"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_handler_stream_failure_exception_closes_run_as_failed(monkeypatch):
+    """真实链路契约：Handler 生成器产出 error 事实后抛 AgentRunStreamFailedError，
+    Runtime 必须走 finish_run("failed") 收口，绝不能落入 complete_run 误标 finished。"""
+    from apps.chat_data_app.handlers import AgentRunStreamFailedError
+
+    order = []
+    published_done = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, _run_id, status, *_args, **_kwargs):
+            assert status == "failed"
+            order.append("run_failed")
+            return "failed"
+
+        async def complete_run(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("失败流不应触发 complete_run")
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+                published_done.append(kwargs["payload"])
+                return "done-stream-0"
+            order.append("error_published")
+            return "error-stream-0"
+
+    async def stream():
+        yield 'event: error\ndata: {"error": "智能问数执行失败，请稍后重试。"}\n\n'
+        raise AgentRunStreamFailedError
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert order.index("error_published") < order.index("run_failed")
+    assert order.index("run_failed") < order.index("done_published")
+    assert order[-1] == "owner_released"
+    assert '"status": "failed"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_waiting_user_publishes_done_without_complete_run(monkeypatch):
+    """等待用户：mark_waiting_for_user 已落库，Runtime 只发布 done，不再收口。"""
+    order = []
+    published_done = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def complete_run(self, *_args, **_kwargs):  # pragma: no cover - 不应被调用
+            raise AssertionError("waiting_user 不应触发 complete_run")
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+                published_done.append(kwargs["payload"])
+                return "done-stream-0"
+            order.append("question_published")
+            return "question-stream-0"
+
+    async def stream():
+        yield 'event: question_requested\ndata: {"question_id": "q1"}\n\n'
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert "done_published" in order
+    assert '"status": "waiting_user"' in published_done[0]
+    assert order[-1] == "owner_released"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_closes_and_publishes_cancelled_done(monkeypatch):
+    """用户取消：finish_run("cancelled") 后发布 status=cancelled 的 done 进 Redis。"""
+    import asyncio
+
+    order = []
+    published_done = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, _run_id, status, *_args, **_kwargs):
+            assert status == "cancelled"
+            order.append("run_cancelled")
+            return "cancelled"
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+                published_done.append(kwargs["payload"])
+                return "done-stream-0"
+            order.append("message_published")
+            return "message-stream-0"
+
+    async def stream():
+        yield "event: message\ndata: {}\n\n"
+        raise asyncio.CancelledError("agent_run_cancelled")
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert order.index("run_cancelled") < order.index("done_published")
+    assert order.index("done_published") < order.index("terminal_recorded")
+    assert order[-1] == "owner_released"
+    assert '"status": "cancelled"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
+    """租约丢失的取消不收口也不发布——流已归新 Worker 所有。"""
+    import asyncio
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("租约丢失不应收口")
+
+        async def record_terminal_event(self, _run_id, _stream_id):  # pragma: no cover
+            raise AssertionError("租约丢失不应记录终态游标")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            pass
+
+        async def append(self, **kwargs):  # pragma: no cover
+            raise AssertionError("租约丢失不应发布任何事件")
+
+    async def stream():
+        raise asyncio.CancelledError("agent_run_lease_lost")
+        yield  # pragma: no cover - 保持异步生成器类型
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
 
 
 @pytest.mark.asyncio
 async def test_terminal_record_failure_does_not_break_owner_release(monkeypatch):
     """终止游标落库失败只降级（Redis 内 done 仍可用），不影响收尾。"""
     order = []
+    published_done = []
 
-    class Inbox:
+    class Inbox(_ActiveInbox):
         async def prepare_pending_run(self, _run_id):
             return _prepared()
+
+        async def complete_run(self, *_args, **_kwargs):
+            return _completion()
 
         async def record_terminal_event(self, _run_id, _stream_id):
             raise RuntimeError("mysql unavailable")
@@ -148,17 +422,14 @@ async def test_terminal_record_failure_does_not_break_owner_release(monkeypatch)
         async def release_owner(self, _run_id, _owner_token):
             order.append("owner_released")
 
-        @staticmethod
-        def is_terminal_payload(payload):
-            return "event: done" in payload
-
         async def append(self, **kwargs):
             if "event: done" in kwargs["payload"]:
                 order.append("done_published")
+                published_done.append(kwargs["payload"])
             return "stream-0"
 
     async def stream():
-        yield "event: done\ndata: [DONE]\n\n"
+        yield "event: message\ndata: {}\n\n"
 
     runtime = AgentRunRuntime(
         inbox_service=Inbox(),
@@ -170,6 +441,7 @@ async def test_terminal_record_failure_does_not_break_owner_release(monkeypatch)
     await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
 
     assert order == ["done_published", "owner_released"]
+    assert '"status": "finished"' in published_done[0]
 
 
 def test_build_stream_factory_requires_injected_stream_generator():
@@ -226,6 +498,7 @@ async def test_cancel_local_cancels_in_process_task_with_cancel_reason():
 
     task = asyncio.create_task(running())
     runtime._tasks["run-1"] = task
+    runtime._owned_runs.add("run-1")
     await asyncio.sleep(0)
 
     assert runtime.cancel_local("run-1") is True
@@ -252,3 +525,53 @@ async def test_cancel_local_returns_false_when_task_absent_or_done():
     await task
     runtime._tasks["run-2"] = task
     assert runtime.cancel_local("run-2") is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_pending_run_publishes_terminal_after_mysql_close():
+    order = []
+
+    class Inbox:
+        async def cancel_active_run(self, *_args):
+            order.append("mysql_closed")
+            return AgentRunCancellationResult(
+                cancelled=True,
+                status="cancelled",
+                terminal_owner_token="1:cancel",
+            )
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            order.append("owner_claimed")
+
+        async def append(self, **kwargs):
+            order.append("done_published")
+            assert kwargs["event_id"] == "run-1:terminal:1:cancel"
+            assert '"status": "cancelled"' in kwargs["payload"]
+            return "done-stream-0"
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+    runtime = AgentRunRuntime(inbox_service=Inbox(), event_service=Events(), event_bus=Events.bus)
+
+    cancelled = await runtime.cancel_run(
+        run_id="run-1",
+        conversation_id="conv-1",
+        user_id="user-1",
+        operator_name="用户一",
+    )
+
+    assert cancelled is True
+    assert order == [
+        "mysql_closed",
+        "owner_claimed",
+        "done_published",
+        "terminal_recorded",
+        "owner_released",
+    ]

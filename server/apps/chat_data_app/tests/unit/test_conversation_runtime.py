@@ -62,7 +62,7 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
         after_turn=lambda: hook("after"),
     ))
 
-    assert events == ["event: message\n\n", "event: message_end\n\n", "event: done\n\n"]
+    assert events == ["event: message\n\n", "event: message_end\n\n"]
     assert adapter.finish_calls == [{"persist_latest_ai_timestamp": True}]
     assert set(calls[:2]) == {"user", "before"}
     assert calls[2:] == ["history", "finalize:True", "after"]
@@ -94,7 +94,7 @@ async def test_stream_agent_turn_starts_model_before_slow_user_persistence_finis
     ))
 
     assert model_started.is_set()
-    assert events == ["event: message\n\n", "event: message_end\n\n", "event: done\n\n"]
+    assert events == ["event: message\n\n", "event: message_end\n\n"]
 
 
 @pytest.mark.asyncio
@@ -186,7 +186,6 @@ async def test_stream_agent_turn_emits_final_events_once():
     assert events == [
         "event: message\n\n",
         "event: message_end\n\n",
-        "event: done\n\n",
     ]
     assert calls == ["user", "history", "after_stream"]
 
@@ -208,7 +207,7 @@ async def test_stream_agent_turn_runs_after_finish_before_history():
         after_finish=lambda: hook("checkpointed"),
     ))
 
-    assert events[-2:] == ["event: message_end\n\n", "event: done\n\n"]
+    assert events[-1:] == ["event: message_end\n\n"]
     assert calls == ["user", "checkpointed", "history"]
 
 

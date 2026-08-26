@@ -56,6 +56,8 @@ def _stub_conversation_event_writes(monkeypatch):
         async def run():
             queue = event_queues.setdefault(run_id, asyncio.Queue())
             context = run_contexts[run_id]
+            # 对齐 Runtime 契约：生成器只产事实，结构化 done 由消费方（Runtime）收口发布。
+            status = "finished"
             try:
                 async for payload in handler_module._generate_chat_data_stream(
                     thread_id=conversation_id,
@@ -76,9 +78,12 @@ def _stub_conversation_event_writes(monkeypatch):
                     owner_token="test-owner",
                     adopted_messages=[],
                 ):
+                    if payload.startswith("event: question_requested"):
+                        status = "waiting_user"
                     await queue.put(payload)
             except Exception:
-                await queue.put(handler_module._format_sse("done", "[DONE]"))
+                status = "failed"
+            await queue.put(handler_module._format_sse("done", {"status": status}))
 
         asyncio.create_task(run())
 
@@ -237,7 +242,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     assert "cfg_user" in text
     assert "已分别查询订单金额和用户数。" in text
     assert "event: message_end" in text
-    assert text.rstrip().endswith("data: [DONE]")
+    assert text.rstrip().endswith('"status": "finished"}')
 
     assert "mode" not in graph.initial_state
     assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"

@@ -18,6 +18,21 @@ logger = get_logger(__name__)
 QUESTION_DONE_WAIT_SECONDS = 10.0
 QUESTION_DONE_DURABLE_POLL_SECONDS = 0.5
 TERMINAL_PERSISTENCE_GRACE_SECONDS = 10.0
+TERMINAL_STATUSES = {"finished", "succeeded", "failed", "cancelled", "waiting_user"}
+
+
+def format_terminal_done(status: str, next_run_id: str | None = None) -> str:
+    """把 Run 权威状态编码为 SSE done；done 只在后端收口完成后产生。"""
+    status = str(status or "failed")
+    if status == "succeeded":
+        status = "finished"
+    if status not in {"finished", "failed", "cancelled", "waiting_user"}:
+        status = "failed"
+    data = {"status": status}
+    next_run_id = str(next_run_id or "").strip()
+    if data["status"] == "finished" and next_run_id:
+        data["next_run_id"] = next_run_id
+    return f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 class AgentRunEventService:
@@ -178,19 +193,25 @@ class AgentRunEventService:
                 logger.warning("读取 Run 状态失败，保持 SSE 订阅等待重试: run_id=%s", run_id, exc_info=True)
                 await asyncio.sleep(0.5)
                 continue
-            if snapshot is None or snapshot["status"] in {
-                "finished",
-                "succeeded",
-                "failed",
-                "cancelled",
-                "waiting_user",
-            }:
+            if snapshot is None or snapshot["status"] in TERMINAL_STATUSES:
                 # inbox 终态先于 done 事件发布提交；宽限期内继续读流，
                 # 等待终止事件到达后再结束订阅。
                 now = asyncio.get_running_loop().time()
                 if terminal_detected_at is None:
                     terminal_detected_at = now
                 if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
+                    if snapshot is not None:
+                        terminal_status = "finished" if snapshot["status"] == "succeeded" else snapshot["status"]
+                        yield {
+                            "stream_id": cursor,
+                            "run_id": run_id,
+                            "conversation_id": str(snapshot.get("conversation_id") or ""),
+                            "user_id": str(snapshot.get("user_id") or ""),
+                            "event_id": f"{run_id}:terminal:fallback",
+                            "event_type": "done",
+                            "sequence_no": "0",
+                            "payload": format_terminal_done(terminal_status, snapshot.get("next_run_id")),
+                        }
                     return
                 await asyncio.sleep(0.2)
                 continue
@@ -214,7 +235,17 @@ class AgentRunEventService:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
             if row is None:
                 return None
-            return {"status": row.status, "conversation_id": row.conversation_id, "user_id": row.user_id}
+            try:
+                content = json.loads(row.content or "{}")
+            except (TypeError, ValueError):
+                content = {}
+            next_run_id = content.get("next_run_id") if isinstance(content, dict) else None
+            return {
+                "status": row.status,
+                "conversation_id": row.conversation_id,
+                "user_id": row.user_id,
+                "next_run_id": str(next_run_id).strip() if next_run_id else None,
+            }
 
     @staticmethod
     def _event_type(payload: str) -> str:

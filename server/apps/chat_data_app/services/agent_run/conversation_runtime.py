@@ -72,7 +72,7 @@ async def stream_agent_turn(
                 await finalize_resources(True)
                 resources_finalized = True
             yield format_sse("question_requested", interrupt_payload)
-            yield format_sse("done", "[DONE]")
+            # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
             return
         if stream_adapter.disconnected:
             if on_disconnect:
@@ -87,7 +87,7 @@ async def stream_agent_turn(
         if after_turn:
             await after_turn()
         yield format_sse("message_end", end_payload)
-        yield format_sse("done", "[DONE]")
+        # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
         if user_persistence_task and not user_persistence_task.done():
             user_persistence_task.cancel()

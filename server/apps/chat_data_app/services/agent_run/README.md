@@ -15,7 +15,7 @@ Agent 工具通过本目录的运行时访问工作区，不直接依赖宿主�
 | 直播 | chunk/token | Redis Stream（per-run key `chatdata:run:{run_id}:events`） | TTL 1h，可丢弃 | `redis_event_bus.py`（Lua 原子 publish） |
 | 快照 | 消息（步骤定稿） | `chat_data_conversation_event` | 永久 | handlers 增量幂等追加（event_key 唯一约束） |
 | 锚点 | 终态游标 | inbox 行 `terminal_event` | 永久 | runtime → `record_terminal_event` |
-| 账本 | Run 状态/租约/队列 | `chat_data_agent_inbox` | 永久 | `agent_inbox_service.py` |
+| 账本 | Run 状态/租约/队列/下一轮关联 | `chat_data_agent_inbox` | 永久 | `agent_inbox_service.py` |
 
 核心判断：**持久化粒度是消息级，不是 token 级**。token 级只存在于直播层；历史、审计、恢复等持久化需求全部由消息级快照满足。
 
@@ -32,7 +32,8 @@ Agent 工具通过本目录的运行时访问工作区，不直接依赖宿主�
 ```
 token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷TTL
 步骤完成  ──► conversation_event 幂等追加
-终态      ──► ① complete_run（MySQL 定稿：状态/内容/下一轮调度/清 MySQL owner）
+终态      ──► ① complete_run / finish_run（MySQL 定稿：status、可选 content.next_run_id、
+                    下一轮调度、清 MySQL owner）
              ──► ② publish done 到 Redis（Redis owner key 仍有效——独立于 MySQL，
                     由 ④ 才清除，故 Lua 校验必过）
              ──► ③ record_terminal_event 锚点落库
@@ -43,7 +44,8 @@ token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷T
 
 1. ②③ 必须在 ④ 之前：done 进流、锚点落库时发布方必须仍持有 Redis 所有权。
 2. ① 先于 ② 是刻意设计：done 对观看者可见时最终历史已提交（read-your-writes）。
-3. ①② 之间的窗口由 SSE 读取侧宽限期兜底（`TERMINAL_PERSISTENCE_GRACE_SECONDS = 10s`）：run 已终态但 done 未到时，宽限期内继续读流，超时后用 `latest_run_event` 直查补发 done。
+3. ①② 之间的窗口由 SSE 读取侧宽限期兜底（`TERMINAL_PERSISTENCE_GRACE_SECONDS = 10s`）：Run 已终态但 Redis 中没有 done 时，宽限期内继续读流，超时后用 MySQL `status + content.next_run_id` 合成同一结构化 done。
+4. `done` 数据固定携带 `status=finished|failed|cancelled|waiting_user`，成功且已创建下一轮时附带 `next_run_id`；纯文本 `[DONE]` 只作为旧协议哨兵，不承载业务终态。
 
 ### 断点恢复矩阵
 

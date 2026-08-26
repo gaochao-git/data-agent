@@ -641,11 +641,12 @@ async def cancel_active_run(conversation_id: str, req: Request, run_id: str = Qu
                 status="error",
                 http_status_code=http_status.HTTP_404_NOT_FOUND,
             )
-        cancelled = await agent_inbox_service.cancel_active_run(conversation_id, user_id, username, run_id)
-        if cancelled and agent_run_runtime.cancel_local(run_id):
-            # 执行者恰好在本进程：直接取消任务（毫秒级），收口仍由执行段
-            # finally 完成；不在本进程时由执行者心跳读 cancelling 兜底。
-            logger.info("停止请求命中本进程执行者，已直接取消: run_id=%s", run_id)
+        cancelled = await agent_run_runtime.cancel_run(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+        )
         return business_response(data={"cancelled": cancelled}, msg="已停止" if cancelled else "当前没有运行中的任务")
     except AuthenticationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

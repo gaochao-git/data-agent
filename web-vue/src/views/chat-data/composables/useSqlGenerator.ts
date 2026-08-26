@@ -5,6 +5,19 @@
 
 import { ref } from 'vue'
 import { streamCompletion } from '../api'
+
+/**
+ * Run 终态：服务端结构化 done 事件的 status 字段。
+ * legacy = 旧协议纯文本 [DONE]（只有流结束信号，无业务状态，不可推断成功）。
+ */
+export type RunDoneStatus = 'finished' | 'failed' | 'cancelled' | 'waiting_user' | 'legacy'
+const STRUCTURED_DONE_STATUSES = new Set<RunDoneStatus>([
+  'finished',
+  'failed',
+  'cancelled',
+  'waiting_user',
+])
+
 import type {
   NL2SQLResult,
   LangGraphMessage,
@@ -111,6 +124,7 @@ export function useSqlGenerator() {
       onRunEvent?: (eventId: string) => void
       onFirstEvent?: () => void
       onRunRestarted?: () => void | Promise<void>
+      onRunCompleted?: (info: { status: RunDoneStatus; nextRunId?: string | null }) => void
     } = {},
   ): Promise<void> => {
     const {
@@ -142,6 +156,7 @@ export function useSqlGenerator() {
       onRunEvent,
       onFirstEvent,
       onRunRestarted,
+      onRunCompleted,
     } = options
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -229,6 +244,10 @@ export function useSqlGenerator() {
       let interrupted = false
       let firstEventHandled = false
       const lifecycleToolCallIds = new Set<string>()
+      // error 事实先于终态到达（failed = error + done）：只记录不中断，
+      // 继续读取直到结构化 done，避免提前退出丢失 onRunCompleted 终态通知。
+      let streamErrorMsg: string | null = null
+      let doneStatus: RunDoneStatus | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -244,13 +263,30 @@ export function useSqlGenerator() {
             onFirstEvent?.()
           }
           if (id) onRunEvent?.(id)
-          // 处理结束事件（与 React 版本一致）
+          // 处理结束事件：结构化 done 携带 Run 终态（status / next_run_id）。
           if (event === 'done' || dataStr === '[DONE]') {
+            let status: RunDoneStatus = 'legacy'
+            let nextRunId: string | null = null
+            if (dataStr !== '[DONE]') {
+              try {
+                const parsed = JSON.parse(dataStr)
+                if (parsed && STRUCTURED_DONE_STATUSES.has(parsed.status as RunDoneStatus)) {
+                  status = parsed.status as RunDoneStatus
+                }
+                if (parsed && typeof parsed.next_run_id === 'string' && parsed.next_run_id) {
+                  nextRunId = parsed.next_run_id
+                }
+              } catch {
+                // 非法 JSON，按旧协议处理（只代表流结束）。
+              }
+            }
+            if (status !== 'legacy') onRunCompleted?.({ status, nextRunId })
+            doneStatus = status
             streamEnded = true
             break
           }
 
-          // 处理错误事件
+          // 处理错误事件：记录后继续读取（done 随后到达，见 done 分支）
           if (event === 'error') {
             let errorMsg = dataStr
             try {
@@ -259,7 +295,8 @@ export function useSqlGenerator() {
             } catch {
               // 保留原始文本。
             }
-            throw new Error(errorMsg)
+            streamErrorMsg = errorMsg
+            continue
           }
 
           if (event === 'message_end') {
@@ -386,18 +423,12 @@ export function useSqlGenerator() {
             continue
           }
 
-          // 处理 message 事件
+          // 处理 message 事件（错误事实统一走 event: error，此处不再拦截 data.error）
           if (event === 'message') {
             try {
               const data = JSON.parse(dataStr)
-              if (data.error) {
-                throw new Error(data.error)
-              }
               onMessage?.(data as LangGraphMessage)
             } catch (err) {
-              if (err instanceof Error && err.message !== dataStr) {
-                throw err
-              }
               console.error('解析 SSE 数据失败:', err, dataStr)
             }
             continue
@@ -417,11 +448,17 @@ export function useSqlGenerator() {
       }
 
       if (!streamEnded) {
-        throw new Error('流式连接意外中断，请重新进入会话继续接收')
+        // 流意外中断：优先呈现已记录的业务错误，其次才是连接中断提示。
+        throw new Error(streamErrorMsg || '流式连接意外中断，请重新进入会话继续接收')
       }
 
-      // 只有明确收到 done 才通知完成。
-      if (!interrupted) onResult?.({} as NL2SQLResult)
+      // 失败终态：onRunCompleted 已先解锁停止流程，这里再把错误抛给失败回调。
+      if (streamErrorMsg) {
+        throw new Error(streamErrorMsg)
+      }
+
+      // 只有明确成功才触发成功回调；cancelled/failed/waiting_user/legacy 各走自己的状态处理。
+      if (doneStatus === 'finished' && !interrupted) onResult?.({} as NL2SQLResult)
     } catch (err) {
       // 用户主动取消不算错误，也不应误报为成功。
       if (err instanceof DOMException && err.name === 'AbortError') {

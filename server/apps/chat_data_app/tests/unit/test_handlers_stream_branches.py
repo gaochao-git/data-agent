@@ -100,11 +100,26 @@ async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monk
         ):
             events.append(event)
 
-    assert [sse_event_name(event) for event in events] == ["error", "done"]
+    assert [sse_event_name(event) for event in events] == ["error"]  # done 由 Runtime 统一发布
 
 
 async def collect_stream(generator):
     return [chunk async for chunk in generator]
+
+
+async def _collect_stream_until_failure(generator):
+    """收集事件并按契约捕获 AgentRunStreamFailedError，返回 (chunks, failure)。
+
+    failure 非 None 表示生成器把失败异常抛给了调用方（Runtime）；
+    其他异常（如准备阶段的 RuntimeError）不在此捕获，继续向外抛。
+    """
+    chunks = []
+    try:
+        async for chunk in generator:
+            chunks.append(chunk)
+    except handlers.AgentRunStreamFailedError as exc:
+        return chunks, exc
+    return chunks, None
 
 
 def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
@@ -214,7 +229,7 @@ async def test_stream_agent_turn_emits_question_and_skips_message_end():
     )]
 
     assert calls == [question]
-    assert [sse_event_name(event) for event in events] == ["question_requested", "done"]
+    assert [sse_event_name(event) for event in events] == ["question_requested"]
 
 
 def FakeChunk(
@@ -690,7 +705,7 @@ async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeyp
     assert "semantic_config_select_required" not in text
     assert '"status": "pending"' not in text
     assert "message_end" in text
-    assert text.rstrip().endswith("data: [DONE]")
+    assert "event: done" not in text  # done 由 Runtime 统一发布，生成器不再输出
 
 
 @pytest.mark.asyncio
@@ -729,13 +744,14 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
         semantic_config=None,
         semantic_config_error="未找到可用指标集: missing",
     )
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查销售额",
         datasource_id="ds",
         semantic_config_id="missing",
     ))
     assert "未找到可用指标集: missing" in "".join(chunks)
+    assert failure is not None  # 失败异常抛给 Runtime 收口，不被 Handler 吞掉
 
     class BadCheckpointer:
         async def __aenter__(self):
@@ -746,9 +762,12 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
 
     _override_semantic_context(monkeypatch)
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: BadCheckpointer())
-    chunks = await collect_stream(handlers._generate_chat_data_stream("conv", "hello"))
+    # checkpointer 失败发生在图执行守卫段内：补发 error 后按流失败契约抛
+    # AgentRunStreamFailedError，由 Runtime 收口为 failed。
+    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream("conv", "hello"))
     assert "智能问数执行失败，请稍后重试。" in "".join(chunks)
     assert "checkpoint down" not in "".join(chunks)
+    assert failure is not None
 
 
 @pytest.mark.asyncio
@@ -1119,7 +1138,7 @@ async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_n
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1128,6 +1147,7 @@ async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_n
 
     assert "未找到可用指标集: missing" in "".join(chunks)
     assert graph.initial_state is None
+    assert failure is not None  # 失败异常抛给 Runtime 收口，不被 Handler 吞掉
 
 
 @pytest.mark.asyncio
@@ -1262,3 +1282,25 @@ async def test_generate_chat_data_stream_message_end_without_token_usage(monkeyp
     assert "message_end" in text
     assert '"timestamp":' in text
     assert '"usage"' not in text
+
+
+
+
+
+@pytest.mark.asyncio
+async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
+    """租约丢失的取消不发布终态事件——流已归新 Worker 所有。"""
+    import asyncio
+
+    async def fake_inner(**_kwargs):
+        raise asyncio.CancelledError("agent_run_lease_lost")
+        yield 'event: message\ndata: {}\n\n'  # pragma: no cover -- 使其成为异步生成器
+
+    monkeypatch.setattr(handlers, "_run_chat_data_agent_stream", fake_inner)
+
+    events = []
+    with pytest.raises(asyncio.CancelledError):
+        async for event in handlers._generate_chat_data_stream(thread_id="conv", user_query="查"):
+            events.append(event)
+
+    assert events == []

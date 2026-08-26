@@ -32,6 +32,7 @@ from apps.chat_data_app.handlers import (
     _resolve_active_tool_call_id,
     prepare_conversation_workspace,
     sql_completion_handler,
+    AgentRunStreamFailedError,
 )
 from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
 from apps.chat_data_app.services.agent_run.context_budget import ContextInputLimitExceededError
@@ -346,6 +347,21 @@ async def _fake_checkpointer():
 
 async def _collect_async_iter(async_iterable):
     return [item async for item in async_iterable]
+
+
+async def _collect_async_iter_until_failure(async_iterable):
+    """收集事件并捕获 AgentRunStreamFailedError，返回 (events, failure)。
+
+    failure 非 None 表示生成器按契约把失败异常抛给了调用方（Runtime）。
+    """
+    events = []
+    failure = None
+    try:
+        async for item in async_iterable:
+            events.append(item)
+    except AgentRunStreamFailedError as exc:
+        failure = exc
+    return events, failure
 
 
 def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selected(monkeypatch):
@@ -853,7 +869,7 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     assert 'event: message_end' in joined
     assert '"usage": {"total_tokens": 12}' in joined
     assert '"timestamp":' in joined
-    assert events[-1] == "event: done\ndata: [DONE]\n\n"
+    assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
     assert fake_graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
     assert fake_graph.initial_state["operator_name"] == "测试用户"
 
@@ -967,7 +983,7 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True))
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_error",
         user_query="查订单数",
         datasource_id="ds_a",
@@ -976,7 +992,9 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     joined = "".join(events)
     assert 'event: error\ndata: {"error": "智能问数执行失败，请稍后重试。"}' in joined
     assert "graph failed" not in joined
-    assert events[-1] == "event: done\ndata: [DONE]\n\n"
+    assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
+    # 失败异常必须抛给 Runtime（由其 finish_run("failed") 收口），不能被 Handler 吞掉。
+    assert failure is not None
 
 
 def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypatch):
@@ -991,7 +1009,7 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_context_limit",
         user_query="查订单数",
         datasource_id="ds_a",
@@ -1000,7 +1018,8 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     joined = "".join(events)
     assert "当前输入内容过长，请拆分问题后重试。" in joined
     assert "智能问数执行失败，请稍后重试。" not in joined
-    assert events[-1] == "event: done\ndata: [DONE]\n\n"
+    assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
+    assert failure is not None  # 失败异常抛给 Runtime 收口
 
 
 def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
@@ -1011,13 +1030,14 @@ def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
         semantic_config=None,
         semantic_config_error="未找到可用指标集: cfg_missing",
     )
-    missing_events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    missing_events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_missing_semantic",
         user_query="查订单",
         datasource_id="ds_a",
         semantic_config_id="cfg_missing",
     )))
     assert "未找到可用指标集: cfg_missing" in "".join(missing_events)
+    assert failure is not None  # 失败异常抛给 Runtime 收口
 
 
 
@@ -1061,7 +1081,7 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_state_fail",
         user_query="查订单",
         datasource_id="ds_a",
@@ -1069,7 +1089,8 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
 
     joined = "".join(events)
     assert "完成" in joined
-    assert "event: done" in joined
+    assert "event: done" not in joined  # done 由 Runtime 统一发布
+    assert failure is not None  # state 查找失败属于流失败契约，异常抛给 Runtime 收口
 
 
 def test_sql_completion_handler_wraps_stream(monkeypatch):

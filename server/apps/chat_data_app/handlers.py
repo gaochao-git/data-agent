@@ -1140,7 +1140,9 @@ async def _generate_chat_data_stream(
         asyncio.create_task(_heartbeat_agent_run(run_id, owner_task, owner_token))
         if run_id else None
     )
-    terminal_status: str | None = None
+    # 生命周期契约：本生成器只产出执行事实（业务事件 / error / question_requested），
+    # 不发 done、不做收口。Run 的终态判定、complete_run/finish_run 调用与结构化
+    # done 发布统一由 AgentRunRuntime（唯一生命周期 owner）完成。
     try:
         async for event in _run_chat_data_agent_stream(
             thread_id=thread_id,
@@ -1170,43 +1172,23 @@ async def _generate_chat_data_stream(
             log_phase=log_phase,
         ):
             yield event
-        terminal_status = "finished"
-    except asyncio.CancelledError as exc:
-        terminal_status = "cancelled" if exc.args and exc.args[0] == "agent_run_cancelled" else None
-        raise
     except AgentRunStreamFailedError:
-        terminal_status = "failed"
+        # 失败事实（error 事件）已由内层产出；异常必须继续抛给 Runtime，
+        # 由唯一生命周期 owner 执行 finish_run("failed") 并发布 done {"status":"failed"}。
+        # 若在此吞掉，Runtime 会把失败流当作正常结束走 complete_run，误标为 finished。
+        logger.info("ChatData Agent 流式执行失败结束: conversation_id=%s", thread_id)
+        raise
     except Exception:
-        terminal_status = "failed"
-        # Preparation can fail before _run_chat_data_agent_stream enters its
-        # own guarded section. The background runtime still needs a terminal
-        # SSE pair so subscribers do not wait until their timeout.
+        # 进入内层守卫段之前（准备阶段）的失败：内层来不及产出 error 事实，
+        # 这里补发一条；终态收口与 done 发布同样交给 Runtime。
+        logger.error("智能问数执行准备失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
-        yield _format_sse("done", "[DONE]")
         raise
     finally:
         if heartbeat_task:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        try:
-            if run_id and terminal_status == "finished" and owner_token:
-                await agent_inbox_service.complete_run(
-                    run_id,
-                    user_id or "system",
-                    username or user_id or "system",
-                    owner_token,
-                )
-            elif run_id and terminal_status in {"cancelled", "failed"}:
-                await agent_inbox_service.finish_run(
-                    run_id,
-                    terminal_status or "cancelled",
-                    user_id or "system",
-                    username or user_id or "system",
-                    owner_token,
-                )
-        except AgentRunLeaseLostError:
-            logger.info("智能问数 Run 租约已丢失，跳过旧 Worker 收口: run_id=%s", run_id)
 
 
 async def _heartbeat_agent_run(
@@ -1216,7 +1198,7 @@ async def _heartbeat_agent_run(
 ) -> None:
     """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
             if heartbeat_status == "active" and owner_token:
@@ -1282,7 +1264,6 @@ async def _run_chat_data_agent_stream(
     if semantic_context.semantic_config_error:
         logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
         yield _format_sse("error", {"error": semantic_context.semantic_config_error})
-        yield _format_sse("done", "[DONE]")
         raise AgentRunStreamFailedError from None
     datasource_id = semantic_context.datasource_id
     if datasource_id and semantic_context.datasource_meta is not None:
@@ -1293,7 +1274,6 @@ async def _run_chat_data_agent_stream(
         )
         if bound_datasource_id != datasource_id:
             yield _format_sse("error", {"error": "当前会话已绑定其他数据源组，请新建会话后再切换。"})
-            yield _format_sse("done", "[DONE]")
             raise AgentRunStreamFailedError from None
     semantic_config_id = semantic_context.semantic_config_id
     if semantic_context.semantic_config:
@@ -1689,12 +1669,10 @@ async def _run_chat_data_agent_stream(
     except ContextInputLimitExceededError as exc:
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
         yield _format_sse("error", {"error": str(exc)})
-        yield _format_sse("done", "[DONE]")
         raise AgentRunStreamFailedError from None
     except Exception:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
-        yield _format_sse("done", "[DONE]")
         raise AgentRunStreamFailedError from None
 
 

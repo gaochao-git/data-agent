@@ -756,6 +756,10 @@ const handleConversationRunStatusChanged = (
   status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
 ) => {
   updateHistoryConversationRunStatus(conversationId, status)
+  if (status === null) {
+    // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
+    void ensureConversationsLoaded(true)
+  }
 }
 
 // 置顶会改变会话所属分组，成功后重载分组首屏，避免同一会话残留在旧目录。
