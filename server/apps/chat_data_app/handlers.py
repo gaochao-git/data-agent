@@ -1684,6 +1684,8 @@ async def sql_completion_handler(
     username: str | None = None,
     request: Request | None = None,
     file_ids: list[str] | None = None,
+    queued_message_id: str | None = None,
+    preserve_queued_messages: bool = False,
 ) -> StreamingResponse:
     """
     智能问数 completion 处理器。
@@ -1707,7 +1709,9 @@ async def sql_completion_handler(
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
     runtime_context = {
-        "query": query,
+        # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
+        # completion 的展示文本作为第二条当前用户消息注入。
+        "query": "" if queued_message_id else query,
         "datasource_id": datasource_id,
         "member_datasource_ids": member_datasource_ids,
         "semantic_config_id": semantic_config_id,
@@ -1725,6 +1729,8 @@ async def sql_completion_handler(
         user_id,
         username or user_id,
         runtime_context,
+        adopt_pending_messages=not queued_message_id and not preserve_queued_messages,
+        selected_message_id=queued_message_id,
     )
 
     agent_run_runtime.submit(

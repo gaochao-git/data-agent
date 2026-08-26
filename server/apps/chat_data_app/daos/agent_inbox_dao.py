@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.models import ChatDataAgentInbox, UserThread
@@ -186,47 +186,25 @@ class AgentInboxDao:
                 ChatDataAgentInbox.status == "claimed",
                 ChatDataAgentInbox.delete_flag == 0,
             )
-            .with_for_update()
         )
         return list(result.scalars().all())
 
     async def requeue_messages(self, session: AsyncSession, run_id: str, now: datetime) -> None:
         """将终止运行尚未确认消费的消息恢复为待处理。"""
-        result = await session.execute(
-            select(ChatDataAgentInbox)
+        await session.execute(
+            update(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.run_id == run_id,
                 ChatDataAgentInbox.record_type == "message",
                 ChatDataAgentInbox.status == "claimed",
                 ChatDataAgentInbox.delete_flag == 0,
             )
-            .with_for_update()
-        )
-        for message in result.scalars().all():
-            message.status = "pending"
-            message.lease_expire_time = None
-            message.update_time = now
-
-    async def renew_claimed_message_leases(
-        self,
-        session: AsyncSession,
-        run_id: str,
-        lease_expire_time: datetime,
-        now: datetime,
-    ) -> None:
-        result = await session.execute(
-            select(ChatDataAgentInbox)
-            .where(
-                ChatDataAgentInbox.run_id == run_id,
-                ChatDataAgentInbox.record_type == "message",
-                ChatDataAgentInbox.status == "claimed",
-                ChatDataAgentInbox.delete_flag == 0,
+            .values(
+                status="pending",
+                lease_expire_time=None,
+                update_time=now,
             )
-            .with_for_update()
         )
-        for message in result.scalars().all():
-            message.lease_expire_time = lease_expire_time
-            message.update_time = now
 
     async def adopt_pending_messages(
         self,
@@ -246,9 +224,9 @@ class AgentInboxDao:
                 ChatDataAgentInbox.status == "pending",
                 ChatDataAgentInbox.delete_flag == 0,
             )
-            .with_for_update()
         )
-        for message in result.scalars().all():
+        messages = list(result.scalars().all())
+        for message in messages:
             message.run_id = run_id
             message.update_time = now
 
@@ -271,22 +249,31 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none() is not None
 
-    async def get_active_run_by_id(
+    async def renew_run_lease(
         self,
         session: AsyncSession,
         run_id: str,
-    ) -> ChatDataAgentInbox | None:
+        owner_token: str | None,
+        lease_expire_time: datetime,
+        now: datetime,
+    ) -> int:
+        """按当前 owner 原子续租 Run，返回匹配到的行数。"""
         result = await session.execute(
-            select(ChatDataAgentInbox)
+            update(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.run_id == run_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status.in_(("active", "cancelling")),
+                ChatDataAgentInbox.status == "active",
+                ChatDataAgentInbox.owner_token.is_not(None),
+                ChatDataAgentInbox.owner_token == owner_token,
                 ChatDataAgentInbox.delete_flag == 0,
             )
-            .with_for_update()
+            .values(
+                lease_expire_time=lease_expire_time,
+                update_time=now,
+            )
         )
-        return result.scalar_one_or_none()
+        return int(result.rowcount or 0)
 
     async def get_run_by_id(
         self,
@@ -328,7 +315,7 @@ class AgentInboxDao:
         now: datetime,
         limit: int = 20,
     ) -> list[ChatDataAgentInbox]:
-        """锁定租约已过期的执行 Run，供后台回收器收口。"""
+        """无锁扫描租约已过期的执行 Run，供回收器逐个复查收口。"""
         result = await session.execute(
             select(ChatDataAgentInbox)
             .where(
@@ -340,7 +327,6 @@ class AgentInboxDao:
             )
             .order_by(ChatDataAgentInbox.id.asc())
             .limit(limit)
-            .with_for_update()
         )
         return list(result.scalars().all())
 
@@ -358,7 +344,6 @@ class AgentInboxDao:
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.asc())
-            .with_for_update()
         )
         return list(result.scalars().all())
 

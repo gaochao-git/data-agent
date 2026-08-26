@@ -331,6 +331,41 @@ async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
 
 
 @pytest.mark.asyncio
+async def test_agent_inbox_heartbeat_renews_only_run_lease(inbox_service):
+    """高频心跳只续 Run，不再锁定或改写已领取消息。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "心跳消息")
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
+
+    async with get_session() as session:
+        before = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.message_id == message_id,
+        ))).scalar_one()
+        message_lease = before.lease_expire_time
+        run_before = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+        run_lease = run_before.lease_expire_time
+
+    assert await service.heartbeat_run(run_id, owners[run_id]) == "active"
+
+    async with get_session() as session:
+        after_message = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.message_id == message_id,
+        ))).scalar_one()
+        after_run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+
+    assert after_message.lease_expire_time == message_lease
+    assert after_run.lease_expire_time != run_lease
+
+
+@pytest.mark.asyncio
 async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
@@ -343,6 +378,65 @@ async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
     assert [message.id for message in adopted] == [message_id]
     claimed = await service.claim_pending_messages(next_run_id, owner_token=owners[next_run_id])
     assert claimed.messages == []
+
+
+@pytest.mark.asyncio
+async def test_start_run_can_preserve_pending_messages_for_new_input(inbox_service):
+    """停止后发送新输入时，旧队列必须留给当前 Run 完成后的 continuation。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    old_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    queued_id = await service.enqueue_message("conv-1", "user-1", "用户一", "旧队列")
+    await service.cancel_active_run("conv-1", "user-1", "用户一", old_run_id)
+    await service.finish_run(old_run_id, "cancelled", "user-1", "用户一", owners[old_run_id])
+
+    new_run_id, adopted = await AgentInboxService.start_run(
+        service,
+        "conv-1",
+        "user-1",
+        "用户一",
+        {"query": "新输入"},
+        adopt_pending_messages=False,
+    )
+    assert new_run_id != old_run_id
+    assert adopted == []
+    async with get_session() as session:
+        queued = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.message_id == queued_id,
+        ))).scalar_one()
+    assert queued.status == "pending"
+    assert queued.run_id == old_run_id
+
+
+@pytest.mark.asyncio
+async def test_start_run_selected_message_only_executes_one_pending_message(inbox_service):
+    """停止后点击执行时，只迁移指定队列消息，其他消息继续等待。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    old_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    first_id = await service.enqueue_message("conv-1", "user-1", "用户一", "执行这一条")
+    second_id = await service.enqueue_message("conv-1", "user-1", "用户一", "保留这一条")
+    await service.cancel_active_run("conv-1", "user-1", "用户一", old_run_id)
+    await service.finish_run(old_run_id, "cancelled", "user-1", "用户一", owners[old_run_id])
+
+    new_run_id, adopted = await AgentInboxService.start_run(
+        service,
+        "conv-1",
+        "user-1",
+        "用户一",
+        {"query": ""},
+        adopt_pending_messages=False,
+        selected_message_id=first_id,
+    )
+    assert [message.id for message in adopted] == [first_id]
+    async with get_session() as session:
+        rows = list((await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.message_id.in_([first_id, second_id]),
+        ).order_by(ChatDataAgentInbox.id))).scalars())
+    assert [(row.message_id, row.run_id, row.status) for row in rows] == [
+        (first_id, new_run_id, "claimed"),
+        (second_id, old_run_id, "pending"),
+    ]
 
 
 @pytest.mark.asyncio

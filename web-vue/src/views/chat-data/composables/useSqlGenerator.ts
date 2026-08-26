@@ -116,6 +116,8 @@ export function useSqlGenerator() {
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
       onContextCompression?: (payload: ChatDataContextCompressionEvent) => void
       fileIds?: string[]
+      queuedMessageId?: string | null
+      preserveQueuedMessages?: boolean
       onToolLifecycle?: (payload: ToolLifecycleEventData) => void
       onInboxAdmitted?: (messageIds: string[]) => void
       onQuestionRequested?: (question: PendingUserQuestion) => void
@@ -148,6 +150,8 @@ export function useSqlGenerator() {
       runtimeOptions,
       onContextCompression,
       fileIds,
+      queuedMessageId,
+      preserveQueuedMessages,
       onToolLifecycle,
       onInboxAdmitted,
       onQuestionRequested,
@@ -216,6 +220,8 @@ export function useSqlGenerator() {
         agent_id: agentId,
         options,
         file_ids: fileIds,
+        queued_message_id: queuedMessageId || undefined,
+        preserve_queued_messages: preserveQueuedMessages || undefined,
       }, currentController.signal)
 
       if (!response.ok) {

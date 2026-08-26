@@ -121,6 +121,9 @@ class AgentInboxService:
         user_id: str,
         operator_name: str,
         runtime_context: dict[str, Any] | None = None,
+        *,
+        adopt_pending_messages: bool = True,
+        selected_message_id: str | None = None,
     ) -> tuple[str, list[HumanMessage]]:
         """开启新运行，返回 (run_id, 遗留排队消息)。
 
@@ -160,7 +163,21 @@ class AgentInboxService:
                 update_by=user_id,
                 update_by_name=operator_name,
             ))
-            await self._dao.adopt_pending_messages(session, conversation_id, user_id, run_id, now)
+            if selected_message_id:
+                selected = await self._dao.get_message_by_id(
+                    session,
+                    conversation_id,
+                    user_id,
+                    selected_message_id,
+                )
+                if selected is None:
+                    raise SteerMessageNotFoundError("队列消息不存在")
+                if selected.status != "pending":
+                    raise SteerMessageNotPendingError("队列消息已进入处理流程")
+                selected.run_id = run_id
+                selected.update_time = now
+            elif adopt_pending_messages:
+                await self._dao.adopt_pending_messages(session, conversation_id, user_id, run_id, now)
             rows = await self._claim_step_and_turn(session, run_id, now)
             return run_id, [self._to_human_message(row) for row in rows]
 
@@ -227,8 +244,23 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             runs = await self._dao.list_expired_runs(session, now, max(limit, 1))
-            for run in runs:
-                result = await self._reap_expired_run_state(session, run, now, run.user_id, run.create_by_name)
+            run_ids = [run.run_id for run in runs]
+        for run_id in run_ids:
+            # 扫描不持有锁；每个候选 Run 单独开事务并重新检查状态。
+            # 多个 Worker 可能同时看到同一候选，最终只有拿到 Run 行锁且
+            # 仍处于过期状态的 Worker 可以收口，其他 Worker 会安全跳过。
+            async with get_session() as session:
+                now = await self._dao.now(session)
+                run = await self._dao.get_run_by_id_for_update(session, run_id)
+                if run is None:
+                    continue
+                result = await self._reap_expired_run_state(
+                    session,
+                    run,
+                    now,
+                    run.user_id,
+                    run.create_by_name,
+                )
                 if result is not None:
                     results.append(result)
         return results
@@ -259,22 +291,31 @@ class AgentInboxService:
                 row.update_time = now
 
     async def heartbeat_run(self, run_id: str, owner_token: str | None = None) -> str:
+        """只用一条带 owner fencing 的 UPDATE 续 Run 租约。
+
+        claimed 消息的租约由领取事务设置，结束/接管时由 Run 锁保护的收口流程
+        处理；高频心跳不再扫描消息行，避免与收口流程形成锁竞争。
+        """
         async with get_session() as session:
             now = await self._dao.now(session)
-            run = await self._dao.get_active_run_by_id(session, run_id)
-            if run is None:
-                return "inactive"
-            self._assert_owner(run, owner_token)
-            if run.status == "cancelling":
-                return "cancelling"
-            run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
-            run.update_time = now
-            await self._dao.renew_claimed_message_leases(
+            renewed = await self._dao.renew_run_lease(
                 session,
                 run_id,
-                now + timedelta(seconds=MESSAGE_LEASE_SECONDS),
+                owner_token,
+                now + timedelta(seconds=RUN_LEASE_SECONDS),
                 now,
             )
+            if renewed:
+                return "active"
+
+            # 0 行既可能是取消/完成，也可能是 owner 已被接管。只在这个
+            # 竞争路径做一次普通读取，正常心跳始终只有一条 UPDATE。
+            run = await self._dao.get_run_by_id(session, run_id)
+            if run is None or run.status not in {"active", "cancelling"}:
+                return "inactive"
+            if run.status == "cancelling":
+                return "cancelling"
+            self._assert_owner(run, owner_token)
             return "active"
 
     async def assert_run_owner(self, run_id: str, owner_token: str | None = None) -> None:

@@ -99,6 +99,7 @@ const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
 const isSubmittingQuestion = ref(false)
 const isStoppingRun = ref(false)
+const executingQueueMessageId = ref<string | null>(null)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
@@ -584,6 +585,9 @@ type AnalysisSubmitOptions = {
   assistantMessageId?: string
   appendUserMessage?: boolean
   fileIds?: string[]
+  queuedMessageId?: string | null
+  preserveQueuedMessages?: boolean
+  userMessageId?: string
   attachments?: MessageAttachment[]
   responseFactory?: (signal: AbortSignal) => Promise<Response>
   preserveAssistant?: boolean
@@ -2269,14 +2273,14 @@ const submitAnalysisQuery = async (
   requestText: string,
   options: AnalysisSubmitOptions & { skillName?: string | null; messageSkill?: Message['skill']; restoreInputText?: string } = {}
 ) => {
-  if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory) || isGenerating.value) return
+  if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory && !options.queuedMessageId) || isGenerating.value) return
   const isFirstMessage = options.appendUserMessage !== false
     && !messages.value.some(item => item.role === 'user')
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
     : (props.semanticConfigSelection || null)
   const userMessage: Message = {
-    id: `user-${Date.now()}`,
+    id: options.userMessageId || `user-${Date.now()}`,
     role: 'user',
     content: requestText,
     timestamp: new Date(),
@@ -2400,6 +2404,8 @@ const submitAnalysisQuery = async (
         runtimeOptions: selectedRuntimeOptions.value,
         onContextCompression: (event) => appendContextCompressionEvent(event),
         fileIds: options.fileIds,
+        queuedMessageId: options.queuedMessageId,
+        preserveQueuedMessages: options.preserveQueuedMessages,
         onToolLifecycle: (event) => {
           if (!event.tool_call_id) return
           const existing = toolCallsMap.value.get(event.tool_call_id)
@@ -2524,10 +2530,43 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
   }
 }
 
-const handleSubmit = async () => {
+// options.queuedMessageId：单条队列消息"执行"入口透传的消息 ID（普通输入框发送不传）
+const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   if (isStoppingRun.value) return
   if (activeRunStatus.value === 'cancelling') {
     ElMessage.info('当前任务正在停止，请稍后再发送')
+    return
+  }
+  if (activeRunStatus.value === 'waiting_user') {
+    ElMessage.info('请先回答智能体问题，回答后再继续处理任务')
+    return
+  }
+  if (options.queuedMessageId) {
+    const queuedMessage = pendingSteerMessages.value.find(
+      item => item.messageId === options.queuedMessageId,
+    )
+    const conversationId = localConversationId.value || props.conversationId
+    if (
+      !queuedMessage
+      || queuedMessage.status !== 'pending'
+      || !conversationId
+      || hasActiveRun.value
+      || isGenerating.value
+    ) return
+    if (!selectedDatasource.value) {
+      ElMessage.warning('请先选择数据源')
+      return
+    }
+    executingQueueMessageId.value = options.queuedMessageId
+    try {
+      await submitAnalysisQuery(queuedMessage.content, {
+        userMessageId: queuedMessage.messageId,
+        queuedMessageId: queuedMessage.messageId,
+        preserveQueuedMessages: true,
+      })
+    } finally {
+      executingQueueMessageId.value = null
+    }
     return
   }
   // 本地正在流式生成，或刷新后服务端仍有运行中的任务：输入都进入队列
@@ -2645,6 +2684,7 @@ const handleSubmit = async () => {
     restoreInputText: queryText,
     semanticConfigIdOverride: manualSemanticConfigId,
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
+    preserveQueuedMessages: pendingSteerMessages.value.length > 0,
     attachments: attachments.length > 0 ? attachments : undefined,
   })
 }
@@ -2911,7 +2951,20 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <span v-else-if="item.status === 'claimed' || item.status === 'consumed'">处理中</span>
                   <span v-else>等待处理</span>
                   <button
-                    v-if="item.messageId && activeRunStatus !== 'waiting_user'"
+                    v-if="item.messageId && item.status === 'pending' && !hasActiveRun"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1 rounded bg-[#1677FF] px-1.5 py-0.5 text-[10px] text-white transition-colors hover:bg-[#1677FF]/85 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="Boolean(executingQueueMessageId) || steerActionBusy"
+                    title="执行这条消息"
+                    @click="handleSubmit({ queuedMessageId: item.messageId })"
+                  >
+                    <i
+                      :class="executingQueueMessageId === item.messageId ? 'fa-solid fa-spinner fa-spin text-[9px]' : 'fa-solid fa-play text-[9px]'"
+                    ></i>
+                    执行
+                  </button>
+                  <button
+                    v-if="item.messageId && hasActiveRun && activeRunStatus !== 'waiting_user'"
                     type="button"
                     class="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
                     :class="item.queueType === 'next-step' ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-blue-50 text-[#1677FF] hover:bg-blue-100'"

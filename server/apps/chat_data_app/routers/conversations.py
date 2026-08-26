@@ -47,10 +47,12 @@ class UpdateTitleRequest(BaseModel):
 
 class CompletionRequest(BaseModel):
     """对话请求"""
-    query: str
+    query: str = ""
     agent_id: str
     options: Optional[Dict[str, Any]] = None  # 通用扩展参数
     file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
+    queued_message_id: Optional[str] = None  # 停止后从队列中明确执行的消息
+    preserve_queued_messages: bool = False  # 新输入作为当前任务，不提前接管旧队列
 
 
 SteerQueueType = Literal["next-step", "next-turn"]
@@ -196,6 +198,10 @@ def _build_completion_handler_kwargs(
     }
     if 'file_ids' in sig.parameters:
         kwargs['file_ids'] = request.file_ids
+    if 'queued_message_id' in sig.parameters:
+        kwargs['queued_message_id'] = request.queued_message_id
+    if 'preserve_queued_messages' in sig.parameters:
+        kwargs['preserve_queued_messages'] = request.preserve_queued_messages
     if 'user_id' in sig.parameters:
         kwargs['user_id'] = user_id
     if 'username' in sig.parameters:
@@ -537,7 +543,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         if not conversation_id:
             return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
-        if not request.query:
+        if not request.query and not request.queued_message_id:
             return business_response(msg="消息不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
 
         user_id, username = _get_current_user_identity(req)
@@ -570,6 +576,20 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         return business_response(
             msg=str(e),
             code=ErrorCode.CHATDATA_AGENT_RUN_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except SteerMessageNotFoundError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except SteerMessageNotPendingError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_PENDING,
             status="error",
             http_status_code=http_status.HTTP_409_CONFLICT,
         )

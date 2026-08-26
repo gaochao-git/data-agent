@@ -1292,6 +1292,8 @@ export function streamCompletion(conversationId: string, data: {
   agent_id: string
   options?: Record<string, unknown>
   file_ids?: string[]
+  queued_message_id?: string
+  preserve_queued_messages?: boolean
 }, signal?: AbortSignal): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}/completion`,
