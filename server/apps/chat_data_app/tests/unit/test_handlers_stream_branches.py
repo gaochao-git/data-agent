@@ -960,6 +960,7 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
     ))
 
     assert "query answer" in "".join(chunks)
+    assert [message.content for message in graph.initial_state["messages"]] == ["查订单"]
     assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
     assert "prompt_context" not in graph.initial_state
     assert "tables_ddl_info" not in graph.initial_state
@@ -968,7 +969,12 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
 
 @pytest.mark.asyncio
 async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypatch):
-    """上一轮遗留的排队消息接管为新轮首批输入：持久化 + inbox_admitted + 注入 initial_state。"""
+    """队列执行/续跑路径（query 为空）：模型输入只含接管的队列消息。
+
+    停止后发消息语义收口后，生产链路不会再出现"遗留队列 + 非空新输入"
+    同一次模型调用的组合：输入框发送走 preserve（不接管），单条执行/
+    continuation 走空 query + adopted。本用例钉住后者。
+    """
     class Graph:
         def __init__(self):
             self.initial_state = None
@@ -987,7 +993,7 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     adopted = [HumanMessage(content="遗留排队消息", id="adopted-1")]
     chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
-        user_query="新问题",
+        user_query="",
         datasource_id="ds_a",
         adopted_messages=adopted,
     ))
@@ -996,8 +1002,8 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     assert "inbox_admitted" in text
     assert "adopted-1" in text
     state_messages = graph.initial_state["messages"]
-    assert [message.content for message in state_messages] == ["遗留排队消息", "新问题"]
-    assert [str(message.id) for message in state_messages][0] == "adopted-1"
+    assert [message.content for message in state_messages] == ["遗留排队消息"]
+    assert str(state_messages[0].id) == "adopted-1"
 
 
 @pytest.mark.asyncio

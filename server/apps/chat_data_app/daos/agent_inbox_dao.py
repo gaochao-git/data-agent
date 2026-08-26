@@ -214,9 +214,14 @@ class AgentInboxDao:
         run_id: str,
         now: datetime,
     ) -> None:
-        """让新运行接管该会话此前运行遗留的待处理消息。"""
-        result = await session.execute(
-            select(ChatDataAgentInbox)
+        """让新运行接管该会话此前运行遗留的待处理消息。
+
+        单条 UPDATE：UPDATE 走当前读，能立即看到并发 requeue 刚提交的
+        pending 行（REPEATABLE READ 快照读会漏掉，导致延迟接管）；
+        归属校验由调用方已持有的 thread/run 行锁保证。
+        """
+        await session.execute(
+            update(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
@@ -224,11 +229,11 @@ class AgentInboxDao:
                 ChatDataAgentInbox.status == "pending",
                 ChatDataAgentInbox.delete_flag == 0,
             )
+            .values(
+                run_id=run_id,
+                update_time=now,
+            )
         )
-        messages = list(result.scalars().all())
-        for message in messages:
-            message.run_id = run_id
-            message.update_time = now
 
     async def has_pending_messages(
         self,

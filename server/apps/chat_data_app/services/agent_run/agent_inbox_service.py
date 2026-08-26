@@ -12,8 +12,11 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 
 from utils.database import get_session
+from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
 from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+
+logger = get_logger(__name__)
 
 MESSAGE_LEASE_SECONDS = 60
 RUN_LEASE_SECONDS = 120
@@ -127,8 +130,13 @@ class AgentInboxService:
     ) -> tuple[str, list[HumanMessage]]:
         """开启新运行，返回 (run_id, 遗留排队消息)。
 
-        上一次运行遗留的排队消息（未消费的立即插入/下一轮消息）由新运行接管，
-        并作为新一轮对话的首批输入；它们在本事务内被领取，避免被中间件重复注入。
+        默认接管上一次运行遗留的排队消息（未消费的立即插入/下一轮）作为
+        本轮首批输入，并在本事务内领取，避免被中间件重复注入。
+
+        停止后发消息语义下有两种例外：
+        - adopt_pending_messages=False（preserve）：新输入单独成 Run，
+          旧队列留在 pending，由当前 Run 结束后的 continuation 按 FIFO 接走；
+        - selected_message_id：单条队列执行，只迁移指定消息，其余继续排队。
         """
         async with get_session() as session:
             now = await self._dao.now(session)
@@ -249,20 +257,25 @@ class AgentInboxService:
             # 扫描不持有锁；每个候选 Run 单独开事务并重新检查状态。
             # 多个 Worker 可能同时看到同一候选，最终只有拿到 Run 行锁且
             # 仍处于过期状态的 Worker 可以收口，其他 Worker 会安全跳过。
-            async with get_session() as session:
-                now = await self._dao.now(session)
-                run = await self._dao.get_run_by_id_for_update(session, run_id)
-                if run is None:
-                    continue
-                result = await self._reap_expired_run_state(
-                    session,
-                    run,
-                    now,
-                    run.user_id,
-                    run.create_by_name,
-                )
-                if result is not None:
-                    results.append(result)
+            try:
+                async with get_session() as session:
+                    now = await self._dao.now(session)
+                    run = await self._dao.get_run_by_id_for_update(session, run_id)
+                    if run is None:
+                        continue
+                    result = await self._reap_expired_run_state(
+                        session,
+                        run,
+                        now,
+                        run.user_id,
+                        run.create_by_name,
+                    )
+                    if result is not None:
+                        results.append(result)
+            except Exception:
+                # 单个候选收口失败（DB 抖动/锁冲突等）只记日志，下一个
+                # 调度 tick 会重新扫到它；不能中断本轮其余候选的收口。
+                logger.exception("回收过期 Run 失败，等待下一周期重试: run_id=%s", run_id)
         return results
 
     async def reconcile_recovered_messages(

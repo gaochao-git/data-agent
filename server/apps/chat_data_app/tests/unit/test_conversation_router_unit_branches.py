@@ -266,6 +266,41 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
     assert payload(await conversation_router.completion("unowned", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.completion("new", conversation_router.CompletionRequest(agent_id="missing", query="hello"), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
+    # 队列执行入参透传：空 query 只有携带 queued_message_id 才放行
+    queue_calls = []
+
+    async def queue_handler(conversation_id, query, options, file_ids=None,
+                            queued_message_id=None, preserve_queued_messages=False,
+                            user_id=None, username=None, request=None):
+        queue_calls.append({
+            "conversation_id": conversation_id,
+            "query": query,
+            "queued_message_id": queued_message_id,
+            "preserve_queued_messages": preserve_queued_messages,
+            "user_id": user_id,
+        })
+        return {"streamed": True}
+
+    conversation_router._completion_handlers["agent_a"] = queue_handler
+    response = await conversation_router.completion(
+        "owned",
+        conversation_router.CompletionRequest(
+            agent_id="agent_a",
+            query="",
+            queued_message_id="msg-1",
+            preserve_queued_messages=True,
+        ),
+        request,
+    )
+    assert response == {"streamed": True}
+    assert queue_calls[-1] == {
+        "conversation_id": "owned",
+        "query": "",
+        "queued_message_id": "msg-1",
+        "preserve_queued_messages": True,
+        "user_id": "u1",
+    }
+
 
 @pytest.mark.asyncio
 async def test_completion_route_binds_datasource_and_rejects_mismatch(router_state, monkeypatch):
