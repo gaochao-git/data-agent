@@ -100,6 +100,17 @@ class AgentRunCompletionResult:
     next_run_id: str | None
 
 
+@dataclass(frozen=True)
+class AgentRunReapResult:
+    """后台回收过期 Run 后，发布终态事件所需的信息。"""
+
+    run_id: str
+    conversation_id: str
+    user_id: str
+    status: str
+    owner_token: str
+
+
 class AgentInboxService:
     def __init__(self, dao: AgentInboxDao = agent_inbox_dao):
         self._dao = dao
@@ -157,7 +168,7 @@ class AgentInboxService:
         """领取 pending Run 并返回重建上下文。
 
         只认领 pending：租约过期的 active Run 视为执行者已死亡，任务停止，
-        由用户下一次交互经 _reap_expired_run 收口，不自动接管续跑。
+        由后台回收器或用户交互经 _reap_expired_run 收口，不自动接管续跑。
         """
         async with get_session() as session:
             now = await self._dao.now(session)
@@ -209,6 +220,18 @@ class AgentInboxService:
                     else None
                 ),
             }
+
+    async def reap_expired_runs(self, limit: int = 20) -> list[AgentRunReapResult]:
+        """在后台收口租约过期的 Run，不自动重放执行段。"""
+        results: list[AgentRunReapResult] = []
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            runs = await self._dao.list_expired_runs(session, now, max(limit, 1))
+            for run in runs:
+                result = await self._reap_expired_run_state(session, run, now, run.user_id, run.create_by_name)
+                if result is not None:
+                    results.append(result)
+        return results
 
     async def reconcile_recovered_messages(
         self,
@@ -826,11 +849,29 @@ class AgentInboxService:
             return run
         if run.lease_expire_time is None or run.lease_expire_time > now:
             return run
+        result = await self._reap_expired_run_state(session, run, now, user_id, operator_name)
+        return run if result and result.status == "waiting_user" else None
+
+    async def _reap_expired_run_state(
+        self,
+        session,
+        run: ChatDataAgentInbox,
+        now: datetime,
+        user_id: str,
+        operator_name: str,
+    ) -> AgentRunReapResult | None:
+        """收口单个过期 Run，并生成新的终态发布 fencing token。"""
+        if run.status not in {"active", "cancelling"}:
+            return None
+        if run.lease_expire_time is None or run.lease_expire_time > now:
+            return None
         dead_status = "failed" if run.status == "active" else "cancelled"
         await self._dao.requeue_messages(session, run.run_id, now)
         content = self._load_run_content(run.content)
         self._restore_unstarted_question(content)
         terminal_status = "waiting_user" if content.get("pending_question") else dead_status
+        owner_generation = int(content.get("owner_generation") or 0) + 1
+        content["owner_generation"] = owner_generation
         content.pop("next_run_id", None)
         run.content = json.dumps(content, ensure_ascii=False)
         run.status = terminal_status
@@ -839,7 +880,13 @@ class AgentInboxService:
         run.update_time = now
         run.update_by = user_id
         run.update_by_name = operator_name
-        return run if run.status == "waiting_user" else None
+        return AgentRunReapResult(
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            user_id=run.user_id,
+            status=terminal_status,
+            owner_token=f"{owner_generation}:{uuid4().hex}",
+        )
 
     @staticmethod
     def _load_run_content(content: str) -> dict[str, Any]:

@@ -167,7 +167,7 @@ class AgentRunRuntime:
             await self._inbox_service.record_terminal_event(run_id, stream_id)
         except Exception:
             logger.warning(
-                "ChatData 已取消 Run 的 done 发布失败，将由 MySQL 终态兜底: run_id=%s",
+                "ChatData 已收口 Run 的 done 发布失败，将由 MySQL 终态兜底: run_id=%s",
                 run_id,
                 exc_info=True,
             )
@@ -198,6 +198,7 @@ class AgentRunRuntime:
     async def _poll_pending_runs(self) -> None:
         while True:
             try:
+                await self._reap_expired_runs()
                 available_slots = self._max_concurrency - len(self._tasks)
                 if available_slots > 0:
                     runnable = await self._list_runnable_runs(available_slots)
@@ -216,6 +217,18 @@ class AgentRunRuntime:
             except Exception:
                 logger.error("ChatData Agent Run 调度失败", exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _reap_expired_runs(self) -> None:
+        """后台收口 Worker 崩溃留下的过期 Run，并结束其 SSE。"""
+        results = await self._inbox_service.reap_expired_runs(limit=20)
+        for result in results:
+            await self._publish_closed_terminal(
+                run_id=result.run_id,
+                conversation_id=result.conversation_id,
+                user_id=result.user_id,
+                status=result.status,
+                owner_token=result.owner_token,
+            )
 
     async def _list_runnable_runs(self, limit: int) -> list[str]:
         from utils.database import get_session

@@ -378,6 +378,58 @@ async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_serv
 
 
 @pytest.mark.asyncio
+async def test_background_reaper_closes_expired_run_and_requeues_messages(inbox_service):
+    """后台回收无需用户刷新：收口过期 Run 并返回终态发布信息。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "后台回收", queue_type="next-step")
+    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+        run.lease_expire_time = datetime.now() - timedelta(seconds=1)
+
+    results = await service.reap_expired_runs()
+
+    assert len(results) == 1
+    assert results[0].run_id == run_id
+    assert results[0].status == "failed"
+    assert results[0].owner_token.startswith("2:")
+    async with get_session() as session:
+        rows = list((await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+        ).order_by(ChatDataAgentInbox.id))).scalars())
+    assert rows[0].status == "failed"
+    assert rows[0].owner_token is None
+    assert rows[1].message_id == message_id
+    assert rows[1].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_background_reaper_preserves_waiting_question(inbox_service):
+    """已落库但尚未恢复的问题回收后仍保持 waiting_user。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    question = {"question_id": "q1", "questions": [{"id": "scope", "question": "选择范围"}]}
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
+
+    # waiting_user 本身没有执行租约，不应被后台回收。
+    assert await service.reap_expired_runs() == []
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert run.status == "waiting_user"
+
+
+@pytest.mark.asyncio
 async def test_expired_run_rejects_steer_and_allows_new_run(inbox_service):
     """租约过期的 Run 已死亡：追加消息就地收口该 Run 并拒绝入队，随后可发起新 Run。"""
     service, create_thread, get_session, owners = inbox_service

@@ -3,6 +3,7 @@ import pytest
 from apps.chat_data_app.services.agent_run.agent_inbox_service import (
     AgentRunCancellationResult,
     AgentRunCompletionResult,
+    AgentRunReapResult,
 )
 from apps.chat_data_app.services.agent_run.agent_run_runtime import AgentRunRuntime
 
@@ -140,6 +141,41 @@ async def test_non_finished_completion_does_not_submit_next_run(monkeypatch):
     await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
 
     assert submitted == []
+
+
+@pytest.mark.asyncio
+async def test_reaper_publishes_done_for_expired_run():
+    """调度器回收过期 Run 后必须通知原 SSE 结束。"""
+    order = []
+
+    class Inbox:
+        async def reap_expired_runs(self, limit):
+            assert limit == 20
+            return [AgentRunReapResult("run-1", "conv-1", "user-1", "failed", "2:reaper")]
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, owner_token):
+            assert owner_token == "2:reaper"
+            order.append("owner_claimed")
+
+        async def append(self, **kwargs):
+            assert kwargs["run_id"] == "run-1"
+            assert '"status": "failed"' in kwargs["payload"]
+            order.append("done_published")
+            return "done-stream-0"
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+    runtime = AgentRunRuntime(inbox_service=Inbox(), event_service=Events(), event_bus=Events.bus)
+    await runtime._reap_expired_runs()
+
+    assert order == ["owner_claimed", "done_published", "terminal_recorded", "owner_released"]
 
 
 @pytest.mark.asyncio

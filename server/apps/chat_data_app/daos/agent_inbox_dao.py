@@ -308,8 +308,8 @@ class AgentInboxDao:
         now: datetime,
         limit: int = 20,
     ) -> list[ChatDataAgentInbox]:
-        # 只调度 pending：租约过期的 active Run 视为执行者死亡，任务停止，
-        # 由用户下一次交互收口，不自动续跑。
+        # 这里只返回 pending；过期 active/cancelling 由 list_expired_runs
+        # 提供给后台回收器收口，不自动续跑。
         result = await session.execute(
             select(ChatDataAgentInbox)
             .where(
@@ -319,6 +319,28 @@ class AgentInboxDao:
             )
             .order_by(ChatDataAgentInbox.id.asc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_expired_runs(
+        self,
+        session: AsyncSession,
+        now: datetime,
+        limit: int = 20,
+    ) -> list[ChatDataAgentInbox]:
+        """锁定租约已过期的执行 Run，供后台回收器收口。"""
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.status.in_(("active", "cancelling")),
+                ChatDataAgentInbox.lease_expire_time.is_not(None),
+                ChatDataAgentInbox.lease_expire_time < now,
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.asc())
+            .limit(limit)
+            .with_for_update()
         )
         return list(result.scalars().all())
 
