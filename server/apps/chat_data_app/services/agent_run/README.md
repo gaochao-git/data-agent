@@ -51,7 +51,7 @@ token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷T
 
 - 创建首个 Run、恢复 `ask_user_question` 的 Run 时，在写入 MySQL 后立即调用当前进程的 `AgentRunRuntime.submit()`，避免等待调度轮询。
 - 当前 Run 的 `complete_run()` 在同一事务中创建后续 `pending` Run 后，Runtime 先完成旧 Run 的 done 发布、终态游标记录和 Redis owner 释放，再立即 `submit(next_run_id)`。因此连续的 `next-step` / `next-turn` 会在当前进程直接接续。
-- fast-path 只负责降低调度延迟，不承担一致性。提交失败、进程重启或请求落到其他 Worker 时，MySQL 中的 `pending` Run 仍由调度轮询发现并通过 `prepare_pending_run()` 原子领取；数据库状态校验保证不会重复执行同一 Run。
+- fast-path 只负责降低调度延迟，不承担一致性。提交失败、进程重启或请求落到其他 Worker 时，MySQL 中的 `pending` Run 仍由每 2 秒一次的调度轮询发现并通过 `prepare_pending_run()` 原子领取；数据库状态校验保证不会重复执行同一 Run。
 
 ### 断点恢复矩阵
 

@@ -16,6 +16,8 @@ from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
 
+RUN_DISPATCH_POLL_SECONDS = 2.0
+
 
 def _sse_event_type(payload: str) -> str | None:
     """从 SSE payload 中解析事件名（如 "message" / "question_requested"）。"""
@@ -208,7 +210,7 @@ class AgentRunRuntime:
                             user_id="",
                             operator_name="",
                         )
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -387,7 +389,7 @@ class AgentRunRuntime:
                         logger.warning("ChatData Agent Run Redis owner 清理失败: run_id=%s", run_id, exc_info=True)
                     if next_run_id_to_submit:
                         # MySQL 已创建 pending Run。旧 Run 的终态发布和 owner 清理
-                        # 完成后再提交，把链式接续从 ≤0.2s 轮询兜底提速到毫秒级；
+                        # 完成后再提交，避免链式接续等待调度兜底轮询；
                         # 新旧 Run 各有独立 Stream，正确性不依赖本直启（轮询可接管）。
                         self.submit(
                             run_id=next_run_id_to_submit,
