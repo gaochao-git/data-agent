@@ -204,7 +204,14 @@ const handleDocumentClick = (event: MouseEvent) => {
 }
 
 const focus = () => {
-  nextTick(() => textareaRef.value?.focus())
+  nextTick(() => {
+    const textarea = textareaRef.value
+    if (!textarea) return
+    textarea.focus()
+    // 光标钉到文本末尾，插入推荐问题后可直接回车发送
+    const end = textarea.value.length
+    textarea.setSelectionRange(end, end)
+  })
 }
 
 defineExpose({

@@ -2776,7 +2776,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 prefer-fallback
                 :load-favorites="false"
                 compact
-                @select-query="(query: string) => input = query"
+                @select-query="(query: string) => { input = query; focusInput() }"
                 @select-skill="handleSkillSelect"
               />
             </div>
