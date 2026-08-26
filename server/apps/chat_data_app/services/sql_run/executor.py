@@ -14,7 +14,7 @@ import re
 import os
 
 from utils.logger import get_logger
-from utils.alarm import emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
+from utils.alarm import DB_FAIL_DATASOURCE, emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
 from utils.db_failover import is_mysql_connection_error
 from ..datasource.credentials import (
     apply_hive_socket_timeout,
@@ -503,6 +503,7 @@ def _emit_query_database_connection_alarm(
         return
     emit_database_connection_alarm(
         "查询数据源连接异常",
+        reason_code=DB_FAIL_DATASOURCE,
         ext1={
             "source_type": normalized_source_type,
             "host": host or "",

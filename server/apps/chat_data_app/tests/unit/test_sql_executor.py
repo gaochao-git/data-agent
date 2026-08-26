@@ -16,6 +16,7 @@ from apps.chat_data_app.services.datasource import credentials as datasource_cre
 from apps.chat_data_app.services.sql_run import executor as sql_executor
 import apps.chat_data_app.services.sql_run.parser as sql_parser
 from apps.chat_data_app.services.sql_run.parser import prepare_sql_for_execution, validate_single_sql_statement
+from utils import alarm as alarm_module
 
 
 def test_default_allowed_sql_types_only_select():
@@ -1136,6 +1137,7 @@ def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
 
     assert failed["success"] is False
     assert db_alarms[0][0][0] == "查询数据源连接异常"
+    assert db_alarms[0][1]["reason_code"] == alarm_module.DB_FAIL_DATASOURCE
     assert db_alarms[0][1]["ext1"]["source_type"] == "mysql"
 
 

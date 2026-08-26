@@ -21,7 +21,7 @@ MySQL 配置：
 
 import os
 
-from utils.alarm import emit_checkpoint_connection_alarm
+from utils.alarm import DB_FAIL_CHECKPOINT, emit_database_connection_alarm
 from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
@@ -215,8 +215,9 @@ async def select_available_checkpointer_endpoint() -> None:
             _endpoint_selector.set_current(endpoint)
             logger.info("checkpoint库当前连接节点: %s", endpoint.label())
             return
-    emit_checkpoint_connection_alarm(
+    emit_database_connection_alarm(
         "checkpoint库启动探测失败",
+        reason_code=DB_FAIL_CHECKPOINT,
         ext1={"endpoints": _endpoint_selector.labels()},
     )
     raise ValueError("所有 checkpoint 库节点均不可用")

@@ -102,6 +102,34 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is True
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
 
+    # 大模型异常大类：连接失败与首 token 超时共用 LLM_EXCEPTION，细分落在 error_code。
+    llm_records = records[3:]
+    assert len(llm_records) == 1
+    assert llm_records[0][1]["extra"]["alarm_id"] == "LLM_EXCEPTION"
+    assert llm_records[0][1]["extra"]["error_code"] == alarm_module.LLM_FAIL_CONNECTION
+
+    alarm_module.emit_llm_first_token_timeout_alarm(elapsed_ms=61000, threshold_seconds=60)
+    timeout_record = records[-1][1]["extra"]
+    assert timeout_record["alarm_id"] == "LLM_EXCEPTION"
+    assert timeout_record["error_code"] == alarm_module.LLM_FAIL_FIRST_TOKEN_TIMEOUT
+
+
+def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
+    """外部依赖与平台自身接口异常共用 API_CALL_EXCEPTION，细分落在 error_code。"""
+    records = []
+    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+
+    alarm_module.emit_external_api_alarm("hive-gateway", TimeoutError("timed out"), method="POST", url="http://x/y")
+    alarm_module.emit_api_call_exception_path = None
+    alarm_module.emit_api_call_alarm("/chat/stream", ValueError("boom"), method="GET")
+
+    external_extra = records[0][1]["extra"]
+    assert external_extra["alarm_id"] == "API_CALL_EXCEPTION"
+    assert external_extra["error_code"] == alarm_module.API_FAIL_EXTERNAL
+    internal_extra = records[1][1]["extra"]
+    assert internal_extra["alarm_id"] == "API_CALL_EXCEPTION"
+    assert internal_extra["error_code"] == alarm_module.API_FAIL_INTERNAL
+
 
 def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
     """alarm_id 固定为 OMS 契约值，细分原因落在 error_code。"""
@@ -364,7 +392,7 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
         DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
     )
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class FakeContext:
         def __init__(self, conn_string):
@@ -432,7 +460,7 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class Context:
         async def __aenter__(self):
@@ -569,11 +597,12 @@ def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monke
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     with pytest.raises(ValueError, match="所有 checkpoint 库节点均不可用"):
         asyncio.run(checkpoint.select_available_checkpointer_endpoint())
     assert alarm_records[0][0][0] == "checkpoint库启动探测失败"
+    assert alarm_records[0][1]["reason_code"] == alarm_module.DB_FAIL_CHECKPOINT
 
 
 def test_database_session_commit_rollback_and_info(monkeypatch):
@@ -746,6 +775,7 @@ def test_database_startup_probe_failure_writes_alarm(monkeypatch):
         asyncio.run(database.select_available_database_endpoint())
 
     assert alarm_records[0][0][0] == "业务库启动探测失败"
+    assert alarm_records[0][1]["reason_code"] == alarm_module.DB_FAIL_CHATDATA
     assert alarm_records[0][1]["ext1"] == {"endpoints": ["127.0.0.1:3306", "127.0.0.2:3307"]}
 
 

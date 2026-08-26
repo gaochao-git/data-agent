@@ -15,7 +15,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
 from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
-from utils.alarm import emit_database_connection_alarm
+from utils.alarm import DB_FAIL_CHATDATA, emit_database_connection_alarm
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -162,6 +162,7 @@ async def select_available_database_endpoint() -> None:
             return
     emit_database_connection_alarm(
         "业务库启动探测失败",
+        reason_code=DB_FAIL_CHATDATA,
         ext1={"endpoints": _endpoint_selector.labels()},
     )
     raise ValueError("所有业务库节点均不可用")

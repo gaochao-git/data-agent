@@ -86,23 +86,21 @@ def emit_alarm(
     )
 
 
-def emit_database_connection_alarm(message: str, *, ext1: Any = None, ext2: Any = None) -> None:
+# 数据库连接失败的细分原因码（写入报警日志 error_code 字段，供检索与统计）。
+# alarm_id="DATABASE_CONNECTION_FAILED" 对应 OMS 告警配置中的告警名称，
+# 属于平台契约，不可随意改名；业务库 / checkpoint 库 / 查询数据源的区分只落在 error_code。
+DB_FAIL_CHATDATA = "CHATDATA_DB_CONNECTION_FAILED"
+DB_FAIL_CHECKPOINT = "CHECKPOINT_DB_CONNECTION_FAILED"
+DB_FAIL_DATASOURCE = "QUERY_DATASOURCE_CONNECTION_FAILED"
+
+
+def emit_database_connection_alarm(message: str, *, reason_code: str, ext1: Any = None, ext2: Any = None) -> None:
+    """数据库连接类失败统一入口；reason_code 必传，强制调用方声明细分场景。"""
     emit_alarm(
         message,
         alarm_id="DATABASE_CONNECTION_FAILED",
         request_type="DATABASE",
-        error_code="DATABASE_CONNECTION_FAILED",
-        ext1=ext1,
-        ext2=ext2,
-    )
-
-
-def emit_checkpoint_connection_alarm(message: str, *, ext1: Any = None, ext2: Any = None) -> None:
-    emit_alarm(
-        message,
-        alarm_id="CHECKPOINT_CONNECTION_FAILED",
-        request_type="DATABASE",
-        error_code="CHECKPOINT_CONNECTION_FAILED",
+        error_code=reason_code,
         ext1=ext1,
         ext2=ext2,
     )
@@ -167,6 +165,16 @@ def emit_dangerous_sql_alarm(
     )
 
 
+# 外部接口/平台自身接口异常的细分原因码。alarm_id 统一为 API_CALL_EXCEPTION，
+# 是否外部依赖只落在 error_code。
+API_FAIL_EXTERNAL = "EXTERNAL_API_CALL_FAILED"
+API_FAIL_INTERNAL = "INTERNAL_API_CALL_FAILED"
+
+# 大模型异常的细分原因码。alarm_id 统一为 LLM_EXCEPTION。
+LLM_FAIL_CONNECTION = "LLM_CONNECTION_FAILED"
+LLM_FAIL_FIRST_TOKEN_TIMEOUT = "LLM_FIRST_TOKEN_TIMEOUT"
+
+
 def emit_external_api_alarm(
     api_name: str,
     exc: Exception,
@@ -177,9 +185,9 @@ def emit_external_api_alarm(
 ) -> None:
     emit_alarm(
         f"调用外部接口异常: {api_name}",
-        alarm_id="EXTERNAL_API_EXCEPTION",
+        alarm_id="API_CALL_EXCEPTION",
         request_type="HTTP_CLIENT",
-        error_code="EXTERNAL_API_EXCEPTION",
+        error_code=API_FAIL_EXTERNAL,
         ext1=ext1 or {"api": api_name, "method": method or "", "url": url or ""},
         ext2={"error_type": exc.__class__.__name__, "error": str(exc)},
     )
@@ -197,7 +205,7 @@ def emit_api_call_alarm(
         "接口调用异常",
         alarm_id="API_CALL_EXCEPTION",
         request_type=method or "API",
-        error_code="API_CALL_EXCEPTION",
+        error_code=API_FAIL_INTERNAL,
         ext1=ext1,
         ext2=ext2 or {"path": path, "error_type": exc.__class__.__name__, "error": str(exc)},
     )
@@ -277,9 +285,9 @@ def emit_llm_connection_alarm_if_needed(exc: BaseException, *, ext1: Any = None,
         return False
     emit_alarm(
         "大模型连接异常",
-        alarm_id="LLM_CONNECTION_EXCEPTION",
+        alarm_id="LLM_EXCEPTION",
         request_type="LLM",
-        error_code="LLM_CONNECTION_EXCEPTION",
+        error_code=LLM_FAIL_CONNECTION,
         ext1=ext1,
         ext2=ext2 or {"error_type": exc.__class__.__name__, "error": str(exc)},
     )
@@ -289,9 +297,9 @@ def emit_llm_connection_alarm_if_needed(exc: BaseException, *, ext1: Any = None,
 def emit_llm_first_token_timeout_alarm(*, elapsed_ms: int, threshold_seconds: int, ext1: Any = None, ext2: Any = None) -> None:
     emit_alarm(
         "大模型首 token 超时",
-        alarm_id="LLM_FIRST_TOKEN_TIMEOUT",
+        alarm_id="LLM_EXCEPTION",
         request_type="LLM",
-        error_code="LLM_FIRST_TOKEN_TIMEOUT",
+        error_code=LLM_FAIL_FIRST_TOKEN_TIMEOUT,
         ext1=ext1,
         ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
     )
