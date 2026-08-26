@@ -47,6 +47,12 @@ token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷T
 3. ①② 之间的窗口由 SSE 读取侧宽限期兜底（`TERMINAL_PERSISTENCE_GRACE_SECONDS = 10s`）：Run 已终态但 Redis 中没有 done 时，宽限期内继续读流，超时后用 MySQL `status + content.next_run_id` 合成同一结构化 done。
 4. `done` 数据固定携带 `status=finished|failed|cancelled|waiting_user`，成功且已创建下一轮时附带 `next_run_id`；纯文本 `[DONE]` 只作为旧协议哨兵，不承载业务终态。
 
+### Run 调度与本进程 fast-path
+
+- 创建首个 Run、恢复 `ask_user_question` 的 Run 时，在写入 MySQL 后立即调用当前进程的 `AgentRunRuntime.submit()`，避免等待调度轮询。
+- 当前 Run 的 `complete_run()` 在同一事务中创建后续 `pending` Run 后，Runtime 先完成旧 Run 的 done 发布、终态游标记录和 Redis owner 释放，再立即 `submit(next_run_id)`。因此连续的 `next-step` / `next-turn` 会在当前进程直接接续。
+- fast-path 只负责降低调度延迟，不承担一致性。提交失败、进程重启或请求落到其他 Worker 时，MySQL 中的 `pending` Run 仍由调度轮询发现并通过 `prepare_pending_run()` 原子领取；数据库状态校验保证不会重复执行同一 Run。
+
 ### 断点恢复矩阵
 
 | 断点场景 | 恢复路径 | 精度 |

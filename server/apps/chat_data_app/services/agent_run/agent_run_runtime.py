@@ -271,6 +271,7 @@ class AgentRunRuntime:
             prepared = None
             terminal_payload: str | None = None
             terminal_ready = False
+            next_run_id_to_submit: str | None = None
             try:
                 prepared = await self._inbox_service.prepare_pending_run(run_id)
                 if prepared is None:
@@ -313,6 +314,8 @@ class AgentRunRuntime:
                         prepared["owner_token"],
                     )
                     terminal_payload = format_terminal_done(completion.status, completion.next_run_id)
+                    if completion.status == "finished":
+                        next_run_id_to_submit = completion.next_run_id
                 terminal_ready = True
             except asyncio.CancelledError as exc:
                 if prepared is not None and exc.args and exc.args[0] == "agent_run_cancelled":
@@ -382,6 +385,16 @@ class AgentRunRuntime:
                         await self._event_service.release_owner(run_id, prepared["owner_token"])
                     except Exception:
                         logger.warning("ChatData Agent Run Redis owner 清理失败: run_id=%s", run_id, exc_info=True)
+                    if next_run_id_to_submit:
+                        # MySQL 已创建 pending Run。旧 Run 的终态发布和 owner 清理
+                        # 完成后再提交，把链式接续从 ≤0.2s 轮询兜底提速到毫秒级；
+                        # 新旧 Run 各有独立 Stream，正确性不依赖本直启（轮询可接管）。
+                        self.submit(
+                            run_id=next_run_id_to_submit,
+                            conversation_id=conversation_id,
+                            user_id=user_id,
+                            operator_name=operator_name,
+                        )
                 self._owned_runs.discard(run_id)
 
 

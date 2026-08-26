@@ -79,6 +79,16 @@ async def test_done_is_published_after_successful_generator_finalization(monkeyp
         event_service=Events(),
         event_bus=Events.bus,
     )
+    def submit_next_run(**kwargs):
+        assert kwargs == {
+            "run_id": "run-2",
+            "conversation_id": "conv-1",
+            "user_id": "user-1",
+            "operator_name": "用户一",
+        }
+        order.append("next_run_submitted")
+
+    monkeypatch.setattr(runtime, "submit", submit_next_run)
     monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
 
     await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
@@ -87,9 +97,49 @@ async def test_done_is_published_after_successful_generator_finalization(monkeyp
     assert order.index("generator_finalized") < order.index("run_completed")
     assert order.index("run_completed") < order.index("done_published")
     assert order.index("done_published") < order.index("terminal_recorded")
-    assert order[-1] == "owner_released"
+    assert order.index("terminal_recorded") < order.index("owner_released")
+    assert order[-1] == "next_run_submitted"
     assert '"status": "finished"' in published_done[0]
     assert '"next_run_id": "run-2"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_non_finished_completion_does_not_submit_next_run(monkeypatch):
+    """只有成功收口创建的 next_run 才能进入本进程 fast-path。"""
+    submitted = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def complete_run(self, *_args, **_kwargs):
+            return _completion(status="waiting_user", next_run_id="should-not-run")
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            return None
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            return None
+
+        async def release_owner(self, _run_id, _owner_token):
+            return None
+
+        async def append(self, **_kwargs):
+            return "stream-0"
+
+    async def stream():
+        yield "event: message\ndata: {}\n\n"
+
+    runtime = AgentRunRuntime(inbox_service=Inbox(), event_service=Events(), event_bus=Events.bus)
+    monkeypatch.setattr(runtime, "submit", lambda **kwargs: submitted.append(kwargs))
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert submitted == []
 
 
 @pytest.mark.asyncio
