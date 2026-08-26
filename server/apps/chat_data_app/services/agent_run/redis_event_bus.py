@@ -14,6 +14,8 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ReadOnlyError, ResponseError, TimeoutError
 from redis.retry import Retry
 
+from utils.crypto import decrypt_env_value
+
 
 RUN_STREAM_PREFIX = "chatdata:run:"
 RUN_STREAM_SUFFIX = ":events"
@@ -128,7 +130,8 @@ class RedisEventBus:
     仅支持哨兵模式：``CHAT_DATA_REDIS_SENTINELS=host:port[,host:port...]`` +
     ``CHAT_DATA_REDIS_MASTER_NAME``，密码经 ``CHAT_DATA_REDIS_PASSWORD``
     （master 与 sentinel 共用；不同密码用 ``CHAT_DATA_REDIS_SENTINEL_PASSWORD``
-    单独指定 sentinel 的），逻辑库经 ``CHAT_DATA_REDIS_DB`` 选择（缺省 0）。
+    单独指定 sentinel 的），两个密码均为 SM4 密文（与数据库密码同规范），
+    逻辑库经 ``CHAT_DATA_REDIS_DB`` 选择（缺省 0）。
     master 地址在连接建立时向 sentinel 解析；failover 后旧连接上的命令会
     收到 ConnectionError/ReadOnlyError，由命令级重试重建连接跟随新主。
     """
@@ -140,11 +143,13 @@ class RedisEventBus:
         self._master_name = os.getenv("CHAT_DATA_REDIS_MASTER_NAME", "").strip()
         # 逻辑库编号：等价于旧 CHAT_DATA_REDIS_URL 的 /N 后缀，缺省 0 行为不变
         self._db = max(int(os.getenv("CHAT_DATA_REDIS_DB", "0")), 0)
-        self._password = os.getenv("CHAT_DATA_REDIS_PASSWORD", "").strip() or None
-        self._sentinel_password = (
-            os.getenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", "").strip()
-            or self._password
-        )
+        self._password = decrypt_env_value("CHAT_DATA_REDIS_PASSWORD") or None
+        if str(os.getenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or "").strip():
+            self._sentinel_password = (
+                decrypt_env_value("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or None
+            )
+        else:
+            self._sentinel_password = self._password
         self._redis: Redis | None = None
 
     @property

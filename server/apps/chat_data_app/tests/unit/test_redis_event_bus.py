@@ -8,6 +8,7 @@ from redis.exceptions import ResponseError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.services.agent_run.redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError
+from utils.crypto import encrypt_password
 
 
 class _FakeRedis:
@@ -155,9 +156,10 @@ async def test_renew_run_owner_requires_exact_owner_token():
 # ---------------------------------------------------------------------------
 
 def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
+    monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
     monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379, 10.0.0.2:26379")
     monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
-    monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", "secret")
+    monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", encrypt_password("secret"))
 
     bus = RedisEventBus()
     with patch(
@@ -184,6 +186,25 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     # failover 窗口旧连接收到 READONLY 错误必须可重试自愈
     from redis.exceptions import ReadOnlyError
     assert ReadOnlyError in master_kwargs["retry"]._supported_errors
+
+
+def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch):
+    monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+    monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", encrypt_password("master-pwd"))
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", encrypt_password("sentinel-pwd"))
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        assert bus.redis is not None
+
+    kwargs = sentinel_cls.call_args.kwargs
+    assert kwargs["password"] == "master-pwd"
+    assert kwargs["sentinel_kwargs"]["password"] == "sentinel-pwd"
 
 
 def test_sentinel_mode_selects_db(monkeypatch):
