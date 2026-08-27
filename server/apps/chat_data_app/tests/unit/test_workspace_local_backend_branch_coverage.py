@@ -144,9 +144,12 @@ def test_delete_local_path_branches(tmp_path):
     (workspace / "sub" / "inner").mkdir(parents=True)
     (workspace / "sub" / "inner" / "deep.txt").write_text("d", encoding="utf-8")
     (workspace / "empty").mkdir()
+    (workspace / "link.txt").symlink_to(workspace / "a.txt")
 
-    # 注：resolve_workspace_path 走 realpath 语义，符号链接在解析阶段就被跟到目标，
-    # 因此 _delete_local_path 内的 is_symlink() 守卫对输入链接不可达（见交付说明）。
+    # 本地与沙箱同口径：符号链接一律拒绝，且不得波及链接指向的目标文件
+    with pytest.raises(ValueError, match="不允许操作符号链接"):
+        lb._delete_local_path(str(root), "workspace/link.txt", False, "file")
+    assert (workspace / "a.txt").exists()
     with pytest.raises(FileNotFoundError, match="路径不存在"):
         lb._delete_local_path(str(root), "workspace/missing.txt", False, "file")
     with pytest.raises(ValueError, match="不能作为dir删除"):
@@ -168,8 +171,13 @@ def test_move_local_path_branches(tmp_path):
     workspace = root / "workspace"
     (workspace / "a.txt").write_text("a", encoding="utf-8")
     (workspace / "b.txt").write_text("b", encoding="utf-8")
+    (workspace / "link.txt").symlink_to(workspace / "a.txt")
 
-    # 同上：链接目标在解析阶段已被跟随，move 的符号链接守卫对输入链接不可达
+    # 移动链接同样被拒绝，且不能把目标文件搬走
+    with pytest.raises(ValueError, match="不允许操作符号链接"):
+        lb._move_local_path(str(root), "workspace/link.txt", "workspace/c.txt")
+    assert (workspace / "a.txt").exists()
+    assert not (workspace / "c.txt").exists()
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
         lb._move_local_path(str(root), "workspace/missing.txt", "workspace/c.txt")
     with pytest.raises(ValueError, match="目标路径已存在"):
@@ -461,3 +469,35 @@ async def test_run_officecli_requires_binary_and_rejects_skill_cwd(tmp_path, mon
         await runtime.run_officecli(
             args=["view", "a.docx", "text"], cwd="/mnt/skills/demo-skill", timeout_seconds=10,
         )
+
+
+# ---------------------------------------------------------------------------
+# 本地 / 沙箱符号链接口径对齐
+# ---------------------------------------------------------------------------
+
+
+def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
+    """本地后端与沙箱后端一致：符号链接不可读写/拷贝，列表则跳过而不是报错。"""
+    _runtime_obj, root = _runtime(tmp_path)
+    workspace = root / "workspace"
+    (workspace / "real.txt").write_text("payload", encoding="utf-8")
+    (workspace / "link.txt").symlink_to(workspace / "real.txt")
+    (workspace / "dirlink").symlink_to(workspace)
+
+    for path in ("workspace/link.txt", "workspace/dirlink"):
+        with pytest.raises(ValueError, match="不允许操作符号链接"):
+            cw.resolve_workspace_path(str(root), path)
+        with pytest.raises(ValueError, match="不允许操作符号链接"):
+            cw.resolve_workspace_path(str(root), path, writable=True)
+
+    # 目标文件必须毫发无损
+    assert (workspace / "real.txt").read_text(encoding="utf-8") == "payload"
+
+    # 列表口径同样对齐沙箱：跳过链接，不抛错、也不泄漏目标内容
+    listed = lb._list_local_workspace_dir(
+        SimpleNamespace(workspace_root=str(root), runtime_skills_dir=None),
+        "workspace", 3,
+    )
+    paths = {item["path"] for item in listed}
+    assert "/mnt/user-data/workspace/real.txt" in paths
+    assert not any("link" in p for p in paths)

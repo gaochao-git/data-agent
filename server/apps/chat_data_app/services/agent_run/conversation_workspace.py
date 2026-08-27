@@ -478,7 +478,16 @@ def resolve_workspace_path(
     else:
         WORKSPACE_PATH_POLICY.assert_readable(logical_path)
 
-    target = (root / logical_path.normalized).resolve()
+    # 与 sandbox 后端保持同一口径：符号链接一律拒绝操作（sandbox 侧由
+    # _sandbox_path_kind 对 entry_type=symlink 直接报错）。必须在 resolve 之前判断
+    # 最终组件，否则 realpath 会先把链接跟到目标，下游的 is_symlink() 守卫永远不可达，
+    # 造成「删链接实际删掉目标文件」。祖先目录已在 root=resolve() 时归一化，
+    # 因此这里只会命中被操作对象本身，不会误伤 CHAT_DATA_HOME 位于符号链接下的部署。
+    candidate = root / logical_path.normalized
+    if candidate.is_symlink():
+        raise ValueError(f"不允许操作符号链接: {path}")
+
+    target = candidate.resolve()
     if root not in target.parents:
         raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
 
