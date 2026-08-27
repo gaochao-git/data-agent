@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../types'
@@ -40,7 +40,8 @@ const emit = defineEmits<{
 }>()
 
 const markdown = new MarkdownIt({ breaks: true, html: false, linkify: true })
-const collapsedThinkingSegmentKeys = ref<Set<string>>(new Set())
+// 用户手动展开的思考分段（跨流式过程保持；未点开的分段一律默认收起）
+const expandedThinkingSegmentKeys = ref<Set<string>>(new Set())
 
 const getThinkingSegmentKey = (messageId: string, thinkingSegmentId: string) => `${messageId}:${thinkingSegmentId}`
 
@@ -49,16 +50,17 @@ const getThinkingSegment = (message: Message, thinkingSegmentId: string) => (
 )
 
 const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => (
-  collapsedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
+  // 用户点开的分段记在 Set 里；不在 Set 里 = 默认收起（含流式中的分段）
+  !expandedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
 )
 
 const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
   if (!getThinkingSegment(message, thinkingSegmentId)) return
   const key = getThinkingSegmentKey(message.id, thinkingSegmentId)
-  const next = new Set(collapsedThinkingSegmentKeys.value)
+  const next = new Set(expandedThinkingSegmentKeys.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
-  collapsedThinkingSegmentKeys.value = next
+  expandedThinkingSegmentKeys.value = next
 }
 
 const getActiveThinkingSegmentId = (message: Message): string | null => {
@@ -68,49 +70,18 @@ const getActiveThinkingSegmentId = (message: Message): string | null => {
   return lastSegment?.type === 'thinkingSegment' ? lastSegment.thinkingSegmentId : null
 }
 
-interface ThinkingMessageState {
-  id: string
-  activeThinkingSegmentId: string | null
-  thinkingSegmentIds: string[]
+// 收起态下，流式中的思考分段在同一行露尾部文字（走马灯式：只显示最新思考到的内容）
+const THINKING_PREVIEW_TAIL_LENGTH = 80
+
+const getThinkingPreviewText = (message: Message, thinkingSegmentId: string): string => {
+  const segment = getThinkingSegment(message, thinkingSegmentId)
+  if (!segment) return ''
+  const singleLine = segment.content.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return ''
+  return singleLine.length > THINKING_PREVIEW_TAIL_LENGTH
+    ? `…${singleLine.slice(-THINKING_PREVIEW_TAIL_LENGTH)}`
+    : singleLine
 }
-
-const getThinkingMessageStates = (): ThinkingMessageState[] => (
-  props.messages.map(message => ({
-    id: message.id,
-    activeThinkingSegmentId: getActiveThinkingSegmentId(message),
-    thinkingSegmentIds: message.thinkingSegments?.map(segment => segment.id) || [],
-  }))
-)
-
-watch(
-  getThinkingMessageStates,
-  (currentStates, previousStates = []) => {
-    const nextCollapsedKeys = new Set(collapsedThinkingSegmentKeys.value)
-    const previousStateByMessageId = new Map(previousStates.map(state => [state.id, state]))
-
-    for (const currentState of currentStates) {
-      const previousState = previousStateByMessageId.get(currentState.id)
-      if (!previousState) {
-        for (const thinkingSegmentId of currentState.thinkingSegmentIds) {
-          if (thinkingSegmentId !== currentState.activeThinkingSegmentId) {
-            nextCollapsedKeys.add(getThinkingSegmentKey(currentState.id, thinkingSegmentId))
-          }
-        }
-      } else if (
-        previousState.activeThinkingSegmentId
-        && previousState.activeThinkingSegmentId !== currentState.activeThinkingSegmentId
-      ) {
-        nextCollapsedKeys.add(getThinkingSegmentKey(currentState.id, previousState.activeThinkingSegmentId))
-      }
-
-      if (currentState.activeThinkingSegmentId) {
-        nextCollapsedKeys.delete(getThinkingSegmentKey(currentState.id, currentState.activeThinkingSegmentId))
-      }
-    }
-    collapsedThinkingSegmentKeys.value = nextCollapsedKeys
-  },
-  { immediate: true },
-)
 
 const resolveToolCall = (message: Message, toolCallId: string): ToolCallInfo | null => (
   props.resolveToolCall(message, toolCallId)
@@ -309,8 +280,13 @@ const handleCopyAssistantMessage = async (message: Message) => {
                     class="group inline-flex max-w-full items-center gap-2 rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
                     @click="toggleThinkingSegment(message, segment.thinkingSegmentId)"
                   >
-                    <i class="fa-solid fa-brain text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600"></i>
-                    <span>思考</span>
+                    <i
+                      :class="[
+                        'fa-solid fa-brain text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600',
+                        getActiveThinkingSegmentId(message) === segment.thinkingSegmentId ? 'fa-fade' : '',
+                      ]"
+                    ></i>
+                    <span>{{ getActiveThinkingSegmentId(message) === segment.thinkingSegmentId ? '思考中' : '思考' }}</span>
                     <i
                       :class="[
                         'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
@@ -319,6 +295,12 @@ const handleCopyAssistantMessage = async (message: Message) => {
                           : 'opacity-0 group-hover:opacity-100',
                       ]"
                     ></i>
+                    <span
+                      v-if="getActiveThinkingSegmentId(message) === segment.thinkingSegmentId
+                        && isThinkingSegmentCollapsed(message, segment.thinkingSegmentId)
+                        && getThinkingPreviewText(message, segment.thinkingSegmentId)"
+                      class="min-w-0 flex-1 truncate text-xs font-normal text-slate-400/80"
+                    >{{ getThinkingPreviewText(message, segment.thinkingSegmentId) }}</span>
                   </button>
                   <div
                     v-if="!isThinkingSegmentCollapsed(message, segment.thinkingSegmentId)"
