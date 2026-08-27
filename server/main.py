@@ -13,10 +13,7 @@ from utils.common_util import load_runtime_env
 
 _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
-print(
-    f"[env] active_env={_RUNTIME_ENV.active_env} "
-    f"loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
-)
+print(f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}")
 
 from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger

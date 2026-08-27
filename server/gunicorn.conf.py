@@ -8,16 +8,6 @@ _SERVER_DIR = Path(__file__).resolve().parent
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from utils.common_util import load_runtime_env
-
-
-_RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
-print(
-    f"[env] active_env={_RUNTIME_ENV.active_env} "
-    f"loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
-)
-
-
 def _env_int(name: str, default: int) -> int:
     value = str(os.getenv(name) or "").strip()
     if not value:
