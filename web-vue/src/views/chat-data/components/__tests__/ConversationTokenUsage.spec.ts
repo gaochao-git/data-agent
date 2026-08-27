@@ -215,7 +215,11 @@ describe('ConversationTokenUsage', () => {
     expect(wrapper.text()).toContain('今天销量怎么样')
 
     const rows = wrapper.findAll('button[class*="grid"]')
-    await rows[1].trigger('click')
+    const detailRow = rows[1]
+    if (!detailRow) {
+      throw new Error(`未渲染第二行明细按钮，实际行数：${rows.length}`)
+    }
+    await detailRow.trigger('click')
     expect(wrapper.text()).toContain('销量共 1234 件')
     wrapper.unmount()
   })
