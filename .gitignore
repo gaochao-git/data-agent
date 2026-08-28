@@ -94,3 +94,4 @@ logs/*
 # 工作区与数据
 /.workbuddy/
 /chat_data/
+/server/.pytest-tmp/
