@@ -12,6 +12,9 @@ from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
 WorkspacePathKind = Literal["workspace", "outputs", "uploads", "skills"]
 
+# 工作区规范虚拟前缀（模型/前端唯一合法形式），与沙箱挂载路径字面一致。
+USER_DATA_VIRTUAL_ROOT = "/mnt/user-data"
+
 _WORKSPACE_ROOTS = frozenset({"workspace", "outputs", "uploads"})
 
 
@@ -58,31 +61,33 @@ class WorkspacePathPolicy:
     """Validate logical workspace paths independently from storage backends."""
 
     def parse(self, path: str, *, allow_empty: bool = False) -> LogicalWorkspacePath:
+        """严进：只接受规范形式 /mnt/user-data/<root>/... 与只读技能 /mnt/skills/<name>/...。
+
+        裸别名（/workspace/...）、相对形式（workspace/...）、./ 前缀一律拒绝，
+        报错信息携带规范形式要求，保证模型可自我纠正。
+        """
         raw = unquote(str(path or "").strip())
-        while raw.startswith("./"):
-            raw = raw[2:]
         if not raw:
             if allow_empty:
                 return LogicalWorkspacePath("", "workspace", "")
-            raise ValueError("必须指定 workspace、outputs 或 uploads 下的路径")
+            raise ValueError("路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头")
         if "\x00" in raw:
             raise ValueError("路径不能包含空字节")
 
-        raw = self._remove_alias(raw)
-        if raw.startswith("/"):
-            if raw == SKILLS_VIRTUAL_ROOT:
-                raise ValueError("技能路径必须包含技能名")
-            if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-                skill_path = raw[len(SKILLS_VIRTUAL_ROOT) + 1 :]
-                return self._build_skill_path(skill_path, raw)
-            raise ValueError(f"只允许访问当前会话目录内的相对路径: {path}")
+        if raw == SKILLS_VIRTUAL_ROOT:
+            raise ValueError("技能路径必须包含技能名")
+        if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            return self._build_skill_path(raw[len(SKILLS_VIRTUAL_ROOT) + 1 :], raw)
 
-        parts = PurePosixPath(raw).parts
+        prefix = f"{USER_DATA_VIRTUAL_ROOT}/"
+        if not raw.startswith(prefix):
+            raise ValueError(f"路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头: {path}")
+        parts = PurePosixPath(raw[len(prefix) :]).parts
         if not parts or ".." in parts:
             raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
         kind = parts[0]
         if kind not in _WORKSPACE_ROOTS:
-            raise ValueError("只允许访问 workspace/、outputs/ 或 uploads/")
+            raise ValueError("只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs 或 /mnt/user-data/uploads")
         relative = "/".join(parts[1:])
         normalized = kind if not relative else f"{kind}/{relative}"
         return LogicalWorkspacePath(
@@ -116,24 +121,7 @@ class WorkspacePathPolicy:
     def to_sandbox_path(self, logical_path: LogicalWorkspacePath) -> str:
         if logical_path.is_skill:
             return f"{SKILLS_VIRTUAL_ROOT}/{logical_path.relative_path}"
-        return f"/mnt/user-data/{logical_path.normalized}"
-
-    @staticmethod
-    def _remove_alias(raw: str) -> str:
-        aliases = (
-            ("/mnt/user-data/workspace", "workspace"),
-            ("/mnt/user-data/outputs", "outputs"),
-            ("/mnt/user-data/uploads", "uploads"),
-            ("/workspace", "workspace"),
-            ("/outputs", "outputs"),
-            ("/uploads", "uploads"),
-        )
-        for prefix, alias in aliases:
-            if raw == prefix:
-                return alias
-            if raw.startswith(f"{prefix}/"):
-                return f"{alias}/{raw[len(prefix) + 1 :]}"
-        return raw
+        return f"{USER_DATA_VIRTUAL_ROOT}/{logical_path.normalized}"
 
     @staticmethod
     def _build_skill_path(relative: str, original: str) -> LogicalWorkspacePath:
@@ -152,6 +140,7 @@ WORKSPACE_PATH_POLICY = WorkspacePathPolicy()
 
 __all__ = [
     "LogicalWorkspacePath",
+    "USER_DATA_VIRTUAL_ROOT",
     "WORKSPACE_PATH_POLICY",
     "WorkspacePathKind",
     "WorkspacePathPolicy",

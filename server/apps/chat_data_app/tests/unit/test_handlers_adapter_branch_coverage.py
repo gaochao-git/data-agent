@@ -423,7 +423,7 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
     assert checkpointer.entered is True
 
     # 超长输入已转写 outputs，并被登记为附件
-    assert written["file_path"].startswith("outputs/input-")
+    assert written["file_path"].startswith("/mnt/user-data/outputs/input-")
     assert written["content"] == long_query
     assert written["mode"] == "overwrite"
 

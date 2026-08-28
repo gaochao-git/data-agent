@@ -1345,7 +1345,7 @@ async def _run_chat_data_agent_stream(
     user_message_content = user_query
     if len(user_query) > USER_INPUT_OFFLOAD_THRESHOLD:
         offload_name = f"input-{time.strftime('%Y%m%d-%H%M%S')}.txt"
-        offload_path = f"outputs/{offload_name}"
+        offload_path = f"/mnt/user-data/outputs/{offload_name}"
         await workspace_runtime.write_text_file(
             file_path=offload_path,
             content=user_query,

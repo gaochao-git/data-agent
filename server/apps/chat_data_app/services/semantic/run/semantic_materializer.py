@@ -133,7 +133,7 @@ async def materialize_runtime_semantic_models(
         if isinstance(result, dict) and _config_id(result) and bool(result.get("enabled", True)):
             configs.append(dict(result))
 
-    root = PurePosixPath("workspace") / "semantic"
+    root = PurePosixPath("/mnt/user-data") / "workspace" / "semantic"
     converter = ChatDataToOssieConverter()
     entries: list[tuple[str, str]] = []
     directory: list[dict[str, Any]] = []
@@ -159,7 +159,7 @@ async def materialize_runtime_semantic_models(
         config_id = _config_id(rendered_config)
         path = str(root / _safe_file_name(config_id))
         entries.append((path, content))
-        directory.append(_directory_item(rendered_config, f"/mnt/user-data/{path}"))
+        directory.append(_directory_item(rendered_config, path))
         cache_hits += int(hit)
 
     await workspace_runtime.write_internal_text_files(entries)

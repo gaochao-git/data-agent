@@ -1079,19 +1079,19 @@ def test_sandbox_artifact_payload_branches(tmp_path, monkeypatch):
         session_ref=ref, file_path="/mnt/user-data/outputs/.tool-offload/x.json",
     )) == {}
     assert asyncio.run(workspace_execution.sandbox_artifact_payload(
-        session_ref=ref, file_path="workspace/missing.txt",
+        session_ref=ref, file_path="/mnt/user-data/workspace/missing.txt",
     )) == {}
     sandbox.remote_kinds["/mnt/user-data/outputs/report.md"] = "file"
     sandbox.remote_files["/mnt/user-data/outputs/report.md"] = "# 结论".encode("utf-8")
     payload = asyncio.run(workspace_execution.sandbox_artifact_payload(
-        session_ref=ref, file_path="outputs/report.md",
+        session_ref=ref, file_path="/mnt/user-data/outputs/report.md",
     ))
     assert payload["artifact_type"] == "markdown"
     assert payload["file_path"] == "/mnt/user-data/outputs/report.md"
     no_session = SandboxExecutionSessionRef()
     with pytest.raises(ValueError, match="未准备"):
         asyncio.run(workspace_execution.sandbox_artifact_payload(
-            session_ref=no_session, file_path="outputs/chart.json",
+            session_ref=no_session, file_path="/mnt/user-data/outputs/chart.json",
         ))
 
 
@@ -1099,7 +1099,7 @@ def test_render_office_html_rejects_suffix(tmp_path, monkeypatch):
     _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match=".docx、.xlsx、.pptx"):
         asyncio.run(workspace_execution.sandbox_render_office_html(
-            session_ref=_ref(session), file_path="workspace/a.txt", max_chars=100,
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", max_chars=100,
         ))
 
 
@@ -1125,7 +1125,7 @@ def test_render_office_html_success_and_truncation(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run)
     monkeypatch.setattr(workspace_execution, "_sandbox_path_info", fake_path_info)
     result = asyncio.run(workspace_execution.sandbox_render_office_html(
-        session_ref=_ref(session), file_path="workspace/report.docx", max_chars=100,
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/report.docx", max_chars=100,
     ))
     assert result["html"] == "<html>small</html>" and result["truncated"] is False
 
@@ -1135,7 +1135,7 @@ def test_render_office_html_success_and_truncation(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", failing_run)
     with pytest.raises(RuntimeError, match="officecli exploded"):
         asyncio.run(workspace_execution.sandbox_render_office_html(
-            session_ref=_ref(session), file_path="workspace/report.docx", max_chars=100,
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/report.docx", max_chars=100,
         ))
 
 
@@ -1145,27 +1145,27 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
     sandbox.command_result = (0, "2", "")
 
     missing = asyncio.run(workspace_execution.sandbox_read_text_file(
-        session_ref=ref, file_path="workspace/missing.txt", offset=0, limit=10, max_chars=100,
+        session_ref=ref, file_path="/mnt/user-data/workspace/missing.txt", offset=0, limit=10, max_chars=100,
     ))
     assert missing["exists"] is False
 
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
     is_dir = asyncio.run(workspace_execution.sandbox_read_text_file(
-        session_ref=ref, file_path="workspace/sub", offset=0, limit=10, max_chars=100,
+        session_ref=ref, file_path="/mnt/user-data/workspace/sub", offset=0, limit=10, max_chars=100,
     ))
     assert is_dir["is_dir"] is True
 
     sandbox.remote_kinds["/mnt/user-data/workspace/bin.dat"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/bin.dat"] = b"a\x00b"
     binary = asyncio.run(workspace_execution.sandbox_read_text_file(
-        session_ref=ref, file_path="workspace/bin.dat", offset=0, limit=10, max_chars=100,
+        session_ref=ref, file_path="/mnt/user-data/workspace/bin.dat", offset=0, limit=10, max_chars=100,
     ))
     assert binary["is_binary"] is True
 
     sandbox.remote_kinds["/mnt/user-data/workspace/text.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/text.txt"] = b"one\ntwo\n"
     result = asyncio.run(workspace_execution.sandbox_read_text_file(
-        session_ref=ref, file_path="workspace/text.txt", offset=0, limit=1, max_chars=10000,
+        session_ref=ref, file_path="/mnt/user-data/workspace/text.txt", offset=0, limit=1, max_chars=10000,
     ))
     assert result["lines"] == ["one"]
     assert result["has_more"] is True
@@ -1175,7 +1175,7 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
 
     # 越界偏移返回空页（不带 lines 字段，用 offset_out_of_range 表达）
     empty = asyncio.run(workspace_execution.sandbox_read_text_file(
-        session_ref=ref, file_path="workspace/text.txt", offset=99, limit=10, max_chars=100,
+        session_ref=ref, file_path="/mnt/user-data/workspace/text.txt", offset=99, limit=10, max_chars=100,
     ))
     assert empty.get("lines", []) == [] and empty["offset_out_of_range"] is True
 
@@ -1187,7 +1187,7 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
     session2 = _make_session(readerless, root)
     with pytest.raises(ValueError, match="files.read_bytes"):
         asyncio.run(workspace_execution.sandbox_read_text_file(
-            session_ref=_ref(session2), file_path="workspace/text.txt",
+            session_ref=_ref(session2), file_path="/mnt/user-data/workspace/text.txt",
             offset=0, limit=1, max_chars=100,
         ))
 
@@ -1219,7 +1219,7 @@ def test_sandbox_list_dir(tmp_path, monkeypatch):
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"abc"
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
     entries = asyncio.run(workspace_execution.sandbox_list_dir(
-        session_ref=_ref(session), path="workspace", max_depth=1,
+        session_ref=_ref(session), path="/mnt/user-data/workspace", max_depth=1,
     ))
     assert entries == [
         {"type": "dir", "path": "/mnt/user-data/workspace/sub/", "size": "-", "mtime": "2026-08-10 00:00"},
@@ -1227,7 +1227,7 @@ def test_sandbox_list_dir(tmp_path, monkeypatch):
     ]
     with pytest.raises(ValueError, match="不是目录"):
         asyncio.run(workspace_execution.sandbox_list_dir(
-            session_ref=_ref(session), path="workspace/a.txt", max_depth=1,
+            session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", max_depth=1,
         ))
     no_lister_sandbox = FakeSandbox()
     no_lister_sandbox.remote_kinds["/mnt/user-data/workspace"] = "directory"
@@ -1235,24 +1235,24 @@ def test_sandbox_list_dir(tmp_path, monkeypatch):
     no_lister = _make_session(no_lister_sandbox, root)
     with pytest.raises(ValueError, match="files.list_directory"):
         asyncio.run(workspace_execution.sandbox_list_dir(
-            session_ref=_ref(no_lister), path="workspace", max_depth=1,
+            session_ref=_ref(no_lister), path="/mnt/user-data/workspace", max_depth=1,
         ))
 
 
 def test_sandbox_create_dir(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     result = asyncio.run(workspace_execution.sandbox_create_dir(
-        session_ref=_ref(session), path="workspace/newdir",
+        session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
     ))
     assert result == {"path": "/mnt/user-data/workspace/newdir", "type": "dir"}
     assert "/mnt/user-data/workspace/newdir" in sandbox.remote_kinds
     with pytest.raises(ValueError, match="已存在"):
         asyncio.run(workspace_execution.sandbox_create_dir(
-            session_ref=_ref(session), path="workspace/newdir",
+            session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
         ))
     with pytest.raises(ValueError, match="根目录"):
         asyncio.run(workspace_execution.sandbox_create_dir(
-            session_ref=_ref(session), path="workspace",
+            session_ref=_ref(session), path="/mnt/user-data/workspace",
         ))
 
 
@@ -1266,18 +1266,18 @@ def test_sandbox_delete_path(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="不能作为dir删除"):
         asyncio.run(workspace_execution.sandbox_delete_path(
-            session_ref=_ref(session), path="workspace/a.txt", recursive=False, expected_type="dir",
+            session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", recursive=False, expected_type="dir",
         ))
     with pytest.raises(ValueError, match="目录非空"):
         asyncio.run(workspace_execution.sandbox_delete_path(
-            session_ref=_ref(session), path="workspace/sub", recursive=False, expected_type="dir",
+            session_ref=_ref(session), path="/mnt/user-data/workspace/sub", recursive=False, expected_type="dir",
         ))
     result = asyncio.run(workspace_execution.sandbox_delete_path(
-        session_ref=_ref(session), path="workspace/a.txt", recursive=False, expected_type="file",
+        session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", recursive=False, expected_type="file",
     ))
     assert result["type"] == "file"
     result = asyncio.run(workspace_execution.sandbox_delete_path(
-        session_ref=_ref(session), path="workspace/sub", recursive=True, expected_type="dir",
+        session_ref=_ref(session), path="/mnt/user-data/workspace/sub", recursive=True, expected_type="dir",
     ))
     assert result["type"] == "dir"
     assert "/mnt/user-data/workspace/sub" not in sandbox.remote_kinds
@@ -1290,7 +1290,7 @@ def test_sandbox_delete_path(tmp_path, monkeypatch):
     no_deleter = _make_session(no_deleter_sandbox, root)
     with pytest.raises(ValueError, match="删除 Files API"):
         asyncio.run(workspace_execution.sandbox_delete_path(
-            session_ref=_ref(no_deleter), path="workspace/b.txt", recursive=False, expected_type="file",
+            session_ref=_ref(no_deleter), path="/mnt/user-data/workspace/b.txt", recursive=False, expected_type="file",
         ))
 
 
@@ -1300,8 +1300,8 @@ def test_sandbox_move_path(tmp_path, monkeypatch):
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
     result = asyncio.run(workspace_execution.sandbox_move_path(
         session_ref=_ref(session),
-        source_path="workspace/a.txt",
-        destination_path="workspace/b.txt",
+        source_path="/mnt/user-data/workspace/a.txt",
+        destination_path="/mnt/user-data/workspace/b.txt",
     ))
     assert result["type"] == "file"
     assert sandbox.files.move_calls == [(
@@ -1310,8 +1310,8 @@ def test_sandbox_move_path(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="已存在"):
         asyncio.run(workspace_execution.sandbox_move_path(
             session_ref=_ref(session),
-            source_path="workspace/b.txt",
-            destination_path="workspace/b.txt",
+            source_path="/mnt/user-data/workspace/b.txt",
+            destination_path="/mnt/user-data/workspace/b.txt",
         ))
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
@@ -1319,8 +1319,8 @@ def test_sandbox_move_path(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="父路径不是目录"):
         asyncio.run(workspace_execution.sandbox_move_path(
             session_ref=_ref(session),
-            source_path="workspace/c.txt",
-            destination_path="workspace/a.txt/deep.txt",
+            source_path="/mnt/user-data/workspace/c.txt",
+            destination_path="/mnt/user-data/workspace/a.txt/deep.txt",
         ))
     no_mover_sandbox = FakeSandbox()
     no_mover_sandbox.remote_kinds["/mnt/user-data/workspace"] = "directory"
@@ -1331,8 +1331,8 @@ def test_sandbox_move_path(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="files.move_files"):
         asyncio.run(workspace_execution.sandbox_move_path(
             session_ref=_ref(no_mover),
-            source_path="workspace/c.txt",
-            destination_path="workspace/d.txt",
+            source_path="/mnt/user-data/workspace/c.txt",
+            destination_path="/mnt/user-data/workspace/d.txt",
         ))
 
 
@@ -1343,35 +1343,35 @@ def test_sandbox_copy_path(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="不能复制"):
         asyncio.run(workspace_execution.sandbox_copy_path(
             session_ref=_ref(session),
-            source_path="outputs/.tool-offload/r.json",
-            destination_path="workspace/r.json",
+            source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+            destination_path="/mnt/user-data/workspace/r.json",
         ))
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
     with pytest.raises(ValueError, match="只支持复制单个文件"):
         asyncio.run(workspace_execution.sandbox_copy_path(
             session_ref=_ref(session),
-            source_path="workspace/sub",
-            destination_path="workspace/sub2",
+            source_path="/mnt/user-data/workspace/sub",
+            destination_path="/mnt/user-data/workspace/sub2",
         ))
     result = asyncio.run(workspace_execution.sandbox_copy_path(
         session_ref=_ref(session),
-        source_path="uploads/src.csv",
-        destination_path="workspace/src.csv",
+        source_path="/mnt/user-data/uploads/src.csv",
+        destination_path="/mnt/user-data/workspace/src.csv",
     ))
     assert result["bytes"] == 3
     assert (root / "workspace" / "src.csv").read_bytes() == b"csv"
     with pytest.raises(ValueError, match="已存在"):
         asyncio.run(workspace_execution.sandbox_copy_path(
             session_ref=_ref(session),
-            source_path="uploads/src.csv",
-            destination_path="workspace/src.csv",
+            source_path="/mnt/user-data/uploads/src.csv",
+            destination_path="/mnt/user-data/workspace/src.csv",
         ))
     sandbox.remote_kinds["/mnt/user-data/uploads/other.csv"] = "file"
     with pytest.raises(ValueError, match="父路径不是目录"):
         asyncio.run(workspace_execution.sandbox_copy_path(
             session_ref=_ref(session),
-            source_path="uploads/other.csv",
-            destination_path="workspace/src.csv/deep.csv",
+            source_path="/mnt/user-data/uploads/other.csv",
+            destination_path="/mnt/user-data/workspace/src.csv/deep.csv",
         ))
 
 
@@ -1381,13 +1381,13 @@ def test_sandbox_search_files(tmp_path, monkeypatch):
     sandbox.remote_kinds["/mnt/user-data/workspace/b.csv"] = "file"
     sandbox.remote_kinds["/mnt/user-data/workspace/c.txt"] = "file"
     results = asyncio.run(workspace_execution.sandbox_search_files(
-        session_ref=_ref(session), path="workspace", pattern="*.csv", max_results=1,
+        session_ref=_ref(session), path="/mnt/user-data/workspace", pattern="*.csv", max_results=1,
     ))
     assert results == [{"path": "/mnt/user-data/workspace/a.csv", "type": "file"}]
     no_search = _make_session(SimpleNamespace(files=SimpleNamespace()), root)
     with pytest.raises(ValueError, match="files.search"):
         asyncio.run(workspace_execution.sandbox_search_files(
-            session_ref=_ref(no_search), path="workspace", pattern="*", max_results=10,
+            session_ref=_ref(no_search), path="/mnt/user-data/workspace", pattern="*", max_results=10,
         ))
 
 
@@ -1432,7 +1432,7 @@ def test_sandbox_grep_text(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", run_127)
     with pytest.raises(RuntimeError, match="ripgrep"):
         asyncio.run(workspace_execution.sandbox_grep_text(
-            session_ref=_ref(session), path="workspace", patterns=["x"],
+            session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["x"],
             glob="**/*", max_results=10, max_chars=1000,
         ))
 
@@ -1442,7 +1442,7 @@ def test_sandbox_grep_text(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", run_fail)
     with pytest.raises(RuntimeError, match="rg 执行失败"):
         asyncio.run(workspace_execution.sandbox_grep_text(
-            session_ref=_ref(session), path="workspace", patterns=["x"],
+            session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["x"],
             glob="**/*", max_results=10, max_chars=1000,
         ))
 
@@ -1452,7 +1452,7 @@ def test_sandbox_grep_text(tmp_path, monkeypatch):
 
     monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", run_ok)
     payload = asyncio.run(workspace_execution.sandbox_grep_text(
-        session_ref=_ref(session), path="workspace", patterns=["hello"],
+        session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["hello"],
         glob="**/*", max_results=10, max_chars=1000,
     ))
     assert payload["matches"] == [
@@ -1465,10 +1465,10 @@ def test_sandbox_write_text_file(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="只支持 overwrite"):
         asyncio.run(workspace_execution.sandbox_write_text_file(
-            session_ref=_ref(session), file_path="workspace/a.txt", content="x", mode="append",
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="x", mode="append",
         ))
     result = asyncio.run(workspace_execution.sandbox_write_text_file(
-        session_ref=_ref(session), file_path="workspace/a.txt", content="hello", mode="overwrite",
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="hello", mode="overwrite",
     ))
     assert result["bytes"] == 5
     assert (root / "workspace" / "a.txt").read_bytes() == b"hello"
@@ -1478,11 +1478,11 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="语义模型"):
         asyncio.run(workspace_execution.sandbox_write_internal_text_files(
-            session_ref=_ref(session), entries=[("workspace/plain.txt", "x")],
+            session_ref=_ref(session), entries=[("/mnt/user-data/workspace/plain.txt", "x")],
         ))
     results = asyncio.run(workspace_execution.sandbox_write_internal_text_files(
         session_ref=_ref(session),
-        entries=[("workspace/semantic/model.yaml", "a: 1")],
+        entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
     ))
     assert results[0]["bytes"] == 4
     target = "/mnt/user-data/workspace/semantic/model.yaml"
@@ -1492,7 +1492,7 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     no_writer = _make_session(no_writer_sandbox, root)
     with pytest.raises(ValueError, match="files.write_files"):
         asyncio.run(workspace_execution.sandbox_write_internal_text_files(
-            session_ref=_ref(no_writer), entries=[("workspace/semantic/model.yaml", "a: 1")],
+            session_ref=_ref(no_writer), entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
         ))
 
 
@@ -1503,22 +1503,22 @@ def test_sandbox_replace_text_file(tmp_path, monkeypatch):
     sandbox.remote_files[target] = b"\xff\xfe binary"
     with pytest.raises(ValueError, match="二进制"):
         asyncio.run(workspace_execution.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="workspace/a.txt",
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
             old_content="a", new_content="b",
         ))
     sandbox.remote_files[target] = b"one two"
     with pytest.raises(ValueError, match="未在文件中找到"):
         asyncio.run(workspace_execution.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="workspace/a.txt",
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
             old_content="zzz", new_content="b",
         ))
     with pytest.raises(ValueError, match="匹配多处"):
         asyncio.run(workspace_execution.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="workspace/a.txt",
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
             old_content="o", new_content="0",
         ))
     result = asyncio.run(workspace_execution.sandbox_replace_text_file(
-        session_ref=_ref(session), file_path="workspace/a.txt",
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
         old_content="two", new_content="THREE",
     ))
     assert result["replaced_count"] == 1
@@ -1529,15 +1529,15 @@ def test_sandbox_write_tool_result(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="系统结果目录"):
         asyncio.run(workspace_execution.sandbox_write_tool_result(
-            session_ref=_ref(session), file_path="workspace/a.txt", content="x",
+            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="x",
         ))
     result = asyncio.run(workspace_execution.sandbox_write_tool_result(
-        session_ref=_ref(session), file_path="outputs/.tool-offload/r_1.json", content="{}",
+        session_ref=_ref(session), file_path="/mnt/user-data/outputs/.tool-offload/r_1.json", content="{}",
     ))
     assert result["bytes"] == 2
     with pytest.raises(ValueError, match="已存在"):
         asyncio.run(workspace_execution.sandbox_write_tool_result(
-            session_ref=_ref(session), file_path="outputs/.tool-offload/r_1.json", content="{}",
+            session_ref=_ref(session), file_path="/mnt/user-data/outputs/.tool-offload/r_1.json", content="{}",
         ))
 
 

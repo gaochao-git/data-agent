@@ -54,20 +54,23 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     assert sandbox_visible_path(
         "/mnt/skills/dashboard-generation/references/guide.md"
     ) == "/mnt/skills/dashboard-generation/references/guide.md"
-    assert sandbox_visible_path("outputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
-    assert sandbox_visible_path("outputs/.tool-offload/result_1.json") == "/mnt/user-data/outputs/.tool-offload/result_1.json"
+    # URL 编码只允许出现在规范前缀内；编码短形式按非规范输入拒绝。
+    assert sandbox_visible_path("/mnt/user-data%2Foutputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
+    with pytest.raises(ValueError, match="/mnt/user-data/"):
+        sandbox_visible_path("outputs%2Fdashboard.dashboard.json")
+    assert sandbox_visible_path("/mnt/user-data/outputs/.tool-offload/result_1.json") == "/mnt/user-data/outputs/.tool-offload/result_1.json"
     with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
-        sandbox_visible_path("outputs/.tool-offload/result_1.json", writable=True)
+        sandbox_visible_path("/mnt/user-data/outputs/.tool-offload/result_1.json", writable=True)
     with pytest.raises(ValueError, match="语义模型只读快照"):
-        sandbox_visible_path("workspace/semantic/model.yaml", writable=True)
+        sandbox_visible_path("/mnt/user-data/workspace/semantic/model.yaml", writable=True)
     assert sandbox_visible_path(
-        "workspace/semantic/model.yaml",
+        "/mnt/user-data/workspace/semantic/model.yaml",
         writable=True,
         allow_managed_semantic_model_write=True,
     ) == "/mnt/user-data/workspace/semantic/model.yaml"
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
-    with pytest.raises(ValueError, match="路径越界"):
+    with pytest.raises(ValueError, match="/mnt/user-data/ 或 /mnt/skills/ 开头"):
         sandbox_visible_path("outputs%2F..%2Fsecret.txt")
     # 技能路径只读，写入被拒。
     with pytest.raises(ValueError, match="只允许写入"):
@@ -157,13 +160,13 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
 
     result = asyncio.run(workspace_execution.sandbox_read_text_file(
         session_ref=session_ref,
-        file_path="workspace/report.txt",
+        file_path="/mnt/user-data/workspace/report.txt",
         offset=0,
         limit=200,
         max_chars=25000,
     ))
 
-    assert captured["resolve"]["file_path"] == "workspace/report.txt"
+    assert captured["resolve"]["file_path"] == "/mnt/user-data/workspace/report.txt"
     assert captured["info_paths"] == ["/mnt/user-data/workspace/report.txt"]
     assert captured["reads"] == [
         {
@@ -216,7 +219,7 @@ def test_sandbox_read_text_file_keeps_content_when_line_count_fails(monkeypatch)
 
     result = asyncio.run(workspace_execution.sandbox_read_text_file(
         session_ref=session_ref,
-        file_path="workspace/report.txt",
+        file_path="/mnt/user-data/workspace/report.txt",
         offset=0,
         limit=200,
         max_chars=25000,
@@ -330,7 +333,7 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
 
     payload = asyncio.run(workspace_execution.sandbox_replace_text_file(
         session_ref=session_ref,
-        file_path="workspace/report.txt",
+        file_path="/mnt/user-data/workspace/report.txt",
         old_content="old",
         new_content="new",
     ))
@@ -343,7 +346,7 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
 @pytest.mark.parametrize(
     ("writer", "file_path", "expected_mode"),
     [
-        (workspace_execution.sandbox_write_text_file, "workspace/report.txt", 666),
+        (workspace_execution.sandbox_write_text_file, "/mnt/user-data/workspace/report.txt", 666),
         (
             workspace_execution.sandbox_write_tool_result,
             "outputs/.tool-offload/result.txt",
@@ -491,14 +494,14 @@ def test_sandbox_file_edit_rejects_missing_or_nonunique_content(monkeypatch):
     with pytest.raises(ValueError, match="匹配多处"):
         asyncio.run(workspace_execution.sandbox_replace_text_file(
             session_ref=session_ref,
-            file_path="workspace/report.txt",
+            file_path="/mnt/user-data/workspace/report.txt",
             old_content="old",
             new_content="new",
         ))
     with pytest.raises(ValueError, match="未在文件中找到"):
         asyncio.run(workspace_execution.sandbox_replace_text_file(
             session_ref=session_ref,
-            file_path="workspace/report.txt",
+            file_path="/mnt/user-data/workspace/report.txt",
             old_content="missing",
             new_content="new",
         ))
@@ -541,7 +544,7 @@ def test_sandbox_file_glob_uses_native_files_search_and_includes_tool_results(mo
 
     results = asyncio.run(workspace_execution.sandbox_search_files(
         session_ref=session_ref,
-        path="outputs",
+        path="/mnt/user-data/outputs",
         pattern="*.json",
         max_results=100,
     ))
@@ -627,10 +630,10 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
     )
 
     entries = asyncio.run(workspace_execution.sandbox_list_dir(
-        session_ref=session_ref, path="workspace", max_depth=2,
+        session_ref=session_ref, path="/mnt/user-data/workspace", max_depth=2,
     ))
 
-    assert resolved_paths == ["workspace"]
+    assert resolved_paths == ["/mnt/user-data/workspace"]
     assert entries[0]["path"] == "/mnt/user-data/workspace/a.txt"
     assert entries[0]["type"] == "file"
     assert any(

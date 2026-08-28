@@ -152,18 +152,18 @@ def test_validate_filename_pattern_rules():
 async def test_file_move_tool_success_and_error():
     runtime = StubRuntime()
     text = await _invoke(runtime, "file_move", {
-        "source_path": "workspace/a.txt", "destination_path": "workspace/b.txt",
+        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
     })
     payload = _payload(text)
     assert payload["destination_path"] == "/mnt/user-data/workspace/b.txt"
     assert runtime.calls == [("move_path", {
-        "source_path": "workspace/a.txt", "destination_path": "workspace/b.txt",
+        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
     })]
 
     failing = StubRuntime()
     failing.fail_with = ValueError("目标路径已存在")
     out = await _invoke(failing, "file_move", {
-        "source_path": "workspace/a.txt", "destination_path": "workspace/b.txt",
+        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
     })
     assert out.startswith("file_move 工具错误:") and "目标路径已存在" in out
 
@@ -172,7 +172,7 @@ async def test_file_move_tool_success_and_error():
 async def test_file_copy_tool_success_and_unexpected_error():
     runtime = StubRuntime()
     payload = _payload(await _invoke(runtime, "file_copy", {
-        "source_path": "uploads/a.csv", "destination_path": "workspace/a.csv",
+        "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
     }))
     assert payload == {"type": "file", "bytes": 3}
 
@@ -180,7 +180,7 @@ async def test_file_copy_tool_success_and_unexpected_error():
     failing = StubRuntime()
     failing.fail_with = RuntimeError("connection pool exhausted at 10.0.0.5:3306")
     out = await _invoke(failing, "file_copy", {
-        "source_path": "uploads/a.csv", "destination_path": "workspace/a.csv",
+        "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
     })
     assert out == "file_copy 工具错误: 工具执行失败，请稍后重试"
     assert "10.0.0.5" not in out
@@ -189,33 +189,33 @@ async def test_file_copy_tool_success_and_unexpected_error():
 @pytest.mark.asyncio
 async def test_file_delete_tool_pins_file_semantics():
     runtime = StubRuntime()
-    await _invoke(runtime, "file_delete", {"file_path": "workspace/a.txt"})
+    await _invoke(runtime, "file_delete", {"file_path": "/mnt/user-data/workspace/a.txt"})
     assert runtime.calls == [("delete_path", {
-        "path": "workspace/a.txt", "recursive": False, "expected_type": "file",
+        "path": "/mnt/user-data/workspace/a.txt", "recursive": False, "expected_type": "file",
     })]
 
 
 @pytest.mark.asyncio
 async def test_dir_delete_tool_passes_recursive_flag():
     runtime = StubRuntime()
-    text = await _invoke(runtime, "dir_delete", {"path": "workspace/sub", "recursive": True})
+    text = await _invoke(runtime, "dir_delete", {"path": "/mnt/user-data/workspace/sub", "recursive": True})
     assert _payload(text)["type"] == "file"  # 桩返回复用，重点在参数透传
     assert runtime.calls == [("delete_path", {
-        "path": "workspace/sub", "recursive": True, "expected_type": "dir",
+        "path": "/mnt/user-data/workspace/sub", "recursive": True, "expected_type": "dir",
     })]
 
     shallow = StubRuntime()
-    await _invoke(shallow, "dir_delete", {"path": "workspace/sub"})
+    await _invoke(shallow, "dir_delete", {"path": "/mnt/user-data/workspace/sub"})
     assert shallow.calls[0][1]["recursive"] is False
 
 
 @pytest.mark.asyncio
 async def test_dir_create_tool_success_and_error():
     runtime = StubRuntime()
-    assert _payload(await _invoke(runtime, "dir_create", {"path": "workspace/new"}))["type"] == "dir"
+    assert _payload(await _invoke(runtime, "dir_create", {"path": "/mnt/user-data/workspace/new"}))["type"] == "dir"
     failing = StubRuntime()
     failing.fail_with = ValueError("目录已存在")
-    assert "目录已存在" in await _invoke(failing, "dir_create", {"path": "workspace/new"})
+    assert "目录已存在" in await _invoke(failing, "dir_create", {"path": "/mnt/user-data/workspace/new"})
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +227,11 @@ async def test_dir_create_tool_success_and_error():
 async def test_file_glob_tool_validates_and_formats():
     runtime = StubRuntime()
     payload = _payload(await _invoke(runtime, "file_glob", {"pattern": "*.py"}))
-    assert payload["path"] == "workspace"
+    assert payload["path"] == "/mnt/user-data/workspace"
     assert payload["pattern"] == "*.py"
     assert payload["count"] == 1
     assert runtime.calls[0][1] == {
-        "path": "workspace", "pattern": "*.py", "max_results": fs._DEFAULT_GLOB_RESULTS,
+        "path": "/mnt/user-data/workspace", "pattern": "*.py", "max_results": fs._DEFAULT_GLOB_RESULTS,
     }
 
     # 路径型 pattern 在沙箱 Files search 语义下不允许
@@ -293,10 +293,10 @@ async def test_dir_list_tool_formats_entries_and_bounds_depth():
     out = await _invoke(empty, "dir_list", {"path": "workspace"})
     assert "count=0" in out and "(空目录)" in out
 
-    # 反斜杠路径统一成正斜杠后再交给 runtime
+    # 反斜杠路径统一成正斜杠后原样交给 runtime（规范化由策略层负责）
     slashed = StubRuntime()
-    await _invoke(slashed, "dir_list", {"path": "workspace\\sub"})
-    assert slashed.calls[0][1]["path"] == "workspace/sub"
+    await _invoke(slashed, "dir_list", {"path": "/mnt/user-data/workspace\\sub"})
+    assert slashed.calls[0][1]["path"] == "/mnt/user-data/workspace/sub"
 
 
 @pytest.mark.asyncio
@@ -311,9 +311,9 @@ async def test_dir_list_tool_error_uses_generic_text_for_unexpected():
 async def test_file_read_tool_rejects_bad_pagination_before_runtime():
     runtime = StubRuntime()
     assert "offset 必须大于等于 0" in await _invoke(runtime, "file_read", {
-        "file_path": "workspace/a.txt", "offset": -1,
+        "file_path": "/mnt/user-data/workspace/a.txt", "offset": -1,
     })
     assert "limit 必须在 1-500 之间" in await _invoke(runtime, "file_read", {
-        "file_path": "workspace/a.txt", "limit": 0,
+        "file_path": "/mnt/user-data/workspace/a.txt", "limit": 0,
     })
     assert runtime.calls == []

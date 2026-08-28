@@ -20,12 +20,11 @@ MAX_TIMEOUT_SECONDS = 120
 
 _UPLOADS_PREFIXES = (
     "/mnt/user-data/uploads",
-    "/uploads",
 )
 
 
 def _under_uploads(path: str) -> bool:
-    """判断虚拟路径是否落在 uploads 只读区内（含裸别名 /uploads）。"""
+    """判断虚拟路径是否落在 uploads 只读区内。"""
     p = str(path or "").strip()
     for prefix in _UPLOADS_PREFIXES:
         if p == prefix or p.startswith(f"{prefix}/"):

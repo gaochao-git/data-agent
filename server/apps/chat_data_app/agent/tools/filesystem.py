@@ -75,15 +75,15 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         limit: int = DEFAULT_READ_LIMIT,
     ) -> str:
         """
-        读取当前会话的 workspace、outputs、uploads 文本文件，或有权访问的技能只读 /mnt/skills 路径。
+        读取当前会话的 /mnt/user-data/{workspace,outputs,uploads} 文本文件，或有权访问的技能只读 /mnt/skills 路径。
 
         默认读取 200 个源行，最多读取 500 行。每行正文最多返回 500 个字符，整页正文受
         CHAT_DATA_FILE_READ_MAX_CHARS 限制；超出的行内容直接截断，不支持续读。
         返回头中的 total_lines 是文件真实总行数：大文件先按 total_lines 评估规模，优先用
         file_grep 定位或按 offset 精确分页，不要从文件头开始逐页翻完整个大文件。
 
-        outputs/query_result/<id>.json 是查询工具统一保存的结果文件；后续分析应按查询工具返回的 result_path 分页读取。
-        outputs/.tool-offload/<id>.json 或 .txt 是普通工具的大结果缓存。两类系统结果都不会作为用户产物展示，不能通过其它文件工具修改、复制、移动或删除。
+        /mnt/user-data/outputs/query_result/<id>.json 是查询工具统一保存的结果文件；后续分析应按查询工具返回的 result_path 分页读取。
+        /mnt/user-data/outputs/.tool-offload/<id>.json 或 .txt 是普通工具的大结果缓存。两类系统结果都不会作为用户产物展示，不能通过其它文件工具修改、复制、移动或删除。
         """
         try:
             if offset < 0:
@@ -140,7 +140,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         new_content: Any,
     ) -> str:
         """
-        精确修改 workspace/ 或 outputs/ 下已有文本文件的一处内容。
+        精确修改 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 下已有文本文件的一处内容。
 
         修改前必须先用 file_read 获取最新内容。old_content 必须是文件中完整、非空且唯一的一段原文；
         找不到或匹配多处时会失败，不会修改文件。新建文件或整体覆盖请使用 file_write。
@@ -164,7 +164,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         content: Any,
     ) -> str:
         """
-        在 workspace/ 或 outputs/ 新建或整体覆盖文本文件。
+        在 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 新建或整体覆盖文本文件。
 
         修改已有局部内容请使用 file_edit，避免无意覆盖文件。最终用户产物应写入 outputs/。
         """
@@ -181,7 +181,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("file_move")
     async def file_move(source_path: str, destination_path: str) -> str:
-        """移动或重命名 workspace/、outputs/ 下的文件或目录。目标路径不得存在，且其父目录必须已存在。"""
+        """移动或重命名 /mnt/user-data/workspace、/mnt/user-data/outputs 下的文件或目录。目标路径不得存在，且其父目录必须已存在。"""
         try:
             payload = await workspace_runtime.move_path(
                 source_path=source_path,
@@ -193,7 +193,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("file_copy")
     async def file_copy(source_path: str, destination_path: str) -> str:
-        """复制 uploads/、workspace/、outputs/ 或只读 /mnt/skills 技能路径下的单个文件到 workspace/ 或 outputs/。目标路径不得存在，且其父目录必须已存在。"""
+        """复制 /mnt/user-data/{uploads,workspace,outputs} 或只读 /mnt/skills 技能路径下的单个文件到 /mnt/user-data/{workspace,outputs}。目标路径不得存在，且其父目录必须已存在。"""
         try:
             payload = await workspace_runtime.copy_path(
                 source_path=source_path,
@@ -205,7 +205,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("file_delete")
     async def file_delete(file_path: str) -> str:
-        """删除 workspace/ 或 outputs/ 下的单个文件。不能删除目录、根目录或隐藏工具结果缓存。"""
+        """删除 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下的单个文件。不能删除目录、根目录或隐藏工具结果缓存。"""
         try:
             payload = await workspace_runtime.delete_path(
                 path=file_path,
@@ -219,21 +219,21 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
     @tool("file_glob")
     async def file_glob(
         pattern: str,
-        path: str = "workspace",
+        path: str = "/mnt/user-data/workspace",
         max_results: int = _DEFAULT_GLOB_RESULTS,
     ) -> str:
-        """在指定目录内递归按文件名匹配，例如 `*.json` 或 `README.*`。默认搜索 workspace，最多返回 500 项。"""
+        """在指定目录内递归按文件名匹配，例如 `*.json` 或 `README.*`。默认搜索 /mnt/user-data/workspace，最多返回 500 项。"""
         try:
             normalized_pattern = _validate_filename_pattern(pattern, field_name="pattern")
             if max_results < 1 or max_results > MAX_GLOB_RESULTS:
                 return f"max_results 必须在 1-{MAX_GLOB_RESULTS} 之间"
             entries = await workspace_runtime.search_files(
-                path=str(path or "workspace").strip(),
+                path=str(path or "/mnt/user-data/workspace").strip(),
                 pattern=normalized_pattern,
                 max_results=max_results,
             )
             payload = {
-                "path": str(path or "workspace").strip(),
+                "path": str(path or "/mnt/user-data/workspace").strip(),
                 "pattern": normalized_pattern,
                 "count": len(entries),
                 "entries": entries,
@@ -245,12 +245,12 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
     @tool("file_grep")
     async def file_grep(
         pattern: str,
-        path: str = "workspace",
+        path: str = "/mnt/user-data/workspace",
         glob: str = "**/*",
         max_results: int = _DEFAULT_GREP_RESULTS,
     ) -> str:
         """
-        在文本文件中按字面内容查找，默认递归搜索 workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail），不支持正则；glob 可限定文件范围，例如 `**/*.md`。
+        在文本文件中按字面内容查找，默认递归搜索 /mnt/user-data/workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail），不支持正则；glob 可限定文件范围，例如 `**/*.md`。
 
         最多返回 200 条匹配，每条最多 500 字符，整体正文受 CHAT_DATA_FILE_READ_MAX_CHARS 限制；二进制文件和超过 2 MiB 的文件会跳过。
         """
@@ -262,14 +262,14 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             if max_results < 1 or max_results > MAX_GREP_RESULTS:
                 return f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间"
             result = await workspace_runtime.grep_text(
-                path=str(path or "workspace").strip(),
+                path=str(path or "/mnt/user-data/workspace").strip(),
                 patterns=patterns,
                 glob=normalized_glob,
                 max_results=max_results,
                 max_chars=FILE_READ_MAX_CHARS,
             )
             payload = {
-                "path": str(path or "workspace").strip(),
+                "path": str(path or "/mnt/user-data/workspace").strip(),
                 "pattern": pattern,
                 "glob": normalized_glob,
                 "count": len(result.get("matches") or []),
@@ -284,7 +284,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("dir_create")
     async def dir_create(path: str) -> str:
-        """在 workspace/ 或 outputs/ 下创建目录。不能创建根目录或操作隐藏工具结果缓存。"""
+        """在 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下创建目录。不能创建根目录或操作隐藏工具结果缓存。"""
         try:
             return _json_result("dir_create", await workspace_runtime.create_dir(path=path))
         except Exception as exc:
@@ -300,7 +300,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         try:
             if max_depth < 1 or max_depth > 5:
                 return "max_depth 必须在 1-5 之间"
-            raw = str(path or "workspace").strip().replace("\\", "/")
+            raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
             entries = await workspace_runtime.list_dir(path=raw, max_depth=max_depth)
             if not entries:
                 return f"[dir_list]\npath={raw}\nis_dir=true\ncount=0\n(空目录)"

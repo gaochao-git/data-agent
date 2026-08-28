@@ -122,19 +122,19 @@ def test_count_local_text_lines_uses_real_awk(tmp_path):
 
 def test_resolve_local_mutable_path_rejects_roots(tmp_path):
     _runtime_obj, root = _runtime(tmp_path)
-    with pytest.raises(ValueError, match="不允许操作 workspace/ 或 outputs/ 根目录"):
-        lb._resolve_local_mutable_path(str(root), "workspace")
-    with pytest.raises(ValueError, match="不允许操作 workspace/ 或 outputs/ 根目录"):
-        lb._resolve_local_mutable_path(str(root), "outputs")
+    with pytest.raises(ValueError, match="不允许操作"):
+        lb._resolve_local_mutable_path(str(root), "/mnt/user-data/workspace")
+    with pytest.raises(ValueError, match="不允许操作"):
+        lb._resolve_local_mutable_path(str(root), "/mnt/user-data/outputs")
 
 
 def test_create_local_dir_branches(tmp_path):
     _runtime_obj, root = _runtime(tmp_path)
-    created = lb._create_local_dir(str(root), "workspace/newdir")
-    assert created == {"path": "/workspace/newdir", "type": "dir"}
+    created = lb._create_local_dir(str(root), "/mnt/user-data/workspace/newdir")
+    assert created == {"path": "/mnt/user-data/workspace/newdir", "type": "dir"}
     assert (root / "workspace" / "newdir").is_dir()
     with pytest.raises(ValueError, match="目录已存在"):
-        lb._create_local_dir(str(root), "workspace/newdir")
+        lb._create_local_dir(str(root), "/mnt/user-data/workspace/newdir")
 
 
 def test_delete_local_path_branches(tmp_path):
@@ -148,21 +148,21 @@ def test_delete_local_path_branches(tmp_path):
 
     # 本地与沙箱同口径：符号链接一律拒绝，且不得波及链接指向的目标文件
     with pytest.raises(ValueError, match="不允许操作符号链接"):
-        lb._delete_local_path(str(root), "workspace/link.txt", False, "file")
+        lb._delete_local_path(str(root), "/mnt/user-data/workspace/link.txt", False, "file")
     assert (workspace / "a.txt").exists()
     with pytest.raises(FileNotFoundError, match="路径不存在"):
-        lb._delete_local_path(str(root), "workspace/missing.txt", False, "file")
+        lb._delete_local_path(str(root), "/mnt/user-data/workspace/missing.txt", False, "file")
     with pytest.raises(ValueError, match="不能作为dir删除"):
-        lb._delete_local_path(str(root), "workspace/a.txt", False, "dir")
+        lb._delete_local_path(str(root), "/mnt/user-data/workspace/a.txt", False, "dir")
     with pytest.raises(ValueError, match="不能作为file删除"):
-        lb._delete_local_path(str(root), "workspace/sub", False, "file")
+        lb._delete_local_path(str(root), "/mnt/user-data/workspace/sub", False, "file")
 
-    assert lb._delete_local_path(str(root), "workspace/a.txt", False, "file") == {
-        "path": "/workspace/a.txt", "type": "file",
+    assert lb._delete_local_path(str(root), "/mnt/user-data/workspace/a.txt", False, "file") == {
+        "path": "/mnt/user-data/workspace/a.txt", "type": "file",
     }
     assert not (workspace / "a.txt").exists()
-    assert lb._delete_local_path(str(root), "workspace/empty", False, "dir")["type"] == "dir"
-    assert lb._delete_local_path(str(root), "workspace/sub", True, "dir")["type"] == "dir"
+    assert lb._delete_local_path(str(root), "/mnt/user-data/workspace/empty", False, "dir")["type"] == "dir"
+    assert lb._delete_local_path(str(root), "/mnt/user-data/workspace/sub", True, "dir")["type"] == "dir"
     assert not (workspace / "sub").exists()
 
 
@@ -175,17 +175,17 @@ def test_move_local_path_branches(tmp_path):
 
     # 移动链接同样被拒绝，且不能把目标文件搬走
     with pytest.raises(ValueError, match="不允许操作符号链接"):
-        lb._move_local_path(str(root), "workspace/link.txt", "workspace/c.txt")
+        lb._move_local_path(str(root), "/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/c.txt")
     assert (workspace / "a.txt").exists()
     assert not (workspace / "c.txt").exists()
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
-        lb._move_local_path(str(root), "workspace/missing.txt", "workspace/c.txt")
+        lb._move_local_path(str(root), "/mnt/user-data/workspace/missing.txt", "/mnt/user-data/workspace/c.txt")
     with pytest.raises(ValueError, match="目标路径已存在"):
-        lb._move_local_path(str(root), "workspace/a.txt", "workspace/b.txt")
+        lb._move_local_path(str(root), "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/b.txt")
 
-    moved = lb._move_local_path(str(root), "workspace/a.txt", "workspace/moved.txt")
-    assert moved["source_path"] == "/workspace/a.txt"
-    assert moved["destination_path"] == "/workspace/moved.txt"
+    moved = lb._move_local_path(str(root), "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/moved.txt")
+    assert moved["source_path"] == "/mnt/user-data/workspace/a.txt"
+    assert moved["destination_path"] == "/mnt/user-data/workspace/moved.txt"
     assert (workspace / "moved.txt").read_text(encoding="utf-8") == "a"
     assert not (workspace / "a.txt").exists()
 
@@ -202,25 +202,25 @@ def test_copy_local_path_branches(tmp_path):
 
     with pytest.raises(ValueError, match="系统结果目录"):
         lb._copy_local_path(
-            str(root), f"outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/r.json", "workspace/r.json",
+            str(root), f"/mnt/user-data/outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/r.json", "/mnt/user-data/workspace/r.json",
         )
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
-        lb._copy_local_path(str(root), "workspace/missing.txt", "workspace/x.txt")
+        lb._copy_local_path(str(root), "/mnt/user-data/workspace/missing.txt", "/mnt/user-data/workspace/x.txt")
     with pytest.raises(ValueError, match="只支持复制单个文件"):
-        lb._copy_local_path(str(root), "workspace/dir", "workspace/x.txt")
+        lb._copy_local_path(str(root), "/mnt/user-data/workspace/dir", "/mnt/user-data/workspace/x.txt")
     with pytest.raises(ValueError, match="不允许操作符号链接"):
-        lb._copy_local_resolved_path(str(root), link, "/workspace/link.txt", "workspace/x.txt")
+        lb._copy_local_resolved_path(str(root), link, "/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/x.txt")
     with pytest.raises(ValueError, match="目标路径已存在"):
-        lb._copy_local_path(str(root), "workspace/note.txt", "workspace/note.txt")
+        lb._copy_local_path(str(root), "/mnt/user-data/workspace/note.txt", "/mnt/user-data/workspace/note.txt")
 
-    copied = lb._copy_local_path(str(root), "workspace/note.txt", "workspace/copy.txt")
+    copied = lb._copy_local_path(str(root), "/mnt/user-data/workspace/note.txt", "/mnt/user-data/workspace/copy.txt")
     assert copied["bytes"] == 5
-    assert copied["destination_path"] == "/workspace/copy.txt"
+    assert copied["destination_path"] == "/mnt/user-data/workspace/copy.txt"
     assert (workspace / "copy.txt").read_text(encoding="utf-8") == "hello"
 
     # 目标父目录不存在
     with pytest.raises(ValueError, match="目标父目录不存在"):
-        lb._copy_local_path(str(root), "workspace/note.txt", "workspace/nope/x.txt")
+        lb._copy_local_path(str(root), "/mnt/user-data/workspace/note.txt", "/mnt/user-data/workspace/nope/x.txt")
     assert uploads.is_dir() and outputs.is_dir()
 
 
@@ -250,7 +250,7 @@ def test_resolve_local_skill_path_branches(tmp_path):
     assert visible == "/mnt/skills/demo-skill/references/guide.md"
 
     with pytest.raises(ValueError, match="只允许访问技能路径"):
-        lb._resolve_local_skill_path(runtime, "workspace/a.txt")
+        lb._resolve_local_skill_path(runtime, "/mnt/user-data/workspace/a.txt")
     with pytest.raises(ValueError, match="技能路径无效"):
         lb._resolve_local_skill_path(runtime, "/mnt/skills/")
     with pytest.raises(ValueError, match="技能路径无效"):
@@ -268,10 +268,10 @@ def test_search_local_workspace_files_branches(tmp_path):
     (workspace / "sub").mkdir()
     (workspace / "sub" / "b.py").write_text("b", encoding="utf-8")
 
-    found = lb._search_local_workspace_files(runtime, "workspace", "*.py", 10)
-    assert [item["path"] for item in found] == ["/workspace/a.py", "/workspace/sub/b.py"]
-    assert lb._search_local_workspace_files(runtime, "workspace", "*.py", 1) == [
-        {"path": "/workspace/a.py", "type": "file"}
+    found = lb._search_local_workspace_files(runtime, "/mnt/user-data/workspace", "*.py", 10)
+    assert [item["path"] for item in found] == ["/mnt/user-data/workspace/a.py", "/mnt/user-data/workspace/sub/b.py"]
+    assert lb._search_local_workspace_files(runtime, "/mnt/user-data/workspace", "*.py", 1) == [
+        {"path": "/mnt/user-data/workspace/a.py", "type": "file"}
     ]
     assert lb._search_local_workspace_files(runtime, "", "*.nope", 10) == []
 
@@ -283,7 +283,7 @@ def test_search_local_workspace_files_branches(tmp_path):
     }
 
     with pytest.raises(ValueError, match="搜索路径必须是目录"):
-        lb._search_local_workspace_files(runtime, "workspace/a.py", "*", 10)
+        lb._search_local_workspace_files(runtime, "/mnt/user-data/workspace/a.py", "*", 10)
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +311,12 @@ def test_grep_local_workspace_text_branches(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="路径不存在"):
         lb._grep_local_workspace_text(
-            runtime, "workspace/missing-dir", ["x"], "**/*", 10, 100,
+            runtime, "/mnt/user-data/workspace/missing-dir", ["x"], "**/*", 10, 100,
         )
 
     monkeypatch.setattr(lb, "_rg_available", False)
     with pytest.raises(RuntimeError, match="ripgrep"):
-        lb._grep_local_workspace_text(runtime, "workspace", ["x"], "**/*", 10, 100)
+        lb._grep_local_workspace_text(runtime, "/mnt/user-data/workspace", ["x"], "**/*", 10, 100)
 
     monkeypatch.setattr(lb, "_rg_available", True)
 
@@ -325,7 +325,7 @@ def test_grep_local_workspace_text_branches(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lb.subprocess, "run", failing)
     with pytest.raises(RuntimeError, match="rg 执行失败"):
-        lb._grep_local_workspace_text(runtime, "workspace", ["x"], "*.py", 10, 100)
+        lb._grep_local_workspace_text(runtime, "/mnt/user-data/workspace", ["x"], "*.py", 10, 100)
 
     match_line = (
         '{"type": "match", "data": {"path": {"text": "%s"}, "line_number": 1, '
@@ -337,9 +337,9 @@ def test_grep_local_workspace_text_branches(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout=match_line.encode(), stderr=b"")
 
     monkeypatch.setattr(lb.subprocess, "run", ok)
-    payload = lb._grep_local_workspace_text(runtime, "workspace", ["hello"], "*.py", 10, 100)
+    payload = lb._grep_local_workspace_text(runtime, "/mnt/user-data/workspace", ["hello"], "*.py", 10, 100)
     assert payload["matches"] == [{
-        "path": "/workspace/a.py", "line_number": 1, "line": "hello world",
+        "path": "/mnt/user-data/workspace/a.py", "line_number": 1, "line": "hello world",
     }]
     assert payload["has_more"] is False
 
@@ -374,17 +374,17 @@ async def test_backend_dir_operations_delegate_to_local_helpers(tmp_path):
     runtime, root = _runtime(tmp_path)
     backend = runtime.backend
 
-    created = await backend.create_dir(runtime, path="workspace/via-backend")
-    assert created["path"] == "/workspace/via-backend"
+    created = await backend.create_dir(runtime, path="/mnt/user-data/workspace/via-backend")
+    assert created["path"] == "/mnt/user-data/workspace/via-backend"
     deleted = await backend.delete_path(
-        runtime, path="workspace/via-backend", recursive=False, expected_type="dir",
+        runtime, path="/mnt/user-data/workspace/via-backend", recursive=False, expected_type="dir",
     )
     assert deleted["type"] == "dir"
     (root / "workspace" / "src.txt").write_text("s", encoding="utf-8")
     moved = await backend.move_path(
-        runtime, source_path="workspace/src.txt", destination_path="workspace/dst.txt",
+        runtime, source_path="/mnt/user-data/workspace/src.txt", destination_path="/mnt/user-data/workspace/dst.txt",
     )
-    assert moved["destination_path"] == "/workspace/dst.txt"
+    assert moved["destination_path"] == "/mnt/user-data/workspace/dst.txt"
 
 
 @pytest.mark.asyncio
@@ -414,7 +414,7 @@ async def test_backend_copy_from_skill_snapshot(tmp_path):
     copied = await backend.copy_path(
         runtime,
         source_path="/mnt/skills/demo-skill/SKILL.md",
-        destination_path="workspace/from-skill.md",
+        destination_path="/mnt/user-data/workspace/from-skill.md",
     )
     assert copied["type"] == "file"
     assert (root / "workspace" / "from-skill.md").exists()
@@ -431,10 +431,10 @@ async def test_backend_render_office_html_delegates(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lb, "_render_local_office_html", fake_render)
     result = await runtime.backend.render_office_html(
-        runtime, file_path="workspace/a.docx", max_chars=50,
+        runtime, file_path="/mnt/user-data/workspace/a.docx", max_chars=50,
     )
     assert result["html"] == "<html/>"
-    assert seen["file_path"] == "workspace/a.docx" and seen["max_chars"] == 50
+    assert seen["file_path"] == "/mnt/user-data/workspace/a.docx" and seen["max_chars"] == 50
 
 
 @pytest.mark.asyncio
@@ -484,7 +484,7 @@ def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
     (workspace / "link.txt").symlink_to(workspace / "real.txt")
     (workspace / "dirlink").symlink_to(workspace)
 
-    for path in ("workspace/link.txt", "workspace/dirlink"):
+    for path in ("/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/dirlink"):
         with pytest.raises(ValueError, match="不允许操作符号链接"):
             cw.resolve_workspace_path(str(root), path)
         with pytest.raises(ValueError, match="不允许操作符号链接"):
@@ -496,7 +496,7 @@ def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
     # 列表口径同样对齐沙箱：跳过链接，不抛错、也不泄漏目标内容
     listed = lb._list_local_workspace_dir(
         SimpleNamespace(workspace_root=str(root), runtime_skills_dir=None),
-        "workspace", 3,
+        "/mnt/user-data/workspace", 3,
     )
     paths = {item["path"] for item in listed}
     assert "/mnt/user-data/workspace/real.txt" in paths

@@ -846,12 +846,22 @@ export function getConversationWorkspaceFiles(conversationId: string): Promise<A
   })
 }
 
+/**
+ * 把前端内部使用的相对路径 key（如 workspace/a.md）转成后端唯一接受的
+ * 规范形式 /mnt/user-data/workspace/a.md。规范形式直接透传。
+ */
+export function toCanonicalWorkspacePath(path: string): string {
+  const value = String(path || '').trim().replace(/\\/g, '/')
+  if (!value || value.startsWith('/mnt/user-data/') || value.startsWith('/mnt/skills/')) return value
+  return `/mnt/user-data/${value.replace(/^\/+/, '')}`
+}
+
 /** 读取会话工作区文本文件。 */
 export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
     method: 'get',
-    params: refreshToken ? { path, _refresh: refreshToken } : { path }
+    params: refreshToken ? { path: toCanonicalWorkspacePath(path), _refresh: refreshToken } : { path: toCanonicalWorkspacePath(path) }
   })
 }
 
@@ -860,7 +870,7 @@ export function getConversationWorkspaceRawFile(conversationId: string, path: st
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/raw`,
     method: 'get',
-    params: refreshToken ? { path, _refresh: refreshToken } : { path },
+    params: refreshToken ? { path: toCanonicalWorkspacePath(path), _refresh: refreshToken } : { path: toCanonicalWorkspacePath(path) },
     responseType: 'blob',
   }) as unknown as Promise<Blob>
 }
@@ -882,7 +892,7 @@ export function getConversationWorkspaceOfficeHtmlPreview(
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/office-html`,
     method: 'get',
-    params: refreshToken ? { path, _refresh: refreshToken } : { path },
+    params: refreshToken ? { path: toCanonicalWorkspacePath(path), _refresh: refreshToken } : { path: toCanonicalWorkspacePath(path) },
   })
 }
 
@@ -890,7 +900,7 @@ export function importConversationWorkspaceSkill(conversationId: string, data: {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-skills/import`,
     method: 'post',
-    data
+    data: { skill_dir_path: toCanonicalWorkspacePath(data.skill_dir_path) }
   })
 }
 

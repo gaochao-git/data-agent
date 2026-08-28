@@ -493,7 +493,7 @@ def resolve_workspace_path(
 
     visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
     if not any(target == item or item in target.parents for item in visible_roots):
-        raise ValueError("只允许访问 workspace/、outputs/ 或 uploads/")
+        raise ValueError("只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs 或 /mnt/user-data/uploads")
 
     if writable:
         if is_system_result_workspace_path(str(root), target):
@@ -526,14 +526,14 @@ def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) ->
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
-    """把物理路径转为模型/前端可见路径。"""
+    """把物理路径转为模型/前端可见路径（统一规范前缀 /mnt/user-data/）。"""
     root = Path(workspace_root).resolve()
     target = path.resolve()
     try:
         relative = target.relative_to(root).as_posix()
     except ValueError:
         return str(target)
-    return f"/{relative}"
+    return f"/mnt/user-data/{relative}"
 
 
 def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
@@ -541,7 +541,7 @@ def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     skill_dir = resolve_workspace_path(workspace_root, path)
     if is_system_result_workspace_path(workspace_root, skill_dir):
         raise ValueError("不允许导入系统结果目录下的内容")
-    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    outputs_root = resolve_workspace_path(workspace_root, "/mnt/user-data/outputs")
     try:
         relative = skill_dir.relative_to(outputs_root)
     except ValueError as exc:
@@ -553,7 +553,7 @@ def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     if not skill_dir.is_dir() or skill_md_path.is_symlink() or not skill_md_path.is_file():
         raise ValueError("技能目录必须包含有效的 SKILL.md")
     artifact = parse_output_artifact(
-        visible_path=f"/outputs/{relative.name}/SKILL.md",
+        visible_path=f"/mnt/user-data/outputs/{relative.name}/SKILL.md",
         data=skill_md_path.read_bytes(),
     )
     if artifact.get("artifact_type") != "skill":
@@ -654,7 +654,7 @@ def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[
                 continue
             try:
                 relative_path = item.relative_to(root).as_posix()
-                resolved_item = resolve_workspace_path(str(root), relative_path)
+                resolved_item = resolve_workspace_path(str(root), f"/mnt/user-data/{relative_path}")
                 if is_system_result_workspace_path(str(root), resolved_item):
                     continue
                 stat = item.stat()

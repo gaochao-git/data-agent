@@ -53,12 +53,12 @@ def test_output_artifact_registry_preserves_suffix_specific_table_type():
     }
 
     artifact = parse_output_artifact(
-        visible_path="/outputs/monthly.table.json",
+        visible_path="/mnt/user-data/outputs/monthly.table.json",
         data=json.dumps(table_payload).encode("utf-8"),
     )
 
     assert artifact == {
-        "file_path": "/outputs/monthly.table.json",
+        "file_path": "/mnt/user-data/outputs/monthly.table.json",
         "artifact_type": "table",
         "renderer": "table",
         "artifact_version": "v1",
@@ -72,7 +72,7 @@ def test_output_artifact_registry_accepts_only_direct_output_skill():
     )
 
     local_artifact = parse_output_artifact(
-        visible_path="/outputs/sales-analysis/SKILL.md",
+        visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
         data=skill_bytes,
     )
     sandbox_artifact = parse_output_artifact(
@@ -84,11 +84,11 @@ def test_output_artifact_registry_accepts_only_direct_output_skill():
     assert sandbox_artifact["artifact_type"] == "skill"
     assert {**local_artifact, "file_path": sandbox_artifact["file_path"]} == sandbox_artifact
     assert parse_output_artifact(
-        visible_path="/outputs/nested/sales-analysis/SKILL.md",
+        visible_path="/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
         data=skill_bytes,
     ) == {}
     assert parse_output_artifact(
-        visible_path="/outputs/sales-analysis/SKILL.md",
+        visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
         data=skill_bytes.replace(b"name: sales-analysis", b"name: another-skill"),
     ) == {}
 
@@ -120,7 +120,7 @@ def test_output_artifact_registry_accepts_markdown_and_reserves_skill_file():
         "artifact_version": "v1",
     }
     assert parse_output_artifact(
-        visible_path="/outputs/invalid-skill/SKILL.md",
+        visible_path="/mnt/user-data/outputs/invalid-skill/SKILL.md",
         data=b"# Not a skill\n",
     ) == {}
 
@@ -142,14 +142,14 @@ def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
 
     assert parse_chart_spec_payload_value(chart_payload)["chart_type"] == "line"
     assert parse_chart_spec_payload_value({**chart_payload, "encoding": {"x": "不存在", "y": ["销售额"]}}) is None
-    assert parse_output_artifact(visible_path="/outputs/bad.json", data=b'"not dict"') == {}
+    assert parse_output_artifact(visible_path="/mnt/user-data/outputs/bad.json", data=b'"not dict"') == {}
 
-    loaded = _local_artifact_payload(root, "outputs/chart.json")
+    loaded = _local_artifact_payload(root, "/mnt/user-data/outputs/chart.json")
 
-    assert loaded["file_path"] == "/outputs/chart.json"
+    assert loaded["file_path"] == "/mnt/user-data/outputs/chart.json"
     assert loaded["artifact_type"] == "chart_spec"
     assert loaded["chart_spec"]["chart_type"] == "line"
-    assert _local_artifact_payload(root, "workspace/chart.json") == {}
+    assert _local_artifact_payload(root, "/mnt/user-data/workspace/chart.json") == {}
 
 
 def test_chart_artifact_payload_supports_graph_and_rejects_incomplete_specs(tmp_path):
@@ -243,7 +243,7 @@ def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(
         "encoding": {"x": "", "y": []},
     }
 
-    assert parse_output_artifact(visible_path="/outputs/invalid-json.json", data=b"{bad") == {}
+    assert parse_output_artifact(visible_path="/mnt/user-data/outputs/invalid-json.json", data=b"{bad") == {}
     assert parse_chart_spec_payload_value(unsupported_type) is None
     assert parse_chart_spec_payload_value(empty_line) is None
     assert parse_chart_spec_payload_value(missing_encoding) is None
@@ -270,15 +270,15 @@ def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path)
     (root / "outputs" / "bad-dashboard-json.json").write_text("{bad", encoding="utf-8")
     valid_dashboard = _write_json(root / "outputs" / "valid-dashboard.json", {"cards": []})
 
-    assert _local_artifact_payload(root, "outputs/missing.json") == {}
-    assert _local_artifact_payload(root, "outputs/bad-chart.json") == {}
-    assert _local_artifact_payload(root, "outputs/bad-dashboard-json.json") == {}
-    loaded_chart = _local_artifact_payload(root, "outputs/valid-chart.json")
-    loaded_dashboard = _local_artifact_payload(root, "outputs/valid-dashboard.json")
+    assert _local_artifact_payload(root, "/mnt/user-data/outputs/missing.json") == {}
+    assert _local_artifact_payload(root, "/mnt/user-data/outputs/bad-chart.json") == {}
+    assert _local_artifact_payload(root, "/mnt/user-data/outputs/bad-dashboard-json.json") == {}
+    loaded_chart = _local_artifact_payload(root, "/mnt/user-data/outputs/valid-chart.json")
+    loaded_dashboard = _local_artifact_payload(root, "/mnt/user-data/outputs/valid-dashboard.json")
 
-    assert loaded_chart["file_path"] == "/outputs/valid-chart.json"
+    assert loaded_chart["file_path"] == "/mnt/user-data/outputs/valid-chart.json"
     assert loaded_chart["chart_spec"]["chart_type"] == "table"
-    assert loaded_dashboard["file_path"] == "/outputs/valid-dashboard.json"
+    assert loaded_dashboard["file_path"] == "/mnt/user-data/outputs/valid-dashboard.json"
     assert loaded_dashboard["dashboard_spec"]["cards"] == []
 
 
@@ -291,13 +291,13 @@ def test_dashboard_artifact_payload_reads_cards_from_outputs(tmp_path):
     _write_json(root / "outputs" / "bad-dashboard.json", {"cards": "bad"})
     _write_json(root / "workspace" / "dashboard.json", {"cards": []})
 
-    loaded = _local_artifact_payload(root, "outputs/dashboard.json")
+    loaded = _local_artifact_payload(root, "/mnt/user-data/outputs/dashboard.json")
 
-    assert loaded["file_path"] == "/outputs/dashboard.json"
+    assert loaded["file_path"] == "/mnt/user-data/outputs/dashboard.json"
     assert loaded["artifact_type"] == "dashboard_spec"
     assert loaded["dashboard_spec"]["dashboard_name"] == "订单看板"
-    assert _local_artifact_payload(root, "workspace/dashboard.json") == {}
-    assert _local_artifact_payload(root, "outputs/bad-dashboard.json") == {}
+    assert _local_artifact_payload(root, "/mnt/user-data/workspace/dashboard.json") == {}
+    assert _local_artifact_payload(root, "/mnt/user-data/outputs/bad-dashboard.json") == {}
 
 
 @pytest.mark.asyncio

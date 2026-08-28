@@ -380,7 +380,7 @@ def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[st
         return {}
     if is_system_result_workspace_path(workspace_root, target):
         return {}
-    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    outputs_root = resolve_workspace_path(workspace_root, "/mnt/user-data/outputs")
     if target != outputs_root and outputs_root not in target.parents:
         return {}
     if not target.is_file():
@@ -399,7 +399,7 @@ def _list_local_workspace_dir(
     path: str,
     max_depth: int,
 ) -> list[dict[str, Any]]:
-    raw = str(path or "workspace").strip().replace("\\", "/")
+    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
     if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
         target, visible_root = _resolve_local_skill_path(runtime, raw)
         is_skill = True
@@ -456,11 +456,11 @@ def _list_local_workspace_dir(
 def _resolve_local_mutable_path(workspace_root: str, path: str) -> Path:
     target = resolve_workspace_path(workspace_root, path, writable=True)
     mutable_roots = {
-        resolve_workspace_path(workspace_root, "workspace"),
-        resolve_workspace_path(workspace_root, "outputs"),
+        resolve_workspace_path(workspace_root, "/mnt/user-data/workspace"),
+        resolve_workspace_path(workspace_root, "/mnt/user-data/outputs"),
     }
     if target in mutable_roots:
-        raise ValueError("不允许操作 workspace/ 或 outputs/ 根目录")
+        raise ValueError("不允许操作 workspace 或 outputs 根目录")
     return target
 
 
@@ -561,7 +561,7 @@ def _search_local_workspace_files(
     pattern: str,
     max_results: int,
 ) -> list[dict[str, Any]]:
-    raw = str(path or "workspace").strip().replace("\\", "/")
+    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
     if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
         target, visible_root = _resolve_local_skill_path(runtime, raw)
         is_skill = True
@@ -609,7 +609,7 @@ def _grep_local_workspace_text(
     max_results: int,
     max_chars: int,
 ) -> dict[str, Any]:
-    raw = str(path or "workspace").strip().replace("\\", "/")
+    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
     if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
         target, visible_root = _resolve_local_skill_path(runtime, raw)
         is_skill = True
@@ -924,7 +924,7 @@ class LocalWorkspaceBackend:
         cwd: str | None,
         timeout_seconds: int,
     ) -> dict[str, Any]:
-        raw_cwd = str(cwd or "workspace").strip()
+        raw_cwd = str(cwd or "/mnt/user-data/workspace").strip()
         if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             local_cwd = (await runtime.resolve_readonly_skill_path_async(raw_cwd))[0]
         else:
@@ -990,7 +990,7 @@ class LocalWorkspaceBackend:
         officecli_bin = shutil.which("officecli")
         if not officecli_bin:
             raise RuntimeError("本地环境未安装 OfficeCLI，无法执行 officecli_run")
-        raw_cwd = str(cwd or "workspace").strip()
+        raw_cwd = str(cwd or "/mnt/user-data/workspace").strip()
         if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             raise ValueError("officecli_run 不允许将 cwd 设置为技能目录")
         else:

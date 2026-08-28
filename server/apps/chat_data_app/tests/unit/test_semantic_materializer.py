@@ -74,7 +74,7 @@ def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(mon
     assert first["directory"][0]["metrics_total"] == 1
     assert first["directory"][0]["dimensions_total"] == 1
     assert first["directory"][0]["path"] == first["paths"]["sc_order"]
-    assert first_runtime.entries[0][0] == "workspace/semantic/sc_order.yaml"
+    assert first_runtime.entries[0][0] == "/mnt/user-data/workspace/semantic/sc_order.yaml"
     assert second_runtime.entries[0][1] == first_runtime.entries[0][1]
     assert calls == [("sc_order", "mysql")]
 
@@ -183,5 +183,5 @@ def test_materializer_only_overwrites_selected_models(monkeypatch):
         semantic_config_ids=["sc_keep"],
     ))
 
-    assert [path for path, _ in runtime.entries] == ["workspace/semantic/sc_keep.yaml"]
+    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/semantic/sc_keep.yaml"]
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/sc_keep.yaml"}
