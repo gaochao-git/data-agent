@@ -502,7 +502,7 @@ def resolve_workspace_path(
             is_managed_semantic_model_workspace_path(str(root), target)
             and not allow_managed_semantic_model_write
         ):
-            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
 
     return target
 
@@ -545,9 +545,9 @@ def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     try:
         relative = skill_dir.relative_to(outputs_root)
     except ValueError as exc:
-        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录") from exc
+        raise ValueError("只允许导入 /mnt/user-data/outputs/<skill-name>/ 下的技能目录") from exc
     if len(relative.parts) != 1 or relative.name.startswith("."):
-        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录")
+        raise ValueError("只允许导入 /mnt/user-data/outputs/<skill-name>/ 下的技能目录")
 
     skill_md_path = skill_dir / "SKILL.md"
     if not skill_dir.is_dir() or skill_md_path.is_symlink() or not skill_md_path.is_file():
@@ -567,7 +567,8 @@ class WorkspacePathMapping:
 
     虚拟前缀（白名单）：
       - 工作区：``/mnt/user-data/{workspace,outputs,uploads}`` 及其裸别名
-        ``/workspace``、``/outputs``、``/uploads``
+        ``/workspace``、``/outputs``、``/uploads``（仅限 bash 命令文本翻译容错；
+        文件工具等结构化入口只接受规范形式，非规范输入由路径策略直接拒绝）
       - 会话技能快照：``/mnt/skills/<name>/...``
 
     - ``translate``：正向，把文本里的虚拟路径翻成物理路径，交给本地 subprocess。

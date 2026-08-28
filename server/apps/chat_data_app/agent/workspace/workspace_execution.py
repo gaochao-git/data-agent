@@ -1924,7 +1924,7 @@ def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_pat
         allow_managed_semantic_model_write=True,
     )
     if not _is_managed_semantic_model_sandbox_path(target):
-        raise ValueError("系统批量写入仅允许 workspace/semantic/ 下的 YAML 语义模型文件")
+        raise ValueError("系统批量写入仅允许 /mnt/user-data/workspace/semantic/ 下的 YAML 语义模型文件")
     return target
 
 

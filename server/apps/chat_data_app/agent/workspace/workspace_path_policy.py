@@ -111,12 +111,12 @@ class WorkspacePathPolicy:
         if logical_path.is_system_result:
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if logical_path.is_semantic_model and not allow_managed_semantic_model_write:
-            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
         if allow_managed_semantic_model_write and (
             not logical_path.is_semantic_model
             or not logical_path.relative_path.lower().endswith(".yaml")
         ):
-            raise ValueError("内部语义模型写入只能覆盖 workspace/semantic/ 下的 YAML 文件")
+            raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
 
     def to_sandbox_path(self, logical_path: LogicalWorkspacePath) -> str:
         if logical_path.is_skill:

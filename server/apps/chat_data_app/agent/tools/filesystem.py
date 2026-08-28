@@ -316,7 +316,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("dir_delete")
     async def dir_delete(path: str, recursive: bool = False) -> str:
-        """删除 workspace/ 或 outputs/ 下的目录。非空目录必须显式设置 recursive=true，不能删除根目录。"""
+        """删除 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下的目录。非空目录必须显式设置 recursive=true，不能删除根目录。"""
         try:
             payload = await workspace_runtime.delete_path(
                 path=path,

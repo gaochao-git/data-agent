@@ -62,9 +62,9 @@ def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntim
         """
         将 outputs 中已经生成的最终产物显式呈现给用户。
 
-        - files: 需要展示的文件路径列表，只能传 `/mnt/user-data/outputs/...` 或 `outputs/...`。
+        - files: 需要展示的文件路径列表，只能传 `/mnt/user-data/outputs/...`。
         - 支持图表、看板、技能、Markdown、表格、文档、表格文件、PDF、图片等已注册产物类型。
-        - 技能只能传 outputs/<skill-name>/SKILL.md，frontmatter 的 name 必须与目录名一致。
+        - 技能只能传 /mnt/user-data/outputs/<skill-name>/SKILL.md，frontmatter 的 name 必须与目录名一致。
         - workspace 中间文件不会被展示。
         """
         artifacts: list[dict[str, Any]] = []

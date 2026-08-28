@@ -316,12 +316,12 @@ def test_resolve_output_skill_directory_rejects_system_results(tmp_path):
 def test_resolve_output_skill_directory_rejects_non_output_paths(tmp_path):
     root = _runtime_root(tmp_path)
     _write_output_skill(root, "demo-skill", "demo-skill")
-    with pytest.raises(ValueError, match="只允许导入 outputs"):
+    with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
         cw.resolve_output_skill_directory(str(root), "/mnt/user-data/workspace/demo-skill")
-    with pytest.raises(ValueError, match="只允许导入 outputs"):
+    with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
         cw.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/.hidden-skill")
     nested = _write_output_skill(root / "outputs" / "demo-skill", "nested", "nested")
-    with pytest.raises(ValueError, match="只允许导入 outputs"):
+    with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
         cw.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/demo-skill/{nested.name}")
 
 
