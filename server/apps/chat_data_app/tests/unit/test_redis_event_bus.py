@@ -7,7 +7,7 @@ from redis.exceptions import ResponseError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.services.agent_run.redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError
+from apps.chat_data_app.agent.run.redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError
 from utils.crypto import encrypt_password
 
 
@@ -163,7 +163,7 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
 
     bus = RedisEventBus()
     with patch(
-        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
     ) as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
@@ -197,7 +197,7 @@ def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch
 
     bus = RedisEventBus()
     with patch(
-        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
     ) as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
@@ -216,7 +216,7 @@ def test_sentinel_mode_supports_no_password(monkeypatch):
 
     bus = RedisEventBus()
     with patch(
-        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
     ) as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
@@ -233,7 +233,7 @@ def test_sentinel_mode_selects_db(monkeypatch):
 
     bus = RedisEventBus()
     with patch(
-        "apps.chat_data_app.services.agent_run.redis_event_bus.Sentinel"
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
     ) as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None

@@ -21,7 +21,7 @@ from ..services.agent_run.conversation_workspace import (
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
 )
-from ..services.agent_run.skill_service import skill_service
+from ..agent.skills.skill_service import skill_service
 from .dependencies import _get_current_user
 from . import BINARY_RESPONSES, JSON_API_RESPONSES
 

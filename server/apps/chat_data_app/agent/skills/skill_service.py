@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
-from ...agent.skills import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
+from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 from ...daos.skill_dao import SkillDao
 
 logger = get_logger(__name__)

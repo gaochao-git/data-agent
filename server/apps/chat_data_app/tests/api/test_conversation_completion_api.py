@@ -12,7 +12,7 @@ from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
-from apps.chat_data_app.services.agent_run.agent_inbox_service import ClaimedAgentMessages
+from apps.chat_data_app.agent.run.agent_inbox_service import ClaimedAgentMessages
 
 
 @pytest.fixture(autouse=True)

@@ -35,11 +35,11 @@ from .agent import (
 )
 from .agent.skills import format_skills_prompt
 from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
-from .services.agent_run.conversation_runtime import stream_agent_turn
-from .services.agent_run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
+from .agent.run.conversation_runtime import stream_agent_turn
+from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service
-from .services.agent_run.agent_run_event_service import agent_run_event_service
-from .services.agent_run.agent_run_runtime import agent_run_runtime
+from .agent.run.agent_run_event_service import agent_run_event_service
+from .agent.run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace

@@ -8,7 +8,7 @@ from langchain.agents.middleware import before_model
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.config import get_stream_writer
 
-from ...services.agent_run.agent_inbox_service import AgentInboxService
+from ...agent.run.agent_inbox_service import AgentInboxService
 
 
 class SteeringMessageTracker:

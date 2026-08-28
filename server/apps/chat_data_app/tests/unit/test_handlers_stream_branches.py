@@ -195,7 +195,7 @@ async def test_agent_sse_stream_adapter_emits_queued_and_custom_steer_events():
 
 @pytest.mark.asyncio
 async def test_stream_agent_turn_emits_question_and_skips_message_end():
-    from apps.chat_data_app.services.agent_run.conversation_runtime import stream_agent_turn
+    from apps.chat_data_app.agent.run.conversation_runtime import stream_agent_turn
 
     question = {"question_id": "q1", "questions": [{"id": "x", "question": "请选择"}]}
     calls = []

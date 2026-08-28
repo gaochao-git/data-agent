@@ -19,8 +19,12 @@ CONTEXT_FORBIDDEN_MARKERS = (
     "daos.",
 )
 
-# agent/ 对 services.agent_run 依赖边的当前上限（2026-08：context_budget 迁出后实测 16）
-AGENT_RUN_EDGE_CEILING = 16
+# agent/ 对 services.agent_run 依赖边的当前上限
+# （2026-08：context_budget 迁出后 16；run 协调组迁出后 15）
+AGENT_RUN_EDGE_CEILING = 15
+
+# services/ 反向依赖 agent/ 的边数上限（2026-08：skill_service 迁出后实测 6，含懒加载）
+SERVICES_TO_AGENT_EDGE_CEILING = 6
 
 _IMPORT_LINE_RE = re.compile(r"^\s*(from|import)\s", re.MULTILINE)
 
@@ -54,4 +58,23 @@ def test_agent_run_edge_count_only_shrinks():
     assert count <= AGENT_RUN_EDGE_CEILING, (
         f"agent/ 对 services.agent_run 的依赖边数 {count} 超过上限 "
         f"{AGENT_RUN_EDGE_CEILING}；只许通过搬迁下调上限，不许新增依赖"
+    )
+
+
+def test_services_reverse_deps_on_agent_only_shrink():
+    services_dir = AGENT_DIR.parent / "services"
+    agent_pkg_markers = ("agent.skills", "agent.prompts", "agent.run", "agent.context")
+    count = 0
+    for path, text in _python_sources(services_dir):
+        for line in text.splitlines():
+            if not _IMPORT_LINE_RE.match(line):
+                continue
+            targets_agent = any(marker in line for marker in agent_pkg_markers) or bool(
+                re.search(r"from\s+\.+agent\.", line)
+            )
+            if targets_agent:
+                count += 1
+    assert count <= SERVICES_TO_AGENT_EDGE_CEILING, (
+        f"services/ 反向依赖 agent/ 的边数 {count} 超过上限 "
+        f"{SERVICES_TO_AGENT_EDGE_CEILING}；只许通过搬迁下调上限，不许新增依赖"
     )

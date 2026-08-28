@@ -17,7 +17,7 @@ from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
 from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snapshot_async
-from ..services.agent_run.agent_inbox_service import (
+from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
     AgentRunConflictError,
@@ -26,8 +26,8 @@ from ..services.agent_run.agent_inbox_service import (
     SteerMessageNotPendingError,
     agent_inbox_service,
 )
-from ..services.agent_run.agent_run_event_service import agent_run_event_service
-from ..services.agent_run.agent_run_runtime import agent_run_runtime
+from ..agent.run.agent_run_event_service import agent_run_event_service
+from ..agent.run.agent_run_runtime import agent_run_runtime
 from .. import AGENT_ID
 
 logger = get_logger(__name__)

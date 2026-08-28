@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
-from ....agent.context.context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
+from apps.chat_data_app.agent.context.context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
 from ...datasource.manager import get_datasource_manager
 from ...llm_config import get_chat_data_llm
 from .semantic_config_service import get_semantic_config_service

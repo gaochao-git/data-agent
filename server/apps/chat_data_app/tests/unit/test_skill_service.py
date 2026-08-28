@@ -15,8 +15,8 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.skills import clear_metadata_cache, format_skills_prompt, parse_metadata
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-from apps.chat_data_app.services.agent_run import skill_service as skill_service_module
-from apps.chat_data_app.services.agent_run.skill_service import SkillService, skill_service
+from apps.chat_data_app.agent.skills import skill_service as skill_service_module
+from apps.chat_data_app.agent.skills.skill_service import SkillService, skill_service
 
 
 @pytest.fixture(autouse=True)

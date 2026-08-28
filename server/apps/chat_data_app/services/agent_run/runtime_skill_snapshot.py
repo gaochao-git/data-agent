@@ -154,7 +154,7 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
         return target
 
     # 延迟 import 打破循环：skill_service 链路经 conversation_workspace 回引本模块。
-    from .skill_service import skill_service
+    from apps.chat_data_app.agent.skills.skill_service import skill_service
 
     sources = await skill_service.list_runtime_skill_sources_async(user_id)
     _sweep_stale_siblings(target)

@@ -481,7 +481,7 @@ class _FakeOwnerTask:
 
 def _run_heartbeat(monkeypatch, statuses, *, owner_token="tok-1"):
     """驱动 _heartbeat_agent_run：statuses 逐个返回，None 表示抛通用异常。"""
-    from apps.chat_data_app.services.agent_run.agent_run_runtime import AgentRunLeaseLostError
+    from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunLeaseLostError
 
     iterator = iter(statuses)
     renewals: list[tuple] = []
@@ -519,7 +519,7 @@ def test_heartbeat_stops_without_cancel_on_normal_transition(monkeypatch):
 
 
 def test_heartbeat_cancels_owner_on_lease_lost(monkeypatch):
-    from apps.chat_data_app.services.agent_run.agent_run_runtime import AgentRunLeaseLostError
+    from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunLeaseLostError
 
     task, _ = _run_heartbeat(monkeypatch, [AgentRunLeaseLostError("租约被接管")])
     assert task.cancelled_with == ["agent_run_lease_lost"]

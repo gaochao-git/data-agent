@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.agent.middleware.steering import SteeringMessageTracker, create_steering_middleware
 from apps.chat_data_app.agent.middleware.tool_execution_fence import create_tool_execution_fence_middleware
-from apps.chat_data_app.services.agent_run import agent_inbox_service as inbox_module
-from apps.chat_data_app.services.agent_run.agent_inbox_service import (
+from apps.chat_data_app.agent.run import agent_inbox_service as inbox_module
+from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentInboxService,
     AgentQuestionNotWaitingError,
     AgentRunConflictError,

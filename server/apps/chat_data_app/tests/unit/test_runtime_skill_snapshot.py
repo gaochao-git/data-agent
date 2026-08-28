@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from apps.chat_data_app.services.agent_run import runtime_skill_snapshot as snapshot_module
-from apps.chat_data_app.services.agent_run import skill_service as skill_service_module
+from apps.chat_data_app.agent.skills import skill_service as skill_service_module
 
 
 def _make_skill(root: Path, name: str) -> Path:

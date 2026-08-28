@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from apps.chat_data_app.services.agent_run.agent_inbox_service import AgentRunLeaseLostError
-from apps.chat_data_app.services.agent_run.agent_run_event_service import AgentRunEventService
-from apps.chat_data_app.services.agent_run.redis_event_bus import RedisRunOwnerMismatchError
+from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
+from apps.chat_data_app.agent.run.agent_run_event_service import AgentRunEventService
+from apps.chat_data_app.agent.run.redis_event_bus import RedisRunOwnerMismatchError
 
 
 class _Bus:
@@ -67,7 +67,7 @@ async def test_append_never_opens_mysql_transaction(monkeypatch):
         raise AssertionError("事件发布不应访问 MySQL")
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         unexpected_database_access,
     )
 
@@ -163,7 +163,7 @@ async def test_latest_event_id_prefers_redis_tail(monkeypatch):
         raise AssertionError("Redis 可用时不应读取 inbox 恢复游标")
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         unexpected_database_access,
     )
 
@@ -184,7 +184,7 @@ async def test_wait_for_done_waits_until_terminal_event(monkeypatch):
 
     service = AgentRunEventService(bus=Bus(), inbox_dao=_InboxDao(content={}))
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
     assert await service.wait_for_done("run-1", timeout=0.2) is True
@@ -201,7 +201,7 @@ async def test_wait_for_done_falls_back_to_inbox_terminal_event(monkeypatch):
         inbox_dao=_InboxDao(content={"terminal_event": {"stream_id": "1740000000003-0", "event_type": "done"}}),
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
 
@@ -216,7 +216,7 @@ async def test_wait_for_done_times_out_without_terminal_evidence(monkeypatch):
 
     service = AgentRunEventService(bus=Bus(), inbox_dao=_InboxDao(content={}))
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
 
@@ -234,7 +234,7 @@ async def test_latest_event_id_falls_back_to_inbox_when_redis_unavailable(monkey
         inbox_dao=_InboxDao(content={"terminal_event": {"stream_id": "1740000000003-0", "event_type": "done"}}),
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
 
@@ -249,7 +249,7 @@ async def test_latest_event_id_defaults_to_zero_cursor_without_terminal_record(m
 
     service = AgentRunEventService(bus=Bus(), inbox_dao=_InboxDao(content={}))
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
 
@@ -276,12 +276,12 @@ async def test_stream_ends_after_terminal_grace_when_stream_expired(monkeypatch)
         return None
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.agent_run_event_service.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.TERMINAL_PERSISTENCE_GRACE_SECONDS",
+        "apps.chat_data_app.agent.run.agent_run_event_service.TERMINAL_PERSISTENCE_GRACE_SECONDS",
         0.0,
     )
 
@@ -321,10 +321,10 @@ async def test_stream_keeps_waiting_while_run_is_active(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.agent_run_event_service.get_session",
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
         lambda: _Session(),
     )
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.agent_run_event_service.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
 
     events = [event async for event in service.stream(run_id="run-1")]
 

@@ -12,11 +12,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat_data_app.services.agent_run.agent_inbox_service import (
+from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentRunCancellationResult,
     AgentRunReapResult,
 )
-from apps.chat_data_app.services.agent_run.agent_run_runtime import AgentRunRuntime
+from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunRuntime
 
 _REAL_SLEEP = asyncio.sleep
 

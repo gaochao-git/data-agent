@@ -13,7 +13,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from sqlalchemy.exc import OperationalError
 
-from apps.chat_data_app.services.agent_run.agent_inbox_service import AgentRunLeaseLostError
+from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
 from apps.chat_data_app.services.agent_run.conversation_event_service import ConversationEventService
 
 _build_history_payload = ConversationEventService._build_history_payload
