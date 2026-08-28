@@ -27,7 +27,7 @@ from ..schema import (
     QuickSqlRequest,
 )
 from ..services.datasource.manager import get_datasource_manager
-from ..services.agent_run.conversation_event_service import conversation_event_service
+from ..agent.run.conversation_event_service import conversation_event_service
 from ..services.sql_run.task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,

@@ -8,7 +8,7 @@ import re
 
 from utils.database import get_session
 from utils.logger import get_logger
-from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from .agent_inbox_service import AgentRunLeaseLostError
 from .redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError, build_redis_event_bus
 

@@ -14,7 +14,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
-from ...agent.context.context_budget import (
+from ..context.context_budget import (
     ContextInputLimitExceededError,
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
@@ -26,11 +26,11 @@ from ...agent.context.context_budget import (
     hard_input_guard_tokens,
     merge_context_summaries,
 )
-from ...services.llm_config import (
+from apps.chat_data_app.services.llm_config import (
     get_chat_data_llm,
     get_context_compression_summary_output_max_tokens,
 )
-from ...services.runtime_config import get_context_compression_config
+from apps.chat_data_app.services.runtime_config import get_context_compression_config
 from ..prompts.context_compression import build_context_compression_summary_prompt
 from ..tool_results import tool_result_recovery
 from .message_integrity import complete_message_boundaries

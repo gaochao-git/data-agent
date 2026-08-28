@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
-from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 
 logger = get_logger(__name__)
 

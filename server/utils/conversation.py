@@ -18,7 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
-from apps.chat_data_app.services.agent_run.conversation_event_service import conversation_event_service
+from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from .database import get_session
 from .models import UserThread

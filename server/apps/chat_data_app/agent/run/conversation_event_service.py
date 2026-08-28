@@ -12,8 +12,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
-from ...daos.conversation_event_dao import ConversationEventDao
-from ...daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, is_valid_redis_stream_id, normalize_history_checkpoint
 
 logger = get_logger(__name__)

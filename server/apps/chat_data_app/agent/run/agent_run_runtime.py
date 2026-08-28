@@ -232,7 +232,7 @@ class AgentRunRuntime:
 
     async def _list_runnable_runs(self, limit: int) -> list[str]:
         from utils.database import get_session
-        from ...daos.agent_inbox_dao import agent_inbox_dao
+        from apps.chat_data_app.daos.agent_inbox_dao import agent_inbox_dao
 
         async with get_session() as session:
             rows = await agent_inbox_dao.list_runnable_runs(session, datetime.now(), limit)

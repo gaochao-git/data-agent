@@ -30,12 +30,12 @@ from langchain.agents.middleware import wrap_model_call
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from utils.logger import get_logger
-from ...services.agent_run.conversation_workspace import (
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
     resolve_workspace_path,
     workspace_runtime_from_state,
 )
-from ...services.agent_run.uploaded_file_service import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
-from ...services.llm_config import get_chat_data_model_config
+from apps.chat_data_app.services.agent_run.uploaded_file_service import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
+from apps.chat_data_app.services.llm_config import get_chat_data_model_config
 
 logger = get_logger(__name__)
 

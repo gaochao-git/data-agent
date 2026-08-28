@@ -1161,7 +1161,7 @@ from apps.chat_data_app.services.agent_run.message_compose import (
     select_vision_attachments as _select_vision_attachments,
 )
 from apps.chat_data_app.services.agent_run.uploaded_file_service import MAX_IMAGES_PER_MESSAGE
-from apps.chat_data_app.services.agent_run.conversation_event_service import _extract_text_content
+from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
 
 
 def test_is_image_attachment_checks_type_and_size():

@@ -23,8 +23,9 @@ CONTEXT_FORBIDDEN_MARKERS = (
 # （2026-08：context_budget 迁出后 16；run 协调组迁出后 15）
 AGENT_RUN_EDGE_CEILING = 15
 
-# services/ 反向依赖 agent/ 的边数上限（2026-08：skill_service 迁出后实测 6，含懒加载）
-SERVICES_TO_AGENT_EDGE_CEILING = 6
+# services/ 反向依赖 agent/ 的边数上限
+# （2026-08：skill_service 迁出后 6；conversation_event_service 迁出后 5，含懒加载）
+SERVICES_TO_AGENT_EDGE_CEILING = 5
 
 _IMPORT_LINE_RE = re.compile(r"^\s*(from|import)\s", re.MULTILINE)
 

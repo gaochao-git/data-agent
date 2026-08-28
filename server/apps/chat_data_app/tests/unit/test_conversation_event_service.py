@@ -10,7 +10,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
-from apps.chat_data_app.services.agent_run.conversation_event_service import ConversationEventService
+from apps.chat_data_app.agent.run.conversation_event_service import ConversationEventService
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
 from utils.models import Base, ChatDataAgentInbox, ChatDataConversationEvent, UserThread
 
@@ -599,7 +599,7 @@ async def test_event_append_retries_connection_errors_and_propagates_final_failu
     async def skip_retry_delay(_delay):
         return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.agent_run.conversation_event_service.asyncio.sleep", skip_retry_delay)
+    monkeypatch.setattr("apps.chat_data_app.agent.run.conversation_event_service.asyncio.sleep", skip_retry_delay)
     message = HumanMessage(content="重试写入", id="turn-retry")
     retry_dao = RetryDao(failures=2)
     await ConversationEventService(retry_dao).persist_user_message(
@@ -647,7 +647,7 @@ async def test_token_usage_failure_does_not_clear_visible_history():
 
 def test_serialized_messages_carry_execution_timing_only_when_stamped():
     """AI/工具消息盖了起止时间才写入 payload；耗时由展示端相减得出。"""
-    from apps.chat_data_app.services.agent_run.conversation_event_service import (
+    from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_ai_message,
         _serialize_tool_message,
     )
@@ -685,7 +685,7 @@ def test_serialized_messages_carry_execution_timing_only_when_stamped():
 
 def test_human_message_payload_strips_blocks_and_carries_vision_attachments():
     """保险丝：blocks 里的图片降级为占位文本；vision_attachments 标记随行。"""
-    from apps.chat_data_app.services.agent_run.conversation_event_service import (
+    from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_human_message,
     )
 

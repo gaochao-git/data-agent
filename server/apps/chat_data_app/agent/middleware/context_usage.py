@@ -16,7 +16,7 @@ from langgraph.types import Command
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
-from ...agent.context.context_budget import (
+from ..context.context_budget import (
     ContextBudget,
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
@@ -34,7 +34,7 @@ from ...agent.context.context_budget import (
     merge_context_summaries,
     sanitize_context_usage_for_response,
 )
-from ...services.runtime_config import get_context_compression_config
+from apps.chat_data_app.services.runtime_config import get_context_compression_config
 
 logger = get_logger(__name__)
 

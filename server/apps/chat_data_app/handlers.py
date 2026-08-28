@@ -37,7 +37,7 @@ from .agent.skills import format_skills_prompt
 from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .agent.run.conversation_runtime import stream_agent_turn
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
-from .services.agent_run.conversation_event_service import conversation_event_service
+from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
