@@ -13,8 +13,8 @@ from .conversation_workspace import (
     ConversationWorkspaceRuntime,
     _absolute_command_path_tokens,
 )
-from .officecli_adapter import command_path_values, parse_officecli_args
-from .workspace_execution import (
+from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
+from apps.chat_data_app.agent.workspace.workspace_execution import (
     OPENSANDBOX_BACKEND,
     SandboxExecutionSessionRef,
     get_workspace_execution_session,

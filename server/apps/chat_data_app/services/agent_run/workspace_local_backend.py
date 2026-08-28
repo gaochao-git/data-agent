@@ -32,13 +32,13 @@ from .conversation_workspace import (
     resolve_workspace_path,
     to_visible_path,
 )
-from .officecli_adapter import (
+from apps.chat_data_app.agent.workspace.officecli_adapter import (
     command_path_values,
     parse_officecli_args,
     translate_command_args,
 )
-from .workspace_execution import parse_rg_output
-from .workspace_text_budget import allocate_file_read_line_budgets
+from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
+from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
 
 logger = get_logger(__name__)
 

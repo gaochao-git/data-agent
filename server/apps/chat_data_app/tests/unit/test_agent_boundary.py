@@ -20,12 +20,14 @@ CONTEXT_FORBIDDEN_MARKERS = (
 )
 
 # agent/ 对 services.agent_run 依赖边的当前上限
-# （2026-08：context_budget 迁出后 16；run 协调组迁出后 15）
-AGENT_RUN_EDGE_CEILING = 15
+# （2026-08：context_budget 迁出后 16；run 协调组迁出后 15；workspace 机制层迁出后 12）
+AGENT_RUN_EDGE_CEILING = 12
 
-# services/ 反向依赖 agent/ 的边数上限
-# （2026-08：skill_service 迁出后 6；conversation_event_service 迁出后 5，含懒加载）
-SERVICES_TO_AGENT_EDGE_CEILING = 5
+# services/ 反向依赖 agent/ 的边数上限（含懒加载）。
+# 2026-08：skill_service 迁出后 6；conversation_event_service 迁出后 5；
+# workspace 机制层迁入 agent/workspace 后，留守门面（conversation_workspace/双 backend）
+# 反向引用机制属"业务消费 harness"的合法方向，第三刀门面迁入后大幅塌缩。
+SERVICES_TO_AGENT_EDGE_CEILING = 12
 
 _IMPORT_LINE_RE = re.compile(r"^\s*(from|import)\s", re.MULTILINE)
 
@@ -64,7 +66,7 @@ def test_agent_run_edge_count_only_shrinks():
 
 def test_services_reverse_deps_on_agent_only_shrink():
     services_dir = AGENT_DIR.parent / "services"
-    agent_pkg_markers = ("agent.skills", "agent.prompts", "agent.run", "agent.context")
+    agent_pkg_markers = ("agent.skills", "agent.prompts", "agent.run", "agent.context", "agent.workspace")
     count = 0
     for path, text in _python_sources(services_dir):
         for line in text.splitlines():

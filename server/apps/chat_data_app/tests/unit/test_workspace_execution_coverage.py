@@ -22,8 +22,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.agent_run import workspace_execution
-from apps.chat_data_app.services.agent_run.workspace_execution import (
+from apps.chat_data_app.agent.workspace import workspace_execution
+from apps.chat_data_app.agent.workspace.workspace_execution import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
 )

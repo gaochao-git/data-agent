@@ -19,7 +19,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     SandboxWorkspaceBackend,
     ensure_conversation_workspace,
 )
-from apps.chat_data_app.services.agent_run.officecli_adapter import command_path_values, parse_officecli_args
+from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
 
 
 def _write_fake_officecli(tmp_path, log_path) -> str:

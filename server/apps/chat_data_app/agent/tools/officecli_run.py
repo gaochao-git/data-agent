@@ -6,11 +6,11 @@ from langchain_core.tools import tool
 
 from utils.logger import get_logger
 from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
-from apps.chat_data_app.services.agent_run.officecli_adapter import (
+from apps.chat_data_app.agent.workspace.officecli_adapter import (
     command_path_values,
     parse_officecli_args,
 )
-from apps.chat_data_app.services.agent_run.workspace_execution import truncate_output
+from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
 from .common import json_dumps
 
 logger = get_logger(__name__)

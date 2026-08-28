@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat_data_app.services.agent_run import uploaded_file_parser
+from apps.chat_data_app.agent.workspace import uploaded_file_parser
 
 
 def test_parser_uses_local_file_conversion_without_plugins(monkeypatch, tmp_path):

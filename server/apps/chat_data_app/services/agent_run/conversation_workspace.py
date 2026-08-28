@@ -29,8 +29,8 @@ from .runtime_skill_snapshot import (
     runtime_skills_snapshot_dir_from_workspace,
 )
 from ... import AGENT_ID
-from .workspace_path_policy import WORKSPACE_PATH_POLICY
-from .workspace_special_services import (
+from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
+from apps.chat_data_app.agent.workspace.workspace_special_services import (
     semantic_model_workspace_service,
     workspace_artifact_service,
     workspace_office_preview_service,

@@ -27,7 +27,7 @@ from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
-from apps.chat_data_app.services.agent_run.workspace_execution import _artifact_payload_from_bytes
+from apps.chat_data_app.agent.workspace.workspace_execution import _artifact_payload_from_bytes
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
@@ -41,7 +41,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     to_visible_path,
     workspace_runtime_from_state,
 )
-from apps.chat_data_app.services.agent_run.workspace_special_services import (
+from apps.chat_data_app.agent.workspace.workspace_special_services import (
     WorkspaceOfficePreviewService,
     stabilize_office_preview_html,
 )

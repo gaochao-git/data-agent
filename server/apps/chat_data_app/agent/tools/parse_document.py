@@ -21,7 +21,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
 )
-from apps.chat_data_app.services.agent_run.uploaded_file_parser import parse_uploaded_file_to_markdown
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import parse_uploaded_file_to_markdown
 
 logger = get_logger(__name__)
 

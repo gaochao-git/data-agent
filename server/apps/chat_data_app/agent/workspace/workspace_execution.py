@@ -22,7 +22,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
-from .artifact_registry import parse_output_artifact
+from apps.chat_data_app.services.agent_run.artifact_registry import parse_output_artifact
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 from .workspace_text_budget import MAX_FILE_READ_LINE_CHARS, allocate_file_read_line_budgets
 

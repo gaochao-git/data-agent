@@ -15,14 +15,14 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import bash_run
-from apps.chat_data_app.services.agent_run import workspace_execution
+from apps.chat_data_app.agent.workspace import workspace_execution
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
     WorkspacePathMapping,
     _absolute_command_path_tokens,
 )
-from apps.chat_data_app.services.agent_run.workspace_execution import (
+from apps.chat_data_app.agent.workspace.workspace_execution import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
     sandbox_visible_path,
@@ -1120,7 +1120,7 @@ def test_parse_rg_output_single_file_target():
     had a trailing slash that rg's path.text never includes, so every
     match was silently filtered out.
     """
-    from apps.chat_data_app.services.agent_run.workspace_execution import parse_rg_output
+    from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
 
     target = "/mnt/user-data/outputs/dashboard.dashboard.json"
     stdout = _rg_match_line(target, '{"metric": "订单数量"}', 1)
@@ -1134,7 +1134,7 @@ def test_parse_rg_output_single_file_target():
 
 def test_parse_rg_output_directory_target():
     """file_grep on a directory still strips the prefix correctly."""
-    from apps.chat_data_app.services.agent_run.workspace_execution import parse_rg_output
+    from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
 
     target = "/mnt/user-data/outputs"
     file_path = f"{target}/dashboard.dashboard.json"
