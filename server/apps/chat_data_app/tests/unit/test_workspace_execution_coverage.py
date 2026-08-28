@@ -1546,3 +1546,456 @@ def test_truncate_output():
     text = "x" * 20
     truncated, flag = workspace_execution.truncate_output(text, limit=5)
     assert flag is True and truncated.endswith("...[truncated]")
+
+
+# ---------------------------------------------------------------------------
+# 分支缺口补测（第二批）
+#
+# 下方用例针对 `workspace_execution.py` 中仍未触达的分支弧，按原缺失行号标注，
+# 便于后续对照 gaps.py 的输出复核。
+# ---------------------------------------------------------------------------
+
+
+def test_parse_rg_output_skips_paths_outside_target():
+    """搜索结果路径不在 target 前缀下时跳过（原缺失分支 1761->1764）。"""
+    stdout = "\n".join([
+        '{"type": "match", "data": {"path": {"text": "/other/outside.py"}, "line_number": 1, "lines": {"text": "x"}}}',
+        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/in.py"}, "line_number": 2, "lines": {"text": "y"}}}',
+    ])
+    matches, has_more = workspace_execution.parse_rg_output(
+        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=10000,
+    )
+    assert [item["file"] for item in matches] == ["in.py"]
+    assert has_more is False
+
+
+def test_parse_rg_output_skips_match_without_line_number():
+    """缺少 line_number 的匹配被跳过（原缺失分支 1766->1767）。"""
+    stdout = '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}}}'
+    matches, has_more = workspace_execution.parse_rg_output(
+        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=10000,
+    )
+    assert matches == []
+    assert has_more is False
+
+
+def test_parse_rg_output_stops_when_body_chars_exhausted():
+    """正文字符预算耗尽时置 has_more 并 break（原缺失分支 1770->1771）。
+
+    第一条 line_cost = 4（内容长度）+ 0（结果列表为空不加分隔符）；
+    第二条 = 4 + 1（结果列表非空需补分隔符）= 5，累计 9 > max_chars=6 触发截断。
+    """
+    stdout = "\n".join([
+        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 1, "lines": {"text": "aaaa"}}}',
+        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}, "line_number": 2, "lines": {"text": "bbbb"}}}',
+    ])
+    matches, has_more = workspace_execution.parse_rg_output(
+        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=6,
+    )
+    assert [item["file"] for item in matches] == ["a.py"]
+    assert has_more is True
+
+
+def test_extract_command_output_skips_blank_error_text():
+    """error 对象存在但 name/value 均为空时，不产生多余错误行（原缺失分支 884->888）。
+
+    注意 886 的 ``elif`` 与 882 的 ``if execution_error is not None`` 配对，而非与
+    884 的 ``if error_text`` 配对 —— 因此 execution_error 存在时不会落到
+    status_lookup_error 分支，stderr 应为空而不是补一行提示。
+    """
+    execution = SimpleNamespace(
+        logs=SimpleNamespace(stdout=[], stderr=[]),
+        error=SimpleNamespace(name="", value=""),
+    )
+    exit_code, _stdout, stderr = workspace_execution._extract_command_output(execution, None)
+    assert exit_code == 1
+    assert stderr == ""
+
+
+def test_resolve_sandbox_target_for_batch_is_guarded_upstream():
+    """非语义模型路径在 sandbox_visible_path 阶段即被拒绝（1927 是不可达的二次校验）。
+
+    ``sandbox_visible_path(..., allow_managed_semantic_model_write=True)`` 已保证只有
+    ``workspace/semantic/*.yaml`` 能通过，故 1926 的
+    ``_is_managed_semantic_model_sandbox_path`` 判定恒为 True，1927 的 raise 无法从
+    公开入口触发。此处锁定上游的真实报错，防止该防御被误删后行为漂移。
+    """
+    with pytest.raises(ValueError, match="内部语义模型写入只能覆盖"):
+        workspace_execution._resolve_sandbox_target_for_batch(
+            None, "/mnt/user-data/workspace/notes.txt",
+        )
+
+
+def test_write_application_bytes_atomically_cleans_temp_file(tmp_path, monkeypatch):
+    """写入中途失败时，finally 必须清理遗留的临时文件（原缺失分支 633->634）。"""
+    path = tmp_path / "out.bin"
+
+    def _boom(_fd):
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(workspace_execution.os, "fsync", _boom)
+    with pytest.raises(OSError):
+        workspace_execution._write_application_bytes_atomically(path, b"data")
+
+    # 目标文件不应存在，临时文件也不应残留
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# 分支缺口补测（第三批）：沙箱异常传播与会话缓存
+#
+# 设计原则：只伪造「异常类型」，其余走真实代码路径，确保断言的是
+# 「哪一类错误该吞、哪一类必须向上抛」这一真实契约。
+# ---------------------------------------------------------------------------
+
+_UNEXPECTED = PermissionError("permission denied")
+
+
+def _cached(session, ttl: float = 60.0):
+    """构造一个尚未过期的缓存条目。"""
+    return workspace_execution.CachedSandboxExecutionSession(
+        session=session,
+        expires_at=workspace_execution.time.monotonic() + ttl,
+    )
+
+
+def test_sync_sandbox_uploads_returns_when_manifest_unchanged(tmp_path, monkeypatch):
+    """uploads 清单未变化时直接返回，不触发后续同步（原缺失行 556）。"""
+    _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    manifest = {"uploads/a.csv": (1, 2, "fingerprint")}
+    session.uploads_manifest = manifest
+    monkeypatch.setattr(workspace_execution, "_tree_manifest", lambda *args, **kwargs: manifest)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("清单未变化时应提前返回，不得继续遍历上传目录")
+
+    monkeypatch.setattr(workspace_execution, "_iter_application_files", _boom)
+    asyncio.run(workspace_execution._sync_sandbox_uploads(session))
+
+
+def test_list_sandbox_directory_entries_reraises_unexpected_error(tmp_path, monkeypatch):
+    """非「文件不存在」的异常必须向上传播，不能被吞成空列表（原缺失行 733）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _boom(entry):
+        raise _UNEXPECTED
+
+    monkeypatch.setattr(sandbox.files, "list_directory", _boom)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution._list_sandbox_directory_entries(
+            session=session, path="/mnt/user-data/workspace",
+        ))
+
+
+def test_walk_sandbox_tree_skips_already_visited_directory(tmp_path, monkeypatch):
+    """重复入队的目录被跳过，避免自引用导致死循环（原缺失分支 753->754）。"""
+    _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    listed = []
+
+    async def _fake_list(*, session, path):
+        listed.append(path)
+        # 无论查询哪个目录都返回同一子目录，使其被反复入队
+        return [SimpleNamespace(path="/mnt/user-data/workspace/sub", entry_type="directory")]
+
+    async def _fake_kind(*, session, path, entry=None):
+        return "dir"
+
+    monkeypatch.setattr(workspace_execution, "_list_sandbox_directory_entries", _fake_list)
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", _fake_kind)
+
+    files, directories = asyncio.run(workspace_execution._walk_sandbox_tree(
+        session=session, root="/mnt/user-data/workspace",
+    ))
+    assert files == []
+    assert [str(getattr(item, "path", "")) for item in directories] == ["/mnt/user-data/workspace/sub"]
+    # 子目录被列出一次、入队两次；第二次出队时命中 visited 直接 continue，
+    # 因此列表里只有一次 sub，且不会无限循环。
+    assert listed == ["/mnt/user-data/workspace", "/mnt/user-data/workspace/sub"]
+
+
+def test_walk_sandbox_tree_ignores_unknown_entry_types(tmp_path, monkeypatch):
+    """既非 dir 也非 file 的条目（如 socket）被忽略（原缺失分支 769->756）。"""
+    _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _fake_list(*, session, path):
+        return [SimpleNamespace(path="/mnt/user-data/workspace/weird", entry_type="other")]
+
+    async def _fake_kind(*, session, path, entry=None):
+        return "socket"
+
+    monkeypatch.setattr(workspace_execution, "_list_sandbox_directory_entries", _fake_list)
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", _fake_kind)
+
+    files, directories = asyncio.run(workspace_execution._walk_sandbox_tree(
+        session=session, root="/mnt/user-data/workspace",
+    ))
+    assert files == [] and directories == []
+
+
+def test_get_session_reuses_cached_session_and_syncs_uploads(tmp_path, monkeypatch):
+    """缓存命中且应用侧未变化时复用会话并增量同步 uploads（原缺失行 1005-1006）。"""
+    root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE[_cache_key(root)] = _cached(session)
+
+    synced = []
+
+    async def _fake_matches(candidate):
+        return True
+
+    async def _fake_sync(candidate):
+        synced.append(candidate)
+
+    monkeypatch.setattr(workspace_execution, "_cached_session_matches_application", _fake_matches)
+    monkeypatch.setattr(workspace_execution, "_sync_sandbox_uploads", _fake_sync)
+
+    result = asyncio.run(workspace_execution.get_workspace_execution_session(str(root), "user_a"))
+    assert result is session
+    assert synced == [session]
+
+
+def test_invalidate_session_pops_matching_cache_entry(tmp_path, monkeypatch):
+    """失效会话时先摘掉缓存条目，再销毁沙箱（原缺失分支 1049->1051）。"""
+    root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    key = _cache_key(root)
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE[key] = _cached(session)
+
+    asyncio.run(workspace_execution.invalidate_workspace_execution_session(session, "user_a"))
+
+    assert key not in workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE
+    assert sandbox.killed == 1 and sandbox.closed == 1
+
+
+def test_cleanup_session_evicts_matching_cache_entry(tmp_path, monkeypatch):
+    """清理会话时遍历缓存摘除自身条目（原缺失分支 1058->1057）。"""
+    root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    key = _cache_key(root)
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE[key] = _cached(session)
+
+    asyncio.run(workspace_execution.cleanup_workspace_execution_session(session))
+
+    assert key not in workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE
+    assert sandbox.killed == 1 and sandbox.closed == 1
+
+
+def test_release_session_swallows_close_error(tmp_path, monkeypatch):
+    """释放会话时 close 失败只告警，不向上传播（原缺失行 1075-1076）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    sandbox.close_error = RuntimeError("close failed")
+
+    asyncio.run(workspace_execution.release_workspace_execution_session(session))
+
+    assert sandbox.closed == 1
+
+
+def test_sandbox_path_info_reraises_unexpected_error(tmp_path, monkeypatch):
+    """get_file_info 抛出非「文件不存在」异常时向上传播（原缺失行 1183）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _boom(paths):
+        raise _UNEXPECTED
+
+    monkeypatch.setattr(sandbox.files, "get_file_info", _boom)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution._sandbox_path_info(
+            session=session, path="/mnt/user-data/workspace/a.txt",
+        ))
+
+
+def test_sandbox_path_info_returns_none_for_non_dict_payload(tmp_path, monkeypatch):
+    """SDK 返回的不是 dict（协议不匹配）时按「查不到」处理（原缺失行 1185）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _unexpected(paths):
+        return ["not", "a", "dict"]
+
+    monkeypatch.setattr(sandbox.files, "get_file_info", _unexpected)
+    assert asyncio.run(workspace_execution._sandbox_path_info(
+        session=session, path="/mnt/user-data/workspace/a.txt",
+    )) is None
+
+
+def test_sandbox_path_kind_reraises_unexpected_error(tmp_path, monkeypatch):
+    """探测路径类型时，非「不是目录」的异常必须向上传播（原缺失行 1225）。
+
+    必须显式传入不带 type 元信息的 entry，否则会先走 `_sandbox_path_info` 查询，
+    文件不存在时直接抛 FileNotFoundError，到不了 list_directory 探测这一步。
+    """
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _boom(entry):
+        raise _UNEXPECTED
+
+    monkeypatch.setattr(sandbox.files, "list_directory", _boom)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution._sandbox_path_kind(
+            session=session,
+            path="/mnt/user-data/workspace/a.txt",
+            entry=SimpleNamespace(path="/mnt/user-data/workspace/a.txt"),
+        ))
+
+
+def test_sandbox_artifact_payload_returns_empty_on_read_error(tmp_path, monkeypatch):
+    """文件元信息存在但读取时传输失败，按空载荷处理（原缺失行 1244-1245）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    sandbox.remote_kinds["/mnt/user-data/outputs/report.json"] = "file"
+    sandbox.remote_files["/mnt/user-data/outputs/report.json"] = b"{}"
+
+    async def _boom(path, **kwargs):
+        raise RuntimeError("transport broken")
+
+    monkeypatch.setattr(sandbox.files, "read_bytes", _boom)
+    assert asyncio.run(workspace_execution.sandbox_artifact_payload(
+        session_ref=_ref(session), file_path="/mnt/user-data/outputs/report.json",
+    )) == {}
+
+
+def _office_preview_setup(sandbox):
+    """准备一个可被 OfficeCLI 预览的 docx。"""
+    sandbox.remote_kinds["/mnt/user-data/workspace/a.docx"] = "file"
+    sandbox.remote_files["/mnt/user-data/workspace/a.docx"] = b"PK"
+
+
+def test_sandbox_render_office_html_truncates_oversized_preview(tmp_path, monkeypatch):
+    """预览体积超过字符上限时返回 truncated 与空 HTML（原缺失行 1280）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    _office_preview_setup(sandbox)
+
+    async def _fake_info(*, session, path):
+        return SimpleNamespace(path=path, size=10_000_000)
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_info", _fake_info)
+    result = asyncio.run(workspace_execution.sandbox_render_office_html(
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=100,
+    ))
+    assert result["truncated"] is True
+    assert result["html"] == ""
+
+
+def test_sandbox_render_office_html_swallows_cleanup_error(tmp_path, monkeypatch):
+    """清理临时预览文件失败时只告警，不影响返回结果（原缺失行 1295-1296）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    _office_preview_setup(sandbox)
+
+    async def _fake_info(*, session, path):
+        return SimpleNamespace(path=path, size=16)
+
+    async def _fake_read(*, sandbox, path):
+        return b"<p>preview</p>"
+
+    async def _boom(paths):
+        raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_info", _fake_info)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", _fake_read)
+    monkeypatch.setattr(sandbox.files, "delete_files", _boom)
+
+    result = asyncio.run(workspace_execution.sandbox_render_office_html(
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=1000,
+    ))
+    assert result["html"] == "<p>preview</p>"
+    assert result["truncated"] is False
+
+
+def test_sandbox_render_office_html_skips_cleanup_without_deleter(tmp_path, monkeypatch):
+    """SDK 不提供 delete_files 时跳过清理，仍正常返回（原缺失分支 1292->1302）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    _office_preview_setup(sandbox)
+
+    async def _fake_info(*, session, path):
+        return SimpleNamespace(path=path, size=16)
+
+    async def _fake_read(*, sandbox, path):
+        return b"<p>preview</p>"
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_info", _fake_info)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", _fake_read)
+    monkeypatch.setattr(sandbox.files, "delete_files", None)
+
+    result = asyncio.run(workspace_execution.sandbox_render_office_html(
+        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=1000,
+    ))
+    assert result["html"] == "<p>preview</p>"
+
+
+def test_sandbox_create_dir_reraises_unexpected_probe_error(tmp_path, monkeypatch):
+    """建目录前探测目标时，非「不存在」的异常必须向上传播（原缺失行 1522）。"""
+    _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _boom(*, session, path, entry=None):
+        raise _UNEXPECTED
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", _boom)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution.sandbox_create_dir(
+            session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
+        ))
+
+
+def test_sandbox_delete_path_allows_empty_directory(tmp_path, monkeypatch):
+    """非 recursive 删除空目录时放行，不报「目录非空」（原缺失分支 1552->1554）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    sandbox.remote_kinds["/mnt/user-data/workspace/empty"] = "directory"
+
+    result = asyncio.run(workspace_execution.sandbox_delete_path(
+        session_ref=_ref(session), path="/mnt/user-data/workspace/empty",
+        recursive=False, expected_type="dir",
+    ))
+    assert result["type"] == "dir"
+    assert ("dir", ["/mnt/user-data/workspace/empty"]) in sandbox.files.delete_calls
+
+
+def test_sandbox_move_path_reraises_unexpected_probe_error(tmp_path, monkeypatch):
+    """移动前探测目标路径时，非「不存在」的异常必须向上传播（原缺失行 1581）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
+    sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
+
+    async def _fake_kind(*, session, path, entry=None):
+        if path.endswith("/b.txt"):
+            raise _UNEXPECTED
+        return "file"
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", _fake_kind)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution.sandbox_move_path(
+            session_ref=_ref(session),
+            source_path="/mnt/user-data/workspace/a.txt",
+            destination_path="/mnt/user-data/workspace/b.txt",
+        ))
+
+
+def test_sandbox_copy_path_reraises_unexpected_probe_error(tmp_path, monkeypatch):
+    """复制前探测目标路径时，非「不存在」的异常必须向上传播（原缺失行 1632）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
+    sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
+
+    async def _fake_kind(*, session, path, entry=None):
+        if path.endswith("/b.txt"):
+            raise _UNEXPECTED
+        return "file"
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", _fake_kind)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution.sandbox_copy_path(
+            session_ref=_ref(session),
+            source_path="/mnt/user-data/workspace/a.txt",
+            destination_path="/mnt/user-data/workspace/b.txt",
+        ))
+
+
+def test_sandbox_write_tool_result_reraises_unexpected_read_error(tmp_path, monkeypatch):
+    """写入工具结果前探测已存在文件时，非「不存在」的异常必须向上传播（原缺失行 1992）。"""
+    _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+
+    async def _boom(path, **kwargs):
+        raise _UNEXPECTED
+
+    monkeypatch.setattr(sandbox.files, "read_bytes", _boom)
+    with pytest.raises(PermissionError):
+        asyncio.run(workspace_execution.sandbox_write_tool_result(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/outputs/.tool-offload/r_9.json",
+            content="{}",
+        ))

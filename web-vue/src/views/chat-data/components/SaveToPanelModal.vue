@@ -22,6 +22,8 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   hideSql?: boolean
   hideChartType?: boolean
+  /** 会话内图表当前的字段映射；保存到面板后由 PanelCard.inferFields 优先采用。 */
+  encoding?: { xField?: string; yFields?: string[] }
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -170,7 +172,14 @@ const handleSave = async () => {
     })
     const selectedIds = canUseMultiSource.value ? selectedMemberDatasourceIds.value : selectedMemberDatasourceIds.value.slice(0, 1)
     const { multiSource: _oldMultiSource, ...baseChartConfig } = props.chartConfig || {}
+    const encodingConfig: Record<string, unknown> = {}
+    if (props.encoding?.xField) encodingConfig.xField = props.encoding.xField
+    if (props.encoding?.yFields?.length) {
+      encodingConfig.yField = props.encoding.yFields[0]
+      if (props.encoding.yFields[1]) encodingConfig.yField2 = props.encoding.yFields[1]
+    }
     const chartConfig = {
+      ...encodingConfig,
       ...baseChartConfig,
       ...(selectedIds.length > 1
         ? { multiSource: { enabled: true, memberDatasourceIds: selectedIds } }

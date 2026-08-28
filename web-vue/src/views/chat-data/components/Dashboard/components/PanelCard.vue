@@ -5,6 +5,7 @@
  */
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import { CHART_COLORS } from '../../../utils/chartOptionBuilder'
 import { Codemirror } from 'vue-codemirror'
 import { sql } from '@codemirror/lang-sql'
 import { EditorView } from '@codemirror/view'
@@ -357,7 +358,12 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handlePanelFullscreenChange)
 })
 
-const themeChartPalette = computed(() => props.theme.chartPalette?.length ? props.theme.chartPalette : ['#1677FF', '#36CFC9', '#52C41A', '#FAAD14', '#F5222D'])
+const themeChartPalette = computed(() => {
+  // 主题色板在前、标准 12 色板续后（去重）：主题视觉不变，10+ 曲线不再循环撞色。
+  const themeColors = props.theme.chartPalette?.length ? props.theme.chartPalette : ['#1677FF', '#36CFC9', '#52C41A', '#FAAD14', '#F5222D']
+  const extra = CHART_COLORS.filter(color => !themeColors.some(existing => existing.toLowerCase() === color.toLowerCase()))
+  return [...themeColors, ...extra]
+})
 const defaultAccentColor = computed(() => themeChartPalette.value[0] || props.theme.accentColor || '#1677FF')
 const isLightTheme = computed(() => props.theme.cardBg === '#ffffff')
 
