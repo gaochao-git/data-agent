@@ -47,7 +47,7 @@ def _build_request_messages(request):
         if isinstance(message, BaseMessage)
     )
     return messages
-from apps.chat_data_app.services.agent_run.context_budget import (
+from apps.chat_data_app.agent.context.context_budget import (
     ContextInputLimitExceededError,
     ContextBudget,
     ContextRequestBudget,
@@ -179,7 +179,7 @@ def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypat
     }
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.is_context_usage_system_prompt_visible",
+        "apps.chat_data_app.agent.context.context_budget.is_context_usage_system_prompt_visible",
         lambda: True,
     )
 
@@ -271,7 +271,7 @@ def test_model_context_budget_never_delays_compression_past_output_reserve(monke
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.get_context_compression_config",
+        "apps.chat_data_app.agent.context.context_budget.get_context_compression_config",
         lambda: {"enabled": True, "trigger_ratio": 0.80},
     )
 
@@ -283,15 +283,15 @@ def test_model_context_budget_never_delays_compression_past_output_reserve(monke
 
 def test_context_budget_startup_validation_rejects_output_reserve_without_input_space(monkeypatch):
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.get_chat_data_model_configs",
+        "apps.chat_data_app.agent.context.context_budget.get_chat_data_model_configs",
         lambda: [{"id": "tiny", "context_window": 1000}],
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.get_chat_data_output_max_tokens",
+        "apps.chat_data_app.agent.context.context_budget.get_chat_data_output_max_tokens",
         lambda: 1000,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.get_context_compression_summary_output_max_tokens",
+        "apps.chat_data_app.agent.context.context_budget.get_context_compression_summary_output_max_tokens",
         lambda: 200,
     )
 
@@ -308,7 +308,7 @@ def test_context_budget_startup_validation_rejects_trigger_ratio_above_guard(mon
 
 def test_context_request_budget_rejects_dynamic_static_input_above_guard(monkeypatch):
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.context_budget.get_model_context_budget",
+        "apps.chat_data_app.agent.context.context_budget.get_model_context_budget",
         lambda *_args, **_kwargs: ContextBudget(
             context_window=100,
             max_output_tokens=20,

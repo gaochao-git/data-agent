@@ -11,12 +11,12 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from ..llm_config import (
+from ...services.llm_config import (
     get_chat_data_model_configs,
     get_chat_data_output_max_tokens,
     get_context_compression_summary_output_max_tokens,
 )
-from ..runtime_config import (
+from ...services.runtime_config import (
     get_context_compression_config,
     get_context_window,
     is_context_usage_system_prompt_visible,

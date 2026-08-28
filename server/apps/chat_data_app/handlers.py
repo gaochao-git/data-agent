@@ -34,7 +34,7 @@ from .agent import (
     get_checkpointer,
 )
 from .agent.skills import format_skills_prompt
-from .services.agent_run.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
+from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .services.agent_run.conversation_runtime import stream_agent_turn
 from .services.agent_run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service

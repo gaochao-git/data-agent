@@ -23,7 +23,7 @@ from apps.chat_data_app.agent.prompts.context_compression import build_context_c
 from apps.chat_data_app.agent.tool_results import build_tool_result_recovery, merge_tool_result_recovery_artifact
 from apps.chat_data_app.agent import agent_runtime
 from langchain.agents.middleware import ToolErrorMiddleware
-from apps.chat_data_app.services.agent_run.context_budget import (
+from apps.chat_data_app.agent.context.context_budget import (
     ContextBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,

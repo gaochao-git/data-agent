@@ -35,7 +35,7 @@ from apps.chat_data_app.handlers import (
     AgentRunStreamFailedError,
 )
 from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
-from apps.chat_data_app.services.agent_run.context_budget import ContextInputLimitExceededError
+from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 
