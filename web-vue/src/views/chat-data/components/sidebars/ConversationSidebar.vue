@@ -23,6 +23,7 @@ import {
   type FieldTooltipSection
 } from '../../utils/fieldDict'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
+import { formatRelativeConversationTime } from '../../utils'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
@@ -39,6 +40,10 @@ const getRunStatusClass = (status: ConversationItem['run_status']): string => {
   if (status === 'cancelling') return 'text-slate-400'
   return 'text-blue-500'
 }
+
+const getConversationTimeText = (conv: ConversationItem): string => (
+  formatRelativeConversationTime(conv.updated_at || conv.created_at)
+)
 
 interface Props {
   activeTab: 'metrics' | 'conversation'
@@ -732,26 +737,41 @@ onUnmounted(() => {
                         <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
                       </span>
                       <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
-                      <button
-                        type="button"
-                        class="shrink-0 flex h-6 w-6 items-center justify-center rounded transition-all duration-150"
-                        :class="conv.is_favorited
-                          ? 'text-amber-500 opacity-100 hover:bg-amber-100 hover:text-amber-600'
-                          : 'text-gray-400 opacity-0 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100'"
-                        :title="conv.is_favorited ? '取消置顶' : '置顶'"
-                        :disabled="favoritingId === conv.id"
-                        @click.stop="toggleConversationFavoriteState(conv)"
-                      >
-                        <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
-                      </button>
-                      <button
-                        type="button"
-                        class="shrink-0 flex h-6 w-6 items-center justify-center rounded text-gray-400 opacity-0 transition-all duration-150 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100"
-                        title="修改标题"
-                        @click.stop="startEditConversationTitle(conv, $event)"
-                      >
-                        <i class="fa-solid fa-pen text-[10px]"></i>
-                      </button>
+                      <!-- 右侧固定角色区：平时显示相对时间，hover 淡出时间、淡入置顶/编辑按钮。
+                           两态共用同一固定宽度容器（w-[52px] = 2×24px 按钮 + 4px 间距），互不挤占、不跳动。
+                           置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
+                      <div data-testid="conversation-role-zone" class="relative h-6 w-[52px] shrink-0">
+                        <span
+                          data-testid="conversation-time"
+                          class="absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
+                          :title="conv.updated_at || conv.created_at"
+                        >{{ getConversationTimeText(conv) }}</span>
+                        <div
+                          data-testid="conversation-actions"
+                          class="absolute inset-y-0 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                        >
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded transition-colors duration-150"
+                            :class="conv.is_favorited
+                              ? 'text-amber-500 hover:bg-amber-100 hover:text-amber-600'
+                              : 'text-gray-400 hover:bg-blue-100 hover:text-blue-600'"
+                            :title="conv.is_favorited ? '取消置顶' : '置顶'"
+                            :disabled="favoritingId === conv.id"
+                            @click.stop="toggleConversationFavoriteState(conv)"
+                          >
+                            <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded text-gray-400 transition-colors duration-150 hover:bg-blue-100 hover:text-blue-600"
+                            title="修改标题"
+                            @click.stop="startEditConversationTitle(conv, $event)"
+                          >
+                            <i class="fa-solid fa-pen text-[10px]"></i>
+                          </button>
+                        </div>
+                      </div>
                     </template>
                   </div>
                   <div v-if="group.is_loading_more" class="flex items-center justify-center gap-2 py-2 text-xs text-gray-400">
