@@ -16,7 +16,7 @@ from utils.response import business_response
 from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
-from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,

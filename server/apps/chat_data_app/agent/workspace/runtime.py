@@ -35,7 +35,7 @@ from .workspace_special_services import (
     workspace_office_preview_service,
     workspace_tool_result_service,
 )
-from apps.chat_data_app.services.agent_run.runtime_skill_snapshot import (
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     is_runtime_skill_snapshot_ready,
     runtime_skills_snapshot_dir_from_workspace,

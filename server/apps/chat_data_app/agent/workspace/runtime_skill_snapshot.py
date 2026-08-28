@@ -70,9 +70,8 @@ def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
     声明的名称与运行时路径不一致。缺失或损坏的 frontmatter 降级为空描述，
     但仍保留可读取的快照技能。
     """
-    # 延迟导入避免 conversation_workspace -> runtime_skill_snapshot -> agent
-    # 初始化期间形成循环依赖；运行时只复用 loader 的唯一 frontmatter 解析入口。
-    from ...agent.skills.loader import parse_metadata
+    # 延迟导入复用 loader 的唯一 frontmatter 解析入口，避免顶层相互 import。
+    from ..skills.loader import parse_metadata
 
     entries: list[dict[str, Any]] = []
     for name in list_snapshot_skill_names(snapshot_dir):
@@ -153,7 +152,6 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
     if is_runtime_skill_snapshot_ready(target):
         return target
 
-    # 延迟 import 打破循环：skill_service 链路经 conversation_workspace 回引本模块。
     from apps.chat_data_app.agent.skills.skill_service import skill_service
 
     sources = await skill_service.list_runtime_skill_sources_async(user_id)

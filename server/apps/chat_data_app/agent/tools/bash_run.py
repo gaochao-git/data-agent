@@ -43,7 +43,12 @@ async def run_bash_command(
     """在当前工作区执行受限 Bash 命令。"""
     safe_command = _validate_command(command)
     await workspace_runtime.validate_bash_paths(command=safe_command)
-    timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS))
+    try:
+        requested_timeout = int(timeout_seconds)
+    except (TypeError, ValueError):
+        requested_timeout = DEFAULT_TIMEOUT_SECONDS
+    # 0/负数按非法输入 clamp 到下限 1，而不是被 or 当成"未提供"落到默认值。
+    timeout = max(1, min(requested_timeout, MAX_TIMEOUT_SECONDS))
     execution = await workspace_runtime.run_bash(
         command=safe_command, cwd=cwd, timeout_seconds=timeout
     )

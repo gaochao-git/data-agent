@@ -11,6 +11,10 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# 图片读取/注入的扩展名与单张大小上限（agent 视觉链路唯一口径）。
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset({
     ".txt", ".md", ".sql", ".pdf", ".docx", ".xlsx", ".pptx",
 })

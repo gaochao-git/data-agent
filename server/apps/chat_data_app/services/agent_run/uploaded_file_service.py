@@ -21,8 +21,10 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # 多模态图片附件限制：作为 content blocks 直接进入模型消息的准入条件
-IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
-MAX_IMAGE_SIZE = 5 * 1024 * 1024
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import (  # noqa: F401
+    IMAGE_EXTENSIONS,
+    MAX_IMAGE_SIZE,
+)
 MAX_IMAGES_PER_MESSAGE = 4
 
 

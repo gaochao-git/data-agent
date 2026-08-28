@@ -48,7 +48,7 @@ from .services.agent_run.message_compose import (
     select_vision_attachments,
 )
 from .services.agent_run.uploaded_file_service import get_file_info
-from .services.agent_run.runtime_skill_snapshot import (
+from .agent.workspace.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
 )

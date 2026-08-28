@@ -23,7 +23,7 @@ from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
     to_visible_path,
 )
-from apps.chat_data_app.services.agent_run.uploaded_file_service import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
 
 logger = get_logger(__name__)
 

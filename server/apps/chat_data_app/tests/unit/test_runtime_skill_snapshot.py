@@ -1,11 +1,14 @@
 """runtime_skill_snapshot 快照构建行为测试。"""
 
 import asyncio
+import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from apps.chat_data_app.services.agent_run import runtime_skill_snapshot as snapshot_module
+from apps.chat_data_app.agent.workspace import runtime_skill_snapshot as snapshot_module
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
 
 
@@ -148,3 +151,108 @@ def test_list_snapshot_skill_metadata_uses_runtime_directory_name(tmp_path):
             "category": "",
         },
     ]
+
+
+def test_list_snapshot_skill_names_missing_dir(tmp_path):
+    assert snapshot_module.list_snapshot_skill_names(tmp_path / "nope") == []
+
+
+def test_rmtree_uses_onerror_on_python_older_than_312(tmp_path):
+    """3.12 以下走 onerror 回调：同一份兼容代码两条分支都要兜住。"""
+    target = tmp_path / "legacy"
+    target.mkdir()
+    (target / "f.txt").write_text("x", encoding="utf-8")
+    real = sys.version_info
+    try:
+        sys.version_info = (3, 11, 0)
+        snapshot_module._rmtree(target)
+    finally:
+        sys.version_info = real
+    assert not target.exists()
+
+
+def test_copy_skill_dir_replaces_existing_destination(tmp_path):
+    src = _make_skill(tmp_path / "src", "skill-a")
+    dst = tmp_path / "dst" / "skill-a"
+    dst.mkdir(parents=True)
+    (dst / "stale.txt").write_text("old", encoding="utf-8")
+
+    snapshot_module._copy_skill_dir(src, dst)
+
+    assert (dst / "SKILL.md").is_file()
+    assert not (dst / "stale.txt").exists()
+
+
+def test_on_rm_error_recovers_locked_file(tmp_path):
+    locked_file = tmp_path / "f.txt"
+    locked_file.write_text("x", encoding="utf-8")
+    locked_file.chmod(0o400)
+
+    snapshot_module._on_rm_error(os.chmod, str(locked_file), None)
+    assert not locked_file.exists()
+
+
+def test_on_rm_error_swallows_unrecoverable_path(tmp_path):
+    """路径已不存在时 chmod 直接失败：只记日志，不向外抛。"""
+    snapshot_module._on_rm_error(os.chmod, str(tmp_path / "gone"), None)
+
+
+def test_remove_tree_swallows_os_error(tmp_path, monkeypatch):
+    def _boom(path, **_kwargs):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(snapshot_module, "_rmtree", _boom)
+    snapshot_module._remove_tree(tmp_path)
+
+
+def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
+    """固定 uuid，验证构建前会清掉同名的残留 building 临时目录。"""
+    monkeypatch.setattr(snapshot_module, "THREADS_DIR", tmp_path / "threads")
+    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir.mkdir(parents=True)
+
+    class FakeSkillService:
+        async def list_runtime_skill_sources_async(self, user_id):
+            return []
+
+    monkeypatch.setattr(
+        skill_service_module.skill_service,
+        "list_runtime_skill_sources_async",
+        FakeSkillService().list_runtime_skill_sources_async,
+    )
+    monkeypatch.setattr(snapshot_module, "uuid4", lambda: SimpleNamespace(hex="fixed"))
+
+    stale_tmp = conv_dir / "runtime-skills.building-fixed"
+    stale_tmp.mkdir(parents=True)
+    (stale_tmp / "leftover.txt").write_text("x", encoding="utf-8")
+
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+    assert target.is_dir()
+    assert not stale_tmp.exists()
+
+
+def test_build_snapshot_reuses_snapshot_completed_during_populate(tmp_path, monkeypatch):
+    """填充期间并发请求先完成构建时：丢弃本次临时目录，复用已有快照。"""
+    monkeypatch.setattr(snapshot_module, "THREADS_DIR", tmp_path / "threads")
+    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir.mkdir(parents=True)
+    target = conv_dir / "runtime-skills"
+
+    class FakeSkillService:
+        async def list_runtime_skill_sources_async(self, user_id):
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "skill-other").mkdir()
+            return [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))]
+
+    monkeypatch.setattr(
+        skill_service_module.skill_service,
+        "list_runtime_skill_sources_async",
+        FakeSkillService().list_runtime_skill_sources_async,
+    )
+
+    result = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+    assert result == target
+    assert (target / "skill-other").is_dir()
+    assert not (target / "skill-a").exists()
+    leftovers = [p.name for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")]
+    assert leftovers == []
