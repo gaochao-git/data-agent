@@ -1,4 +1,4 @@
-"""ChatData 会话工作区 local 后端：路径校验后的宿主机文件系统实现（自 conversation_workspace 拆出）。"""
+"""ChatData 会话工作区 local 后端：路径校验后的宿主机文件系统实现。"""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ from typing import Any, Literal
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
 
-from .artifact_registry import parse_output_artifact
-from .conversation_workspace import (
+from apps.chat_data_app.agent.workspace.artifact_registry import parse_output_artifact
+from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     WorkspacePathMapping,
     _absolute_command_path_tokens,

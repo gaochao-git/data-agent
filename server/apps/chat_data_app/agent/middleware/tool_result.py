@@ -11,7 +11,7 @@ from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME, ToolResultRecord
-from apps.chat_data_app.services.agent_run.conversation_workspace import workspace_runtime_from_state
+from apps.chat_data_app.agent.workspace.runtime import workspace_runtime_from_state
 from apps.chat_data_app.services.sql_run.result import query_result_status, query_result_succeeded
 from apps.chat_data_app.services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..tool_results import (

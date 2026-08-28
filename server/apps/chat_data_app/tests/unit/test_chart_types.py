@@ -10,7 +10,7 @@ from apps.chat_data_app.chart_types import (
     is_supported_chart_type_input,
     normalize_chart_type,
 )
-from apps.chat_data_app.services.agent_run.artifact_registry import parse_chart_spec_payload_value
+from apps.chat_data_app.agent.workspace.artifact_registry import parse_chart_spec_payload_value
 
 
 def test_chart_types_use_canonical_values_only():

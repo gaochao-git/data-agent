@@ -22,6 +22,8 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     WorkspacePathMapping,
@@ -50,8 +52,8 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 
 @pytest.fixture(autouse=True)
 def _chat_data_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(cw, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(cw, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(cw_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(cw_runtime_module, "THREADS_DIR", tmp_path / "threads")
 
 
 def _runtime_root(tmp_path: Path) -> Path:
@@ -164,7 +166,7 @@ async def test_ensure_snapshot_async_swallows_build_failure(tmp_path, monkeypatc
     async def boom(*_args, **_kwargs):
         raise RuntimeError("snapshot build failed")
 
-    monkeypatch.setattr(cw, "build_runtime_skill_snapshot_async", boom)
+    monkeypatch.setattr(cw_runtime_module, "build_runtime_skill_snapshot_async", boom)
     # 构建失败只记日志，不向上抛出
     await runtime._ensure_snapshot_async()
 
@@ -238,7 +240,7 @@ async def test_runtime_render_office_html_delegates_to_preview_service(tmp_path,
     async def fake_render_html(_runtime, **kwargs):
         return {"renderer": "officecli-html", "html": "<html/>", "truncated": False, "echo": kwargs}
 
-    monkeypatch.setattr(cw.workspace_office_preview_service, "render_html", fake_render_html)
+    monkeypatch.setattr(cw_runtime_module.workspace_office_preview_service, "render_html", fake_render_html)
     result = await runtime.render_office_html(file_path="/mnt/user-data/workspace/a.docx", max_chars=100)
     assert result["html"] == "<html/>"
     assert result["echo"] == {"file_path": "/mnt/user-data/workspace/a.docx", "max_chars": 100}
@@ -278,7 +280,7 @@ def test_is_managed_semantic_model_workspace_path(tmp_path):
 
 
 def test_ensure_workspace_root_in_chat_data_home_rejects_outside(tmp_path, monkeypatch):
-    monkeypatch.setattr(cw, "CHAT_DATA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cw_runtime_module, "CHAT_DATA_HOME", str(tmp_path / "home"))
     _ensure_workspace_root_in_chat_data_home(str(tmp_path / "home" / "threads" / "u" / "c"))
     with pytest.raises(ValueError, match="不在 CHAT_DATA_HOME"):
         _ensure_workspace_root_in_chat_data_home("/tmp/definitely-outside-root/user-data")
@@ -302,27 +304,27 @@ def _write_output_skill(root: Path, skill_name: str, metadata_name: str) -> Path
 def test_resolve_output_skill_directory_success(tmp_path):
     root = _runtime_root(tmp_path)
     skill_dir = _write_output_skill(root, "demo-skill", "demo-skill")
-    assert cw.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/demo-skill") == skill_dir
+    assert cw_runtime_module.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/demo-skill") == skill_dir
 
 
 def test_resolve_output_skill_directory_rejects_system_results(tmp_path):
     root = _runtime_root(tmp_path)
-    offload = root / "outputs" / cw.TOOL_OFFLOAD_DIR_NAME / "demo-skill"
+    offload = root / "outputs" / cw_runtime_module.TOOL_OFFLOAD_DIR_NAME / "demo-skill"
     _write_output_skill(offload, "demo-skill", "demo-skill")
     with pytest.raises(ValueError, match="不允许导入系统结果目录"):
-        cw.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/demo-skill")
+        cw_runtime_module.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/demo-skill")
 
 
 def test_resolve_output_skill_directory_rejects_non_output_paths(tmp_path):
     root = _runtime_root(tmp_path)
     _write_output_skill(root, "demo-skill", "demo-skill")
     with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
-        cw.resolve_output_skill_directory(str(root), "/mnt/user-data/workspace/demo-skill")
+        cw_runtime_module.resolve_output_skill_directory(str(root), "/mnt/user-data/workspace/demo-skill")
     with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
-        cw.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/.hidden-skill")
+        cw_runtime_module.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/.hidden-skill")
     nested = _write_output_skill(root / "outputs" / "demo-skill", "nested", "nested")
     with pytest.raises(ValueError, match="只允许导入 /mnt/user-data/outputs"):
-        cw.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/demo-skill/{nested.name}")
+        cw_runtime_module.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/demo-skill/{nested.name}")
 
 
 def test_resolve_output_skill_directory_requires_valid_skill_md(tmp_path):
@@ -330,17 +332,17 @@ def test_resolve_output_skill_directory_requires_valid_skill_md(tmp_path):
     empty_dir = root / "outputs" / "no-skill"
     empty_dir.mkdir(parents=True)
     with pytest.raises(ValueError, match="必须包含有效的 SKILL.md"):
-        cw.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/no-skill")
+        cw_runtime_module.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/no-skill")
 
     mismatched = _write_output_skill(root, "other-skill", "different-name")
     with pytest.raises(ValueError, match="元数据无效或与技能目录名不一致"):
-        cw.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/{mismatched.name}")
+        cw_runtime_module.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/{mismatched.name}")
 
     symlinked = root / "outputs" / "link-skill"
     symlinked.mkdir()
     (symlinked / "SKILL.md").symlink_to(mismatched / "SKILL.md")
     with pytest.raises(ValueError, match="必须包含有效的 SKILL.md"):
-        cw.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/link-skill")
+        cw_runtime_module.resolve_output_skill_directory(str(root), "/mnt/user-data/outputs/link-skill")
 
 
 # ---------------------------------------------------------------------------
@@ -376,9 +378,9 @@ def test_list_workspace_files_skips_missing_and_unresolvable(tmp_path, monkeypat
     root = ensure_conversation_workspace("conv_list", "user_a")["root"]
     (Path(root) / "workspace" / "ok.txt").write_text("ok", encoding="utf-8")
 
-    monkeypatch.setattr(cw, "WORKSPACE_DIR_NAMES", ("workspace", "missing-dir"))
+    monkeypatch.setattr(cw_runtime_module, "WORKSPACE_DIR_NAMES", ("workspace", "missing-dir"))
 
-    original_resolve = cw.resolve_workspace_path
+    original_resolve = cw_runtime_module.resolve_workspace_path
 
     def flaky_resolve(workspace_root, path, **kwargs):
         if str(path).endswith("bad.txt"):
@@ -424,7 +426,7 @@ def test_read_workspace_raw_file_branches(tmp_path):
     target.write_bytes(b"x" * 100)
 
     with pytest.raises(ValueError, match="不在工作区文件预览范围内"):
-        read_workspace_raw_file("conv_raw", f"/mnt/user-data/outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a")
+        read_workspace_raw_file("conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a")
     with pytest.raises(FileNotFoundError, match="文件不存在"):
         read_workspace_raw_file("conv_raw", "/mnt/user-data/workspace/missing.bin", 100, "user_a")
     with pytest.raises(ValueError, match="文件过大"):
@@ -447,7 +449,7 @@ def test_validate_office_preview_source_branches(tmp_path):
     _validate_office_preview_source(root, "/mnt/user-data/workspace/report.docx")
 
     with pytest.raises(ValueError, match="不支持 Office 预览"):
-        _validate_office_preview_source(root, f"/mnt/user-data/outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/r.docx")
+        _validate_office_preview_source(root, f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.docx")
     with pytest.raises(ValueError, match="仅支持 .docx"):
         _validate_office_preview_source(root, "/mnt/user-data/workspace/notes.txt")
     with pytest.raises(FileNotFoundError, match="文件不存在"):
@@ -464,7 +466,7 @@ def _patch_officecli(monkeypatch, *, which_result, returncode, write_preview, st
     created: list[str] = []
 
     def fake_mkstemp(**kwargs):
-        # 始终使用标准库原始实现：cw.tempfile 就是全局 tempfile 模块，
+        # 始终使用标准库原始实现：cw_runtime_module.tempfile 就是全局 tempfile 模块，
         # 同一用例内多次 patch 时若从模块取会拿到上一轮的替身。
         fd, path = _REAL_MKSTEMP(**kwargs)
         os.close(fd)
@@ -486,9 +488,9 @@ def _patch_officecli(monkeypatch, *, which_result, returncode, write_preview, st
             Path(path).write_text("<html>preview</html>", encoding="utf-8")
         return CompletedRun()
 
-    monkeypatch.setattr(cw.shutil, "which", lambda _name: which_result)
-    monkeypatch.setattr(cw.subprocess, "run", fake_run)
-    monkeypatch.setattr(cw.tempfile, "mkstemp", fake_mkstemp)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda _name: which_result)
+    monkeypatch.setattr(cw_runtime_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cw_runtime_module.tempfile, "mkstemp", fake_mkstemp)
     return created
 
 
@@ -557,7 +559,7 @@ async def test_render_conversation_workspace_office_preview_branches(tmp_path, m
     async def fake_render(_runtime, **_kwargs):
         return fake_render.payload
 
-    monkeypatch.setattr(cw.workspace_office_preview_service, "render_html", fake_render)
+    monkeypatch.setattr(cw_runtime_module.workspace_office_preview_service, "render_html", fake_render)
 
     fake_render.payload = {"html": "", "truncated": True}
     assert await render_conversation_workspace_office_preview(

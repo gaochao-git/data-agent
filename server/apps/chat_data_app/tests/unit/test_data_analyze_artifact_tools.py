@@ -13,7 +13,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services.semantic.run import semantic_query_service
-from apps.chat_data_app.services.agent_run.artifact_registry import (
+from apps.chat_data_app.agent.workspace.artifact_registry import (
     parse_chart_spec_payload_value,
     parse_output_artifact,
 )

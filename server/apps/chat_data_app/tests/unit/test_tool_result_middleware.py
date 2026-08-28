@@ -16,6 +16,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.middleware import tool_result
 from apps.chat_data_app.services.agent_run import conversation_workspace
+from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
 
 
 def _request(
@@ -36,8 +37,8 @@ def _request(
 
 
 def _workspace_request(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
     paths = conversation_workspace.ensure_conversation_workspace("conv_a", "user_a")
     return _request(workspace_root=paths["root"]), paths
 

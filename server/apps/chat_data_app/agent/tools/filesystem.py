@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.services.runtime_config import FILE_READ_MAX_CHARS
 from .common import (
     DEFAULT_READ_LIMIT,

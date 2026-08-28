@@ -30,7 +30,7 @@ from langchain.agents.middleware import wrap_model_call
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from utils.logger import get_logger
-from apps.chat_data_app.services.agent_run.conversation_workspace import (
+from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
     workspace_runtime_from_state,
 )

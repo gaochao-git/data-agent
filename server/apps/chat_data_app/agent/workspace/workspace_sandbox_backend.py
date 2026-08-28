@@ -1,4 +1,4 @@
-"""ChatData 会话工作区 sandbox 后端：OpenSandbox 远程文件系统适配（自 conversation_workspace 拆出）。"""
+"""ChatData 会话工作区 sandbox 后端：OpenSandbox 远程文件系统适配。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 
-from .conversation_workspace import (
+from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     _absolute_command_path_tokens,
 )

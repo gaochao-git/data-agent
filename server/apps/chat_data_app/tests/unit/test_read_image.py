@@ -17,14 +17,15 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 from apps.chat_data_app.agent.middleware import image_injection
 from apps.chat_data_app.agent.tools import read_image as read_image_module
 from apps.chat_data_app.services.agent_run import conversation_workspace
+from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 
 def _init_workspace(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
     return conversation_workspace.ensure_conversation_workspace("conv_a", "user_a")
 
 

@@ -11,7 +11,9 @@ from apps.chat_data_app.agent.tools.officecli_run import (
     run_officecli_command,
 )
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
-from apps.chat_data_app.services.agent_run import (
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import (
     workspace_sandbox_backend as sandbox_backend_module,
 )
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
@@ -133,7 +135,7 @@ def test_officecli_schema_reports_missing_file_before_path_validation():
 async def test_local_run_officecli_executes_binary_with_translated_paths(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
     (Path(runtime.workspace_root) / "workspace" / "report.docx").write_bytes(b"")
 
@@ -159,7 +161,7 @@ async def test_local_run_officecli_keeps_arg_boundaries_when_root_has_spaces(mon
     """Regression: physical roots containing spaces must not split a path into two argv items."""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
 
     spaced_root = tmp_path / "chat data" / "user-data"
     (spaced_root / "workspace").mkdir(parents=True)
@@ -185,7 +187,7 @@ async def test_local_run_officecli_does_not_leak_server_environment(monkeypatch,
     """The child must not inherit server secrets, and HOME must stay off the visible workspace."""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     monkeypatch.setenv("FXCJG_DB_PASSWORD", "super-secret")
     runtime = _local_runtime(tmp_path)
 
@@ -202,7 +204,7 @@ async def test_local_run_officecli_times_out(monkeypatch, tmp_path):
     slow_bin = tmp_path / "officecli"
     slow_bin.write_text("#!/bin/sh\nsleep 10\n")
     slow_bin.chmod(slow_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: str(slow_bin))
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: str(slow_bin))
     runtime = _local_runtime(tmp_path)
 
     result = await runtime.run_officecli(
@@ -217,7 +219,7 @@ async def test_local_run_officecli_rejects_relative_parent_escape(monkeypatch, t
     """`..` never reaches the child, otherwise cwd-relative args could leave the workspace."""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
 
     with pytest.raises(ValueError, match="officecli_run"):
@@ -233,7 +235,7 @@ async def test_local_run_officecli_rejects_relative_parent_escape(monkeypatch, t
 async def test_local_run_officecli_rejects_path_escape_and_skills(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
 
     with pytest.raises(ValueError):
@@ -252,7 +254,7 @@ async def test_local_run_officecli_rejects_path_escape_and_skills(monkeypatch, t
 async def test_local_run_officecli_selector_not_treated_as_path(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
 
     # /slide[1] is a DOM selector, not a host path -> must not raise.
@@ -326,7 +328,7 @@ async def test_sandbox_run_officecli_passes_command_and_validates_bounds(monkeyp
 async def test_tool_wrapper_surfaces_denied_subcommand_and_success(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
 
     tool = create_officecli_run_tool(runtime)
@@ -342,7 +344,7 @@ async def test_tool_wrapper_surfaces_denied_subcommand_and_success(monkeypatch, 
 async def test_run_officecli_command_success_shape(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
 
     payload = await run_officecli_command(
@@ -392,7 +394,7 @@ async def test_uploads_reads_allowed_for_readonly_subcommands(monkeypatch, tmp_p
     """view/validate 可读取 uploads，调用应正常到达后端。"""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
     (Path(runtime.workspace_root) / "uploads" / "original.docx").write_bytes(b"")
 
@@ -410,7 +412,7 @@ async def test_dump_from_uploads_to_workspace_is_allowed(monkeypatch, tmp_path):
     """dump 源读 uploads、输出写 workspace 属正常流程，不应拦截。"""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
-    monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
     runtime = _local_runtime(tmp_path)
     (Path(runtime.workspace_root) / "uploads" / "src.docx").write_bytes(b"")
 

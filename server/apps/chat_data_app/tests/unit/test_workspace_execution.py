@@ -720,11 +720,11 @@ def test_sandbox_bash_uses_files_api_snapshot_paths(monkeypatch, tmp_path):
         runtime_skills_dir=snapshot_dir,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.workspace_sandbox_backend.run_command_in_sandbox",
+        "apps.chat_data_app.agent.workspace.workspace_sandbox_backend.run_command_in_sandbox",
         fake_run_command_in_sandbox,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.agent_run.workspace_sandbox_backend.sync_sandbox_working_trees",
+        "apps.chat_data_app.agent.workspace.workspace_sandbox_backend.sync_sandbox_working_trees",
         lambda _session: asyncio.sleep(0),
     )
 

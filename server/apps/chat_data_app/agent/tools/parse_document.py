@@ -17,7 +17,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from apps.chat_data_app.services.agent_run.conversation_workspace import (
+from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
 )

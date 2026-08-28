@@ -6,7 +6,7 @@ from typing import Any
 from langchain.agents import create_agent
 
 from ..agent.context.context_budget import ContextRequestBudget
-from ..services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
+from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
     build_standard_agent_middleware,

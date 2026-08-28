@@ -21,7 +21,10 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
-from apps.chat_data_app.services.agent_run import workspace_local_backend as lb
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace import workspace_local_backend as lb
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     ensure_conversation_workspace,
@@ -30,8 +33,8 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 
 @pytest.fixture(autouse=True)
 def _chat_data_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(cw, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(cw, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(cw_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(cw_runtime_module, "THREADS_DIR", tmp_path / "threads")
 
 
 def _runtime(tmp_path: Path) -> tuple[ConversationWorkspaceRuntime, Path]:
@@ -202,7 +205,7 @@ def test_copy_local_path_branches(tmp_path):
 
     with pytest.raises(ValueError, match="系统结果目录"):
         lb._copy_local_path(
-            str(root), f"/mnt/user-data/outputs/{cw.TOOL_OFFLOAD_DIR_NAME}/r.json", "/mnt/user-data/workspace/r.json",
+            str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", "/mnt/user-data/workspace/r.json",
         )
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
         lb._copy_local_path(str(root), "/mnt/user-data/workspace/missing.txt", "/mnt/user-data/workspace/x.txt")
@@ -486,9 +489,9 @@ def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
 
     for path in ("/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/dirlink"):
         with pytest.raises(ValueError, match="不允许操作符号链接"):
-            cw.resolve_workspace_path(str(root), path)
+            cw_runtime_module.resolve_workspace_path(str(root), path)
         with pytest.raises(ValueError, match="不允许操作符号链接"):
-            cw.resolve_workspace_path(str(root), path, writable=True)
+            cw_runtime_module.resolve_workspace_path(str(root), path, writable=True)
 
     # 目标文件必须毫发无损
     assert (workspace / "real.txt").read_text(encoding="utf-8") == "payload"

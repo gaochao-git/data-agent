@@ -5,7 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
     command_path_values,
     parse_officecli_args,

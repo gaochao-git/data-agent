@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
-from ...agent.skills.loader import parse_metadata_text
+from ..skills.loader import parse_metadata_text
 from ...chart_types import (
     chart_type_max_y_fields,
     chart_type_requires_data,

@@ -17,10 +17,9 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_module
-from apps.chat_data_app.services.agent_run import (
+from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
+from apps.chat_data_app.agent.workspace import (
     workspace_local_backend as workspace_local_backend_module,
-)
-from apps.chat_data_app.services.agent_run import (
     workspace_sandbox_backend as workspace_sandbox_backend_module,
 )
 from utils import tool_result_store
@@ -254,8 +253,8 @@ def test_resolve_workspace_path_restricts_writes():
 
 @pytest.mark.asyncio
 async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
     semantic_root = Path(paths["workspace"]) / "semantic"
     semantic_root.mkdir()
@@ -275,8 +274,8 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
 
 @pytest.mark.asyncio
 async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_read(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
     monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
     paths = ensure_conversation_workspace("conv_private", "user_a")
     private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
@@ -299,8 +298,8 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
 
 @pytest.mark.asyncio
 async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_query_result", "user_a")
     result_file = Path(paths["outputs"]) / "query_result" / "result_1.json"
     result_file.parent.mkdir()
@@ -355,8 +354,8 @@ def test_resolve_workspace_path_rejects_non_canonical_forms():
 
 @pytest.mark.asyncio
 async def test_file_copy_copies_upload_into_workspace_and_keeps_source(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_file_copy", "user_a")
     source = Path(paths["uploads"]) / "原文件.docx"
     source.write_bytes(b"\x00\x01docx-bytes")
@@ -376,8 +375,8 @@ async def test_file_copy_copies_upload_into_workspace_and_keeps_source(monkeypat
 
 @pytest.mark.asyncio
 async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp_path):
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_file_copy_guard", "user_a")
     source = Path(paths["uploads"]) / "a.bin"
     source.write_bytes(b"a")
@@ -1095,7 +1094,7 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
         return SimpleNamespace(returncode=0, stdout=f"{line_count}\n", stderr="")
 
     workspace_local_backend_module._count_local_text_lines_cached.cache_clear()
-    monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(workspace_runtime_module.subprocess, "run", fake_run)
 
     first = workspace_local_backend_module._read_text_page_from_path(
         target, "/mnt/user-data/workspace/report with spaces.txt", offset=0, limit=1, max_chars=100,
@@ -1126,7 +1125,7 @@ async def test_file_read_rejects_workspace_root_outside_chat_data_home(monkeypat
     (workspace_root / "outputs").mkdir()
     (workspace_root / "uploads").mkdir()
     (workspace_root / "workspace" / "secret.txt").write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
     runtime = ConversationWorkspaceRuntime(
         workspace_root=str(workspace_root),
         user_id="u1",
@@ -1733,8 +1732,8 @@ async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
 @pytest.mark.asyncio
 async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
     """file_grep on a single file must return matches, not silently drop them."""
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_grep_file", "user_a")
     target = Path(paths["outputs"]) / "order.dashboard.json"
     target.write_text(
@@ -1802,8 +1801,8 @@ def test_render_local_office_html_invokes_host_officecli(monkeypatch):
         Path(preview_path).write_text("<main>local preview</main>", encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr(conversation_workspace_module.shutil, "which", fake_which)
-    monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(workspace_runtime_module.shutil, "which", fake_which)
+    monkeypatch.setattr(workspace_runtime_module.subprocess, "run", fake_run)
 
     result = _render_local_office_html(str(root), "/mnt/user-data/outputs/report.docx", 12 * 1024 * 1024)
 
@@ -1821,7 +1820,7 @@ def test_render_local_office_html_missing_binary_raises(monkeypatch):
     docx = root / "outputs" / "report.docx"
     docx.write_text("PK fake", encoding="utf-8")
 
-    monkeypatch.setattr(conversation_workspace_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(workspace_runtime_module.shutil, "which", lambda _: None)
 
     with pytest.raises(RuntimeError, match="未安装 OfficeCLI"):
         _render_local_office_html(str(root), "/mnt/user-data/outputs/report.docx", 1024)
