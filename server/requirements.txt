@@ -1,12 +1,12 @@
-fastapi
-uvicorn
+fastapi==0.121.3
+uvicorn==0.38.0
 gunicorn
 uvicorn-worker
 PyMuPDF
 markitdown[pdf,docx,pptx,xlsx]==0.1.7
 Pillow
 pdf2image
-requests
+requests==2.32.5
 redis==7.0.1
 pytest
 pytest-asyncio
