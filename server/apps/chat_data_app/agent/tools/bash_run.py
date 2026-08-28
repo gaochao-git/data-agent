@@ -76,7 +76,7 @@ def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
         """
         在当前会话工作区执行非交互命令，可用于 ls/find/python3/node/bash 等。
 
-        - cwd 必须位于 /mnt/user-data/workspace、outputs、uploads 或当前已加载的只读 /mnt/skills 路径，默认 workspace。
+        - cwd 必须是规范形式路径：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 或已加载的只读 /mnt/skills/<技能名>/...；默认 /mnt/user-data/workspace。
         - command 必须是短生命周期非交互命令，不支持后台进程、服务管理或提权命令。
         - 生成最终产物前，先把脚本输出写到 workspace/，校验后复制或写入 outputs/。
         """

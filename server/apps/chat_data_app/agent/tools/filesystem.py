@@ -293,7 +293,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
     @tool("dir_list")
     async def dir_list(path: str = "workspace", max_depth: int = 2) -> str:
         """
-        列出当前会话 workspace、outputs、uploads 目录，或有权访问的技能只读 /mnt/skills 目录内容。
+        列出当前会话目录内容。path 必须是规范形式：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 之一，或只读技能路径 /mnt/skills/<技能名>/...。
 
         max_depth 默认 2，范围 1-5；系统管理的 outputs/query_result 和 outputs/.tool-offload 不会出现在结果中。
         """
