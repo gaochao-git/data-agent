@@ -3,17 +3,16 @@
  */
 
 export const DASHBOARD_BACKGROUNDS = [
-  { id: 'monitor-deep-gold', src: '', name: '深海蓝 x 金', theme: 'monitor-deep-gold' },
+  { id: 'monitor-deep-gold', src: '', name: '深邃蓝', theme: 'monitor-deep-gold' },
   { id: 'monitor-midnight-cyan', src: '', name: '极夜黑 x 青', theme: 'monitor-midnight-cyan' },
-  { id: 'monitor-forest-emerald', src: '', name: '暗林绿 x 翠', theme: 'monitor-forest-emerald' },
-  { id: 'monitor-space-violet', src: '', name: '深宇紫 x 星白', theme: 'monitor-space-violet' },
+  { id: 'monitor-space-violet', src: '', name: '石墨黑', theme: 'monitor-space-violet' },
   { id: 'light01', src: '', name: '简约白', theme: 'light' },
   { id: 'light02', src: '', name: '淡雅灰', theme: 'light' },
   { id: 'light03', src: '', name: '清新蓝', theme: 'light' },
 ] as const
 
 // 主题类型
-export type ThemeType = 'dark' | 'light' | 'monitor-deep-gold' | 'monitor-midnight-cyan' | 'monitor-forest-emerald' | 'monitor-space-violet'
+export type ThemeType = 'dark' | 'light' | 'monitor-deep-gold' | 'monitor-midnight-cyan' | 'monitor-space-violet'
 
 // 主题配置接口
 export interface ThemeConfig {
@@ -163,59 +162,33 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
     cardBg: '#0d0d1e',
     chartPalette: ['#00e5ff', '#36CFC9', '#00dc75', '#ffdc3d', '#ff3d00'],
   },
-  'monitor-forest-emerald': {
-    pageBg: '#040e09',
-    panelBg: 'rgba(7, 21, 16, 0.88)',
-    panelBorder: 'rgba(46, 204, 138, 0.32)',
-    panelHeaderBg: 'rgba(5, 18, 13, 0.7)',
-    titleColor: '#52d68a',
-    textColor: '#dff8ea',
-    textMuted: '#6e907d',
-    accentColor: '#2ecc8a',
-    accentGlow: 'rgba(46, 204, 138, 0.14)',
-    decorLine: 'linear-gradient(90deg, transparent, #2ecc8a 18%, #52d68a 62%, transparent)',
-    chartTooltipBg: 'rgba(4, 14, 9, 0.95)',
-    chartTooltipBorder: 'rgba(46, 204, 138, 0.42)',
-    chartTooltipText: '#e8fff1',
-    chartAxisText: '#6f8f7c',
-    chartGridLine: 'rgba(91, 139, 112, 0.18)',
-    tableHeaderBg: 'rgba(8, 28, 20, 0.94)',
-    tableRowHover: 'rgba(46, 204, 138, 0.08)',
-    tableBorder: 'rgba(46, 204, 138, 0.15)',
-    buttonBg: 'rgba(46, 204, 138, 0.12)',
-    buttonHover: 'rgba(46, 204, 138, 0.22)',
-    buttonText: '#52d68a',
-    emptyBorder: 'rgba(46, 204, 138, 0.32)',
-    emptyBg: 'rgba(7, 21, 16, 0.5)',
-    cardBg: '#071510',
-    chartPalette: ['#2ecc8a', '#52d68a', '#f7c331', '#ef5350', '#4fc3f7'],
-  },
   'monitor-space-violet': {
-    pageBg: '#09061a',
-    panelBg: 'rgba(16, 12, 30, 0.88)',
-    panelBorder: 'rgba(167, 139, 250, 0.34)',
-    panelHeaderBg: 'rgba(14, 10, 28, 0.7)',
-    titleColor: '#ded9fe',
-    textColor: '#f5f3ff',
-    textMuted: '#8c82b8',
-    accentColor: '#a78bfa',
-    accentGlow: 'rgba(167, 139, 250, 0.16)',
-    decorLine: 'linear-gradient(90deg, transparent, #a78bfa 18%, #ded9fe 58%, transparent)',
-    chartTooltipBg: 'rgba(9, 6, 26, 0.95)',
-    chartTooltipBorder: 'rgba(167, 139, 250, 0.42)',
-    chartTooltipText: '#f5f3ff',
-    chartAxisText: '#8177a8',
-    chartGridLine: 'rgba(129, 119, 168, 0.18)',
-    tableHeaderBg: 'rgba(22, 18, 42, 0.94)',
-    tableRowHover: 'rgba(167, 139, 250, 0.08)',
-    tableBorder: 'rgba(167, 139, 250, 0.15)',
-    buttonBg: 'rgba(167, 139, 250, 0.12)',
-    buttonHover: 'rgba(167, 139, 250, 0.22)',
-    buttonText: '#ded9fe',
-    emptyBorder: 'rgba(167, 139, 250, 0.32)',
-    emptyBg: 'rgba(16, 12, 30, 0.5)',
-    cardBg: '#100c1e',
-    chartPalette: ['#36CFC9', '#34d399', '#fbbf24', '#60a5fa', '#fb7185'],
+    // 石墨黑主题（id 保持 monitor-space-violet 兼容已保存看板）：中性灰黑 + 冷白强调，无紫。
+    pageBg: '#0d0f14',
+    panelBg: 'rgba(19, 22, 30, 0.88)',
+    panelBorder: 'rgba(148, 163, 184, 0.28)',
+    panelHeaderBg: 'rgba(17, 20, 27, 0.7)',
+    titleColor: '#e2e8f0',
+    textColor: '#f1f5f9',
+    textMuted: '#8b93a5',
+    accentColor: '#67e8f9',
+    accentGlow: 'rgba(103, 232, 249, 0.14)',
+    decorLine: 'linear-gradient(90deg, transparent, #67e8f9 18%, #e2e8f0 58%, transparent)',
+    chartTooltipBg: 'rgba(13, 15, 20, 0.95)',
+    chartTooltipBorder: 'rgba(148, 163, 184, 0.35)',
+    chartTooltipText: '#f1f5f9',
+    chartAxisText: '#8b93a5',
+    chartGridLine: 'rgba(148, 163, 184, 0.14)',
+    tableHeaderBg: 'rgba(24, 28, 37, 0.94)',
+    tableRowHover: 'rgba(103, 232, 249, 0.06)',
+    tableBorder: 'rgba(148, 163, 184, 0.16)',
+    buttonBg: 'rgba(103, 232, 249, 0.10)',
+    buttonHover: 'rgba(103, 232, 249, 0.20)',
+    buttonText: '#e2e8f0',
+    emptyBorder: 'rgba(148, 163, 184, 0.30)',
+    emptyBg: 'rgba(19, 22, 30, 0.5)',
+    cardBg: '#13161e',
+    chartPalette: ['#22d3ee', '#4ade80', '#fbbf24', '#60a5fa', '#fb7185'],
   },
 }
 
@@ -227,10 +200,9 @@ export const LIGHT_BACKGROUNDS: Record<string, string> = {
 }
 
 export const MONITOR_BACKGROUNDS: Record<string, string> = {
-  'monitor-deep-gold': 'radial-gradient(circle at 78% 8%, rgba(201,168,76,0.12), transparent 28%), linear-gradient(90deg, rgba(6,14,28,0.98), rgba(10,22,40,0.98)), repeating-linear-gradient(0deg, rgba(122,143,171,0.08) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(122,143,171,0.06) 0 1px, transparent 1px 36px)',
-  'monitor-midnight-cyan': 'radial-gradient(circle at 74% 10%, rgba(0,229,255,0.14), transparent 28%), linear-gradient(90deg, rgba(8,8,16,0.98), rgba(13,13,30,0.98)), repeating-linear-gradient(0deg, rgba(0,229,255,0.07) 0 1px, transparent 1px 34px), repeating-linear-gradient(90deg, rgba(124,77,255,0.05) 0 1px, transparent 1px 34px)',
-  'monitor-forest-emerald': 'radial-gradient(circle at 72% 12%, rgba(46,204,138,0.12), transparent 30%), linear-gradient(90deg, rgba(4,14,9,0.98), rgba(7,21,16,0.98)), repeating-linear-gradient(0deg, rgba(82,214,138,0.06) 0 1px, transparent 1px 38px), repeating-linear-gradient(90deg, rgba(82,214,138,0.05) 0 1px, transparent 1px 38px)',
-  'monitor-space-violet': 'radial-gradient(circle at 76% 10%, rgba(167,139,250,0.14), transparent 28%), linear-gradient(90deg, rgba(9,6,26,0.98), rgba(16,12,30,0.98)), repeating-linear-gradient(0deg, rgba(167,139,250,0.07) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(222,217,254,0.04) 0 1px, transparent 1px 36px)',
+  'monitor-deep-gold': 'radial-gradient(circle at 78% 8%, rgba(96,165,250,0.09), transparent 26%), linear-gradient(180deg, rgba(9,14,26,0.98), rgba(14,21,38,0.98)), repeating-linear-gradient(0deg, rgba(122,143,171,0.05) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(122,143,171,0.04) 0 1px, transparent 1px 36px)',
+  'monitor-midnight-cyan': 'radial-gradient(circle at 74% 10%, rgba(0,229,255,0.10), transparent 24%), linear-gradient(180deg, rgba(8,10,18,0.98), rgba(13,15,28,0.98)), repeating-linear-gradient(0deg, rgba(0,229,255,0.05) 0 1px, transparent 1px 34px), repeating-linear-gradient(90deg, rgba(0,229,255,0.04) 0 1px, transparent 1px 34px)',
+  'monitor-space-violet': 'radial-gradient(circle at 76% 10%, rgba(148,197,255,0.06), transparent 26%), linear-gradient(180deg, rgba(13,15,20,0.98), rgba(19,22,30,0.98)), repeating-linear-gradient(0deg, rgba(148,163,184,0.04) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(148,163,184,0.04) 0 1px, transparent 1px 36px)',
 }
 
 export const getThemeTypeByBackgroundId = (backgroundId: string): ThemeType => {
