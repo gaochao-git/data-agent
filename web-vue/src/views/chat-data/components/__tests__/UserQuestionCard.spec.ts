@@ -63,4 +63,27 @@ describe('UserQuestionCard', () => {
     expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
     expect(wrapper.findAll('button').find(button => button.text().trim() === '提交')!.attributes('disabled')).toBeDefined()
   })
+
+  it('caps a long option list with an internal scroll area', () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        question: {
+          question_id: 'question-3',
+          questions: [{
+            id: 'fields',
+            question: '选择字段',
+            options: Array.from({ length: 12 }, (_, index) => ({ label: `字段${index + 1}` })),
+            multi_select: false,
+          }],
+        },
+      },
+    })
+
+    const optionButtons = wrapper.findAll('button').filter(button => button.text().startsWith('字段'))
+    expect(optionButtons).toHaveLength(12)
+
+    const scrollArea = optionButtons[0]!.element.parentElement!
+    expect(scrollArea.className).toContain('max-h-[240px]')
+    expect(scrollArea.className).toContain('overflow-y-auto')
+  })
 })

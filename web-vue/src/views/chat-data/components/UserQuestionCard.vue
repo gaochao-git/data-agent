@@ -81,7 +81,7 @@ const skipCurrent = () => {
       <div class="min-h-[220px]">
         <div v-if="currentQuestion.header" class="mb-2 text-xs font-medium text-slate-500">{{ currentQuestion.header }}</div>
         <div class="text-base font-semibold text-slate-900">{{ currentQuestion.question }}</div>
-        <div v-if="currentQuestion.options.length" class="mt-5 space-y-2">
+        <div v-if="currentQuestion.options.length" class="mt-5 max-h-[240px] space-y-2 overflow-y-auto pr-1">
           <button
             v-for="option in currentQuestion.options"
             :key="option.label"

@@ -197,10 +197,23 @@ function buildSemanticDslParam(args: Record<string, unknown>): Record<string, un
 // 过滤要展示的参数
 type DisplayParam = [key: string, value: unknown]
 
+interface TodoItem { content: string; status: 'pending' | 'in_progress' | 'completed' }
+const isWriteTodos = computed(() => props.toolCall.tool_name === 'write_todos')
+const todoItems = computed<TodoItem[]>(() => {
+  if (!isWriteTodos.value) return []
+  const todos = (props.toolCall.args || {})?.todos
+  return Array.isArray(todos)
+    ? todos.filter(item => item && typeof item.content === 'string').map(item => ({
+        content: String(item.content),
+        status: item.status === 'completed' || item.status === 'in_progress' ? item.status : 'pending',
+      }))
+    : []
+})
+
 const displayParams = computed<DisplayParam[]>(() => {
   const args = props.toolCall.args || {}
   const entries: DisplayParam[] = Object.entries(args).filter(([key, value]) => {
-    if (key === 'visualization') return false
+    if (key === 'visualization' || (props.toolCall.tool_name === 'write_todos' && key === 'todos')) return false
     if (value === null || value === undefined) return false
     if (Array.isArray(value) && value.length === 0) return false
     if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0) return false
@@ -495,6 +508,21 @@ function getSqlTokenClass(type: string): string {
 
     <!-- 内容区 -->
     <div v-if="isExpanded" class="min-w-0 px-3.5 py-2.5 border-t border-black/[0.04] bg-black/[0.02]">
+      <!-- 任务计划步骤列表（write_todos 专用） -->
+      <div v-if="isWriteTodos && todoItems.length > 0" class="mb-3 last:mb-0">
+        <div class="flex flex-col gap-1.5 p-3 rounded-lg bg-white border border-black/[0.06]">
+          <div v-for="(item, idx) in todoItems" :key="idx" class="flex items-center gap-2 text-[13px]">
+            <i v-if="item.status === 'completed'" class="fa-solid fa-circle-check text-emerald-500 text-xs shrink-0"></i>
+            <i v-else-if="item.status === 'in_progress'" class="fa-solid fa-spinner fa-spin text-[#1677FF] text-xs shrink-0"></i>
+            <span v-else class="h-3 w-3 shrink-0 rounded-full border border-dashed border-slate-300"></span>
+            <span :class="[
+              item.status === 'completed' ? 'text-slate-400 line-through' : '',
+              item.status === 'in_progress' ? 'text-slate-800 font-medium' : '',
+              item.status === 'pending' ? 'text-slate-500' : '',
+            ]" class="truncate">{{ item.content }}</span>
+          </div>
+        </div>
+      </div>
       <!-- 参数区（可折叠） -->
       <div v-if="displayParams.length > 0" class="mb-3 last:mb-0">
         <button

@@ -27,7 +27,7 @@ _OPTIONAL_SLOTS = {
 }
 
 # 无条件必备项（组装点内部创建）
-_MANDATORY_NAMES = ["ToolTimingMiddleware", "ToolErrorMiddleware"]
+_MANDATORY_NAMES = ["ToolTimingMiddleware", "TodoListMiddleware", "ToolErrorMiddleware"]
 
 # include_* 开关 -> 对应中间件注册名
 _FLAG_SLOTS = {

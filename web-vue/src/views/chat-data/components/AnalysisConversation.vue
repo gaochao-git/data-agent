@@ -31,6 +31,8 @@ import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
+import AnalysisProgress from './AnalysisProgress.vue'
+import { deriveAnalysisTodos } from '../utils/analysisTodos'
 
 interface Props {
   datasource?: DataSource | null
@@ -444,6 +446,9 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
 const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
+
+// 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；出现后常驻本会话
+const analysisTodos = computed(() => deriveAnalysisTodos(messages.value))
 
 const handleUploadFile = () => {
   fileInputRef.value?.click()
@@ -2917,6 +2922,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
+          <AnalysisProgress
+            v-if="analysisTodos.items.length"
+            class="mb-3"
+            :todos="analysisTodos"
+          />
           <div
             v-if="pendingSteerMessages.length"
             class="mb-2 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"

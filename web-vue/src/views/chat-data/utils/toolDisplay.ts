@@ -22,6 +22,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   get_current_time: '获取当前时间',
   present_artifacts: '展示文件',
   ask_user_question: '询问用户',
+  write_todos: '更新任务计划',
 }
 
 export function getToolDisplayName(toolName?: string | null): string {
@@ -100,6 +101,13 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
+  write_todos: args => {
+    const todos = Array.isArray(args.todos) ? args.todos : []
+    const done = todos.filter(item => item?.status === 'completed').length
+    const current = todos.find(item => item?.status === 'in_progress')
+    const base = `共 ${todos.length} 项，已完成 ${done}`
+    return current ? `${base}，进行中：${compactInlineText(current.content, 40)}` : base
+  },
   ask_user_question: args => {
     const questions = Array.isArray(args.questions) ? args.questions : []
     const first = questions[0]

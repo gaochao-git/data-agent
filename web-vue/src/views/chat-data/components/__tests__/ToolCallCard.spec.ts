@@ -93,4 +93,33 @@ describe('ToolCallCard', () => {
     expect(wrapper.text()).toContain(filePath)
     expect(wrapper.find(`[title="${filePath}"]`).exists()).toBe(true)
   })
+
+  it('renders write_todos steps in the expanded area and hides the raw todos param', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-todos',
+          tool_name: 'write_todos',
+          args: {
+            todos: [
+              { content: '读取数据', status: 'completed' },
+              { content: '生成图表', status: 'in_progress' },
+              { content: '输出报告', status: 'pending' },
+            ],
+          },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('更新任务计划')
+    expect(wrapper.text()).toContain('读取数据')
+    expect(wrapper.text()).toContain('输出报告')
+    expect(wrapper.find('.fa-circle-check.text-emerald-500').exists()).toBe(true)
+    expect(wrapper.find('.fa-spinner.fa-spin').exists()).toBe(true)
+    expect(wrapper.find('.border-dashed').exists()).toBe(true)
+    // 原始 todos 参数不重复展示
+    expect(wrapper.text()).not.toContain('todos')
+  })
 })

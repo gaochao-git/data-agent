@@ -1049,16 +1049,17 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
             "ask_user_question",
             "officecli_run",
     ]
-    assert len(captured["middleware"]) == 9
+    assert len(captured["middleware"]) == 10
     assert captured["middleware"][0].name == "ImageInjectionMiddleware"
     assert captured["middleware"][1].name == "ToolTimingMiddleware"
     assert captured["middleware"][2].name == "ToolCallHistoryRepairMiddleware"
-    assert captured["middleware"][3].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][4].name == "ContextUsageMiddleware"
-    assert captured["middleware"][5].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][6].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][7].name == "ToolResultMiddleware"
-    assert captured["middleware"][8].name == "ToolErrorMiddleware"
+    assert captured["middleware"][3].name == "TodoListMiddleware"
+    assert captured["middleware"][4].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][5].name == "ContextUsageMiddleware"
+    assert captured["middleware"][6].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][7].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][8].name == "ToolResultMiddleware"
+    assert captured["middleware"][9].name == "ToolErrorMiddleware"
     assert data_agent.create_data_agent(AgentRuntimeOptions(), model_invocation=data_agent.ModelInvocationConfig(model_id="m1")).name == "agent"
     assert "智能问数与数据分析助手" in captured["system_prompt"]
 

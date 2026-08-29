@@ -28,6 +28,7 @@ describe('toolDisplay', () => {
       bash_run: '运行脚本',
       officecli_run: '运行 OfficeCLI',
       ask_user_question: '询问用户',
+      write_todos: '更新任务计划',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
@@ -93,6 +94,16 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('ask_user_question', {
       questions: [{ question: '请选择统计范围' }],
     })).toBe('请选择统计范围')
+    expect(getToolCompactDescription('write_todos', {
+      todos: [
+        { content: '读取数据', status: 'completed' },
+        { content: '生成图表并核对数值', status: 'in_progress' },
+        { content: '输出报告', status: 'pending' },
+      ],
+    })).toBe('共 3 项，已完成 1，进行中：生成图表并核对数值')
+    expect(getToolCompactDescription('write_todos', {
+      todos: [{ content: '唯一步骤', status: 'pending' }],
+    })).toBe('共 1 项，已完成 0')
     expect(getToolCompactDescription('read_image', {
       file_path: '/mnt/user-data/uploads/登录页面.png',
     })).toBe('/mnt/user-data/uploads/登录页面.png')
