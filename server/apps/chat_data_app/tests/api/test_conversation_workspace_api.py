@@ -253,7 +253,8 @@ def test_conversation_workspace_imports_presented_output_skill(client, auth_head
 
     success_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",
-        json={"skill_dir_path": "outputs/generated-skill"},
+        # 严进路径策略后，API 只接受规范虚拟路径（与前端 toCanonicalWorkspacePath 发送形态一致）
+        json={"skill_dir_path": "/mnt/user-data/outputs/generated-skill"},
         headers=auth_headers,
     )
     rejected_response = client.post(
