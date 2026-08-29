@@ -159,7 +159,9 @@ def test_map_having_operand_for_builder_maps_metric_with_agg_id(adapter):
     )
     assert mapped["type"] == "metric"
     assert mapped["aggId"] == "agg-GMV"
-    assert mapped["func"] == "SUM"
+    # _metric_aggregation_node 用的是 aggFunc，不是 func
+    assert mapped["aggFunc"] == "SUM"
+    assert mapped["column"] == "amount"
 
 
 def test_map_having_operand_for_builder_recurses_binary(adapter):
@@ -274,8 +276,13 @@ def test_generate_sql_order_by_metric_without_expression(adapter):
     assert "ORDER BY" in result["sql"]
 
 
-def test_generate_sql_order_by_unknown_field_falls_back_to_dimension_branch(adapter):
-    """排序字段既不是指标也不在维度表里时走维度兜底分支（664->673）。"""
+def test_generate_sql_rejects_unknown_order_by_field(adapter):
+    """未知排序字段在 validator 阶段就被拦下，走不到后面的维度兜底。
+
+    ``validate_order_by`` 只接受已校验的维度名或指标名，因此 665 行
+    ``self.dimensions_map.get(field_name, {})`` 的空 dict 兜底不可达 ——
+    这里锁定前端拦截行为，避免后续误以为该兜底是活代码。
+    """
     result = adapter.generate_sql(
         metrics=["GMV"],
         dimensions=["城市"],
@@ -283,7 +290,8 @@ def test_generate_sql_order_by_unknown_field_falls_back_to_dimension_branch(adap
         having=[],
         order_by=[{"field": "未知字段", "direction": "DESC"}],
     )
-    assert result["success"] is True
+    assert result["success"] is False
+    assert "未知字段" in result["error"]
 
 
 def test_generate_sql_requires_metric_or_dimension(adapter):
