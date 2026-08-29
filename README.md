@@ -16,7 +16,7 @@ Data Agent 是面向数据查询和分析场景的智能问数项目，包含后
 data-agent/
 ├── server/      # 后端服务，FastAPI 入口为 server/main.py
 ├── web-vue/     # 前端应用，Vue 3 + Vite
-└── docs/        # 项目文档与历史说明
+└── AGENTS.md、后台管理/普通用户使用手册、系统内核链路手册（均在仓库根目录）
 ```
 
 ## 核心能力
