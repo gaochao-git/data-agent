@@ -50,17 +50,21 @@ def _validate_sql_before_task_submit(
     request: ExecuteSqlRequest | QueryTaskCreateRequest,
     datasource: Optional[Dict[str, Any]],
 ) -> None:
-    """在创建任务前经 sql_guard 管线拦截危险 SQL，语法错误交由任务结果返回。"""
+    """创建任务前仅当场拒绝多语句，其余违规延迟到执行期统一拦截与展示。
+
+    多语句可能绕过只读限制，必须在任务创建前拒绝。语法错误、命令类型、
+    副作用构造和 LIMIT 超限与语法错误同构：任务正常创建，由执行器边界的
+    sql_guard 复检拦截并生成成员失败结果，页面在结果面板统一展示错误、
+    边界发出高危报警——避免同类 SQL 内容错误一部分弹全局提示、一部分进面板。
+    """
     if datasource is None:
         return
     sql = str(getattr(request, "sql", "") or "").strip()
     if not sql:
         return
     source_type = _datasource_source_type(datasource)
-    # 多语句可能绕过只读限制，必须在任务创建前拒绝；单条语法错误则由每个
-    # 执行对象生成独立失败结果，避免前端将其误判为接口异常（defer_syntax_error）。
     violation = run_sql_guard(sql, source_type=source_type, defer_syntax_error=True)
-    if violation is None:
+    if violation is None or violation.rule != "single_statement":
         return
     emit_dangerous_sql_alarm(
         sql,
