@@ -599,8 +599,9 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
     assert alarm_records[0][0][0] == "select 1; drop table orders"
     assert alarm_records[0][1]["execution_scope"] == "task_submit"
-    with pytest.raises(ValueError, match="查询结果最多返回"):
-        asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
+    # LIMIT 超限与语法错误同构：提交阶段放行，由执行期边界复检拦截并进结果面板
+    assert asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"})) is oversized_limit
+    assert alarm_records == [alarm_records[0]]  # 仅多语句一条报警
     with pytest.raises(ValueError, match="必须基于指标集"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
