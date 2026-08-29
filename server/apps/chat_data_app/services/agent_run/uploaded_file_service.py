@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import os
 import uuid
 from datetime import datetime
@@ -157,7 +159,7 @@ class UploadedFileService:
             return None
         uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
         file_path = uploads_root / info["storage_dir"]
-        return file_path.read_bytes() if file_path.exists() else None
+        return await asyncio.to_thread(file_path.read_bytes) if file_path.exists() else None
 
     async def list_files_by_thread(
         self, thread_id: str, user_id: str = "system"

@@ -155,11 +155,11 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
     from apps.chat_data_app.agent.skills.skill_service import skill_service
 
     sources = await skill_service.list_runtime_skill_sources_async(user_id)
-    _sweep_stale_siblings(target)
+    await asyncio.to_thread(_sweep_stale_siblings, target)
 
     tmp = target.with_name(f"{target.name}.building-{uuid4().hex}")
     if tmp.exists():
-        _remove_tree(tmp)
+        await asyncio.to_thread(_remove_tree, tmp)
     tmp.mkdir(parents=True, exist_ok=True)
 
     try:
