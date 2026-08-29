@@ -373,6 +373,20 @@ def test_map_having_operand_rejects_division_by_zero(adapter):
         )
 
 
+def test_map_having_operand_allows_non_zero_divisor(adapter):
+    """除零检查通过时正常返回二元节点（1100->1106）。"""
+    mapped = adapter._map_having_operand(
+        {
+            "type": "binary",
+            "operator": "/",
+            "left": {"type": "metric", "name": "GMV"},
+            "right": {"type": "literal", "value": 100},
+        }
+    )
+    assert mapped["operator"] == "/"
+    assert mapped["right"] == {"type": "literal", "value": 100}
+
+
 def test_map_having_operand_tolerates_non_numeric_divisor(adapter):
     """除零检查里 float() 抛 TypeError 时静默跳过（1104->1105）。
 
@@ -542,6 +556,22 @@ def test_collect_filter_tables_includes_field_ref_target(adapter):
         needed,
     )
     assert needed == {"o", "customers"}
+
+
+def test_collect_filter_tables_recurses_logical_groups(adapter):
+    """and / or 组要递归下探，非 dict 子节点跳过（1276->1285）。"""
+    needed = set()
+    SemanticBIQueryAdapter._collect_filter_tables(
+        {
+            "and": [
+                {"table": "orders", "tableAlias": "o"},
+                {"or": [{"table": "customers", "tableAlias": "c"}, "skipped"]},
+                "skipped",
+            ]
+        },
+        needed,
+    )
+    assert needed == {"o", "c"}
 
 
 # --------------------------------------------------------------------------
