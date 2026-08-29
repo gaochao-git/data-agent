@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
@@ -498,6 +498,24 @@ def _build_column_dict_generate_prompt(table_name: str, column_name: str, column
     )
 
 
+def _parse_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
+    """解析字段枚举候选值列表，去重并截断长度。"""
+    enum_values: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    if not isinstance(raw_enums, list):
+        return enum_values
+    for item in raw_enums:
+        if not isinstance(item, dict):
+            continue
+        enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
+        enum_label = str(item.get("label") or item.get("enum_label") or "").strip()[:255]
+        if not enum_value or enum_value in seen:
+            continue
+        seen.add(enum_value)
+        enum_values.append({"value": enum_value, "label": enum_label})
+    return enum_values
+
+
 def _parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     """解析字段数据字典生成模型返回。"""
     parsed = parse_llm_json(str(content or ""), strict=False)
@@ -505,24 +523,44 @@ def _parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     if not isinstance(raw_dict, dict):
         raw_dict = {}
     raw_enums = raw_dict.get("enum_values") or raw_dict.get("enums") or []
-    enum_values: List[Dict[str, str]] = []
-    seen: Set[str] = set()
-    if isinstance(raw_enums, list):
-        for item in raw_enums:
-            if not isinstance(item, dict):
-                continue
-            enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
-            enum_label = str(item.get("label") or item.get("enum_label") or "").strip()[:255]
-            if not enum_value or enum_value in seen:
-                continue
-            seen.add(enum_value)
-            enum_values.append({"value": enum_value, "label": enum_label})
     return {
-        "enum_values": enum_values[:100],
+        "enum_values": _parse_column_enum_values(raw_enums)[:100],
         "synonyms": [],
         "storage_format": "",
         "unit": str(raw_dict.get("unit") or "").strip()[:100],
     }
+
+
+def _find_datasource_column(datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
+    """在数据源表结构中定位指定字段。"""
+    target_column = None
+    for table in (datasource or {}).get("ds_tables") or []:
+        if str(table.get("table_name") or "").strip() != table_name:
+            continue
+        for column in table.get("columns") or []:
+            if str(column.get("name") or "").strip() == column_name:
+                target_column = column
+                break
+    return target_column
+
+
+async def _invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: str, column_name: str):
+    """调用字段数据字典生成模型，失败时上报连接报警。"""
+    llm = get_chat_data_llm(streaming=False, max_tokens=1200)
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={
+                "purpose": "datasource_column_dict_generate",
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "column_name": column_name,
+            },
+        )
+        raise
+    return response.content if hasattr(response, "content") else str(response)
 
 
 @router.post("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict/generate")
@@ -532,32 +570,11 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
         _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
-        target_column = None
-        for table in (datasource or {}).get("ds_tables") or []:
-            if str(table.get("table_name") or "").strip() != table_name:
-                continue
-            for column in table.get("columns") or []:
-                if str(column.get("name") or "").strip() == column_name:
-                    target_column = column
-                    break
+        target_column = _find_datasource_column(datasource, table_name, column_name)
         if not datasource or target_column is None:
             return business_response(msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
-        llm = get_chat_data_llm(streaming=False, max_tokens=1200)
-        try:
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-        except Exception as exc:
-            emit_llm_connection_alarm_if_needed(
-                exc,
-                ext1={
-                    "purpose": "datasource_column_dict_generate",
-                    "datasource_id": datasource_id,
-                    "table_name": table_name,
-                    "column_name": column_name,
-                },
-            )
-            raise
-        content = response.content if hasattr(response, "content") else str(response)
+        content = await _invoke_column_dict_llm(prompt, datasource_id, table_name, column_name)
         column_dict = _parse_column_dict_generate_response(str(content))
         return business_response(
             data={

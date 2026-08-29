@@ -61,33 +61,40 @@ async def _get_datasource_table_column_dicts_response(
     )
 
 
-def _normalize_source_item(
-    source_type: str,
-    host: str,
+def _validate_source_item_params(
+    normalized_host: str,
+    normalized_database: str,
+    normalized_org_name: str,
+    normalized_org_code: str,
+    normalized_executor_type: str,
     port: Optional[int],
-    database: str,
-    org_name: Optional[str] = None,
-    org_code: Optional[str] = None,
-    query_executor_type: Optional[str] = None,
-) -> Dict[str, Any]:
-    """标准化数据源连接项。"""
-    normalized_host = str(host or "").strip()
-    normalized_database = str(database or "").strip()
-    normalized_org_name = str(org_name or "").strip()
-    normalized_org_code = str(org_code or "").strip()
-    normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
+) -> Optional[str]:
+    """校验数据源连接项参数，返回错误信息；None 表示通过。"""
     if not normalized_org_name:
-        raise ValueError("机构名称不能为空")
+        return "机构名称不能为空"
     if not normalized_org_code:
-        raise ValueError("机构编码不能为空")
+        return "机构编码不能为空"
     if normalized_executor_type not in {"direct", "http"}:
-        raise ValueError(f"不支持的查询执行方式: {normalized_executor_type}")
+        return f"不支持的查询执行方式: {normalized_executor_type}"
     if not normalized_database:
-        raise ValueError("数据库名不能为空")
+        return "数据库名不能为空"
     if normalized_executor_type == "direct" and not normalized_host:
-        raise ValueError("数据源连接信息不完整")
+        return "数据源连接信息不完整"
     if normalized_executor_type == "http" and (normalized_host or port is not None):
-        raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
+        return "HTTP 模式只填写数据库名，不填写 IP 和端口"
+    return None
+
+
+def _build_source_item_result(
+    source_type: str,
+    normalized_host: str,
+    port: Optional[int],
+    normalized_database: str,
+    normalized_org_name: str,
+    normalized_org_code: str,
+    normalized_executor_type: str,
+) -> Dict[str, Any]:
+    """按执行方式构造标准化数据源连接项。"""
     if normalized_executor_type == "direct":
         result = {
             "host": normalized_host,
@@ -103,6 +110,42 @@ def _normalize_source_item(
     result["org_name"] = normalized_org_name
     result["org_code"] = normalized_org_code
     return result
+
+
+def _normalize_source_item(
+    source_type: str,
+    host: str,
+    port: Optional[int],
+    database: str,
+    org_name: Optional[str] = None,
+    org_code: Optional[str] = None,
+    query_executor_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """标准化数据源连接项。"""
+    normalized_host = str(host or "").strip()
+    normalized_database = str(database or "").strip()
+    normalized_org_name = str(org_name or "").strip()
+    normalized_org_code = str(org_code or "").strip()
+    normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
+    validation_error = _validate_source_item_params(
+        normalized_host,
+        normalized_database,
+        normalized_org_name,
+        normalized_org_code,
+        normalized_executor_type,
+        port,
+    )
+    if validation_error:
+        raise ValueError(validation_error)
+    return _build_source_item_result(
+        source_type,
+        normalized_host,
+        port,
+        normalized_database,
+        normalized_org_name,
+        normalized_org_code,
+        normalized_executor_type,
+    )
 
 
 def _column_type_label(column: Dict[str, Any]) -> str:
@@ -130,6 +173,22 @@ def _schema_health_issue(level: str, issue_type: str, message: str, target: str)
     return {"level": level, "type": issue_type, "message": message, "target": target}
 
 
+def _collect_column_schema_issues(
+    cached_columns: Dict[str, str],
+    physical_columns: Dict[str, str],
+    table_name: str,
+    issues: List[Dict[str, Any]],
+) -> None:
+    """收集单表字段级结构差异（缺失与类型变化）。"""
+    for column_name in sorted(set(cached_columns) - set(physical_columns)):
+        issues.append(_schema_health_issue("error", "physical_column_removed", f"物理库已不存在字段: {table_name}.{column_name}", f"column:{table_name}.{column_name}"))
+    for column_name in sorted(set(cached_columns) & set(physical_columns)):
+        cached_type = cached_columns[column_name]
+        physical_type = physical_columns[column_name]
+        if cached_type and physical_type and cached_type != physical_type:
+            issues.append(_schema_health_issue("warning", "physical_column_type_changed", f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}", f"column:{table_name}.{column_name}"))
+
+
 def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
     """校验缓存表结构是否仍存在于真实物理表结构中。"""
     cached_schema = _build_table_schema_map(cached_tables)
@@ -140,15 +199,7 @@ def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tab
         issues.append(_schema_health_issue("error", "physical_table_removed", f"物理库已不存在表: {table_name}", f"table:{table_name}"))
 
     for table_name in sorted(set(cached_schema) & set(physical_schema)):
-        cached_columns = cached_schema[table_name]
-        physical_columns = physical_schema[table_name]
-        for column_name in sorted(set(cached_columns) - set(physical_columns)):
-            issues.append(_schema_health_issue("error", "physical_column_removed", f"物理库已不存在字段: {table_name}.{column_name}", f"column:{table_name}.{column_name}"))
-        for column_name in sorted(set(cached_columns) & set(physical_columns)):
-            cached_type = cached_columns[column_name]
-            physical_type = physical_columns[column_name]
-            if cached_type and physical_type and cached_type != physical_type:
-                issues.append(_schema_health_issue("warning", "physical_column_type_changed", f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}", f"column:{table_name}.{column_name}"))
+        _collect_column_schema_issues(cached_schema[table_name], physical_schema[table_name], table_name, issues)
 
     status = "invalid" if any(item["level"] == "error" for item in issues) else "warning" if issues else "ok"
     return {

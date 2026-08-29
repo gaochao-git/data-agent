@@ -9,7 +9,7 @@ import time
 import uuid
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from fastapi import APIRouter, HTTPException, Request, status as http_status
 from fastapi.responses import StreamingResponse
@@ -136,17 +136,29 @@ def _time_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [item for item in _dimension_items(config) if is_time_logical_dimension(item)]
 
 
+def _dimension_match_text(item: Dict[str, Any]) -> str:
+    """提取维度字段的匹配文本（小写）。"""
+    return str(item.get("name") or item.get("field_name") or item.get("column") or "").lower()
+
+
+def _dimension_matches_any_token(item: Dict[str, Any], tokens: Sequence[str]) -> bool:
+    """判断维度字段文本是否包含任一关键词。"""
+    text = _dimension_match_text(item)
+    return any(token in text for token in tokens)
+
+
 def _categorical_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     blocked_tokens = ("id", "编号", "号码", "邮箱", "email", "phone", "手机")
+    candidate_tokens = ("状态", "分类", "类型", "名称", "status", "category", "type", "name")
     candidates = [item for item in _dimension_items(config) if not is_time_logical_dimension(item)]
     preferred = [
         item for item in candidates
         if str(item.get("allowed_values") or "").strip()
-        or any(token in str(item.get("name") or item.get("field_name") or item.get("column") or "").lower() for token in ("状态", "分类", "类型", "名称", "status", "category", "type", "name"))
+        or _dimension_matches_any_token(item, candidate_tokens)
     ]
     return [
         item for item in (preferred or candidates)
-        if not any(token in str(item.get("name") or item.get("field_name") or item.get("column") or "").lower() for token in blocked_tokens)
+        if not _dimension_matches_any_token(item, blocked_tokens)
     ]
 
 
@@ -392,6 +404,19 @@ def _looks_like_sql(text: str) -> bool:
     return bool(re.search(r"^\s*(select|with)\b", normalized) or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL))
 
 
+async def _invoke_evaluation_draft_llm(prompt: str, config_id: str):
+    """调用评测用例草稿生成模型，失败时上报连接报警。"""
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
+    try:
+        return await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
+        )
+        raise
+
+
 async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], payload: AccuracyEvaluationDraftCaseRequest) -> Dict[str, Any]:
     """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
     user_input = str(payload.hint or "").strip()
@@ -408,15 +433,7 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         existing_questions=payload.existing_questions,
         semantic_config_payload=config,
     )
-    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
-        )
-        raise
+    response = await _invoke_evaluation_draft_llm(prompt, config_id)
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
     if not isinstance(parsed, dict) or not parsed.get("nl") or not isinstance(parsed.get("gold_dsl"), dict):
@@ -487,6 +504,18 @@ async def _run_accuracy_evaluation_payload(payload: AccuracyEvaluationRunRequest
     return report
 
 
+async def _persist_accuracy_event_record(run_id: str, event: Dict[str, Any], operator_id: str, operator_name: str) -> None:
+    """按事件类型落库评测运行记录；其他事件类型忽略。"""
+    event_name = str(event.get("event") or "")
+    if event_name == "case_result":
+        await _upsert_eval_run_case_record(run_id, str(event.get("id") or ""), event.get("result") or {}, operator_id=operator_id, operator_name=operator_name)
+    elif event_name == "progress":
+        await _update_eval_run_record(run_id, status="running", summary=event.get("summary") or {})
+    elif event_name == "done":
+        report = event.get("report") or {}
+        await _update_eval_run_record(run_id, status="succeeded", summary=report.get("summary") or {})
+
+
 async def _iter_accuracy_evaluation_sse(payload: AccuracyEvaluationRunRequest, request: Request, current_user: Any):
     """生成准确率评测 SSE 数据。"""
     from ..evaluate.accuracy.runner import iter_accuracy_evaluation_events
@@ -499,14 +528,7 @@ async def _iter_accuracy_evaluation_sse(payload: AccuracyEvaluationRunRequest, r
         user_id = str(getattr(current_user, "user_id", "") or "").strip()
         username = str(getattr(current_user, "username", "") or "").strip()
         async for event in iter_accuracy_evaluation_events(args, cases):
-            event_name = str(event.get("event") or "")
-            if event_name == "case_result":
-                await _upsert_eval_run_case_record(run_id, str(event.get("id") or ""), event.get("result") or {}, operator_id=user_id, operator_name=username)
-            elif event_name == "progress":
-                await _update_eval_run_record(run_id, status="running", summary=event.get("summary") or {})
-            elif event_name == "done":
-                report = event.get("report") or {}
-                await _update_eval_run_record(run_id, status="succeeded", summary=report.get("summary") or {})
+            await _persist_accuracy_event_record(run_id, event, user_id, username)
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     except asyncio.CancelledError:
         await _update_eval_run_record(run_id, status="cancelled", error_message="评测已停止")

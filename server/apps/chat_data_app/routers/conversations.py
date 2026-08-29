@@ -279,6 +279,55 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         return business_response(msg="创建对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
 
 
+def _flat_conversation_page_result(rows: List[Dict[str, Any]], page: int, page_size: int) -> Dict[str, Any]:
+    """构造平铺会话列表分页结果。"""
+    return {
+        "conversations": rows[:page_size],
+        "page": page,
+        "page_size": page_size,
+        "has_more": len(rows) > page_size,
+    }
+
+
+def _parse_requested_agent_ids(agent_ids: str) -> List[str]:
+    """解析逗号分隔的 agent_id 列表。"""
+    return [item.strip() for item in agent_ids.split(",") if item.strip()]
+
+
+def _unknown_agent_ids(requested_agent_ids: List[str]) -> List[str]:
+    """筛选配置中不存在的 agent_id。"""
+    return [item for item in requested_agent_ids if not get_agent_config(item)]
+
+
+async def _list_grouped_conversations_response(
+    agent_id: Optional[str],
+    agent_ids: Optional[str],
+    user_id: str,
+    page: int,
+    page_size: int,
+    group_key: Optional[str],
+    cursor: Optional[str],
+):
+    """分组视图会话查询响应。"""
+    if agent_ids or not agent_id:
+        return business_response(msg="分组会话查询必须指定单个 agent_id", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    config = get_agent_config(agent_id)
+    if not config:
+        return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+    try:
+        result = await conversation.list_grouped(
+            agent_id,
+            user_id,
+            page_size,
+            group_key=group_key,
+            page=page,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        return business_response(msg=str(exc), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    return business_response(data=result, msg="获取分组对话列表成功")
+
+
 @router.get("")
 async def list_conversations(
     req: Request,
@@ -316,49 +365,23 @@ async def list_conversations(
         user_id, username = _get_current_user_identity(req)
 
         if view == "grouped":
-            if agent_ids or not agent_id:
-                return business_response(msg="分组会话查询必须指定单个 agent_id", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-            config = get_agent_config(agent_id)
-            if not config:
-                return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-            try:
-                result = await conversation.list_grouped(
-                    agent_id,
-                    user_id,
-                    page_size,
-                    group_key=group_key,
-                    page=page,
-                    cursor=cursor,
-                )
-            except ValueError as exc:
-                return business_response(msg=str(exc), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-            return business_response(data=result, msg="获取分组对话列表成功")
+            return await _list_grouped_conversations_response(agent_id, agent_ids, user_id, page, page_size, group_key, cursor)
 
         offset = (page - 1) * page_size
         if agent_ids:
-            requested_agent_ids = [item.strip() for item in agent_ids.split(",") if item.strip()]
-            unknown_agent_ids = [item for item in requested_agent_ids if not get_agent_config(item)]
+            requested_agent_ids = _parse_requested_agent_ids(agent_ids)
+            unknown_agent_ids = _unknown_agent_ids(requested_agent_ids)
             if unknown_agent_ids:
                 return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
             rows = await conversation.list_by_agent_ids(requested_agent_ids, user_id, page_size + 1, offset)
-            result = {
-                "conversations": rows[:page_size],
-                "page": page,
-                "page_size": page_size,
-                "has_more": len(rows) > page_size,
-            }
+            result = _flat_conversation_page_result(rows, page, page_size)
         elif agent_id:
             # 指定 agent_id，使用该智能体的数据库
             config = get_agent_config(agent_id)
             if not config:
                 return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
             rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
-            result = {
-                "conversations": rows[:page_size],
-                "page": page,
-                "page_size": page_size,
-                "has_more": len(rows) > page_size,
-            }
+            result = _flat_conversation_page_result(rows, page, page_size)
         else:
             # 不指定 agent_id，查询所有智能体的会话
             result = await conversation.list_all(_agent_configs, user_id, page_size)
@@ -529,6 +552,30 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
         return business_response(msg="切换收藏状态失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
 
 
+def _validate_completion_request(conversation_id: str, request: CompletionRequest):
+    """校验对话请求基础参数；非法时返回错误响应。"""
+    if not conversation_id:
+        return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    if not request.query and not request.queued_message_id:
+        return business_response(msg="消息不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
+    return None
+
+
+async def _apply_completion_datasource_binding(conversation_id: str, user_id: str, options: Dict[str, Any]):
+    """绑定会话数据源；需要拦截时返回错误响应，否则原地回填 options。"""
+    requested_datasource_id = str(options.get("datasource_id") or "").strip()
+    bound_datasource_id, datasource_binding_response = await _completion_datasource_binding_response(
+        conversation_id,
+        user_id,
+        requested_datasource_id,
+    )
+    if datasource_binding_response:
+        return datasource_binding_response
+    if bound_datasource_id:
+        options["datasource_id"] = bound_datasource_id
+    return None
+
+
 @router.post("/{conversation_id}/completion", responses=SSE_RESPONSES)
 async def completion(conversation_id: str, request: CompletionRequest, req: Request):
     """
@@ -540,11 +587,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
     返回：StreamingResponse (SSE)
     """
     try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        if not request.query and not request.queued_message_id:
-            return business_response(msg="消息不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
+        invalid_request_response = _validate_completion_request(conversation_id, request)
+        if invalid_request_response:
+            return invalid_request_response
 
         user_id, username = _get_current_user_identity(req)
         existing_agent_id = await _get_existing_agent_for_completion(conversation_id, request.agent_id, user_id)
@@ -557,16 +602,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         if not existing_agent_id:
             await conversation.get_or_create_conversation("", request.agent_id, conversation_id, user_id)
         options = dict(request.options or {})
-        requested_datasource_id = str(options.get("datasource_id") or "").strip()
-        bound_datasource_id, datasource_binding_response = await _completion_datasource_binding_response(
-            conversation_id,
-            user_id,
-            requested_datasource_id,
-        )
-        if datasource_binding_response:
-            return datasource_binding_response
-        if bound_datasource_id:
-            options["datasource_id"] = bound_datasource_id
+        binding_response = await _apply_completion_datasource_binding(conversation_id, user_id, options)
+        if binding_response:
+            return binding_response
 
         # 调用对应的 completion 处理器
         kwargs = _build_completion_handler_kwargs(handler, conversation_id, request, options, req, user_id, username)

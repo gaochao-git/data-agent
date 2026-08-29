@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
@@ -203,6 +203,21 @@ def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str,
     return items
 
 
+def _build_prefill_columns(table: Dict) -> List[Dict[str, str]]:
+    """构造单张表的紧凑字段列表。"""
+    columns = []
+    for col in table.get("columns", []) or []:
+        col_name = str(col.get("name") or "").strip()
+        if not col_name:
+            continue
+        columns.append({
+            "name": col_name,
+            "type": col.get("mysql_type") or col.get("hive_type") or col.get("type") or "",
+            "description": col.get("description") or "",
+        })
+    return columns
+
+
 def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
     """构造自动预填使用的紧凑表结构。"""
     table_payload = []
@@ -212,22 +227,29 @@ def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
         if not table_name or table_name in seen_tables:
             continue
         seen_tables.add(table_name)
-        columns = []
-        for col in table.get("columns", []) or []:
-            col_name = str(col.get("name") or "").strip()
-            if not col_name:
-                continue
-            columns.append({
-                "name": col_name,
-                "type": col.get("mysql_type") or col.get("hive_type") or col.get("type") or "",
-                "description": col.get("description") or "",
-            })
         table_payload.append({
             "table": table_name,
             "description": table.get("description") or "",
-            "columns": columns,
+            "columns": _build_prefill_columns(table),
         })
     return table_payload
+
+
+def _build_table_columns_index(table_payload: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+    """构建物理表字段名索引，供预填解析校验使用。"""
+    return {
+        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
+        for table in table_payload
+        if table.get("table")
+    }
+
+
+def _resolve_prefill_alias_map(
+    table_payload: List[Dict[str, Any]],
+    table_alias_map: Optional[Dict[str, List[str]]] = None,
+) -> Dict[str, List[str]]:
+    """解析表别名映射，缺省回退为表名自身。"""
+    return table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
 
 
 def _parse_prefill_dimension_name_map(parsed: Dict[str, Any], table_payload: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -235,11 +257,7 @@ def _parse_prefill_dimension_name_map(parsed: Dict[str, Any], table_payload: Lis
     raw_fields = parsed.get("fields", []) if isinstance(parsed, dict) else []
     if not isinstance(raw_fields, list):
         return {}
-    table_columns = {
-        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
-        for table in table_payload
-        if table.get("table")
-    }
+    table_columns = _build_table_columns_index(table_payload)
     name_map: Dict[str, str] = {}
     for item in raw_fields:
         if not isinstance(item, dict):
@@ -259,7 +277,7 @@ def _build_prefill_dimension_fields(
 ) -> List[Dict[str, str]]:
     """将物理字段全部作为维度预填。"""
     fields: List[Dict[str, str]] = []
-    alias_map = table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
+    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
     name_map = dimension_name_map or {}
     for table in table_payload:
         table_name = table.get("table", "")
@@ -283,6 +301,52 @@ def _build_prefill_dimension_fields(
     return fields
 
 
+def _resolve_metric_candidate(item: Any, table_columns: Dict[str, Set[str]]) -> Optional[Tuple[str, str, str]]:
+    """提取并校验单条推荐指标的 (表, 字段, 聚合) 三元组；非法时返回 None。"""
+    if not isinstance(item, dict):
+        return None
+    table_name = str(item.get("table") or "").strip()
+    column_name = str(item.get("column") or item.get("source_column") or "").strip()
+    agg = str(item.get("agg") or "").strip().upper()
+    if table_name not in table_columns or column_name not in table_columns[table_name] or agg not in PREFILL_ALLOWED_METRIC_AGGS:
+        return None
+    return table_name, column_name, agg
+
+
+def _build_metric_entry(item: Dict[str, Any], table_name: str, column_name: str, agg: str) -> Dict[str, str]:
+    """构造单条原子指标条目（不含表别名）。"""
+    fallback_name = f"{column_name}_{agg.lower()}"
+    return {
+        "table": table_name,
+        "table_alias": "",
+        "column": column_name,
+        "source_column": column_name,
+        "role": "metric",
+        "field_name": str(item.get("field_name") or fallback_name).strip() or fallback_name,
+        "name": _normalize_prefill_display_name(item.get("name"), column_name),
+        "agg": agg,
+        "expression": f"{agg}({_quote_identifier(column_name)})",
+    }
+
+
+def _append_metric_entries(
+    normalized: List[Dict[str, str]],
+    item: Dict[str, Any],
+    table_name: str,
+    column_name: str,
+    agg: str,
+    aliases: List[str],
+    max_metrics: int,
+) -> bool:
+    """按表别名展开指标条目；达到数量上限时返回 True。"""
+    entry = _build_metric_entry(item, table_name, column_name, agg)
+    for table_alias in aliases:
+        normalized.append(dict(entry, table_alias=table_alias))
+        if len(normalized) >= max_metrics:
+            return True
+    return False
+
+
 def _parse_metric_items(
     parsed: Dict[str, Any],
     table_payload: List[Dict[str, Any]],
@@ -293,43 +357,21 @@ def _parse_metric_items(
     raw_metrics = parsed.get("metrics", []) if isinstance(parsed, dict) else []
     if not isinstance(raw_metrics, list):
         return []
-    table_columns = {
-        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
-        for table in table_payload
-        if table.get("table")
-    }
-    alias_map = table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
+    table_columns = _build_table_columns_index(table_payload)
+    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
     normalized: List[Dict[str, str]] = []
     seen: Set[str] = set()
     for item in raw_metrics:
-        if not isinstance(item, dict):
+        candidate = _resolve_metric_candidate(item, table_columns)
+        if candidate is None:
             continue
-        table_name = str(item.get("table") or "").strip()
-        column_name = str(item.get("column") or item.get("source_column") or "").strip()
-        agg = str(item.get("agg") or "").strip().upper()
-        if table_name not in table_columns or column_name not in table_columns[table_name] or agg not in PREFILL_ALLOWED_METRIC_AGGS:
-            continue
+        table_name, column_name, agg = candidate
         key = f"{table_name}.{column_name}.{agg}"
         if key in seen:
             continue
         seen.add(key)
-        expression = f"{agg}({_quote_identifier(column_name)})"
         aliases = alias_map.get(table_name) or [table_name]
-        for table_alias in aliases:
-            normalized.append({
-                "table": table_name,
-                "table_alias": table_alias,
-                "column": column_name,
-                "source_column": column_name,
-                "role": "metric",
-                "field_name": str(item.get("field_name") or f"{column_name}_{agg.lower()}").strip() or f"{column_name}_{agg.lower()}",
-                "name": _normalize_prefill_display_name(item.get("name"), column_name),
-                "agg": agg,
-                "expression": expression,
-            })
-            if len(normalized) >= max_metrics:
-                break
-        if len(normalized) >= max_metrics:
+        if _append_metric_entries(normalized, item, table_name, column_name, agg, aliases, max_metrics):
             break
     return _dedupe_prefill_display_names(normalized)
 
@@ -741,6 +783,24 @@ async def learn_admin_semantic_config_from_history(
     return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
+_SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "ontology_rules", "enabled")
+_SEMANTIC_UPDATE_LIST_FIELDS = ("metrics", "dimensions", "relationships")
+
+
+def _build_semantic_update_kwargs(payload: SemanticConfigUpdateRequest) -> Dict[str, Any]:
+    """将更新请求转换为语义配置更新参数；None 字段不参与更新。"""
+    update_kwargs: Dict[str, Any] = {}
+    for field in _SEMANTIC_UPDATE_PLAIN_FIELDS:
+        value = getattr(payload, field)
+        if value is not None:
+            update_kwargs[field] = value
+    for field in _SEMANTIC_UPDATE_LIST_FIELDS:
+        items = getattr(payload, field)
+        if items is not None:
+            update_kwargs[field] = [item.model_dump() for item in items]
+    return update_kwargs
+
+
 async def _update_semantic_config(
     datasource_id: str,
     config_id: str,
@@ -765,21 +825,7 @@ async def _update_semantic_config(
         if not can_mutate_semantic_config(current_config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
-        update_kwargs = {}
-        if payload.name is not None:
-            update_kwargs["name"] = payload.name
-        if payload.description is not None:
-            update_kwargs["description"] = payload.description
-        if payload.ontology_rules is not None:
-            update_kwargs["ontology_rules"] = payload.ontology_rules
-        if payload.enabled is not None:
-            update_kwargs["enabled"] = payload.enabled
-        if payload.metrics is not None:
-            update_kwargs["metrics"] = [m.model_dump() for m in payload.metrics]
-        if payload.dimensions is not None:
-            update_kwargs["dimensions"] = [d.model_dump() for d in payload.dimensions]
-        if payload.relationships is not None:
-            update_kwargs["relationships"] = [r.model_dump() for r in payload.relationships]
+        update_kwargs = _build_semantic_update_kwargs(payload)
 
         merged_metrics = update_kwargs.get("metrics", current_config.get("metrics", []))
         merged_dimensions = update_kwargs.get("dimensions", current_config.get("dimensions", []))

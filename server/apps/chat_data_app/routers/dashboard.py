@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -173,26 +173,41 @@ async def create_dashboard(request: DashboardCreateRequest, http_request: Reques
         )
 
 
+def _spec_cards_have_semantic_config(cards: List[Any]) -> bool:
+    """判断规格卡片中是否任一携带语义模型 ID。"""
+    return any(
+        isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
+        for card in cards
+    )
+
+
+def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: Dict[str, Any], cards: List[Any]):
+    """校验 AI 看板规格；非法时返回错误响应，合法时返回 None。"""
+    datasource_id = str(request.datasource_id or "").strip()
+    if not datasource_id:
+        return business_response(msg="缺少数据源ID，无法创建看板", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    if spec.get("need_clarify"):
+        return business_response(msg="当前方案仍需补充确认，暂不能写入看板", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
+    if not cards:
+        return business_response(msg="看板规格缺少卡片，无法创建看板", code=ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED, status="error")
+    semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
+    if not semantic_config_id and not _spec_cards_have_semantic_config(cards):
+        return business_response(msg="看板规格缺少语义模型ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error")
+    return None
+
+
 @router.post("/dashboards/from-spec")
 async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_request: Request):
     """根据 AI 生成的看板规格创建大屏和面板。"""
     try:
         current_user = _current_user(http_request)
-        datasource_id = str(request.datasource_id or "").strip()
-        if not datasource_id:
-            return business_response(msg="缺少数据源ID，无法创建看板", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
         spec = request.dashboard_spec or {}
-        if spec.get("need_clarify"):
-            return business_response(msg="当前方案仍需补充确认，暂不能写入看板", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
         cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
-        if not cards:
-            return business_response(msg="看板规格缺少卡片，无法创建看板", code=ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED, status="error")
+        error_response = _dashboard_spec_error_response(request, spec, cards)
+        if error_response:
+            return error_response
+        datasource_id = str(request.datasource_id or "").strip()
         semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
-        if not semantic_config_id and not any(
-            isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
-            for card in cards
-        ):
-            return business_response(msg="看板规格缺少语义模型ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error")
 
         result = await create_dashboard_from_spec_payload(
             dashboard_spec=spec,
@@ -579,6 +594,52 @@ async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_re
         )
 
 
+def _resolve_panel_batch_request(
+    request: Optional[PanelBatchExecuteRequest | List[str]],
+) -> Tuple[Optional[List[str]], Dict[str, str]]:
+    """解析看板批量执行请求的面板 ID 列表与成员数据源映射。"""
+    if isinstance(request, list):
+        return request, {}
+    if request is None:
+        return None, {}
+    panel_ids = request.panel_ids or None
+    panel_member_datasource_ids = {
+        str(panel_id): str(member_id).strip()
+        for panel_id, member_id in (request.panel_member_datasource_ids or {}).items()
+        if str(panel_id).strip() and str(member_id).strip()
+    }
+    return panel_ids, panel_member_datasource_ids
+
+
+def _resolve_batch_task_datasource_id(
+    dashboard: Optional[Dict[str, Any]],
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+) -> str:
+    """解析批量执行任务数据源：优先大屏自身，回退第一个有效面板。"""
+    task_datasource_id = str((dashboard or {}).get("datasource_id") or "").strip()
+    if task_datasource_id:
+        return task_datasource_id
+    return next(
+        (
+            str((panel_map.get(panel_id) or {}).get("datasource_id") or "").strip()
+            for panel_id in panel_ids
+            if str((panel_map.get(panel_id) or {}).get("datasource_id") or "").strip()
+        ),
+        "",
+    )
+
+
+def _collect_dashboard_panels(dashboard: Optional[Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any]]]:
+    """返回大屏面板的 (panel_id, panel) 规范化列表。"""
+    entries: List[Tuple[str, Dict[str, Any]]] = []
+    for panel in (dashboard or {}).get("panels") or []:
+        panel_id = str(panel.get("id") or "").strip()
+        if panel_id:
+            entries.append((panel_id, panel))
+    return entries
+
+
 @router.post("/dashboards/{dashboard_id}/panels/execute-batch", responses=SSE_RESPONSES)
 async def execute_panels_batch(
     dashboard_id: str,
@@ -602,17 +663,7 @@ async def execute_panels_batch(
     dashboard: Optional[Dict[str, Any]] = None
 
     # 如果没有指定 panel_ids，获取该大屏下所有面板
-    panel_ids: Optional[List[str]] = None
-    panel_member_datasource_ids: Dict[str, str] = {}
-    if isinstance(request, list):
-        panel_ids = request
-    elif request is not None:
-        panel_ids = request.panel_ids or None
-        panel_member_datasource_ids = {
-            str(panel_id): str(member_id).strip()
-            for panel_id, member_id in (request.panel_member_datasource_ids or {}).items()
-            if str(panel_id).strip() and str(member_id).strip()
-        }
+    panel_ids, panel_member_datasource_ids = _resolve_panel_batch_request(request)
 
     if not panel_ids:
         dashboard = await service.get_dashboard(dashboard_id, user_id=str(current_user.user_id), include_public=True)
@@ -652,16 +703,7 @@ async def execute_panels_batch(
         panel_map,
         panel_member_datasource_ids,
     )
-    task_datasource_id = str((dashboard or {}).get("datasource_id") or "").strip()
-    if not task_datasource_id:
-        task_datasource_id = next(
-            (
-                str((panel_map.get(panel_id) or {}).get("datasource_id") or "").strip()
-                for panel_id in panel_ids
-                if str((panel_map.get(panel_id) or {}).get("datasource_id") or "").strip()
-            ),
-            "",
-        )
+    task_datasource_id = _resolve_batch_task_datasource_id(dashboard, panel_ids, panel_map)
 
     task_info = await dashboard_runtime.dashboard_runtime().create_task_record(
         task_type="dashboard_batch",
@@ -717,28 +759,11 @@ async def create_dashboard_query_task(
                 status="error"
             )
 
-        panel_ids: Optional[List[str]] = None
-        panel_member_datasource_ids: Dict[str, str] = {}
-        if isinstance(request, list):
-            panel_ids = request
-        elif request is not None:
-            panel_ids = request.panel_ids or None
-            panel_member_datasource_ids = {
-                str(panel_id): str(member_id).strip()
-                for panel_id, member_id in (request.panel_member_datasource_ids or {}).items()
-                if str(panel_id).strip() and str(member_id).strip()
-            }
+        panel_ids, panel_member_datasource_ids = _resolve_panel_batch_request(request)
 
-        effective_panel_ids = panel_ids or [
-            str(panel.get("id") or "").strip()
-            for panel in (dashboard.get("panels") or [])
-            if str(panel.get("id") or "").strip()
-        ]
-        panel_map = {
-            str(panel.get("id") or "").strip(): panel
-            for panel in (dashboard.get("panels") or [])
-            if str(panel.get("id") or "").strip()
-        }
+        entries = _collect_dashboard_panels(dashboard)
+        effective_panel_ids = panel_ids or [panel_id for panel_id, _panel in entries]
+        panel_map = dict(entries)
         effective_panel_member_datasource_ids = dashboard_runtime.build_effective_panel_member_datasource_ids(
             effective_panel_ids,
             panel_map,
