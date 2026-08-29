@@ -41,16 +41,22 @@ def test_validate_before_task_submit_skips_empty_sql_and_blocks_dangerous(monkey
 
     monkeypatch.setattr(
         query_runtime,
-        "validate_raw_single_sql_statement",
-        lambda *_args, **_kwargs: SimpleNamespace(success=True),
+        "run_sql_guard",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            rule="command_type",
+            message="检测到危险 SQL",
+            internal=False,
+            syntax_error=False,
+            reason_code="SQL_TYPE_NOT_ALLOWED",
+        ),
     )
-    monkeypatch.setattr(query_runtime, "validate_sql", lambda *_args, **_kwargs: (False, "检测到危险 SQL"))
 
     request = ExecuteSqlRequest(sql="delete from orders", datasource_id="ds_a", user_id="u1")
     with pytest.raises(ValueError, match="检测到危险 SQL"):
         query_runtime._validate_sql_before_task_submit(request, {"source_type": "mysql"})
     assert alarms[0][0][0] == "delete from orders"
     assert alarms[0][1]["execution_scope"] == "task_submit"
+    assert alarms[0][1]["reason_code"] == "SQL_TYPE_NOT_ALLOWED"
 
 
 def test_normalize_execution_time_and_datetime_parse_branches():

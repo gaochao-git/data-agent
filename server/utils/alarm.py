@@ -109,23 +109,39 @@ def emit_database_connection_alarm(message: str, *, reason_code: str, ext1: Any 
 # 高危 SQL 拦截的细分原因码（写入报警日志 error_code 字段，供检索与统计）。
 # 注意：alarm_id="DANGEROUS_SQL_BLOCKED" 对应 OMS 告警配置中的告警名称，
 # 属于平台契约，不可随意改名；细分原因只允许落在 error_code。
-# 仅两类属于安全拦截；语法写错等普通校验失败（如 SQL 解析失败）不算高危，
-# 照常拒绝执行但不发本告警（见 _infer_sql_block_reason 返回 None 的语义）。
+# 语法写错等普通校验失败（如 SQL 解析失败）不算高危，照常拒绝执行但不发本告警
+# （见 _infer_sql_block_reason 返回 None 的语义）。
 SQL_BLOCK_MULTI_STATEMENT = "MULTI_STATEMENT_BLOCKED"
 SQL_BLOCK_TYPE_NOT_ALLOWED = "SQL_TYPE_NOT_ALLOWED"
+SQL_BLOCK_SELECT_INTO = "SELECT_INTO_BLOCKED"
+SQL_BLOCK_DANGEROUS_FUNCTION = "DANGEROUS_FUNCTION_BLOCKED"
+SQL_BLOCK_LOCKING_READ = "LOCKING_READ_BLOCKED"
+SQL_BLOCK_ROW_LIMIT = "ROW_LIMIT_EXCEEDED"
+SQL_BLOCK_LIMIT_GATE = "LIMIT_GATE_FAILURE"
+
+
+# sql_run 固定拦截文案（子串）→ 细分原因码；新增拦截分支在此登记一行即可。
+_SQL_BLOCK_REASON_MAP = {
+    "一次只能执行一条 SQL": SQL_BLOCK_MULTI_STATEMENT,
+    "只允许执行以下类型的 SQL": SQL_BLOCK_TYPE_NOT_ALLOWED,
+    "不允许使用 INTO": SQL_BLOCK_SELECT_INTO,
+    "不允许使用高危函数": SQL_BLOCK_DANGEROUS_FUNCTION,
+    "锁定读": SQL_BLOCK_LOCKING_READ,
+    "请调整 SQL LIMIT": SQL_BLOCK_ROW_LIMIT,
+    "行数上限校验失败": SQL_BLOCK_LIMIT_GATE,
+}
 
 
 def _infer_sql_block_reason(reason: str) -> str | None:
     """根据拦截文案推断细分原因码（文案来自 sql_run 固定拦截分支）。
 
-    仅多语句与类型越权属于安全拦截；其余文案（sqlglot 解析异常、SQL 为空等
-    普通校验失败）返回 None，调用方不应为此发 DANGEROUS_SQL_BLOCKED 告警。
+    解析失败、SQL 为空等普通校验失败不在映射内，返回 None，调用方不应为此
+    发 DANGEROUS_SQL_BLOCKED 告警。
     """
     text = str(reason or "")
-    if "一次只能执行一条 SQL" in text:
-        return SQL_BLOCK_MULTI_STATEMENT
-    if text.startswith("只允许执行以下类型的 SQL"):
-        return SQL_BLOCK_TYPE_NOT_ALLOWED
+    for marker, reason_code in _SQL_BLOCK_REASON_MAP.items():
+        if marker in text:
+            return reason_code
     return None
 
 

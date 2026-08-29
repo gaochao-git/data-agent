@@ -18,7 +18,7 @@ from sqlalchemy import select
 from utils.database import get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
-from utils.alarm import SQL_BLOCK_MULTI_STATEMENT, emit_dangerous_sql_alarm
+from utils.alarm import emit_dangerous_sql_alarm
 
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from . import cache as query_cache
@@ -26,8 +26,8 @@ from ..datasource.manager import get_datasource_manager
 from ..runtime_config import DEFAULT_ROW_LIMIT
 from ..semantic.run.semantic_query_service import compile_semantic_builder_sql
 from .concurrency import run_with_sql_user_datasource_limit
-from .executor import build_effective_sql, fetch_http_query_task_result, get_executor, validate_sql
-from .parser import validate_raw_single_sql_statement
+from .executor import build_effective_sql, fetch_http_query_task_result, get_executor
+from .sql_guard import run_sql_guard
 from .result import (
     QUERY_SUCCEEDED_STATUS,
     build_query_result_payload,
@@ -50,42 +50,28 @@ def _validate_sql_before_task_submit(
     request: ExecuteSqlRequest | QueryTaskCreateRequest,
     datasource: Optional[Dict[str, Any]],
 ) -> None:
-    """在创建任务前拦截危险 SQL，语法错误交由任务结果返回。"""
+    """在创建任务前经 sql_guard 管线拦截危险 SQL，语法错误交由任务结果返回。"""
     if datasource is None:
         return
     sql = str(getattr(request, "sql", "") or "").strip()
     if not sql:
         return
     source_type = _datasource_source_type(datasource)
-    raw_statement = validate_raw_single_sql_statement(sql, source_type=source_type)
-    if not raw_statement.success:
-        # 多语句可能绕过只读限制，必须在任务创建前拒绝；单条语法错误则由每个
-        # 执行对象生成独立失败结果，避免前端将其误判为接口异常。
-        if "一次只能执行一条 SQL" not in raw_statement.error:
-            return
-        error_msg = raw_statement.error
-        emit_dangerous_sql_alarm(
-            sql,
-            error_msg,
-            source_type=source_type,
-            datasource_id=str(getattr(request, "datasource_id", "") or ""),
-            user_id=str(getattr(request, "user_id", "") or ""),
-            execution_scope="task_submit",
-            reason_code=SQL_BLOCK_MULTI_STATEMENT,
-        )
-        raise ValueError(error_msg)
-    is_valid, error_msg = validate_sql(sql, source_type=source_type)
-    if not is_valid:
-        emit_dangerous_sql_alarm(
-            sql,
-            error_msg,
-            source_type=source_type,
-            datasource_id=str(getattr(request, "datasource_id", "") or ""),
-            user_id=str(getattr(request, "user_id", "") or ""),
-            execution_scope="task_submit",
-        )
-        raise ValueError(error_msg)
-    build_effective_sql(sql, getattr(request, "limit", None) or DEFAULT_ROW_LIMIT, source_type=source_type)
+    # 多语句可能绕过只读限制，必须在任务创建前拒绝；单条语法错误则由每个
+    # 执行对象生成独立失败结果，避免前端将其误判为接口异常（defer_syntax_error）。
+    violation = run_sql_guard(sql, source_type=source_type, defer_syntax_error=True)
+    if violation is None:
+        return
+    emit_dangerous_sql_alarm(
+        sql,
+        violation.message,
+        source_type=source_type,
+        datasource_id=str(getattr(request, "datasource_id", "") or ""),
+        user_id=str(getattr(request, "user_id", "") or ""),
+        execution_scope="task_submit",
+        reason_code=violation.reason_code,
+    )
+    raise ValueError(violation.message)
 
 
 async def fetch_http_remote_ref_cache_result(cached_result: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
@@ -349,6 +335,18 @@ async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any
         return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
+def _coerce_member_result(item: Any) -> Dict[str, Any]:
+    """gather(return_exceptions=True) 的异常项隔离为失败结果，保证聚合形状一致。
+
+    execute_sql_for_member 内部已全捕获，这里兜底的是收尾阶段（关闭/落库）
+    的意外异常：该成员按失败处理，绝不让单个成员异常取消其他成员的在途查询。
+    """
+    if isinstance(item, dict):
+        return item
+    logger.error("成员执行返回异常（已隔离为失败结果）: %s", item, exc_info=item if isinstance(item, BaseException) else None)
+    return {"status": "failed", "error": str(item) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+
+
 async def execute_sql_for_member(
     execution_target: Dict[str, Any],
     sql: str,
@@ -502,12 +500,20 @@ async def execute_sql_for_member(
         result = {"status": "failed", "error": str(e) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
     finally:
         if executor is not None:
-            await executor.close()
+            try:
+                await executor.close()
+            except Exception:
+                # 关闭失败不能让本成员的收尾异常冒泡取消其他成员的在途查询
+                logger.warning("执行器资源关闭失败: member_datasource_id=%s", member_datasource_id, exc_info=True)
     status = query_result_status(result)
     if result.get("execution_time_ms") is None and status not in {"pending", "running"}:
         result["execution_time_ms"] = int((time.perf_counter() - local_started_at) * 1000)
     if execution_id:
-        await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
+        try:
+            await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
+        except Exception:
+            # 落库失败只损失该成员的执行留痕，不向 gather 冒泡引发级联取消
+            logger.error("执行结果落库失败: execution_id=%s member_datasource_id=%s", execution_id, member_datasource_id, exc_info=True)
     return {
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
@@ -549,22 +555,25 @@ async def build_execute_sql_result_data(
         user_id=request.user_id,
         username=username,
     )
-    results = await asyncio.gather(*[
-        execute_sql_for_member(
-            execution_target=target,
-            sql=request.sql,
-            limit=request.limit or DEFAULT_ROW_LIMIT,
-            timeout=request.timeout,
-            user_id=request.user_id,
-            username=username,
-            query_task_id=query_task_id,
-            execution_id=get_execution_id_by_member(execution_map or {}, target),
-            statement_index=statement_index,
-            skip_query_cache=request.skip_query_cache,
-            datasource_id=request.datasource_id,
-        )
-        for target in execution_targets
-    ])
+    results = [
+        _coerce_member_result(item)
+        for item in await asyncio.gather(*[
+            execute_sql_for_member(
+                execution_target=target,
+                sql=request.sql,
+                limit=request.limit or DEFAULT_ROW_LIMIT,
+                timeout=request.timeout,
+                user_id=request.user_id,
+                username=username,
+                query_task_id=query_task_id,
+                execution_id=get_execution_id_by_member(execution_map or {}, target),
+                statement_index=statement_index,
+                skip_query_cache=request.skip_query_cache,
+                datasource_id=request.datasource_id,
+            )
+            for target in execution_targets
+        ], return_exceptions=True)
+    ]
 
     execution_time_ms = int((time.time() - start_time) * 1000)
     primary_result = next((item for item in results if query_result_succeeded(item)), results[0] if results else {})
@@ -671,12 +680,14 @@ async def build_persistent_query_task_result_for_request(request: ExecuteSqlRequ
     try:
         all_http_targets = await are_all_sql_execution_targets_http(request, operator_name=operator_name)
     except Exception:
+        logger.warning("判定全 HTTP 执行对象失败，按混合模式降级处理", exc_info=True)
         all_http_targets = False
     if all_http_targets:
         return None
     try:
         http_member_ids = await get_http_execution_member_ids(request, operator_name=operator_name)
     except Exception:
+        logger.warning("获取 HTTP 执行成员失败，按无过滤降级处理", exc_info=True)
         http_member_ids = set()
     return build_persistent_query_task_result_payload(result_data, http_member_ids)
 
@@ -1239,19 +1250,22 @@ async def execute_agent_sql(
             user_id=user_id,
             username=operator_name,
         )
-        member_results = await asyncio.gather(*[
-            execute_sql_for_member(
-                execution_target=target,
-                sql=sql,
-                limit=DEFAULT_ROW_LIMIT,
-                timeout=None,
-                user_id=user_id,
-                username=operator_name,
-                execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
-                datasource_id=datasource_id,
-            )
-            for target in execution_targets
-        ])
+        member_results = [
+            _coerce_member_result(item)
+            for item in await asyncio.gather(*[
+                execute_sql_for_member(
+                    execution_target=target,
+                    sql=sql,
+                    limit=DEFAULT_ROW_LIMIT,
+                    timeout=None,
+                    user_id=user_id,
+                    username=operator_name,
+                    execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
+                    datasource_id=datasource_id,
+                )
+                for target in execution_targets
+            ], return_exceptions=True)
+        ]
         primary_result = next((item for item in member_results if query_result_succeeded(item)), member_results[0] if member_results else {})
         final_result = build_query_result_payload(
             sql=primary_result.get("sql") or sql,

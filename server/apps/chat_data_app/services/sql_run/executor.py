@@ -27,8 +27,15 @@ from ..datasource.credentials import (
 # Keep the executor seam patchable without duplicating Hive transport logic.
 _apply_socket_timeout = apply_hive_socket_timeout
 SOCKET_TIMEOUT_SECONDS = HIVE_SOCKET_TIMEOUT_SECONDS
-from ..runtime_config import DEFAULT_ROW_LIMIT, normalize_row_limit
-from .parser import extract_top_level_limit_count, validate_raw_single_sql_statement
+from ..runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS, normalize_row_limit
+from .parser import extract_top_level_limit_count
+from .sql_guard import (  # noqa: F401  ALLOWED_SQL_TYPES 为历史兼容 re-export，测试与外部仍从本模块引用
+    ALLOWED_SQL_TYPES,
+    check_effective_limit_gate,
+    has_line_comment_marker,
+    run_sql_guard,
+    sql_operation_type,
+)
 
 logger = get_logger(__name__)
 
@@ -38,13 +45,11 @@ DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_MYSQL_QUERY_TIMEO
 DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_HIVE_QUERY_TIMEOUT_SECONDS", "600"))
 DEFAULT_HTTP_POLL_INTERVAL_MS = int(os.getenv("CHAT_DATA_HTTP_POLL_INTERVAL_MS", "1500"))
 
-# 允许的 SQL 操作类型（从环境变量读取，默认仅 SELECT）
+# 允许的 SQL 操作类型（从环境变量读取，默认仅 SELECT；定义与规则实现在 sql_guard）
 #
 # SHOW / EXPLAIN / DESCRIBE 属于元数据或执行计划类命令；Hive 方言下 sqlglot
 # 对部分语法会降级为 COMMAND，暂不复用通用 SQL 执行口放行。后续如需支持，
 # 应单独提供受控接口并做权限、审计和结果脱敏。
-_ALLOWED_SQL_TYPES = os.getenv("CHATDATA_ALLOWED_SQL", "SELECT")
-ALLOWED_SQL_TYPES = [s.strip().upper() for s in _ALLOWED_SQL_TYPES.split(",") if s.strip()]
 CONNECT_TIMEOUT_SECONDS = 3
 HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
 HTTP_STATUS_URL = str(os.getenv("CHAT_DATA_HTTP_STATUS_URL") or "").strip()
@@ -105,11 +110,11 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
 
 
 def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> int:
-    """解析查询超时时间，优先使用显式传参，其次按数据源类型读取默认值。"""
+    """解析查询超时时间，优先使用显式传参（封顶 MAX_QUERY_TIMEOUT_SECONDS），其次按数据源类型取默认值。"""
     if timeout is not None:
         normalized_timeout = int(timeout)
         if normalized_timeout > 0:
-            return normalized_timeout
+            return min(normalized_timeout, MAX_QUERY_TIMEOUT_SECONDS)
 
     normalized_source_type = str(source_type or "").strip().lower()
     if normalized_source_type == "hive":
@@ -334,34 +339,13 @@ def _normalize_http_rows(raw_rows: Any, columns: list[str]) -> list[dict[str, An
 
 
 def _get_sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
-    """解析 SQL 类型，用于白名单校验，不改写 SQL。"""
-    try:
-        from sqlglot import exp
-        from .parser import _parse_sql
-    except Exception:
-        return ""
-
-    try:
-        expressions = _parse_sql(sql, source_type)
-    except Exception:
-        return ""
-    if len(expressions) != 1:
-        return ""
-    expression = expressions[0]
-    if isinstance(expression, exp.Query):
-        return "SELECT"
-    if isinstance(expression, exp.Show):
-        return "SHOW"
-    if isinstance(expression, exp.Describe):
-        text = str(sql or "").lstrip().upper()
-        return "EXPLAIN" if text.startswith("EXPLAIN") else "DESCRIBE"
-    key = str(getattr(expression, "key", "") or "").strip().upper()
-    return key
+    """解析 SQL 类型，用于白名单校验，不改写 SQL（实现收敛在 sql_guard）。"""
+    return sql_operation_type(sql, source_type)
 
 
 def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str]:
     """
-    验证 SQL 是否安全
+    验证 SQL 是否安全（历史兼容门面，规则实现在 sql_guard 管线）
 
     Args:
         sql: SQL 语句
@@ -369,16 +353,10 @@ def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str
     Returns:
         (is_valid, error_message) - 如果验证通过返回 (True, "")，否则返回 (False, 错误信息)
     """
-    statement_result = validate_raw_single_sql_statement(sql, source_type=source_type)
-    if not statement_result.success:
-        return False, statement_result.error or "SQL 解析失败"
-
-    sql_operation_type = _get_sql_operation_type(statement_result.sql or sql, source_type=source_type)
-    if sql_operation_type and sql_operation_type in ALLOWED_SQL_TYPES:
-        return True, ""
-
-    allowed_str = ", ".join(ALLOWED_SQL_TYPES)
-    return False, f"只允许执行以下类型的 SQL: {allowed_str}"
+    violation = run_sql_guard(sql, source_type=source_type)
+    if violation is not None:
+        return False, violation.message
+    return True, ""
 
 
 def _should_auto_add_limit(sql: str, source_type: Optional[str] = None) -> bool:
@@ -468,8 +446,24 @@ def normalize_sql_aliases(sql: str) -> str:
 
 
 def build_effective_sql(sql: str, limit: int = DEFAULT_ROW_LIMIT, source_type: Optional[str] = None) -> str:
-    """生成真实执行 SQL：仅按需追加 LIMIT。"""
-    return _add_limit_if_needed(sql, limit, source_type=source_type)
+    """生成真实执行 SQL：仅按需追加 LIMIT，出口终检强制行数上限。
+
+    终检门是"进入数据库的 SELECT 必须带合法 LIMIT"的硬保证：补全阶段的任何
+    缺陷（如注释吞掉追加文本）在这里从静默无界查询变成响亮拒绝。拒绝时按
+    原因分叉——末行注释导致补全失效给可行动文案；其余属系统内部缺陷，
+    记 error 日志并走高危 SQL 报警。
+    """
+    effective_sql = _add_limit_if_needed(sql, limit, source_type=source_type)
+    gate = check_effective_limit_gate(effective_sql, source_type=source_type, max_rows=DEFAULT_ROW_LIMIT)
+    if gate is None:
+        return effective_sql
+    base_sql = str(sql or "").rstrip().rstrip(";").rstrip()
+    last_line = base_sql.splitlines()[-1] if base_sql.splitlines() else ""
+    if has_line_comment_marker(last_line):
+        raise ValueError("SQL 末尾的注释导致系统无法安全追加行数上限，请将注释移至 LIMIT 之前或删除注释后重试")
+    logger.error("LIMIT 终检失败（系统内部缺陷信号）: sql_tail=%r", effective_sql[-120:])
+    _emit_sql_execution_validation_alarm(sql, gate.message, source_type=source_type or "", execution_scope="limit_gate")
+    raise ValueError(gate.message)
 
 
 def _log_sql_execution_summary(source_type: str, database: str, execution_time_ms: int, row_count: int) -> None:

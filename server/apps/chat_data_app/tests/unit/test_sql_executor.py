@@ -14,6 +14,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.services.datasource import credentials as datasource_credentials
 from apps.chat_data_app.services.sql_run import executor as sql_executor
+from apps.chat_data_app.services.sql_run import sql_guard
 import apps.chat_data_app.services.sql_run.parser as sql_parser
 from apps.chat_data_app.services.sql_run.parser import prepare_sql_for_execution, validate_single_sql_statement
 from utils import alarm as alarm_module
@@ -245,19 +246,9 @@ def test_validate_sql_allows_query_shapes_when_select_is_allowed(sql):
 
 
 def test_get_sql_operation_type_parser_error_edges(monkeypatch):
-    original_import = __import__
-
-    def fail_sqlglot_import(name, *args, **kwargs):
-        if name == "sqlglot":
-            raise ImportError("missing sqlglot")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", fail_sqlglot_import)
-    assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
-    monkeypatch.setattr("builtins.__import__", original_import)
-
+    # 类型解析实现在 sql_guard.sql_operation_type，解析异常一律返回空串
     monkeypatch.setattr(
-        sql_parser,
+        sql_guard,
         "_parse_sql",
         lambda *_args, **_kwargs: [],
     )
@@ -266,7 +257,7 @@ def test_get_sql_operation_type_parser_error_edges(monkeypatch):
     def raise_parse(*_args, **_kwargs):
         raise RuntimeError("parse failed")
 
-    monkeypatch.setattr(sql_parser, "_parse_sql", raise_parse)
+    monkeypatch.setattr(sql_guard, "_parse_sql", raise_parse)
     assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
 
 

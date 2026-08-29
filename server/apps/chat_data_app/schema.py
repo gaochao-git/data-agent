@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
-from .services.runtime_config import DEFAULT_ROW_LIMIT
+from .services.runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS
 
 
 class ApiResponse(BaseModel):
@@ -104,7 +104,7 @@ class ExecuteSqlRequest(BaseModel):
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
-    timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
+    timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
     query_type: Optional[str] = Field(default="sql", description="内部查询类型: sql | builder | agent")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
     semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
@@ -122,7 +122,7 @@ class QueryTaskCreateRequest(BaseModel):
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     sql: List[str] = Field(default_factory=list, description="要执行的 SQL 语句列表；builder 查询由服务端根据 DSL 编译")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
-    timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
+    timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
     query_type: Literal["sql", "builder"] = Field(default="sql", description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
     semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
