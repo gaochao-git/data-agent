@@ -6,8 +6,9 @@
 
 当前模块范围：
 - 后端应用：`server/apps/chat_data_app/`
+- 智能体核心域：`server/apps/chat_data_app/agent/`（data_agent 装配、tools/ 工具、middleware/ 中间件、workspace/ 会话工作区、prompts/ 提示词、run/ 运行时服务、skills/ 技能、context/ 上下文预算；各子包带 README）
 - 对话与 LLM/LangGraph 通用能力：`server/utils/`（`llm.py` 模型创建、`llm_json.py` 模型输出 JSON 解析、`conversation.py` 会话管理、`checkpoint.py` 检查点）
-- 上传文件服务：`server/utils/file_manager.py`
+- 上传文件服务：`server/apps/chat_data_app/services/agent_run/uploaded_file_service.py`
 - 前端页面：`web-vue/src/views/chat-data/`
 - 前端路由入口：`web-vue/src/router/index.ts`
 
@@ -88,7 +89,7 @@
 ## 5. 目录与文件约定
 
 ### 5.1 不要随意改动
-- 运行产物/缓存：`DATA_ROOT/`、`server/logs/`、`web-vue/dist/`
+- 运行产物/缓存：`CHAT_DATA_HOME/`（默认 `chat_data/`，见 `utils/storage_paths.py`）、`server/logs/`、`web-vue/dist/`
 - 依赖目录：`web-vue/node_modules/`、`server/venv/`、`__pycache__/`
 - 环境文件：`.env`、`*.local`、密钥配置
 - 系统文件：`.DS_Store`
