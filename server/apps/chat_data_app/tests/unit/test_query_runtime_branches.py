@@ -1413,6 +1413,52 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     assert missing_task_session.commits == 0
 
 
+def test_update_query_task_and_execution_lock_rows_for_update(monkeypatch):
+    """终态守卫的读取必须带 FOR UPDATE 行锁，防止取消与回写并发时终态被覆盖。"""
+
+    class _RecordingSession(_SessionQueue):
+        def __init__(self, *results):
+            super().__init__(*results)
+            self.statements = []
+
+        async def execute(self, stmt):
+            self.statements.append(stmt)
+            return await super().execute(stmt)
+
+    task = SimpleNamespace(
+        task_id="task_lock",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="pending",
+        progress_text=None,
+        request_payload="{}",
+        result_payload=None,
+        remote_task_payload=None,
+        error_message=None,
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="u1",
+        update_by="u1",
+        create_by_name="张三",
+        update_by_name="张三",
+    )
+    task_session = _RecordingSession(_ScalarResult(task))
+    _patch_query_runtime_session(monkeypatch, task_session)
+    asyncio.run(query_runtime.update_query_task("task_lock"))
+    assert task_session.statements, "update_query_task 应执行 SELECT"
+    assert "FOR UPDATE" in str(task_session.statements[0]).upper()
+
+    execution = SimpleNamespace(sql_status="pending", update_time=None)
+    execution_session = _RecordingSession(_ScalarResult(execution))
+    _patch_query_runtime_session(monkeypatch, execution_session)
+    asyncio.run(query_runtime.update_query_execution("exec_lock"))
+    assert execution_session.statements, "update_query_execution 应执行 SELECT"
+    assert "FOR UPDATE" in str(execution_session.statements[0]).upper()
+
+
 def test_update_query_execution_from_result_falls_back_to_started_finished(monkeypatch):
     started = datetime.now() - timedelta(seconds=5)
     execution = SimpleNamespace(

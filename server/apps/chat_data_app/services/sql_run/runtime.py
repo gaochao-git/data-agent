@@ -223,7 +223,13 @@ async def update_query_execution(
     if not execution_id:
         return
     async with get_session() as db:
-        result = await db.execute(select(ChatDataQueryExecution).filter_by(execution_id=execution_id, delete_flag=0))
+        # 行锁读取：取消操作与执行线程并发写时，先锁定再校验终态守卫，
+        # 避免 REPEATABLE READ 快照读读到旧的 cancelled 前状态、回写覆盖终态。
+        result = await db.execute(
+            select(ChatDataQueryExecution)
+            .filter_by(execution_id=execution_id, delete_flag=0)
+            .with_for_update()
+        )
         execution = result.scalar_one_or_none()
         if not execution:
             return
@@ -935,7 +941,12 @@ async def update_query_task(
 ) -> Optional[Dict[str, Any]]:
     """更新异步查询任务。"""
     async with get_session() as db:
-        result = await db.execute(select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0))
+        # 行锁读取：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。
+        result = await db.execute(
+            select(ChatDataQueryTask)
+            .filter_by(task_id=task_id, delete_flag=0)
+            .with_for_update()
+        )
         task = result.scalar_one_or_none()
         if not task:
             return None
