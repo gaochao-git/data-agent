@@ -52,7 +52,11 @@ rdflib
 pyshacl
 opensandbox==0.1.15
 sqlglot==30.8.0
-# Apache Ossie has no PyPI release yet; install the official Python package
-# from the pinned upstream commit and its python/ subdirectory.
-apache-ossie @ git+https://github.com/apache/ossie.git@88e0011148283302c9a04cd0287e00e0b9d87354#subdirectory=python
+# Apache Ossie has no PyPI release yet; the offline wheel below was built from
+# the pinned upstream commit 88e0011148283302c9a04cd0287e00e0b9d87354
+# (apache/ossie python/ subdirectory), so intranet hosts can install without
+# GitHub access. To upgrade: rebuild the wheel from the new pinned commit with
+#   pip wheel 'apache-ossie @ git+https://github.com/apache/ossie.git@<commit>#subdirectory=python' -w wheels/
+# and replace the file here.
+wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
 jsonschema>=4.23.0

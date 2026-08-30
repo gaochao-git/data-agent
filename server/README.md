@@ -98,7 +98,7 @@ kill -9 $(lsof -ti :5001)
 - `CHAT_DATA_CONTEXT_COMPRESSION_ENABLED`：智能问数上下文压缩总开关，仅影响发给大模型的上下文，不影响页面历史、checkpoint 和审计记录
 - `CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`，必须大于 `0` 且不超过 `0.95`；非法配置会阻止服务启动，实际触发点同时受 `CHAT_DATA_OUTPUT_MAX_TOKENS` 输出预留和 `95%` 输入安全水位约束
 - `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`：上下文压缩摘要调用的最大输出 token，默认 `2000`；独立于主模型调用的 `CHAT_DATA_OUTPUT_MAX_TOKENS`
-- `apache-ossie`：语义模型物料化依赖，必须从官方 Ossie 仓库固定 commit 的 `python/` 子目录安装；不能使用开发机本地路径或静默降级。
+- `apache-ossie`：语义模型物料化依赖。Ossie 尚未发布 PyPI 正式版，requirements 使用 `wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl` 离线 wheel（由官方仓库固定 commit `88e0011148283302c9a04cd0287e00e0b9d87354` 的 `python/` 子目录构建），内网机器无需访问 GitHub 即可安装。升级时按 requirements.txt 内注释从新 commit 重建 wheel 替换旧文件；不能使用开发机本地路径或静默降级。
 
 ## 运行时存储
 
