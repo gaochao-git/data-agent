@@ -18,7 +18,7 @@ from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, safe_user_error_message
 from .. import agent as agent_module
 from ..agent.sql_assist_agent import create_sql_assist_agent
 from ..schema import (
@@ -50,7 +50,8 @@ def _sse_event(data: dict[str, Any]) -> str:
 
 
 def _sse_error(message: str) -> str:
-    return _sse_event({"type": "error", "message": message})
+    # SSE 通道同样走统一脱敏入口，防止异常堆栈/连接串等内部细节随流式事件泄露。
+    return _sse_event({"type": "error", "message": safe_user_error_message(message)})
 
 
 def _resolve_current_user(request: Request, current_user: Any | None) -> Any:

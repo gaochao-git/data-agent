@@ -289,6 +289,35 @@ async def test_persist_shielded_logs_inner_failure_then_reraises_cancel(monkeypa
         await task
 
 
+@pytest.mark.asyncio
+async def test_sse_error_sanitizes_internal_error_details(monkeypatch):
+    """SSE 错误事件必须走统一脱敏入口，异常堆栈/连接细节不得直接下发前端。"""
+    body = json.loads(
+        query_execution_routes._sse_error("sqlalchemy.exc.OperationalError: (2003, ...)")
+        .removeprefix("data: ")
+    )
+    assert body == {"type": "error", "message": "后端服务异常，请稍后重试"}
+
+    plain = json.loads(query_execution_routes._sse_error("数据源不存在").removeprefix("data: "))
+    assert plain["message"] == "数据源不存在"
+
+    async def _explode(_payload, **_kwargs):
+        raise RuntimeError("pymysql.err.OperationalError: access denied for user 'x'@'%'")
+
+    monkeypatch.setattr(query_execution_routes, "_load_quick_sql_context", _explode)
+    chunks = [
+        chunk
+        async for chunk in query_execution_routes._generate_quick_sql_stream(
+            QuickSqlRequest(query="查销量", datasource_id="ds-1"),
+            user_id="u1",
+            username="tester",
+            datasource_manager=SimpleNamespace(),
+        )
+    ]
+    assert all("pymysql" not in chunk and "access denied" not in chunk for chunk in chunks)
+    assert any("后端服务异常，请稍后重试" in chunk for chunk in chunks)
+
+
 # --------------------------------------------------------------------------
 # semantic_config.py：创建指标集的校验 / 成功 / 空结果 / 异常四条路径
 #
