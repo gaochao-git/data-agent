@@ -8,6 +8,16 @@ _SERVER_DIR = Path(__file__).resolve().parent
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
+# gunicorn 的启动顺序是「加载本文件求值 bind（绑定 socket）→ fork → 导入 app」，
+# 即 bind 在 main.py 被导入之前就已求值。因此 conf/.env-{env} 必须在此处加载，
+# 否则 PORT 等配置取不到，只会静默回退到 os.getenv 的硬编码默认值。
+# 与 main.py 中的 load_runtime_env 调用重复是幂等的：两者读同一个 .env-{env} 文件，
+# 且 load_runtime_env 内部以「进程环境变量优先」覆盖同名键，结果一致。
+from utils.common_util import load_runtime_env
+
+_RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
+
+
 def _env_int(name: str, default: int) -> int:
     value = str(os.getenv(name) or "").strip()
     if not value:
