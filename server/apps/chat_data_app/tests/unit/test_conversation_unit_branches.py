@@ -8,7 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from utils import conversation as conversation_module
-from utils.models import Base
+from utils.models import Base, UserThread
+from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 
 
@@ -299,3 +300,73 @@ async def test_conversation_generate_title_from_event_history(conversation_db, m
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
     await conversation_module.update_title("", "conv_graph", "未命名会话", "u1")
     assert await conversation_module.generate_title("", "conv_graph", "u1") == "请分析订单销售趋势"
+
+
+@pytest.mark.asyncio
+async def test_dao_group_first_pages_without_window_functions():
+    """list_thread_group_first_pages 在无窗口函数（MySQL 5.7 兼容）实现下保持组序/组内序/每组截断。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def fake_get_session():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    dao = ConversationDao(session_context=lambda: fake_get_session())
+
+    def thread(conversation_id, update_time, *, datasource_id=None, favorited=0):
+        return UserThread(
+            user_id="u1",
+            thread_id=conversation_id,
+            thread_title=conversation_id,
+            agent_id="agent_a",
+            datasource_id=datasource_id,
+            is_favorited=favorited,
+            delete_flag=0,
+            create_time=update_time,
+            update_time=update_time,
+        )
+
+    t1 = datetime(2026, 8, 1, 10, 0, 0)
+    t2 = datetime(2026, 8, 2, 10, 0, 0)
+    t3 = datetime(2026, 8, 3, 10, 0, 0)
+    t4 = datetime(2026, 8, 4, 10, 0, 0)
+    t5 = datetime(2026, 8, 5, 10, 0, 0)
+    t6 = datetime(2026, 8, 6, 10, 0, 0)
+    t7 = datetime(2026, 8, 7, 10, 0, 0)
+    t8 = datetime(2026, 8, 8, 10, 0, 0)
+    rows = [
+        thread("pin_new", t5, datasource_id="ds_a", favorited=1),
+        thread("pin_old", t1, datasource_id="ds_b", favorited=1),
+        # ds_a 有 3 条，limit_per_group=2 应截掉最旧的 a_old
+        thread("a_new", t6, datasource_id="ds_a"),
+        thread("a_mid", t3, datasource_id="ds_a"),
+        thread("a_old", t2, datasource_id="ds_a"),
+        thread("b_new", t7, datasource_id="ds_b"),
+        thread("b_old", t4, datasource_id="ds_b"),
+        thread("none_new", t8, datasource_id=""),
+        thread("none_old", t2, datasource_id=""),
+        # 带首尾空格的数据源应独立成组（trim 语义，与 ds_c 等价）
+        thread("c_padded", t1, datasource_id=" ds_c "),
+    ]
+    async with session_factory() as session:
+        session.add_all(rows)
+        await session.commit()
+
+    result = await dao.list_thread_group_first_pages(agent_id="agent_a", user_id="u1", limit_per_group=2)
+
+    # 置顶组在前（组内新在前）；其余各组按组内最新会话时间倒序交错：
+    # unclassified(none_new t8) > ds_b(b_new t7) > ds_a(a_new t6，a_old 被截断) > ds_c(c_padded t1)
+    assert [row.thread_id for row in result] == [
+        "pin_new", "pin_old", "none_new", "b_new", "a_new", "b_old", "a_mid", "none_old", "c_padded",
+    ]
+
+    await engine.dispose()

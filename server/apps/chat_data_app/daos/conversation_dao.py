@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, List, Optional
 
-from sqlalchemy import and_, case, func, literal, or_, select, update as sa_update
-from sqlalchemy.orm import aliased
+from sqlalchemy import and_, func, or_, select, update as sa_update
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataAgentInbox, UserThread
@@ -141,36 +140,41 @@ class ConversationDao:
         user_id: Optional[str],
         limit_per_group: int,
     ) -> List[UserThread]:
-        """一次查询返回每个历史会话分组的首屏，额外一条用于判断 has_more。"""
-        datasource_group = func.trim(func.coalesce(UserThread.datasource_id, ""))
-        group_type = case(
-            (UserThread.is_favorited == 1, literal("pinned")),
-            (datasource_group == "", literal("unclassified")),
-            else_=literal("datasource"),
-        )
-        group_datasource = case(
-            (UserThread.is_favorited == 1, literal("")),
-            else_=datasource_group,
-        )
-        group_rank = func.row_number().over(
-            partition_by=(group_type, group_datasource),
-            order_by=(UserThread.update_time.desc(), UserThread.id.desc()),
-        ).label("group_rank")
-        ranked = select(UserThread, group_rank).where(
-            *self._list_conditions(agent_id, user_id)
-        ).subquery()
-        ranked_thread = aliased(UserThread, ranked)
+        """返回每个历史会话分组的首屏，每组多取一条用于判断 has_more。
+
+        MySQL 5.7 不支持窗口函数（row_number() OVER），改为先查出分组清单，
+        再逐组复用 list_threads_in_group 取前 N 条，最后在应用层按
+        is_favorited DESC, update_time DESC, id DESC 归并，排序结果与原
+        窗口函数版本一致。
+        """
+        datasource_group = func.trim(func.coalesce(UserThread.datasource_id, "")).label("datasource_group")
         async with self._session_context() as session:
             result = await session.execute(
-                select(ranked_thread)
-                .where(ranked.c.group_rank <= limit_per_group)
-                .order_by(
-                    ranked_thread.is_favorited.desc(),
-                    ranked_thread.update_time.desc(),
-                    ranked_thread.id.desc(),
+                select(datasource_group).distinct().where(*self._list_conditions(agent_id, user_id))
+            )
+            datasource_ids = {value for value in result.scalars().all() if value is not None}
+
+        groups: List[tuple[str, Optional[str]]] = [("pinned", None)]
+        if "" in datasource_ids:
+            groups.append(("unclassified", None))
+        groups.extend(("datasource", datasource_id) for datasource_id in sorted(datasource_ids) if datasource_id)
+
+        rows: List[UserThread] = []
+        for group_type, datasource_id in groups:
+            rows.extend(
+                await self.list_threads_in_group(
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    group_type=group_type,
+                    datasource_id=datasource_id,
+                    limit=limit_per_group,
                 )
             )
-            return list(result.scalars().all())
+        # 先按组内排序键（update_time/id 倒序）全局归并，再稳定排序把置顶提到最前，
+        # 等价于原窗口函数版本的外层 ORDER BY is_favorited DESC, update_time DESC, id DESC。
+        rows.sort(key=lambda thread: (thread.update_time, thread.id), reverse=True)
+        rows.sort(key=lambda thread: thread.is_favorited or 0, reverse=True)
+        return rows
 
     async def list_threads_in_group(
         self,

@@ -143,3 +143,4 @@ pytest apps/chat_data_app/tests
 - 不要提交真实 `.env`、Token、数据库密码或业务数据。
 - `main.py` 只应挂载当前项目需要的智能问数相关路由。
 - 已删除的旧业务 app 不应再被 import 或 include_router。
+- **SQL 兼容红线：业务库需兼容 MySQL 5.7**（UAT 为 5.7 实例）。新查询禁止使用窗口函数（`row_number() OVER` 等）和 CTE（`WITH` 子句），二者均要求 MySQL 8.0+，在 5.7 上报 1064 语法错误。「每组取前 N 条」类需求参照 `daos/conversation_dao.py::list_thread_group_first_pages` 的写法：`DISTINCT` 查分组清单后逐组 `LIMIT`，应用层归并排序。若部署基线统一升级到 8.0+，可解除该限制。
