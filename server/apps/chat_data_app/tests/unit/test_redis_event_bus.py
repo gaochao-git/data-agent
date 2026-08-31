@@ -171,7 +171,8 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     addrs, kwargs = sentinel_cls.call_args.args[0], sentinel_cls.call_args.kwargs
     assert addrs == [("10.0.0.1", 26379), ("10.0.0.2", 26379)]
     assert kwargs["password"] == "secret"
-    assert kwargs["sentinel_kwargs"]["password"] == "secret"
+    # sentinel 密码未单独配置时不发送 AUTH（不继承 master 密码）
+    assert kwargs["sentinel_kwargs"]["password"] is None
     assert kwargs["socket_connect_timeout"] == 5.0
 
     master_kwargs = sentinel_cls.return_value.master_for.call_args.kwargs
@@ -205,6 +206,26 @@ def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch
     kwargs = sentinel_cls.call_args.kwargs
     assert kwargs["password"] == "master-pwd"
     assert kwargs["sentinel_kwargs"]["password"] == "sentinel-pwd"
+
+
+def test_sentinel_mode_without_sentinel_password_skips_sentinel_auth(monkeypatch):
+    """master 有密码而 sentinel 未单独配置：sentinel 连接不发送 AUTH，不继承 master 密码。"""
+    monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+    monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", encrypt_password("master-pwd"))
+    monkeypatch.delenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", raising=False)
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        assert bus.redis is not None
+
+    kwargs = sentinel_cls.call_args.kwargs
+    assert kwargs["password"] == "master-pwd"
+    assert kwargs["sentinel_kwargs"]["password"] is None
 
 
 def test_sentinel_mode_supports_no_password(monkeypatch):

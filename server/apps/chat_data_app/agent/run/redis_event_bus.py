@@ -128,9 +128,10 @@ class RedisEventBus:
     """Publish and consume Run events using Redis Streams.
 
     仅支持哨兵模式：``CHAT_DATA_REDIS_SENTINELS=host:port[,host:port...]`` +
-    ``CHAT_DATA_REDIS_MASTER_NAME``，密码经 ``CHAT_DATA_REDIS_PASSWORD``
-    （master 与 sentinel 共用；不同密码用 ``CHAT_DATA_REDIS_SENTINEL_PASSWORD``
-    单独指定 sentinel 的），两个密码均为 SM4 密文（与数据库密码同规范），
+    ``CHAT_DATA_REDIS_MASTER_NAME``，master 密码经 ``CHAT_DATA_REDIS_PASSWORD``
+    （SM4 密文，与数据库密码同规范）。sentinel 未单独配置密码时不发送 AUTH
+    （sentinel 未开认证是常见形态，继承 master 密码反而会 AUTH 报错）；
+    sentinel 单独开了认证时用 ``CHAT_DATA_REDIS_SENTINEL_PASSWORD`` 指定（SM4 密文）。
     逻辑库经 ``CHAT_DATA_REDIS_DB`` 选择（缺省 0）。
     master 地址在连接建立时向 sentinel 解析；failover 后旧连接上的命令会
     收到 ConnectionError/ReadOnlyError，由命令级重试重建连接跟随新主。
@@ -149,7 +150,7 @@ class RedisEventBus:
                 decrypt_env_value("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or None
             )
         else:
-            self._sentinel_password = self._password
+            self._sentinel_password = None
         self._redis: Redis | None = None
 
     @property

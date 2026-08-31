@@ -54,23 +54,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
--- 如果 chat_data_agent_inbox 已经存在且建表时没有 owner_token，再单独执行：
--- ALTER TABLE `chat_data_agent_inbox`
---   ADD COLUMN `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token' AFTER `run_id`;
-
 ALTER TABLE datasource_table
     ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
-
-ALTER TABLE `user_threads`
-  ADD KEY `idx_thread_history` (`user_id`,`agent_id`,`delete_flag`,`update_time`,`id`);
-
--- Run 事件不再落 MySQL（问答恢复兜底改存 inbox 行 content.terminal_event）。
--- 应用部署完成并联调确认后执行：
-DROP TABLE IF EXISTS `chat_data_agent_run_event`;
-
--- 历史遗留的逐轮 token_usage 行清理（新代码只保留每会话一行 token_usage:latest）：
-DELETE FROM `chat_data_conversation_event`
- WHERE `event_type` = 'token_usage' AND `event_key` != 'token_usage:latest';
 ```
 
 ## 依赖变更
