@@ -54,8 +54,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
-ALTER TABLE datasource_table
-    ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
+ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
+ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
 ```
 
 ## 依赖变更
