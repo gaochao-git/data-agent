@@ -59,5 +59,21 @@ sqlglot==30.8.0
 #   pip wheel 'apache-ossie @ git+https://github.com/apache/ossie.git@<commit>#subdirectory=python' -w wheels/
 # and replace the file here.
 wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
-wheels/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_x86_64.whl
+# numpy / onnxruntime are transitive deps of markitdown -> magika. They are
+# vendored as offline wheels because the intranet PyPI mirror (pypi.nucc.com)
+# times out on them, and their versions are pinned for CPU compatibility:
+#   - numpy is pinned to 1.26.4: numpy 2.0+ raises the manylinux wheel baseline
+#     to x86_V2 (AVX2), which the target intranet CPU does not support -- it
+#     fails at import with "Numpy was built with baseline optimizations:
+#     (x86_V2) but the machine doesn't support (x86_V2)". The 1.26.4
+#     manylinux_2_17 wheel only requires SSE2.
+#   - onnxruntime is pinned to 1.23.2 to match the combination verified in the
+#     local dev env (magika 0.6.3 / markitdown 0.1.7). It only ships
+#     manylinux_2_28+ variants, so the host needs glibc >= 2.28.
+# Both wheels target Linux x86_64 / CPython 3.12; regenerate for other
+# platforms with:
+#   pip download --no-deps --only-binary=:all: --platform manylinux2014_x86_64 \
+#     --python-version 312 --implementation cp -d wheels/ 'numpy==1.26.4'
+wheels/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+wheels/onnxruntime-1.23.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 jsonschema>=4.23.0
