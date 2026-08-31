@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -378,6 +379,45 @@ def test_handle_tool_calls_records_index_and_args_fallback():
     assert state.args_fallback == {"call-1": {"path": "/a"}, "call-2": {"path": "/b"}}
     assert "call-3" not in state.args_fallback
     assert state.tool_names == {"call-1": "file_read", "call-2": "file_write", "call-3": "glob"}
+
+
+def test_handle_tool_calls_accepts_json_string_args():
+    """内网 Qwen3.6 经 vLLM 返回的 args 是 JSON 字符串（非 dict），直播侧不得丢弃。"""
+    state = handlers._ToolStreamState()
+
+    events = state.handle_tool_calls([
+        {"id": "call-1", "name": "calculator_tool", "args": '{"calculations": [{"expression": "1 + 1"}]}'},
+    ])
+
+    assert state.args_fallback["call-1"] == {"calculations": [{"expression": "1 + 1"}]}
+    assert state.args_buffer["call-1"] == '{"calculations": [{"expression": "1 + 1"}]}'
+    # running 事件（tool_started + tool 两条）应携带解析后的结构化参数
+    assert len(events) == 2
+    assert all('"calculations"' in event for event in events)
+
+
+def test_handle_tool_calls_accepts_double_encoded_json_args():
+    """双层编码字符串也应剥出 dict 兜底，原始文本进 buffer 由完成时统一解析。"""
+    state = handlers._ToolStreamState()
+    double_encoded = handlers.json.dumps(handlers.json.dumps({"a": 1}))
+
+    state.handle_tool_calls([{"id": "call-1", "name": "file_read", "args": double_encoded}])
+
+    assert state.args_fallback["call-1"] == {"a": 1}
+    assert state.args_buffer["call-1"] == double_encoded
+
+
+def test_build_completion_event_carries_args_for_frontend():
+    """tool_completed/tool_failed 生命周期事件须带 args 字段（前端 onToolLifecycle 只读 args）。"""
+    state = handlers._ToolStreamState()
+    payload = state.build_tool_message_payload(
+        ToolMessageChunk(content="2", tool_call_id="call-1", name="calculator_tool")
+    )
+
+    event = state.build_completion_event(payload)
+
+    assert "tool_completed" in event
+    assert json.loads(event.split("data:", 1)[1])["args"] == payload["accumulated_args"]
 
 
 def test_handle_tool_call_chunks_skips_non_dict_entries():

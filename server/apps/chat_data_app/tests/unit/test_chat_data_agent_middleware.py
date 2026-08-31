@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +93,51 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
         [SimpleNamespace(name="semantic_search")],
     )
     assert normalized.tool_calls[0]["name"] == "semantic_search_extra"
+
+
+def test_normalize_response_tool_call_names_coerces_string_args():
+    """内网 Qwen3.6 经 vLLM 返回的 args 是 JSON 字符串/双层编码，须在工具执行前规整为 dict。
+
+    服务端 langchain 版本不校验 tool_calls args 类型（本仓库 fxcjg 的 1.5.4 构造时强校验 dict），
+    故用 model_construct 绕过构造校验模拟服务端真实形态。
+    """
+    message = AIMessage.model_construct(
+        content="",
+        tool_calls=[
+            {
+                "id": "call_str",
+                "name": "calculator_tool",
+                "args": '{"calculations": [{"expression": "1 + 1"}]}',
+            },
+            {
+                "id": "call_double",
+                "name": "file_read",
+                "args": json.dumps(json.dumps({"path": "/a"})),
+            },
+            {
+                "id": "call_bad",
+                "name": "file_read",
+                "args": "raw-not-json",
+            },
+            {
+                "id": "call_dict",
+                "name": "file_read",
+                "args": {"path": "/b"},
+            },
+        ],
+    )
+
+    normalized = normalize_response_tool_call_names(
+        message,
+        [SimpleNamespace(name="calculator_tool"), SimpleNamespace(name="file_read")],
+    )
+
+    calls = {call["id"]: call for call in normalized.tool_calls}
+    assert calls["call_str"]["args"] == {"calculations": [{"expression": "1 + 1"}]}
+    assert calls["call_double"]["args"] == {"path": "/a"}
+    # 解析不了的原始文本保持原样，让工具侧自然报错，不做静默篡改
+    assert calls["call_bad"]["args"] == "raw-not-json"
+    assert calls["call_dict"]["args"] == {"path": "/b"}
 
 
 @pytest.mark.asyncio

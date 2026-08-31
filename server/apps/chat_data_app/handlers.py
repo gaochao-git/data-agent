@@ -23,6 +23,7 @@ from langgraph.types import Command
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
 from utils import conversation
+from utils.tool_call_args import coerce_tool_call_args
 from .agent import (
     create_data_agent,
     AgentRunControls,
@@ -629,17 +630,21 @@ def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
     }
 
 
+def _coerce_tool_args(value: Any) -> dict[str, Any] | None:
+    """工具调用参数规整（字符串/双层编码 → dict），统一收口在 utils.tool_call_args。"""
+    return coerce_tool_call_args(value)
+
+
 def _parse_tool_args_buffer(args_buffer: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
     """解析流式工具参数，解析失败时回退到已知结构化参数。"""
     fallback_args = fallback or {}
     if not args_buffer:
         return fallback_args
-    try:
-        parsed = json.loads(args_buffer)
-        return parsed if isinstance(parsed, dict) else fallback_args
-    except json.JSONDecodeError:
+    parsed = _coerce_tool_args(args_buffer)
+    if parsed is None:
         logger.warning("无法解析工具参数，使用兜底参数: %s", args_buffer[:200])
         return fallback_args
+    return parsed
 
 
 def _is_tool_result_error(content: Any) -> bool:
@@ -722,9 +727,14 @@ class _ToolStreamState:
             if isinstance(tool_index, int):
                 self.index_map[tool_index] = tool_call_id
             self.args_buffer.setdefault(tool_call_id, "")
-            if isinstance(tool_call.get("args"), dict):
-                self.args_fallback[tool_call_id] = tool_call.get("args") or {}
-            events.extend(self._running_event(tool_call_id, tool_name, tool_call.get("args") if isinstance(tool_call.get("args"), dict) else None))
+            raw_args = tool_call.get("args")
+            coerced_args = _coerce_tool_args(raw_args)
+            if coerced_args is not None:
+                self.args_fallback[tool_call_id] = coerced_args
+            if isinstance(raw_args, str) and raw_args.strip():
+                # 字符串形态的 args（含双层编码）进 buffer，完成后由 _parse_tool_args_buffer 统一解析。
+                self.args_buffer[tool_call_id] = self.args_buffer.get(tool_call_id, "") + raw_args
+            events.extend(self._running_event(tool_call_id, tool_name, coerced_args))
         return events
 
     def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
@@ -781,7 +791,10 @@ class _ToolStreamState:
         """将工具结果映射为完成或失败的统一生命周期事件。"""
         status = str(tool_payload.get("status") or "completed")
         event_type = "tool_failed" if status == "error" else "tool_completed"
-        return _format_tool_lifecycle_event(event_type, tool_payload)
+        data = dict(tool_payload)
+        # 前端 onToolLifecycle 只读 args 字段，补齐一份与 accumulated_args 同源，直播侧才能展示参数。
+        data["args"] = tool_payload.get("accumulated_args") or {}
+        return _format_tool_lifecycle_event(event_type, data)
 
     def _running_event(self, tool_call_id: str, tool_name: str, args: dict[str, Any] | None) -> list[str]:
         _register_running_tool(self.running_tool_ids, tool_call_id)

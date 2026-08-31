@@ -1,4 +1,4 @@
-"""Tool call name normalization middleware."""
+"""Tool call name/args normalization middleware."""
 
 from typing import Any
 
@@ -6,6 +6,7 @@ from langchain.agents.middleware import wrap_model_call
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
+from utils.tool_call_args import coerce_tool_call_args
 
 logger = get_logger(__name__)
 
@@ -34,15 +35,16 @@ def _normalize_repeated_tool_name(tool_name: Any, available_tool_names: set[str]
 
 
 def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
-    """在 tools 节点执行前归一化明显重复的已注册工具名。"""
+    """在 tools 节点执行前归一化工具调用：重复工具名 + 字符串形态的 args。
+
+    args 规整逻辑统一收口在 ``utils.tool_call_args.coerce_tool_call_args``
+    （handlers 直播侧与回放侧共用同一实现）。
+    """
     tool_calls = getattr(message, "tool_calls", None)
     if not tool_calls:
         return message
 
     available_tool_names = _get_available_tool_names(tools)
-    if not available_tool_names:
-        return message
-
     changed = False
     normalized_tool_calls = []
     for tool_call in tool_calls:
@@ -50,23 +52,30 @@ def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
             normalized_tool_calls.append(tool_call)
             continue
         raw_name = tool_call.get("name")
-        normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
-        if normalized_name != raw_name:
-            tool_call = {**tool_call, "name": normalized_name}
-            changed = True
+        if available_tool_names:
+            normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
+            if normalized_name != raw_name:
+                tool_call = {**tool_call, "name": normalized_name}
+                changed = True
+        raw_args = tool_call.get("args")
+        if not isinstance(raw_args, dict):
+            coerced_args = coerce_tool_call_args(raw_args)
+            if coerced_args is not None:
+                tool_call = {**tool_call, "args": coerced_args}
+                changed = True
         normalized_tool_calls.append(tool_call)
 
     if not changed:
         return message
 
-    logger.warning("已归一化重复工具调用名称，避免 OpenAI-compatible 流式 chunk 合并异常")
+    logger.warning("已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常")
     try:
         message.tool_calls = normalized_tool_calls
         return message
     except Exception:
         if hasattr(message, "model_copy"):
             return message.model_copy(update={"tool_calls": normalized_tool_calls})
-        logger.warning("工具调用名称归一化写入失败: message=%r", message, exc_info=True)
+        logger.warning("工具调用归一化写入失败: message=%r", message, exc_info=True)
         return message
 
 

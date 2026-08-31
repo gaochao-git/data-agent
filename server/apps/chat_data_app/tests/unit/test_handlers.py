@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.handlers import (
+    _coerce_tool_args,
     _extract_reasoning_content,
     _format_reasoning_for_display,
     _format_sse,
@@ -266,6 +267,30 @@ def test_parse_tool_args_buffer_falls_back_on_invalid_json():
     assert _parse_tool_args_buffer('{"sql":"select 2"}', fallback) == {"sql": "select 2"}
     assert _parse_tool_args_buffer('["not_dict"]', fallback) == fallback
     assert _parse_tool_args_buffer("{bad json", fallback) == fallback
+
+
+def test_coerce_tool_args_handles_string_and_double_encoded_forms():
+    """内网 Qwen3.6 经 vLLM 返回的 args 是 JSON 字符串甚至双层编码，须规整为 dict。"""
+
+    assert _coerce_tool_args({"a": 1}) == {"a": 1}
+    assert _coerce_tool_args('{"calculations": [{"expression": "1 + 1"}]}') == {
+        "calculations": [{"expression": "1 + 1"}]
+    }
+    double_encoded = json.dumps(json.dumps({"a": 1}))
+    assert _coerce_tool_args(double_encoded) == {"a": 1}
+    assert _coerce_tool_args("raw-string") is None
+    assert _coerce_tool_args('["not_dict"]') is None
+    assert _coerce_tool_args("{bad json") is None
+    assert _coerce_tool_args("") is None
+    assert _coerce_tool_args(None) is None
+    assert _coerce_tool_args(42) is None
+
+
+def test_parse_tool_args_buffer_unwraps_double_encoded_json():
+    fallback = {"sql": "select 1"}
+
+    assert _parse_tool_args_buffer(json.dumps(json.dumps({"sql": "select 3"})), fallback) == {"sql": "select 3"}
+    assert _parse_tool_args_buffer("raw-string", fallback) == fallback
 
 
 def test_is_tool_result_error_detects_plain_errors():
