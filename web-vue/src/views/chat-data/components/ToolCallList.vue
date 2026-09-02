@@ -64,8 +64,10 @@ const toggleExpand = (id: string) => {
   expandedIds.value = newSet
 }
 
-// 子智能体内部过程：task 卡片下方独立区域，工具与中间文本按发生顺序混排。
-// 内层工具的参数与结果不在此区展示；点击 chip 在右侧详情面板查看——面板
+// 子智能体内部过程：task 卡片下方独立区域，工具与中间文本按发生顺序混排，
+// 整块可折叠（运行中展开、跑完自动收起，手动点过则听用户的）。
+// 内层工具的参数与结果不在此区展示；点击 chip 在右侧详情面板查看——与普通
+// 工具走同一条 selectTool 链路（同一面板、同样的再点一次收起行为），区别只在
 // 内容来自 SSE 转发的截断预览（后端限长），并非完整原文。
 
 interface TrailView {
@@ -153,11 +155,45 @@ const trailViewsByToolCallId = computed(() => {
 
 const trailViewsOf = (toolCallId: string): TrailView[] => trailViewsByToolCallId.value.get(toolCallId) || []
 
-const countSubTools = (trail: SubagentTrailItem[]) => trail.filter(item => item.kind === 'tool').length
-
 const onSubToolClick = (toolCall: ToolCallInfo) => {
   emit('selectTool', toolCall)
 }
+
+// ---- 子智能体过程区折叠 ----
+// 默认策略：运行中展开（过程可见是这个功能本身的价值），跑完自动收起
+// （结论已作为 task 的 ToolMessage 落在主对话里，过程不占屏）。用户一旦
+// 手动点过，就完全听用户的，不再被自动策略覆盖。
+// 折叠只隐藏过程区，不触碰任何选中状态——右侧面板的归属与内容不受影响，
+// 内层 chip 点击仍与普通工具一致地走 selectTool。
+const collapsedChainIds = ref<Set<string>>(new Set())
+const userTouchedChains = ref<Set<string>>(new Set())
+
+const isChainRunning = (tc: ToolCallInfo) => tc.status === 'running' || tc.status === 'generating'
+
+const isChainCollapsed = (tc: ToolCallInfo): boolean => {
+  if (userTouchedChains.value.has(tc.tool_call_id)) {
+    return collapsedChainIds.value.has(tc.tool_call_id)
+  }
+  return !isChainRunning(tc)
+}
+
+const toggleChain = (toolCallId: string) => {
+  const target = props.toolCalls.find((tc) => tc.tool_call_id === toolCallId)
+  if (!target) return
+  const shouldCollapse = !isChainCollapsed(target)
+  userTouchedChains.value = new Set(userTouchedChains.value).add(toolCallId)
+  const collapsed = new Set(collapsedChainIds.value)
+  if (shouldCollapse) {
+    collapsed.add(toolCallId)
+  } else {
+    collapsed.delete(toolCallId)
+  }
+  collapsedChainIds.value = collapsed
+}
+
+// 折叠后过程不可见，仅在内层工具失败时补一个标记，避免异常被完全藏起来
+const chainHasError = (tc: ToolCallInfo) =>
+  (tc.subagentTrail || []).some((item) => item.kind === 'tool' && item.status === 'error')
 
 // ---- 子智能体思考过程：与主对话口径一致，默认收起；流式进行中按钮行露尾部预览 ----
 const THINKING_TAIL_PREVIEW_LENGTH = 80
@@ -266,12 +302,23 @@ watch(
         class="subagent-chain ml-3 mt-1 flex flex-col gap-1.5 rounded-lg border-l-2 border-[#1f82d9]/40 bg-[#1f82d9]/[0.03] px-3 py-2.5"
         :data-parent-tool-call-id="tc.tool_call_id"
       >
-        <div class="flex items-center gap-1.5 text-xs font-medium text-[#1f82d9]">
-          <i class="fa-solid fa-diagram-project text-[10px]"></i>
-          <span>子智能体内部逻辑</span>
-          <span class="text-gray-400">（{{ countSubTools(tc.subagentTrail || []) }}）</span>
-        </div>
+        <button
+          type="button"
+          class="subagent-chain-toggle flex w-full items-center gap-1.5 text-left text-xs font-medium text-[#1f82d9] transition-colors hover:text-[#1668b0]"
+          :aria-expanded="!isChainCollapsed(tc)"
+          @click.stop="toggleChain(tc.tool_call_id)"
+        >
+          <i class="fa-solid fa-diagram-project shrink-0 text-[10px]"></i>
+          <span class="shrink-0">子智能体执行过程</span>
+          <span v-if="chainHasError(tc)" class="shrink-0 text-[11px] font-normal text-red-400">部分工具失败</span>
+          <i v-if="isChainRunning(tc)" class="fa-solid fa-spinner fa-spin shrink-0 text-[10px]"></i>
+          <i
+            class="fa-solid fa-chevron-right ml-auto shrink-0 text-[9px] text-[#1f82d9]/60 transition-transform duration-200"
+            :class="{ 'rotate-90': !isChainCollapsed(tc) }"
+          ></i>
+        </button>
         <div
+          v-if="!isChainCollapsed(tc)"
           class="subagent-trail-scroll flex max-h-[280px] flex-col gap-1 overflow-y-auto pr-1"
           :ref="setChainScrollEl(tc.tool_call_id)"
         >

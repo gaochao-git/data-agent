@@ -45,7 +45,7 @@ describe('ToolCallList', () => {
     const chain = wrapper.find('.subagent-chain')
     expect(chain.exists()).toBe(true)
     expect(chain.attributes('data-parent-tool-call-id')).toBe('call-task')
-    expect(chain.text()).toContain('子智能体内部逻辑')
+    expect(chain.text()).toContain('子智能体执行过程')
     expect(chain.text()).toContain('精确计算')
     expect(chain.text()).toContain('查询数据')
     // 内层工具结果不在消息流内展示（完整参数/结果点击 chip 走右侧详情面板）
@@ -92,8 +92,6 @@ describe('ToolCallList', () => {
 
     const messages = chain.findAll('.conversation-markdown')
     expect(messages.length).toBe(2)
-    // 计数只统计工具条目
-    expect(chain.text()).toContain('（1）')
 
     // 顺序：文本 → 工具 → 文本
     const order = Array.from((chain.element as HTMLElement).querySelectorAll('.conversation-markdown, .sub-tool-chip'))
@@ -278,7 +276,88 @@ describe('ToolCallList', () => {
         },
       ],
     })
+    // 父 task 已结束 → 过程区自动收起，先手动展开再看思考按钮
+    await wrapper.find('.subagent-chain-toggle').trigger('click')
     const settledToggle = wrapper.find('.sub-thinking-toggle')
     expect(settledToggle.text()).not.toContain('…')
+  })
+
+  it('collapses the subagent chain when the task settles and then obeys manual toggling', async () => {
+    const task = (status: 'running' | 'completed') => ({
+      tool_call_id: 'call-task',
+      tool_name: 'task' as const,
+      args: { description: '任务书' },
+      status,
+      subagentTrail: [
+        { kind: 'tool' as const, id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed' as const, result: '2' },
+      ],
+    })
+    const wrapper = mount(ToolCallList, { props: { toolCalls: [task('running')] } })
+
+    // 运行中：过程可见
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(true)
+
+    // 跑完：自动收起（结论已落在主对话，过程不占屏）
+    await wrapper.setProps({ toolCalls: [task('completed')] })
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(false)
+
+    // 手动展开后，自动策略不再覆盖用户意图
+    await wrapper.find('.subagent-chain-toggle').trigger('click')
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(true)
+    await wrapper.setProps({ toolCalls: [task('running')] })
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(true)
+
+    // 再点一次收起
+    await wrapper.find('.subagent-chain-toggle').trigger('click')
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(false)
+  })
+
+  it('keeps the chain toggle away from the side panel: no selectTool, inner chips still select', async () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [
+              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed', result: '2' },
+            ],
+          },
+        ],
+      },
+    })
+
+    // 折叠/展开标题行不触碰右侧面板
+    await wrapper.find('.subagent-chain-toggle').trigger('click')
+    await wrapper.find('.subagent-chain-toggle').trigger('click')
+    expect(wrapper.emitted('selectTool')).toBeUndefined()
+
+    // 内层 chip 与普通工具走同一条 selectTool 链路
+    await wrapper.find('.sub-tool-chip').trigger('click')
+    expect(wrapper.emitted('selectTool')?.[0]?.[0]).toMatchObject({ tool_call_id: 'inner-1' })
+  })
+
+  it('surfaces inner tool failures while the chain is collapsed', () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'completed',
+            subagentTrail: [
+              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 / 0' }, status: 'error', result: 'division by zero' },
+            ],
+          },
+        ],
+      },
+    })
+
+    // 默认收起，但异常不被完全藏起来
+    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(false)
+    expect(wrapper.find('.subagent-chain').text()).toContain('部分工具失败')
   })
 })
