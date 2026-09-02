@@ -127,9 +127,14 @@ export function buildEChartsOption(context: ChartOptionContext): echarts.ECharts
     return {
       tooltip: {
         trigger: 'item',
-        formatter: (params: { name?: string; value?: unknown }) => Number.isFinite(Number(params.value))
-          ? `${params.name}: ${String(params.value)}`
-          : `${params.name}: 暂无数据`,
+        // 参数类型由 EChartsOption 上下文推断（TopLevelFormatterParams）
+        formatter: (params) => {
+          const item = Array.isArray(params) ? params[0] : params
+          if (!item) return '暂无数据'
+          const name = 'name' in item ? String(item.name ?? '') : ''
+          const value = 'value' in item ? item.value : undefined
+          return Number.isFinite(Number(value)) ? `${name}: ${String(value)}` : `${name}: 暂无数据`
+        },
       },
       visualMap: {
         min: minValue,

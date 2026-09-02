@@ -380,7 +380,11 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
 
     assert result["models"][0]["id"] == "stealth/ox-alpha"
     assert "default_model" not in result
-    assert result["runtime_options"] == {"workspace_backend": "sandbox", "bash_enabled": True}
+    assert result["runtime_options"] == {
+        "workspace_backend": "sandbox",
+        "bash_enabled": True,
+        "analysis_subagent_enabled": False,
+    }
     assert result["user_overridable"] is True
     assert result["context_window"] == 256000
 

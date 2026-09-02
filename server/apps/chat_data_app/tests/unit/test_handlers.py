@@ -206,6 +206,11 @@ def test_reasoning_and_thinking_helper_branches():
     assert "semantic_search" not in tool_thinking_event
     assert _format_reasoning_for_display("调用 semantic_query_tool") == "调用 查询数据"
     assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
+    # 短工具名（task）只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
+    assert _format_reasoning_for_display("派发 task 处理") == "派发 派发子智能体 处理"
+    assert _format_reasoning_for_display("拆成 3 个 subtask 分别处理") == "拆成 3 个 subtask 分别处理"
+    assert _format_reasoning_for_display("先记录 task_id，再调用工具") == "先记录 task_id，再调用工具"
+    assert _format_reasoning_for_display("这些 tasks 是独立的") == "这些 tasks 是独立的"
 
     segments = []
     _append_reasoning_segment(segments, "", 0)

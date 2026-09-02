@@ -6,6 +6,17 @@ const toNumber = (value: unknown) => {
   return Number.isFinite(n) ? n : null
 }
 
+// noUncheckedIndexedAccess 下 series[0] 是可空类型；统一在此判空并收窄，
+// 测试体只保留断言语义。
+type ChartOption = ReturnType<typeof buildEChartsOption>
+
+const seriesAt = (option: ChartOption, index: number): Record<string, unknown> => {
+  const list = option.series as Array<Record<string, unknown>> | undefined
+  const item = list?.[index]
+  if (!item) throw new Error(`expected series[${index}] to exist`)
+  return item
+}
+
 const rows = [
   { city: '北京', sales: 100, cost: 60 },
   { city: '上海', sales: 200, cost: 90 },
@@ -20,36 +31,36 @@ describe('buildEChartsOption', () => {
 
   it('bar 生成柱状 series 且 borderRadius 为顶部圆角', () => {
     const option = buildEChartsOption({ type: 'bar', rows, encoding, toNumber })
-    const series = option.series as Array<Record<string, unknown>>
-    expect(series).toHaveLength(2)
-    expect(series[0].type).toBe('bar')
-    expect(series[0].data).toEqual([100, 200])
-    expect((series[0].itemStyle as Record<string, unknown>).borderRadius).toEqual([4, 4, 0, 0])
+    const first = seriesAt(option, 0)
+    expect(option.series).toHaveLength(2)
+    expect(first.type).toBe('bar')
+    expect(first.data).toEqual([100, 200])
+    expect((first.itemStyle as Record<string, unknown>).borderRadius).toEqual([4, 4, 0, 0])
     expect((option.xAxis as Record<string, unknown>).type).toBe('category')
   })
 
   it('horizontal_bar 交换轴且圆角为右侧', () => {
     const option = buildEChartsOption({ type: 'horizontal_bar', rows, encoding, toNumber })
-    const series = option.series as Array<Record<string, unknown>>
-    expect(series[0].type).toBe('bar')
-    expect((series[0].itemStyle as Record<string, unknown>).borderRadius).toEqual([0, 4, 4, 0])
+    const first = seriesAt(option, 0)
+    expect(first.type).toBe('bar')
+    expect((first.itemStyle as Record<string, unknown>).borderRadius).toEqual([0, 4, 4, 0])
     expect((option.xAxis as Record<string, unknown>).type).toBe('value')
     expect((option.yAxis as Record<string, unknown>).type).toBe('category')
   })
 
   it('line/area 使用 line series，area 带 areaStyle', () => {
     const line = buildEChartsOption({ type: 'line', rows, encoding, toNumber })
-    expect((line.series as Array<Record<string, unknown>>)[0].type).toBe('line')
+    expect(seriesAt(line, 0).type).toBe('line')
     const area = buildEChartsOption({ type: 'area', rows, encoding, toNumber })
-    expect((area.series as Array<Record<string, unknown>>)[0].areaStyle).toBeDefined()
+    expect(seriesAt(area, 0).areaStyle).toBeDefined()
   })
 
   it('pie 只取第一个数值列', () => {
     const option = buildEChartsOption({ type: 'pie', rows, encoding, toNumber })
-    const series = option.series as Array<Record<string, unknown>>
-    expect(series).toHaveLength(1)
-    expect(series[0].type).toBe('pie')
-    expect(series[0].data).toEqual([
+    const first = seriesAt(option, 0)
+    expect(option.series).toHaveLength(1)
+    expect(first.type).toBe('pie')
+    expect(first.data).toEqual([
       { name: '北京', value: 100 },
       { name: '上海', value: 200 },
     ])
@@ -62,20 +73,20 @@ describe('buildEChartsOption', () => {
       encoding: { xField: 'city', yFields: ['sales', 'cost', 'extra'] },
       toNumber,
     })
-    const series = option.series as Array<Record<string, unknown>>
-    expect(series).toHaveLength(2)
-    expect(series[0].type).toBe('bar')
-    expect(series[1].type).toBe('line')
-    expect(series[0].yAxisIndex).toBe(0)
-    expect(series[1].yAxisIndex).toBe(1)
+    const first = seriesAt(option, 0)
+    const second = seriesAt(option, 1)
+    expect(option.series).toHaveLength(2)
+    expect(first.type).toBe('bar')
+    expect(second.type).toBe('line')
+    expect(first.yAxisIndex).toBe(0)
+    expect(second.yAxisIndex).toBe(1)
     expect(option.yAxis).toHaveLength(2)
   })
 
   it('funnel 无图例且降序数据', () => {
     const option = buildEChartsOption({ type: 'funnel', rows, encoding, toNumber })
-    const series = option.series as Array<Record<string, unknown>>
     expect((option.legend as Record<string, unknown>).show).toBe(false)
-    expect(series[0].type).toBe('funnel')
+    expect(seriesAt(option, 0).type).toBe('funnel')
   })
 
   it('map 未就绪时返回空对象', () => {
@@ -88,9 +99,9 @@ describe('buildEChartsOption', () => {
       links: [{ source: 'A', target: 'B', value: 2 }],
     }
     const option = buildEChartsOption({ type: 'graph', rows, encoding, graphData, toNumber })
-    const series = option.series as Array<Record<string, unknown>>
-    expect(series[0].type).toBe('graph')
-    expect(series[0].data).toEqual(graphData.nodes)
+    const first = seriesAt(option, 0)
+    expect(first.type).toBe('graph')
+    expect(first.data).toEqual(graphData.nodes)
   })
 })
 

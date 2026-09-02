@@ -732,6 +732,11 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
         "timestamp": _timestamp(message),
     }
     payload.update(_execution_timing(message))
+    # task 工具的子智能体过程快照（subagents.py 盖在 additional_kwargs 上）：
+    # 随 tool_result 事件持久化，历史回放时前端据此还原「子智能体内部逻辑」。
+    trail = (getattr(message, "additional_kwargs", None) or {}).get("subagent_trail")
+    if isinstance(trail, list) and trail:
+        payload["subagent_trail"] = trail
     return payload
 
 

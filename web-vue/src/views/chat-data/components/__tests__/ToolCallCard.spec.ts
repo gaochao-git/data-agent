@@ -122,4 +122,30 @@ describe('ToolCallCard', () => {
     // 原始 todos 参数不重复展示
     expect(wrapper.text()).not.toContain('todos')
   })
+
+  it('does not render subagent chain inside the card (chain is rendered by ToolCallList)', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-task',
+          tool_name: 'task',
+          args: { description: '任务书', subagent_type: 'deep-analysis' },
+          status: 'running',
+          subagentTrail: [
+            {
+              kind: 'tool',
+              id: 'inner-1',
+              tool_name: 'calculator_tool',
+              args: { expression: '1 + 1' },
+              status: 'completed',
+            },
+          ],
+        },
+      },
+    })
+
+    expect(wrapper.find('.subagent-chain').exists()).toBe(false)
+    expect(wrapper.findAll('.sub-tool-chip').length).toBe(0)
+  })
 })

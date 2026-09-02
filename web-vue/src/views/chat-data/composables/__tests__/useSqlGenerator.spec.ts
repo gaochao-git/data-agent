@@ -141,3 +141,30 @@ describe('useSqlGenerator', () => {
     expect(onResult).toHaveBeenCalledOnce()
   })
 })
+
+describe('useSqlGenerator tool event dedup', () => {
+  it('does not let subagent inner lifecycle events suppress top-level tool events', async () => {
+    const onRunningTool = vi.fn()
+    const onToolLifecycle = vi.fn()
+    const { generateSqlStream } = useSqlGenerator()
+    await generateSqlStream('1+1', true, null, conversationId, {
+      mode: 'query',
+      agentId: 'chat_data',
+      responseFactory: async () => streamResponse([
+        // 内层工具生命周期事件（带 parent_tool_call_id）：走 trail 渲染
+        'event: tool_started\ndata: {"tool_call_id":"inner-1","tool_name":"calculator_tool","parent_tool_call_id":"task-1"}\n\n',
+        // 同 id 的顶层 tool 事件必须照常分发——内层 id 不得进去重集合
+        'event: tool\ndata: {"tool_call_id":"inner-1","tool_name":"calculator_tool","args":{},"status":"running"}\n\n',
+        // 顶层生命周期事件 → 同 id 的顶层 tool 事件被去重跳过
+        'event: tool_started\ndata: {"tool_call_id":"top-1","tool_name":"file_read"}\n\n',
+        'event: tool\ndata: {"tool_call_id":"top-1","tool_name":"file_read","args":{},"status":"running"}\n\n',
+      ]),
+      onRunningTool,
+      onToolLifecycle,
+    })
+
+    expect(onToolLifecycle).toHaveBeenCalledTimes(2)
+    expect(onRunningTool).toHaveBeenCalledTimes(1)
+    expect(onRunningTool).toHaveBeenCalledWith(expect.objectContaining({ tool_call_id: 'inner-1' }))
+  })
+})

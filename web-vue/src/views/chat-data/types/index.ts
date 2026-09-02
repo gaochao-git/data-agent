@@ -448,6 +448,26 @@ export interface ToolCallInfo {
   visualization?: VisualizationConfig
   // 语义参数（从关联的 dsl2sql_tool 获取）
   semanticParams?: SemanticParams
+  // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
+  subagentTrail?: SubagentTrailItem[]
+}
+
+/** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
+export interface SubagentTrailItem {
+  kind: 'tool' | 'message'
+  /** tool：tool_call_id；message：message_id */
+  id: string
+  // 工具条目
+  tool_name?: string
+  args?: Record<string, unknown>
+  result?: string
+  status?: 'running' | 'completed' | 'error'
+  // 文本条目
+  content?: string
+  truncated?: boolean
+  // 思考过程（流式增量拼接；默认收起，仅流式进行中露尾部预览）
+  thinking?: string
+  thinkingTruncated?: boolean
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -555,7 +575,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'inbox_admitted' | 'question_requested' | 'run_restarted' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'inbox_admitted' | 'question_requested' | 'run_restarted' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -598,10 +618,20 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
+  // 子智能体内部过程事件：所属 task 工具调用的 ID（前端据此嵌套展示）
+  parent_tool_call_id?: string
+  // 子智能体中间文本输出的稳定 ID（message 条目去重）
+  message_id?: string
+  // 内层结果超长截断标记
+  truncated?: boolean
+  // 流式增量（subagent_message_delta / subagent_thinking_delta）
+  delta?: string
+  // 完整消息已通过增量流出：收敛时前端只补截断标记，不覆盖内容
+  streamed?: boolean
 }
 
 // 语义层配置

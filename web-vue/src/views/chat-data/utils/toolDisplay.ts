@@ -23,6 +23,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   present_artifacts: '展示文件',
   ask_user_question: '询问用户',
   write_todos: '更新任务计划',
+  task: '派发子智能体',
 }
 
 export function getToolDisplayName(toolName?: string | null): string {
@@ -101,6 +102,11 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
+  task: args => {
+    const type = String(args.subagent_type || '').trim()
+    const summary = compactInlineText(args.description, 80)
+    return type && summary ? `${type} · ${summary}` : type || summary
+  },
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length

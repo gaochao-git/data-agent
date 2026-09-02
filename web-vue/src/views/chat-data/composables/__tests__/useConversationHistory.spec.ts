@@ -166,3 +166,92 @@ describe('buildHistoryMessages', () => {
     })
   })
 })
+
+describe('subagent trail replay', () => {
+  const trail = [
+    { kind: 'message', id: 'm1', content: '开始计算', truncated: false, thinking: '需要精确计算', thinkingTruncated: false },
+    { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, result: '2', status: 'completed' },
+  ]
+
+  it('restores subagent trail from history events onto the task tool call', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '算一下 1+1' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: { description: '算 1+1', subagent_type: 'deep-analysis' } }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '1 + 1 = 2', subagent_trail: trail },
+      },
+      {
+        sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-2', role: 'assistant', content: '答案是 2。' },
+      },
+    ])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    const taskCall = assistant.toolCalls?.find(tool => tool.tool_call_id === 'task-1')
+    expect(taskCall?.subagentTrail).toEqual(trail)
+    // 普通工具不受影响
+    expect(assistant.toolCalls).toHaveLength(1)
+  })
+
+  it('restores subagent trail from the legacy messages path', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '算一下 1+1' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'task-1', name: 'task', args: {} }],
+      },
+      { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', content: '1 + 1 = 2', subagent_trail: trail },
+      { id: 'assistant-2', role: 'assistant', content: '答案是 2。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    expect(assistant.toolCalls?.[0]?.subagentTrail).toEqual(trail)
+  })
+
+  it('drops invalid trail entries instead of failing the whole replay', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '分析' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'task-1', name: 'task', args: {} }],
+      },
+      {
+        id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', content: '结论',
+        subagent_trail: [
+          null,
+          { kind: 'message', id: '' },
+          { kind: 'message', id: 'm1', content: '', thinking: '' },
+          { kind: 'unknown', id: 'x' },
+          { kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: 'bad-args', status: 'weird' },
+          { kind: 'message', id: 'm2', content: '有效文本', truncated: 'yes' },
+        ],
+      },
+      { id: 'assistant-2', role: 'assistant', content: '结论。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    const restored = assistant.toolCalls?.[0]?.subagentTrail
+    expect(restored).toHaveLength(2)
+    expect(restored?.[0]).toEqual({ kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: {}, result: '', status: 'completed' })
+    expect(restored?.[1]).toEqual({ kind: 'message', id: 'm2', content: '有效文本', truncated: false, thinking: '', thinkingTruncated: false })
+  })
+
+  it('leaves subagentTrail undefined when the payload carries none', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '查数据' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'tool-query', name: 'semantic_query_tool', args: {} }],
+      },
+      { id: 'tool-result-1', role: 'tool', tool_call_id: 'tool-query', content: '{"success": true}' },
+      { id: 'assistant-2', role: 'assistant', content: '完成。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    expect(assistant.toolCalls?.[0]?.subagentTrail).toBeUndefined()
+  })
+})

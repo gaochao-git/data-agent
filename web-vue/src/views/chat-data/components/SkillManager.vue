@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import MarkdownIt from 'markdown-it'
 import {
   copySkill,
   createSkill,
@@ -21,7 +20,7 @@ import {
   updateSkill
 } from '../api'
 import type { SkillInfo, SkillVersionInfo } from '../types'
-import { getSkillCreatorLabel } from '../utils'
+import { getSkillCreatorLabel, renderMarkdown } from '../utils'
 
 type SkillFileDir = 'references' | 'assets' | 'scripts'
 type SkillFileForm = {
@@ -42,7 +41,6 @@ const props = defineProps<{
   initialSkillId?: string | null
 }>()
 
-const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
 const skills = ref<SkillInfo[]>([])
 const selectedSkill = ref<(SkillInfo & { content?: string }) | null>(null)
 const skillVersions = ref<SkillVersionInfo[]>([])
@@ -103,7 +101,7 @@ const canManageFiles = computed(() => Boolean(
 const canShowFileTree = computed(() => Boolean(selectedSkill.value?.source === 'system' || canManageSkill(selectedSkill.value)))
 const selectedFileTitle = computed(() => selectedFileNode.value?.file_path || 'SKILL.md')
 const selectedFileContent = computed(() => selectedFileNode.value ? fileForm.content : displayedContent.value)
-const displayedContentHtml = computed(() => md.render(selectedFileContent.value || '暂无内容'))
+const displayedContentHtml = computed(() => renderMarkdown(selectedFileContent.value || '暂无内容'))
 const canEditSelectedFile = computed(() => Boolean(canManageFiles.value && selectedFileNode.value && selectedFileEditing.value))
 const canDeleteSkill = (skill?: SkillInfo | null) => Boolean(
   canManageSkill(skill)

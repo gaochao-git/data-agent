@@ -15,6 +15,7 @@ from .agent_runtime import (
 from .agent_state import ChatDataAgentState
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
 from .middleware.context_compression import create_context_compression_middleware
+from .middleware.subagents import SubagentMiddleware, SubagentSpec
 from .middleware.context_usage import (
     bind_context_usage_middleware,
     create_request_context_usage_middleware,
@@ -25,7 +26,7 @@ from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.steering import create_steering_middleware
-from .prompts.chat_data import build_unified_system_prompt
+from .prompts.chat_data import ANALYSIS_SUBAGENT_PROMPT, build_unified_system_prompt
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -135,6 +136,44 @@ def assemble_tools(
     return tools
 
 
+# 子智能体不继承的工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
+# present_artifacts 是用户可见的产物呈现（最终交付由主智能体负责）。
+SUBAGENT_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_artifacts"})
+
+ANALYSIS_SUBAGENT_NAME = "deep-analysis"
+ANALYSIS_SUBAGENT_DESCRIPTION = (
+    "执行深度数据分析：语义检索、DSL/SQL 查询、结果读取、"
+    "精确计算核对与多步交叉分析，只回传最终结论。"
+)
+
+
+def build_subagent_middleware(
+    runtime_options: AgentRuntimeOptions,
+    tools: list,
+    *,
+    model,
+) -> SubagentMiddleware | None:
+    """按运行选项构建子智能体中间件；未启用时返回 None。
+
+    子智能体继承主智能体全部工具（扣除需人工应答与产物呈现的交互工具），
+    使用与主智能体相同的模型，运行在隔离上下文中。
+    """
+    if not runtime_options.analysis_subagent_enabled:
+        return None
+    subagent_tools = [
+        tool for tool in tools
+        if str(getattr(tool, "name", "") or "") not in SUBAGENT_EXCLUDED_TOOL_NAMES
+    ]
+    spec = SubagentSpec(
+        name=ANALYSIS_SUBAGENT_NAME,
+        description=ANALYSIS_SUBAGENT_DESCRIPTION,
+        system_prompt=ANALYSIS_SUBAGENT_PROMPT,
+        tools=subagent_tools,
+        model=model,
+    )
+    return SubagentMiddleware([spec])
+
+
 def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
@@ -183,6 +222,14 @@ def create_data_agent(
     )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
+    model = create_streaming_chat_model(
+        model_id=model_id,
+        enable_thinking=enable_thinking,
+        thinking_effort=thinking_effort,
+        stream_usage=True,
+        llm_factory=get_chat_data_llm,
+    )
+    subagent_middleware = build_subagent_middleware(options, tools, model=model)
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,
@@ -232,6 +279,7 @@ def create_data_agent(
         image_injection_middleware=image_injection_middleware,
         tool_call_history_repair_middleware=tool_call_history_repair_middleware,
         steering_middleware=steering_middleware,
+        subagent_middleware=subagent_middleware,
         context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
         tool_result_middleware=tool_result_middleware,
@@ -240,13 +288,7 @@ def create_data_agent(
         include_tool_call_normalizer=True,
     )
     agent = create_agent(
-        model=create_streaming_chat_model(
-            model_id=model_id,
-            enable_thinking=enable_thinking,
-            thinking_effort=thinking_effort,
-            stream_usage=True,
-            llm_factory=get_chat_data_llm,
-        ),
+        model=model,
         tools=tools,
         system_prompt=effective_system_prompt,
         middleware=middleware,

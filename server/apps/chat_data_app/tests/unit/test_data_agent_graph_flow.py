@@ -155,6 +155,73 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
     ]
 
 
+def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatch, tmp_path):
+    captured = {}
+    runtime, base_options = _runtime(tmp_path)
+    options = AgentRuntimeOptions(
+        workspace_backend="local", bash_enabled=False, analysis_subagent_enabled=True
+    )
+
+    def fake_create_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
+
+    data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
+    )
+
+    names = [middleware.name for middleware in captured["middleware"]]
+    assert "SubagentMiddleware" in names
+    assert names.index("SubagentMiddleware") == names.index("TodoListMiddleware") - 1
+
+
+def test_build_subagent_middleware_disabled_by_default(tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+
+    runtime, options = _runtime(tmp_path)
+    assert build_subagent_middleware(options, [], model=object()) is None
+
+
+def test_build_subagent_middleware_excludes_interactive_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(
+        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
+    )
+    # 伪工具对象无法走真实 create_agent 编译，桩掉子图编译步骤
+    monkeypatch.setattr(
+        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+    )
+    options = AgentRuntimeOptions(
+        workspace_backend="local", bash_enabled=False, analysis_subagent_enabled=True
+    )
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="ask_user_question"),
+        SimpleNamespace(name="present_artifacts"),
+        SimpleNamespace(name="calculator_tool"),
+    ]
+    model = object()
+
+    middleware = build_subagent_middleware(options, tools, model=model)
+
+    assert middleware is not None
+    task_tool = middleware.tools[0]
+    assert task_tool.name == "task"
+    spec = middleware.specs[0]
+    assert [tool.name for tool in spec.tools] == ["file_read", "calculator_tool"]
+    assert spec.model is model
+
+
 @pytest.mark.asyncio
 async def test_tool_call_name_normalizer_middleware():
     middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])

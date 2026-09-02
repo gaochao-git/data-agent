@@ -2,6 +2,7 @@
 
 import json
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -90,6 +91,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "get_current_time": "获取当前时间",
     "present_artifacts": "展示文件",
     "ask_user_question": "询问用户",
+    "task": "派发子智能体",
 }
 
 
@@ -224,11 +226,27 @@ def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | No
     return ""
 
 
+def _compile_reasoning_tool_name_patterns() -> list[tuple[re.Pattern[str], str]]:
+    """按 ASCII 词边界编译工具名匹配，避免短名命中长词里的子串。
+
+    ``task`` 是四字母常见英文词，朴素 ``str.replace`` 会把 ``subtask`` /
+    ``task_id`` / ``tasks`` 一起替换掉。此处要求工具名两侧都不是 ASCII 词字符
+    （字母、数字、下划线）；中文、标点、反引号等照常命中。
+    """
+    return [
+        (re.compile(rf"(?<![0-9A-Za-z_]){re.escape(tool_name)}(?![0-9A-Za-z_])"), display_name)
+        for tool_name, display_name in REASONING_TOOL_DISPLAY_NAMES.items()
+    ]
+
+
+_REASONING_TOOL_NAME_PATTERNS = _compile_reasoning_tool_name_patterns()
+
+
 def _format_reasoning_for_display(content: str) -> str:
     """将思考流中的内部工具名替换为更短的展示名，不影响真实工具调用。"""
     text = str(content or "")
-    for tool_name, display_name in REASONING_TOOL_DISPLAY_NAMES.items():
-        text = text.replace(tool_name, display_name)
+    for pattern, display_name in _REASONING_TOOL_NAME_PATTERNS:
+        text = pattern.sub(display_name, text)
     return text
 
 
@@ -971,6 +989,27 @@ class _AgentSseStreamAdapter:
                 "message": message,
                 "progress": payload.get("progress"),
             })]
+        if payload.get("type") == "subagent_tool" and isinstance(payload.get("event"), dict):
+            event = payload["event"]
+            event_type = str(event.get("event_type") or "").strip()
+            if event_type not in {
+                "tool_started",
+                "tool_completed",
+                "tool_failed",
+                "subagent_message",
+                "subagent_message_delta",
+                "subagent_thinking_delta",
+            }:
+                logger.warning("忽略未知的子智能体工具事件类型: %s", event_type)
+                return []
+            if event_type == "subagent_message":
+                # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
+                if not event.get("streamed") and not str(event.get("content") or "").strip():
+                    return []
+            if event_type in {"subagent_message_delta", "subagent_thinking_delta"} and not str(event.get("delta") or ""):
+                return []
+            data = {key: value for key, value in event.items() if key != "event_type"}
+            return [_format_tool_lifecycle_event(event_type, data)]
         return []
 
     def _alarm_context(self) -> dict[str, Any]:
@@ -1323,6 +1362,9 @@ async def _run_chat_data_agent_stream(
     workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
 
     config = {
+        # 与子智能体（subagents.py::SubagentSpec.recursion_limit 默认 40）对齐；
+        # 不设置时 langgraph 默认仅 25 个 super-step（约 12 轮工具循环）。
+        "recursion_limit": 40,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": ""

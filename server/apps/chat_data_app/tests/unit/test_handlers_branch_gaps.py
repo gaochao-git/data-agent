@@ -819,6 +819,71 @@ async def test_stream_events_stops_immediately_when_client_disconnected():
     assert adapter.disconnected is True
 
 
+def test_handle_custom_payload_translates_subagent_tool_events():
+    """subagent_tool custom 事件翻译成带 parent_tool_call_id 的生命周期 SSE。"""
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=_ScriptedAgent([]),
+        initial_state={},
+        config={},
+    )
+
+    started = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
+        "event_type": "tool_started",
+        "tool_call_id": "inner-1",
+        "tool_name": "calculator_tool",
+        "args": {"expression": "1 + 1"},
+        "parent_tool_call_id": "call-parent",
+    }})
+    completed = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
+        "event_type": "tool_completed",
+        "tool_call_id": "inner-1",
+        "tool_name": "calculator_tool",
+        "content": "2",
+        "truncated": False,
+        "parent_tool_call_id": "call-parent",
+    }})
+    unknown = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
+        "event_type": "bogus",
+    }})
+    malformed = adapter._handle_custom_payload({"type": "subagent_tool", "event": "not-dict"})
+
+    assert len(started) == 1 and started[0].startswith("event: tool_started")
+    assert "parent_tool_call_id" in started[0]
+    assert "\"tool_call_id\": \"inner-1\"" in started[0].replace(" ", " ") or "inner-1" in started[0]
+    assert len(completed) == 1 and completed[0].startswith("event: tool_completed")
+    assert unknown == []
+    assert malformed == []
+
+
+def test_handle_custom_payload_translates_subagent_message_events():
+    """subagent_message 走独立 SSE 事件；空白文本不产生帧。"""
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=_ScriptedAgent([]),
+        initial_state={},
+        config={},
+    )
+
+    emitted = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
+        "event_type": "subagent_message",
+        "message_id": "msg-1",
+        "content": "先算一下 1+1",
+        "truncated": False,
+        "parent_tool_call_id": "call-parent",
+    }})
+    blank = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
+        "event_type": "subagent_message",
+        "message_id": "msg-2",
+        "content": "   ",
+        "parent_tool_call_id": "call-parent",
+    }})
+
+    assert len(emitted) == 1
+    assert emitted[0].startswith("event: subagent_message")
+    assert "先算一下 1+1" in emitted[0]
+    assert "call-parent" in emitted[0]
+    assert blank == []
+
+
 @pytest.mark.asyncio
 async def test_stream_events_skips_unknown_event_kind():
     """既不是 custom 也不是 messages 的事件直接跳过（879->880）。"""

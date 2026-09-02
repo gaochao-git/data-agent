@@ -20,6 +20,7 @@ _OPTIONAL_SLOTS = {
     "image_injection_middleware": "ImageInjectionMiddleware",
     "tool_call_history_repair_middleware": "ToolCallHistoryRepairMiddleware",
     "steering_middleware": "SteeringMiddleware",
+    "subagent_middleware": "SubagentMiddleware",
     "after_model_history_middleware": "AfterModelHistoryMiddleware",
     "context_compression_middleware": "ContextCompressionMiddleware",
     "context_usage_middleware": "ContextUsageMiddleware",

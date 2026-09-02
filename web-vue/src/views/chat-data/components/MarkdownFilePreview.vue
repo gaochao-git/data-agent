@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import MarkdownIt from 'markdown-it'
+import { renderMarkdown } from '../utils'
 
 const props = defineProps({
   content: {
@@ -9,8 +9,7 @@ const props = defineProps({
   },
 })
 
-const markdown = new MarkdownIt({ breaks: true, html: false, linkify: true })
-const renderedContent = computed(() => markdown.render(props.content))
+const renderedContent = computed(() => renderMarkdown(props.content))
 </script>
 
 <template>

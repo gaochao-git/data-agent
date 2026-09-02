@@ -7,6 +7,7 @@ import { getConversationHistory } from '../api'
 import type {
   ChatDataContextCompressionEvent,
   ChatDataTokenUsage,
+  SubagentTrailItem,
   ToolCallInfo,
   Message,
   SemanticConfigSelectionInfo,
@@ -127,6 +128,7 @@ interface HistoryMessagePayload {
   tool_call_id?: unknown
   tool_name?: unknown
   reasoning_turn_id?: unknown
+  subagent_trail?: unknown
 }
 
 interface HistoryEventPayload {
@@ -171,7 +173,49 @@ const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   }
 }
 
-const withHistoryToolResult = (toolCall: ToolCallInfo, result: string): ToolCallInfo => {
+// 子智能体过程快照：随 task 的 tool_result payload 持久化（后端盖在
+// additional_kwargs.subagent_trail），历史回放时据此还原「子智能体内部逻辑」。
+// 逐条目校验，坏数据丢弃条目而不是整块丢弃。
+const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const trail: SubagentTrailItem[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    const id = String(item.id || '').trim()
+    if (!id) continue
+    if (item.kind === 'message') {
+      const content = typeof item.content === 'string' ? item.content : ''
+      const thinking = typeof item.thinking === 'string' ? item.thinking : ''
+      if (!content && !thinking) continue
+      trail.push({
+        kind: 'message',
+        id,
+        content,
+        truncated: item.truncated === true,
+        thinking,
+        thinkingTruncated: item.thinkingTruncated === true,
+      })
+    } else if (item.kind === 'tool') {
+      const status = item.status === 'error' ? 'error' : item.status === 'running' ? 'running' : 'completed'
+      trail.push({
+        kind: 'tool',
+        id,
+        tool_name: typeof item.tool_name === 'string' ? item.tool_name : '',
+        args: item.args && typeof item.args === 'object' ? item.args as Record<string, unknown> : {},
+        result: typeof item.result === 'string' ? item.result : '',
+        status,
+      })
+    }
+  }
+  return trail.length > 0 ? trail : undefined
+}
+
+const withHistoryToolResult = (
+  toolCall: ToolCallInfo,
+  result: string,
+  subagentTrail?: SubagentTrailItem[],
+): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
   let semanticParams: SemanticParams | undefined
@@ -192,6 +236,7 @@ const withHistoryToolResult = (toolCall: ToolCallInfo, result: string): ToolCall
     renderId,
     renderType,
     semanticParams,
+    subagentTrail,
   }
 }
 
@@ -313,8 +358,9 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const target = toolCallTargets.get(toolCallId)
     if (!target?.toolCalls?.length) continue
     const result = String(messagePayload.content || '')
+    const subagentTrail = normalizeSubagentTrail(messagePayload.subagent_trail)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail) : toolCall
     ))
   }
   return displayMessages
@@ -436,8 +482,9 @@ export const buildHistoryMessages = (
     const target = toolCallTargets.get(toolCallId)
     if (!target?.toolCalls?.length) continue
     const result = String(rawMessage.content || '')
+    const subagentTrail = normalizeSubagentTrail(rawMessage.subagent_trail)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail) : toolCall
     ))
   }
 

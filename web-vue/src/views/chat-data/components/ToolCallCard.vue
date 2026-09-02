@@ -102,8 +102,18 @@ const PARAM_LABELS: Record<string, string> = {
   field_type: '字段类型',
   datasource_id: '数据源',
   member_datasource_id: '执行机构',
-  member_datasource_ids: '执行机构'
+  member_datasource_ids: '执行机构',
+  subagent_type: '子智能体类型'
 }
+
+// 个别工具的参数名与通用语义冲突（如 task 的 description 是「任务书」，
+// 不代表所有工具的 description 都该这么显示），按工具维度覆盖全局表。
+const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
+  task: { description: '任务书' }
+}
+
+const paramLabel = (key: string): string =>
+  TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
 
 type SemanticSelectionResult = {
   success?: boolean
@@ -540,7 +550,7 @@ function getSqlTokenClass(type: string): string {
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
               <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="paramLabel(key)">{{ paramLabel(key) }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -558,7 +568,7 @@ function getSqlTokenClass(type: string): string {
               <!-- 代码块类型 -->
               <div v-else-if="needsCodeBlock(key, value)" class="mb-3 last:mb-0">
                 <div class="mb-1.5 flex items-center gap-2">
-                  <div class="max-w-[160px] shrink-0 truncate text-xs text-gray-400" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</div>
+                  <div class="max-w-[160px] shrink-0 truncate text-xs text-gray-400" :title="paramLabel(key)">{{ paramLabel(key) }}</div>
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 border-none bg-transparent p-0 text-[11px] text-gray-400 cursor-pointer hover:text-gray-600"
@@ -573,7 +583,7 @@ function getSqlTokenClass(type: string): string {
               </div>
               <!-- 普通类型 -->
               <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="paramLabel(key)">{{ paramLabel(key) }}</span>
                 <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>

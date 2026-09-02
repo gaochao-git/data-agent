@@ -29,6 +29,7 @@ describe('toolDisplay', () => {
       officecli_run: '运行 OfficeCLI',
       ask_user_question: '询问用户',
       write_todos: '更新任务计划',
+      task: '派发子智能体',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
@@ -107,6 +108,13 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('read_image', {
       file_path: '/mnt/user-data/uploads/登录页面.png',
     })).toBe('/mnt/user-data/uploads/登录页面.png')
+    expect(getToolCompactDescription('task', {
+      subagent_type: 'deep-analysis',
+      description: '分析近 30 天入金金额趋势并给出结论',
+    })).toBe('deep-analysis · 分析近 30 天入金金额趋势并给出结论')
+    expect(getToolCompactDescription('task', {
+      description: '只给了任务书没有类型',
+    })).toBe('只给了任务书没有类型')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 })

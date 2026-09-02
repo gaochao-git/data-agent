@@ -32,6 +32,29 @@ import type {
 } from '../types'
 
 /**
+ * 工具生命周期事件：顶层事件（无 parent_tool_call_id）的 tool_call_id 收进
+ * lifecycleToolCallIds，用于在顶层 `tool` 事件里去重（同一工具的完整快照已由
+ * 生命周期事件先行分发）。子智能体内层事件走 trail 渲染，与顶层去重无关。
+ */
+const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
+  'tool_started',
+  'tool_progress',
+  'tool_completed',
+  'tool_failed',
+  'subagent_message',
+  'subagent_message_delta',
+  'subagent_thinking_delta',
+])
+
+/**
+ * Set.has() 不触发类型窄化，这里用 type-guard 把「集合内容恰好是
+ * ToolLifecycleEventData['type'] 全集」这一不变量写进类型（块内 event
+ * 随即窄化为那 7 个字面量）。
+ */
+const isToolLifecycleEvent = (e: SSEEventType): e is ToolLifecycleEventData['type'] =>
+  TOOL_LIFECYCLE_EVENTS.has(e)
+
+/**
  * 解析 SSE 事件流
  */
 function parseSSEEvents(buffer: string): {
@@ -393,10 +416,12 @@ export function useSqlGenerator() {
             continue
           }
 
-          if (event === 'tool_started' || event === 'tool_progress' || event === 'tool_completed' || event === 'tool_failed') {
+          if (isToolLifecycleEvent(event)) {
             try {
               const data = JSON.parse(dataStr) as ToolLifecycleEventData
-              if (data.tool_call_id) lifecycleToolCallIds.add(data.tool_call_id)
+              // 只收顶层 id：内层 id（带 parent_tool_call_id）永不出现在顶层
+              // `tool` 事件里，收进集合没有意义，只会污染去重语义。
+              if (data.tool_call_id && !data.parent_tool_call_id) lifecycleToolCallIds.add(data.tool_call_id)
               onToolLifecycle?.({ ...data, type: event })
             } catch (err) {
               console.error(`解析 ${event} 数据失败:`, err, dataStr)

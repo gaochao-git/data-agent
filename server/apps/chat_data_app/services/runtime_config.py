@@ -64,6 +64,10 @@ if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
     )
     CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = "local"
 CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
+# 是否注册 task 工具，允许主智能体把深度分析类长任务派发给隔离上下文的子智能体。
+CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED = read_bool_env(
+    "CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED", False
+)
 # 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":
@@ -141,6 +145,7 @@ def get_chat_data_runtime_config() -> dict:
         "runtime_options": {
             "workspace_backend": CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
             "bash_enabled": CHAT_DATA_DEFAULT_BASH_ENABLED,
+            "analysis_subagent_enabled": CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED,
         },
         "user_overridable": CHAT_DATA_CAPABILITY_USER_OVERRIDABLE,
         "default_row_limit": DEFAULT_ROW_LIMIT,

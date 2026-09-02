@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import MarkdownIt from 'markdown-it'
 import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../types'
 import { extractGeneratedSqlFromToolCall } from '../utils/semanticTool'
-import { formatDateTimeValue } from '../utils'
+import { formatDateTimeValue, renderMarkdown } from '../utils'
 import AssistantMessageFooter from './AssistantMessageFooter.vue'
 import QueryResultPanel from './QueryResultPanel.vue'
 import ToolCallList from './ToolCallList.vue'
@@ -39,7 +38,6 @@ const emit = defineEmits<{
   openAttachment: [attachment: MessageAttachment]
 }>()
 
-const markdown = new MarkdownIt({ breaks: true, html: false, linkify: true })
 // 用户手动展开的思考分段（跨流式过程保持；未点开的分段一律默认收起）
 const expandedThinkingSegmentKeys = ref<Set<string>>(new Set())
 
@@ -268,7 +266,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
                 <div
                   v-if="segment.type === 'text' && getDisplayContent(segment.content)"
                   class="conversation-markdown min-w-0 text-sm leading-relaxed text-slate-700"
-                  v-html="markdown.render(getDisplayContent(segment.content))"
+                  v-html="renderMarkdown(getDisplayContent(segment.content))"
                 ></div>
 
                 <div
@@ -336,7 +334,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <div
               v-else-if="getDisplayContent(message.content)"
               class="conversation-markdown min-w-0 text-sm leading-relaxed text-slate-700"
-              v-html="markdown.render(getDisplayContent(message.content))"
+              v-html="renderMarkdown(getDisplayContent(message.content))"
             ></div>
             <div v-else-if="message.isStreaming" class="flex items-center gap-2 text-sm text-slate-500">
               <i class="fa-solid fa-spinner fa-spin text-xs"></i>
@@ -375,86 +373,3 @@ const handleCopyAssistantMessage = async (message: Message) => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.conversation-markdown {
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-.conversation-markdown :deep(p) {
-  margin: 0 0 8px;
-}
-
-.conversation-markdown :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.conversation-markdown :deep(strong) {
-  font-weight: 700;
-}
-
-.conversation-markdown :deep(:not(pre) > code) {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(15, 23, 42, 0.06);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.conversation-markdown :deep(pre) {
-  max-width: 100%;
-  margin: 8px 0;
-  padding: 12px;
-  overflow-x: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  white-space: pre;
-}
-
-.conversation-markdown :deep(pre code) {
-  display: block;
-  min-width: max-content;
-  padding: 0;
-  background: transparent;
-  white-space: pre;
-  overflow-wrap: normal;
-  word-break: normal;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #334155;
-}
-
-.conversation-markdown :deep(table) {
-  width: 100%;
-  max-width: 100%;
-  margin: 10px 0;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
-.conversation-markdown :deep(th),
-.conversation-markdown :deep(td) {
-  border: 1px solid #d8dee8;
-  padding: 8px 10px;
-  text-align: left;
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.conversation-markdown :deep(th) {
-  background: #f8fafc;
-  color: #334155;
-  font-weight: 700;
-}
-
-.conversation-markdown :deep(ul),
-.conversation-markdown :deep(ol) {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-</style>

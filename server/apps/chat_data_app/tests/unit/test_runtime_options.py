@@ -12,6 +12,7 @@ def test_defaults_are_local_without_bash():
     options = ro.AgentRuntimeOptions()
     assert options.workspace_backend == "local"
     assert options.bash_enabled is False
+    assert options.analysis_subagent_enabled is False
 
 
 def test_post_init_falls_back_to_local_for_invalid_backend():
@@ -22,10 +23,12 @@ def test_post_init_falls_back_to_local_for_invalid_backend():
 def test_get_default_runtime_options_reads_runtime_config(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_BASH_ENABLED", True)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED", True)
 
     options = ro.get_chat_data_default_runtime_options()
     assert options.workspace_backend == "sandbox"
     assert options.bash_enabled is True
+    assert options.analysis_subagent_enabled is True
 
 
 def test_resolve_returns_base_without_override(monkeypatch):
@@ -46,6 +49,21 @@ def test_resolve_applies_override_when_overridable(monkeypatch):
     )
     assert options.workspace_backend == "sandbox"
     assert options.bash_enabled is True
+
+
+def test_resolve_applies_subagent_override_when_overridable(monkeypatch):
+    monkeypatch.setattr(ro, "_is_runtime_option_user_overridable", lambda: True)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "local")
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_BASH_ENABLED", False)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED", False)
+
+    options = ro.resolve_agent_runtime_options(
+        user_id="u1", override={"analysis_subagent_enabled": True}
+    )
+    assert options.analysis_subagent_enabled is True
+
+    options = ro.resolve_agent_runtime_options(user_id="u1", override={})
+    assert options.analysis_subagent_enabled is False
 
 
 def test_resolve_ignores_override_when_not_overridable(monkeypatch):

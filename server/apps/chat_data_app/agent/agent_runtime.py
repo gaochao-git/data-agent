@@ -94,6 +94,7 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
     "SteeringMiddleware",               # 在压缩之前注入插话，避免被摘要吞掉
+    "SubagentMiddleware",               # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
     "TodoListMiddleware",               # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
     "AfterModelHistoryMiddleware",      # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
     "ContextCompressionMiddleware",
@@ -115,6 +116,7 @@ def build_standard_agent_middleware(
     tool_execution_fence_middleware: Any | None = None,
     image_injection_middleware: Any | None = None,
     steering_middleware: Any | None = None,
+    subagent_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
@@ -138,6 +140,7 @@ def build_standard_agent_middleware(
         "ToolTimingMiddleware": create_tool_timing_middleware(),
         "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,
         "SteeringMiddleware": steering_middleware,
+        "SubagentMiddleware": subagent_middleware,
         "TodoListMiddleware": TodoListMiddleware(),
         "AfterModelHistoryMiddleware": after_model_history_middleware,
         "ContextCompressionMiddleware": context_compression_middleware,

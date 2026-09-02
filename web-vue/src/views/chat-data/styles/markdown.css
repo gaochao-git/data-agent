@@ -1,0 +1,87 @@
+/**
+ * 会话 Markdown 渲染样式。
+ *
+ * 全局而非 scoped：主智能体回复（ConversationMessageList）与子智能体中间
+ * 文本（ToolCallList 内 .subagent-chain）共用 `.conversation-markdown`，
+ * 只有一份定义才能保证两处展示始终一致，不会随其中一处改动而脱节。
+ */
+.conversation-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.conversation-markdown p {
+  margin: 0 0 8px;
+}
+
+.conversation-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.conversation-markdown strong {
+  font-weight: 700;
+}
+
+.conversation-markdown :not(pre) > code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.06);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.conversation-markdown pre {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  white-space: pre;
+}
+
+.conversation-markdown pre code {
+  display: block;
+  min-width: max-content;
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.conversation-markdown table {
+  width: 100%;
+  max-width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.conversation-markdown th,
+.conversation-markdown td {
+  border: 1px solid #d8dee8;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.conversation-markdown th {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+}
+
+.conversation-markdown ul,
+.conversation-markdown ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}

@@ -7,6 +7,9 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+// 会话 markdown 渲染样式（.conversation-markdown）：主对话与子智能体 trail 共用，
+// 全局注入但随本模块走，便于整个 chat-data 目录迁移到其它主项目。
+import '../styles/markdown.css'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'

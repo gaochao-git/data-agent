@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo, UserQuestionAnswer } from '../types'
+import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../types'
 import { useSqlGenerator, type RunDoneStatus } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -609,6 +609,9 @@ const closeTokenUsagePanel = () => {
   tokenUsagePanelRef.value?.closePanel()
 }
 
+// 顶层工具调用状态注册表：只存顶层调用。子智能体内层工具不进此 map——
+// 它们挂在父 task 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
+// 详情查找经 findToolCallById 的 trail 兜底完成。
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
@@ -724,8 +727,22 @@ const findToolCallById = (id: string | null) => {
   const fromMap = toolCallsMap.value.get(id)
   if (fromMap) return fromMap
   for (const message of messages.value) {
-    const matched = message.toolCalls?.find(item => item.tool_call_id === id)
-    if (matched) return matched
+    for (const toolCall of message.toolCalls || []) {
+      if (toolCall.tool_call_id === id) return toolCall
+      // 子智能体内层工具：挂在父 task 调用的 subagentTrail 上（与
+      // ToolCallList 的 chip 构建口径一致），历史恢复后 map 中无内层条目，
+      // 详情面板靠这条兜底取数。
+      const inner = toolCall.subagentTrail?.find(item => item.kind === 'tool' && item.id === id)
+      if (inner) {
+        return {
+          tool_call_id: inner.id,
+          tool_name: inner.tool_name || 'tool_call',
+          args: inner.args || {},
+          result: inner.result,
+          status: inner.status || 'running',
+        }
+      }
+    }
   }
   return null
 }
@@ -2138,6 +2155,100 @@ const upsertToolMessage = (toolInfo: ToolCallInfo) => {
   }
 }
 
+const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
+  const parentId = event.parent_tool_call_id
+  if (!parentId) return
+
+  // 提交挂到父 task 调用下的 trail 变更：写 map 与消息引用（内层工具不进
+  // 全局 map，详情查找走 findToolCallById 的 trail 兜底）
+  const commitTrail = (transform: (trail: SubagentTrailItem[]) => SubagentTrailItem[]) => {
+    const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
+      { ...tool, subagentTrail: transform([...(tool.subagentTrail || [])]) }
+    )
+    const parentFromMap = toolCallsMap.value.get(parentId)
+    const merged = mergeParent(parentFromMap || {
+      tool_call_id: parentId,
+      tool_name: 'task',
+      args: {},
+      status: 'running',
+    })
+    toolCallsMap.value.set(parentId, merged)
+    for (const message of messages.value) {
+      if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
+      message.toolCalls = message.toolCalls.map(item => item.tool_call_id === parentId ? merged : item)
+    }
+  }
+
+  // 流式增量：按 message_id 追加正文/思考
+  if (event.type === 'subagent_message_delta' || event.type === 'subagent_thinking_delta') {
+    const entryId = event.message_id
+    const delta = event.delta || ''
+    if (!entryId || !delta) return
+    const isText = event.type === 'subagent_message_delta'
+    commitTrail((trail) => {
+      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
+      if (idx >= 0) {
+        const prev = trail[idx]
+        if (!prev) return trail
+        trail[idx] = isText
+          ? { ...prev, content: (prev.content || '') + delta, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
+          : { ...prev, thinking: (prev.thinking || '') + delta, thinkingTruncated: Boolean(event.truncated) || Boolean(prev.thinkingTruncated) }
+      } else {
+        trail.push(isText
+          ? { kind: 'message', id: entryId, content: delta, truncated: Boolean(event.truncated) }
+          : { kind: 'message', id: entryId, thinking: delta, thinkingTruncated: Boolean(event.truncated) })
+      }
+      return trail
+    })
+    return
+  }
+
+  if (event.type === 'subagent_message') {
+    const entryId = event.message_id
+    if (!entryId) return
+    const content = event.content || ''
+    commitTrail((trail) => {
+      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
+      if (idx >= 0) {
+        const prev = trail[idx]
+        if (!prev) return trail
+        // 收敛策略「只补标记不覆盖」：已增量流过的消息保留前端拼出的全文，
+        // 完整事件只补截断标记；未流过（如后端降级路径）才写入完整内容
+        trail[idx] = event.streamed
+          ? { ...prev, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
+          : { ...prev, content: content || prev.content || '', truncated: Boolean(event.truncated) }
+      } else {
+        trail.push({ kind: 'message', id: entryId, content, truncated: Boolean(event.truncated) })
+      }
+      return trail
+    })
+    return
+  }
+
+  // 工具生命周期事件：tool_started / tool_completed / tool_failed
+  const entryId = event.tool_call_id
+  if (!entryId) return
+  const entry: SubagentTrailItem = {
+    kind: 'tool',
+    id: entryId,
+    tool_name: event.tool_name || 'tool_call',
+    args: { ...(event.args || {}) },
+    result: event.content || event.result,
+    status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
+  }
+  commitTrail((trail) => {
+    const idx = trail.findIndex(item => item.id === entryId)
+    if (idx >= 0) {
+      const prev = trail[idx]
+      if (!prev) return trail
+      trail[idx] = { ...prev, ...entry, args: { ...(prev.args || {}), ...(entry.args || {}) } }
+    } else {
+      trail.push(entry)
+    }
+    return trail
+  })
+}
+
 const isUnfinishedToolStatus = (status?: ToolCallInfo['status']) => status === 'generating' || status === 'running'
 
 const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: string) => {
@@ -2412,6 +2523,12 @@ const submitAnalysisQuery = async (
         queuedMessageId: options.queuedMessageId,
         preserveQueuedMessages: options.preserveQueuedMessages,
         onToolLifecycle: (event) => {
+          // 子智能体内部过程事件：挂到所属 task 调用下，不建顶层片段
+          // 必须在 tool_call_id 判空之前分流——文本条目本身没有 tool_call_id
+          if (event.parent_tool_call_id) {
+            upsertSubagentTrailItem(event)
+            return
+          }
           if (!event.tool_call_id) return
           const existing = toolCallsMap.value.get(event.tool_call_id)
           const isFailed = event.type === 'tool_failed'
@@ -2424,6 +2541,7 @@ const submitAnalysisQuery = async (
             progressMessage: event.message || existing?.progressMessage,
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
+            subagentTrail: existing?.subagentTrail,
           }
           upsertToolMessage(toolInfo)
         },
