@@ -43,7 +43,7 @@ from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
-from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
@@ -1362,9 +1362,9 @@ async def _run_chat_data_agent_stream(
     workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
 
     config = {
-        # 与子智能体（subagents.py::SubagentSpec.recursion_limit 默认 40）对齐；
-        # 不设置时 langgraph 默认仅 25 个 super-step（约 12 轮工具循环）。
-        "recursion_limit": 40,
+        # 子智能体（subagents.py::build_subagent_invocation_config）读同一常量，
+        # 主/子图口径同源；不设置时 langgraph 默认仅 25 个 super-step。
+        "recursion_limit": AGENT_RECURSION_LIMIT,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": ""

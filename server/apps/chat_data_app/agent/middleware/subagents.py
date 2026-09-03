@@ -28,6 +28,12 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from apps.chat_data_app.services.runtime_config import (
+    AGENT_RECURSION_LIMIT,
+    SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
+    SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
+    SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
+)
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
@@ -35,23 +41,10 @@ from .tool_result import create_tool_result_middleware
 
 logger = get_logger(__name__)
 
-SUBAGENT_RESULT_PREVIEW_MAX_CHARS = 2000
-"""子智能体内层工具结果随 SSE 外发的最大长度，超出截断并打 truncated 标记。
-
-子图不经过主对话的 32k tool_result offload（中间件只挂在主 agent 上），而
-SSE custom 通道没有卸载机制，为避免巨包必须在此处主动截断。"""
-
-SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS = 4000
-"""子智能体中间文本输出（AIMessage.content）随 SSE 外发的最大长度。
-
-与工具结果分开配置：文本是给人读的过程叙述，截断太狠会失去上下文；但仍然
-必须截断——子智能体可能一次性吐出远超 SSE 单帧合理体积的分析长文。"""
-
-SUBAGENT_THINKING_PREVIEW_MAX_CHARS = 8000
-"""子智能体思考过程（reasoning_content）随 SSE 外发的最大长度。
-
-独立于正文配置：思考普遍比正文长得多（同一轮里可能是正文的数倍），复用正文
-上限会让思考几乎必被截断；但思考只在用户主动展开时可见，故允许更大的量。"""
+# 过程外发上限的口径说明见 services/runtime_config.py：工具结果上限与
+# TOOL_RESULT_OFFLOAD_SIZE 对齐（子图同样挂载 ToolResultMiddleware，超限内容
+# 已被替换成信封），正文/思考单独配置。三者都保留截断逻辑作为安全兜底，
+# 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
 
 SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset({
     "user_id",
@@ -117,7 +110,9 @@ class SubagentSpec:
     system_prompt: str
     tools: list = field(default_factory=list)
     model: Any = None
-    recursion_limit: int = 40
+    # None 表示跟随全局 AGENT_RECURSION_LIMIT（主图同源码）；在 dataclass 默认值里
+    # 直接写死常量会在 import 时固化取值，运行时改 env / monkeypatch 都不生效。
+    recursion_limit: int | None = None
 
 
 def validate_subagent_specs(specs: list[SubagentSpec]) -> None:
@@ -170,7 +165,7 @@ def build_subagent_invocation_config(spec: SubagentSpec) -> dict[str, Any]:
     """构造子图调用配置：切断回调继承，避免子图 token 进入主 SSE 流。"""
     return {
         "callbacks": [],
-        "recursion_limit": max(int(spec.recursion_limit or 40), 1),
+        "recursion_limit": max(int(spec.recursion_limit or AGENT_RECURSION_LIMIT), 1),
         "configurable": {"chatdata_subagent": spec.name},
     }
 

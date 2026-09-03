@@ -360,4 +360,87 @@ describe('ToolCallList', () => {
     expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(false)
     expect(wrapper.find('.subagent-chain').text()).toContain('部分工具失败')
   })
+
+  it('surfaces the in-flight inner tool in the header so fast tools do not look frozen', () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [
+              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed', result: '2' },
+              { kind: 'tool', id: 'inner-2', tool_name: 'semantic_query_tool', args: { query: '订单量' }, status: 'running' },
+            ],
+          },
+        ],
+      },
+    })
+
+    const chain = wrapper.find('.subagent-chain')
+    // 标题行给出「正在执行什么」：内层工具常在亚秒级完成，chip 上的小
+    // spinner 会一闪而过，标题行才是用户能持续看到的位置
+    expect(chain.text()).toContain('正在执行：查询数据')
+    expect(chain.find('.subagent-chain-toggle .fa-spinner').exists()).toBe(true)
+
+    // 执行中的 chip 与已完成的 chip 视觉可区分（对齐主图卡片的 running 底色）
+    const chips = chain.findAll('.sub-tool-chip')
+    expect(chips.length).toBe(2)
+    const runningChip = chips[1]
+    if (!runningChip) throw new Error('expected the running inner tool chip to exist')
+    expect(runningChip.classes().join(' ')).toContain('bg-[rgba(31,130,217,0.06)]')
+    expect(runningChip.classes().join(' ')).not.toContain('hover:bg-white')
+    const settledChip = chips[0]
+    if (!settledChip) throw new Error('expected the settled inner tool chip to exist')
+    expect(settledChip.classes().join(' ')).not.toContain('bg-[rgba(31,130,217,0.06)]')
+  })
+
+  it('prefers the in-flight hint while running and surfaces failures once settled', async () => {
+    const toolCall = {
+      tool_call_id: 'call-task',
+      tool_name: 'task' as const,
+      args: { description: '任务书' },
+      status: 'running' as const,
+      subagentTrail: [
+        { kind: 'tool' as const, id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 / 0' }, status: 'error' as const, result: 'boom' },
+        { kind: 'tool' as const, id: 'inner-2', tool_name: 'semantic_query_tool', args: { query: '订单量' }, status: 'running' as const },
+      ],
+    }
+    const wrapper = mount(ToolCallList, { props: { toolCalls: [toolCall] } })
+
+    // 运行中：有工具正在跑，标题行优先说「正在执行什么」
+    expect(wrapper.find('.subagent-chain').text()).toContain('正在执行：查询数据')
+
+    await wrapper.setProps({ toolCalls: [{ ...toolCall, status: 'completed' as const }] })
+    // 收敛后：不再有 in-flight 提示，改为露出异常
+    const settled = wrapper.find('.subagent-chain').text()
+    expect(settled).not.toContain('正在执行')
+    expect(settled).toContain('部分工具失败')
+  })
+
+  it('shows no in-flight hint when no inner tool is executing', () => {
+    // 任务仍在跑、但模型正在思考下一步（没有工具在执行）：此时不谎报
+    // 「正在执行」，反馈由中间文本的流式增量承担
+    const wrapper = mount(ToolCallList, {
+      props: {
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [
+              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed', result: '2' },
+            ],
+          },
+        ],
+      },
+    })
+
+    const header = wrapper.find('.subagent-chain-toggle').text()
+    expect(header).not.toContain('正在执行')
+    expect(header).not.toContain('部分工具失败')
+  })
 })

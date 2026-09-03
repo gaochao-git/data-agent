@@ -195,6 +195,21 @@ const toggleChain = (toolCallId: string) => {
 const chainHasError = (tc: ToolCallInfo) =>
   (tc.subagentTrail || []).some((item) => item.kind === 'tool' && item.status === 'error')
 
+// 当前正在执行的内层工具名。内层工具可能执行得很快（读文件/走缓存的检索
+// 常在亚秒级完成），chip 上的小 spinner 会一闪而过；标题行始终可见，把
+// 「正在执行什么」落在这里，用户才感知得到子智能体没有卡住。
+const runningToolName = (tc: ToolCallInfo): string => {
+  if (!isChainRunning(tc)) return ''
+  const trail = tc.subagentTrail || []
+  for (let index = trail.length - 1; index >= 0; index -= 1) {
+    const item = trail[index]
+    if (item?.kind === 'tool' && item.status === 'running') {
+      return getToolDisplayName(item.tool_name || '')
+    }
+  }
+  return ''
+}
+
 // ---- 子智能体思考过程：与主对话口径一致，默认收起；流式进行中按钮行露尾部预览 ----
 const THINKING_TAIL_PREVIEW_LENGTH = 80
 
@@ -310,8 +325,11 @@ watch(
         >
           <i class="fa-solid fa-diagram-project shrink-0 text-[10px]"></i>
           <span class="shrink-0">子智能体执行过程</span>
-          <span v-if="chainHasError(tc)" class="shrink-0 text-[11px] font-normal text-red-400">部分工具失败</span>
-          <i v-if="isChainRunning(tc)" class="fa-solid fa-spinner fa-spin shrink-0 text-[10px]"></i>
+          <template v-if="runningToolName(tc)">
+            <i class="fa-solid fa-spinner fa-spin shrink-0 text-[10px]"></i>
+            <span class="min-w-0 truncate text-[11px] font-normal text-[#1f82d9]/80">正在执行：{{ runningToolName(tc) }}</span>
+          </template>
+          <span v-else-if="chainHasError(tc)" class="shrink-0 text-[11px] font-normal text-red-400">部分工具失败</span>
           <i
             class="fa-solid fa-chevron-right ml-auto shrink-0 text-[9px] text-[#1f82d9]/60 transition-transform duration-200"
             :class="{ 'rotate-90': !isChainCollapsed(tc) }"
@@ -356,15 +374,19 @@ watch(
             <!-- 内层工具调用：参数与结果走右侧详情面板，点击 chip 查看 -->
             <div v-else-if="entry.kind === 'tool'" class="flex flex-col">
               <div
-                class="sub-tool-chip group flex max-w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs text-slate-500 transition-all duration-200 hover:bg-white hover:text-slate-700"
-                :class="{ 'text-red-500': entry.isError }"
+                class="sub-tool-chip group flex max-w-full cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-xs transition-all duration-200"
+                :class="{
+                  'border-transparent text-slate-500 hover:bg-white hover:text-slate-700': !entry.isRunning && !entry.isError,
+                  'border-[rgba(31,130,217,0.15)] bg-[rgba(31,130,217,0.06)] text-[#1f82d9] hover:bg-[rgba(31,130,217,0.1)]': entry.isRunning,
+                  'border-red-200 bg-red-50 text-red-600 hover:bg-red-100': entry.isError,
+                }"
                 :title="entry.compactDescription || entry.displayName"
                 @click.stop="entry.toolCall && onSubToolClick(entry.toolCall)"
               >
                 <i class="fa-solid fa-wrench text-[10px] shrink-0"></i>
                 <span class="shrink-0 font-semibold">{{ entry.displayName }}</span>
                 <span v-if="entry.compactDescription" class="min-w-0 truncate font-mono text-[11px] text-slate-400">{{ entry.compactDescription }}</span>
-                <i v-if="entry.isRunning" class="fa-solid fa-spinner fa-spin ml-auto shrink-0 text-[10px] text-slate-400"></i>
+                <i v-if="entry.isRunning" class="fa-solid fa-spinner fa-spin ml-auto shrink-0 text-[10px] text-[#1f82d9]"></i>
                 <i v-else-if="entry.isError" class="fa-solid fa-circle-exclamation ml-auto shrink-0 text-[10px] text-red-400"></i>
                 <i v-else class="fa-solid fa-circle-check ml-auto shrink-0 text-[10px] text-emerald-400"></i>
               </div>

@@ -38,6 +38,23 @@ DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)
 # 单条查询超时的硬上限（秒）：请求显式传参超过该值一律封顶，防止实质关闭超时
 MAX_QUERY_TIMEOUT_SECONDS = 3600
 TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE", 32000)
+# 子智能体过程外发上限：子图同样挂载了 ToolResultMiddleware，工具结果超过
+# TOOL_RESULT_OFFLOAD_SIZE 后已被替换成几百字符的信封（含 result_id / result_path），
+# 因此 SSE 侧拿到的工具结果天然有上界——把预览上限对齐到同一常量后，工具结果
+# 要么完整原文、要么信封，不会在 SSE 层被二次砍断。这里的截断仅作防御性兜底
+# （例如外置落盘失败时的长内容回退）。
+SUBAGENT_RESULT_PREVIEW_MAX_CHARS = TOOL_RESULT_OFFLOAD_SIZE
+# 子智能体的中间正文与思考没有卸载机制保护，模型可直接吐长文，故单独配置上限。
+# 默认值取大：过程区的设计意图是「用户能看到子智能体做了什么」，截断太狠会让
+# 过程失去可读性；同时保留上限作为安全兜底，避免单个 SSE 帧无限膨胀。
+SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS = read_positive_int_env("CHAT_DATA_SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS", 32000)
+SUBAGENT_THINKING_PREVIEW_MAX_CHARS = read_positive_int_env("CHAT_DATA_SUBAGENT_THINKING_PREVIEW_MAX_CHARS", 64000)
+# 主智能体与子智能体共用的 super-step 上限，两处必须同源：
+# 子图的一次调用整体只占主图 1 个 super-step，但子图内部有自己的循环，若两边
+# 口径不一致（子图更宽松）会出现「主图还有余量、子图已先耗尽」的错位。
+# langgraph 未显式设置时默认仅 25 个 super-step（约 12 轮工具循环），复杂分析
+# 任务会抛 GraphRecursionError，故显式抬到 40。
+AGENT_RECURSION_LIMIT = read_positive_int_env("CHAT_DATA_AGENT_RECURSION_LIMIT", 40)
 FILE_READ_MAX_CHARS = max(4096, read_positive_int_env("CHAT_DATA_FILE_READ_MAX_CHARS", 25000))
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
