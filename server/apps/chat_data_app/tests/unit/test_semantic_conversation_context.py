@@ -42,16 +42,10 @@ class _FakeDatasourceManager:
 
 
 @pytest.mark.asyncio
-async def test_prepare_context_loads_directory_and_only_selected_authorized_members(monkeypatch):
+async def test_prepare_context_only_loads_selected_authorized_members(monkeypatch):
     manager = _FakeDatasourceManager()
-    calls = {"directory": []}
-
-    async def fake_directory(datasource_id, user_id):
-        calls["directory"].append((datasource_id, user_id))
-        return [{"id": "cfg_1", "name": "订单指标集", "description": "订单分析", "metrics_total": 2, "dimensions_total": 3}]
 
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
 
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",
@@ -62,7 +56,6 @@ async def test_prepare_context_loads_directory_and_only_selected_authorized_memb
         user_query="查询杭州西湖分公司和宁波分公司的订单",
     )
 
-    assert calls["directory"] == [("ds_1", "u_1")]
     assert manager.authorize_calls == [(
         {"id": "ds_1", "query_context": "按机构分库查询", "ds_tables": []},
         ["m_hz", "m_nb"],
@@ -70,7 +63,6 @@ async def test_prepare_context_loads_directory_and_only_selected_authorized_memb
         "测试用户",
     )]
     assert context.semantic_config is None
-    assert "订单指标集" in context.semantic_config_directory_info
     assert context.available_member_datasource_ids == ["m_hz", "m_nb"]
     assert context.matched_member_datasource_ids == ["m_nb"]
     assert "按机构分库查询" in context.datasource_group_context
@@ -82,11 +74,7 @@ async def test_prepare_context_loads_directory_and_only_selected_authorized_memb
 async def test_build_agent_prompt_context_reuses_semantic_context_without_loading_data(monkeypatch):
     manager = _FakeDatasourceManager()
 
-    async def fake_directory(*_args):
-        return [{"id": "cfg_1", "name": "订单指标集", "description": "订单分析", "metrics_total": 2, "dimensions_total": 3}]
-
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",
         semantic_config_id=None,
@@ -102,26 +90,21 @@ async def test_build_agent_prompt_context_reuses_semantic_context_without_loadin
         "source_type": "",
     }
     assert prompt_context["datasource_group_context"] == context.datasource_group_context
-    assert prompt_context["semantic_config_directory_info"] == context.semantic_config_directory_info
+    assert "semantic_config_directory_info" not in prompt_context
     assert prompt_context["selected_semantic_config"] is None
 
 
 @pytest.mark.asyncio
-async def test_prepare_context_loads_selected_config_and_keeps_directory_for_prompt(monkeypatch):
+async def test_prepare_context_loads_selected_config_for_prompt(monkeypatch):
     manager = _FakeDatasourceManager()
-    calls = {"config": [], "directory": 0}
+    calls = {"config": []}
 
     async def fake_config(datasource_id, semantic_config_id, user_id):
         calls["config"].append((datasource_id, semantic_config_id, user_id))
         return {"id": "cfg_1", "name": "订单指标集", "enabled": True, "metrics": [], "dimensions": []}
 
-    async def fake_directory(*_args):
-        calls["directory"] += 1
-        return [{"id": "cfg_1", "name": "订单指标集", "description": "订单分析", "metrics_total": 2, "dimensions_total": 3}]
-
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_conversation_context, "load_runtime_semantic_config", fake_config)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
 
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",
@@ -133,10 +116,8 @@ async def test_prepare_context_loads_selected_config_and_keeps_directory_for_pro
     )
 
     assert calls["config"] == [("ds_1", "cfg_1", "u_1")]
-    assert calls["directory"] == 1
     assert context.semantic_config_id == "cfg_1"
     assert context.semantic_config["name"] == "订单指标集"
-    assert "订单指标集" in context.semantic_config_directory_info
     assert context.matched_member_datasource_ids == ["m_hz"]
 
     data_context = await conversation_context.build_conversation_prompt_context(
@@ -177,11 +158,7 @@ async def test_prepare_context_returns_neutral_error_for_invisible_selected_conf
 async def test_prepare_context_does_not_authorize_or_expand_empty_member_scope(monkeypatch):
     manager = _FakeDatasourceManager()
 
-    async def fake_directory(*_args):
-        return []
-
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
 
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",
@@ -203,11 +180,7 @@ async def test_prepare_context_does_not_authorize_or_expand_empty_member_scope(m
 async def test_prepare_context_handles_execution_authorization_failure(monkeypatch):
     manager = _FakeDatasourceManager(authorize_error=ValueError("无机构权限"))
 
-    async def fake_directory(*_args):
-        return []
-
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
 
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",

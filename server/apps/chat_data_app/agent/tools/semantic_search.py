@@ -12,7 +12,12 @@ from langgraph.prebuilt import InjectedState
 
 from ...schema import SemanticToolInput
 from apps.chat_data_app.services.semantic.run.semantic_model_search import search_semantic_models
-from apps.chat_data_app.services.semantic.run.semantic_materializer import materialize_runtime_semantic_models
+from apps.chat_data_app.services.semantic.run.semantic_materializer import (
+    SEMANTIC_SNAPSHOT_DIR,
+    enabled_candidate_ids,
+    materialize_runtime_semantic_models,
+)
+from apps.chat_data_app.services.semantic.run.semantic_config_service import get_semantic_config_service
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -77,7 +82,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "success": True,
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
-        "message": "已返回相关语义模型的轻量引用。先对候选模型调用 list_fields；需要确认字段完整定义、关系、原始表列或模型整体结构时，使用每项 path 配合 file_grep/file_read。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
+        "message": "已返回相关语义模型的轻量引用。先对候选模型调用 list_fields；当前数据源组全部启用模型的 YAML 已物化到 semantic_dir（materialized_total 个），需要交叉核对其它模型或候选不足时，可用 file_grep/file_read 在该目录检索。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
     }
 
 
@@ -135,31 +140,42 @@ async def _search_models(
     source_type: str,
     workspace_runtime: Any,
 ) -> dict[str, Any]:
+    # 全量候选只拉一次：既算物化范围，又直接喂给 LLM 打分器，
+    # 避免打分器内部再拉一次库（search_semantic_models 传 semantic_configs 时不自查）。
+    runtime_configs = await get_semantic_config_service().get_runtime_configs_async(datasource_id, user_id)
+    candidate_ids = enabled_candidate_ids(runtime_configs)
     selection = await search_semantic_models(
         datasource_id=datasource_id,
         user_query=query,
         model_id=model_id,
         user_id=user_id,
         datasource_group_context=datasource_group_context,
+        semantic_configs=runtime_configs,
     )
     selected_ids = [
         str(config_id).strip()
         for config_id in (selection or {}).get("semantic_config_ids") or []
         if str(config_id).strip()
     ]
-    if selected_ids and workspace_runtime is None:
+    if (selected_ids or candidate_ids) and workspace_runtime is None:
         raise ValueError("当前请求缺少会话工作区")
+    # 全量物化：LLM 只负责召回 top5，精读层可对全部启用模型 file_grep/file_read；
+    # 范围是完整启用集，可顺带清理停用/删除模型的残留 YAML。
     materialized = await materialize_runtime_semantic_models(
         workspace_runtime=workspace_runtime,
         datasource_id=datasource_id,
         user_id=user_id,
         source_type=source_type,
-        semantic_config_ids=selected_ids,
+        semantic_config_ids=candidate_ids,
+        prune_stale=True,
     )
     payload = _selection_to_tool_payload(
         selection,
         _materialized_directory(materialized),
     )
+    if payload.get("success"):
+        payload["semantic_dir"] = SEMANTIC_SNAPSHOT_DIR
+        payload["materialized_total"] = len(materialized.get("directory") or [])
     payload["operation"] = "search_models"
     return payload
 
@@ -226,7 +242,8 @@ def create_semantic_search(
         """搜索语义模型，或分页列出模型中的指标和维度。
 
         - search_models：在当前用户可见的全部启用语义模型中，按完整业务意图检索并返回一个或多个候选，
-          同时把候选 Ossie YAML 写入会话工作区。同一业务问题只需调用一次，不要按指标、维度或子问题拆成多个并行搜索。
+          同时把全部启用模型的 Ossie YAML 物化到会话工作区 semantic/ 目录（可用 file_grep/file_read 检索）。
+          同一业务问题只需调用一次，不要按指标、维度或子问题拆成多个并行搜索。
         - list_fields：传 semantic_config_id；可用 field_type=all/metric/dimension 和 offset/limit 分页。
         字段完整定义和模型结构不由本工具返回；使用返回的 path 配合 file_grep/file_read。
         """

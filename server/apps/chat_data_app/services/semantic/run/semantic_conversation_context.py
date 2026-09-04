@@ -17,29 +17,10 @@ from ...datasource.target_context import (
     normalize_member_datasource_ids,
 )
 from .semantic_model_repository import (
-    list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
 )
 
 logger = get_logger(__name__)
-
-
-def format_semantic_config_directory_for_prompt(directory: list[dict[str, Any]]) -> str:
-    items = [item for item in directory or [] if isinstance(item, dict) and str(item.get("name") or "").strip()]
-    if not items:
-        return ""
-    lines = [
-        "## 当前可见语义模型目录",
-        "以下是当前数据源组下可见的启用语义模型轻量目录，只包含 ID、名称、描述、指标数量和维度数量；用于选择模型，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先调用 semantic_search 的 search_models 和 list_fields，再按返回路径使用 file_grep/file_read 按需读取。",
-    ]
-    for index, item in enumerate(items, start=1):
-        lines.extend([
-            f"{index}. ID：{str(item.get('id') or item.get('semantic_config_id') or '').strip()}",
-            f"   名称：{str(item.get('name') or '').strip()}",
-            f"   描述：{str(item.get('description') or '未填写').strip()}",
-            f"   指标数：{max(int(item.get('metrics_total') or 0), 0)}；维度数：{max(int(item.get('dimensions_total') or 0), 0)}",
-        ])
-    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -50,7 +31,6 @@ class SemanticConversationContext:
     datasource_meta: dict[str, Any] | None
     semantic_config_id: str | None
     semantic_config: dict[str, Any] | None
-    semantic_config_directory_info: str
     execution_targets: list[dict[str, Any]]
     available_member_datasource_ids: list[str]
     matched_member_datasource_ids: list[str]
@@ -68,7 +48,6 @@ class AgentPromptContext(TypedDict):
 
     datasource: dict[str, Any] | None
     datasource_group_context: str
-    semantic_config_directory_info: str
     selected_semantic_config: dict[str, str] | None
 
 
@@ -87,7 +66,6 @@ def build_agent_prompt_context(context: SemanticConversationContext) -> AgentPro
     return {
         "datasource": datasource,
         "datasource_group_context": context.datasource_group_context,
-        "semantic_config_directory_info": context.semantic_config_directory_info,
         "selected_semantic_config": _selected_semantic_config_prompt_ref(context),
     }
 
@@ -133,10 +111,6 @@ async def prepare_semantic_conversation_context(
     manager = get_datasource_manager()
     datasource_meta_task = manager.get_datasource_meta_async(normalized_datasource_id)
     selected_config_task = None
-    directory_task = list_runtime_semantic_config_directory(
-        normalized_datasource_id,
-        normalized_user_id,
-    )
     if normalized_config_id:
         selected_config_task = load_runtime_semantic_config(
             normalized_datasource_id,
@@ -144,10 +118,9 @@ async def prepare_semantic_conversation_context(
             normalized_user_id,
         )
 
-    datasource_meta, resolved_config, directory = await _load_semantic_inputs(
+    datasource_meta, resolved_config = await _load_semantic_inputs(
         datasource_meta_task=datasource_meta_task,
         selected_config_task=selected_config_task,
-        directory_task=directory_task,
     )
     semantic_error = _semantic_config_error(
         semantic_config_id=normalized_config_id,
@@ -178,7 +151,6 @@ async def prepare_semantic_conversation_context(
         datasource_meta=datasource_meta,
         semantic_config_id=normalized_config_id,
         semantic_config=resolved_config,
-        semantic_config_directory_info=format_semantic_config_directory_for_prompt(directory),
         execution_targets=execution_targets,
         available_member_datasource_ids=available_member_ids,
         matched_member_datasource_ids=matched_member_ids,
@@ -192,25 +164,16 @@ async def _load_semantic_inputs(
     *,
     datasource_meta_task,
     selected_config_task,
-    directory_task,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     tasks = [datasource_meta_task]
     if selected_config_task is not None:
         tasks.append(selected_config_task)
-    if directory_task is not None:
-        tasks.append(directory_task)
     results = await asyncio.gather(*tasks, return_exceptions=True)
     datasource_meta = _result_or_none(results[0], "读取数据源组元信息失败")
     resolved_config = None
-    directory: list[dict[str, Any]] = []
-    result_index = 1
     if selected_config_task is not None:
-        resolved_config = _result_or_none(results[result_index], "加载手选指标集失败")
-        result_index += 1
-    if directory_task is not None:
-        raw_directory = _result_or_none(results[result_index], "读取指标集目录失败")
-        directory = [dict(item) for item in raw_directory or [] if isinstance(item, dict)]
-    return datasource_meta, resolved_config, directory
+        resolved_config = _result_or_none(results[1], "加载手选指标集失败")
+    return datasource_meta, resolved_config
 
 
 def _result_or_none(result: Any, failure_message: str) -> Any | None:
@@ -277,7 +240,6 @@ def _empty_context(
         datasource_meta=None,
         semantic_config_id=semantic_config_id,
         semantic_config=None,
-        semantic_config_directory_info="",
         execution_targets=[],
         available_member_datasource_ids=[],
         matched_member_datasource_ids=[],

@@ -245,6 +245,10 @@ def test_create_update_delete_lifecycle_and_name_scope_rules():
             await service.create_async("ds_a", name="新配置", scope_type="invalid")
         with pytest.raises(ValueError, match="名称已存在"):
             await service.create_async("ds_a", name="订单分析", scope_type="private", create_by="u1")
+        # 同组内模型名全局唯一（与唯一索引 (group_id, name, delete_flag) 对齐）：
+        # 不同 owner 的 private 同名同样拒绝，否则应用层放行后 DB 唯一键拒绝报 IntegrityError。
+        with pytest.raises(ValueError, match="名称已存在"):
+            await service.create_async("ds_a", name="个人分析", scope_type="private", create_by="u2")
 
         created = await service.create_async(
             "ds_a",

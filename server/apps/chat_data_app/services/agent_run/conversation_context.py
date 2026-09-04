@@ -34,7 +34,6 @@ async def build_conversation_prompt_context(
             "source_type": datasource.get("source_type") or "",
         },
         "datasource_group_context": str(prompt_context.get("datasource_group_context") or ""),
-        "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
         "semantic_configs": [_selected_semantic_config_item(selected_config)] if selected_config else [],
     }
 
@@ -46,6 +45,5 @@ def _empty_conversation_context(prompt_context: AgentPromptContext) -> dict[str,
             "source_type": (datasource or {}).get("source_type") or "",
         },
         "datasource_group_context": str(prompt_context.get("datasource_group_context") or ""),
-        "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
         "semantic_configs": [],
     }

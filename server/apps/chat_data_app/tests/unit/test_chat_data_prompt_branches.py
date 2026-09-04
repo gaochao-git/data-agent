@@ -34,13 +34,6 @@ def test_format_datasource_group_context_for_llm():
     assert chat_data.format_datasource_group_context_for_llm(None) == ""
 
 
-def test_format_semantic_config_directory_info_for_llm():
-    assert chat_data.format_semantic_config_directory_info_for_llm("模型目录") == "\n模型目录\n"
-    assert chat_data.format_semantic_config_directory_info_for_llm("  模型目录  ") == "\n模型目录\n"
-    assert chat_data.format_semantic_config_directory_info_for_llm("") == ""
-    assert chat_data.format_semantic_config_directory_info_for_llm(None) == ""
-
-
 # ---------------------------------------------------------------------------
 # build_semantic_layer_context（38->40 / 40->42）
 # ---------------------------------------------------------------------------
@@ -53,6 +46,20 @@ def test_build_semantic_layer_context_without_selection():
     assert "本轮未手动选择语义模型" in unselected
     # 空 dict 与 None 走同一分支
     assert chat_data.build_semantic_layer_context({}) == unselected
+
+
+def test_build_semantic_layer_context_directory_flow():
+    """未选中分支走 AI coding 式目录流程：dir_list -> file_grep -> file_read，不提 semantic_search。"""
+    unselected = chat_data.build_semantic_layer_context(None)
+
+    assert "dir_list" in unselected
+    assert "file_grep" in unselected
+    assert "file_read" in unselected
+    assert "semantic_search" not in unselected
+    # 已选模型分支同样只走目录工具
+    selected = chat_data.build_semantic_layer_context({"id": "cfg_1", "name": "交易域"})
+    assert "file_grep" in selected
+    assert "semantic_search" not in selected
 
 
 def test_build_semantic_layer_context_with_name_and_id():
@@ -96,7 +103,6 @@ def test_format_conversation_context_rejects_non_dict():
 def test_format_conversation_context_picks_selected_config():
     data_context = {
         "datasource_group_context": "数据源组说明",
-        "semantic_config_directory_info": "模型目录",
         "semantic_configs": [
             {"id": "cfg_other", "name": "未选中"},
             "junk-entry",
@@ -107,17 +113,15 @@ def test_format_conversation_context_picks_selected_config():
     text = chat_data._format_conversation_context(data_context)
 
     assert "数据源组说明" in text
-    assert "模型目录" in text
     assert "cfg_1" in text
     assert "未选中" not in text
 
 
 def test_build_data_context_text_prefers_explicit_data_context():
-    """传了 data_context 时忽略三个独立入参（82 真分支）。"""
+    """传了 data_context 时忽略独立入参（82 真分支）。"""
     text = chat_data.build_data_context_text(
         data_context={"datasource_group_context": "来自会话上下文"},
         datasource_group_context="被忽略",
-        semantic_config_directory_info="被忽略",
     )
 
     assert "来自会话上下文" in text
@@ -125,10 +129,9 @@ def test_build_data_context_text_prefers_explicit_data_context():
 
 
 def test_build_data_context_text_assembles_parts_when_no_data_context():
-    """未传 data_context 时按三段拼装，空段自动跳过（82 假分支 + 89 过滤）。"""
+    """未传 data_context 时按两段拼装，空段自动跳过（82 假分支 + 89 过滤）。"""
     text = chat_data.build_data_context_text(
         datasource_group_context="数据源组说明",
-        semantic_config_directory_info=None,
     )
 
     assert text.startswith("## 数据源组智能问数说明")
@@ -256,9 +259,10 @@ def test_system_prompt_inlines_data_context_parts():
     prompt = chat_data.build_unified_system_prompt(
         AgentRuntimeOptions(),
         datasource_group_context="数据源组说明",
-        semantic_config_directory_info="模型目录",
     )
 
     assert "# 数据上下文" in prompt
     assert "## 数据源组智能问数说明\n数据源组说明" in prompt
-    assert "模型目录" in prompt
+    # 系统提示词不再枚举模型目录，只引导 dir_list 浏览工作区目录
+    assert "当前可见语义模型目录" not in prompt
+    assert "dir_list" in prompt

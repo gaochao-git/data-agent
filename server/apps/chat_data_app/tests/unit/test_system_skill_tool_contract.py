@@ -63,10 +63,11 @@ def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
 def test_semantic_query_skill_contains_complete_query_contract():
     semantic_query = _skill_text("semantic-query")
 
-    assert 'semantic_search(operation="search_models"' in semantic_query
-    assert 'semantic_search(operation="list_fields"' in semantic_query
-    assert "当前用户可见的全部启用语义模型" in semantic_query
-    assert "不要按指标、维度或分析子问题拆成多个重复或并行" in semantic_query
+    # AI coding 式目录路线：dir_list -> file_grep -> file_read，不引导 semantic_search
+    assert "当前用户可见（当前数据源组）的全部启用语义模型" in semantic_query
+    assert "`/mnt/user-data/workspace/semantic/`" in semantic_query
+    assert "不要为找模型全量逐个读取目录文件" in semantic_query
+    assert "dir_list" in semantic_query
     assert "file_grep" in semantic_query
     assert "file_read" in semantic_query
     assert "value_type" in semantic_query

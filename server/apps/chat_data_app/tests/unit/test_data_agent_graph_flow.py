@@ -67,6 +67,23 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     assert bash_tool_names[:-1] == tool_names
 
 
+def test_assemble_tools_semantic_search_switch(monkeypatch, tmp_path):
+    runtime, options = _runtime(tmp_path, bash_enabled=False)
+
+    def _tool_names():
+        return [tool.name for tool in assemble_tools(
+            options, runtime,
+            identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
+            datasource_context=DatasourceContext(datasource_id="ds_a"),
+        )]
+
+    monkeypatch.setattr(data_agent, "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", False)
+    assert "semantic_search" not in _tool_names()
+
+    monkeypatch.setattr(data_agent, "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", True)
+    assert "semantic_search" in _tool_names()
+
+
 def test_create_data_agent_uses_standard_middleware_without_model_fallback(monkeypatch, tmp_path):
     captured = {}
     bound = []

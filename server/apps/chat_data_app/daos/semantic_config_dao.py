@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from utils.logger import get_logger
@@ -14,6 +14,24 @@ from .dao_session import session_scope
 from .datasource_dao_helpers import _batch_items, _format_time, _load_json
 
 logger = get_logger(__name__)
+
+# 软删除时的改名表达式。
+#
+# 表上有唯一索引 (group_id, semantic_config_name, delete_flag)，而 delete_flag 只有 0/1 两态，
+# 因此「删除 → 用同名重建 → 再次删除」会让两条记录都落到 (name, 1) 上，撞唯一键报 IntegrityError。
+# 删除时把自增主键拼进名字，保证任意多次删除的 (group_id, name, delete_flag) 三元组都互不相同。
+#
+# 必须在同一条 UPDATE 的 SQL 表达式里完成，不能用 Python 读-改-写：
+# soft_delete_by_group_id_async 是单条批量 UPDATE（一次可删整组），没有逐行拼值的机会，且读改写有并发竞态。
+#
+# 长度：LEFT(name, 92) + "__d" + id(≤7) + "_" + yyyyMMdd(8) = 110 < varchar(128)。
+_DELETED_NAME_EXPR = func.concat(
+    func.left(SemanticConfig.semantic_config_name, 92),
+    "__d",
+    SemanticConfig.id,
+    "_",
+    func.date_format(func.now(), "%Y%m%d"),
+)
 
 
 class SemanticConfigDao:
@@ -191,12 +209,20 @@ class SemanticConfigDao:
         return True
 
     async def soft_delete_async(self, config_id: str, update_by: str = "", update_by_name: str = "") -> None:
+        """软删除单个语义配置。
+
+        带 delete_flag == 0 条件保证幂等（重复调用不会二次改名、也不会重复累加后缀）。
+        """
         async with session_scope() as session:
             await session.execute(
                 update(SemanticConfig)
-                .where(SemanticConfig.semantic_config_id == config_id)
+                .where(
+                    SemanticConfig.semantic_config_id == config_id,
+                    SemanticConfig.delete_flag == 0,
+                )
                 .values(
                     delete_flag=1,
+                    semantic_config_name=_DELETED_NAME_EXPR,
                     update_by=update_by or "",
                     update_by_name=update_by_name or "",
                 )
@@ -211,6 +237,7 @@ class SemanticConfigDao:
                 .where(SemanticConfig.group_id == group_id, SemanticConfig.delete_flag == 0)
                 .values(
                     delete_flag=1,
+                    semantic_config_name=_DELETED_NAME_EXPR,
                     update_by=update_by or "",
                     update_by_name=update_by_name or "",
                 )

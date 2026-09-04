@@ -56,6 +56,9 @@ CREATE TABLE `chat_data_agent_inbox` (
 
 ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
 ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
+
+SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
+ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
 ```
 
 ## 依赖变更

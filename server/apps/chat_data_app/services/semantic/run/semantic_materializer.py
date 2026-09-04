@@ -19,7 +19,12 @@ logger = get_logger(__name__)
 
 _CACHE_LIMIT = 256
 _YAML_CACHE: OrderedDict[str, str] = OrderedDict()
-_FILE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# 语义模型 YAML 快照目录（受管只读区，仅供 file_grep/file_read）
+SEMANTIC_SNAPSHOT_DIR = "/mnt/user-data/workspace/semantic"
+# unicode 感知：保留中文，仅把空白/路径分隔等不安全字符折叠成下划线
+_FILE_COMPONENT_RE = re.compile(r"[^\w.-]+")
+_MODEL_NAME_MAX_CHARS = 40
+_ID_SUFFIX_CHARS = 8
 
 
 def _config_id(config: dict[str, Any]) -> str:
@@ -37,11 +42,27 @@ def _config_cache_key(config: dict[str, Any], source_type: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _safe_file_name(config_id: str) -> str:
-    value = _FILE_COMPONENT_RE.sub("_", str(config_id or "").strip()).strip("._")
-    if not value:
-        raise ValueError("语义配置 ID 不能用于快照文件名")
-    return f"{value}.yaml"
+def _safe_file_name(config: dict[str, Any]) -> str:
+    """生成 `{清洗后的模型名}__{id后缀}.yaml`，让 grep/list_dir 输出自带模型语义。
+
+    id 后缀保证清洗后碰撞（如 `模型A/B` 与 `模型A B` 同折成 `模型A_B`）、
+    跨数据源组同名时文件名仍互不相同；模型名整体唯一由
+    `uniq_group_id_config_name_delete_flag` 唯一索引背书。
+    """
+    config_id = _config_id(config)
+    name = str(config.get("name") or config.get("semantic_config_name") or "").strip()
+    cleaned_name = _FILE_COMPONENT_RE.sub("_", name).strip("._")[:_MODEL_NAME_MAX_CHARS]
+    cleaned_id = _FILE_COMPONENT_RE.sub("_", config_id).strip("._")
+    # 取末段（config_id 形如 sc_<时间戳>_<uuid12>）再截后 8 位，避免把分隔符带进后缀
+    id_tail = cleaned_id.rsplit("_", 1)[-1] if cleaned_id else ""
+    id_suffix = id_tail[-_ID_SUFFIX_CHARS:]
+    if not cleaned_name and not id_suffix:
+        raise ValueError("语义配置缺少可用于快照文件名的名称与 ID")
+    if not id_suffix:
+        return f"{cleaned_name}.yaml"
+    if not cleaned_name:
+        return f"{id_suffix}.yaml"
+    return f"{cleaned_name}__{id_suffix}.yaml"
 
 
 def _directory_item(config: dict[str, Any], path: str = "") -> dict[str, Any]:
@@ -64,6 +85,7 @@ async def _load_selected_semantic_config(
     datasource_id: str | None,
     semantic_config_id: str,
     user_id: str | None,
+    column_dicts: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Reload one selected model with the current user's authorization."""
     normalized_datasource_id = str(datasource_id or "").strip()
@@ -75,6 +97,7 @@ async def _load_selected_semantic_config(
         normalized_datasource_id,
         normalized_config_id,
         normalized_user_id,
+        column_dicts=column_dicts,
     )
     if not isinstance(config, dict) or not config.get("enabled", True):
         return None
@@ -84,6 +107,46 @@ async def _load_selected_semantic_config(
     if not result.get("id"):
         result["id"] = normalized_config_id
     return result
+
+
+def enabled_candidate_ids(configs: list[dict[str, Any]] | None) -> list[str]:
+    """取全量可见且启用的候选模型 id（保序去重）。"""
+    ids: list[str] = []
+    for config in configs or []:
+        config_id = str((config or {}).get("id") or "").strip()
+        if config_id and bool(config.get("enabled", True)) and config_id not in ids:
+            ids.append(config_id)
+    return ids
+
+
+async def prematerialize_enabled_semantic_models(
+    *,
+    workspace_runtime: Any,
+    datasource_id: str | None,
+    user_id: str | None,
+    source_type: str = "",
+) -> int:
+    """Run 启动前把当前数据源组全部启用模型物化到 workspace/semantic/。
+
+    让模型无需先触发 semantic_search 即可用 dir_list/file_grep/file_read
+    检索语义目录；YAML 内容有 sha256 缓存，只有首次或配置变更才真正写盘。
+    返回物化文件数；未绑定数据源组或无启用模型时返回 0。失败由调用方兜底。
+    """
+    normalized_datasource_id = str(datasource_id or "").strip()
+    if not normalized_datasource_id or workspace_runtime is None:
+        return 0
+    runtime_configs = await get_semantic_config_service().get_runtime_configs_async(
+        normalized_datasource_id, str(user_id or "")
+    )
+    materialized = await materialize_runtime_semantic_models(
+        workspace_runtime=workspace_runtime,
+        datasource_id=normalized_datasource_id,
+        user_id=str(user_id or ""),
+        source_type=str(source_type or ""),
+        semantic_config_ids=enabled_candidate_ids(runtime_configs),
+        prune_stale=True,
+    )
+    return len(materialized.get("directory") or [])
 
 
 def _cache_get(key: str) -> str | None:
@@ -100,6 +163,31 @@ def _cache_put(key: str, value: str) -> None:
         _YAML_CACHE.popitem(last=False)
 
 
+async def _prune_stale_semantic_files(workspace_runtime: Any, keep_paths: set[str]) -> None:
+    """删除 semantic 目录中不在保留集内的残留 YAML（停用/删除模型遗留）。
+
+    清理失败只告警不抛错：残留文件最多浪费一次检索轮次，不影响正确性。
+    """
+    try:
+        existing = await workspace_runtime.list_dir(path=SEMANTIC_SNAPSHOT_DIR, max_depth=1)
+    except FileNotFoundError:
+        return
+    except Exception as exc:  # noqa: BLE001 - 清理属尽力而为
+        logger.warning("列举语义目录失败，跳过残留清理: %s", exc)
+        return
+    for item in existing or []:
+        if not isinstance(item, dict) or item.get("type") != "file":
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path.endswith(".yaml") or path in keep_paths:
+            continue
+        try:
+            await workspace_runtime.delete_path(path=path, recursive=False, expected_type="file")
+            logger.info("清理语义目录残留文件: %s", path)
+        except Exception as exc:  # noqa: BLE001 - 清理属尽力而为
+            logger.warning("清理语义目录残留文件失败: path=%s error=%s", path, exc)
+
+
 async def materialize_runtime_semantic_models(
     *,
     workspace_runtime: Any,
@@ -107,11 +195,16 @@ async def materialize_runtime_semantic_models(
     user_id: str | None,
     source_type: str = "",
     semantic_config_ids: list[str] | None = None,
+    prune_stale: bool = False,
 ) -> dict[str, Any]:
     """Reload and overwrite only the selected semantic model files.
 
     The database remains authoritative. The workspace YAML is a model-readable
     reference and is never used as the query execution source.
+
+    ``prune_stale`` 仅应在传入“全部启用模型”完整范围时开启（预物化 /
+    search_models），会删除目录里不属于本次物化清单的残留 YAML；
+    单模型物化（list_fields）禁止开启，否则会误删其它模型文件。
     """
     normalized_ids = []
     for config_id in semantic_config_ids or []:
@@ -121,8 +214,13 @@ async def materialize_runtime_semantic_models(
     if not normalized_ids:
         return {"directory": [], "paths": {}, "configs": {}}
 
+    # 字段数据字典按数据源整体拉取一次，所有模型复用；
+    # 逐模型拉取会让全量物化时 DB 压力随模型数线性放大。
+    service = get_semantic_config_service()
+    column_dicts = await service.get_column_dicts_async(str(datasource_id or ""))
+
     loaded = await asyncio.gather(*(
-        _load_selected_semantic_config(datasource_id, config_id, user_id)
+        _load_selected_semantic_config(datasource_id, config_id, user_id, column_dicts=column_dicts)
         for config_id in normalized_ids
     ), return_exceptions=True)
     configs: list[dict[str, Any]] = []
@@ -133,7 +231,7 @@ async def materialize_runtime_semantic_models(
         if isinstance(result, dict) and _config_id(result) and bool(result.get("enabled", True)):
             configs.append(dict(result))
 
-    root = PurePosixPath("/mnt/user-data") / "workspace" / "semantic"
+    root = PurePosixPath(SEMANTIC_SNAPSHOT_DIR)
     converter = ChatDataToOssieConverter()
     entries: list[tuple[str, str]] = []
     directory: list[dict[str, Any]] = []
@@ -157,12 +255,17 @@ async def materialize_runtime_semantic_models(
             continue
         rendered_config, content, hit = result
         config_id = _config_id(rendered_config)
-        path = str(root / _safe_file_name(config_id))
+        path = str(root / _safe_file_name(rendered_config))
         entries.append((path, content))
         directory.append(_directory_item(rendered_config, path))
         cache_hits += int(hit)
 
     await workspace_runtime.write_internal_text_files(entries)
+    if prune_stale:
+        # 保留集以“加载成功的启用模型”为准而非 entries：
+        # 转换失败的模型仍启用，不应因本轮转换异常丢掉原本有效的 YAML。
+        keep_paths = {str(root / _safe_file_name(config)) for config in configs}
+        await _prune_stale_semantic_files(workspace_runtime, keep_paths)
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s selected_ids=%s files=%s cache_hits=%s backend=%s",
         datasource_id,
@@ -180,4 +283,5 @@ async def materialize_runtime_semantic_models(
 
 __all__ = [
     "materialize_runtime_semantic_models",
+    "SEMANTIC_SNAPSHOT_DIR",
 ]

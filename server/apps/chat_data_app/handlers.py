@@ -59,6 +59,7 @@ from .services.semantic.run.semantic_conversation_context import (
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
 )
+from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
 
 logger = get_logger(__name__)
 
@@ -1348,6 +1349,23 @@ async def _run_chat_data_agent_stream(
         user_id=user_id or "system",
         backend=runtime_options.workspace_backend,
     )
+    # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
+    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
+    # 失败不阻断本轮，semantic_search 调用时仍会兜底物化。
+    try:
+        prematerialized_total = await prematerialize_enabled_semantic_models(
+            workspace_runtime=workspace_runtime,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+        )
+        if prematerialized_total:
+            logger.info(
+                "语义模型预物化完成: thread_id=%s datasource_id=%s files=%s",
+                thread_id, datasource_id, prematerialized_total,
+            )
+    except Exception as err:
+        logger.warning("语义模型预物化失败，本轮由 semantic_search 兜底: %s", err)
     data_context = await build_conversation_prompt_context(prompt_context)
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])
@@ -1491,7 +1509,6 @@ async def _run_chat_data_agent_stream(
                 data_context=data_context,
                 workspace_root=workspace_paths["root"],
                 datasource_group_context=prompt_context["datasource_group_context"],
-                semantic_config_directory_info=prompt_context.get("semantic_config_directory_info"),
                 available_skills_xml=available_skills_xml,
             )
             log_phase("build_system_prompt")

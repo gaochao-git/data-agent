@@ -16,20 +16,21 @@ def format_datasource_group_context_for_llm(context: str) -> str:
     return f"\n## 数据源组智能问数说明\n{text}\n"
 
 
-def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
-    """格式化当前可见语义模型轻量目录，供 system prompt 注入。"""
-    text = str(directory_info or "").strip()
-    if not text:
-        return ""
-    return f"\n{text}\n"
-
-
 def build_semantic_layer_context(semantic_config: dict | None) -> str:
-    """构建统一语义层上下文（问数态使用）。"""
+    """构建统一语义层上下文（问数态使用）。
+
+    检索走 AI coding 式目录路线：dir_list 看目录 -> file_grep 检索 -> file_read 精读，
+    不在提示词层面枚举模型清单，也不引导 semantic_search 兜底。
+    """
     if not semantic_config:
         return (
             "## 当前语义模型\n"
-            "本轮未手动选择语义模型。语义模型目录或业务范围概览可直接基于“当前可见语义模型目录”回答；目录中的 ID 只用于选择，不表示语义文件已经生成。需要具体指标、维度、枚举或业务口径时，先调用 `semantic_search(operation=\"search_models\")`，再对候选模型调用 `list_fields`。需要确认字段完整定义、关系、原始表列或整体结构时，按工具返回的实际路径用 `file_grep`/`file_read` 读取。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
+            "本轮未手动选择语义模型。当前数据源组全部启用语义模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`"
+            "（文件名 `{模型名}__{id后缀}.yaml`），按以下步骤选择模型：\n"
+            "1. 用 `dir_list` 浏览该目录得到模型清单，结合用户问题圈定候选范围；\n"
+            "2. 多个模型可能包含相关内容、或模型名对不上业务术语时，用 `file_grep` 按指标名、维度名或业务关键词在该目录内检索，定位包含关键词的模型；\n"
+            "3. 对候选模型用 `file_read` 精读 YAML，比较指标、维度、关系与口径后确定使用哪个模型。\n"
+            "不要为找模型全量逐个读取目录文件；目录中找不到合适模型时，向用户澄清。\n"
         )
 
     config_id = str(semantic_config.get("id") or "").strip()
@@ -42,7 +43,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     return (
         header
         + "。这是本轮优先参考，不代表锁定。\n"
-        + "需要具体指标、维度、枚举、关联或表列时，必须调用 `semantic_search` 获取实际语义模型和字段定义；可根据检索结果使用其他可见语义模型。\n"
+        + "该模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（文件名 `{模型名}__{id后缀}.yaml`）：需要具体指标、维度、枚举、关联或表列时，先用 `file_glob` 按模型名定位文件，`file_read` 精读确认口径；需要交叉核对其它模型时，用 `file_grep` 检索该目录或 `dir_list` 浏览。\n"
     )
 
 
@@ -51,7 +52,6 @@ def _format_conversation_context(data_context: dict) -> str:
     if not isinstance(data_context, dict):
         return "{}"
     datasource_group_context = str(data_context.get("datasource_group_context") or "").strip()
-    semantic_config_directory_info = str(data_context.get("semantic_config_directory_info") or "").strip()
     semantic_configs = data_context.get("semantic_configs") or []
     selected_config = next(
         (
@@ -65,7 +65,6 @@ def _format_conversation_context(data_context: dict) -> str:
         section
         for section in (
             datasource_group_context,
-            semantic_config_directory_info,
             build_semantic_layer_context(selected_config),
         )
         if section
@@ -76,14 +75,12 @@ def build_data_context_text(
     *,
     data_context: dict | None = None,
     datasource_group_context: str | None = None,
-    semantic_config_directory_info: str | None = None,
 ) -> str:
     """统一的数据上下文文本入口。"""
     if data_context is not None:
         return _format_conversation_context(data_context)
     parts = [
         format_datasource_group_context_for_llm(datasource_group_context),
-        format_semantic_config_directory_info_for_llm(semantic_config_directory_info),
         build_semantic_layer_context(None),
     ]
     return "\n".join(p for p in parts if p).strip()
@@ -251,13 +248,11 @@ def build_unified_system_prompt(
     workspace_root: str | None = None,
     available_skills_xml: str | None = None,
     datasource_group_context: str | None = None,
-    semantic_config_directory_info: str | None = None,
 ) -> str:
     """构造单一 Agent 的系统提示词。"""
     context_text = build_data_context_text(
         data_context=data_context,
         datasource_group_context=datasource_group_context,
-        semantic_config_directory_info=semantic_config_directory_info,
     )
 
     sections: list[str] = [ROLE_BLOCK]

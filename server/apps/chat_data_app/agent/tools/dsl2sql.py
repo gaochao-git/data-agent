@@ -11,6 +11,7 @@ from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
 )
+from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
 from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
 from .common import json_dumps, normalize_json_like_payload
@@ -68,7 +69,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
                     for card in dsl
                 ):
-                    return "dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先调用 semantic_search 搜索语义模型"
+                    return f"dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}"
                 result = await validate_dashboard_spec_payload(
                     dashboard_spec={"cards": dsl},
                     datasource_id=bound_datasource_id,
@@ -90,7 +91,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
             if not isinstance(dsl, dict):
                 return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
             if not effective_semantic_config_id:
-                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 semantic_search 搜索语义模型后显式传入语义模型ID"
+                return f"dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID"
             semantic_config = await load_semantic_model(
                 bound_datasource_id,
                 effective_semantic_config_id,

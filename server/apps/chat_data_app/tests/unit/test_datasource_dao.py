@@ -722,6 +722,20 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
 
     asyncio.run(run_checks())
 
+    # 软删除语句必须：① where 带 delete_flag == 0（幂等，重复删除不二次改名）；
+    # ② 名字改成 concat(left(name,92),'__d',id,'_',日期)——delete_flag 只有两态，
+    # 「删除→同名重建→再删」会让两条记录都落到 (name, 1) 上，改名保证三元组唯一。
+    from sqlalchemy.sql.dml import Update as sa_Update
+
+    # soft_delete_async 是本测试最后发出的 semantic_config 写操作，取最后一条 update 断言
+    semantic_updates = [s for s in executed if isinstance(s, sa_Update) and s.table.name == "semantic_config"]
+    assert semantic_updates
+    delete_sql = str(semantic_updates[-1].compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "delete_flag = 0" in delete_sql
+    assert "concat(left(" in delete_sql
+    assert "'__d'" in delete_sql
+    assert "date_format(now()" in delete_sql
+
     sql_texts = [str(stmt) for stmt in executed]
     assert any("INSERT INTO datasource_group" in sql for sql in sql_texts)
     assert any("UPDATE datasource_group" in sql for sql in sql_texts)

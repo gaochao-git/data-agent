@@ -261,20 +261,32 @@ class SemanticConfigService:
             column_dicts = {}
         return [self._merge_column_dict(config, column_dicts) for config in configs]
 
-    async def get_runtime_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[Dict[str, Any]]:
+    async def get_column_dicts_async(self, datasource_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+        """读取数据源字段字典；失败降级为空 dict（与 get_runtime_config_async 的容错口径一致）。"""
+        try:
+            return await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
+        except Exception as exc:
+            logger.warning("读取字段数据字典失败，使用原始语义配置: datasource_id=%s error=%s", datasource_id, exc)
+            return {}
+
+    async def get_runtime_config_async(
+        self,
+        datasource_id: str,
+        config_id: str,
+        user_id: str = "",
+        *,
+        column_dicts: Optional[Dict[tuple[str, str], Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         config = await self.get_config_async(datasource_id, config_id, user_id)
         if not config:
             return None
-        try:
-            column_dicts = await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
-        except Exception as exc:
-            logger.warning("读取字段数据字典失败，使用原始语义配置: datasource_id=%s error=%s", datasource_id, exc)
-            column_dicts = {}
+        if column_dicts is None:
+            column_dicts = await self.get_column_dicts_async(datasource_id)
         return self._merge_column_dict(config, column_dicts)
 
-    async def _name_exists_async(self, group_id: str, name: str, exclude_id: str = "", scope_type: str = "public", create_by: str = "") -> bool:
+    async def _name_exists_async(self, group_id: str, name: str, exclude_id: str = "") -> bool:
         configs = await self.dao.get_by_group_id_async(group_id)
-        return self._name_exists(configs, name, exclude_id=exclude_id, scope_type=scope_type, create_by=create_by)
+        return self._name_exists(configs, name, exclude_id=exclude_id)
 
     @staticmethod
     def _name_exists(
@@ -282,24 +294,26 @@ class SemanticConfigService:
         name: str,
         *,
         exclude_id: str = "",
-        scope_type: str = "public",
-        create_by: str = "",
     ) -> bool:
+        """同组内的模型名判重。
+
+        判重口径必须与唯一索引 (group_id, semantic_config_name, delete_flag) 完全一致：
+        **同组内模型名全局唯一，不区分 scope_type、不区分 create_by。**
+
+        若此处放宽（例如允许不同用户的 private 模型同名），应用层会先放行、再由 DB
+        唯一键拒绝，最终以 IntegrityError 而非友好 ValueError 的形式暴露给用户。
+
+        注意入参 configs 来自 ``get_by_group_id_async``，已过滤 delete_flag == 0，
+        这与唯一索引包含 delete_flag 的语义一致——已删除的记录不参与判重。
+        """
         normalized_name = str(name or "").strip()
-        normalized_scope = str(scope_type or "public").strip().lower()
-        normalized_user = str(create_by or "").strip()
+        if not normalized_name:
+            return False
         for config in configs:
             current_id = str(config.get("id") or "").strip()
             if exclude_id and current_id == exclude_id:
                 continue
-            if str(config.get("name") or "").strip() != normalized_name:
-                continue
-            current_scope = _scope_type(config)
-            current_owner = str(config.get("create_by") or "").strip()
-            if normalized_scope == "private":
-                if current_scope == "public" or (current_scope == "private" and current_owner == normalized_user):
-                    return True
-            elif current_scope in {"public", "private"}:
+            if str(config.get("name") or "").strip() == normalized_name:
                 return True
         return False
 
@@ -313,8 +327,7 @@ class SemanticConfigService:
         scope_type = str(kwargs.get("scope_type") or "private").strip().lower()
         if scope_type not in {"public", "private"}:
             raise ValueError("语义配置范围只能是 public 或 private")
-        operator = str(kwargs.get("create_by") or "").strip()
-        if await self._name_exists_async(group_id, name, scope_type=scope_type, create_by=operator):
+        if await self._name_exists_async(group_id, name):
             raise ValueError(f"语义配置名称已存在: {name}")
         config = self._build_persisted_config(group_id, **kwargs)
         if not await self.dao.upsert_async(group_id, config):
@@ -361,12 +374,7 @@ class SemanticConfigService:
             if (
                 table_name in configured_tables
                 or generated_name in existing_names
-                or self._name_exists(
-                    all_configs,
-                    generated_name,
-                    scope_type="public",
-                    create_by=create_by,
-                )
+                or self._name_exists(all_configs, generated_name)
             ):
                 result["skipped"] += 1
                 self._set_generation_item(result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order)
@@ -585,7 +593,7 @@ class SemanticConfigService:
         name = str(kwargs["name"]).strip() if kwargs.get("name") is not None else str(current.get("name") or "").strip()
         if not name:
             raise ValueError("语义配置名称不能为空")
-        if await self._name_exists_async(str(current.get("group_id") or ""), name, exclude_id=config_id, scope_type=current.get("scope_type", "public"), create_by=current.get("create_by", "")):
+        if await self._name_exists_async(str(current.get("group_id") or ""), name, exclude_id=config_id):
             raise ValueError(f"语义配置名称已存在: {name}")
         next_config = {
             **current,

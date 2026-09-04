@@ -9,6 +9,7 @@ from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
 from ...schema import SemanticQueryInput
+from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_runtime_semantic_config
 from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     SemanticCompileOptions,
@@ -131,7 +132,7 @@ async def _resolve_tool_context(
     datasource_id = _get_datasource_id_from_state(state)
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     if not normalized_semantic_config_id:
-        return _tool_error("缺少指标集ID，请先调用 semantic_search 搜索语义模型后显式传入 semantic_config_id")
+        return _tool_error(f"缺少指标集ID，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入 semantic_config_id")
     if not datasource_id:
         return _tool_error("当前会话未绑定数据源")
 

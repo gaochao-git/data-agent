@@ -65,7 +65,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         datasource_meta={"query_context": ""} if datasource_id else None,
         semantic_config_id=semantic_config_id,
         semantic_config=semantic_config,
-        semantic_config_directory_info=("" if semantic_config else "## 当前可见指标集目录\n1. 名称：测试指标集"),
         execution_targets=targets,
         available_member_datasource_ids=selected_ids,
         matched_member_datasource_ids=matched_ids,
@@ -409,10 +408,7 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
         return fake_graph
 
     monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
-    _override_semantic_context(
-        monkeypatch,
-        semantic_config_directory_info="## 当前可见指标集目录\n1. 名称：订单分析",
-    )
+    _override_semantic_context(monkeypatch)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_auto_semantic_search",
@@ -424,7 +420,10 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     joined = "".join(events)
     assert "5+5=10" in joined
     assert "prompt_context" not in fake_graph.initial_state
-    assert "## 当前可见指标集目录\n1. 名称：订单分析" in captured_agent_kwargs["model_invocation"].system_prompt
+    assert "## 当前语义模型" in captured_agent_kwargs["model_invocation"].system_prompt
+    # 系统提示词不再枚举模型目录，未选中时引导 dir_list -> file_grep -> file_read
+    assert "当前可见指标集目录" not in captured_agent_kwargs["model_invocation"].system_prompt
+    assert "dir_list" in captured_agent_kwargs["model_invocation"].system_prompt
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
 

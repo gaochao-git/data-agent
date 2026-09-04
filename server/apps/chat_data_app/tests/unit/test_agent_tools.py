@@ -19,6 +19,7 @@ from apps.chat_data_app.agent.tools import semantic_query as agent_tools
 from apps.chat_data_app.agent.tools.current_time import get_current_time_payload, get_current_time_tool
 from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services.sql_run import runtime as query_runtime
+from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services import sql_assist_context
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 
@@ -1020,7 +1021,7 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
         "state": {},
     }))
 
-    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 semantic_search 搜索语义模型后显式传入 semantic_config_id"
+    assert missing_config == f"semantic_query_tool 执行失败: 缺少指标集ID，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入 semantic_config_id"
     assert bad_dsl == "semantic_query_tool 执行失败: dsl 必须是对象"
     assert mixed_payload == "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
 

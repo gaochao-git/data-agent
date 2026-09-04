@@ -21,8 +21,20 @@ from apps.chat_data_app.agent.tools.semantic_search import (
     _selection_to_tool_payload,
     create_semantic_search,
 )
-from apps.chat_data_app.services.semantic.run.semantic_conversation_context import format_semantic_config_directory_for_prompt
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import list_runtime_semantic_config_directory, load_runtime_semantic_config
+
+
+def _patch_runtime_configs(monkeypatch, configs=None):
+    """打桩 _search_models 的全量候选拉取，避免触库。"""
+
+    class FakeConfigService:
+        async def get_runtime_configs_async(self, datasource_id, user_id=""):
+            return list(configs or [])
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.tools.semantic_search.get_semantic_config_service",
+        lambda: FakeConfigService(),
+    )
 
 
 def test_semantic_search_description_requires_one_complete_model_search():
@@ -46,6 +58,7 @@ def test_extract_datasource_id_from_state():
 
 def test_semantic_search_uses_bound_datasource_group_context(monkeypatch):
     captured = {}
+    _patch_runtime_configs(monkeypatch, [])
 
     async def fake_search_semantic_models(**kwargs):
         captured.update(kwargs)
@@ -71,31 +84,6 @@ def test_extract_user_query_reads_last_human_message():
     assert extract_user_query({}) is None
     assert extract_user_query({"messages": [HumanMessage(content="第一次"), AIMessage(content="回复"), HumanMessage(content="第二次")]}) == "第二次"
     assert extract_user_query({"messages": [AIMessage(content="没有用户消息")]}) is None
-
-
-def test_format_semantic_config_directory_for_prompt_keeps_full_description():
-    long_description = "订单经营分析" * 40
-    prompt = format_semantic_config_directory_for_prompt([
-        {
-            "id": "sc_order",
-            "name": "订单分析",
-            "description": long_description,
-            "metrics_total": 3,
-            "dimensions_total": 5,
-        },
-        {"name": "", "description": "无名称会跳过"},
-        "invalid",
-    ])
-
-    assert "## 当前可见语义模型目录" in prompt
-    assert "ID：sc_order" in prompt
-    assert "名称：订单分析" in prompt
-    assert "YAML路径" not in prompt
-    assert "/mnt/user-data/workspace/semantic/sc_order.yaml" not in prompt
-    assert f"描述：{long_description}" in prompt
-    assert "指标数：3；维度数：5" in prompt
-    assert "无名称会跳过" not in prompt
-    assert format_semantic_config_directory_for_prompt([]) == ""
 
 
 def test_selection_to_tool_payload_branches():
@@ -226,6 +214,10 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
 
 def test_semantic_search_uses_bound_datasource_id(monkeypatch):
     captured = {}
+    _patch_runtime_configs(monkeypatch, [
+        {"id": "sc_a", "enabled": True},
+        {"id": "sc_b", "enabled": False},
+    ])
 
     async def fake_search_semantic_models(
         datasource_id,
@@ -235,6 +227,7 @@ def test_semantic_search_uses_bound_datasource_id(monkeypatch):
         datasource_group_context=None,
         **_kwargs,
     ):
+        assert "semantic_configs" in _kwargs, "打分器必须复用调用方拉取的全量候选"
         captured.update({
             "datasource_id": datasource_id,
             "user_query": user_query,
@@ -281,13 +274,18 @@ def test_semantic_search_uses_bound_datasource_id(monkeypatch):
     assert captured["model_id"] == "model_a"
     assert captured["user_id"] == "u1"
     assert captured["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
+    # 全量物化：物化范围是全部启用候选（sc_b 被禁用被排除），不是 LLM 召回的 top5
     assert captured["materialize"]["semantic_config_ids"] == ["sc_a"]
     assert payload["semantic_config_ids"] == ["sc_a"]
     assert payload["semantic_configs"]["sc_a"]["name"] == "订单分析"
     assert payload["semantic_configs"]["sc_a"]["path"].endswith("/sc_a.yaml")
+    assert payload["semantic_dir"] == "/mnt/user-data/workspace/semantic"
+    assert payload["materialized_total"] == 1
 
 
 def test_semantic_search_returns_lightweight_references_for_all_selected_configs(monkeypatch):
+    _patch_runtime_configs(monkeypatch, [{"id": "sc_order", "enabled": True}, {"id": "sc_user", "enabled": True}])
+
     async def fake_search_semantic_models(datasource_id, user_query, **_kwargs):
         assert datasource_id == "ds_bound"
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
@@ -313,6 +311,8 @@ def test_semantic_search_returns_lightweight_references_for_all_selected_configs
 
 
 def test_semantic_search_returns_selected_reference_without_full_config(monkeypatch):
+    _patch_runtime_configs(monkeypatch, [{"id": "sc_order", "enabled": True}])
+
     async def fake_search_semantic_models(**_kwargs):
         return {"semantic_config_ids": ["sc_order"]}
 
@@ -350,6 +350,8 @@ def test_semantic_search_returns_selected_reference_without_full_config(monkeypa
 
 
 def test_semantic_search_returns_all_selected_configs_without_own_context_budget(monkeypatch):
+    _patch_runtime_configs(monkeypatch, [{"id": "sc_order", "enabled": True}, {"id": "sc_user", "enabled": True}])
+
     async def fake_search_semantic_models(**_kwargs):
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
 
@@ -532,6 +534,7 @@ def test_semantic_search_list_fields_filters_and_rejects_inaccessible_model(monk
 
 
 def test_semantic_search_error_branches(monkeypatch):
+    _patch_runtime_configs(monkeypatch, [])
     select_tool = create_semantic_search(datasource_id="ds_a")
 
     missing_datasource = asyncio.run(create_semantic_search().ainvoke({"operation": "search_models", "query": "查询订单"}))

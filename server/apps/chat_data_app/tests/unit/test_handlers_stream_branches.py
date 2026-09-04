@@ -38,7 +38,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         datasource_meta={"query_context": ""} if datasource_id else None,
         semantic_config_id=semantic_config_id,
         semantic_config=semantic_config,
-        semantic_config_directory_info="",
         execution_targets=[],
         available_member_datasource_ids=selected_member_ids,
         matched_member_datasource_ids=[],

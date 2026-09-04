@@ -8,6 +8,7 @@ from langchain.agents import create_agent
 from ..agent.context.context_budget import ContextRequestBudget
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
+from ..services.runtime_config import CHAT_DATA_SEMANTIC_SEARCH_ENABLED
 from .agent_runtime import (
     build_standard_agent_middleware,
     create_streaming_chat_model,
@@ -106,13 +107,17 @@ def assemble_tools(
     datasource = datasource_context or DatasourceContext()
     invocation = model_invocation or ModelInvocationConfig()
     user_id = identity.user_id if identity.user_id is not None else "system"
-    semantic_search = create_semantic_search(
-        model_id=invocation.model_id,
-        datasource_id=datasource.datasource_id,
-        user_id=user_id,
-        datasource_group_context=datasource.datasource_group_context,
-        source_type=datasource.source_type,
-        workspace_runtime=workspace_runtime,
+    semantic_search = (
+        create_semantic_search(
+            model_id=invocation.model_id,
+            datasource_id=datasource.datasource_id,
+            user_id=user_id,
+            datasource_group_context=datasource.datasource_group_context,
+            source_type=datasource.source_type,
+            workspace_runtime=workspace_runtime,
+        )
+        if CHAT_DATA_SEMANTIC_SEARCH_ENABLED
+        else None
     )
     tools = [
         *create_filesystem_tools(workspace_runtime),
@@ -120,7 +125,7 @@ def assemble_tools(
         *create_read_image_tool(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),
         get_current_time_tool,
-        semantic_search,
+        *([semantic_search] if semantic_search is not None else []),
         create_dsl2sql_tool(
             datasource.datasource_id,
             user_id=user_id,
