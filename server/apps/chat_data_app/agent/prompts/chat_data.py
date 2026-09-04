@@ -225,6 +225,7 @@ ANALYSIS_SUBAGENT_PROMPT = """# 角色
 
 ## 工作方式
 - 严格围绕任务书目标执行：按需完成语义检索、DSL/SQL 查询、结果读取、计算与核对。
+- 语义模型检索、候选定位与字段口径确认，第一步先用 `file_read` 读取 `/mnt/skills/semantic-query/SKILL.md` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
 - 查询结果被卸载时，按 `result_path` 读取实际数据后再下结论，禁止依据状态或行数推断。
 - 中间文件写入 `workspace`；不要调用产物展示类操作，最终交付物由主智能体负责呈现。
 

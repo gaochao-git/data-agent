@@ -261,6 +261,48 @@ async def test_tool_call_name_normalizer_middleware():
     assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeated_name", ["write_todoswrite_todos", "write_todoswrite_todoswrite_todos"])
+async def test_tool_call_name_normalizer_covers_middleware_injected_tools(repeated_name):
+    """候选名必须取本轮 request.tools。
+
+    重复名的成因是流式协议里多段 ``tool_call delta`` 的 ``function.name`` 被逐段拼接
+    （恒为名称的整数倍，不带分隔符）。``write_todos`` 由 TodoListMiddleware 经
+    ``middleware.tools`` 注册，不在业务 tools 静态列表里；以静态列表当候选名时这类名字
+    修不回来（内网 vLLM/GLM 实测）。同时确认：不在候选集内的名称仍原样返回，不做猜测。
+    """
+    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])
+    request = SimpleNamespace(tools=[
+        SimpleNamespace(name="write_todos"),
+        SimpleNamespace(name="semantic_search"),
+    ])
+
+    async def handler(_request):
+        return AIMessage(content="", tool_calls=[{
+            "id": "call_todos", "name": repeated_name, "args": {"todos": []},
+        }])
+
+    response = await middleware.awrap_model_call(request, handler)
+
+    assert response.tool_calls[0]["name"] == "write_todos"
+    assert response.tool_calls[0]["args"] == {"todos": []}
+
+
+@pytest.mark.asyncio
+async def test_tool_call_name_normalizer_leaves_unmatched_names_untouched():
+    middleware = create_tool_call_name_normalizer_middleware([])
+    request = SimpleNamespace(tools=[SimpleNamespace(name="write_todos")])
+
+    async def handler(_request):
+        return AIMessage(content="", tool_calls=[{
+            "id": "call_x", "name": "write_todos_extra", "args": {},
+        }])
+
+    response = await middleware.awrap_model_call(request, handler)
+
+    assert response.tool_calls[0]["name"] == "write_todos_extra"
+
+
 def test_get_data_agent_graph_forwards_runtime_options_and_checkpointer(monkeypatch):
     captured = {}
 
