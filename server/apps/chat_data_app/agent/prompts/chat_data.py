@@ -19,18 +19,15 @@ def format_datasource_group_context_for_llm(context: str) -> str:
 def build_semantic_layer_context(semantic_config: dict | None) -> str:
     """构建统一语义层上下文（问数态使用）。
 
-    检索走 AI coding 式目录路线：dir_list 看目录 -> file_grep 检索 -> file_read 精读，
-    不在提示词层面枚举模型清单，也不引导 semantic_search 兜底。
+    语义模型检索、候选定位与字段口径确认的完整规则以 semantic-query 技能
+    （SKILL.md）为单一维护点，系统提示词只声明工作区目录存在 + 指向该技能，
+    不重复定义检索步骤，也不枚举模型清单。
     """
     if not semantic_config:
         return (
             "## 当前语义模型\n"
-            "本轮未手动选择语义模型。当前数据源组全部启用语义模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`"
-            "（文件名 `{模型名}__{id后缀}.yaml`），按以下步骤选择模型：\n"
-            "1. 用 `dir_list` 浏览该目录得到模型清单，结合用户问题圈定候选范围；\n"
-            "2. 多个模型可能包含相关内容、或模型名对不上业务术语时，用 `file_grep` 按指标名、维度名或业务关键词在该目录内检索，定位包含关键词的模型；\n"
-            "3. 对候选模型用 `file_read` 精读 YAML，比较指标、维度、关系与口径后确定使用哪个模型。\n"
-            "不要为找模型全量逐个读取目录文件；目录中找不到合适模型时，向用户澄清。\n"
+            "本轮未手动选择语义模型。当前数据源组全部启用语义模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`；"
+            "语义模型的检索、候选定位与字段口径确认以 `semantic-query` 技能为唯一依据，先读取其 SKILL.md 再执行，本提示不重复定义。\n"
         )
 
     config_id = str(semantic_config.get("id") or "").strip()
@@ -43,7 +40,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     return (
         header
         + "。这是本轮优先参考，不代表锁定。\n"
-        + "该模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（文件名 `{模型名}__{id后缀}.yaml`）：需要具体指标、维度、枚举、关联或表列时，先用 `file_glob` 按模型名定位文件，`file_read` 精读确认口径；需要交叉核对其它模型时，用 `file_grep` 检索该目录或 `dir_list` 浏览。\n"
+        + "需要具体指标、维度、枚举、关联或表列，或需要交叉核对其它模型时，按 `semantic-query` 技能的检索与口径确认规则执行。\n"
     )
 
 

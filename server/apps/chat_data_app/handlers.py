@@ -1351,7 +1351,8 @@ async def _run_chat_data_agent_stream(
     )
     # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
     # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
-    # 失败不阻断本轮，semantic_search 调用时仍会兜底物化。
+    # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
+    # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
     try:
         prematerialized_total = await prematerialize_enabled_semantic_models(
             workspace_runtime=workspace_runtime,
@@ -1365,7 +1366,12 @@ async def _run_chat_data_agent_stream(
                 thread_id, datasource_id, prematerialized_total,
             )
     except Exception as err:
-        logger.warning("语义模型预物化失败，本轮由 semantic_search 兜底: %s", err)
+        logger.error(
+            "语义模型预物化失败，终止本轮: thread_id=%s datasource_id=%s error=%s",
+            thread_id, datasource_id, err,
+        )
+        yield _format_sse("error", {"error": "语义模型目录初始化失败，请稍后重试。"})
+        raise AgentRunStreamFailedError from None
     data_context = await build_conversation_prompt_context(prompt_context)
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])

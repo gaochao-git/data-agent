@@ -17,8 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 FRONTEND_CHART_TYPES_PATH = (
     REPO_ROOT / "web-vue" / "src" / "views" / "chat-data" / "chartTypes.ts"
 )
+# 图表类型清单的文档维护点是主指南（guide.md）；SKILL.md 不重复罗列类型
+# （类型清单另有 chart_types.py 注册表与 get_chart_type_prompt_text 两处声明）。
 SKILL_DOC_PATHS = [
-    REPO_ROOT / "chat_data" / "skills" / "system" / "dashboard-generation" / "SKILL.md",
     REPO_ROOT / "chat_data" / "skills" / "system" / "dashboard-generation" / "references" / "dashboard-generation-guide.md",
 ]
 

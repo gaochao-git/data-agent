@@ -242,7 +242,7 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板卡片的 `dsl` 使用与智能问数一致的语义层规则，由平台工具转换为 SQL。不要手写 SQL，除非用户明确要求并且工具支持。
 
-系统提示词只提供可见语义模型目录和手动选择的轻量引用，不包含完整指标、维度、表结构或关联关系。生成 DSL 前必须调用 `semantic_search(operation="search_models")` 检索候选模型，再用 `list_fields` 定位候选字段，并按返回路径用 `file_grep`/`file_read` 确认每张卡片使用的字段；手动选择只作为优先参考，不锁定语义模型。
+语义模型的检索方式、关键词检索规则与「无命中即停止澄清」的边界，全部以 `semantic-query` 技能（`/mnt/skills/semantic-query/SKILL.md`）为唯一依据，本指南不重复定义。看板卡片使用的指标和维度，必须是按该技能检索并精读模型 YAML 后确认的真实字段；不能凭模型名称、文件名或字段相似性猜测，手动选择只作为优先参考，不锁定语义模型。
 
 一个看板可以包含多个语义模型，但每张卡片只能使用一个 `semantic_config_id`。多个返回项都可能符合、但无法判断某张卡片要哪个业务口径时，必须先向用户澄清；不得在同一张卡片混用多个 `semantic_configs` 的指标或维度。AI 创建看板仍使用当前会话绑定的一个 `datasource_id`，不在卡片中重复填写数据源。
 
@@ -265,7 +265,7 @@ DSL 字段：
 
 指标规则：
 
-- `metrics` 必须来自 `semantic_search` 确认的实际语义指标。
+- `metrics` 必须来自语义模型 YAML 中确认的实际语义指标。
 - `metrics` 必须是字符串数组，例如 `["订单金额"]`；不要写成对象数组，例如 `[{"name":"订单金额","aggregate":"SUM"}]`。
 - 聚合卡片优先使用聚合指标，例如数量、金额、均值、占比。
 - 不要在同一聚合卡片中混用原始值指标和聚合指标。
@@ -274,7 +274,7 @@ DSL 字段：
 
 维度规则：
 
-- `dimensions` 必须来自 `semantic_search` 确认的实际语义维度。
+- `dimensions` 必须来自语义模型 YAML 中确认的实际语义维度。
 - 趋势卡片使用时间维度，建议写成 `{"name": "时间维度", "time_grain": "month"}` 这类对象。
 - 排行卡片使用对象维度、机构维度、区域维度、产品维度等。
 - 没有维度时返回总体聚合结果。
@@ -304,7 +304,7 @@ DSL 字段：
 ## 校验流程
 
 1. 为每张卡片确定一个语义模型，再生成完整 `dashboard_spec`；每张卡片必须包含 `semantic_config_id`，旧规格可以使用顶层默认字段。
-2. 每张卡片的 `semantic_config_id` 必须取 `search_models` 返回的 `semantic_config_ids` 之一。
+2. 每张卡片的 `semantic_config_id` 必须取按 `semantic-query` 技能检索到的、当前目录中实际存在的语义模型 ID。
 3. **看板必须批量校验**：调用一次 `dsl2sql_tool(dsl=dashboard_spec)`，传入包含 `dashboard_name` 和完整 `cards` 数组的整个规格。工具会按卡片语义模型生成校验结果并返回 `mode=batch`、`valid_count`、`semantic_config_ids`、逐卡 `panels` 和 `warnings`。
 4. 根据批量返回的逐卡模型、`panels` 和 `warnings` 修正完整 `dashboard_spec`，再整体调用 `dsl2sql_tool`；禁止将每张卡片的 DSL 拆开单独校验。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
@@ -315,7 +315,7 @@ DSL 字段：
 
 ## 失败处理
 
-- `dsl2sql_tool` 返回指标不存在：回到 `semantic_search` 返回的字段索引，并按返回路径读取字段定义，替换为真实存在的指标，不要编造指标。
+- `dsl2sql_tool` 返回指标不存在：回到该卡片 `semantic_config_id` 对应的语义模型 YAML，按 `semantic-query` 技能的检索方式定位并确认字段定义，替换为真实存在的指标，不要编造指标。
 - `dsl2sql_tool` 返回维度不可用：检查工具返回的该指标可用维度，移除或替换不可用维度。
 - 趋势卡片校验失败：优先改用工具返回指标体系中真实存在的时间维度，并设置合适的 `time_grain`。
 - 排行卡片校验失败：确认 `order_by.field` 使用指标名，`dimensions` 使用对象、商品、机构、区域等真实维度。

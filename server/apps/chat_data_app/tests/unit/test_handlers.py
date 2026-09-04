@@ -116,6 +116,15 @@ def _stub_semantic_conversation_context(monkeypatch):
         "apps.chat_data_app.handlers.conversation_event_service.persist_turn",
         noop_event_write,
     )
+    # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”，
+    # 需要验证物化行为的用例自行覆盖。
+    async def noop_prematerialize(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        noop_prematerialize,
+    )
 
 
 def _tool_event_contents(events: list[str]) -> list[str]:
@@ -426,6 +435,39 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     assert "dir_list" in captured_agent_kwargs["model_invocation"].system_prompt
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
+
+
+def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(monkeypatch):
+    """语义目录物化失败属基础设施故障：必须终止本轮，不能带着空目录进 agent 循环。"""
+    import asyncio
+
+    agent_calls = {"count": 0}
+
+    def create_agent(_runtime_options, **_kwargs):
+        agent_calls["count"] += 1
+        return _FakeGraph(events=[], state=SimpleNamespace(tasks=[], values={}))
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+
+    async def failing_prematerialize(**_kwargs):
+        raise RuntimeError("workspace 写盘失败")
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        failing_prematerialize,
+    )
+
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+        thread_id="conv_prematerialize_failed",
+        user_query="查询订单数",
+        datasource_id="ds_a",
+        semantic_config_id=None,
+    )))
+
+    assert failure is not None
+    assert "语义模型目录初始化失败" in "".join(events)
+    assert agent_calls["count"] == 0
 
 
 def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monkeypatch, tmp_path):

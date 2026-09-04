@@ -28,6 +28,12 @@ def _stub_conversation_event_writes(monkeypatch):
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_user_message", noop_event_write)
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
 
+    # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
+    async def noop_prematerialize(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(handler_module, "prematerialize_enabled_semantic_models", noop_prematerialize)
+
     async def start_run(*_args, **_kwargs):
         runtime_context = _args[3] if len(_args) > 3 else _kwargs.get("runtime_context") or {}
         run_contexts["run-test"] = runtime_context

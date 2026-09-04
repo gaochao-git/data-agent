@@ -225,6 +225,49 @@ def test_prematerialize_skips_without_datasource_or_runtime():
     )) == 0
 
 
+def test_materializer_reports_failed_ids_instead_of_silently_skipping(monkeypatch):
+    """加载或转换失败的模型必须出现在 failed_ids 里，不能只静默跳过。"""
+    semantic_materializer._YAML_CACHE.clear()
+    configs = [_config("sc_ok"), _config("sc_load_fail"), _config("sc_render_fail")]
+    original_load = _FakeDatasourceManager.get_runtime_config_async
+
+    async def failing_load(self, datasource_id, config_id, user_id="", *, column_dicts=None):
+        if config_id == "sc_load_fail":
+            raise RuntimeError("加载炸了")
+        return await original_load(self, datasource_id, config_id, user_id, column_dicts=column_dicts)
+
+    def failing_convert(self, config, *, source_type=""):
+        if config["id"] == "sc_render_fail":
+            raise RuntimeError(f"转换炸了: {config['id']}")
+        return f"semantic_model: {config['id']}\n"
+
+    monkeypatch.setattr(_FakeDatasourceManager, "get_runtime_config_async", failing_load)
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
+    monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", failing_convert)
+
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=_FakeRuntime(),
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=["sc_ok", "sc_load_fail", "sc_render_fail"],
+    ))
+
+    assert result["failed_ids"] == ["sc_load_fail", "sc_render_fail"]
+    assert list(result["paths"]) == ["sc_ok"]
+
+
+def test_materializer_returns_empty_failed_ids_for_empty_scope():
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=_FakeRuntime(),
+        datasource_id="ds_1",
+        user_id="user_1",
+        semantic_config_ids=[],
+    ))
+
+    assert result["failed_ids"] == []
+
+
 def test_prematerialize_writes_all_enabled_models(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     configs = [_config("sc_a"), _config("sc_b"), _config("sc_off", enabled=False)]

@@ -90,13 +90,10 @@ CHAT_DATA_DEFAULT_ANALYSIS_SUBAGENT_ENABLED = read_bool_env(
 CHAT_DATA_SEMANTIC_SEARCH_ENABLED = read_bool_env(
     "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", True
 )
-# 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：随上面的开关切换，
-# 避免开关关闭后错误提示仍引导模型调用已不注册的 semantic_search。
-SEMANTIC_MODEL_DISCOVERY_HINT = (
-    "调用 semantic_search 搜索语义模型"
-    if CHAT_DATA_SEMANTIC_SEARCH_ENABLED
-    else "用 dir_list 浏览 /mnt/user-data/workspace/semantic/ 或用 file_grep 检索该目录确认语义模型"
-)
+# 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
+# 检索用法的单一维护点是 semantic-query 技能（SKILL.md），错误提示统一指向该技能，
+# 不随工具开关切换文案，也不在此重复检索步骤。
+SEMANTIC_MODEL_DISCOVERY_HINT = "按 semantic-query 技能检索并确认语义模型"
 # 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":

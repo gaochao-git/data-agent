@@ -66,7 +66,9 @@ def test_semantic_query_skill_contains_complete_query_contract():
     # AI coding 式目录路线：dir_list -> file_grep -> file_read，不引导 semantic_search
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in semantic_query
     assert "`/mnt/user-data/workspace/semantic/`" in semantic_query
-    assert "不要为找模型全量逐个读取目录文件" in semantic_query
+    assert "禁止为找模型逐个读取目录里的 YAML" in semantic_query
+    # grep 无命中即判定缺失：不得靠逐个读文件碰运气
+    assert "无命中" in semantic_query
     assert "dir_list" in semantic_query
     assert "file_grep" in semantic_query
     assert "file_read" in semantic_query
@@ -91,7 +93,7 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "不是 `mode` 参数" in semantic_query
     assert "CTE" in semantic_query
     assert "年度总量对比" in semantic_query
-    assert "搜索或读取确认当前配置不存在" in semantic_query
+    assert "读取候选后确认当前配置不存在" in semantic_query
     assert "用户必须补充公式和统计周期" in semantic_query
     assert "查询成功后系统始终将完整结果保存" in semantic_query
     assert "result_path" in semantic_query

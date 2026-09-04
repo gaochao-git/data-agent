@@ -48,17 +48,21 @@ def test_build_semantic_layer_context_without_selection():
     assert chat_data.build_semantic_layer_context({}) == unselected
 
 
-def test_build_semantic_layer_context_directory_flow():
-    """未选中分支走 AI coding 式目录流程：dir_list -> file_grep -> file_read，不提 semantic_search。"""
+def test_build_semantic_layer_context_delegates_to_semantic_query_skill():
+    """检索用法单一维护在 semantic-query 技能：提示词只声明目录存在 + 指向技能，不重复步骤。"""
     unselected = chat_data.build_semantic_layer_context(None)
 
-    assert "dir_list" in unselected
-    assert "file_grep" in unselected
-    assert "file_read" in unselected
+    assert "/mnt/user-data/workspace/semantic/" in unselected
+    assert "semantic-query" in unselected
+    assert "SKILL.md" in unselected
     assert "semantic_search" not in unselected
-    # 已选模型分支同样只走目录工具
+    # 不再重复定义检索步骤
+    assert "dir_list" not in unselected
+    assert "file_grep" not in unselected
+    # 已选模型分支同样只指向技能
     selected = chat_data.build_semantic_layer_context({"id": "cfg_1", "name": "交易域"})
-    assert "file_grep" in selected
+    assert "semantic-query" in selected
+    assert "file_grep" not in selected
     assert "semantic_search" not in selected
 
 

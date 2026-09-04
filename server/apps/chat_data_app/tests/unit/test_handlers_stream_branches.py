@@ -20,6 +20,12 @@ def _stub_datasource_binding(monkeypatch):
     monkeypatch.setattr(handlers.conversation_event_service, "persist_user_message", noop_event_write)
     monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", noop_event_write)
 
+    # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
+    async def noop_prematerialize(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(handlers, "prematerialize_enabled_semantic_models", noop_prematerialize)
+
 
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None

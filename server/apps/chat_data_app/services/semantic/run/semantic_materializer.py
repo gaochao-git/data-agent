@@ -212,7 +212,7 @@ async def materialize_runtime_semantic_models(
         if value and value not in normalized_ids:
             normalized_ids.append(value)
     if not normalized_ids:
-        return {"directory": [], "paths": {}, "configs": {}}
+        return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
     # 字段数据字典按数据源整体拉取一次，所有模型复用；
     # 逐模型拉取会让全量物化时 DB 压力随模型数线性放大。
@@ -224,9 +224,11 @@ async def materialize_runtime_semantic_models(
         for config_id in normalized_ids
     ), return_exceptions=True)
     configs: list[dict[str, Any]] = []
+    failed_ids: list[str] = []
     for config_id, result in zip(normalized_ids, loaded):
         if isinstance(result, Exception):
-            logger.warning("加载选中语义模型失败: config_id=%s error=%s", config_id, result)
+            logger.error("加载选中语义模型失败: config_id=%s error=%s", config_id, result)
+            failed_ids.append(config_id)
             continue
         if isinstance(result, dict) and _config_id(result) and bool(result.get("enabled", True)):
             configs.append(dict(result))
@@ -251,7 +253,8 @@ async def materialize_runtime_semantic_models(
     rendered = await asyncio.gather(*(render(config) for config in configs), return_exceptions=True)
     for config, result in zip(configs, rendered):
         if isinstance(result, Exception):
-            logger.warning("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
+            logger.error("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
+            failed_ids.append(_config_id(config))
             continue
         rendered_config, content, hit = result
         config_id = _config_id(rendered_config)
@@ -274,10 +277,20 @@ async def materialize_runtime_semantic_models(
         cache_hits,
         workspace_runtime.backend_name,
     )
+    if failed_ids:
+        # 目录缺模型会让模型误判为“不存在该模型”，必须留下可排查的失败清单。
+        logger.error(
+            "语义模型物化不完整: datasource_id=%s 期望=%s 成功=%s 失败=%s",
+            datasource_id,
+            len(normalized_ids),
+            len(entries),
+            failed_ids,
+        )
     return {
         "directory": directory,
         "paths": {item["id"]: item["path"] for item in directory},
         "configs": {_config_id(config): config for config in configs},
+        "failed_ids": failed_ids,
     }
 
 
