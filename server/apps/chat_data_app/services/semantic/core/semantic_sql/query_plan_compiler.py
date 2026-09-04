@@ -317,6 +317,237 @@ def _build_filter_tree_clause(
     )
 
 
+def _validate_query_plan(query_plan: Dict[str, Any]) -> None:
+    """编译前置校验；不合法直接 raise ValueError。"""
+    if not isinstance(query_plan, dict):
+        raise ValueError("查询计划格式错误")
+    if not (query_plan.get("mainTable") or "").strip():
+        raise ValueError("查询计划缺少 mainTable")
+    if not query_plan.get("dimensions") and not query_plan.get("aggregations"):
+        raise ValueError("请至少选择一个维度或指标")
+    if query_plan.get("compare"):
+        raise ValueError("DSL2SQL 不再支持 compare 同比/环比 SQL；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
+    aggregations = query_plan.get("aggregations") or []
+    has_raw_metric = any(str(a.get("func") or "RAW").upper() == "RAW" for a in aggregations)
+    has_agg_metric = any(str(a.get("func") or "RAW").upper() != "RAW" for a in aggregations)
+    if has_raw_metric and has_agg_metric:
+        raise ValueError("指标区不支持原始值与聚合函数混用，请统一为原始值或聚合函数")
+
+
+def _split_where_and_having(filters: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """按节点类型把过滤分流到 WHERE / HAVING 两桶；混合筛选树不合法。"""
+    where_filters: List[Dict[str, Any]] = []
+    having_filters: List[Dict[str, Any]] = []
+    for f in filters:
+        if _is_filter_tree_node(f):
+            tree_scope = _get_filter_tree_scope(f)
+            if tree_scope == "mixed":
+                raise ValueError("过滤条件不合法：同一组合筛选树不能混用明细过滤和结果过滤")
+            if tree_scope == "aggregate":
+                having_filters.append(f)
+            else:
+                where_filters.append(f)
+            continue
+        if f.get("aggFunc"):
+            having_filters.append(f)
+        else:
+            where_filters.append(f)
+    return where_filters, having_filters
+
+
+def _append_filter_clause(
+    parts: List[str],
+    filter_list: List[Dict[str, Any]],
+    *,
+    for_having: bool,
+    is_multi_table: bool,
+    main_alias: str,
+    dimension_expr_map: Dict[Tuple[str, str], str],
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+) -> None:
+    """WHERE / HAVING 共用的子句组装：单棵筛选树走树编译器，否则平铺拼接。"""
+    if not filter_list:
+        return
+    keyword = "HAVING" if for_having else "WHERE"
+    if len(filter_list) == 1 and isinstance(filter_list[0], dict) and _is_filter_tree_node(filter_list[0]):
+        clause = compile_filter_tree_clause(
+            filter_list[0],
+            for_having=for_having,
+            is_root=True,
+            is_multi_table=is_multi_table,
+            main_table=main_alias,
+            dimension_expr_map=dimension_expr_map,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+            normalize_raw_expression=_normalize_raw_expression,
+            normalize_aggregate_expression=_normalize_aggregate_expression,
+            get_column_expr=_get_column_expr,
+            is_aggregate_expression=_is_aggregate_expression,
+            safe_functions=SQL_SAFE_FUNCTIONS,
+        )
+        if clause:
+            parts.append(f"{keyword} {clause}")
+        return
+    clauses = []
+    for idx, f in enumerate(filter_list):
+        logic = str(f.get("logic", "AND")).upper()
+        if for_having:
+            clause = _build_having_leaf_clause(
+                f,
+                is_multi_table,
+                main_alias,
+                aggregations,
+                agg_by_id,
+                normalize_expression=True,
+            )
+        else:
+            clause = _build_where_leaf_clause(f, is_multi_table, dimension_expr_map, main_alias)
+        clauses.append(clause if idx == 0 else f"{logic} {clause}")
+    parts.append(f"{keyword} {' '.join(clauses)}")
+
+
+def _find_agg_block(
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    main_alias: str,
+    agg_func: str,
+    table: str,
+    column: str,
+    agg_id: Optional[str],
+    expression: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """按 aggId 优先、表列特征次之回溯聚合块。"""
+    matched = agg_by_id.get(str(agg_id)) if agg_id else None
+    if not matched and not (expression or "").strip():
+        for a in aggregations:
+            if _effective_table_ref(a, fallback=main_alias) == table and a.get("column") == column and (a.get("func") or "").upper() == agg_func:
+                matched = a
+                break
+    return matched
+
+
+def _resolve_agg_expr(
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    main_alias: str,
+    is_multi_table: bool,
+    agg_func: str,
+    table: str,
+    column: str,
+    agg_id: Optional[str],
+    expression: Optional[str] = None,
+    physical_table: Optional[str] = None,
+) -> str:
+    """按 aggId / 表列特征回溯聚合块，产出聚合表达式。"""
+    matched = _find_agg_block(aggregations, agg_by_id, main_alias, agg_func, table, column, agg_id, expression)
+
+    matched_expr = (matched or {}).get("expression") or expression
+    matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table or table)
+    if agg_func == "RAW" and (matched_expr or "").strip():
+        return _normalize_raw_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
+    if agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
+        return _normalize_aggregate_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
+
+    col_expr = "*" if column == "*" else _get_column_expr(table, column, is_multi_table)
+    if agg_func == "RAW":
+        return col_expr
+    if agg_func == "COUNT_DISTINCT":
+        return f"COUNT(DISTINCT {col_expr})"
+    return f"{agg_func}({col_expr})"
+
+
+def _match_aggregation_for_order(
+    aggregations: List[Dict[str, Any]],
+    main_alias: str,
+    table: str,
+    column: str,
+) -> Optional[Dict[str, Any]]:
+    """聚合查询按明细字段排序时，回溯唯一的非 RAW 聚合块。"""
+    matched_aggs = [
+        a
+        for a in aggregations
+        if (a.get("func") or "RAW").upper() != "RAW"
+        and _effective_table_ref(a, fallback=main_alias) == table
+        and a.get("column", "") == column
+    ]
+    if len(matched_aggs) == 1:
+        return matched_aggs[0]
+    return None
+
+
+def _build_order_by_fields(
+    order_by: List[Dict[str, Any]],
+    *,
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    main_alias: str,
+    is_multi_table: bool,
+    dimension_alias_map: Dict[Tuple[str, str], str],
+    group_expr_map: Dict[Tuple[str, str], str],
+    dimension_expr_map: Dict[Tuple[str, str], str],
+    has_real_aggregation: bool,
+) -> List[str]:
+    """ORDER BY 字段解析：aggFunc > 维度别名 > 分组表达式 > 维度表达式 > 聚合回溯 > 裸列。"""
+    order_fields = []
+    for o in order_by:
+        direction = str(o.get("direction", "ASC")).upper()
+        table = _effective_table_ref(o, fallback=main_alias)
+        column = o.get("column", "")
+        agg_func = o.get("aggFunc")
+        if agg_func:
+            physical_table = _physical_table_ref(o, fallback=table)
+            order_fields.append(
+                f"{_resolve_agg_expr(aggregations, agg_by_id, main_alias, is_multi_table, str(agg_func).upper(), table, column, o.get('aggId'), o.get('expression'), physical_table)} {direction}"
+            )
+        elif (table, column) in dimension_alias_map:
+            order_fields.append(f"{_quote_identifier(dimension_alias_map[(table, column)])} {direction}")
+        elif (table, column) in group_expr_map:
+            order_fields.append(f"{group_expr_map[(table, column)]} {direction}")
+        elif (table, column) in dimension_expr_map:
+            order_fields.append(f"{dimension_expr_map[(table, column)]} {direction}")
+        elif has_real_aggregation:
+            matched_agg = _match_aggregation_for_order(aggregations, main_alias, table, column)
+            if matched_agg is not None:
+                order_fields.append(
+                    f"{_resolve_agg_expr(aggregations, agg_by_id, main_alias, is_multi_table, str(matched_agg.get('func') or '').upper(), table, column, matched_agg.get('id'))} {direction}"
+                )
+                continue
+            raise ValueError("聚合查询不能按未分组的明细字段排序，请改用已选择的维度或聚合指标排序")
+        else:
+            order_fields.append(f"{table}.{column} {direction}")
+    return order_fields
+
+
+def _has_real_aggregation(
+    aggregations: List[Dict[str, Any]],
+    having_filters: List[Dict[str, Any]],
+    order_by: List[Dict[str, Any]],
+) -> bool:
+    """聚合判定：输出、HAVING、ORDER BY 任一含真实聚合函数。"""
+    return (
+        any(_is_real_aggregation_func(a.get("func")) for a in aggregations)
+        or any(_filter_has_real_aggregation(f) for f in having_filters)
+        or any(_order_by_has_real_aggregation(o) for o in order_by)
+    )
+
+
+def _append_limit_offset(
+    parts: List[str],
+    sql_dialect: Any,
+    limit: Optional[int],
+    offset: Optional[int],
+) -> None:
+    """校验并追加 LIMIT/OFFSET 子句。"""
+    if offset is not None:
+        if not isinstance(offset, int) or offset < 0:
+            raise ValueError("OFFSET 必须为非负整数")
+        if limit is None:
+            raise ValueError("OFFSET 必须配合 LIMIT 使用")
+    if limit is not None or offset is not None:
+        parts.append(sql_dialect.limit_offset(int(limit), int(offset or 0)))
+
+
 def _compile_query_plan_sql(
     query_plan: Dict[str, Any],
     dialect: str = "mysql",
@@ -336,6 +567,10 @@ def _compile_query_plan_sql(
     """
     if not isinstance(query_plan, dict):
         raise ValueError("查询计划格式错误")
+    # 行数限制校验先于结构校验，保持与拆分前一致的报错优先级。
+    raw_limit = query_plan.get("limit")
+    limit = normalize_row_limit(raw_limit, max_rows=max_rows) if raw_limit is not None else None
+    _validate_query_plan(query_plan)
 
     main_table = (query_plan.get("mainTable") or "").strip()
     main_alias = (query_plan.get("mainAlias") or main_table).strip()
@@ -344,22 +579,7 @@ def _compile_query_plan_sql(
     joins: List[Dict[str, Any]] = query_plan.get("joins") or []
     filters: List[Dict[str, Any]] = query_plan.get("filters") or []
     order_by: List[Dict[str, Any]] = query_plan.get("orderBy") or []
-    raw_limit = query_plan.get("limit")
-    limit = normalize_row_limit(raw_limit, max_rows=max_rows) if raw_limit is not None else None
     offset = query_plan.get("offset")
-
-    if not main_table:
-        raise ValueError("查询计划缺少 mainTable")
-    if not dimensions and not aggregations:
-        raise ValueError("请至少选择一个维度或指标")
-
-    if query_plan.get("compare"):
-        raise ValueError("DSL2SQL 不再支持 compare 同比/环比 SQL；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
-
-    has_raw_metric = any(str(a.get("func") or "RAW").upper() == "RAW" for a in aggregations)
-    has_agg_metric = any(str(a.get("func") or "RAW").upper() != "RAW" for a in aggregations)
-    if has_raw_metric and has_agg_metric:
-        raise ValueError("指标区不支持原始值与聚合函数混用，请统一为原始值或聚合函数")
 
     selected_tables = [main_alias] + [j.get("rightAlias") or j.get("rightTable") for j in joins if j.get("rightTable")]
     is_multi_table = len(selected_tables) > 1
@@ -387,166 +607,50 @@ def _compile_query_plan_sql(
     parts: List[str] = [f"SELECT {', '.join(select_fields)}"]
     parts.extend(build_join_clauses(main_table, joins, main_alias))
 
-    where_filters: List[Dict[str, Any]] = []
-    having_filters: List[Dict[str, Any]] = []
-    for f in filters:
-        if _is_filter_tree_node(f):
-            tree_scope = _get_filter_tree_scope(f)
-            if tree_scope == "mixed":
-                raise ValueError("过滤条件不合法：同一组合筛选树不能混用明细过滤和结果过滤")
-            if tree_scope == "aggregate":
-                having_filters.append(f)
-            else:
-                where_filters.append(f)
-            continue
-        if f.get("aggFunc"):
-            having_filters.append(f)
-        else:
-            where_filters.append(f)
-
-    if where_filters:
-        if len(where_filters) == 1 and isinstance(where_filters[0], dict) and _is_filter_tree_node(where_filters[0]):
-            where_clause = compile_filter_tree_clause(
-                where_filters[0],
-                for_having=False,
-                is_root=True,
-                is_multi_table=is_multi_table,
-                main_table=main_alias,
-                dimension_expr_map=dimension_expr_map,
-                aggregations=aggregations,
-                agg_by_id=agg_by_id,
-                normalize_raw_expression=_normalize_raw_expression,
-                normalize_aggregate_expression=_normalize_aggregate_expression,
-                get_column_expr=_get_column_expr,
-                is_aggregate_expression=_is_aggregate_expression,
-                safe_functions=SQL_SAFE_FUNCTIONS,
-            )
-            if where_clause:
-                parts.append(f"WHERE {where_clause}")
-        else:
-            where_clauses = []
-            for idx, f in enumerate(where_filters):
-                logic = str(f.get("logic", "AND")).upper()
-                clause = _build_where_leaf_clause(f, is_multi_table, dimension_expr_map, main_alias)
-                where_clauses.append(clause if idx == 0 else f"{logic} {clause}")
-            parts.append(f"WHERE {' '.join(where_clauses)}")
-
-    has_real_aggregation = (
-        any(_is_real_aggregation_func(a.get("func")) for a in aggregations)
-        or any(_filter_has_real_aggregation(f) for f in having_filters)
-        or any(_order_by_has_real_aggregation(o) for o in order_by)
+    where_filters, having_filters = _split_where_and_having(filters)
+    _append_filter_clause(
+        parts,
+        where_filters,
+        for_having=False,
+        is_multi_table=is_multi_table,
+        main_alias=main_alias,
+        dimension_expr_map=dimension_expr_map,
+        aggregations=aggregations,
+        agg_by_id=agg_by_id,
     )
+
+    has_real_aggregation = _has_real_aggregation(aggregations, having_filters, order_by)
     if dimensions and has_real_aggregation:
         group_fields = [group_expr_map[(_effective_table_ref(d, fallback=main_alias), d.get("column", ""))] for d in dimensions]
         parts.append(f"GROUP BY {', '.join(group_fields)}")
 
-    def get_agg_expr(
-        agg_func: str,
-        table: str,
-        column: str,
-        agg_id: Optional[str],
-        expression: Optional[str] = None,
-        physical_table: Optional[str] = None,
-    ) -> str:
-        matched = agg_by_id.get(str(agg_id)) if agg_id else None
-        if not matched and not (expression or "").strip():
-            for a in aggregations:
-                if _effective_table_ref(a, fallback=main_alias) == table and a.get("column") == column and (a.get("func") or "").upper() == agg_func:
-                    matched = a
-                    break
-
-        matched_expr = (matched or {}).get("expression") or expression
-        matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table or table)
-        if agg_func == "RAW" and (matched_expr or "").strip():
-            return _normalize_raw_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
-        if agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
-            return _normalize_aggregate_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
-
-        col_expr = "*" if column == "*" else _get_column_expr(table, column, is_multi_table)
-        if agg_func == "RAW":
-            return col_expr
-        if agg_func == "COUNT_DISTINCT":
-            return f"COUNT(DISTINCT {col_expr})"
-        return f"{agg_func}({col_expr})"
-
-    if having_filters:
-        if len(having_filters) == 1 and isinstance(having_filters[0], dict) and _is_filter_tree_node(having_filters[0]):
-            having_clause = compile_filter_tree_clause(
-                having_filters[0],
-                for_having=True,
-                is_root=True,
-                is_multi_table=is_multi_table,
-                main_table=main_alias,
-                dimension_expr_map=dimension_expr_map,
-                aggregations=aggregations,
-                agg_by_id=agg_by_id,
-                normalize_raw_expression=_normalize_raw_expression,
-                normalize_aggregate_expression=_normalize_aggregate_expression,
-                get_column_expr=_get_column_expr,
-                is_aggregate_expression=_is_aggregate_expression,
-                safe_functions=SQL_SAFE_FUNCTIONS,
-            )
-            if having_clause:
-                parts.append(f"HAVING {having_clause}")
-        else:
-            having_clauses = []
-            for idx, f in enumerate(having_filters):
-                logic = str(f.get("logic", "AND")).upper()
-                clause = _build_having_leaf_clause(
-                    f,
-                    is_multi_table,
-                    main_alias,
-                    aggregations,
-                    agg_by_id,
-                    normalize_expression=True,
-                )
-                having_clauses.append(clause if idx == 0 else f"{logic} {clause}")
-            parts.append(f"HAVING {' '.join(having_clauses)}")
+    _append_filter_clause(
+        parts,
+        having_filters,
+        for_having=True,
+        is_multi_table=is_multi_table,
+        main_alias=main_alias,
+        dimension_expr_map=dimension_expr_map,
+        aggregations=aggregations,
+        agg_by_id=agg_by_id,
+    )
 
     if order_by:
-        order_fields = []
-        for o in order_by:
-            direction = str(o.get("direction", "ASC")).upper()
-            table = _effective_table_ref(o, fallback=main_alias)
-            column = o.get("column", "")
-            agg_func = o.get("aggFunc")
-            if agg_func:
-                physical_table = _physical_table_ref(o, fallback=table)
-                order_fields.append(f"{get_agg_expr(str(agg_func).upper(), table, column, o.get('aggId'), o.get('expression'), physical_table)} {direction}")
-            elif (table, column) in dimension_alias_map:
-                order_fields.append(f"{_quote_identifier(dimension_alias_map[(table, column)])} {direction}")
-            elif (table, column) in group_expr_map:
-                order_fields.append(f"{group_expr_map[(table, column)]} {direction}")
-            elif (table, column) in dimension_expr_map:
-                order_fields.append(f"{dimension_expr_map[(table, column)]} {direction}")
-            elif has_real_aggregation:
-                matched_aggs = [
-                    a
-                    for a in aggregations
-                    if (a.get("func") or "RAW").upper() != "RAW"
-                    and _effective_table_ref(a, fallback=main_alias) == table
-                    and a.get("column", "") == column
-                ]
-                if len(matched_aggs) == 1:
-                    matched_agg = matched_aggs[0]
-                    order_fields.append(
-                        f"{get_agg_expr(str(matched_agg.get('func') or '').upper(), table, column, matched_agg.get('id'))} {direction}"
-                    )
-                    continue
-                raise ValueError("聚合查询不能按未分组的明细字段排序，请改用已选择的维度或聚合指标排序")
-            else:
-                order_fields.append(f"{table}.{column} {direction}")
+        order_fields = _build_order_by_fields(
+            order_by,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+            main_alias=main_alias,
+            is_multi_table=is_multi_table,
+            dimension_alias_map=dimension_alias_map,
+            group_expr_map=group_expr_map,
+            dimension_expr_map=dimension_expr_map,
+            has_real_aggregation=has_real_aggregation,
+        )
         parts.append(f"ORDER BY {', '.join(order_fields)}")
 
-    if offset is not None:
-        if not isinstance(offset, int) or offset < 0:
-            raise ValueError("OFFSET 必须为非负整数")
-        if limit is None:
-            raise ValueError("OFFSET 必须配合 LIMIT 使用")
-    if limit is not None or offset is not None:
-        parts.append(sql_dialect.limit_offset(int(limit), int(offset or 0)))
+    _append_limit_offset(parts, sql_dialect, limit, offset)
     return "\n".join(parts)
-
 
 def compile_query_plan_sql(
     query_plan: Dict[str, Any],

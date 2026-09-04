@@ -125,6 +125,42 @@ def datasource_requires_http_permission(datasource: Dict[str, Any]) -> bool:
     return False
 
 
+def _resolve_member_executor_type(member: Dict[str, Any], default_executor_type: str) -> str:
+    executor_type = str((member or {}).get("query_executor_type") or default_executor_type).strip().lower() or "direct"
+    if executor_type not in {"direct", "http"}:
+        executor_type = "direct"
+    return executor_type
+
+
+def _member_allowed_by_org_codes(
+    member: Dict[str, Any],
+    default_executor_type: str,
+    allowed_org_codes: Dict[str, Set[str]],
+) -> bool:
+    executor_type = _resolve_member_executor_type(member, default_executor_type)
+    org_code = str((member or {}).get("org_code") or "").strip()
+    return bool(org_code) and org_code in allowed_org_codes.get(executor_type, set())
+
+
+def _allowed_member_id_set(allowed_members: List[Dict[str, Any]]) -> Set[str]:
+    return {
+        str((member or {}).get("member_datasource_id") or "").strip()
+        for member in allowed_members
+        if str((member or {}).get("member_datasource_id") or "").strip()
+    }
+
+
+def _filter_member_datasource_ids(
+    datasource: Dict[str, Any],
+    allowed_member_ids: Set[str],
+) -> List[str]:
+    return [
+        member_id
+        for member_id in (datasource.get("member_datasource_ids") or [])
+        if str(member_id or "").strip() in allowed_member_ids
+    ]
+
+
 def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], allowed_org_codes: Dict[str, Set[str]]) -> Optional[Dict[str, Any]]:
     """Filter datasource member_sources by executor-specific org permissions."""
     member_sources = list(datasource.get("member_sources") or [])
@@ -133,31 +169,18 @@ def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], a
 
     source_type = str(datasource.get("source_type") or "").strip()
     datasource_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
-    allowed_members: List[Dict[str, Any]] = []
-    for member in member_sources:
-        executor_type = str((member or {}).get("query_executor_type") or datasource_executor_type).strip().lower() or "direct"
-        if executor_type not in {"direct", "http"}:
-            executor_type = "direct"
-        org_code = str((member or {}).get("org_code") or "").strip()
-        if org_code and org_code in allowed_org_codes.get(executor_type, set()):
-            allowed_members.append(member)
-
+    allowed_members = [
+        member for member in member_sources
+        if _member_allowed_by_org_codes(member, datasource_executor_type, allowed_org_codes)
+    ]
     if not allowed_members:
         return None
 
-    allowed_member_ids = {
-        str((member or {}).get("member_datasource_id") or "").strip()
-        for member in allowed_members
-        if str((member or {}).get("member_datasource_id") or "").strip()
-    }
+    allowed_member_ids = _allowed_member_id_set(allowed_members)
     result = dict(datasource)
     result["source_type"] = source_type or result.get("source_type")
     result["member_sources"] = allowed_members
-    result["member_datasource_ids"] = [
-        member_id
-        for member_id in (datasource.get("member_datasource_ids") or [])
-        if str(member_id or "").strip() in allowed_member_ids
-    ]
+    result["member_datasource_ids"] = _filter_member_datasource_ids(datasource, allowed_member_ids)
     template_member_id = str(datasource.get("template_datasource_id") or "").strip()
     if template_member_id not in allowed_member_ids:
         result["template_datasource_id"] = str((allowed_members[0] or {}).get("member_datasource_id") or "").strip()

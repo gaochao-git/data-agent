@@ -105,110 +105,134 @@ class MySQLSyncService:
         conn = await self._get_connection()
         try:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
-                await cursor.execute(
-                    """
-                    SELECT
-                        t.TABLE_NAME,
-                        t.TABLE_COMMENT,
-                        c.COLUMN_NAME,
-                        c.COLUMN_TYPE,
-                        c.COLUMN_COMMENT,
-                        c.COLUMN_KEY,
-                        c.IS_NULLABLE
-                    FROM information_schema.TABLES t
-                    LEFT JOIN information_schema.COLUMNS c
-                        ON t.TABLE_SCHEMA = c.TABLE_SCHEMA
-                        AND t.TABLE_NAME = c.TABLE_NAME
-                    WHERE t.TABLE_SCHEMA = %s
-                        AND t.TABLE_TYPE = 'BASE TABLE'
-                    ORDER BY t.TABLE_NAME, c.ORDINAL_POSITION
-                    """,
-                    (self.database,),
-                )
-                rows = await cursor.fetchall()
-                tables_by_name: Dict[str, Dict[str, Any]] = {}
-                for row in rows:
-                    table_name = row["TABLE_NAME"]
-                    if table_names and table_name not in table_names:
-                        continue
-                    table = tables_by_name.setdefault(
-                        table_name,
-                        {
-                            "table_name": table_name,
-                            "description": row["TABLE_COMMENT"] or table_name,
-                            "columns": [],
-                            "primary_keys": [],
-                            "unique_indexes": [],
-                            "indexes": [],
-                        },
-                    )
-                    if row["COLUMN_NAME"]:
-                        column_key = row["COLUMN_KEY"]
-                        table["columns"].append({
-                            "name": row["COLUMN_NAME"],
-                            "type": row["COLUMN_TYPE"],
-                            "mysql_type": row["COLUMN_TYPE"],
-                            "description": row["COLUMN_COMMENT"] or row["COLUMN_NAME"],
-                            "primary_key": column_key == "PRI",
-                            "unique_key": column_key == "UNI",
-                            "index_key": column_key == "MUL",
-                            "nullable": row["IS_NULLABLE"] == "YES",
-                        })
-                await cursor.execute(
-                    """
-                    SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
-                    FROM information_schema.STATISTICS
-                    WHERE TABLE_SCHEMA = %s
-                    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
-                    """,
-                    (self.database,),
-                )
-                stat_rows = await cursor.fetchall()
-                stats_by_table: Dict[str, List[Dict[str, Any]]] = {}
-                for sr in stat_rows:
-                    table_name = sr.get("TABLE_NAME")
-                    if not table_name:
-                        continue
-                    if table_names and table_name not in table_names:
-                        continue
-                    stats_by_table.setdefault(table_name, []).append({
-                        "index_name": sr.get("INDEX_NAME"),
-                        "non_unique": bool(sr.get("NON_UNIQUE")),
-                        "seq": sr.get("SEQ_IN_INDEX") or 0,
-                        "column_name": sr.get("COLUMN_NAME"),
-                    })
-                for table_name, stats_list in stats_by_table.items():
-                    table = tables_by_name.get(table_name)
-                    if table is None:
-                        continue
-                    by_index: Dict[str, Dict[str, Any]] = {}
-                    for s in stats_list:
-                        index_name = s["index_name"]
-                        if not index_name or not s["column_name"]:
-                            continue
-                        if index_name not in by_index:
-                            by_index[index_name] = {"non_unique": s["non_unique"], "columns": []}
-                        by_index[index_name]["columns"].append((s["seq"], s["column_name"]))
-                    primary_keys: List[List[str]] = []
-                    unique_indexes: List[Dict[str, Any]] = []
-                    indexes: List[Dict[str, Any]] = []
-                    for index_name, info in by_index.items():
-                        columns = [col for _, col in sorted(info["columns"])]
-                        if index_name == "PRIMARY":
-                            primary_keys.append(columns)
-                        elif not info["non_unique"]:
-                            unique_indexes.append({"name": index_name, "columns": columns})
-                        else:
-                            indexes.append({"name": index_name, "columns": columns})
-                    table["primary_keys"] = primary_keys
-                    table["unique_indexes"] = unique_indexes
-                    table["indexes"] = indexes
-                if table_names:
-                    return [tables_by_name[name] for name in table_names if name in tables_by_name]
-                return list(tables_by_name.values())
+                rows = await self._fetch_table_column_rows(cursor)
+                tables_by_name = MySQLSyncService._group_rows_into_tables(rows, table_names)
+                stat_rows = await self._fetch_index_stat_rows(cursor)
+                stats_by_table = MySQLSyncService._group_index_stats(stat_rows, table_names)
+                MySQLSyncService._apply_index_stats(tables_by_name, stats_by_table)
+                return MySQLSyncService._select_requested_tables(tables_by_name, table_names)
         finally:
             conn.close()
             await conn.ensure_closed()
+
+    async def _fetch_table_column_rows(self, cursor) -> List[Dict[str, Any]]:
+        await cursor.execute(
+            """
+            SELECT
+                t.TABLE_NAME,
+                t.TABLE_COMMENT,
+                c.COLUMN_NAME,
+                c.COLUMN_TYPE,
+                c.COLUMN_COMMENT,
+                c.COLUMN_KEY,
+                c.IS_NULLABLE
+            FROM information_schema.TABLES t
+            LEFT JOIN information_schema.COLUMNS c
+                ON t.TABLE_SCHEMA = c.TABLE_SCHEMA
+                AND t.TABLE_NAME = c.TABLE_NAME
+            WHERE t.TABLE_SCHEMA = %s
+                AND t.TABLE_TYPE = 'BASE TABLE'
+            ORDER BY t.TABLE_NAME, c.ORDINAL_POSITION
+            """,
+            (self.database,),
+        )
+        return await cursor.fetchall()
+
+    async def _fetch_index_stat_rows(self, cursor) -> List[Dict[str, Any]]:
+        await cursor.execute(
+            """
+            SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = %s
+            ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
+            """,
+            (self.database,),
+        )
+        return await cursor.fetchall()
+
+    @staticmethod
+    def _group_rows_into_tables(rows: List[Dict[str, Any]], table_names: Optional[List[str]]) -> Dict[str, Dict[str, Any]]:
+        tables_by_name: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            table_name = row["TABLE_NAME"]
+            if table_names and table_name not in table_names:
+                continue
+            table = tables_by_name.setdefault(
+                table_name,
+                {
+                    "table_name": table_name,
+                    "description": row["TABLE_COMMENT"] or table_name,
+                    "columns": [],
+                    "primary_keys": [],
+                    "unique_indexes": [],
+                    "indexes": [],
+                },
+            )
+            if row["COLUMN_NAME"]:
+                column_key = row["COLUMN_KEY"]
+                table["columns"].append({
+                    "name": row["COLUMN_NAME"],
+                    "type": row["COLUMN_TYPE"],
+                    "mysql_type": row["COLUMN_TYPE"],
+                    "description": row["COLUMN_COMMENT"] or row["COLUMN_NAME"],
+                    "primary_key": column_key == "PRI",
+                    "unique_key": column_key == "UNI",
+                    "index_key": column_key == "MUL",
+                    "nullable": row["IS_NULLABLE"] == "YES",
+                })
+        return tables_by_name
+
+    @staticmethod
+    def _group_index_stats(stat_rows: List[Dict[str, Any]], table_names: Optional[List[str]]) -> Dict[str, List[Dict[str, Any]]]:
+        stats_by_table: Dict[str, List[Dict[str, Any]]] = {}
+        for sr in stat_rows:
+            table_name = sr.get("TABLE_NAME")
+            if not table_name:
+                continue
+            if table_names and table_name not in table_names:
+                continue
+            stats_by_table.setdefault(table_name, []).append({
+                "index_name": sr.get("INDEX_NAME"),
+                "non_unique": bool(sr.get("NON_UNIQUE")),
+                "seq": sr.get("SEQ_IN_INDEX") or 0,
+                "column_name": sr.get("COLUMN_NAME"),
+            })
+        return stats_by_table
+
+    @staticmethod
+    def _apply_index_stats(tables_by_name: Dict[str, Dict[str, Any]], stats_by_table: Dict[str, List[Dict[str, Any]]]) -> None:
+        for table_name, stats_list in stats_by_table.items():
+            table = tables_by_name.get(table_name)
+            if table is None:
+                continue
+            by_index: Dict[str, Dict[str, Any]] = {}
+            for s in stats_list:
+                index_name = s["index_name"]
+                if not index_name or not s["column_name"]:
+                    continue
+                if index_name not in by_index:
+                    by_index[index_name] = {"non_unique": s["non_unique"], "columns": []}
+                by_index[index_name]["columns"].append((s["seq"], s["column_name"]))
+            primary_keys: List[List[str]] = []
+            unique_indexes: List[Dict[str, Any]] = []
+            indexes: List[Dict[str, Any]] = []
+            for index_name, info in by_index.items():
+                columns = [col for _, col in sorted(info["columns"])]
+                if index_name == "PRIMARY":
+                    primary_keys.append(columns)
+                elif not info["non_unique"]:
+                    unique_indexes.append({"name": index_name, "columns": columns})
+                else:
+                    indexes.append({"name": index_name, "columns": columns})
+            table["primary_keys"] = primary_keys
+            table["unique_indexes"] = unique_indexes
+            table["indexes"] = indexes
+
+    @staticmethod
+    def _select_requested_tables(tables_by_name: Dict[str, Dict[str, Any]], table_names: Optional[List[str]]) -> List[Dict[str, Any]]:
+        if table_names:
+            return [tables_by_name[name] for name in table_names if name in tables_by_name]
+        return list(tables_by_name.values())
 
 
 class HiveSyncService:
@@ -250,58 +274,91 @@ class HiveSyncService:
             if should_close:
                 conn.close()
 
+    @staticmethod
+    def _hive_section_marker(col_name: str) -> Optional[str]:
+        """识别 DESCRIBE FORMATTED 输出中的分段标记行，非标记行返回 None。"""
+        if col_name == "# Partition Information":
+            return "partition"
+        if col_name == "# Detailed Table Information":
+            return "details"
+        if col_name == "# Storage Information":
+            return "storage"
+        return None
+
+    @staticmethod
+    def _extract_hive_row_fields(row) -> tuple[str, str, str]:
+        col_name = str(row[0] or "").strip()
+        col_type = str(row[1] if len(row) > 1 and row[1] else "").strip()
+        col_comment = str(row[2] if len(row) > 2 and row[2] else "").strip()
+        return col_name, col_type, col_comment
+
+    @staticmethod
+    def _append_hive_column(
+        columns: List[Dict[str, Any]],
+        partition_columns: set[str],
+        seen_columns: set[str],
+        section: str,
+        col_name: str,
+        col_type: str,
+        col_comment: str,
+    ) -> None:
+        is_partition = section == "partition"
+        seen_columns.add(col_name)
+        if is_partition:
+            partition_columns.add(col_name)
+        columns.append({
+            "name": col_name,
+            "type": col_type,
+            "hive_type": col_type,
+            "description": col_comment or col_name,
+            "primary_key": False,
+            "nullable": True,
+            "is_partition": is_partition,
+        })
+
+    @staticmethod
+    def _resolve_hive_table_comment(col_name: str, col_type: str, col_comment: str, table_comment: str) -> str:
+        if not col_name and col_type.lower() == "comment":
+            return col_comment
+        if col_name.lower() == "comment":
+            return col_type
+        return table_comment
+
+    @classmethod
+    def _parse_hive_metadata_rows(cls, rows) -> Dict[str, Any]:
+        columns: List[Dict[str, Any]] = []
+        partition_columns: set[str] = set()
+        table_comment = ""
+        seen_columns: set[str] = set()
+        section = "columns"
+        for row in rows:
+            col_name, col_type, col_comment = cls._extract_hive_row_fields(row)
+            if not col_name and section != "details":
+                continue
+            marker = cls._hive_section_marker(col_name)
+            if marker:
+                section = marker
+                continue
+            if col_name.startswith("#"):
+                continue
+            if section in {"columns", "partition"} and col_name not in seen_columns:
+                cls._append_hive_column(columns, partition_columns, seen_columns, section, col_name, col_type, col_comment)
+            elif section == "details":
+                table_comment = cls._resolve_hive_table_comment(col_name, col_type, col_comment, table_comment)
+        return {
+            "comment": table_comment,
+            "columns": columns,
+            "partition_columns": partition_columns,
+        }
+
     def _get_table_metadata(self, table_name: str, conn=None) -> Dict[str, Any]:
         should_close = conn is None
         conn = conn or self._get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute(f"DESCRIBE FORMATTED {_quote_hive_identifier(table_name)}")
-            columns: List[Dict[str, Any]] = []
-            partition_columns: set[str] = set()
-            table_comment = ""
-            seen_columns: set[str] = set()
-            section = "columns"
-            for row in cursor.fetchall():
-                col_name = str(row[0] or "").strip()
-                col_type = str(row[1] if len(row) > 1 and row[1] else "").strip()
-                col_comment = str(row[2] if len(row) > 2 and row[2] else "").strip()
-                if not col_name and section != "details":
-                    continue
-                if col_name == "# Partition Information":
-                    section = "partition"
-                    continue
-                if col_name == "# Detailed Table Information":
-                    section = "details"
-                    continue
-                if col_name == "# Storage Information":
-                    section = "storage"
-                    continue
-                if col_name.startswith("#"):
-                    continue
-                if section in {"columns", "partition"} and col_name not in seen_columns:
-                    is_partition = section == "partition"
-                    seen_columns.add(col_name)
-                    if is_partition:
-                        partition_columns.add(col_name)
-                    columns.append({
-                        "name": col_name,
-                        "type": col_type,
-                        "hive_type": col_type,
-                        "description": col_comment or col_name,
-                        "primary_key": False,
-                        "nullable": True,
-                        "is_partition": is_partition,
-                    })
-                elif section == "details":
-                    if not col_name and col_type.lower() == "comment":
-                        table_comment = col_comment
-                    elif col_name.lower() == "comment":
-                        table_comment = col_type
-            return {
-                "comment": table_comment,
-                "columns": columns,
-                "partition_columns": partition_columns,
-            }
+            metadata = self._parse_hive_metadata_rows(cursor.fetchall())
+            return metadata
         except Exception as exc:
             logger.error("获取表 %s 元数据失败: %s", table_name, exc)
             raise RuntimeError(f"获取表 {table_name} 元数据失败") from exc

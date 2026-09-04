@@ -23,6 +23,45 @@ def expression_uses_physical_column(expression: str, table_columns: Set[str]) ->
     return False
 
 
+def _validate_field_display_names(dimensions: List[Dict], metrics: List[Dict]) -> Optional[str]:
+    """维度/指标的显示名称不能为空且不能重复。"""
+    seen_names: Set[str] = set()
+    for item in [*(dimensions or []), *(metrics or [])]:
+        display_name = str((item or {}).get("name") or "").strip()
+        normalized_name = normalize_semantic_text(display_name)
+        if not normalized_name:
+            return "字段显示名称不能为空"
+        if normalized_name in seen_names:
+            return f"字段显示名称重复: {display_name}"
+        seen_names.add(normalized_name)
+    return None
+
+
+def _validate_dimensions_against_tables(dimensions: List[Dict], table_columns_map: Dict[str, Set[str]]) -> Optional[str]:
+    for dimension in dimensions or []:
+        table_name = dimension.get("table")
+        column_name = dimension.get("column")
+        if not table_name or table_name not in table_columns_map:
+            return f"维度 {dimension.get('name', '')} 所属表不存在: {table_name}"
+        if not column_name or column_name not in table_columns_map[table_name]:
+            return f"维度 {dimension.get('name', '')} 字段不存在: {table_name}.{column_name}"
+        allowed_operators_error = _validate_allowed_operators(dimension)
+        if allowed_operators_error:
+            return allowed_operators_error
+    return None
+
+
+def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dict[str, Set[str]]) -> Optional[str]:
+    for metric in metrics or []:
+        table_name = metric.get("table")
+        expression = str(metric.get("expression") or "").strip()
+        if not table_name or table_name not in table_columns_map:
+            return f"指标 {metric.get('name', '')} 所属表不存在: {table_name}"
+        if not expression_uses_physical_column(expression, table_columns_map[table_name]):
+            return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
+    return None
+
+
 def validate_semantic_fields(
     datasource: Dict,
     metrics: List[Dict],
@@ -35,34 +74,15 @@ def validate_semantic_fields(
     if not effective_table_columns_map:
         return "当前数据源缺少表结构信息，请先完成数据源同步"
 
-    seen_names: Set[str] = set()
-    for item in [*(dimensions or []), *(metrics or [])]:
-        display_name = str((item or {}).get("name") or "").strip()
-        normalized_name = normalize_semantic_text(display_name)
-        if not normalized_name:
-            return "字段显示名称不能为空"
-        if normalized_name in seen_names:
-            return f"字段显示名称重复: {display_name}"
-        seen_names.add(normalized_name)
-
-    for dimension in dimensions or []:
-        table_name = dimension.get("table")
-        column_name = dimension.get("column")
-        if not table_name or table_name not in effective_table_columns_map:
-            return f"维度 {dimension.get('name', '')} 所属表不存在: {table_name}"
-        if not column_name or column_name not in effective_table_columns_map[table_name]:
-            return f"维度 {dimension.get('name', '')} 字段不存在: {table_name}.{column_name}"
-        allowed_operators_error = _validate_allowed_operators(dimension)
-        if allowed_operators_error:
-            return allowed_operators_error
-
-    for metric in metrics or []:
-        table_name = metric.get("table")
-        expression = str(metric.get("expression") or "").strip()
-        if not table_name or table_name not in effective_table_columns_map:
-            return f"指标 {metric.get('name', '')} 所属表不存在: {table_name}"
-        if not expression_uses_physical_column(expression, effective_table_columns_map[table_name]):
-            return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
+    display_name_error = _validate_field_display_names(dimensions, metrics)
+    if display_name_error:
+        return display_name_error
+    dimension_error = _validate_dimensions_against_tables(dimensions, effective_table_columns_map)
+    if dimension_error:
+        return dimension_error
+    metric_error = _validate_metrics_against_tables(metrics, effective_table_columns_map)
+    if metric_error:
+        return metric_error
     return validate_semantic_relationships(
         effective_table_columns_map,
         metrics or [],
@@ -116,15 +136,12 @@ def _register_alias(alias_tables: Dict[str, str], alias: str, table: str) -> Opt
     return None
 
 
-def validate_semantic_relationships(
-    table_columns_map: Dict[str, Set[str]],
-    metrics: List[Dict],
+def _register_field_aliases(
+    alias_tables: Dict[str, str],
+    field_aliases: Set[str],
     dimensions: List[Dict],
-    relationships: List[Dict],
+    metrics: List[Dict],
 ) -> Optional[str]:
-    """Validate relationship endpoints, aliases, columns and field connectivity."""
-    alias_tables: Dict[str, str] = {}
-    field_aliases: Set[str] = set()
     for item in [*dimensions, *metrics]:
         table = str((item or {}).get("table") or "").strip()
         alias = _semantic_alias(item or {})
@@ -133,46 +150,88 @@ def validate_semantic_relationships(
             if error:
                 return error
             field_aliases.add(alias)
+    return None
 
-    adjacency: Dict[str, Set[str]] = {}
-    for index, relationship in enumerate(relationships):
-        left_table = str((relationship or {}).get("left_table") or "").strip()
-        right_table = str((relationship or {}).get("right_table") or "").strip()
-        left_alias = _relationship_alias(relationship or {}, "left")
-        right_alias = _relationship_alias(relationship or {}, "right")
-        label = f"关系[{index + 1}]"
-        for side_name, table, alias in (
+
+def _validate_relationship_conditions(
+    table_columns_map: Dict[str, Set[str]],
+    label: str,
+    left_table: str,
+    right_table: str,
+    conditions: List[Dict],
+) -> Optional[str]:
+    for condition_index, condition in enumerate(conditions):
+        left_column = str((condition or {}).get("left_column") or "").strip()
+        right_column = str((condition or {}).get("right_column") or "").strip()
+        condition_label = f"{label}关联条件[{condition_index + 1}]"
+        if not left_column or not right_column:
+            return f"{condition_label}左右字段不能为空"
+        if left_column not in table_columns_map[left_table]:
+            return f"{condition_label}左字段不存在: {left_table}.{left_column}"
+        if right_column not in table_columns_map[right_table]:
+            return f"{condition_label}右字段不存在: {right_table}.{right_column}"
+    return None
+
+
+def _validate_relationship_sides(
+    table_columns_map: Dict[str, Set[str]],
+    alias_tables: Dict[str, str],
+    label: str,
+    sides: tuple[tuple[str, str, str], ...],
+) -> Optional[str]:
+    for side_name, table, alias in sides:
+        if not table or table not in table_columns_map:
+            return f"{label}{side_name}不存在: {table}"
+        if not alias:
+            return f"{label}{side_name}别名不能为空"
+        error = _register_alias(alias_tables, alias, table)
+        if error:
+            return error
+    return None
+
+
+def _validate_single_relationship(
+    table_columns_map: Dict[str, Set[str]],
+    alias_tables: Dict[str, str],
+    adjacency: Dict[str, Set[str]],
+    index: int,
+    relationship: Dict,
+) -> Optional[str]:
+    left_table = str((relationship or {}).get("left_table") or "").strip()
+    right_table = str((relationship or {}).get("right_table") or "").strip()
+    left_alias = _relationship_alias(relationship or {}, "left")
+    right_alias = _relationship_alias(relationship or {}, "right")
+    label = f"关系[{index + 1}]"
+    error = _validate_relationship_sides(
+        table_columns_map,
+        alias_tables,
+        label,
+        (
             ("左表", left_table, left_alias),
             ("右表", right_table, right_alias),
-        ):
-            if not table or table not in table_columns_map:
-                return f"{label}{side_name}不存在: {table}"
-            if not alias:
-                return f"{label}{side_name}别名不能为空"
-            error = _register_alias(alias_tables, alias, table)
-            if error:
-                return error
-        if left_alias == right_alias:
-            return f"{label}左右表别名不能相同: {left_alias}"
+        ),
+    )
+    if error:
+        return error
+    if left_alias == right_alias:
+        return f"{label}左右表别名不能相同: {left_alias}"
 
-        conditions = _relationship_conditions(relationship or {})
-        if not conditions:
-            return f"{label}缺少关联条件"
-        for condition_index, condition in enumerate(conditions):
-            left_column = str((condition or {}).get("left_column") or "").strip()
-            right_column = str((condition or {}).get("right_column") or "").strip()
-            condition_label = f"{label}关联条件[{condition_index + 1}]"
-            if not left_column or not right_column:
-                return f"{condition_label}左右字段不能为空"
-            if left_column not in table_columns_map[left_table]:
-                return f"{condition_label}左字段不存在: {left_table}.{left_column}"
-            if right_column not in table_columns_map[right_table]:
-                return f"{condition_label}右字段不存在: {right_table}.{right_column}"
-        adjacency.setdefault(left_alias, set()).add(right_alias)
-        adjacency.setdefault(right_alias, set()).add(left_alias)
+    conditions = _relationship_conditions(relationship or {})
+    if not conditions:
+        return f"{label}缺少关联条件"
+    error = _validate_relationship_conditions(
+        table_columns_map, label, left_table, right_table, conditions,
+    )
+    if error:
+        return error
+    adjacency.setdefault(left_alias, set()).add(right_alias)
+    adjacency.setdefault(right_alias, set()).add(left_alias)
+    return None
 
+
+def _find_disconnected_aliases(field_aliases: Set[str], adjacency: Dict[str, Set[str]]) -> List[str]:
     if len(field_aliases) <= 1:
-        return None
+        return []
     start = next(iter(field_aliases))
     reachable = {start}
     pending = [start]
@@ -182,7 +241,31 @@ def validate_semantic_relationships(
             if neighbor not in reachable:
                 reachable.add(neighbor)
                 pending.append(neighbor)
-    disconnected = sorted(field_aliases - reachable)
+    return sorted(field_aliases - reachable)
+
+
+def validate_semantic_relationships(
+    table_columns_map: Dict[str, Set[str]],
+    metrics: List[Dict],
+    dimensions: List[Dict],
+    relationships: List[Dict],
+) -> Optional[str]:
+    """Validate relationship endpoints, aliases, columns and field connectivity."""
+    alias_tables: Dict[str, str] = {}
+    field_aliases: Set[str] = set()
+    error = _register_field_aliases(alias_tables, field_aliases, dimensions, metrics)
+    if error:
+        return error
+
+    adjacency: Dict[str, Set[str]] = {}
+    for index, relationship in enumerate(relationships):
+        error = _validate_single_relationship(
+            table_columns_map, alias_tables, adjacency, index, relationship,
+        )
+        if error:
+            return error
+
+    disconnected = _find_disconnected_aliases(field_aliases, adjacency)
     if disconnected:
         return f"语义字段所在表缺少关联路径: {'、'.join(disconnected)}"
     return None

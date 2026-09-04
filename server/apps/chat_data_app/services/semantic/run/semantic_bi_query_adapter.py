@@ -149,6 +149,38 @@ class SemanticBIQueryAdapter:
                     return dim
         raise ValueError(f"语义维度不存在或不在当前指标集内: {item.get('alias') or item.get('displayName') or item.get('column')}")
 
+    @staticmethod
+    def _metric_field_signature(metric: Dict[str, Any]) -> tuple[str, str, set]:
+        """解析语义指标的 (expression, func, field_keys) 匹配签名。"""
+        metric_expression = normalize_text(metric.get("expression"))
+        parsed = metric_func_column(metric_expression)
+        metric_func = parsed[0] if parsed else "RAW"
+        metric_column = parsed[1] if parsed else (metric.get("column") or metric.get("field_name") or "")
+        metric_keys = _field_keys(metric.get("table"), _semantic_alias(metric), metric_column)
+        return metric_expression, metric_func, metric_keys
+
+    def _match_metric_by_field(
+        self,
+        item: Dict[str, Any],
+        item_expression: str,
+        item_func: str,
+        item_keys: set,
+    ) -> Optional[Dict[str, Any]]:
+        """按表达式/字段键扫描语义指标；命中多个时要求显式指定。"""
+        matched_by_field: List[Dict[str, Any]] = []
+        for metric in self.semantic_config.get("metrics") or []:
+            metric_expression, metric_func, metric_keys = self._metric_field_signature(metric)
+            if item_expression and metric_expression and item_expression == metric_expression:
+                return metric
+            if item_func == metric_func and item_keys and item_keys.intersection(metric_keys):
+                matched_by_field.append(metric)
+        if len(matched_by_field) == 1:
+            return matched_by_field[0]
+        if len(matched_by_field) > 1:
+            metric_names = "、".join(normalize_text(metric.get("name")) for metric in matched_by_field if normalize_text(metric.get("name")))
+            raise ValueError(f"指标字段匹配到多个语义指标，请传 semanticName 或 expression: {metric_names}")
+        return None
+
     def _resolve_metric_config(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name_candidates = [
             item.get("semanticName"),
@@ -164,23 +196,7 @@ class SemanticBIQueryAdapter:
         item_func = normalize_text(item.get("func") or "RAW").upper()
         item_keys = _field_keys(item.get("table"), _normalize_alias(item), item.get("column"))
         item_expression = normalize_text(item.get("expression"))
-        matched_by_field: List[Dict[str, Any]] = []
-        for metric in self.semantic_config.get("metrics") or []:
-            metric_expression = normalize_text(metric.get("expression"))
-            parsed = metric_func_column(metric_expression)
-            metric_func = parsed[0] if parsed else "RAW"
-            metric_column = parsed[1] if parsed else (metric.get("column") or metric.get("field_name") or "")
-            metric_keys = _field_keys(metric.get("table"), _semantic_alias(metric), metric_column)
-            if item_expression and metric_expression and item_expression == metric_expression:
-                return metric
-            if item_func == metric_func and item_keys and item_keys.intersection(metric_keys):
-                matched_by_field.append(metric)
-        if len(matched_by_field) == 1:
-            return matched_by_field[0]
-        if len(matched_by_field) > 1:
-            metric_names = "、".join(normalize_text(metric.get("name")) for metric in matched_by_field if normalize_text(metric.get("name")))
-            raise ValueError(f"指标字段匹配到多个语义指标，请传 semanticName 或 expression: {metric_names}")
-        return None
+        return self._match_metric_by_field(item, item_expression, item_func, item_keys)
 
     def _map_dimension(self, item: Dict[str, Any]) -> Dict[str, Any]:
         dim = self._resolve_dimension_config(item)
@@ -196,26 +212,45 @@ class SemanticBIQueryAdapter:
             "transform": transform,
         }
 
+    @staticmethod
+    def _aggregation_fields_from_metric(item: Dict[str, Any], metric: Dict[str, Any]) -> tuple:
+        """命中语义指标时，聚合字段优先取指标配置。"""
+        parsed = metric_func_column(normalize_text(metric.get("expression")))
+        func = parsed[0] if parsed else normalize_text(item.get("func") or "RAW").upper()
+        column = parsed[1] if parsed else (metric.get("column") or item.get("column") or "*")
+        table = metric.get("table") or item.get("table")
+        return (
+            func,
+            table,
+            _semantic_alias(metric) or table,
+            column,
+            metric.get("expression") or item.get("expression"),
+            metric.get("name") or item.get("alias") or item.get("displayName") or column,
+        )
+
+    def _aggregation_fields_from_dimension(self, item: Dict[str, Any]) -> tuple:
+        """未命中指标时回退维度聚合，仅允许基础聚合函数。"""
+        dim = self._resolve_dimension_config(item)
+        func = normalize_text(item.get("func") or "RAW").upper()
+        if func not in {"RAW", "COUNT", "SUM", "AVG", "MAX", "MIN", "COUNT_DISTINCT"}:
+            raise ValueError(f"字段 '{item.get('alias') or item.get('displayName') or item.get('column')}' 未配置为指标，不能作为聚合指标使用")
+        table = dim.get("table")
+        column = dim.get("column")
+        return (
+            func,
+            table,
+            _semantic_alias(dim) or table,
+            column,
+            dim.get("expression") or item.get("expression"),
+            item.get("alias") or item.get("displayName") or dim.get("name") or column,
+        )
+
     def _map_aggregation(self, item: Dict[str, Any]) -> Dict[str, Any]:
         metric = self._resolve_metric_config(item)
         if metric:
-            parsed = metric_func_column(normalize_text(metric.get("expression")))
-            func = parsed[0] if parsed else normalize_text(item.get("func") or "RAW").upper()
-            column = parsed[1] if parsed else (metric.get("column") or item.get("column") or "*")
-            table = metric.get("table") or item.get("table")
-            table_alias = _semantic_alias(metric) or table
-            expression = metric.get("expression") or item.get("expression")
-            display_name = metric.get("name") or item.get("alias") or item.get("displayName") or column
+            func, table, table_alias, column, expression, display_name = self._aggregation_fields_from_metric(item, metric)
         else:
-            dim = self._resolve_dimension_config(item)
-            func = normalize_text(item.get("func") or "RAW").upper()
-            if func not in {"RAW", "COUNT", "SUM", "AVG", "MAX", "MIN", "COUNT_DISTINCT"}:
-                raise ValueError(f"字段 '{item.get('alias') or item.get('displayName') or item.get('column')}' 未配置为指标，不能作为聚合指标使用")
-            table = dim.get("table")
-            table_alias = _semantic_alias(dim) or table
-            column = dim.get("column")
-            expression = dim.get("expression") or item.get("expression")
-            display_name = item.get("alias") or item.get("displayName") or dim.get("name") or column
+            func, table, table_alias, column, expression, display_name = self._aggregation_fields_from_dimension(item)
 
         return {
             "id": item.get("id") or f"agg-{display_name}",
@@ -293,29 +328,30 @@ class SemanticBIQueryAdapter:
         return True
 
     @classmethod
-    def _validate_filter_value(cls, node: Dict[str, Any]) -> None:
-        operator = normalize_text(node.get("operator") or "=").upper()
-        if operator in {"IS NULL", "IS NOT NULL", "EMPTY STRING"}:
-            return
-
-        label = normalize_text(
+    def _filter_label(cls, node: Dict[str, Any]) -> str:
+        return normalize_text(
             node.get("displayName")
             or node.get("semanticName")
             or node.get("name")
             or node.get("column")
             or "筛选条件"
         )
-        value_type = normalize_text(node.get("valueType") or node.get("value_type") or "literal").lower()
+
+    @classmethod
+    def _validate_typed_filter_value(cls, node: Dict[str, Any], value_type: str, label: str) -> bool:
+        """field_ref/expression 类型校验；返回 True 表示已按类型完成校验。"""
         if value_type == "field_ref":
             if not normalize_text(node.get("rightTable")) or not normalize_text(node.get("rightColumn")):
                 raise ValueError(f"筛选条件“{label}”请选择右侧字段")
-            return
+            return True
         if value_type == "expression":
             if not normalize_text(node.get("rightExpression")):
                 raise ValueError(f"筛选条件“{label}”请输入表达式")
-            return
+            return True
+        return False
 
-        value = node.get("value")
+    @classmethod
+    def _validate_operator_filter_value(cls, operator: str, value: Any, label: str) -> None:
         if operator == "BETWEEN":
             if not isinstance(value, list) or len(value) != 2 or any(not cls._has_filter_value(item) for item in value):
                 raise ValueError(f"筛选条件“{label}”请输入完整的起止值")
@@ -326,6 +362,18 @@ class SemanticBIQueryAdapter:
             return
         if not cls._has_filter_value(value):
             raise ValueError(f"筛选条件“{label}”请输入筛选值")
+
+    @classmethod
+    def _validate_filter_value(cls, node: Dict[str, Any]) -> None:
+        operator = normalize_text(node.get("operator") or "=").upper()
+        if operator in {"IS NULL", "IS NOT NULL", "EMPTY STRING"}:
+            return
+
+        label = cls._filter_label(node)
+        value_type = normalize_text(node.get("valueType") or node.get("value_type") or "literal").lower()
+        if cls._validate_typed_filter_value(node, value_type, label):
+            return
+        cls._validate_operator_filter_value(operator, node.get("value"), label)
 
     def _copy_filter_value_fields(self, source: Dict[str, Any], target: Dict[str, Any]) -> None:
         for key in ("value", "valueType", "value_type", "rightExpression", "logic"):

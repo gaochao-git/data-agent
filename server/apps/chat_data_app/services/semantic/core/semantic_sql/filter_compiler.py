@@ -161,6 +161,54 @@ def build_where_leaf_clause(
     return _operator_clause(expression, leaf, right_expression=right_expression, safe_functions=safe_functions)
 
 
+def _match_aggregation(
+    leaf: Dict[str, Any],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: List[Dict[str, Any]],
+    main_table: str,
+    table: str,
+    column: Any,
+    agg_func: str,
+) -> Optional[Dict[str, Any]]:
+    """优先按 aggId 匹配聚合定义，否则按表/列/聚合函数兜底匹配。"""
+    matched = agg_by_id.get(str(leaf.get("aggId"))) if leaf.get("aggId") else None
+    if not matched and not str(leaf.get("expression") or "").strip():
+        matched = next((item for item in aggregations if _effective_table_ref(item, main_table) == table and item.get("column") == column and str(item.get("func") or "").upper() == agg_func), None)
+    return matched
+
+
+def _aggregate_expression_output(
+    expression: Any,
+    agg_func: str,
+    table: str,
+    column: Any,
+    physical_table: str,
+    is_multi_table: bool,
+    normalize_expression: bool,
+    normalize_raw_expression: Callable[..., str],
+    normalize_aggregate_expression: Callable[..., str],
+    is_aggregate_expression: Callable[[Optional[str]], bool],
+) -> Optional[str]:
+    """RAW/聚合表达式命中时返回规整后的表达式，未命中返回 None。"""
+    if agg_func == "RAW" and str(expression or "").strip():
+        if normalize_expression:
+            return normalize_raw_expression(expression, table, column, is_multi_table, physical_table)
+        return _rewrite_expression_table_qualifier(expression.strip(), table, physical_table, is_multi_table)
+    if agg_func != "RAW" and str(expression or "").strip() and is_aggregate_expression(expression):
+        if normalize_expression:
+            return normalize_aggregate_expression(expression, table, column, is_multi_table, physical_table)
+        return _rewrite_expression_table_qualifier(expression.strip(), table, physical_table, is_multi_table)
+    return None
+
+
+def _apply_aggregation_func(agg_func: str, column_expression: str) -> str:
+    if agg_func == "RAW":
+        return column_expression
+    if agg_func == "COUNT_DISTINCT":
+        return f"COUNT(DISTINCT {column_expression})"
+    return f"{agg_func}({column_expression})"
+
+
 def _build_aggregate_expr(
     leaf: Dict[str, Any],
     *,
@@ -178,25 +226,25 @@ def _build_aggregate_expr(
     agg_func = str(leaf.get("aggFunc", "RAW")).upper()
     table = _effective_table_ref(leaf, main_table)
     column = leaf.get("column", "")
-    matched = agg_by_id.get(str(leaf.get("aggId"))) if leaf.get("aggId") else None
-    if not matched and not str(leaf.get("expression") or "").strip():
-        matched = next((item for item in aggregations if _effective_table_ref(item, main_table) == table and item.get("column") == column and str(item.get("func") or "").upper() == agg_func), None)
+    matched = _match_aggregation(leaf, agg_by_id, aggregations, main_table, table, column, agg_func)
     physical_table = _physical_table_ref(matched or leaf, table)
     expression = (matched or {}).get("expression") or leaf.get("expression")
-    if agg_func == "RAW" and str(expression or "").strip():
-        if normalize_expression:
-            return normalize_raw_expression(expression, table, column, is_multi_table, physical_table)
-        return _rewrite_expression_table_qualifier(expression.strip(), table, physical_table, is_multi_table)
-    if agg_func != "RAW" and str(expression or "").strip() and is_aggregate_expression(expression):
-        if normalize_expression:
-            return normalize_aggregate_expression(expression, table, column, is_multi_table, physical_table)
-        return _rewrite_expression_table_qualifier(expression.strip(), table, physical_table, is_multi_table)
+    normalized = _aggregate_expression_output(
+        expression,
+        agg_func,
+        table,
+        column,
+        physical_table,
+        is_multi_table,
+        normalize_expression,
+        normalize_raw_expression,
+        normalize_aggregate_expression,
+        is_aggregate_expression,
+    )
+    if normalized is not None:
+        return normalized
     column_expression = "*" if column == "*" else get_column_expr(table, column, is_multi_table)
-    if agg_func == "RAW":
-        return column_expression
-    if agg_func == "COUNT_DISTINCT":
-        return f"COUNT(DISTINCT {column_expression})"
-    return f"{agg_func}({column_expression})"
+    return _apply_aggregation_func(agg_func, column_expression)
 
 
 def _rewrite_expression_table_qualifier(expression: str, table: str, physical_table: str, is_multi_table: bool) -> str:

@@ -101,6 +101,38 @@ def get_chat_data_models_file_path() -> str:
     return raw
 
 
+def _parse_thinking_efforts(raw: dict, dialect: str, prefix: str) -> tuple[str, ...]:
+    """校验并归一化 thinking.efforts；缺省返回空元组。"""
+    efforts_raw = raw.get("efforts")
+    if efforts_raw is None:
+        return ()
+    if not isinstance(efforts_raw, list) or not all(isinstance(item, str) for item in efforts_raw):
+        raise ValueError(f"{prefix}: efforts 应为字符串数组")
+    invalid = [item for item in efforts_raw if item not in EFFORT_LEVELS]
+    if invalid:
+        raise ValueError(f"{prefix}: efforts 含非法等级 {invalid}（支持: {list(EFFORT_LEVELS)}）")
+    if dialect == THINKING_DIALECT_CHAT_TEMPLATE:
+        raise ValueError(
+            f"{prefix}: chat_template 方言为纯布尔协议不支持等级，请移除 efforts 或改用其它方言"
+        )
+    return tuple(efforts_raw)
+
+
+def _parse_thinking_default_effort(raw: dict, efforts: tuple[str, ...], prefix: str) -> Any:
+    """校验 default_effort 与 efforts 成对出现且取值合法。"""
+    default_effort_raw = raw.get("default_effort")
+    if (default_effort_raw is None) != (not efforts):
+        raise ValueError(
+            f"{prefix}: default_effort 与 efforts 必须成对出现（当前 efforts={raw.get('efforts')!r}, "
+            f"default_effort={default_effort_raw!r}）"
+        )
+    if default_effort_raw is not None and default_effort_raw not in efforts:
+        raise ValueError(
+            f"{prefix}: default_effort={default_effort_raw!r} 不在 efforts {list(efforts)} 中"
+        )
+    return default_effort_raw
+
+
 def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability:
     """解析单个模型的 thinking 字段，任何不合法直接抛 ValueError。"""
     prefix = f"{path} 中模型 {model_id} 的 thinking 配置无效"
@@ -124,32 +156,8 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
         raise ValueError(
             f"{prefix}: dialect 必须是 {_THINKING_DIALECTS} 之一，当前值: {raw.get('dialect')!r}"
         )
-
-    efforts_raw = raw.get("efforts")
-    if efforts_raw is None:
-        efforts: tuple[str, ...] = ()
-    else:
-        if not isinstance(efforts_raw, list) or not all(isinstance(item, str) for item in efforts_raw):
-            raise ValueError(f"{prefix}: efforts 应为字符串数组")
-        invalid = [item for item in efforts_raw if item not in EFFORT_LEVELS]
-        if invalid:
-            raise ValueError(f"{prefix}: efforts 含非法等级 {invalid}（支持: {list(EFFORT_LEVELS)}）")
-        efforts = tuple(efforts_raw)
-        if dialect == THINKING_DIALECT_CHAT_TEMPLATE:
-            raise ValueError(
-                f"{prefix}: chat_template 方言为纯布尔协议不支持等级，请移除 efforts 或改用其它方言"
-            )
-
-    default_effort_raw = raw.get("default_effort")
-    if (default_effort_raw is None) != (not efforts):
-        raise ValueError(
-            f"{prefix}: default_effort 与 efforts 必须成对出现（当前 efforts={efforts_raw!r}, "
-            f"default_effort={default_effort_raw!r}）"
-        )
-    if default_effort_raw is not None and default_effort_raw not in efforts:
-        raise ValueError(
-            f"{prefix}: default_effort={default_effort_raw!r} 不在 efforts {list(efforts)} 中"
-        )
+    efforts = _parse_thinking_efforts(raw, dialect, prefix)
+    default_effort_raw = _parse_thinking_default_effort(raw, efforts, prefix)
 
     default_on_raw = raw.get("default_on")
     if mode == THINKING_MODE_FORCED:

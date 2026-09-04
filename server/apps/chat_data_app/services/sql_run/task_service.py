@@ -536,6 +536,111 @@ class QueryTaskService:
             "result_payload": live_remote_payload["result_payload"],
         }
 
+    @staticmethod
+    def _cancelled_remote_result(execution: Dict[str, Any], execution_status: str) -> Dict[str, Any]:
+        return {
+            "status": execution_status,
+            "error": execution.get("error_message") or ("已人工取消" if execution_status == "cancelled" else "停止执行失败"),
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+            "execution_time_ms": execution.get("execution_time_ms"),
+        }
+
+    def _build_remote_member_result(
+        self,
+        remote_task: Dict[str, Any],
+        statement: Dict[str, Any],
+        remote_result: Dict[str, Any],
+        execution: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        return {
+            "member_datasource_id": remote_task.get("member_datasource_id"),
+            "member_name": remote_task.get("member_name"),
+            "sql": statement.get("sql") or "",
+            "status": query_result_status(remote_result),
+            "columns": remote_result.get("columns") or [],
+            "data": remote_result.get("data") or [],
+            "total_count": int(remote_result.get("total_count") or 0),
+            "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, execution),
+            "error": remote_result.get("error"),
+        }
+
+    @staticmethod
+    def _merge_member_result_into_statement(
+        statement: Dict[str, Any],
+        member_result: Dict[str, Any],
+    ) -> None:
+        existing = list(statement.get("results") or [])
+        member_id = str(member_result["member_datasource_id"] or "").strip()
+        statement["results"] = [
+            item for item in existing
+            if str((item or {}).get("member_datasource_id") or "").strip() != member_id
+        ] + [member_result]
+        aggregated = build_query_result_payload(
+            sql=str(statement.get("sql") or ""),
+            member_results=statement["results"],
+            fallback_error=statement.get("error"),
+        )
+        statement.update({
+            "status": aggregated["status"],
+            "error": aggregated["error"],
+            "results": aggregated["results"],
+        })
+
+    async def _apply_remote_task_result(
+        self,
+        statements: List[Dict[str, Any]],
+        remote_task: Dict[str, Any],
+        *,
+        user_id: str,
+        username: str,
+        execution_by_remote_task_id: Dict[str, Dict[str, Any]],
+    ) -> None:
+        try:
+            statement_index = int(remote_task.get("statement_index"))
+        except (TypeError, ValueError):
+            return
+        if statement_index < 0 or statement_index >= len(statements):
+            return
+        remote_result = await self.fetch_http_query_task_result(
+            str(remote_task.get("remote_task_id") or ""),
+            str(remote_task.get("source_type") or "hive"),
+            user_id=user_id,
+            username=username,
+        )
+        statement = statements[statement_index]
+        execution = execution_by_remote_task_id.get(str(remote_task.get("remote_task_id") or "").strip())
+        execution_status = str((execution or {}).get("sql_status") or "").strip().lower()
+        if execution_status in {"cancelled", "kill_failed"}:
+            remote_result = self._cancelled_remote_result(execution or {}, execution_status)
+        member_result = self._build_remote_member_result(remote_task, statement, remote_result, execution)
+        self._merge_member_result_into_statement(statement, member_result)
+
+    async def _merge_http_member_results(
+        self,
+        response_data: Dict[str, Any],
+        statements: List[Dict[str, Any]],
+        remote_tasks: List[Dict[str, Any]],
+        executions: List[Dict[str, Any]],
+    ) -> None:
+        request_payload = response_data.get("request_payload") or {}
+        user_id = str(request_payload.get("user_id") or "").strip()
+        username = str(request_payload.get("operator_name") or "").strip()
+        execution_by_remote_task_id = {
+            str((execution or {}).get("remote_task_id") or "").strip(): execution
+            for execution in executions
+            if str((execution or {}).get("remote_task_id") or "").strip()
+        }
+        for remote_task in remote_tasks:
+            await self._apply_remote_task_result(
+                statements,
+                remote_task,
+                user_id=user_id,
+                username=username,
+                execution_by_remote_task_id=execution_by_remote_task_id,
+            )
+
     async def build_sql_batch_statement_results(
         self,
         response_data: Dict[str, Any],
@@ -546,66 +651,7 @@ class QueryTaskService:
         statements = [dict(item) for item in result_payload.get("statement_results") or []]
         remote_tasks = list(response_data.get("remote_tasks") or [])
         if statements and remote_tasks:
-            request_payload = response_data.get("request_payload") or {}
-            user_id = str(request_payload.get("user_id") or "").strip()
-            username = str(request_payload.get("operator_name") or "").strip()
-            execution_by_remote_task_id = {
-                str((execution or {}).get("remote_task_id") or "").strip(): execution
-                for execution in executions
-                if str((execution or {}).get("remote_task_id") or "").strip()
-            }
-            for remote_task in remote_tasks:
-                try:
-                    statement_index = int(remote_task.get("statement_index"))
-                except (TypeError, ValueError):
-                    continue
-                if statement_index < 0 or statement_index >= len(statements):
-                    continue
-                remote_result = await self.fetch_http_query_task_result(
-                    str(remote_task.get("remote_task_id") or ""),
-                    str(remote_task.get("source_type") or "hive"),
-                    user_id=user_id,
-                    username=username,
-                )
-                statement = statements[statement_index]
-                execution = execution_by_remote_task_id.get(str(remote_task.get("remote_task_id") or "").strip())
-                execution_status = str((execution or {}).get("sql_status") or "").strip().lower()
-                if execution_status in {"cancelled", "kill_failed"}:
-                    remote_result = {
-                        "status": execution_status,
-                        "error": (execution or {}).get("error_message") or ("已人工取消" if execution_status == "cancelled" else "停止执行失败"),
-                        "columns": [],
-                        "data": [],
-                        "total_count": 0,
-                        "execution_time_ms": (execution or {}).get("execution_time_ms"),
-                    }
-                member_result = {
-                    "member_datasource_id": remote_task.get("member_datasource_id"),
-                    "member_name": remote_task.get("member_name"),
-                    "sql": statement.get("sql") or "",
-                    "status": query_result_status(remote_result),
-                    "columns": remote_result.get("columns") or [],
-                    "data": remote_result.get("data") or [],
-                    "total_count": int(remote_result.get("total_count") or 0),
-                    "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, execution),
-                    "error": remote_result.get("error"),
-                }
-                existing = list(statement.get("results") or [])
-                member_id = str(member_result["member_datasource_id"] or "").strip()
-                statement["results"] = [
-                    item for item in existing
-                    if str((item or {}).get("member_datasource_id") or "").strip() != member_id
-                ] + [member_result]
-                aggregated = build_query_result_payload(
-                    sql=str(statement.get("sql") or ""),
-                    member_results=statement["results"],
-                    fallback_error=statement.get("error"),
-                )
-                statement.update({
-                    "status": aggregated["status"],
-                    "error": aggregated["error"],
-                    "results": aggregated["results"],
-                })
+            await self._merge_http_member_results(response_data, statements, remote_tasks, executions)
         if str(response_data.get("status") or "").strip().lower() == "cancelled":
             return self.mark_pending_sql_batch_statements_cancelled(statements)
         return statements
@@ -640,6 +686,44 @@ class QueryTaskService:
         return statements
 
     @staticmethod
+    def _sql_batch_pending_status(
+        statuses: List[str],
+        normalized_fallback_status: str,
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        """仍有语句在途时的状态判定；返回 None 表示无在途语句。"""
+        if not any(status in {"pending", "running"} for status in statuses):
+            return None
+        if normalized_fallback_status == "cancelled":
+            has_succeeded = any(status == "succeeded" for status in statuses)
+            if has_succeeded:
+                return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
+            return "cancelled", "已停止", "已人工取消"
+        return "running", "SQL 执行中", None
+
+    @staticmethod
+    def _sql_batch_error_summary(statement_results: List[Dict[str, Any]]) -> str:
+        errors = [str(item.get("error") or "").strip() for item in statement_results]
+        return "；".join(error for error in errors if error) or "SQL 执行失败"
+
+    @staticmethod
+    def _sql_batch_terminal_status(
+        statuses: List[str],
+        statement_results: List[Dict[str, Any]],
+    ) -> tuple[str, str, Optional[str]]:
+        """全部语句到达终态后聚合批次结果。"""
+        if statuses and all(status == "cancelled" for status in statuses):
+            return "cancelled", "已停止", "已人工取消"
+        has_succeeded = any(status == "succeeded" for status in statuses)
+        has_failures = any(status != "succeeded" for status in statuses)
+        if has_succeeded and has_failures:
+            if all(status in {"succeeded", "cancelled"} for status in statuses):
+                return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
+            return "partial_success", "执行完成，部分 SQL 失败", "部分 SQL 执行失败"
+        if has_succeeded:
+            return "succeeded", "执行完成", None
+        return "failed", "执行失败", QueryTaskService._sql_batch_error_summary(statement_results)
+
+    @staticmethod
     def resolve_sql_batch_status(
         statement_results: List[Dict[str, Any]],
         *,
@@ -663,25 +747,10 @@ class QueryTaskService:
                 str(fallback_progress_text or "执行失败"),
                 fallback_error_message,
             )
-        if any(status in {"pending", "running"} for status in statuses):
-            if normalized_fallback_status == "cancelled":
-                has_succeeded = any(status == "succeeded" for status in statuses)
-                if has_succeeded:
-                    return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
-                return "cancelled", "已停止", "已人工取消"
-            return "running", "SQL 执行中", None
-        if statuses and all(status == "cancelled" for status in statuses):
-            return "cancelled", "已停止", "已人工取消"
-        has_succeeded = any(status == "succeeded" for status in statuses)
-        has_failures = any(status != "succeeded" for status in statuses)
-        if has_succeeded and has_failures:
-            if all(status in {"succeeded", "cancelled"} for status in statuses):
-                return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
-            return "partial_success", "执行完成，部分 SQL 失败", "部分 SQL 执行失败"
-        if has_succeeded:
-            return "succeeded", "执行完成", None
-        errors = [str(item.get("error") or "").strip() for item in statement_results]
-        return "failed", "执行失败", "；".join(error for error in errors if error) or "SQL 执行失败"
+        pending_status = QueryTaskService._sql_batch_pending_status(statuses, normalized_fallback_status)
+        if pending_status is not None:
+            return pending_status
+        return QueryTaskService._sql_batch_terminal_status(statuses, statement_results)
 
     async def build_live_remote_sql_result(
         self,

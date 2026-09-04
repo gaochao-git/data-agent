@@ -644,6 +644,73 @@ class DataSourceDao:
                 )
             )
 
+    @staticmethod
+    def _build_table_sync_rows(
+        group_id: str,
+        tables: List[Dict[str, Any]],
+        existing_by_name: Dict[str, Any],
+        *,
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> List[Dict[str, Any]]:
+        # 与拆分前的 dict 构建保持一致：同名表 last-wins 去重，
+        # 保留最后一次出现的行（含其 sort_no）。
+        rows_by_name: Dict[str, Dict[str, Any]] = {}
+        for index, table in enumerate(tables):
+            table_name = str((table or {}).get("table_name") or "").strip()
+            if not table_name:
+                continue
+            existing = existing_by_name.get(table_name)
+            indexes = _merge_table_indexes_for_sync(
+                table,
+                getattr(existing, "indexes_json", None) if existing is not None else None,
+            )
+            rows_by_name[table_name] = {
+                "group_id": group_id,
+                "table_names": table_name,
+                "table_desc": table.get("description"),
+                "columns_json": json.dumps(table.get("columns") or [], ensure_ascii=False),
+                "indexes_json": json.dumps(indexes, ensure_ascii=False),
+                "sort_no": index,
+                "create_by": create_by,
+                "create_by_name": create_by_name,
+                "update_by": update_by,
+                "update_by_name": update_by_name,
+                "delete_flag": 0,
+            }
+        return list(rows_by_name.values())
+
+    async def _upsert_table_rows(self, session, rows: List[Dict[str, Any]]) -> None:
+        for batch in _batch_items(rows):
+            stmt = mysql_insert(DatasourceTable).values(batch)
+            await session.execute(
+                stmt.on_duplicate_key_update(
+                    table_desc=stmt.inserted.table_desc,
+                    columns_json=stmt.inserted.columns_json,
+                    indexes_json=stmt.inserted.indexes_json,
+                    sort_no=stmt.inserted.sort_no,
+                    update_by=stmt.inserted.update_by,
+                    update_by_name=stmt.inserted.update_by_name,
+                    delete_flag=0,
+                )
+            )
+
+    @staticmethod
+    async def _load_existing_table_rows(session, group_id: str, active_table_names: List[str]) -> Dict[str, Any]:
+        existing_result = await session.execute(
+            select(DatasourceTable).where(
+                DatasourceTable.group_id == group_id,
+                DatasourceTable.table_names.in_(active_table_names),
+            ).with_for_update()
+        )
+        return {
+            str(row.table_names or "").strip(): row
+            for row in existing_result.scalars().all()
+            if str(row.table_names or "").strip()
+        }
+
     async def replace_datasource_tables_async(
         self,
         group_id: str,
@@ -676,54 +743,18 @@ class DataSourceDao:
             if not active_table_names:
                 return
 
-            existing_result = await session.execute(
-                select(DatasourceTable).where(
-                    DatasourceTable.group_id == group_id,
-                    DatasourceTable.table_names.in_(active_table_names),
-                ).with_for_update()
-            )
-            existing_by_name = {
-                str(row.table_names or "").strip(): row
-                for row in existing_result.scalars().all()
-                if str(row.table_names or "").strip()
-            }
+            existing_by_name = await self._load_existing_table_rows(session, group_id, active_table_names)
 
-            table_rows_by_name = {}
-            for index, table in enumerate(table_list):
-                table_name = str((table or {}).get("table_name") or "").strip()
-                if not table_name:
-                    continue
-                existing = existing_by_name.get(table_name)
-                indexes = _merge_table_indexes_for_sync(
-                    table,
-                    getattr(existing, "indexes_json", None) if existing is not None else None,
-                )
-                table_rows_by_name[table_name] = {
-                    "group_id": group_id,
-                    "table_names": table_name,
-                    "table_desc": table.get("description"),
-                    "columns_json": json.dumps(table.get("columns") or [], ensure_ascii=False),
-                    "indexes_json": json.dumps(indexes, ensure_ascii=False),
-                    "sort_no": index,
-                    "create_by": create_by,
-                    "create_by_name": create_by_name,
-                    "update_by": update_by,
-                    "update_by_name": update_by_name,
-                    "delete_flag": 0,
-                }
-            for batch in _batch_items(list(table_rows_by_name.values())):
-                stmt = mysql_insert(DatasourceTable).values(batch)
-                await session.execute(
-                    stmt.on_duplicate_key_update(
-                        table_desc=stmt.inserted.table_desc,
-                        columns_json=stmt.inserted.columns_json,
-                        indexes_json=stmt.inserted.indexes_json,
-                        sort_no=stmt.inserted.sort_no,
-                        update_by=stmt.inserted.update_by,
-                        update_by_name=stmt.inserted.update_by_name,
-                        delete_flag=0,
-                    )
-                )
+            table_rows = self._build_table_sync_rows(
+                group_id,
+                table_list,
+                existing_by_name,
+                create_by=create_by,
+                create_by_name=create_by_name,
+                update_by=update_by,
+                update_by_name=update_by_name,
+            )
+            await self._upsert_table_rows(session, table_rows)
 
     async def get_datasource_table_indexes_async(self, group_id: str, table_name: str) -> Optional[Dict[str, Any]]:
         """读取单表索引 JSON，供管理服务只更新 manual 分区。"""

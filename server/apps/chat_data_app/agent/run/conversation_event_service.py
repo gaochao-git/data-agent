@@ -430,25 +430,23 @@ class ConversationEventService:
             raise AgentRunLeaseLostError(f"当前运行恢复水位归属已变化: {run_id}")
 
 
-def _build_turn_events(
-    *,
-    turn_id: str,
-    messages: list[BaseMessage],
-    reasoning_segments: list[dict[str, Any]],
-    context_compression_events: list[dict[str, Any]] | None = None,
-    token_usage: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+def _turn_message_range(messages: list[BaseMessage], turn_id: str) -> tuple[int, int] | None:
+    """定位本轮消息区间：起点为该 turn 的用户消息，终点为下一条用户消息前。"""
     start_index = _turn_start_index(messages, turn_id)
     if start_index is None:
-        return []
+        return None
     turn_end = len(messages)
     for index, message in enumerate(messages[start_index + 1 :], start=start_index + 1):
         if isinstance(message, HumanMessage):
             turn_end = index
             break
-    turn_messages = messages[start_index:turn_end]
-    pending_reasoning = _normalize_reasoning_segments(reasoning_segments, turn_id)
-    compression_events = _normalize_context_compression_events(context_compression_events or [], turn_id)
+    return start_index, turn_end
+
+
+def _partition_compression_events(
+    compression_events: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """按锚点消息分组压缩事件，未锚定事件单独收集。"""
     compression_events_by_anchor: dict[str, list[dict[str, Any]]] = {}
     unanchored_compression_events: list[dict[str, Any]] = []
     for event in compression_events:
@@ -457,17 +455,34 @@ def _build_turn_events(
             compression_events_by_anchor.setdefault(anchor_message_id, []).append(event)
         else:
             unanchored_compression_events.append(event)
+    return compression_events_by_anchor, unanchored_compression_events
+
+
+def _build_turn_events(
+    *,
+    turn_id: str,
+    messages: list[BaseMessage],
+    reasoning_segments: list[dict[str, Any]],
+    context_compression_events: list[dict[str, Any]] | None = None,
+    token_usage: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    turn_range = _turn_message_range(messages, turn_id)
+    if turn_range is None:
+        return []
+    start_index, turn_end = turn_range
+    turn_messages = messages[start_index:turn_end]
+    pending_reasoning = _normalize_reasoning_segments(reasoning_segments, turn_id)
+    compression_events = _normalize_context_compression_events(context_compression_events or [], turn_id)
+    compression_events_by_anchor, unanchored_compression_events = _partition_compression_events(compression_events)
     events: list[dict[str, Any]] = []
-    next_reasoning_index = 0
-    visible_tool_count = 0
+    state = {"next_reasoning_index": 0, "visible_tool_count": 0}
 
     def append_ready_reasoning() -> None:
-        nonlocal next_reasoning_index
         while (
-            next_reasoning_index < len(pending_reasoning)
-            and int(pending_reasoning[next_reasoning_index].get("tool_call_count") or 0) <= visible_tool_count
+            state["next_reasoning_index"] < len(pending_reasoning)
+            and int(pending_reasoning[state["next_reasoning_index"]].get("tool_call_count") or 0) <= state["visible_tool_count"]
         ):
-            segment = pending_reasoning[next_reasoning_index]
+            segment = pending_reasoning[state["next_reasoning_index"]]
             segment_id = str(segment["id"])
             events.append(_event(
                 turn_id=turn_id,
@@ -475,9 +490,9 @@ def _build_turn_events(
                 event_type=EVENT_REASONING,
                 payload=segment,
             ))
-            next_reasoning_index += 1
+            state["next_reasoning_index"] += 1
 
-    def append_context_compression_events(anchor_message_id: str) -> None:
+    def append_anchor_events(anchor_message_id: str) -> None:
         for event in compression_events_by_anchor.pop(anchor_message_id, []):
             event_id = str(event["id"])
             events.append(_event(
@@ -487,61 +502,67 @@ def _build_turn_events(
                 payload=event,
             ))
 
+    def flush_unanchored_events() -> None:
+        for event in unanchored_compression_events:
+            event_id = str(event["id"])
+            events.append(_event(
+                turn_id=turn_id,
+                event_key=f"context_compression:{event_id}",
+                event_type=EVENT_CONTEXT_COMPRESSION,
+                payload=event,
+            ))
+        unanchored_compression_events.clear()
+
+    def append_human_message(message: BaseMessage) -> None:
+        message_id = _message_id(message)
+        if not message_id:
+            return
+        events.append(_event(
+            turn_id=turn_id,
+            event_key=f"user:{message_id}",
+            event_type=EVENT_USER_MESSAGE,
+            payload=_serialize_human_message(message),
+        ))
+        append_anchor_events(message_id)
+        if unanchored_compression_events:
+            flush_unanchored_events()
+
+    def append_ai_message(message: BaseMessage, message_index: int) -> None:
+        append_ready_reasoning()
+        message_id = _message_id(message) or f"{turn_id}:ai:{message_index}"
+        events.append(_event(
+            turn_id=turn_id,
+            event_key=f"assistant:{message_id}",
+            event_type=EVENT_ASSISTANT_MESSAGE,
+            payload=_serialize_ai_message(message),
+        ))
+        state["visible_tool_count"] += len(getattr(message, "tool_calls", None) or [])
+        append_anchor_events(message_id)
+
+    def append_tool_message(message: BaseMessage, message_index: int) -> None:
+        message_id = _message_id(message) or f"{turn_id}:tool:{message_index}"
+        events.append(_event(
+            turn_id=turn_id,
+            event_key=f"tool:{message_id}",
+            event_type=EVENT_TOOL_RESULT,
+            payload=_serialize_tool_message(message),
+        ))
+        append_anchor_events(message_id)
+
     for message_index, message in enumerate(turn_messages):
         if isinstance(message, HumanMessage):
-            message_id = _message_id(message)
-            if message_id:
-                events.append(_event(
-                    turn_id=turn_id,
-                    event_key=f"user:{message_id}",
-                    event_type=EVENT_USER_MESSAGE,
-                    payload=_serialize_human_message(message),
-                ))
-                append_context_compression_events(message_id)
-                if unanchored_compression_events:
-                    for event in unanchored_compression_events:
-                        event_id = str(event["id"])
-                        events.append(_event(
-                            turn_id=turn_id,
-                            event_key=f"context_compression:{event_id}",
-                            event_type=EVENT_CONTEXT_COMPRESSION,
-                            payload=event,
-                        ))
-                    unanchored_compression_events = []
+            append_human_message(message)
             continue
         if isinstance(message, AIMessage):
-            append_ready_reasoning()
-            message_id = _message_id(message) or f"{turn_id}:ai:{message_index}"
-            events.append(_event(
-                turn_id=turn_id,
-                event_key=f"assistant:{message_id}",
-                event_type=EVENT_ASSISTANT_MESSAGE,
-                payload=_serialize_ai_message(message),
-            ))
-            visible_tool_count += len(getattr(message, "tool_calls", None) or [])
-            append_context_compression_events(message_id)
+            append_ai_message(message, message_index)
             continue
         if isinstance(message, ToolMessage):
-            message_id = _message_id(message) or f"{turn_id}:tool:{message_index}"
-            events.append(_event(
-                turn_id=turn_id,
-                event_key=f"tool:{message_id}",
-                event_type=EVENT_TOOL_RESULT,
-                payload=_serialize_tool_message(message),
-            ))
-            append_context_compression_events(message_id)
+            append_tool_message(message, message_index)
 
     append_ready_reasoning()
     for pending_events in compression_events_by_anchor.values():
         unanchored_compression_events.extend(pending_events)
-    for event in unanchored_compression_events:
-        event_id = str(event["id"])
-        events.append(_event(
-            turn_id=turn_id,
-            event_key=f"context_compression:{event_id}",
-            event_type=EVENT_CONTEXT_COMPRESSION,
-            payload=event,
-        ))
+    flush_unanchored_events()
     if isinstance(token_usage, dict) and token_usage:
         events.append(_event(
             turn_id=turn_id,

@@ -683,6 +683,89 @@ async def execute_dashboard_panel_task_item(
             _dashboard_sql_semaphore.reset(context_token)
 
 
+def _parse_dashboard_batch_payload(task: Dict[str, Any]) -> tuple[str, str, str, List[str], Dict[str, str]]:
+    """解析批量任务的请求载荷。"""
+    request_payload = json_loads_dict(task.get("request_payload"))
+    dashboard_id = str(request_payload.get("dashboard_id") or "")
+    user_id = str(request_payload.get("user_id") or "").strip()
+    operator_name = str(request_payload.get("operator_name") or "").strip()
+    panel_ids = [str(panel_id).strip() for panel_id in (request_payload.get("panel_ids") or []) if str(panel_id).strip()]
+    panel_member_datasource_ids = {
+        str(panel_id): str(member_id).strip()
+        for panel_id, member_id in (request_payload.get("panel_member_datasource_ids") or {}).items()
+        if str(panel_id).strip() and str(member_id).strip()
+    }
+    return dashboard_id, user_id, operator_name, panel_ids, panel_member_datasource_ids
+
+
+async def _load_dashboard_batch_panels(
+    service,
+    dashboard_id: str,
+    user_id: str,
+    panel_ids: List[str],
+) -> tuple[Optional[Dict[str, Any]], List[str]]:
+    """未指定面板时回读大屏全部面板；返回 (dashboard, panel_ids)。"""
+    dashboard: Optional[Dict[str, Any]] = None
+    if not panel_ids:
+        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=True)
+        if not dashboard:
+            raise ValueError(f"大屏不存在: {dashboard_id}")
+        panel_ids = [str(panel.get("id") or "").strip() for panel in (dashboard.get("panels") or []) if str(panel.get("id") or "").strip()]
+    return dashboard, panel_ids
+
+
+def _spawn_dashboard_panel_tasks(
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    execution_target_map: Dict[tuple[str, str], Dict[str, Any]],
+    effective_panel_member_datasource_ids: Dict[str, str],
+    task_id: str,
+    user_id: str,
+    operator_name: str,
+) -> List[asyncio.Task]:
+    """在面板并发信号量保护下创建全部面板执行任务。"""
+    context_token = _dashboard_sql_semaphore.set(asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY))
+    try:
+        return [
+            asyncio.create_task(
+                execute_dashboard_panel_task_item(
+                    panel_id,
+                    effective_panel_member_datasource_ids.get(panel_id),
+                    panel=panel_map.get(panel_id),
+                    execution_target=execution_target_map.get(
+                        build_dashboard_execution_target_cache_key(
+                            str((panel_map.get(panel_id) or {}).get("datasource_id") or ""),
+                            effective_panel_member_datasource_ids.get(panel_id),
+                        )
+                    ),
+                    query_task_id=task_id,
+                    user_id=user_id,
+                    operator_name=operator_name,
+                )
+            )
+            for panel_id in panel_ids
+        ]
+    finally:
+        _dashboard_sql_semaphore.reset(context_token)
+
+
+async def _collect_dashboard_panel_results(task_id: str, tasks: List[asyncio.Task], batch_result: Dict[str, Any]) -> bool:
+    """逐个收集面板结果并推进进度；返回 False 表示任务已取消。"""
+    for completed_task in asyncio.as_completed(tasks):
+        if await cancel_dashboard_batch_if_needed(task_id, tasks):
+            return False
+        panel_id, entry = await completed_task
+        update_dashboard_batch_result(batch_result, panel_id, entry)
+        await dashboard_runtime().update_query_task(
+            task_id,
+            progress_text=f"已完成 {batch_result['completed']}/{batch_result['total']}",
+            result_payload=batch_result,
+        )
+        if await cancel_dashboard_batch_if_needed(task_id, tasks):
+            return False
+    return True
+
+
 async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
     """后台执行看板批量任务。"""
     if await dashboard_runtime().is_query_task_cancelled(task_id):
@@ -696,24 +779,10 @@ async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
     )
     if await dashboard_runtime().is_query_task_cancelled(task_id):
         return
-    request_payload = json_loads_dict(task.get("request_payload"))
-    dashboard_id = str(request_payload.get("dashboard_id") or "")
-    user_id = str(request_payload.get("user_id") or "").strip()
-    operator_name = str(request_payload.get("operator_name") or "").strip()
-    panel_ids = [str(panel_id).strip() for panel_id in (request_payload.get("panel_ids") or []) if str(panel_id).strip()]
-    panel_member_datasource_ids = {
-        str(panel_id): str(member_id).strip()
-        for panel_id, member_id in (request_payload.get("panel_member_datasource_ids") or {}).items()
-        if str(panel_id).strip() and str(member_id).strip()
-    }
+    dashboard_id, user_id, operator_name, panel_ids, panel_member_datasource_ids = _parse_dashboard_batch_payload(task)
 
     service = get_dashboard_service()
-    dashboard: Optional[Dict[str, Any]] = None
-    if not panel_ids:
-        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=True)
-        if not dashboard:
-            raise ValueError(f"大屏不存在: {dashboard_id}")
-        panel_ids = [str(panel.get("id") or "").strip() for panel in (dashboard.get("panels") or []) if str(panel.get("id") or "").strip()]
+    dashboard, panel_ids = await _load_dashboard_batch_panels(service, dashboard_id, user_id, panel_ids)
 
     batch_result = build_dashboard_batch_result(dashboard_id, panel_ids)
     await dashboard_runtime().update_query_task(task_id, result_payload=batch_result, progress_text="看板执行中")
@@ -742,41 +811,17 @@ async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
         panel_map,
         panel_member_datasource_ids,
     )
-    context_token = _dashboard_sql_semaphore.set(asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY))
-    try:
-        tasks = [
-            asyncio.create_task(
-                execute_dashboard_panel_task_item(
-                    panel_id,
-                    effective_panel_member_datasource_ids.get(panel_id),
-                    panel=panel_map.get(panel_id),
-                    execution_target=execution_target_map.get(
-                        build_dashboard_execution_target_cache_key(
-                            str((panel_map.get(panel_id) or {}).get("datasource_id") or ""),
-                            effective_panel_member_datasource_ids.get(panel_id),
-                        )
-                    ),
-                    query_task_id=task_id,
-                    user_id=user_id,
-                    operator_name=operator_name,
-                )
-            )
-            for panel_id in panel_ids
-        ]
-    finally:
-        _dashboard_sql_semaphore.reset(context_token)
-    for completed_task in asyncio.as_completed(tasks):
-        if await cancel_dashboard_batch_if_needed(task_id, tasks):
-            return
-        panel_id, entry = await completed_task
-        update_dashboard_batch_result(batch_result, panel_id, entry)
-        await dashboard_runtime().update_query_task(
-            task_id,
-            progress_text=f"已完成 {batch_result['completed']}/{batch_result['total']}",
-            result_payload=batch_result,
-        )
-        if await cancel_dashboard_batch_if_needed(task_id, tasks):
-            return
+    tasks = _spawn_dashboard_panel_tasks(
+        panel_ids,
+        panel_map,
+        execution_target_map,
+        effective_panel_member_datasource_ids,
+        task_id,
+        user_id,
+        operator_name,
+    )
+    if not await _collect_dashboard_panel_results(task_id, tasks, batch_result):
+        return
 
     if await dashboard_runtime().is_query_task_cancelled(task_id):
         return

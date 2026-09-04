@@ -27,6 +27,47 @@ def query_result_succeeded(result: Dict[str, Any]) -> bool:
     return query_result_status(result) == QUERY_SUCCEEDED_STATUS
 
 
+def _normalize_member_results(member_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized_results: List[Dict[str, Any]] = []
+    for item in member_results or []:
+        member_result = dict(item or {})
+        member_result["status"] = query_result_status(member_result)
+        member_result.pop("success", None)
+        normalized_results.append(member_result)
+    return normalized_results
+
+
+def _resolve_query_result_status(
+    normalized_results: List[Dict[str, Any]],
+    succeeded_results: List[Dict[str, Any]],
+    fallback_error: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """根据成员结果推导聚合状态与错误信息。"""
+    has_running = any(query_result_status(item) in {"pending", QUERY_RUNNING_STATUS} for item in normalized_results)
+    has_results = bool(normalized_results)
+    all_cancelled = has_results and all(query_result_status(item) == QUERY_CANCELLED_STATUS for item in normalized_results)
+
+    if has_running:
+        return QUERY_RUNNING_STATUS, "部分执行对象仍在查询中"
+    if succeeded_results:
+        return QUERY_SUCCEEDED_STATUS, None
+    if all_cancelled:
+        return QUERY_CANCELLED_STATUS, _join_member_errors(normalized_results) or fallback_error or "已停止"
+    return QUERY_FAILED_STATUS, _join_member_errors(normalized_results) or fallback_error or "查询失败"
+
+
+def _aggregate_execution_time_ms(
+    normalized_results: List[Dict[str, Any]],
+    fallback_execution_time_ms: Optional[int],
+) -> Optional[int]:
+    execution_times = [
+        int(item.get("execution_time_ms") or 0)
+        for item in normalized_results
+        if item.get("execution_time_ms") is not None
+    ]
+    return max(execution_times) if execution_times else fallback_execution_time_ms
+
+
 def build_query_result_payload(
     *,
     sql: str,
@@ -35,42 +76,14 @@ def build_query_result_payload(
     fallback_execution_time_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build the public query result payload; row data only lives in results[]."""
-    normalized_results: List[Dict[str, Any]] = []
-    for item in member_results or []:
-        member_result = dict(item or {})
-        member_result["status"] = query_result_status(member_result)
-        member_result.pop("success", None)
-        normalized_results.append(member_result)
-
+    normalized_results = _normalize_member_results(member_results)
     succeeded_results = [item for item in normalized_results if query_result_succeeded(item)]
-    has_running = any(query_result_status(item) in {"pending", QUERY_RUNNING_STATUS} for item in normalized_results)
-    has_results = bool(normalized_results)
-    all_cancelled = has_results and all(query_result_status(item) == QUERY_CANCELLED_STATUS for item in normalized_results)
-
-    if has_running:
-        status = QUERY_RUNNING_STATUS
-        error_message = "部分执行对象仍在查询中"
-    elif succeeded_results:
-        status = QUERY_SUCCEEDED_STATUS
-        error_message = None
-    elif all_cancelled:
-        status = QUERY_CANCELLED_STATUS
-        error_message = _join_member_errors(normalized_results) or fallback_error or "已停止"
-    else:
-        status = QUERY_FAILED_STATUS
-        error_message = _join_member_errors(normalized_results) or fallback_error or "查询失败"
-
-    execution_times = [
-        int(item.get("execution_time_ms") or 0)
-        for item in normalized_results
-        if item.get("execution_time_ms") is not None
-    ]
-    execution_time_ms = max(execution_times) if execution_times else fallback_execution_time_ms
+    status, error_message = _resolve_query_result_status(normalized_results, succeeded_results, fallback_error)
     return {
         "status": status,
         "sql": sql,
         "total_count": sum(int(item.get("total_count") or 0) for item in succeeded_results),
-        "execution_time_ms": execution_time_ms,
+        "execution_time_ms": _aggregate_execution_time_ms(normalized_results, fallback_execution_time_ms),
         "error": error_message,
         "results": normalized_results,
     }

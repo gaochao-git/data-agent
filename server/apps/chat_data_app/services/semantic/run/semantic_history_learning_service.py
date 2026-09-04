@@ -222,28 +222,34 @@ def _history_belongs_to_config(
     return True, "matched_table_scope", sorted(history_tables), ""
 
 
+def _history_learning_table_columns(table: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """裁剪单表字段列表，保留名称/类型/描述。"""
+    columns: List[Dict[str, Any]] = []
+    for col in table.get("columns", []) or []:
+        col_name = str((col or {}).get("name") or "").strip()
+        if not col_name:
+            continue
+        columns.append({
+            "name": col_name,
+            "type": (col or {}).get("mysql_type") or (col or {}).get("hive_type") or (col or {}).get("type") or "",
+            "description": (col or {}).get("description") or "",
+        })
+    return columns
+
+
 def _build_history_learning_table_context(datasource: Dict[str, Any], config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """裁剪指标集相关表结构给历史学习模型。"""
     scope_tables = _semantic_scope_tables(config)
     items: List[Dict[str, Any]] = []
     for table in datasource.get("ds_tables", []) or []:
-        table_name = str((table or {}).get("table_name") or "").strip()
+        table = table or {}
+        table_name = str(table.get("table_name") or "").strip()
         if scope_tables and table_name not in scope_tables:
             continue
-        columns = []
-        for col in (table or {}).get("columns", []) or []:
-            col_name = str((col or {}).get("name") or "").strip()
-            if not col_name:
-                continue
-            columns.append({
-                "name": col_name,
-                "type": (col or {}).get("mysql_type") or (col or {}).get("hive_type") or (col or {}).get("type") or "",
-                "description": (col or {}).get("description") or "",
-            })
         items.append({
             "table_name": table_name,
-            "description": (table or {}).get("description") or "",
-            "columns": columns[:80],
+            "description": table.get("description") or "",
+            "columns": _history_learning_table_columns(table)[:80],
         })
     return items[:20]
 
@@ -430,6 +436,36 @@ def _empty_history_learning_skip_counts() -> Dict[str, Dict[str, int]]:
     }
 
 
+def _dimension_review_reasons(
+    normalized: Dict[str, Any],
+    table_name: str,
+    table_columns: Dict[str, Set[str]],
+) -> List[str]:
+    reasons: List[str] = []
+    column_name = str(normalized.get("column") or normalized.get("field_name") or "").strip()
+    if not column_name:
+        reasons.append("缺少字段名，需要人工确认")
+    if table_name and column_name and table_name in table_columns and column_name not in table_columns[table_name]:
+        reasons.append(f"字段不在当前表结构中：{table_name}.{column_name}")
+    return reasons
+
+
+def _metric_review_reasons(
+    normalized: Dict[str, Any],
+    table_name: str,
+    table_columns: Dict[str, Set[str]],
+) -> List[str]:
+    reasons: List[str] = []
+    expression = str(normalized.get("expression") or "").strip()
+    if not expression:
+        reasons.append("缺少指标表达式，需要人工确认")
+    expression_columns = _extract_expression_columns(normalized.get("expression"))
+    missing_columns = sorted(col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name])
+    if table_name and missing_columns:
+        reasons.append(f"表达式引用字段不在当前表结构中：{table_name}.{', '.join(missing_columns)}")
+    return reasons
+
+
 def _history_suggestion_review_reasons(
     normalized: Dict[str, Any],
     category: str,
@@ -443,19 +479,9 @@ def _history_suggestion_review_reasons(
     if table_name and table_name not in table_columns:
         review_reasons.append(f"表不在当前数据源缓存中：{table_name}")
     if category == "dimensions":
-        column_name = str(normalized.get("column") or normalized.get("field_name") or "").strip()
-        if not column_name:
-            review_reasons.append("缺少字段名，需要人工确认")
-        if table_name and column_name and table_name in table_columns and column_name not in table_columns[table_name]:
-            review_reasons.append(f"字段不在当前表结构中：{table_name}.{column_name}")
+        review_reasons.extend(_dimension_review_reasons(normalized, table_name, table_columns))
     if category == "metrics":
-        expression = str(normalized.get("expression") or "").strip()
-        if not expression:
-            review_reasons.append("缺少指标表达式，需要人工确认")
-        expression_columns = _extract_expression_columns(normalized.get("expression"))
-        missing_columns = sorted(col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name])
-        if table_name and missing_columns:
-            review_reasons.append(f"表达式引用字段不在当前表结构中：{table_name}.{', '.join(missing_columns)}")
+        review_reasons.extend(_metric_review_reasons(normalized, table_name, table_columns))
     return review_reasons
 
 

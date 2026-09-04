@@ -326,6 +326,9 @@ def test_skill_service_db_metadata_filters_and_detail(tmp_path, monkeypatch):
 
     assert async_metadata["path"] == str(skill_md)
     assert async_metadata["creator_name"] == "张三"
+    # DB 技能详情的权威出口必须包含 name（原样透传，无 title 那样的 or 兜底）。
+    assert async_detail["name"] == "sales-analysis"
+    assert async_detail["title"] == "销售分析"
     assert async_detail["content"].startswith("# 销售分析")
 
     draft_row = dict(row, skill_publish_status="draft", current_skill_version_no=0)

@@ -984,6 +984,14 @@ class AgentInboxService:
         if answer.get("cancelled") is True:
             return
         questions = question.get("questions") or []
+        submitted_by_id = AgentInboxService._submitted_answer_by_id(answer, questions)
+        for item in questions:
+            current = submitted_by_id[str(item.get("id") or "")]
+            AgentInboxService._validate_answer_item(current, item)
+
+    @staticmethod
+    def _submitted_answer_by_id(answer: dict[str, Any], questions: list[dict[str, Any]]) -> dict[str, Any]:
+        """校验 answers 顶层结构，返回按问题 ID 索引的回答映射。"""
         submitted = answer.get("answers") if isinstance(answer, dict) else None
         if not isinstance(submitted, list):
             raise ValueError("answers 必须是数组")
@@ -992,21 +1000,27 @@ class AgentInboxService:
             raise ValueError("回答的问题 ID 不能重复且必须是对象")
         if set(submitted_by_id) != {str(item.get("id") or "") for item in questions}:
             raise ValueError("回答的问题 ID 与待回答问题不一致")
-        for item in questions:
-            current = submitted_by_id[str(item.get("id") or "")]
-            if current.get("skipped") is True:
-                continue
-            selected = current.get("selected") or []
-            custom = str(current.get("custom") or "").strip()
-            if not isinstance(selected, list) or not all(isinstance(value, str) for value in selected):
-                raise ValueError("selected 必须是字符串数组")
-            allowed = {str(option.get("label") or "") for option in item.get("options") or []}
-            if any(value not in allowed for value in selected):
-                raise ValueError("回答包含无效选项")
-            if not item.get("multi_select") and len(selected) > 1:
-                raise ValueError("单选问题只能选择一个选项")
-            if not selected and not custom:
-                raise ValueError("每个问题都必须选择选项或填写自定义回答")
+        return submitted_by_id
+
+    @staticmethod
+    def _validate_answer_item(current: dict[str, Any], item: dict[str, Any]) -> None:
+        if current.get("skipped") is True:
+            return
+        selected = current.get("selected") or []
+        custom = str(current.get("custom") or "").strip()
+        AgentInboxService._validate_selected_options(selected)
+        allowed = {str(option.get("label") or "") for option in item.get("options") or []}
+        if any(value not in allowed for value in selected):
+            raise ValueError("回答包含无效选项")
+        if not item.get("multi_select") and len(selected) > 1:
+            raise ValueError("单选问题只能选择一个选项")
+        if not selected and not custom:
+            raise ValueError("每个问题都必须选择选项或填写自定义回答")
+
+    @staticmethod
+    def _validate_selected_options(selected: Any) -> None:
+        if not isinstance(selected, list) or not all(isinstance(value, str) for value in selected):
+            raise ValueError("selected 必须是字符串数组")
 
     async def _claim_step_and_turn(self, session, run_id: str, now: datetime) -> list[ChatDataAgentInbox]:
         """领取一个模型轮次的输入：全部 next-step，加一条 FIFO next-turn。"""

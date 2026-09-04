@@ -174,31 +174,60 @@ class SemanticQueryPlanContext:
         return None
 
     @staticmethod
-    def _relationship_to_join(
+    def _relationship_condition(
+        relationship: Dict[str, Any],
+        left_alias: str,
+        reversed_pair: bool,
+        left_column: Any,
+        right_column: Any,
+    ) -> Dict[str, Any]:
+        """单条关联条件；reversed_pair 时左右列互换。"""
+        return {
+            "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
+            "leftAlias": left_alias,
+            "leftColumn": right_column if reversed_pair else left_column,
+            "rightColumn": left_column if reversed_pair else right_column,
+        }
+
+    @classmethod
+    def _relationship_join_conditions(
+        cls,
         relationship: Dict[str, Any],
         left_alias: str,
         right_alias: str,
         reversed_pair: bool,
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
+        """收集 join_conditions；为空时回退关系级单条件。"""
         conditions = []
         for condition in relationship.get("join_conditions") or []:
             left_column = (condition or {}).get("left_column")
             right_column = (condition or {}).get("right_column")
             if not left_column or not right_column:
                 continue
-            conditions.append({
-                "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
-                "leftAlias": left_alias,
-                "leftColumn": right_column if reversed_pair else left_column,
-                "rightColumn": left_column if reversed_pair else right_column,
-            })
+            conditions.append(
+                cls._relationship_condition(relationship, left_alias, reversed_pair, left_column, right_column)
+            )
         if not conditions and relationship.get("left_column") and relationship.get("right_column"):
-            conditions.append({
-                "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
-                "leftAlias": left_alias,
-                "leftColumn": relationship.get("right_column") if reversed_pair else relationship.get("left_column"),
-                "rightColumn": relationship.get("left_column") if reversed_pair else relationship.get("right_column"),
-            })
+            conditions.append(
+                cls._relationship_condition(
+                    relationship,
+                    left_alias,
+                    reversed_pair,
+                    relationship.get("left_column"),
+                    relationship.get("right_column"),
+                )
+            )
+        return conditions
+
+    @classmethod
+    def _relationship_to_join(
+        cls,
+        relationship: Dict[str, Any],
+        left_alias: str,
+        right_alias: str,
+        reversed_pair: bool,
+    ) -> Dict[str, Any]:
+        conditions = cls._relationship_join_conditions(relationship, left_alias, right_alias, reversed_pair)
         if not conditions:
             raise ValueError(f"语义关系 {left_alias} -> {right_alias} 缺少有效关联条件")
 
@@ -210,6 +239,6 @@ class SemanticQueryPlanContext:
             "rightAlias": right_alias,
             "joinType": str(relationship.get("join_type", "left")).upper(),
             "joinConditions": conditions,
-            "leftColumn": conditions[0]["leftColumn"] if conditions else "",
-            "rightColumn": conditions[0]["rightColumn"] if conditions else "",
+            "leftColumn": conditions[0]["leftColumn"],
+            "rightColumn": conditions[0]["rightColumn"],
         }

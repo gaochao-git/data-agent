@@ -320,6 +320,47 @@ def validate_dashboard_spec_structure(
     return errors
 
 
+def _resolve_panel_generator(
+    generators: Dict[str, SemanticAIQueryAdapter],
+    semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]],
+    sql_generator: Optional[SemanticAIQueryAdapter],
+    semantic_config_id: str,
+) -> SemanticAIQueryAdapter:
+    generator = (
+        generators.get(semantic_config_id)
+        if semantic_config_generators is not None
+        else sql_generator
+    )
+    if generator is None:
+        raise ValueError("缺少 semantic_config_id 对应的语义模型")
+    return generator
+
+
+def _build_panel_plan_dsl(card: Dict[str, Any]) -> Dict[str, Any]:
+    """合并卡片 dsl 与顶层指标/维度等字段，dsl 缺失时回落卡片字段。"""
+    dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
+    return {
+        **dsl,
+        "metrics": dsl.get("metrics") or card.get("metrics") or [],
+        "dimensions": dsl.get("dimensions") or card.get("dimensions") or [],
+        "filters": dsl.get("filters") or card.get("filters") or [],
+        "having": dsl.get("having") or card.get("having") or [],
+        "order_by": dsl.get("order_by") or card.get("order_by") or [],
+        "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
+    }
+
+
+def _failed_panel_plan(card: Dict[str, Any], index: int, default_semantic_config_id: Optional[str], error: str) -> Dict[str, Any]:
+    return {
+        "index": index,
+        "card": card,
+        "sql": "",
+        "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
+        "semantic_config_id": resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id),
+        "error": error,
+    }
+
+
 def build_dashboard_panel_plans(
     cards: List[Any],
     sql_generator: Optional[SemanticAIQueryAdapter] = None,
@@ -336,48 +377,28 @@ def build_dashboard_panel_plans(
             continue
         try:
             semantic_config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
-            generator = (
-                generators.get(semantic_config_id)
-                if semantic_config_generators is not None
-                else sql_generator
+            generator = _resolve_panel_generator(generators, semantic_config_generators, sql_generator, semantic_config_id)
+            dsl = _build_panel_plan_dsl(card)
+            _payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl(
+                dsl, getattr(generator, "semantic_config", {}),
             )
-            if generator is None:
-                raise ValueError("缺少 semantic_config_id 对应的语义模型")
-            dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
-            _payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl({
-                **dsl,
-                "metrics": dsl.get("metrics") or card.get("metrics") or [],
-                "dimensions": dsl.get("dimensions") or card.get("dimensions") or [],
-                "filters": dsl.get("filters") or card.get("filters") or [],
-                "having": dsl.get("having") or card.get("having") or [],
-                "order_by": dsl.get("order_by") or card.get("order_by") or [],
-                "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
-            }, getattr(generator, "semantic_config", {}))
             for warning in normalize_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
             sql = build_panel_sql_from_dashboard_card(card, generator)
             if not sql:
                 raise ValueError("SQL 为空")
-            chart_type = normalize_dashboard_spec_chart_type(card.get("chart_type"))
             panel_plans.append({
                 "index": index,
                 "card": card,
                 "sql": sql,
-                "chart_type": chart_type,
+                "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
                 "semantic_config_id": semantic_config_id,
                 "error": "",
             })
         except Exception as err:
             error = str(err) or "SQL 生成失败"
             warnings.append(f"卡片「{card.get('title') or index + 1}」创建失败：{error}")
-            panel_plans.append({
-                "index": index,
-                "card": card,
-                "sql": "",
-                "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
-                "semantic_config_id": resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id),
-                "error": error,
-            })
+            panel_plans.append(_failed_panel_plan(card, index, default_semantic_config_id, error))
     return panel_plans, warnings
 
 
@@ -440,6 +461,53 @@ async def filter_executable_dashboard_panel_plans(
     return marked_plans, warnings
 
 
+def _collect_spec_semantic_config_ids(cards: List[Any], default_semantic_config_id: Optional[str]) -> List[str]:
+    semantic_config_ids: List[str] = []
+    for card in cards[:12]:
+        if not isinstance(card, dict):
+            continue
+        config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
+        if config_id and config_id not in semantic_config_ids:
+            semantic_config_ids.append(config_id)
+    return semantic_config_ids
+
+
+async def _build_spec_generators(
+    datasource_id: str,
+    semantic_config_ids: List[str],
+    user_id: str,
+) -> Dict[str, SemanticAIQueryAdapter]:
+    semantic_config_generators: Dict[str, SemanticAIQueryAdapter] = {}
+    for config_id in semantic_config_ids:
+        semantic_config = await get_dashboard_spec_semantic_config(datasource_id, config_id, user_id=user_id)
+        semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config)
+    return semantic_config_generators
+
+
+def _summarize_dashboard_validation(
+    panel_plans: List[Dict[str, Any]],
+    warnings: List[str],
+    semantic_config_ids: List[str],
+) -> Dict[str, Any]:
+    return {
+        "valid": any(not plan.get("error") for plan in panel_plans),
+        "valid_count": len([plan for plan in panel_plans if not plan.get("error")]),
+        "semantic_config_ids": semantic_config_ids,
+        "warnings": warnings,
+        "panels": [
+            {
+                "index": int(plan["index"]),
+                "title": str(plan["card"].get("title") or f"分析卡片{int(plan['index']) + 1}"),
+                "chart_type": plan["chart_type"],
+                "semantic_config_id": plan.get("semantic_config_id") or "",
+                "sql": plan["sql"],
+                "error": plan.get("error") or "",
+            }
+            for plan in panel_plans
+        ],
+    }
+
+
 async def validate_dashboard_spec_payload(
     *,
     dashboard_spec: Dict[str, Any],
@@ -468,17 +536,8 @@ async def validate_dashboard_spec_payload(
             "warnings": structure_errors,
             "panels": [],
         }
-    semantic_config_ids: List[str] = []
-    for card in cards[:12]:
-        if not isinstance(card, dict):
-            continue
-        config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
-        if config_id and config_id not in semantic_config_ids:
-            semantic_config_ids.append(config_id)
-    semantic_config_generators: Dict[str, SemanticAIQueryAdapter] = {}
-    for config_id in semantic_config_ids:
-        semantic_config = await get_dashboard_spec_semantic_config(datasource_id, config_id, user_id=user_id)
-        semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config)
+    semantic_config_ids = _collect_spec_semantic_config_ids(cards, default_semantic_config_id)
+    semantic_config_generators = await _build_spec_generators(datasource_id, semantic_config_ids, user_id)
     panel_plans, warnings = build_dashboard_panel_plans(
         cards,
         semantic_config_generators=semantic_config_generators,
@@ -492,23 +551,7 @@ async def validate_dashboard_spec_payload(
             username=username,
         )
         warnings.extend(execution_warnings)
-    return {
-        "valid": any(not plan.get("error") for plan in panel_plans),
-        "valid_count": len([plan for plan in panel_plans if not plan.get("error")]),
-        "semantic_config_ids": semantic_config_ids,
-        "warnings": warnings,
-        "panels": [
-            {
-                "index": int(plan["index"]),
-                "title": str(plan["card"].get("title") or f"分析卡片{int(plan['index']) + 1}"),
-                "chart_type": plan["chart_type"],
-                "semantic_config_id": plan.get("semantic_config_id") or "",
-                "sql": plan["sql"],
-                "error": plan.get("error") or "",
-            }
-            for plan in panel_plans
-        ],
-    }
+    return _summarize_dashboard_validation(panel_plans, warnings, semantic_config_ids)
 
 
 def _chart_type_label(chart_type: str) -> str:
@@ -606,6 +649,94 @@ def _build_dashboard_panel_chart_config(card: Dict[str, Any], error: str = "") -
     return config
 
 
+async def _add_panel_from_card(
+    service: Any,
+    dashboard: Dict[str, Any],
+    card: Dict[str, Any],
+    plan: Optional[Dict[str, Any]],
+    *,
+    chart_type: str,
+    layout: Dict[str, Any],
+    panel_error: str,
+    conversation_id: Optional[str],
+    datasource_id: str,
+    user_id: str,
+    username: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    return await service.add_panel(
+        dashboard_id=dashboard["id"],
+        name=_truncate_text(str(card.get("title") or "分析卡片"), 24) or _build_panel_name_fallback(chart_type, 24),
+        sql=str((plan or {}).get("sql") or ""),
+        chart_type=chart_type,
+        chart_config=_build_dashboard_panel_chart_config(card, panel_error),
+        layout_x=layout["x"],
+        layout_y=layout["y"],
+        layout_w=layout["w"],
+        layout_h=layout["h"],
+        source_thread_id=conversation_id,
+        datasource_id=datasource_id,
+        user_id=str(user_id or "system"),
+        operator_name=str(username or ""),
+    )
+
+
+async def _create_dashboard_panels(
+    service: Any,
+    dashboard: Dict[str, Any],
+    spec: Dict[str, Any],
+    validation: Dict[str, Any],
+    *,
+    conversation_id: Optional[str],
+    datasource_id: str,
+    user_id: str,
+    username: Optional[str],
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """按校验结果逐卡片创建面板；单卡失败记入 warnings 不中断。"""
+    warnings = list(validation["warnings"])
+    panels: List[Dict[str, Any]] = []
+    valid_sql_by_index = {int(item["index"]): item for item in validation["panels"]}
+    cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
+    for index, card in enumerate(cards[:12]):
+        plan = valid_sql_by_index.get(index)
+        if not isinstance(card, dict):
+            continue
+        chart_type = str((plan or {}).get("chart_type") or normalize_dashboard_spec_chart_type(card.get("chart_type")))
+        layout = normalize_dashboard_card_layout(card, index, chart_type)
+        panel_error = str((plan or {}).get("error") or "")
+        try:
+            panel = await _add_panel_from_card(
+                service, dashboard, card, plan,
+                chart_type=chart_type,
+                layout=layout,
+                panel_error=panel_error,
+                conversation_id=conversation_id,
+                datasource_id=datasource_id,
+                user_id=user_id,
+                username=username,
+            )
+            if panel:
+                panels.append(panel)
+        except Exception as err:
+            warnings.append(f"卡片「{card.get('title') or index + 1}」创建失败：{err}")
+    return panels, warnings
+
+
+async def _verify_dashboard_persisted(
+    service: Any,
+    dashboard: Dict[str, Any],
+    warnings: List[str],
+) -> Optional[Dict[str, Any]]:
+    """回读看板确认持久化；失败时删除并返回 None。"""
+    persisted_dashboard = await service.get_dashboard(dashboard["id"])
+    persisted_panels = (persisted_dashboard or {}).get("panels") or []
+    if not persisted_dashboard or not persisted_panels:
+        warnings.append("看板写入后回读失败，未确认数据已持久化")
+        await service.delete_dashboard(dashboard["id"])
+        return None
+    persisted_dashboard["panels"] = persisted_panels
+    return persisted_dashboard
+
+
 async def create_dashboard_from_spec_payload(
     *,
     dashboard_spec: Dict[str, Any],
@@ -643,48 +774,24 @@ async def create_dashboard_from_spec_payload(
         operator_name=str(username or ""),
     )
 
-    warnings = list(validation["warnings"])
-    panels = []
-    valid_sql_by_index = {int(item["index"]): item for item in validation["panels"]}
-    cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
-    for index, card in enumerate(cards[:12]):
-        plan = valid_sql_by_index.get(index)
-        if not isinstance(card, dict):
-            continue
-        chart_type = str((plan or {}).get("chart_type") or normalize_dashboard_spec_chart_type(card.get("chart_type")))
-        layout = normalize_dashboard_card_layout(card, index, chart_type)
-        panel_error = str((plan or {}).get("error") or "")
-        try:
-            panel = await service.add_panel(
-                dashboard_id=dashboard["id"],
-                name=_truncate_text(str(card.get("title") or "分析卡片"), 24) or _build_panel_name_fallback(chart_type, 24),
-                sql=str((plan or {}).get("sql") or ""),
-                chart_type=chart_type,
-                chart_config=_build_dashboard_panel_chart_config(card, panel_error),
-                layout_x=layout["x"],
-                layout_y=layout["y"],
-                layout_w=layout["w"],
-                layout_h=layout["h"],
-                source_thread_id=conversation_id,
-                datasource_id=datasource_id,
-                user_id=str(user_id or "system"),
-                operator_name=str(username or ""),
-            )
-            if panel:
-                panels.append(panel)
-        except Exception as err:
-            warnings.append(f"卡片「{card.get('title') or index + 1}」创建失败：{err}")
+    panels, warnings = await _create_dashboard_panels(
+        service, dashboard, spec, validation,
+        conversation_id=conversation_id,
+        datasource_id=datasource_id,
+        user_id=user_id,
+        username=username,
+    )
 
     if not panels:
         await service.delete_dashboard(dashboard["id"])
         return {"dashboard": None, "panels": [], "warnings": warnings}
 
-    persisted_dashboard = await service.get_dashboard(dashboard["id"])
-    persisted_panels = (persisted_dashboard or {}).get("panels") or []
-    if not persisted_dashboard or not persisted_panels:
-        warnings.append("看板写入后回读失败，未确认数据已持久化")
-        await service.delete_dashboard(dashboard["id"])
+    persisted_dashboard = await _verify_dashboard_persisted(service, dashboard, warnings)
+    if persisted_dashboard is None:
         return {"dashboard": None, "panels": [], "warnings": warnings}
 
-    persisted_dashboard["panels"] = persisted_panels
-    return {"dashboard": persisted_dashboard, "panels": persisted_panels, "warnings": warnings}
+    return {
+        "dashboard": persisted_dashboard,
+        "panels": persisted_dashboard["panels"],
+        "warnings": warnings,
+    }

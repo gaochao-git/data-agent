@@ -442,6 +442,70 @@ async def test_cancelled_run_closes_and_publishes_cancelled_done(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancelling_at_claim_still_closes_run_and_releases_owner(monkeypatch):
+    """认领后心跳即读到 cancelling：prepared 虽未从 helper 返回，
+    取消收口（finish_run + owner 释放）仍必须完整执行。"""
+    import asyncio
+
+    order = []
+    published_done = []
+
+    class Inbox:
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def heartbeat_run(self, _run_id, _owner_token):
+            return "cancelling"
+
+        async def finish_run(self, _run_id, status, *_args, **_kwargs):
+            assert status == "cancelled"
+            order.append("run_cancelled")
+            return "cancelled"
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            order.append("owner_claimed")
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+                published_done.append(kwargs["payload"])
+                return "done-stream-0"
+            order.append("message_published")
+            return "message-stream-0"
+
+    async def stream():  # pragma: no cover - 认领期取消，流不应被消费
+        raise AssertionError("认领期取消不应进入流消费")
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert order == [
+        "owner_claimed",
+        "run_cancelled",
+        "done_published",
+        "terminal_recorded",
+        "owner_released",
+    ]
+    assert '"status": "cancelled"' in published_done[0]
+
+
+@pytest.mark.asyncio
 async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
     """租约丢失的取消不收口也不发布——流已归新 Worker 所有。"""
     import asyncio

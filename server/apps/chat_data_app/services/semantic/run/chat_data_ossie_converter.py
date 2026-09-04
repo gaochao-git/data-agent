@@ -252,26 +252,37 @@ class ChatDataToOssieConverter:
             custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
         )
 
-    def _dataset_keys(self, table: str, config: dict[str, Any]) -> tuple[list[str], list[list[str]]]:
-        table_config = next((
+    @staticmethod
+    def _find_table_config(config: dict[str, Any], table: str) -> dict[str, Any]:
+        return next((
             item for item in config.get("tables") or []
             if isinstance(item, dict) and _table_name(item) == table
         ), {})
-        physical_primary_keys = [
+
+    @staticmethod
+    def _physical_primary_keys(table_config: dict[str, Any]) -> list[list[str]]:
+        return [
             columns for value in table_config.get("primary_keys") or []
             if (columns := _key_columns(value))
         ]
-        manual_indexes = [
+
+    @staticmethod
+    def _manual_indexes(table_config: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
             item for item in table_config.get("manual_indexes") or []
             if isinstance(item, dict)
         ]
-        manual_primary_keys = [
+
+    @staticmethod
+    def _manual_primary_keys(manual_indexes: list[dict[str, Any]]) -> list[list[str]]:
+        return [
             columns for item in manual_indexes
             if _text(item.get("index_type")).lower() == "primary"
             and (columns := _key_columns(item.get("columns")))
         ]
-        primary_key = (physical_primary_keys or manual_primary_keys or [[]])[0]
 
+    @staticmethod
+    def _collect_unique_keys(table_config: dict[str, Any], manual_indexes: list[dict[str, Any]]) -> list[list[str]]:
         unique_keys: list[list[str]] = []
         for item in table_config.get("unique_indexes") or []:
             columns = _key_columns(item.get("columns")) if isinstance(item, dict) else []
@@ -283,7 +294,15 @@ class ChatDataToOssieConverter:
             columns = _key_columns(item.get("columns"))
             if columns and columns not in unique_keys:
                 unique_keys.append(columns)
-        return primary_key, unique_keys
+        return unique_keys
+
+    def _dataset_keys(self, table: str, config: dict[str, Any]) -> tuple[list[str], list[list[str]]]:
+        table_config = self._find_table_config(config, table)
+        manual_indexes = self._manual_indexes(table_config)
+        physical_primary_keys = self._physical_primary_keys(table_config)
+        manual_primary_keys = self._manual_primary_keys(manual_indexes)
+        primary_key = (physical_primary_keys or manual_primary_keys or [[]])[0]
+        return primary_key, self._collect_unique_keys(table_config, manual_indexes)
 
     @staticmethod
     def _dimension_datatype(config: dict[str, Any], dimension: dict[str, Any]) -> str | None:

@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
@@ -33,6 +34,22 @@ def _max_concurrency() -> int:
         return max(int(raw), 1)
     except ValueError:
         raise ValueError("CHAT_DATA_AGENT_MAX_CONCURRENCY 必须是正整数") from None
+
+
+@dataclass
+class _RunExecutionState:
+    """单次 Run 执行过程中的可变状态，供 _execute 与其各阶段 helper 共享。"""
+
+    run_id: str
+    conversation_id: str
+    user_id: str
+    operator_name: str
+    terminal_payload: str | None = None
+    terminal_ready: bool = False
+    next_run_id_to_submit: str | None = None
+    # 心跳发现 cancelling 时认领已生效，但 helper 无法 return prepared；
+    # 挂在 state 上带回，保证取消收口（finish_run/release_owner）仍能执行。
+    cancelled_prepared: dict | None = None
 
 
 class AgentRunRuntime:
@@ -274,6 +291,156 @@ class AgentRunRuntime:
 
         return factory
 
+    async def _claim_pending_run(self, state: _RunExecutionState) -> dict | None:
+        """认领待执行 Run 并刷新执行身份；心跳显示 cancelling 时抛取消。"""
+        prepared = await self._inbox_service.prepare_pending_run(state.run_id)
+        if prepared is None:
+            return None
+        state.conversation_id = prepared["conversation_id"]
+        state.user_id = prepared["user_id"]
+        state.operator_name = prepared.get("operator_name") or state.operator_name or state.user_id
+        await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
+        self._owned_runs.add(state.run_id)
+        if await self._inbox_service.heartbeat_run(state.run_id, prepared["owner_token"]) == "cancelling":
+            state.cancelled_prepared = prepared
+            raise asyncio.CancelledError("agent_run_cancelled")
+        return prepared
+
+    async def _append_run_event(self, state: _RunExecutionState, prepared: dict, payload: str) -> str:
+        # A Run may resume after waiting_user; event IDs must
+        # remain unique across all execution segments.
+        return await self._event_service.append(
+            run_id=state.run_id,
+            conversation_id=state.conversation_id,
+            user_id=state.user_id,
+            event_id=f"{state.run_id}:{uuid4().hex}",
+            payload=payload,
+            owner_token=prepared["owner_token"],
+        )
+
+    async def _decide_terminal_state(self, state: _RunExecutionState, prepared: dict, saw_question_requested: bool) -> str:
+        """流结束后决定终态：waiting_user 直接复用，否则落库收口。"""
+        if saw_question_requested:
+            # waiting_user 已由 mark_waiting_for_user 落库，无需重复收口。
+            return format_terminal_done("waiting_user")
+        completion = await self._inbox_service.complete_run(
+            state.run_id,
+            state.user_id,
+            state.operator_name,
+            prepared["owner_token"],
+        )
+        if completion.status == "finished":
+            state.next_run_id_to_submit = completion.next_run_id
+        return format_terminal_done(completion.status, completion.next_run_id)
+
+    async def _stream_and_finalize(self, state: _RunExecutionState, prepared: dict) -> str:
+        """消费流并逐事件落库，结束后决定终态并返回结构化 done payload。"""
+        event_cursor: dict[str, str | None] = {"stream_id": None}
+        prepared["stream_event_id_provider"] = lambda: event_cursor["stream_id"]
+        stream_factory = self._build_stream_factory(prepared)
+        saw_question_requested = False
+        async for payload in stream_factory():
+            # 生成器只产出事实；question_requested 是 waiting_user 的标记事实。
+            if _sse_event_type(payload) == "question_requested":
+                saw_question_requested = True
+            stream_id = await self._append_run_event(state, prepared, payload)
+            event_cursor["stream_id"] = stream_id
+        # 正常结束：唯一生命周期 owner 在此收口——先落库，再发布结构化 done。
+        return await self._decide_terminal_state(state, prepared, saw_question_requested)
+
+    async def _finalize_cancelled_run(self, state: _RunExecutionState, prepared: dict | None, exc: asyncio.CancelledError) -> None:
+        if prepared is None or not (exc.args and exc.args[0] == "agent_run_cancelled"):
+            return
+        # 用户主动停止也是终态：落库 cancelled 后发布结构化 done。
+        # 租约丢失的取消不收口也不发布——流已归新 Worker 所有。
+        try:
+            finished_status = await self._inbox_service.finish_run(
+                state.run_id,
+                "cancelled",
+                state.user_id,
+                state.operator_name,
+                prepared["owner_token"],
+            )
+        except AgentRunLeaseLostError:
+            logger.info("ChatData Agent Run 取消收口时租约已丢失: run_id=%s", state.run_id)
+            return
+        if finished_status:
+            state.terminal_payload = format_terminal_done(finished_status)
+            state.terminal_ready = True
+
+    async def _finalize_failed_run(self, state: _RunExecutionState, prepared: dict) -> None:
+        try:
+            finished_status = await self._inbox_service.finish_run(
+                state.run_id,
+                "failed",
+                state.user_id,
+                state.operator_name,
+                prepared["owner_token"],
+            )
+        except AgentRunLeaseLostError:
+            logger.info("ChatData Agent Run 失败收口时租约已丢失: run_id=%s", state.run_id)
+            return
+        if finished_status:
+            state.terminal_payload = format_terminal_done(finished_status)
+            state.terminal_ready = True
+
+    async def _publish_terminal_event(self, state: _RunExecutionState, prepared: dict) -> None:
+        if state.terminal_payload is None or not state.terminal_ready:
+            return
+        try:
+            terminal_stream_id = await self._event_service.append(
+                run_id=state.run_id,
+                conversation_id=state.conversation_id,
+                user_id=state.user_id,
+                event_id=f"{state.run_id}:terminal:{prepared['owner_token']}",
+                payload=state.terminal_payload,
+                owner_token=prepared["owner_token"],
+            )
+        except AgentRunLeaseLostError:
+            logger.info("ChatData Agent Run 终止事件发布时租约已丢失: run_id=%s", state.run_id)
+            return
+        except Exception:
+            logger.error("ChatData Agent Run 终止事件发布失败: run_id=%s", state.run_id, exc_info=True)
+            return
+        # done 已进 Redis Stream；把游标落到 inbox 行，
+        # 供问答恢复在 Redis 失效时做 done 检测与游标兜底。
+        try:
+            await self._inbox_service.record_terminal_event(state.run_id, terminal_stream_id)
+        except Exception:
+            logger.warning(
+                "ChatData Agent Run 终止游标落库失败（Redis 内 done 仍可用）: run_id=%s",
+                state.run_id,
+                exc_info=True,
+            )
+
+    async def _release_ownership(self, state: _RunExecutionState, prepared: dict) -> None:
+        try:
+            await self._event_service.release_owner(state.run_id, prepared["owner_token"])
+        except Exception:
+            logger.warning("ChatData Agent Run Redis owner 清理失败: run_id=%s", state.run_id, exc_info=True)
+
+    def _submit_chained_run(self, state: _RunExecutionState) -> None:
+        if not state.next_run_id_to_submit:
+            return
+        # MySQL 已创建 pending Run。旧 Run 的终态发布和 owner 清理
+        # 完成后再提交，避免链式接续等待调度兜底轮询；
+        # 新旧 Run 各有独立 Stream，正确性不依赖本直启（轮询可接管）。
+        self.submit(
+            run_id=state.next_run_id_to_submit,
+            conversation_id=state.conversation_id,
+            user_id=state.user_id,
+            operator_name=state.operator_name,
+        )
+
+    async def _release_after_run(self, state: _RunExecutionState, prepared: dict | None) -> None:
+        if prepared is None:
+            self._owned_runs.discard(state.run_id)
+            return
+        await self._publish_terminal_event(state, prepared)
+        await self._release_ownership(state, prepared)
+        self._submit_chained_run(state)
+        self._owned_runs.discard(state.run_id)
+
     async def _execute(
         self,
         *,
@@ -283,72 +450,22 @@ class AgentRunRuntime:
         operator_name: str,
     ) -> None:
         async with self._semaphore:
-            prepared = None
-            terminal_payload: str | None = None
-            terminal_ready = False
-            next_run_id_to_submit: str | None = None
+            state = _RunExecutionState(
+                run_id=run_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                operator_name=operator_name,
+            )
+            prepared: dict | None = None
             try:
-                prepared = await self._inbox_service.prepare_pending_run(run_id)
+                prepared = await self._claim_pending_run(state)
                 if prepared is None:
                     return
-                conversation_id = prepared["conversation_id"]
-                user_id = prepared["user_id"]
-                operator_name = prepared.get("operator_name") or operator_name or user_id
-                await self._event_service.claim_owner(run_id, prepared["owner_token"])
-                self._owned_runs.add(run_id)
-                if await self._inbox_service.heartbeat_run(run_id, prepared["owner_token"]) == "cancelling":
-                    raise asyncio.CancelledError("agent_run_cancelled")
-                event_cursor: dict[str, str | None] = {"stream_id": None}
-                prepared["stream_event_id_provider"] = lambda: event_cursor["stream_id"]
-                stream_factory = self._build_stream_factory(prepared)
-                saw_question_requested = False
-                async for payload in stream_factory():
-                    # 生成器只产出事实；question_requested 是 waiting_user 的标记事实。
-                    if _sse_event_type(payload) == "question_requested":
-                        saw_question_requested = True
-                    stream_id = await self._event_service.append(
-                        run_id=run_id,
-                        conversation_id=conversation_id,
-                        user_id=user_id,
-                        # A Run may resume after waiting_user; event IDs must
-                        # remain unique across all execution segments.
-                        event_id=f"{run_id}:{uuid4().hex}",
-                        payload=payload,
-                        owner_token=prepared["owner_token"],
-                    )
-                    event_cursor["stream_id"] = stream_id
-                # 正常结束：唯一生命周期 owner 在此收口——先落库，再发布结构化 done。
-                if saw_question_requested:
-                    # waiting_user 已由 mark_waiting_for_user 落库，无需重复收口。
-                    terminal_payload = format_terminal_done("waiting_user")
-                else:
-                    completion = await self._inbox_service.complete_run(
-                        run_id,
-                        user_id,
-                        operator_name,
-                        prepared["owner_token"],
-                    )
-                    terminal_payload = format_terminal_done(completion.status, completion.next_run_id)
-                    if completion.status == "finished":
-                        next_run_id_to_submit = completion.next_run_id
-                terminal_ready = True
+                state.terminal_payload = await self._stream_and_finalize(state, prepared)
+                state.terminal_ready = True
             except asyncio.CancelledError as exc:
-                if prepared is not None and exc.args and exc.args[0] == "agent_run_cancelled":
-                    # 用户主动停止也是终态：落库 cancelled 后发布结构化 done。
-                    # 租约丢失的取消不收口也不发布——流已归新 Worker 所有。
-                    try:
-                        finished_status = await self._inbox_service.finish_run(
-                            run_id,
-                            "cancelled",
-                            user_id,
-                            operator_name,
-                            prepared["owner_token"],
-                        )
-                        if finished_status:
-                            terminal_payload = format_terminal_done(finished_status)
-                            terminal_ready = True
-                    except AgentRunLeaseLostError:
-                        logger.info("ChatData Agent Run 取消收口时租约已丢失: run_id=%s", run_id)
+                prepared = state.cancelled_prepared or prepared
+                await self._finalize_cancelled_run(state, prepared, exc)
                 raise
             except Exception as exc:
                 if isinstance(exc, AgentRunLeaseLostError):
@@ -356,61 +473,9 @@ class AgentRunRuntime:
                     return
                 logger.error("ChatData Agent 后台运行失败: run_id=%s", run_id, exc_info=True)
                 if prepared is not None:
-                    try:
-                        finished_status = await self._inbox_service.finish_run(
-                            run_id,
-                            "failed",
-                            user_id,
-                            operator_name,
-                            prepared["owner_token"],
-                        )
-                        if finished_status:
-                            terminal_payload = format_terminal_done(finished_status)
-                            terminal_ready = True
-                    except AgentRunLeaseLostError:
-                        logger.info("ChatData Agent Run 失败收口时租约已丢失: run_id=%s", run_id)
+                    await self._finalize_failed_run(state, prepared)
             finally:
-                if prepared is not None:
-                    if terminal_payload is not None and terminal_ready:
-                        try:
-                            terminal_stream_id = await self._event_service.append(
-                                run_id=run_id,
-                                conversation_id=conversation_id,
-                                user_id=user_id,
-                                event_id=f"{run_id}:terminal:{prepared['owner_token']}",
-                                payload=terminal_payload,
-                                owner_token=prepared["owner_token"],
-                            )
-                        except AgentRunLeaseLostError:
-                            logger.info("ChatData Agent Run 终止事件发布时租约已丢失: run_id=%s", run_id)
-                        except Exception:
-                            logger.error("ChatData Agent Run 终止事件发布失败: run_id=%s", run_id, exc_info=True)
-                        else:
-                            # done 已进 Redis Stream；把游标落到 inbox 行，
-                            # 供问答恢复在 Redis 失效时做 done 检测与游标兜底。
-                            try:
-                                await self._inbox_service.record_terminal_event(run_id, terminal_stream_id)
-                            except Exception:
-                                logger.warning(
-                                    "ChatData Agent Run 终止游标落库失败（Redis 内 done 仍可用）: run_id=%s",
-                                    run_id,
-                                    exc_info=True,
-                                )
-                    try:
-                        await self._event_service.release_owner(run_id, prepared["owner_token"])
-                    except Exception:
-                        logger.warning("ChatData Agent Run Redis owner 清理失败: run_id=%s", run_id, exc_info=True)
-                    if next_run_id_to_submit:
-                        # MySQL 已创建 pending Run。旧 Run 的终态发布和 owner 清理
-                        # 完成后再提交，避免链式接续等待调度兜底轮询；
-                        # 新旧 Run 各有独立 Stream，正确性不依赖本直启（轮询可接管）。
-                        self.submit(
-                            run_id=next_run_id_to_submit,
-                            conversation_id=conversation_id,
-                            user_id=user_id,
-                            operator_name=operator_name,
-                        )
-                self._owned_runs.discard(run_id)
+                await self._release_after_run(state, prepared)
 
 
 agent_run_runtime = AgentRunRuntime()

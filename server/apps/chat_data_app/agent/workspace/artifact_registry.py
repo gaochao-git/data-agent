@@ -31,6 +31,44 @@ class ArtifactDefinition:
     parse: ArtifactParser
 
 
+def _chart_spec_graph_passthrough(chart_type: str, payload: dict[str, Any]) -> bool:
+    """graph 类型只要 nodes/links 合法即通过，无需 data/encoding。"""
+    if chart_type != "graph":
+        return False
+    graph_payload = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    links = graph_payload.get("links") if isinstance(graph_payload.get("links"), list) else graph_payload.get("edges")
+    return bool(
+        isinstance(graph_payload.get("nodes"), list)
+        and isinstance(links, list)
+        and graph_payload.get("nodes")
+        and links
+    )
+
+
+def _chart_spec_encoding_valid(chart_type: str, encoding: Any) -> bool:
+    if not isinstance(encoding, dict):
+        return False
+    y_fields = encoding.get("y")
+    if chart_type_requires_y(chart_type) and (not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)):
+        return False
+    max_y_fields = chart_type_max_y_fields(chart_type)
+    if max_y_fields is not None and isinstance(y_fields, list) and len([item for item in y_fields if str(item).strip()]) > max_y_fields:
+        return False
+    if chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip():
+        return False
+    return True
+
+
+def _chart_spec_fields_exist(chart_type: str, data: list, encoding: dict[str, Any], y_fields: Any) -> bool:
+    row_fields = {str(key) for row in data if isinstance(row, dict) for key in row}
+    x_field = str(encoding.get("x") or "").strip()
+    if chart_type_requires_x(chart_type) and x_field and x_field not in row_fields:
+        return False
+    if isinstance(y_fields, list) and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip()):
+        return False
+    return True
+
+
 def parse_chart_spec_payload_value(payload: Any) -> dict[str, Any] | None:
     """Validate and normalize a chart specification payload."""
     if not isinstance(payload, dict) or not is_supported_chart_type_input(payload.get("chart_type")):
@@ -39,34 +77,18 @@ def parse_chart_spec_payload_value(payload: Any) -> dict[str, Any] | None:
     payload["chart_type"] = chart_type
     if str(payload.get("version") or "").strip() != "1.0":
         return None
-    if chart_type == "graph":
-        graph_payload = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-        links = graph_payload.get("links") if isinstance(graph_payload.get("links"), list) else graph_payload.get("edges")
-        if isinstance(graph_payload.get("nodes"), list) and isinstance(links, list) and graph_payload.get("nodes") and links:
-            return payload
+    if _chart_spec_graph_passthrough(chart_type, payload):
+        return payload
     if not isinstance(payload.get("data"), list):
         return None
     data = payload["data"]
     if chart_type_requires_data(chart_type) and not data:
         return None
     encoding = payload.get("encoding")
-    if not isinstance(encoding, dict):
+    if not _chart_spec_encoding_valid(chart_type, encoding):
         return None
-    y_fields = encoding.get("y")
-    if chart_type_requires_y(chart_type) and (not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)):
+    if data and not _chart_spec_fields_exist(chart_type, data, encoding, encoding.get("y")):
         return None
-    max_y_fields = chart_type_max_y_fields(chart_type)
-    if max_y_fields is not None and isinstance(y_fields, list) and len([item for item in y_fields if str(item).strip()]) > max_y_fields:
-        return None
-    if chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip():
-        return None
-    if data:
-        row_fields = {str(key) for row in data if isinstance(row, dict) for key in row}
-        x_field = str(encoding.get("x") or "").strip()
-        if chart_type_requires_x(chart_type) and x_field and x_field not in row_fields:
-            return None
-        if isinstance(y_fields, list) and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip()):
-            return None
     return payload
 
 

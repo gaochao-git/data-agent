@@ -325,6 +325,38 @@ class QueryHistoryService:
             "remote_result_status": status,
         }
 
+    @staticmethod
+    def _history_raw_status(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> Any:
+        """兼容 success 旧口径，推断成员结果的原始状态。"""
+        raw_status = payload.get("status")
+        if not raw_status and payload.get("success") is True:
+            return "succeeded"
+        if not raw_status and payload.get("success") is False:
+            return "failed"
+        if not raw_status:
+            return getattr(execution, "sql_status", None) or ("failed" if payload.get("error") else "succeeded")
+        return raw_status
+
+    @staticmethod
+    def _history_total_count(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> int:
+        total_count = payload.get("total_count")
+        if total_count is None:
+            total_count = payload.get("row_count")
+        if total_count is None:
+            total_count = getattr(execution, "result_row_count", None)
+        if total_count is None:
+            total_count = len(payload["data"])
+        try:
+            return int(total_count or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _history_error_message(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> Optional[str]:
+        if payload["status"] == "succeeded":
+            return None
+        return str(payload.get("error") or getattr(execution, "error_message", None) or "").strip() or None
+
     @classmethod
     def normalize_history_result_payload(
         cls,
@@ -337,14 +369,7 @@ class QueryHistoryService:
             return None
 
         payload = dict(result_payload)
-        raw_status = payload.get("status")
-        if not raw_status and payload.get("success") is True:
-            raw_status = "succeeded"
-        if not raw_status and payload.get("success") is False:
-            raw_status = "failed"
-        if not raw_status:
-            raw_status = getattr(execution, "sql_status", None) or ("failed" if payload.get("error") else "succeeded")
-        payload["status"] = query_result_status({"status": raw_status})
+        payload["status"] = query_result_status({"status": cls._history_raw_status(payload, execution)})
         payload.pop("success", None)
 
         columns = payload.get("columns")
@@ -353,24 +378,11 @@ class QueryHistoryService:
         rows = payload.get("data")
         payload["data"] = rows if isinstance(rows, list) else []
 
-        total_count = payload.get("total_count")
-        if total_count is None:
-            total_count = payload.get("row_count")
-        if total_count is None:
-            total_count = getattr(execution, "result_row_count", None)
-        if total_count is None:
-            total_count = len(payload["data"])
-        try:
-            payload["total_count"] = int(total_count or 0)
-        except (TypeError, ValueError):
-            payload["total_count"] = 0
+        payload["total_count"] = cls._history_total_count(payload, execution)
 
         if payload.get("execution_time_ms") is None:
             payload["execution_time_ms"] = execution_time_ms
-        if payload["status"] == "succeeded":
-            payload["error"] = None
-        else:
-            payload["error"] = str(payload.get("error") or getattr(execution, "error_message", None) or "").strip() or None
+        payload["error"] = cls._history_error_message(payload, execution)
         return payload
 
     async def build_remote_history_result_payload(

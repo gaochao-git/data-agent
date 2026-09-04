@@ -270,34 +270,36 @@ async def update_query_execution(
         await db.commit()
 
 
+def _execution_result_payload(status: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """构造执行明细的 result_payload 落库快照。"""
+    return {
+        "status": status,
+        "columns": result.get("columns") or [],
+        "data": result.get("data") or [],
+        "total_count": int(result.get("total_count") or 0),
+        "execution_time_ms": result.get("execution_time_ms"),
+        "error": result.get("error"),
+        "cache_hit": bool(result.get("cache_hit")),
+        "cache_age_seconds": result.get("cache_age_seconds"),
+        "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
+    }
+
+
 async def update_query_execution_from_result(execution_id: str, result: Dict[str, Any], store_result_payload: bool = True) -> None:
     """按 SQL 执行结果更新执行明细。"""
-    status = query_result_status(result or {})
+    result = result or {}
+    status = query_result_status(result)
     success = status == QUERY_SUCCEEDED_STATUS
-    started_time = _parse_datetime_value((result or {}).get("started_time"))
-    finished_time = _parse_datetime_value((result or {}).get("finished_time")) or datetime.now()
-    result_payload = None
-    if store_result_payload:
-        result_payload = {
-            "status": status,
-            "columns": (result or {}).get("columns") or [],
-            "data": (result or {}).get("data") or [],
-            "total_count": int((result or {}).get("total_count") or 0),
-            "execution_time_ms": (result or {}).get("execution_time_ms"),
-            "error": (result or {}).get("error"),
-            "cache_hit": bool((result or {}).get("cache_hit")),
-            "cache_age_seconds": (result or {}).get("cache_age_seconds"),
-            "cache_expires_in_seconds": (result or {}).get("cache_expires_in_seconds"),
-        }
+    result_payload = _execution_result_payload(status, result) if store_result_payload else None
     await update_query_execution(
         execution_id,
         sql_status=status,
-        execution_time_ms=(result or {}).get("execution_time_ms"),
-        result_row_count=int((result or {}).get("total_count") or 0),
+        execution_time_ms=result.get("execution_time_ms"),
+        result_row_count=int(result.get("total_count") or 0),
         result_payload=result_payload,
-        error_message=None if success else str((result or {}).get("error") or "SQL 执行失败"),
-        started_time=started_time,
-        finished_time=finished_time,
+        error_message=None if success else str(result.get("error") or "SQL 执行失败"),
+        started_time=_parse_datetime_value(result.get("started_time")),
+        finished_time=_parse_datetime_value(result.get("finished_time")) or datetime.now(),
     )
 
 
@@ -310,17 +312,34 @@ async def get_query_execution_status(execution_id: str) -> str:
         return str(result.scalar_one_or_none() or "").strip().lower()
 
 
-async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """向异步任务中追加远端 HTTP 任务映射。"""
-    normalized_remote_task = {
+def _normalize_remote_task_entry(remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """归一化远端任务映射，缺关键字段时返回 None。"""
+    normalized = {
         "member_datasource_id": str((remote_task or {}).get("member_datasource_id") or "").strip(),
         "member_name": str((remote_task or {}).get("member_name") or "").strip(),
         "remote_task_id": str((remote_task or {}).get("remote_task_id") or "").strip(),
         "source_type": str((remote_task or {}).get("source_type") or "").strip().lower() or "hive",
     }
     if (remote_task or {}).get("statement_index") is not None:
-        normalized_remote_task["statement_index"] = (remote_task or {}).get("statement_index")
-    if not normalized_remote_task["member_datasource_id"] or not normalized_remote_task["remote_task_id"]:
+        normalized["statement_index"] = (remote_task or {}).get("statement_index")
+    if not normalized["member_datasource_id"] or not normalized["remote_task_id"]:
+        return None
+    return normalized
+
+
+def _remote_task_entry_exists(remote_tasks: list, entry: Dict[str, Any]) -> bool:
+    return any(
+        item.get("member_datasource_id") == entry["member_datasource_id"]
+        and item.get("remote_task_id") == entry["remote_task_id"]
+        and item.get("statement_index") == entry.get("statement_index")
+        for item in remote_tasks
+    )
+
+
+async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """向异步任务中追加远端 HTTP 任务映射。"""
+    normalized_remote_task = _normalize_remote_task_entry(remote_task)
+    if normalized_remote_task is None:
         return None
 
     async with get_session() as db:
@@ -330,13 +349,7 @@ async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any
         if not task:
             return None
         remote_tasks = load_remote_tasks(task.remote_task_payload)
-        exists = any(
-            item.get("member_datasource_id") == normalized_remote_task["member_datasource_id"]
-            and item.get("remote_task_id") == normalized_remote_task["remote_task_id"]
-            and item.get("statement_index") == normalized_remote_task.get("statement_index")
-            for item in remote_tasks
-        )
-        if not exists:
+        if not _remote_task_entry_exists(remote_tasks, normalized_remote_task):
             remote_tasks.append(normalized_remote_task)
             task.remote_task_payload = json.dumps(remote_tasks, ensure_ascii=False)
             task.update_time = datetime.now()
@@ -355,6 +368,177 @@ def _coerce_member_result(item: Any) -> Dict[str, Any]:
         return item
     logger.error("成员执行返回异常（已隔离为失败结果）: %s", item, exc_info=item if isinstance(item, BaseException) else None)
     return {"status": "failed", "error": str(item) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+
+
+async def _notify_remote_task_created(
+    payload: Dict[str, Any],
+    *,
+    execution_id: Optional[str],
+    query_task_id: Optional[str],
+    member_datasource_id: Any,
+    member_name: str,
+    statement_index: Optional[int],
+) -> None:
+    remote_task_id = str((payload or {}).get("remote_task_id") or "").strip()
+    if not remote_task_id:
+        return
+    if execution_id:
+        await update_query_execution(execution_id, remote_task_id=remote_task_id)
+    if query_task_id:
+        await append_query_task_remote_task(
+            query_task_id,
+            {
+                "member_datasource_id": member_datasource_id,
+                "member_name": member_name,
+                "remote_task_id": remote_task_id,
+                "source_type": str((payload or {}).get("source_type") or "").strip().lower() or "hive",
+                **({"statement_index": statement_index} if statement_index is not None else {}),
+            },
+        )
+
+
+async def _notify_db_connection_created(payload: Dict[str, Any], execution_id: Optional[str]) -> None:
+    if not execution_id:
+        return
+    db_connection_id = str((payload or {}).get("db_connection_id") or "").strip()
+    if db_connection_id:
+        await update_query_execution(execution_id, db_connection_id=db_connection_id)
+
+
+async def _guard_running_execution(execution_id: str) -> bool:
+    """执行前置检查：置 running 前后各复核一次取消状态，已取消返回 True。"""
+    if await get_query_execution_status(execution_id) == "cancelled":
+        return True
+    await update_query_execution(execution_id, sql_status="running", started_time=datetime.now(), error_message="")
+    return await get_query_execution_status(execution_id) == "cancelled"
+
+
+def _cancelled_member_result(member_datasource_id: Any, member_name: str, effective_sql: str) -> Dict[str, Any]:
+    return {
+        "member_datasource_id": member_datasource_id,
+        "member_name": member_name,
+        "sql": effective_sql,
+        "status": "cancelled",
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "execution_time_ms": None,
+        "remote_task_id": None,
+        "db_connection_id": None,
+        "error": "已人工取消",
+    }
+
+
+async def _fetch_sql_cached_result(cache_identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """读取 SQL 结果缓存，读缓存失败时降级为未命中。"""
+    try:
+        return await query_cache.get_sql_result_cache(cache_identity)
+    except Exception as cache_err:
+        logger.warning("读取 SQL 结果缓存失败，降级查询数据源: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
+        return None
+
+
+async def _resolve_cached_query_result(
+    http_target: bool,
+    cached_result: Dict[str, Any],
+    cache_identity: Dict[str, Any],
+    execution_target: Dict[str, Any],
+    user_id: Optional[str],
+    username: Optional[str],
+    execute_query_and_update_cache,
+    on_remote_task_created,
+) -> Dict[str, Any]:
+    """命中缓存时按执行目标类型解析结果；远端引用不可用时重新提交查询。"""
+    if http_target:
+        if query_cache.is_http_remote_ref_cache(cached_result):
+            result = await fetch_http_remote_ref_cache_result(cached_result, user_id=user_id, username=username)
+            if result.get("_cache_ref_unavailable"):
+                logger.info(
+                    "HTTP 远端缓存结果不可用，重新提交查询: cache_key=%s remote_task_id=%s status=%s error=%s",
+                    cache_identity.get("cache_key"),
+                    cached_result.get("remote_task_id"),
+                    result.get("status"),
+                    result.get("error"),
+                )
+                return await execute_query_and_update_cache()
+            await on_remote_task_created({
+                "remote_task_id": result.get("remote_task_id"),
+                "source_type": cached_result.get("source_type") or execution_target.get("source_type"),
+            })
+            return result
+        return await execute_query_and_update_cache()
+    if query_cache.is_http_remote_ref_cache(cached_result):
+        return await execute_query_and_update_cache()
+    return cached_result
+
+
+def _build_member_query_response(
+    member_datasource_id: Any,
+    member_name: str,
+    effective_sql: str,
+    result: Dict[str, Any],
+    status: str,
+) -> Dict[str, Any]:
+    return {
+        "member_datasource_id": member_datasource_id,
+        "member_name": member_name,
+        "sql": effective_sql,
+        "status": status,
+        "columns": result.get("columns") or [],
+        "data": result.get("data") or [],
+        "total_count": int(result.get("total_count") or 0),
+        "execution_time_ms": result.get("execution_time_ms"),
+        "started_time": result.get("started_time"),
+        "finished_time": result.get("finished_time"),
+        "remote_task_id": result.get("remote_task_id"),
+        "db_connection_id": result.get("db_connection_id"),
+        "error": result.get("error"),
+        "cache_hit": bool(result.get("cache_hit")),
+        "cache_age_seconds": result.get("cache_age_seconds"),
+        "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
+    }
+
+
+async def _execute_query_and_save_cache(
+    execute_query,
+    user_id: Optional[str],
+    execution_target: Dict[str, Any],
+    skip_query_cache: bool,
+    http_target: bool,
+    cache_identity: Dict[str, Any],
+    username: Optional[str],
+) -> Dict[str, Any]:
+    query_result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
+    if not query_cache.is_sql_result_cache_enabled(skip_query_cache):
+        return query_result
+    try:
+        if http_target:
+            await query_cache.save_http_remote_ref_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
+        else:
+            await query_cache.save_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
+    except Exception as cache_err:
+        logger.warning("保存 SQL 结果缓存失败，忽略缓存写入: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
+    return query_result
+
+
+async def _finalize_member_query_result(
+    execution_id: Optional[str],
+    result: Dict[str, Any],
+    http_target: bool,
+    member_datasource_id: Any,
+    local_started_at: float,
+) -> str:
+    """补充执行耗时并落库执行留痕，返回最终状态。"""
+    status = query_result_status(result)
+    if result.get("execution_time_ms") is None and status not in {"pending", "running"}:
+        result["execution_time_ms"] = int((time.perf_counter() - local_started_at) * 1000)
+    if execution_id:
+        try:
+            await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
+        except Exception:
+            # 落库失败只损失该成员的执行留痕，不向 gather 冒泡引发级联取消
+            logger.error("执行结果落库失败: execution_id=%s member_datasource_id=%s", execution_id, member_datasource_id, exc_info=True)
+    return status
 
 
 async def execute_sql_for_member(
@@ -378,29 +562,17 @@ async def execute_sql_for_member(
     local_started_at = time.perf_counter()
 
     async def on_remote_task_created(payload: Dict[str, Any]) -> None:
-        remote_task_id = str((payload or {}).get("remote_task_id") or "").strip()
-        if not remote_task_id:
-            return
-        if execution_id:
-            await update_query_execution(execution_id, remote_task_id=remote_task_id)
-        if query_task_id:
-            await append_query_task_remote_task(
-                query_task_id,
-                {
-                    "member_datasource_id": member_datasource_id,
-                    "member_name": member_name,
-                    "remote_task_id": remote_task_id,
-                    "source_type": str((payload or {}).get("source_type") or "").strip().lower() or "hive",
-                    **({"statement_index": statement_index} if statement_index is not None else {}),
-                },
-            )
+        await _notify_remote_task_created(
+            payload,
+            execution_id=execution_id,
+            query_task_id=query_task_id,
+            member_datasource_id=member_datasource_id,
+            member_name=member_name,
+            statement_index=statement_index,
+        )
 
     async def on_db_connection_created(payload: Dict[str, Any]) -> None:
-        if not execution_id:
-            return
-        db_connection_id = str((payload or {}).get("db_connection_id") or "").strip()
-        if db_connection_id:
-            await update_query_execution(execution_id, db_connection_id=db_connection_id)
+        await _notify_db_connection_created(payload, execution_id)
 
     execute_kwargs = {
         "sql": sql,
@@ -413,36 +585,8 @@ async def execute_sql_for_member(
     try:
         effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
         cache_identity = query_cache.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
-        if execution_id:
-            if await get_query_execution_status(execution_id) == "cancelled":
-                return {
-                    "member_datasource_id": member_datasource_id,
-                    "member_name": member_name,
-                    "sql": effective_sql,
-                    "status": "cancelled",
-                    "columns": [],
-                    "data": [],
-                    "total_count": 0,
-                    "execution_time_ms": None,
-                    "remote_task_id": None,
-                    "db_connection_id": None,
-                    "error": "已人工取消",
-                }
-            await update_query_execution(execution_id, sql_status="running", started_time=datetime.now(), error_message="")
-            if await get_query_execution_status(execution_id) == "cancelled":
-                return {
-                    "member_datasource_id": member_datasource_id,
-                    "member_name": member_name,
-                    "sql": effective_sql,
-                    "status": "cancelled",
-                    "columns": [],
-                    "data": [],
-                    "total_count": 0,
-                    "execution_time_ms": None,
-                    "remote_task_id": None,
-                    "db_connection_id": None,
-                    "error": "已人工取消",
-                }
+        if execution_id and await _guard_running_execution(execution_id):
+            return _cancelled_member_result(member_datasource_id, member_name, effective_sql)
 
         async def execute_query() -> Dict[str, Any]:
             nonlocal executor
@@ -456,49 +600,23 @@ async def execute_sql_for_member(
             return await executor.execute(**execute_kwargs)
 
         async def execute_query_and_update_cache() -> Dict[str, Any]:
-            query_result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
-            if not query_cache.is_sql_result_cache_enabled(skip_query_cache):
-                return query_result
-            try:
-                if http_target:
-                    await query_cache.save_http_remote_ref_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
-                else:
-                    await query_cache.save_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
-            except Exception as cache_err:
-                logger.warning("保存 SQL 结果缓存失败，忽略缓存写入: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
-            return query_result
+            return await _execute_query_and_save_cache(
+                execute_query, user_id, execution_target, skip_query_cache, http_target, cache_identity, username,
+            )
 
         if query_cache.is_sql_result_cache_enabled(skip_query_cache):
-            try:
-                cached_result = await query_cache.get_sql_result_cache(cache_identity)
-            except Exception as cache_err:
-                logger.warning("读取 SQL 结果缓存失败，降级查询数据源: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
-                cached_result = None
+            cached_result = await _fetch_sql_cached_result(cache_identity)
             if cached_result:
-                if http_target:
-                    if query_cache.is_http_remote_ref_cache(cached_result):
-                        result = await fetch_http_remote_ref_cache_result(cached_result, user_id=user_id, username=username)
-                        if result.get("_cache_ref_unavailable"):
-                            logger.info(
-                                "HTTP 远端缓存结果不可用，重新提交查询: cache_key=%s remote_task_id=%s status=%s error=%s",
-                                cache_identity.get("cache_key"),
-                                cached_result.get("remote_task_id"),
-                                result.get("status"),
-                                result.get("error"),
-                            )
-                            result = await execute_query_and_update_cache()
-                        else:
-                            await on_remote_task_created({
-                                "remote_task_id": result.get("remote_task_id"),
-                                "source_type": cached_result.get("source_type") or execution_target.get("source_type"),
-                            })
-                    else:
-                        result = await execute_query_and_update_cache()
-                else:
-                    if query_cache.is_http_remote_ref_cache(cached_result):
-                        result = await execute_query_and_update_cache()
-                    else:
-                        result = cached_result
+                result = await _resolve_cached_query_result(
+                    http_target,
+                    cached_result,
+                    cache_identity,
+                    execution_target,
+                    user_id,
+                    username,
+                    execute_query_and_update_cache,
+                    on_remote_task_created,
+                )
             else:
                 result = await execute_query_and_update_cache()
         else:
@@ -515,33 +633,8 @@ async def execute_sql_for_member(
             except Exception:
                 # 关闭失败不能让本成员的收尾异常冒泡取消其他成员的在途查询
                 logger.warning("执行器资源关闭失败: member_datasource_id=%s", member_datasource_id, exc_info=True)
-    status = query_result_status(result)
-    if result.get("execution_time_ms") is None and status not in {"pending", "running"}:
-        result["execution_time_ms"] = int((time.perf_counter() - local_started_at) * 1000)
-    if execution_id:
-        try:
-            await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
-        except Exception:
-            # 落库失败只损失该成员的执行留痕，不向 gather 冒泡引发级联取消
-            logger.error("执行结果落库失败: execution_id=%s member_datasource_id=%s", execution_id, member_datasource_id, exc_info=True)
-    return {
-        "member_datasource_id": member_datasource_id,
-        "member_name": member_name,
-        "sql": effective_sql,
-        "status": status,
-        "columns": result.get("columns") or [],
-        "data": result.get("data") or [],
-        "total_count": int(result.get("total_count") or 0),
-        "execution_time_ms": result.get("execution_time_ms"),
-        "started_time": result.get("started_time"),
-        "finished_time": result.get("finished_time"),
-        "remote_task_id": result.get("remote_task_id"),
-        "db_connection_id": result.get("db_connection_id"),
-        "error": result.get("error"),
-        "cache_hit": bool(result.get("cache_hit")),
-        "cache_age_seconds": result.get("cache_age_seconds"),
-        "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
-    }
+    status = await _finalize_member_query_result(execution_id, result, http_target, member_datasource_id, local_started_at)
+    return _build_member_query_response(member_datasource_id, member_name, effective_sql, result, status)
 
 
 async def build_execute_sql_result_data(
@@ -1084,12 +1177,102 @@ async def mark_sql_batch_precreation_failed(
                 )
 
 
+async def _precreate_sql_batch_executions(
+    task_id: str,
+    request_payload: Dict[str, Any],
+    statements: List[str],
+    operator_name: Optional[str],
+    statement_results: List[Dict[str, Any]],
+) -> Dict[int, Dict[str, str]] | None:
+    """预创建全部语句的执行记录；失败时落库失败态并返回 None。"""
+    execution_maps: Dict[int, Dict[str, str]] = {}
+    for index, statement in enumerate(statements):
+        execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
+        try:
+            execution_maps[index] = await create_query_executions_for_task(task_id, execute_request, operator_name=operator_name)
+        except Exception as err:
+            logger.error("SQL 批次执行记录创建异常: task_id=%s statement_index=%s error=%s", task_id, index, err, exc_info=True)
+            error_message = str(err) or "SQL 执行记录创建失败"
+            await mark_sql_batch_precreation_failed(statement_results, execution_maps, 0, error_message)
+            await update_query_task(
+                task_id,
+                status="failed",
+                progress_text="执行失败",
+                result_payload={"statement_results": statement_results},
+                error_message=error_message,
+                finished_time=datetime.now(),
+            )
+            return None
+    return execution_maps
+
+
+async def _execute_batch_statement(
+    request_payload: Dict[str, Any],
+    statement: str,
+    *,
+    task_id: str,
+    execution_map: Dict[str, str],
+    operator_name: Optional[str],
+    statement_index: int,
+) -> Dict[str, Any]:
+    """执行单条批次语句，返回 statement_results[index] 的增量更新。"""
+    execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
+    try:
+        result_data = await build_execute_sql_result_data(
+            execute_request,
+            query_task_id=task_id,
+            execution_map=execution_map,
+            username=operator_name,
+            statement_index=statement_index,
+        )
+        persistent_result = await build_persistent_query_task_result_for_request(
+            execute_request,
+            result_data,
+            operator_name=operator_name,
+        )
+        statement_member_results = (persistent_result or {}).get("results") or []
+        if not statement_member_results and query_result_status(result_data) == "failed":
+            statement_member_results = result_data.get("results") or []
+        return {
+            "status": query_result_status(result_data),
+            "error": result_data.get("error"),
+            "results": statement_member_results,
+        }
+    except Exception as err:
+        logger.error("SQL 批次语句执行异常: task_id=%s statement_index=%s error=%s", task_id, statement_index, err, exc_info=True)
+        return {"status": "failed", "error": str(err) or "SQL 执行失败", "results": []}
+
+
+def _resolve_sql_batch_final_status(
+    statement_results: List[Dict[str, Any]],
+) -> tuple[str, str, Optional[str]]:
+    """按各语句结果聚合批次终态，返回（status, progress_text, error_message）。"""
+    statement_statuses = [query_result_status(item) for item in statement_results]
+    has_succeeded = QUERY_SUCCEEDED_STATUS in statement_statuses
+    has_failures = any(status != QUERY_SUCCEEDED_STATUS for status in statement_statuses)
+    all_cancelled = bool(statement_statuses) and all(status == "cancelled" for status in statement_statuses)
+    if all_cancelled:
+        return "cancelled", "已停止", "已人工取消"
+    if has_succeeded and has_failures:
+        only_cancelled_failures = all(status in {QUERY_SUCCEEDED_STATUS, "cancelled"} for status in statement_statuses)
+        progress_text = "执行完成，部分 SQL 已停止" if only_cancelled_failures else "执行完成，部分 SQL 失败"
+        error_message = "部分 SQL 已停止" if only_cancelled_failures else "部分 SQL 执行失败"
+        return "partial_success", progress_text, error_message
+    if has_succeeded:
+        return "succeeded", "执行完成", None
+    return "failed", "执行失败", "SQL 执行失败"
+
+
+def _parse_batch_statements(request_payload: Dict[str, Any]) -> List[str]:
+    return [str(item or "").strip() for item in request_payload.get("sql") or [] if str(item or "").strip()]
+
+
 async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
     """顺序执行 SQL 批次；启动时预创建全部语句的历史执行记录。"""
     if await is_query_task_cancelled(task_id):
         return
     request_payload = json.loads(task.get("request_payload") or "{}")
-    statements = [str(item or "").strip() for item in request_payload.get("sql") or [] if str(item or "").strip()]
+    statements = _parse_batch_statements(request_payload)
     if not statements:
         await update_query_task(task_id, status="failed", progress_text="执行失败", error_message="SQL 批次为空", finished_time=datetime.now())
         return
@@ -1108,24 +1291,11 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
         error_message=None,
     )
 
-    execution_maps: Dict[int, Dict[str, str]] = {}
-    for index, statement in enumerate(statements):
-        execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
-        try:
-            execution_maps[index] = await create_query_executions_for_task(task_id, execute_request, operator_name=operator_name)
-        except Exception as err:
-            logger.error("SQL 批次执行记录创建异常: task_id=%s statement_index=%s error=%s", task_id, index, err, exc_info=True)
-            error_message = str(err) or "SQL 执行记录创建失败"
-            await mark_sql_batch_precreation_failed(statement_results, execution_maps, 0, error_message)
-            await update_query_task(
-                task_id,
-                status="failed",
-                progress_text="执行失败",
-                result_payload={"statement_results": statement_results},
-                error_message=error_message,
-                finished_time=datetime.now(),
-            )
-            return
+    execution_maps = await _precreate_sql_batch_executions(
+        task_id, request_payload, statements, operator_name, statement_results,
+    )
+    if execution_maps is None:
+        return
 
     for index, statement in enumerate(statements):
         if await is_query_task_cancelled(task_id):
@@ -1137,58 +1307,21 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
             progress_text=f"正在执行 SQL {index + 1}/{len(statements)}",
             result_payload={"statement_results": statement_results},
         )
-        execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
-        try:
-            result_data = await build_execute_sql_result_data(
-                execute_request,
-                query_task_id=task_id,
-                execution_map=execution_maps.get(index) or {},
-                username=operator_name,
-                statement_index=index,
-            )
-            persistent_result = await build_persistent_query_task_result_for_request(
-                execute_request,
-                result_data,
-                operator_name=operator_name,
-            )
-            statement_member_results = (persistent_result or {}).get("results") or []
-            if not statement_member_results and query_result_status(result_data) == "failed":
-                statement_member_results = result_data.get("results") or []
-            statement_results[index].update({
-                "status": query_result_status(result_data),
-                "error": result_data.get("error"),
-                "results": statement_member_results,
-            })
-        except Exception as err:
-            logger.error("SQL 批次语句执行异常: task_id=%s statement_index=%s error=%s", task_id, index, err, exc_info=True)
-            statement_results[index].update({"status": "failed", "error": str(err) or "SQL 执行失败", "results": []})
+        statement_results[index].update(await _execute_batch_statement(
+            request_payload,
+            statement,
+            task_id=task_id,
+            execution_map=execution_maps.get(index) or {},
+            operator_name=operator_name,
+            statement_index=index,
+        ))
 
         await update_query_task(task_id, result_payload={"statement_results": statement_results})
         if await is_query_task_cancelled(task_id):
             await mark_sql_batch_remaining_cancelled(task_id, statement_results, execution_maps, index + 1)
             return
 
-    statement_statuses = [query_result_status(item) for item in statement_results]
-    has_succeeded = QUERY_SUCCEEDED_STATUS in statement_statuses
-    has_failures = any(status != QUERY_SUCCEEDED_STATUS for status in statement_statuses)
-    all_cancelled = bool(statement_statuses) and all(status == "cancelled" for status in statement_statuses)
-    if all_cancelled:
-        final_status = "cancelled"
-        final_progress_text = "已停止"
-        final_error_message = "已人工取消"
-    elif has_succeeded and has_failures:
-        final_status = "partial_success"
-        only_cancelled_failures = all(status in {QUERY_SUCCEEDED_STATUS, "cancelled"} for status in statement_statuses)
-        final_progress_text = "执行完成，部分 SQL 已停止" if only_cancelled_failures else "执行完成，部分 SQL 失败"
-        final_error_message = "部分 SQL 已停止" if only_cancelled_failures else "部分 SQL 执行失败"
-    elif has_succeeded:
-        final_status = "succeeded"
-        final_progress_text = "执行完成"
-        final_error_message = None
-    else:
-        final_status = "failed"
-        final_progress_text = "执行失败"
-        final_error_message = "SQL 执行失败"
+    final_status, final_progress_text, final_error_message = _resolve_sql_batch_final_status(statement_results)
     await update_query_task(
         task_id,
         status=final_status,
@@ -1197,6 +1330,106 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
         error_message=final_error_message,
         finished_time=datetime.now(),
     )
+
+
+async def _fail_agent_sql_task(task_info: Optional[Dict[str, Any]], error_message: str) -> None:
+    """智能体 SQL 任务失败落库；尽力而为，不覆盖原始异常。"""
+    if not task_info:
+        return
+    try:
+        await update_query_task(
+            task_info["task_id"],
+            status="failed",
+            progress_text="执行失败",
+            error_message=error_message,
+            finished_time=datetime.now(),
+        )
+    except Exception as update_err:
+        logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
+
+
+async def _create_agent_sql_task(
+    execute_request: ExecuteSqlRequest,
+    operator_name: Optional[str],
+) -> tuple[Optional[Dict[str, Any]], Dict[str, str], Optional[str]]:
+    """创建查询任务与执行记录，返回 (task_info, execution_map, error_message)。"""
+    task_info: Optional[Dict[str, Any]] = None
+    execution_map: Dict[str, str] = {}
+    try:
+        task_info = await create_task_for_execute_request(execute_request, query_type="agent", operator_name=operator_name)
+        execution_map = await create_query_executions_for_task(task_info["task_id"], execute_request, operator_name=operator_name)
+        await update_query_task(task_info["task_id"], status="running", progress_text="SQL 执行中", started_time=datetime.now(), error_message=None)
+        return task_info, execution_map, None
+    except Exception as task_err:
+        logger.error("创建智能体 SQL 查询任务失败: %s", task_err, exc_info=True)
+        return task_info, execution_map, str(task_err) or "创建智能体 SQL 查询任务失败"
+
+
+async def _finalize_agent_sql_task(
+    task_info: Dict[str, Any],
+    final_result: Dict[str, Any],
+    persistent_result_payload: Any,
+) -> None:
+    succeeded = query_result_succeeded(final_result)
+    await update_query_task(
+        task_info["task_id"],
+        status="succeeded" if succeeded else "failed",
+        progress_text="执行完成" if succeeded else "执行失败",
+        result_payload=persistent_result_payload,
+        error_message=None if succeeded else final_result.get("error") or "SQL 执行失败",
+        finished_time=datetime.now(),
+    )
+
+
+async def _run_agent_sql_execution(
+    execute_request: ExecuteSqlRequest,
+    sql: str,
+    *,
+    datasource_id: Optional[str],
+    member_datasource_ids: Optional[List[str]],
+    user_id: Optional[str],
+    operator_name: Optional[str],
+    task_info: Optional[Dict[str, Any]],
+    execution_map: Dict[str, str],
+    ds_manager: Any,
+) -> Dict[str, Any]:
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+        datasource_id,
+        member_datasource_ids,
+        user_id=user_id,
+        username=operator_name,
+    )
+    member_results = [
+        _coerce_member_result(item)
+        for item in await asyncio.gather(*[
+            execute_sql_for_member(
+                execution_target=target,
+                sql=sql,
+                limit=DEFAULT_ROW_LIMIT,
+                timeout=None,
+                user_id=user_id,
+                username=operator_name,
+                execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
+                datasource_id=datasource_id,
+            )
+            for target in execution_targets
+        ], return_exceptions=True)
+    ]
+    primary_result = next((item for item in member_results if query_result_succeeded(item)), member_results[0] if member_results else {})
+    final_result = build_query_result_payload(
+        sql=primary_result.get("sql") or sql,
+        member_results=member_results,
+        fallback_error="查询失败",
+    )
+    if task_info:
+        persistent_result_payload = final_result
+        try:
+            persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, final_result, operator_name=operator_name)
+        except Exception as persist_err:
+            logger.warning("构建智能体 SQL 查询任务落库结果失败，跳过结果落库: %s", persist_err, exc_info=True)
+            persistent_result_payload = None
+        await _finalize_agent_sql_task(task_info, final_result, persistent_result_payload)
+    return final_result
 
 
 async def execute_agent_sql(
@@ -1236,98 +1469,28 @@ async def execute_agent_sql(
         logger.error("智能体 SQL 预校验失败: %s", e)
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=str(e))
 
-    task_info = None
-    execution_map: Dict[str, str] = {}
-    try:
-        task_info = await create_task_for_execute_request(execute_request, query_type="agent", operator_name=operator_name)
-        execution_map = await create_query_executions_for_task(task_info["task_id"], execute_request, operator_name=operator_name)
-        await update_query_task(task_info["task_id"], status="running", progress_text="SQL 执行中", started_time=datetime.now(), error_message=None)
-    except Exception as task_err:
-        logger.error("创建智能体 SQL 查询任务失败: %s", task_err, exc_info=True)
-        error_message = str(task_err) or "创建智能体 SQL 查询任务失败"
-        if task_info:
-            try:
-                await update_query_task(
-                    task_info["task_id"],
-                    status="failed",
-                    progress_text="执行失败",
-                    error_message=error_message,
-                    finished_time=datetime.now(),
-                )
-            except Exception as update_err:
-                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
-        return build_query_result_payload(sql=sql, member_results=[], fallback_error=error_message)
+    task_info, execution_map, create_error = await _create_agent_sql_task(execute_request, operator_name)
+    if create_error:
+        await _fail_agent_sql_task(task_info, create_error)
+        return build_query_result_payload(sql=sql, member_results=[], fallback_error=create_error)
 
     try:
-        execution_targets = await ds_manager.get_authorized_execution_datasources_async(
-            datasource_id,
-            member_datasource_ids,
+        return await _run_agent_sql_execution(
+            execute_request,
+            sql,
+            datasource_id=datasource_id,
+            member_datasource_ids=member_datasource_ids,
             user_id=user_id,
-            username=operator_name,
+            operator_name=operator_name,
+            task_info=task_info,
+            execution_map=execution_map,
+            ds_manager=ds_manager,
         )
-        member_results = [
-            _coerce_member_result(item)
-            for item in await asyncio.gather(*[
-                execute_sql_for_member(
-                    execution_target=target,
-                    sql=sql,
-                    limit=DEFAULT_ROW_LIMIT,
-                    timeout=None,
-                    user_id=user_id,
-                    username=operator_name,
-                    execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
-                    datasource_id=datasource_id,
-                )
-                for target in execution_targets
-            ], return_exceptions=True)
-        ]
-        primary_result = next((item for item in member_results if query_result_succeeded(item)), member_results[0] if member_results else {})
-        final_result = build_query_result_payload(
-            sql=primary_result.get("sql") or sql,
-            member_results=member_results,
-            fallback_error="查询失败",
-        )
-        if task_info:
-            persistent_result_payload = final_result
-            try:
-                persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, final_result, operator_name=operator_name)
-            except Exception as persist_err:
-                logger.warning("构建智能体 SQL 查询任务落库结果失败，跳过结果落库: %s", persist_err, exc_info=True)
-                persistent_result_payload = None
-            await update_query_task(
-                task_info["task_id"],
-                status="succeeded" if query_result_succeeded(final_result) else "failed",
-                progress_text="执行完成" if query_result_succeeded(final_result) else "执行失败",
-                result_payload=persistent_result_payload,
-                error_message=None if query_result_succeeded(final_result) else final_result.get("error") or "SQL 执行失败",
-                finished_time=datetime.now(),
-            )
-        return final_result
     except ValueError as e:
         logger.error("不支持的数据源类型: %s", e)
-        if task_info:
-            try:
-                await update_query_task(
-                    task_info["task_id"],
-                    status="failed",
-                    progress_text="执行失败",
-                    error_message=str(e) or "SQL 执行失败",
-                    finished_time=datetime.now(),
-                )
-            except Exception as update_err:
-                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
+        await _fail_agent_sql_task(task_info, str(e) or "SQL 执行失败")
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=str(e))
     except Exception as e:
         logger.error("执行 SQL 异常: %s", e, exc_info=True)
-        if task_info:
-            try:
-                await update_query_task(
-                    task_info["task_id"],
-                    status="failed",
-                    progress_text="执行失败",
-                    error_message=str(e) or "SQL 执行失败",
-                    finished_time=datetime.now(),
-                )
-            except Exception as update_err:
-                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
+        await _fail_agent_sql_task(task_info, str(e) or "SQL 执行失败")
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=f"执行失败: {str(e)}")

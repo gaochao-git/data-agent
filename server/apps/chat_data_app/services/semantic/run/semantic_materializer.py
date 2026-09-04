@@ -193,6 +193,69 @@ async def _prune_stale_semantic_files(workspace_runtime: Any, keep_paths: set[st
             logger.warning("清理语义目录残留文件失败: path=%s error=%s", path, exc)
 
 
+def _normalize_config_ids(semantic_config_ids: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for config_id in semantic_config_ids or []:
+        value = str(config_id or "").strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _partition_loaded_configs(
+    normalized_ids: list[str],
+    loaded: list[Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """分区加载结果：启用且有效的进 configs，异常进 failed_ids。"""
+    configs: list[dict[str, Any]] = []
+    failed_ids: list[str] = []
+    for config_id, result in zip(normalized_ids, loaded):
+        if isinstance(result, Exception):
+            logger.error("加载选中语义模型失败: config_id=%s error=%s", config_id, result)
+            failed_ids.append(config_id)
+            continue
+        if isinstance(result, dict) and _config_id(result) and bool(result.get("enabled", True)):
+            configs.append(dict(result))
+    return configs, failed_ids
+
+
+async def _render_selected_configs(
+    configs: list[dict[str, Any]],
+    source_type: str,
+) -> tuple[list[tuple[str, str]], list[dict[str, Any]], int, list[str]]:
+    """批量转换并缓存语义模型，返回 (entries, directory, cache_hits, failed_ids)。"""
+    root = PurePosixPath(SEMANTIC_SNAPSHOT_DIR)
+    converter = ChatDataToOssieConverter()
+
+    async def render(config: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
+        config_id = _config_id(config)
+        effective_source_type = str(source_type or config.get("source_type") or "").strip()
+        key = _config_cache_key(config, effective_source_type)
+        cached = _cache_get(key)
+        if cached is not None:
+            return config, cached, True
+        content = await asyncio.to_thread(converter.convert, config, source_type=effective_source_type)
+        _cache_put(key, content)
+        return config, content, False
+
+    rendered = await asyncio.gather(*(render(config) for config in configs), return_exceptions=True)
+    entries: list[tuple[str, str]] = []
+    directory: list[dict[str, Any]] = []
+    cache_hits = 0
+    failed_ids: list[str] = []
+    for config, result in zip(configs, rendered):
+        if isinstance(result, Exception):
+            logger.error("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
+            failed_ids.append(_config_id(config))
+            continue
+        rendered_config, content, hit = result
+        path = str(root / _safe_file_name(rendered_config))
+        entries.append((path, content))
+        directory.append(_directory_item(rendered_config, path))
+        cache_hits += int(hit)
+    return entries, directory, cache_hits, failed_ids
+
+
 async def materialize_runtime_semantic_models(
     *,
     workspace_runtime: Any,
@@ -211,11 +274,7 @@ async def materialize_runtime_semantic_models(
     search_models），会删除目录里不属于本次物化清单的残留 YAML；
     单模型物化（list_fields）禁止开启，否则会误删其它模型文件。
     """
-    normalized_ids = []
-    for config_id in semantic_config_ids or []:
-        value = str(config_id or "").strip()
-        if value and value not in normalized_ids:
-            normalized_ids.append(value)
+    normalized_ids = _normalize_config_ids(semantic_config_ids)
     if not normalized_ids:
         return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
@@ -228,51 +287,16 @@ async def materialize_runtime_semantic_models(
         _load_selected_semantic_config(datasource_id, config_id, user_id, column_dicts=column_dicts)
         for config_id in normalized_ids
     ), return_exceptions=True)
-    configs: list[dict[str, Any]] = []
-    failed_ids: list[str] = []
-    for config_id, result in zip(normalized_ids, loaded):
-        if isinstance(result, Exception):
-            logger.error("加载选中语义模型失败: config_id=%s error=%s", config_id, result)
-            failed_ids.append(config_id)
-            continue
-        if isinstance(result, dict) and _config_id(result) and bool(result.get("enabled", True)):
-            configs.append(dict(result))
+    configs, failed_ids = _partition_loaded_configs(normalized_ids, loaded)
 
-    root = PurePosixPath(SEMANTIC_SNAPSHOT_DIR)
-    converter = ChatDataToOssieConverter()
-    entries: list[tuple[str, str]] = []
-    directory: list[dict[str, Any]] = []
-    cache_hits = 0
-
-    async def render(config: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
-        config_id = _config_id(config)
-        effective_source_type = str(source_type or config.get("source_type") or "").strip()
-        key = _config_cache_key(config, effective_source_type)
-        cached = _cache_get(key)
-        if cached is not None:
-            return config, cached, True
-        content = await asyncio.to_thread(converter.convert, config, source_type=effective_source_type)
-        _cache_put(key, content)
-        return config, content, False
-
-    rendered = await asyncio.gather(*(render(config) for config in configs), return_exceptions=True)
-    for config, result in zip(configs, rendered):
-        if isinstance(result, Exception):
-            logger.error("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
-            failed_ids.append(_config_id(config))
-            continue
-        rendered_config, content, hit = result
-        config_id = _config_id(rendered_config)
-        path = str(root / _safe_file_name(rendered_config))
-        entries.append((path, content))
-        directory.append(_directory_item(rendered_config, path))
-        cache_hits += int(hit)
+    entries, directory, cache_hits, render_failed_ids = await _render_selected_configs(configs, source_type)
+    failed_ids.extend(render_failed_ids)
 
     await workspace_runtime.write_internal_text_files(entries)
     if prune_stale:
         # 保留集以“加载成功的启用模型”为准而非 entries：
         # 转换失败的模型仍启用，不应因本轮转换异常丢掉原本有效的 YAML。
-        keep_paths = {str(root / _safe_file_name(config)) for config in configs}
+        keep_paths = {str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / _safe_file_name(config)) for config in configs}
         await _prune_stale_semantic_files(workspace_runtime, keep_paths)
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s selected_ids=%s files=%s cache_hits=%s backend=%s",

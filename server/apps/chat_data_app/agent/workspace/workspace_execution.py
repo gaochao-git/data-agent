@@ -796,8 +796,16 @@ def _is_managed_semantic_model_local_path(application_root: Path, path: Path) ->
     return path == semantic_root or semantic_root in path.parents
 
 
-async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
-    """Persist the sandbox-owned mutable trees after commands with unknown file effects."""
+def _is_unmanaged_sandbox_path(path: str) -> bool:
+    return not _is_managed_semantic_model_sandbox_path(path) and not _is_tool_results_sandbox_path(path)
+
+
+def _is_unmanaged_local_path(application_root: Path, path: Path) -> bool:
+    return not _is_hidden_tool_results_local_path(application_root, path) and not _is_managed_semantic_model_local_path(application_root, path)
+
+
+async def _collect_sandbox_remote_paths(session: SandboxExecutionSession) -> tuple[set, set]:
+    """遍历沙箱 workspace/outputs，返回需持久化的 (文件路径集合, 目录路径集合)。"""
     remote_files: list[str] = []
     remote_directories: list[str] = []
     for root in (sandbox_workspace_dir(), sandbox_outputs_dir()):
@@ -805,25 +813,24 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
         remote_files.extend(
             str(getattr(entry, "path", "") or "")
             for entry in files
-            if not _is_managed_semantic_model_sandbox_path(str(getattr(entry, "path", "") or ""))
-            and not _is_tool_results_sandbox_path(str(getattr(entry, "path", "") or ""))
+            if _is_unmanaged_sandbox_path(str(getattr(entry, "path", "") or ""))
         )
         remote_directories.extend(
             str(getattr(entry, "path", "") or "")
             for entry in directories
-            if not _is_managed_semantic_model_sandbox_path(str(getattr(entry, "path", "") or ""))
-            and not _is_tool_results_sandbox_path(str(getattr(entry, "path", "") or ""))
+            if _is_unmanaged_sandbox_path(str(getattr(entry, "path", "") or ""))
         )
-    remote_set = set(remote_files)
-    remote_directory_set = set(remote_directories)
-    application_root = _application_workspace_root(session.workspace_root)
+    return set(remote_files), set(remote_directories)
+
+
+def _collect_local_application_paths(application_root: Path) -> tuple[list[Path], list[Path]]:
+    """遍历应用侧 workspace/outputs，返回需比对的 (文件, 目录) 列表。"""
     local_files: list[Path] = []
     local_directories: list[Path] = []
     for directory_name in ("workspace", "outputs"):
         local_files.extend(
             path for _, path in _iter_application_files(application_root / directory_name)
-            if not _is_hidden_tool_results_local_path(application_root, path)
-            and not _is_managed_semantic_model_local_path(application_root, path)
+            if _is_unmanaged_local_path(application_root, path)
         )
         root = application_root / directory_name
         local_directories.extend(
@@ -831,9 +838,16 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
             for path in root.rglob("*")
             if path.is_dir()
             and not path.is_symlink()
-            and not _is_hidden_tool_results_local_path(application_root, path)
-            and not _is_managed_semantic_model_local_path(application_root, path)
+            and _is_unmanaged_local_path(application_root, path)
         )
+    return local_files, local_directories
+
+
+async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
+    """Persist the sandbox-owned mutable trees after commands with unknown file effects."""
+    remote_set, remote_directory_set = await _collect_sandbox_remote_paths(session)
+    application_root = _application_workspace_root(session.workspace_root)
+    local_files, local_directories = _collect_local_application_paths(application_root)
     deleted_paths = [
         f"{sandbox_thread_root()}/{path.relative_to(application_root).as_posix()}"
         for path in local_files
@@ -1337,6 +1351,70 @@ async def _sandbox_text_line_count(
     return total_lines
 
 
+async def _prepare_sandbox_text_reader(
+    session: Any,
+    target: Any,
+    entry: Any,
+) -> tuple[Any, Optional[dict[str, Any]]]:
+    """确认目标是可读文本；目录/二进制文件时返回 (None, 提前返回结果)。"""
+    path_kind = await _sandbox_path_kind(session=session, path=target, entry=entry)
+    if path_kind == "dir":
+        return None, {"exists": True, "is_dir": True, "path": sandbox_path_to_visible(target)}
+    files = getattr(session.sandbox, "files", None)
+    reader = getattr(files, "read_bytes", None)
+    if not callable(reader):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.read_bytes")
+    sample = bytes(await reader(target, range_header="bytes=0-4095"))
+    if b"\x00" in sample:
+        return reader, {"exists": True, "is_binary": True, "path": sandbox_path_to_visible(target)}
+    return reader, None
+
+
+async def _sandbox_total_lines_or_none(session: Any, target: Any, entry: Any) -> Optional[int]:
+    """统计总行数；统计失败时记 warning 并返回 None，不阻塞正文读取。"""
+    try:
+        return await _sandbox_text_line_count(session=session, path=target, entry=entry)
+    except Exception as exc:
+        logger.warning(
+            "沙箱文本行数统计失败，继续读取正文: sandbox_id=%s path=%s error=%s",
+            session.sandbox_id,
+            target,
+            exc,
+        )
+        return None
+
+
+def _split_file_page_lines(page_text: str) -> list[str]:
+    source_lines = page_text.split("\n") if page_text else []
+    if source_lines and source_lines[-1] == "" and page_text.endswith("\n"):
+        source_lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in source_lines]
+
+
+def _apply_file_read_line_budgets(
+    selected_source_lines: list[str],
+    max_chars: int,
+    start_line: int,
+) -> tuple[list[str], list[dict[str, Any]], bool]:
+    """按字符预算截断各行为；返回 (lines, truncated_lines, 是否因预算提前截断)。"""
+    budgets = allocate_file_read_line_budgets(
+        [len(line) for line in selected_source_lines],
+        max_chars,
+    )
+    selected_lines = selected_source_lines[:len(budgets)]
+    lines = [line[:budget] for line, budget in zip(selected_lines, budgets)]
+    truncated_lines = [
+        {
+            "line_number": start_line + position,
+            "original_chars": len(line),
+            "returned_chars": budget,
+        }
+        for position, (line, budget) in enumerate(zip(selected_lines, budgets))
+        if budget < len(line)
+    ]
+    return lines, truncated_lines, len(budgets) < len(selected_source_lines)
+
+
 async def sandbox_read_text_file(
     *,
     session_ref: SandboxExecutionSessionRef,
@@ -1354,39 +1432,16 @@ async def sandbox_read_text_file(
         entry = await _sandbox_path_info(session=session, path=target)
         if entry is None:
             return {"exists": False, "path": visible_path}
-        path_kind = await _sandbox_path_kind(session=session, path=target, entry=entry)
-        if path_kind == "dir":
-            return {"exists": True, "is_dir": True, "path": visible_path}
-        files = getattr(session.sandbox, "files", None)
-        reader = getattr(files, "read_bytes", None)
-        if not callable(reader):
-            raise ValueError("当前 OpenSandbox SDK 不支持 files.read_bytes")
-        sample = bytes(await reader(target, range_header="bytes=0-4095"))
-        if b"\x00" in sample:
-            return {"exists": True, "is_binary": True, "path": visible_path}
-        try:
-            total_lines = await _sandbox_text_line_count(
-                session=session,
-                path=target,
-                entry=entry,
-            )
-        except Exception as exc:
-            total_lines = None
-            logger.warning(
-                "沙箱文本行数统计失败，继续读取正文: sandbox_id=%s path=%s error=%s",
-                session.sandbox_id,
-                target,
-                exc,
-            )
+        reader, early_result = await _prepare_sandbox_text_reader(session, target, entry)
+        if early_result is not None:
+            return early_result
+        total_lines = await _sandbox_total_lines_or_none(session, target, entry)
         source_offset = max(0, int(offset)) + 1
         source_limit = max(1, int(limit)) + 1
         page_text = bytes(await reader(target, offset=source_offset, limit=source_limit)).decode(
             "utf-8", errors="replace"
         )
-        source_lines = page_text.split("\n") if page_text else []
-        if source_lines and source_lines[-1] == "" and page_text.endswith("\n"):
-            source_lines.pop()
-        source_lines = [line[:-1] if line.endswith("\r") else line for line in source_lines]
+        source_lines = _split_file_page_lines(page_text)
         has_more_lines = len(source_lines) > source_limit - 1
         selected_source_lines = source_lines[:source_limit - 1]
         if not selected_source_lines:
@@ -1399,23 +1454,10 @@ async def sandbox_read_text_file(
                 "empty": int(getattr(entry, "size", 0) or 0) == 0,
                 "offset_out_of_range": int(getattr(entry, "size", 0) or 0) > 0,
             }
-        budgets = allocate_file_read_line_budgets(
-            [len(line) for line in selected_source_lines],
-            max_chars,
+        lines, truncated_lines, budget_trimmed = _apply_file_read_line_budgets(
+            selected_source_lines, max_chars, source_offset,
         )
-        selected_lines = selected_source_lines[:len(budgets)]
-        lines = [line[:budget] for line, budget in zip(selected_lines, budgets)]
-        start_line = source_offset
-        truncated_lines = [
-            {
-                "line_number": start_line + position,
-                "original_chars": len(line),
-                "returned_chars": budget,
-            }
-            for position, (line, budget) in enumerate(zip(selected_lines, budgets))
-            if budget < len(line)
-        ]
-        has_more_lines = has_more_lines or len(budgets) < len(selected_source_lines)
+        has_more_lines = has_more_lines or budget_trimmed
         result = {
             "exists": True,
             "is_dir": False,
@@ -1423,8 +1465,8 @@ async def sandbox_read_text_file(
             "path": visible_path,
             "lines": lines,
             "total_lines": total_lines,
-            "start_line": start_line,
-            "end_line": start_line + len(lines) - 1,
+            "start_line": source_offset,
+            "end_line": source_offset + len(lines) - 1,
             "next_offset": source_offset - 1 + len(lines) if has_more_lines else None,
             "has_more_lines": has_more_lines,
             "has_more": has_more_lines,

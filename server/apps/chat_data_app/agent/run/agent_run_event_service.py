@@ -140,6 +140,56 @@ class AgentRunEventService:
                 return False
             await asyncio.sleep(0.05)
 
+    async def _read_run_events(self, run_id: str, cursor: str, *, was_unavailable: bool):
+        """读取 Redis Run 事件，返回 (events, stream_exists, redis_unavailable)。"""
+        try:
+            events = await self._bus.read_run(run_id, cursor)
+            if was_unavailable:
+                logger.info("Redis Run 事件读取已恢复: run_id=%s", run_id)
+            return events, True, False
+        except Exception:
+            if not was_unavailable:
+                logger.warning("Redis Run 事件读取失败，等待恢复: run_id=%s", run_id, exc_info=True)
+            return [], False, True
+
+    async def _recheck_stream_exists(self, run_id: str) -> bool:
+        try:
+            return bool(await self._bus.run_stream_exists(run_id))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _terminal_fallback_event(run_id: str, cursor: str, snapshot: dict) -> dict:
+        """inbox 终态先于 done 事件提交时的兜底 done 事件。"""
+        terminal_status = "finished" if snapshot["status"] == "succeeded" else snapshot["status"]
+        return {
+            "stream_id": cursor,
+            "run_id": run_id,
+            "conversation_id": str(snapshot.get("conversation_id") or ""),
+            "user_id": str(snapshot.get("user_id") or ""),
+            "event_id": f"{run_id}:terminal:fallback",
+            "event_type": "done",
+            "sequence_no": "0",
+            "payload": format_terminal_done(terminal_status, snapshot.get("next_run_id")),
+        }
+
+    async def _wait_between_polls(self, run_id: str, stream_exists: bool) -> None:
+        """无新事件时的等待节奏：流不存在直接长等，否则复查后再等。"""
+        if not stream_exists:
+            await asyncio.sleep(0.5)
+            return
+        if not await self._recheck_stream_exists(run_id):
+            await asyncio.sleep(0.5)
+
+    async def _load_snapshot_with_retry(self, run_id: str) -> tuple[dict | None, bool]:
+        """读取 Run 快照；失败时长等后重试（返回 loaded=False）。"""
+        try:
+            return await self._get_run_snapshot(run_id), True
+        except Exception:
+            logger.warning("读取 Run 状态失败，保持 SSE 订阅等待重试: run_id=%s", run_id, exc_info=True)
+            await asyncio.sleep(0.5)
+            return None, False
+
     async def stream(
         self,
         *,
@@ -158,18 +208,9 @@ class AgentRunEventService:
         while True:
             if is_disconnected and await is_disconnected():
                 return
-            try:
-                events = await self._bus.read_run(run_id, cursor)
-                stream_exists = True
-                if redis_unavailable:
-                    logger.info("Redis Run 事件读取已恢复: run_id=%s", run_id)
-                    redis_unavailable = False
-            except Exception:
-                if not redis_unavailable:
-                    logger.warning("Redis Run 事件读取失败，等待恢复: run_id=%s", run_id, exc_info=True)
-                redis_unavailable = True
-                events = []
-                stream_exists = False
+            events, stream_exists, redis_unavailable = await self._read_run_events(
+                run_id, cursor, was_unavailable=redis_unavailable
+            )
             if events:
                 terminal_detected_at = None
                 for event in events:
@@ -178,20 +219,9 @@ class AgentRunEventService:
                     if event.get("event_type") == "done":
                         return
                 continue
-            if not stream_exists:
-                await asyncio.sleep(0.5)
-            else:
-                try:
-                    stream_exists = await self._bus.run_stream_exists(run_id)
-                except Exception:
-                    stream_exists = False
-                if not stream_exists:
-                    await asyncio.sleep(0.5)
-            try:
-                snapshot = await self._get_run_snapshot(run_id)
-            except Exception:
-                logger.warning("读取 Run 状态失败，保持 SSE 订阅等待重试: run_id=%s", run_id, exc_info=True)
-                await asyncio.sleep(0.5)
+            await self._wait_between_polls(run_id, stream_exists)
+            snapshot, loaded = await self._load_snapshot_with_retry(run_id)
+            if not loaded:
                 continue
             if snapshot is None or snapshot["status"] in TERMINAL_STATUSES:
                 # inbox 终态先于 done 事件发布提交；宽限期内继续读流，
@@ -201,17 +231,7 @@ class AgentRunEventService:
                     terminal_detected_at = now
                 if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
                     if snapshot is not None:
-                        terminal_status = "finished" if snapshot["status"] == "succeeded" else snapshot["status"]
-                        yield {
-                            "stream_id": cursor,
-                            "run_id": run_id,
-                            "conversation_id": str(snapshot.get("conversation_id") or ""),
-                            "user_id": str(snapshot.get("user_id") or ""),
-                            "event_id": f"{run_id}:terminal:fallback",
-                            "event_type": "done",
-                            "sequence_no": "0",
-                            "payload": format_terminal_done(terminal_status, snapshot.get("next_run_id")),
-                        }
+                        yield self._terminal_fallback_event(run_id, cursor, snapshot)
                     return
                 await asyncio.sleep(0.2)
                 continue

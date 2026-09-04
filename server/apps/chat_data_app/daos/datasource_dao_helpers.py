@@ -64,43 +64,54 @@ def _unique_non_empty_texts(values: List[Any]) -> List[str]:
     return result
 
 
+def _normalize_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
+    """标准化枚举值列表（最多 100 个，按 value 去重）。"""
+    enum_values: List[Dict[str, str]] = []
+    if not isinstance(raw_enums, list):
+        return enum_values
+    seen_values: set[str] = set()
+    for item in raw_enums:
+        if len(enum_values) >= 100:
+            break
+        if not isinstance(item, dict):
+            continue
+        enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
+        if not enum_value or enum_value in seen_values:
+            continue
+        seen_values.add(enum_value)
+        enum_values.append({
+            "value": enum_value,
+            "label": str(item.get("label") or item.get("enum_label") or "").strip()[:255],
+        })
+    return enum_values
+
+
+def _normalize_column_synonyms(raw_synonyms: Any) -> List[str]:
+    """标准化同义词列表（最多 50 个，去重）。"""
+    synonyms: List[str] = []
+    if not isinstance(raw_synonyms, list):
+        return synonyms
+    seen_synonyms: set[str] = set()
+    for value in raw_synonyms:
+        if len(synonyms) >= 50:
+            break
+        text = str(value or "").strip()[:100]
+        if not text or text in seen_synonyms:
+            continue
+        seen_synonyms.add(text)
+        synonyms.append(text)
+    return synonyms
+
+
 def _normalize_column_dict(raw_dict: Dict[str, Any] | None) -> Dict[str, Any]:
     """标准化字段数据字典内容。"""
     payload = raw_dict if isinstance(raw_dict, dict) else {}
-    result: Dict[str, Any] = {
-        "enum_values": [],
-        "synonyms": [],
+    return {
+        "enum_values": _normalize_column_enum_values(payload.get("enum_values") or payload.get("enums") or []),
+        "synonyms": _normalize_column_synonyms(payload.get("synonyms") or []),
         "storage_format": str(payload.get("storage_format") or "").strip()[:255],
         "unit": str(payload.get("unit") or "").strip()[:100],
     }
-    seen_values: set[str] = set()
-    raw_enums = payload.get("enum_values") or payload.get("enums") or []
-    if isinstance(raw_enums, list):
-        for item in raw_enums:
-            if len(result["enum_values"]) >= 100:
-                break
-            if not isinstance(item, dict):
-                continue
-            enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
-            if not enum_value or enum_value in seen_values:
-                continue
-            seen_values.add(enum_value)
-            result["enum_values"].append({
-                "value": enum_value,
-                "label": str(item.get("label") or item.get("enum_label") or "").strip()[:255],
-            })
-    seen_synonyms: set[str] = set()
-    raw_synonyms = payload.get("synonyms") or []
-    if isinstance(raw_synonyms, list):
-        for value in raw_synonyms:
-            if len(result["synonyms"]) >= 50:
-                break
-            text = str(value or "").strip()[:100]
-            if not text or text in seen_synonyms:
-                continue
-            seen_synonyms.add(text)
-            result["synonyms"].append(text)
-    return result
 
 
 def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:

@@ -13,6 +13,30 @@ SseFormatter = Callable[[str, dict[str, Any] | str], str]
 ResourceFinalizer = Callable[[bool], Awaitable[None]]
 
 
+async def _run_optional_hook(hook: AsyncHook | None) -> None:
+    if hook is not None:
+        await hook()
+
+
+async def _abort_user_persistence(task: asyncio.Task | None) -> None:
+    """取消并等待用户消息持久化任务（已结束时直接等待收敛）。"""
+    if task is not None and not task.done():
+        task.cancel()
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def _resolve_turn_outcome(stream_adapter: Any) -> tuple[str, Any]:
+    """正常流结束后的出口判定：interrupt / disconnected / completed。"""
+    pending_interrupt = getattr(stream_adapter, "pending_interrupt", None)
+    interrupt_payload = pending_interrupt() if callable(pending_interrupt) else None
+    if interrupt_payload:
+        return "interrupt", interrupt_payload
+    if stream_adapter.disconnected:
+        return "disconnected", None
+    return "completed", None
+
+
 async def stream_agent_turn(
     *,
     stream_adapter: Any,
@@ -44,12 +68,18 @@ async def stream_agent_turn(
         if user_persistence_task is not None:
             await user_persistence_task
 
+    async def finalize_now(success: bool) -> None:
+        nonlocal resources_finalized
+        if finalize_resources is not None:
+            await finalize_resources(success)
+            resources_finalized = True
+
     try:
         # The user message is already visible in the local UI. Persist it in
         # parallel with Agent startup, but wait before final history is saved
         # so the durable event order remains user -> assistant/tool events.
         user_persistence_task = asyncio.create_task(persist_user_message())
-        if before_stream and not await before_stream():
+        if before_stream is not None and not await before_stream():
             await wait_user_persistence()
             return
 
@@ -58,53 +88,37 @@ async def stream_agent_turn(
 
         await wait_user_persistence()
         end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
-        if after_finish:
-            await after_finish()
+        await _run_optional_hook(after_finish)
         await persist_turn_history()
-        if after_stream:
-            await after_stream()
-        pending_interrupt = getattr(stream_adapter, "pending_interrupt", None)
-        interrupt_payload = pending_interrupt() if callable(pending_interrupt) else None
-        if interrupt_payload:
-            if on_interrupt:
+        await _run_optional_hook(after_stream)
+        outcome, interrupt_payload = _resolve_turn_outcome(stream_adapter)
+        if outcome == "interrupt":
+            if on_interrupt is not None:
                 await on_interrupt(interrupt_payload)
-            if finalize_resources:
-                await finalize_resources(True)
-                resources_finalized = True
+            await finalize_now(True)
             yield format_sse("question_requested", interrupt_payload)
             # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
             return
-        if stream_adapter.disconnected:
-            if on_disconnect:
+        if outcome == "disconnected":
+            if on_disconnect is not None:
                 await on_disconnect()
-            if finalize_resources:
-                await finalize_resources(True)
-                resources_finalized = True
+            await finalize_now(True)
             return
-        if finalize_resources:
-            await finalize_resources(True)
-            resources_finalized = True
-        if after_turn:
+        await finalize_now(True)
+        if after_turn is not None:
             await after_turn()
         yield format_sse("message_end", end_payload)
         # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
-        if user_persistence_task and not user_persistence_task.done():
-            user_persistence_task.cancel()
-        if user_persistence_task:
-            await asyncio.gather(user_persistence_task, return_exceptions=True)
-        if finalize_resources:
-            await finalize_resources(cleanup_success_on_cancel)
-            resources_finalized = True
+        await _abort_user_persistence(user_persistence_task)
+        await finalize_now(cleanup_success_on_cancel)
         raise
     except Exception:
-        if user_persistence_task:
+        if user_persistence_task is not None:
             await asyncio.gather(user_persistence_task, return_exceptions=True)
         await persist_partial_history()
         raise
     finally:
-        if user_persistence_task and not user_persistence_task.done():
-            user_persistence_task.cancel()
-            await asyncio.gather(user_persistence_task, return_exceptions=True)
-        if finalize_resources and not resources_finalized:
+        await _abort_user_persistence(user_persistence_task)
+        if finalize_resources is not None and not resources_finalized:
             await finalize_resources(False)

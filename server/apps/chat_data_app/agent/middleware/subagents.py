@@ -396,6 +396,65 @@ def _iter_subagent_stream_events(
     return events
 
 
+class _SubagentStreamState:
+    """子图直播的状态载体：去重、增量转发达标与匿名 id 兜底。"""
+
+    def __init__(self, parent_tool_call_id: str | None):
+        self.parent_tool_call_id = parent_tool_call_id
+        self.seen_ids: set[str] = set()
+        self.text_caps: dict[str, _StreamCapState] = {}
+        self.think_caps: dict[str, _StreamCapState] = {}
+        self.streamed_text_ids: set[str] = set()
+        self.streamed_think_ids: set[str] = set()
+        self.anonymous_seq = count(1)
+        self.anonymous_ids: dict[int, str] = {}
+        self.collected: list = []
+
+    def resolve_anonymous_id(self, message: Any) -> str:
+        """给缺失 id 的消息生成稳定 id。
+
+        按对象身份缓存：同一条消息（无 id）可能出现在多个节点的 updates 里，
+        必须收敛到同一个 id，否则 seen_ids 去重失效、前端会渲染出重复条目。
+        消息对象在 collected 中持有强引用，``id()`` 作为 key 不会被复用。
+        """
+        key = id(message)
+        generated = self.anonymous_ids.get(key)
+        if generated is None:
+            generated = f"{self.parent_tool_call_id or 'subagent'}:anon-{next(self.anonymous_seq)}"
+            self.anonymous_ids[key] = generated
+        return generated
+
+    def emit_messages_chunk(self, chunk_obj: Any, writer: Any) -> None:
+        """messages 模式：正文/思考增量转发并记录已达标的 message id。"""
+        for event in _iter_chunk_stream_events(chunk_obj, self.parent_tool_call_id, self.text_caps, self.think_caps):
+            if event["event_type"] == "subagent_message_delta":
+                self.streamed_text_ids.add(event["message_id"])
+            else:
+                self.streamed_think_ids.add(event["message_id"])
+            _emit_subagent_tool_event(writer, event)
+
+    def collect_update_messages(self, update: dict[str, Any]) -> list:
+        """updates 模式：收集本节点新增消息（去重后），返回给事件提取。"""
+        new_messages: list = []
+        for node_result in update.values():
+            if not isinstance(node_result, dict):
+                continue
+            node_messages = node_result.get("messages") or []
+            if isinstance(node_messages, dict):
+                # 带 reducer 指令的消息更新（如 REMOVE_ALL_MESSAGES），跳过
+                continue
+            for message in node_messages:
+                if isinstance(message, dict):
+                    continue
+                message_id = getattr(message, "id", None) or self.resolve_anonymous_id(message)
+                if message_id in self.seen_ids:
+                    continue
+                self.seen_ids.add(message_id)
+                self.collected.append(message)
+                new_messages.append(message)
+        return new_messages
+
+
 async def _run_subagent_with_events(
     runnable: Any,
     state: dict[str, Any],
@@ -420,70 +479,27 @@ async def _run_subagent_with_events(
       完整 ``subagent_message`` 事件对已增量转发的消息只补截断标记
       （收敛策略见 ``_iter_subagent_stream_events``）。
     """
-    collected = [] if collected is None else collected
-    seen_ids: set[str] = set()
-    text_caps: dict[str, _StreamCapState] = {}
-    think_caps: dict[str, _StreamCapState] = {}
-    streamed_text_ids: set[str] = set()
-    streamed_think_ids: set[str] = set()
-    anonymous_seq = count(1)
-    anonymous_ids: dict[int, str] = {}
-
-    def resolve_anonymous_id(message: Any) -> str:
-        """给缺失 id 的消息生成稳定 id。
-
-        按对象身份缓存：同一条消息（无 id）可能出现在多个节点的 updates 里，
-        必须收敛到同一个 id，否则 seen_ids 去重失效、前端会渲染出重复条目。
-        消息对象在 collected 中持有强引用，``id()`` 作为 key 不会被复用。
-        """
-        key = id(message)
-        generated = anonymous_ids.get(key)
-        if generated is None:
-            generated = f"{parent_tool_call_id or 'subagent'}:anon-{next(anonymous_seq)}"
-            anonymous_ids[key] = generated
-        return generated
-
+    stream_state = _SubagentStreamState(parent_tool_call_id)
+    if collected is not None:
+        stream_state.collected = collected
     async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
         if not (isinstance(chunk, tuple) and len(chunk) == 2):
             continue
         mode, payload = chunk
         if mode == "messages":
             if isinstance(payload, tuple) and len(payload) == 2:
-                chunk_obj = payload[0]
-                for event in _iter_chunk_stream_events(chunk_obj, parent_tool_call_id, text_caps, think_caps):
-                    if event["event_type"] == "subagent_message_delta":
-                        streamed_text_ids.add(event["message_id"])
-                    else:
-                        streamed_think_ids.add(event["message_id"])
-                    _emit_subagent_tool_event(writer, event)
+                stream_state.emit_messages_chunk(payload[0], writer)
             continue
-        if mode != "updates":
+        if mode != "updates" or not isinstance(payload, dict):
             continue
-        update = payload
-        if not isinstance(update, dict):
-            continue
-        new_messages: list = []
-        for node_result in update.values():
-            if not isinstance(node_result, dict):
-                continue
-            node_messages = node_result.get("messages") or []
-            if isinstance(node_messages, dict):
-                # 带 reducer 指令的消息更新（如 REMOVE_ALL_MESSAGES），跳过
-                continue
-            for message in node_messages:
-                if isinstance(message, dict):
-                    continue
-                message_id = getattr(message, "id", None) or resolve_anonymous_id(message)
-                if message_id in seen_ids:
-                    continue
-                seen_ids.add(message_id)
-                collected.append(message)
-                new_messages.append(message)
+        new_messages = stream_state.collect_update_messages(payload)
         for event in _iter_subagent_stream_events(
-            new_messages, parent_tool_call_id, streamed_text_ids, streamed_think_ids, resolve_anonymous_id
+            new_messages, parent_tool_call_id,
+            stream_state.streamed_text_ids, stream_state.streamed_think_ids,
+            stream_state.resolve_anonymous_id,
         ):
             _emit_subagent_tool_event(writer, event)
-    return collected
+    return stream_state.collected
 
 
 def _build_subagent_state(runtime: ToolRuntime, description: str) -> dict[str, Any]:
@@ -494,6 +510,87 @@ def _build_subagent_state(runtime: ToolRuntime, description: str) -> dict[str, A
     }
     state["messages"] = [HumanMessage(content=description)]
     return state
+
+
+def _collect_subagent_tool_results(messages: list) -> dict[str, dict[str, Any]]:
+    tool_results: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        if not tool_call_id:
+            continue
+        raw = _plain_text(getattr(message, "content", ""))
+        tool_results[tool_call_id] = {
+            "status": "error" if str(getattr(message, "status", "") or "") == "error" else "completed",
+            "result": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
+        }
+    return tool_results
+
+
+def _trail_message_entry(message: AIMessage, message_id: str) -> dict[str, Any]:
+    text = _plain_text(getattr(message, "content", ""))
+    thinking = _chunk_reasoning_text(message)
+    return {
+        "kind": "message",
+        "id": message_id,
+        "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容") if text.strip() else "",
+        "truncated": len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
+        "thinking": _truncate_text(thinking, SUBAGENT_THINKING_PREVIEW_MAX_CHARS, "思考") if thinking.strip() else "",
+        "thinkingTruncated": len(thinking) > SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
+    }
+
+
+def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    tool_call_id = str(tool_call.get("id") or "")
+    outcome = tool_results.get(tool_call_id) or {}
+    return {
+        "kind": "tool",
+        "id": tool_call_id,
+        "tool_name": str(tool_call.get("name") or ""),
+        "args": coerce_tool_call_args(tool_call.get("args")) or {},
+        "result": outcome.get("result", ""),
+        "status": outcome.get("status", "completed"),
+    }
+
+
+def _trail_orphan_tool_entry(
+    message: ToolMessage,
+    tool_results: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+    outcome = tool_results[tool_call_id]
+    return {
+        "kind": "tool",
+        "id": tool_call_id,
+        "tool_name": str(getattr(message, "name", "") or ""),
+        "args": {},
+        "result": outcome["result"],
+        "status": outcome["status"],
+    }
+
+
+def _append_ai_message_trail(
+    message: AIMessage,
+    tool_results: dict[str, dict[str, Any]],
+    trail: list[dict[str, Any]],
+    seen_ids: set[str],
+    anonymous_seq,
+) -> None:
+    message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
+    text = _plain_text(getattr(message, "content", ""))
+    thinking = _chunk_reasoning_text(message)
+    if (text.strip() or thinking.strip()) and message_id not in seen_ids:
+        seen_ids.add(message_id)
+        trail.append(_trail_message_entry(message, message_id))
+    for tool_call in getattr(message, "tool_calls", None) or []:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_call_id = str(tool_call.get("id") or "")
+        if not tool_call_id or tool_call_id in seen_ids:
+            continue
+        seen_ids.add(tool_call_id)
+        trail.append(_trail_tool_entry(tool_call, tool_results))
 
 
 def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
@@ -508,68 +605,21 @@ def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
       一致）
     - ToolMessage → 回填对应内层工具的终态 status 与结果预览
     """
-    tool_results: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        if not isinstance(message, ToolMessage):
-            continue
-        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-        if not tool_call_id:
-            continue
-        raw = _plain_text(getattr(message, "content", ""))
-        tool_results[tool_call_id] = {
-            "status": "error" if str(getattr(message, "status", "") or "") == "error" else "completed",
-            "result": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
-        }
+    tool_results = _collect_subagent_tool_results(messages)
 
     trail: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     anonymous_seq = count(1)
     for message in messages:
         if isinstance(message, AIMessage):
-            message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
-            text = _plain_text(getattr(message, "content", ""))
-            thinking = _chunk_reasoning_text(message)
-            if (text.strip() or thinking.strip()) and message_id not in seen_ids:
-                seen_ids.add(message_id)
-                trail.append({
-                    "kind": "message",
-                    "id": message_id,
-                    "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容") if text.strip() else "",
-                    "truncated": len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
-                    "thinking": _truncate_text(thinking, SUBAGENT_THINKING_PREVIEW_MAX_CHARS, "思考") if thinking.strip() else "",
-                    "thinkingTruncated": len(thinking) > SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
-                })
-            for tool_call in getattr(message, "tool_calls", None) or []:
-                if not isinstance(tool_call, dict):
-                    continue
-                tool_call_id = str(tool_call.get("id") or "")
-                if not tool_call_id or tool_call_id in seen_ids:
-                    continue
-                seen_ids.add(tool_call_id)
-                outcome = tool_results.get(tool_call_id) or {}
-                trail.append({
-                    "kind": "tool",
-                    "id": tool_call_id,
-                    "tool_name": str(tool_call.get("name") or ""),
-                    "args": coerce_tool_call_args(tool_call.get("args")) or {},
-                    "result": outcome.get("result", ""),
-                    "status": outcome.get("status", "completed"),
-                })
+            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_seq)
         elif isinstance(message, ToolMessage):
             # 内层工具先产生 ToolMessage 后才出现对应 tool_calls 的情形不
             # 应发生（OpenAI 协议要求先声明后调用）；此处只为容忍乱序输入。
             tool_call_id = str(getattr(message, "tool_call_id", "") or "")
             if tool_call_id and tool_call_id not in seen_ids:
-                outcome = tool_results[tool_call_id]
                 seen_ids.add(tool_call_id)
-                trail.append({
-                    "kind": "tool",
-                    "id": tool_call_id,
-                    "tool_name": str(getattr(message, "name", "") or ""),
-                    "args": {},
-                    "result": outcome["result"],
-                    "status": outcome["status"],
-                })
+                trail.append(_trail_orphan_tool_entry(message, tool_results))
     return trail
 
 

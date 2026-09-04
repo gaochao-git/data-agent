@@ -340,12 +340,8 @@ class SkillService:
             logger.warning("读取技能表失败，仅返回系统技能: %s", err)
             return None
 
-    async def list_skills_async(self, search: Optional[str] = None, category: Optional[str] = None, user_id: str = "", scope: str = "all", user_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
-        db_rows = await self._safe_db_skills_async(user_id=user_id)
-        keyword = str(search or "").strip().lower()
-        normalized_category = str(category or "").strip()
-        skills: List[Dict[str, Any]] = []
-        system_metadata = await asyncio.to_thread(load_metadata)
+    def _collect_skill_source_rows(self, db_rows, system_metadata, user_id: str, user_names: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """合并 DB 用户技能行与文件系统系统技能为统一的展示行。"""
         source_rows = [
             _skill_row_to_info(row, user_id=user_id, user_names=user_names)
             for row in (db_rows or [])
@@ -353,25 +349,44 @@ class SkillService:
         ] if db_rows is not None else []
         for item in system_metadata.values():
             source_rows.append(_system_metadata_to_info(item))
+        return source_rows
+
+    @staticmethod
+    def _skill_matches_scope(item: Dict[str, Any], scope: str, user_id: str) -> bool:
+        if scope == "favorites" and not item.get("favorite"):
+            return False
+        if scope == "mine" and str(item.get("owner_user_id") or "") != str(user_id or ""):
+            return False
+        if scope == "system" and item.get("source") != "system":
+            return False
+        if scope == "runtime" and item.get("source") == "user" and not int(item.get("current_version_no") or 0):
+            return False
+        return True
+
+    @staticmethod
+    def _skill_matches_filter(item: Dict[str, Any], keyword: str, normalized_category: str) -> bool:
+        if normalized_category and item.get("category") != normalized_category:
+            return False
+        searchable = " ".join([
+            str(item.get("name") or ""),
+            str(item.get("title") or ""),
+            str(item.get("description") or ""),
+            str(item.get("domain") or ""),
+            str(item.get("category") or ""),
+        ]).lower()
+        return not (keyword and keyword not in searchable)
+
+    async def list_skills_async(self, search: Optional[str] = None, category: Optional[str] = None, user_id: str = "", scope: str = "all", user_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        db_rows = await self._safe_db_skills_async(user_id=user_id)
+        keyword = str(search or "").strip().lower()
+        normalized_category = str(category or "").strip()
+        skills: List[Dict[str, Any]] = []
+        system_metadata = await asyncio.to_thread(load_metadata)
+        source_rows = self._collect_skill_source_rows(db_rows, system_metadata, user_id, user_names)
         for item in source_rows:
-            if scope == "favorites" and not item.get("favorite"):
+            if not self._skill_matches_scope(item, scope, user_id):
                 continue
-            if scope == "mine" and str(item.get("owner_user_id") or "") != str(user_id or ""):
-                continue
-            if scope == "system" and item.get("source") != "system":
-                continue
-            if scope == "runtime" and item.get("source") == "user" and not int(item.get("current_version_no") or 0):
-                continue
-            if normalized_category and item.get("category") != normalized_category:
-                continue
-            searchable = " ".join([
-                str(item.get("name") or ""),
-                str(item.get("title") or ""),
-                str(item.get("description") or ""),
-                str(item.get("domain") or ""),
-                str(item.get("category") or ""),
-            ]).lower()
-            if keyword and keyword not in searchable:
+            if not self._skill_matches_filter(item, keyword, normalized_category):
                 continue
             skills.append(item)
         return sorted(skills, key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")))
@@ -786,51 +801,106 @@ class SkillService:
         await self.dao.set_favorite_async(user_id, str(skill.get("skill_id")), favorite, operator=user_id, operator_name=operator_name)
         return {"skill_id": skill.get("skill_id"), "favorite": favorite}
 
+    @staticmethod
+    def _db_skill_row_loadable(row: Dict[str, Any], include_draft: bool) -> bool:
+        """用户技能行是否可加载：仅 published（或管理者看 draft）且已有版本号。"""
+        if row.get("skill_source") != "user":
+            return False
+        if row.get("skill_publish_status") != "published" and not include_draft:
+            return False
+        if not include_draft and not int(row.get("current_skill_version_no") or 0):
+            return False
+        return True
+
+    @staticmethod
+    def _build_db_skill_metadata(
+        row: Dict[str, Any],
+        skill_path: Path,
+        can_manage: bool,
+        user_names: Dict[str, str],
+    ) -> Dict[str, Any]:
+        parsed = parse_metadata(skill_path)
+        base = dict(parsed or {})
+        base.update({
+            "skill_id": row.get("skill_id"),
+            "name": row.get("skill_name"),
+            "title": row.get("skill_title") or row.get("skill_name"),
+            "description": row.get("skill_desc") or "",
+            "category": row.get("skill_category") or "",
+            "output_type": "text",
+            "path": str(skill_path),
+            "source": row.get("skill_source") or "user",
+            "visibility_type": row.get("visibility_type") or "private",
+            "publish_status": row.get("skill_publish_status") or "draft",
+            "current_version_no": int(row.get("current_skill_version_no") or 0),
+            "draft_version_no": int(row.get("draft_skill_version_no") or 0) if can_manage else 0,
+            "has_draft": bool(row.get("draft_skill_version_no")) if can_manage else False,
+            "owner_user_id": row.get("owner_user_id") or "",
+            "creator_id": str(row.get("create_by") or row.get("owner_user_id") or "").strip(),
+            "creator_name": _get_creator_name(row, user_names=user_names),
+            "can_manage": can_manage,
+            "enabled": bool(row.get("enabled_flag", 1)),
+            "favorite": bool(row.get("favorite_flag")),
+        })
+        return base
+
     async def _get_db_skill_metadata_async(self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         """异步从数据库读取可加载技能元数据。"""
         try:
             row = await self.dao.get_skill_async(resolve_skill_name(name), user_id=user_id)
             if not row:
                 return None
-            if row.get("skill_source") != "user":
-                return None
-            if row.get("skill_source") == "user" and row.get("skill_publish_status") != "published" and not include_draft:
-                return None
-            if row.get("skill_source") == "user" and not include_draft and not int(row.get("current_skill_version_no") or 0):
+            if not self._db_skill_row_loadable(row, include_draft):
                 return None
             can_manage = _can_manage_skill(row, user_id)
             effective_include_draft = include_draft and can_manage
             skill_path = await self._resolve_db_skill_md_path_async(row, include_draft=effective_include_draft)
             if not skill_path:
                 return None
-            parsed = parse_metadata(skill_path)
-            base = dict(parsed or {})
-            base.update({
-                "skill_id": row.get("skill_id"),
-                "name": row.get("skill_name"),
-                "title": row.get("skill_title") or row.get("skill_name"),
-                "description": row.get("skill_desc") or "",
-                "category": row.get("skill_category") or "",
-                "output_type": "text",
-                "path": str(skill_path),
-                "source": row.get("skill_source") or "user",
-                "visibility_type": row.get("visibility_type") or "private",
-                "publish_status": row.get("skill_publish_status") or "draft",
-                "current_version_no": int(row.get("current_skill_version_no") or 0),
-                "draft_version_no": int(row.get("draft_skill_version_no") or 0) if can_manage else 0,
-                "has_draft": bool(row.get("draft_skill_version_no")) if can_manage else False,
-                "owner_user_id": row.get("owner_user_id") or "",
-                "creator_id": str(row.get("create_by") or row.get("owner_user_id") or "").strip(),
-                "creator_name": _get_creator_name(row, user_names=user_names),
-                "can_manage": can_manage,
-                "enabled": bool(row.get("enabled_flag", 1)),
-                "favorite": bool(row.get("favorite_flag")),
-            })
+            base = self._build_db_skill_metadata(row, skill_path, can_manage, user_names or {})
             file_info = await asyncio.to_thread(_list_skill_files, str(skill_path))
             return {**base, **file_info}
         except Exception as err:
             logger.warning("读取数据库技能元数据失败: name=%s error=%s", name, err)
             return None
+
+    _DETAIL_FIELD_DEFAULTS = {
+        "title": None,  # 特殊：默认取 name
+        "description": "",
+        "domain": "",
+        "category": "",
+        "output_type": "text",
+        "input_schema": None,  # 特殊：空 dict
+        "references": None,  # 特殊：空 list
+        "scripts": None,  # 特殊：空 list
+        "assets": None,  # 特殊：空 list
+        "source": "user",
+        "visibility_type": "private",
+        "publish_status": "published",
+        "current_version_no": 0,
+        "draft_version_no": 0,
+        "owner_user_id": "",
+        "creator_id": "",
+        "creator_name": "",
+    }
+
+    @classmethod
+    def _apply_metadata_defaults(cls, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """为详情字段填充与原 `or` 链一致的缺省值；name 原样透传（无兜底）。"""
+        detail: Dict[str, Any] = {"name": metadata.get("name")}
+        for key, default in cls._DETAIL_FIELD_DEFAULTS.items():
+            value = metadata.get(key)
+            if default is None:
+                # 特殊默认：title 回退 name，容器字段回退空容器
+                if key == "title":
+                    detail[key] = value or metadata.get("name")
+                elif key == "input_schema":
+                    detail[key] = value or {}
+                else:
+                    detail[key] = value or []
+            else:
+                detail[key] = value or default
+        return detail
 
     async def _get_db_skill_detail_async(self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         """异步从数据库读取技能详情。"""
@@ -841,32 +911,16 @@ class SkillService:
         if not path.exists():
             return None
         text = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
-        return {
-            "name": metadata.get("name"),
-            "title": metadata.get("title") or metadata.get("name"),
-            "description": metadata.get("description") or "",
-            "domain": metadata.get("domain") or "",
-            "category": metadata.get("category") or "",
-            "output_type": metadata.get("output_type") or "text",
-            "input_schema": metadata.get("input_schema") or {},
+        detail = self._apply_metadata_defaults(metadata)
+        detail.update({
             "content": _strip_frontmatter(text),
-            "references": metadata.get("references") or [],
-            "scripts": metadata.get("scripts") or [],
-            "assets": metadata.get("assets") or [],
-            "source": metadata.get("source") or "user",
             "skill_id": metadata.get("skill_id"),
-            "visibility_type": metadata.get("visibility_type") or "private",
-            "publish_status": metadata.get("publish_status") or "published",
-            "current_version_no": metadata.get("current_version_no") or 0,
-            "draft_version_no": metadata.get("draft_version_no") or 0,
             "has_draft": bool(metadata.get("has_draft")),
-            "owner_user_id": metadata.get("owner_user_id") or "",
-            "creator_id": metadata.get("creator_id") or "",
-            "creator_name": metadata.get("creator_name") or "",
             "can_manage": bool(metadata.get("can_manage")),
             "enabled": bool(metadata.get("enabled", True)),
             "favorite": bool(metadata.get("favorite")),
-        }
+        })
+        return detail
 
     async def _resolve_db_skill_md_path_async(self, row: Dict[str, Any], include_draft: bool = False) -> Optional[Path]:
         """异步根据技能主表和版本表定位 SKILL.md。"""

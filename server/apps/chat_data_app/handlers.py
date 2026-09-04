@@ -6,6 +6,8 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
+from functools import partial
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
@@ -28,6 +30,7 @@ from utils.tool_call_args import coerce_tool_call_args
 from .agent import (
     create_data_agent,
     AgentRunControls,
+    AgentRuntimeOptions,
     DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
@@ -56,8 +59,10 @@ from .agent.workspace.runtime_skill_snapshot import (
 )
 from .agent.middleware.steering import SteeringMessageTracker
 from .services.semantic.run.semantic_conversation_context import (
+    AgentPromptContext,
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
+    SemanticConversationContext,
 )
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
 
@@ -341,6 +346,35 @@ async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any
         return state
 
 
+def _resolve_history_turn_ids(messages: list[Any], turn_id: str) -> list[str]:
+    turn_ids = [
+        message_id
+        for message in messages
+        if isinstance(message, HumanMessage)
+        and (message_id := _stream_message_id(message))
+    ]
+    if turn_id and turn_id not in turn_ids:
+        turn_ids.insert(0, turn_id)
+    return turn_ids
+
+
+def _resolve_history_usage(values: dict[str, Any] | None, stream_adapter: "_AgentSseStreamAdapter") -> Any:
+    usage = (values or {}).get("token_usage")
+    latest_usage = getattr(stream_adapter, "latest_token_usage", None)
+    if isinstance(latest_usage, dict) and (latest_usage.get("breakdown") or latest_usage.get("llm_calls")):
+        usage = latest_usage
+    return usage
+
+
+def _resolve_history_stream_id(
+    snapshot_stream_id: str | None,
+    stream_event_id_provider: Callable[[], str | None] | None,
+) -> str | None:
+    if snapshot_stream_id is not None:
+        return snapshot_stream_id
+    return stream_event_id_provider() if stream_event_id_provider else None
+
+
 async def _persist_agent_turn_history(
     stream_adapter: "_AgentSseStreamAdapter",
     *,
@@ -366,18 +400,8 @@ async def _persist_agent_turn_history(
         state_messages,
         turn_id=turn_id,
     )
-    turn_ids = [
-        message_id
-        for message in messages
-        if isinstance(message, HumanMessage)
-        and (message_id := _stream_message_id(message))
-    ]
-    if turn_id and turn_id not in turn_ids:
-        turn_ids.insert(0, turn_id)
-    usage = (values or {}).get("token_usage")
-    latest_usage = getattr(stream_adapter, "latest_token_usage", None)
-    if isinstance(latest_usage, dict) and (latest_usage.get("breakdown") or latest_usage.get("llm_calls")):
-        usage = latest_usage
+    turn_ids = _resolve_history_turn_ids(messages, turn_id)
+    usage = _resolve_history_usage(values, stream_adapter)
     for current_turn_id in turn_ids:
         # token_usage 是会话级单行快照（event_key 固定），只随最后一轮写一次即可。
         is_last_turn = current_turn_id == turn_ids[-1]
@@ -396,11 +420,7 @@ async def _persist_agent_turn_history(
                 **persist_kwargs,
                 run_id=run_id,
                 owner_token=owner_token,
-                stream_id=(
-                    snapshot_stream_id
-                    if snapshot_stream_id is not None
-                    else stream_event_id_provider() if stream_event_id_provider else None
-                ),
+                stream_id=_resolve_history_stream_id(snapshot_stream_id, stream_event_id_provider),
             )
         else:
             await conversation_event_service.persist_turn(**persist_kwargs)
@@ -488,25 +508,33 @@ def _merge_message_snapshots(
     return merged
 
 
+def _tool_call_ids_of(message: AIMessage) -> tuple[str, ...]:
+    tool_call_ids = tuple(
+        str((tool_call or {}).get("id") or "").strip()
+        for tool_call in getattr(message, "tool_calls", None) or []
+        if str((tool_call or {}).get("id") or "").strip()
+    )
+    return tool_call_ids
+
+
+def _tool_message_key(message: ToolMessage) -> tuple[Any, ...] | None:
+    tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
+    return ("tool", tool_call_id) if tool_call_id else None
+
+
 def _stream_message_key(message: BaseMessage, index: int) -> tuple[Any, ...] | None:
     message_id = _stream_message_id(message)
     if message_id:
         return ("id", message_id)
     if isinstance(message, ToolMessage):
-        tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
-        return ("tool", tool_call_id) if tool_call_id else None
+        return _tool_message_key(message)
     if isinstance(message, AIMessage):
-        tool_call_ids = tuple(
-            str((tool_call or {}).get("id") or "").strip()
-            for tool_call in getattr(message, "tool_calls", None) or []
-            if str((tool_call or {}).get("id") or "").strip()
-        )
+        tool_call_ids = _tool_call_ids_of(message)
         if tool_call_ids:
             return ("ai_tools", *tool_call_ids)
+        return ("ai", str(message.content or ""))
     if isinstance(message, HumanMessage):
         return ("human", str(message.content or ""))
-    if isinstance(message, AIMessage):
-        return ("ai", str(message.content or ""))
     return (message.__class__.__name__, str(getattr(message, "content", "") or ""), index)
 
 
@@ -756,6 +784,28 @@ class _ToolStreamState:
             events.extend(self._running_event(tool_call_id, tool_name, coerced_args))
         return events
 
+    def _register_tool_call_chunk(
+        self, chunk_id: str, chunk_name: str, chunk_index: Any,
+    ) -> str | None:
+        """登记 chunk 的身份信息，返回本次应播报的 running 工具名（无则 None）。"""
+        if not chunk_id:
+            return None
+        if chunk_name:
+            self.tool_names[chunk_id] = chunk_name
+        self.active_tool_call_id = chunk_id
+        if isinstance(chunk_index, int):
+            self.index_map[chunk_index] = chunk_id
+        self.args_buffer.setdefault(chunk_id, "")
+        running_tool_name = chunk_name or self.tool_names.get(chunk_id, "")
+        return running_tool_name or None
+
+    def _resolve_chunk_tool_call_id(self, chunk_id: str, chunk_index: Any) -> str | None:
+        return (
+            chunk_id
+            or (self.index_map.get(chunk_index) if isinstance(chunk_index, int) else None)
+            or _resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids)
+        )
+
     def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
         events: list[str] = []
         for chunk in tool_call_chunks or []:
@@ -765,22 +815,11 @@ class _ToolStreamState:
             chunk_name = str(chunk.get("name") or "").strip()
             chunk_args = str(chunk.get("args") or "")
             chunk_index = chunk.get("index")
-            if chunk_id:
-                if chunk_name:
-                    self.tool_names[chunk_id] = chunk_name
-                self.active_tool_call_id = chunk_id
-                if isinstance(chunk_index, int):
-                    self.index_map[chunk_index] = chunk_id
-                self.args_buffer.setdefault(chunk_id, "")
-                running_tool_name = chunk_name or self.tool_names.get(chunk_id, "")
-                if running_tool_name:
-                    events.extend(self._running_event(chunk_id, running_tool_name, {}))
+            running_tool_name = self._register_tool_call_chunk(chunk_id, chunk_name, chunk_index)
+            if running_tool_name:
+                events.extend(self._running_event(chunk_id, running_tool_name, {}))
 
-            current_tool_call_id = (
-                chunk_id
-                or (self.index_map.get(chunk_index) if isinstance(chunk_index, int) else None)
-                or _resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids)
-            )
+            current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
         return events
@@ -830,6 +869,57 @@ class _ToolStreamState:
             _format_tool_lifecycle_event("tool_started", payload),
             _format_tool_event(**payload),
         ]
+
+
+_SUBAGENT_TOOL_EVENT_TYPES = {
+    "tool_started",
+    "tool_completed",
+    "tool_failed",
+    "subagent_message",
+    "subagent_message_delta",
+    "subagent_thinking_delta",
+}
+
+
+@dataclass
+class _MessageChunkFlags:
+    """message_chunk 的载荷形态标记，供 _handle_message_chunk 分发。"""
+
+    has_content: bool
+    has_tool_calls: bool
+    has_tool_call_chunks: bool
+    is_ai_message: bool
+    is_tool_message: bool
+    thinking_event: str | None
+
+    @classmethod
+    def of(cls, message_chunk: Any) -> "_MessageChunkFlags":
+        return cls(
+            has_content=bool(getattr(message_chunk, "content", None)),
+            has_tool_calls=bool(getattr(message_chunk, "tool_calls", None)),
+            has_tool_call_chunks=bool(getattr(message_chunk, "tool_call_chunks", None)),
+            is_ai_message=isinstance(message_chunk, (AIMessage, AIMessageChunk)),
+            is_tool_message=isinstance(message_chunk, (ToolMessage, ToolMessageChunk)),
+            thinking_event=_format_thinking_event(message_chunk),
+        )
+
+    @property
+    def has_visible_payload(self) -> bool:
+        return (
+            self.has_content
+            or self.has_tool_calls
+            or self.has_tool_call_chunks
+            or bool(self.thinking_event)
+        )
+
+    @property
+    def thinking_only(self) -> bool:
+        return (
+            not self.has_content
+            and not self.has_tool_calls
+            and not self.has_tool_call_chunks
+            and not self.is_tool_message
+        )
 
 
 class _AgentSseStreamAdapter:
@@ -962,56 +1052,72 @@ class _AgentSseStreamAdapter:
     def _handle_custom_payload(self, payload: Any) -> list[str]:
         if not isinstance(payload, dict):
             return []
-        if payload.get("type") == "token_usage" and payload.get("usage"):
+        handlers = {
+            "token_usage": self._handle_token_usage_payload,
+            "context_compression": self._handle_context_compression_payload,
+            "inbox_admitted": self._handle_inbox_admitted_payload,
+            "tool_progress": self._handle_tool_progress_payload,
+            "subagent_tool": self._handle_subagent_tool_payload,
+        }
+        handler = handlers.get(str(payload.get("type") or ""))
+        if handler is None:
+            return []
+        return handler(payload)
+
+    def _handle_token_usage_payload(self, payload: dict[str, Any]) -> list[str]:
+        if payload.get("usage"):
             self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
             return [_format_sse("token_usage", self.latest_token_usage)]
-        if payload.get("type") == "context_compression" and isinstance(payload.get("event"), dict):
-            archived_messages = payload.get("archived_turn_messages")
-            if isinstance(archived_messages, list):
-                self.archived_turn_messages = _merge_message_snapshots(
-                    self.archived_turn_messages,
-                    archived_messages,
-                )
-            return [_format_sse("context_compression", payload["event"])]
-        if payload.get("type") == "inbox_admitted" and isinstance(payload.get("message_ids"), list):
-            message_ids = [str(message_id) for message_id in payload["message_ids"] if str(message_id)]
-            return [_format_sse("inbox_admitted", {"message_ids": message_ids})] if message_ids else []
-        if payload.get("type") == "tool_progress":
-            tool_call_id = str(payload.get("tool_call_id") or "").strip()
-            tool_name = str(payload.get("tool_name") or "").strip()
-            message = str(payload.get("message") or "").strip()
-            if not tool_call_id or not tool_name or not message:
-                logger.warning("忽略无效工具进度事件: %s", payload)
-                return []
-            return [_format_tool_lifecycle_event("tool_progress", {
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "status": "running",
-                "message": message,
-                "progress": payload.get("progress"),
-            })]
-        if payload.get("type") == "subagent_tool" and isinstance(payload.get("event"), dict):
-            event = payload["event"]
-            event_type = str(event.get("event_type") or "").strip()
-            if event_type not in {
-                "tool_started",
-                "tool_completed",
-                "tool_failed",
-                "subagent_message",
-                "subagent_message_delta",
-                "subagent_thinking_delta",
-            }:
-                logger.warning("忽略未知的子智能体工具事件类型: %s", event_type)
-                return []
-            if event_type == "subagent_message":
-                # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
-                if not event.get("streamed") and not str(event.get("content") or "").strip():
-                    return []
-            if event_type in {"subagent_message_delta", "subagent_thinking_delta"} and not str(event.get("delta") or ""):
-                return []
-            data = {key: value for key, value in event.items() if key != "event_type"}
-            return [_format_tool_lifecycle_event(event_type, data)]
         return []
+
+    def _handle_context_compression_payload(self, payload: dict[str, Any]) -> list[str]:
+        if not isinstance(payload.get("event"), dict):
+            return []
+        archived_messages = payload.get("archived_turn_messages")
+        if isinstance(archived_messages, list):
+            self.archived_turn_messages = _merge_message_snapshots(
+                self.archived_turn_messages,
+                archived_messages,
+            )
+        return [_format_sse("context_compression", payload["event"])]
+
+    def _handle_inbox_admitted_payload(self, payload: dict[str, Any]) -> list[str]:
+        if not isinstance(payload.get("message_ids"), list):
+            return []
+        message_ids = [str(message_id) for message_id in payload["message_ids"] if str(message_id)]
+        return [_format_sse("inbox_admitted", {"message_ids": message_ids})] if message_ids else []
+
+    def _handle_tool_progress_payload(self, payload: dict[str, Any]) -> list[str]:
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        tool_name = str(payload.get("tool_name") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        if not tool_call_id or not tool_name or not message:
+            logger.warning("忽略无效工具进度事件: %s", payload)
+            return []
+        return [_format_tool_lifecycle_event("tool_progress", {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "status": "running",
+            "message": message,
+            "progress": payload.get("progress"),
+        })]
+
+    def _handle_subagent_tool_payload(self, payload: dict[str, Any]) -> list[str]:
+        if not isinstance(payload.get("event"), dict):
+            return []
+        event = payload["event"]
+        event_type = str(event.get("event_type") or "").strip()
+        if event_type not in _SUBAGENT_TOOL_EVENT_TYPES:
+            logger.warning("忽略未知的子智能体工具事件类型: %s", event_type)
+            return []
+        if event_type == "subagent_message":
+            # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
+            if not event.get("streamed") and not str(event.get("content") or "").strip():
+                return []
+        if event_type in {"subagent_message_delta", "subagent_thinking_delta"} and not str(event.get("delta") or ""):
+            return []
+        data = {key: value for key, value in event.items() if key != "event_type"}
+        return [_format_tool_lifecycle_event(event_type, data)]
 
     def _alarm_context(self) -> dict[str, Any]:
         configurable = self.config.get("configurable") if isinstance(self.config, dict) else {}
@@ -1064,32 +1170,26 @@ class _AgentSseStreamAdapter:
         )
 
     async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]):
-        has_content = bool(getattr(message_chunk, "content", None))
-        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
-        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-        is_ai_message = isinstance(message_chunk, (AIMessage, AIMessageChunk))
-        is_tool_message = isinstance(message_chunk, (ToolMessage, ToolMessageChunk))
-        thinking_event = _format_thinking_event(message_chunk)
-        has_visible_payload = has_content or has_tool_calls or has_tool_call_chunks or thinking_event
-        if not has_visible_payload and not (self.include_empty_tool_messages and is_tool_message):
+        flags = _MessageChunkFlags.of(message_chunk)
+        if not flags.has_visible_payload and not (self.include_empty_tool_messages and flags.is_tool_message):
             return
-        if thinking_event:
+        if flags.thinking_event:
             _append_reasoning_segment(
                 self.reasoning_segments,
                 _extract_reasoning_content(message_chunk),
                 self.tool_stream_state.visible_tool_count(),
                 self.reasoning_turn_id,
             )
-            yield thinking_event
-            if not has_content and not has_tool_calls and not has_tool_call_chunks and not is_tool_message:
+            yield flags.thinking_event
+            if flags.thinking_only:
                 return
-        if has_tool_calls:
+        if flags.has_tool_calls:
             for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
                 yield tool_event
-        if has_tool_call_chunks:
+        if flags.has_tool_call_chunks:
             for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
                 yield tool_event
-        if is_tool_message:
+        if flags.is_tool_message:
             tool_payload = self.tool_stream_state.build_tool_message_payload(message_chunk)
             yield self.tool_stream_state.build_completion_event(tool_payload)
             yield _format_sse("tool", tool_payload)
@@ -1275,6 +1375,628 @@ async def _heartbeat_agent_run(
             return
 
 
+class _AgentRunPreparationError(Exception):
+    """Agent 流准备阶段致命失败；message 即下发前端的 error 文案。"""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def _resolve_agent_turn_id(
+    resume_turn_id: str | None,
+    turn_id: str | None,
+    user_message: HumanMessage | None,
+    adopted_messages: list[HumanMessage] | None,
+) -> str:
+    """当前轮次 ID：恢复轮 > 请求轮 > 用户消息 ID > 首条接管消息 ID。"""
+    return resume_turn_id or turn_id or str(
+        user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "")
+    ) or ""
+
+
+async def _prepare_agent_semantic_context(
+    *,
+    thread_id: str,
+    user_query: str,
+    datasource_id: str | None,
+    user_id: str | None,
+    username: str | None,
+    member_datasource_ids: list[str] | None,
+    semantic_config_id: str | None,
+) -> tuple[SemanticConversationContext, AgentPromptContext]:
+    """准备语义会话上下文并校验数据源绑定；致命失败抛 _AgentRunPreparationError。"""
+    semantic_context = await prepare_semantic_conversation_context(
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        username=username,
+        user_query=user_query,
+    )
+    if semantic_context.semantic_config_error:
+        logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
+        raise _AgentRunPreparationError(semantic_context.semantic_config_error)
+    if semantic_context.datasource_id and semantic_context.datasource_meta is not None:
+        bound_datasource_id = await conversation.resolve_datasource_binding(
+            thread_id,
+            user_id or "system",
+            semantic_context.datasource_id,
+        )
+        if bound_datasource_id != semantic_context.datasource_id:
+            raise _AgentRunPreparationError("当前会话已绑定其他数据源组，请新建会话后再切换。")
+    if semantic_context.semantic_config:
+        logger.info(
+            "智能问数使用手选指标集: %s",
+            semantic_context.semantic_config.get("name") or semantic_context.semantic_config.get("id"),
+        )
+    else:
+        logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
+    return semantic_context, build_agent_prompt_context(semantic_context)
+
+
+async def _prepare_agent_workspace_runtime(
+    *,
+    thread_id: str,
+    datasource_id: str | None,
+    user_id: str | None,
+    semantic_context: SemanticConversationContext,
+    runtime_options: AgentRuntimeOptions,
+) -> tuple[dict[str, str], ConversationWorkspaceRuntime, str]:
+    """准备会话工作区并预物化语义目录；目录整体失败抛 _AgentRunPreparationError。
+
+    返回（workspace 路径表, workspace 运行时, 语义物化缺失说明）。
+    """
+    workspace_paths = await prepare_conversation_workspace(thread_id, user_id or "system")
+    workspace_runtime = ConversationWorkspaceRuntime(
+        workspace_root=workspace_paths["root"],
+        user_id=user_id or "system",
+        backend=runtime_options.workspace_backend,
+    )
+    # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
+    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
+    # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
+    # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
+    # 部分模型物化失败不终止本轮，但把缺失清单注入上下文，让模型能区分
+    # “数据源组没有该模型”和“该模型本轮未物化”。
+    try:
+        prematerialized = await prematerialize_enabled_semantic_models(
+            workspace_runtime=workspace_runtime,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+        )
+    except Exception as err:
+        logger.error(
+            "语义模型预物化失败，终止本轮: thread_id=%s datasource_id=%s error=%s",
+            thread_id, datasource_id, err,
+        )
+        raise _AgentRunPreparationError("语义模型目录初始化失败，请稍后重试。") from None
+    if prematerialized["total"]:
+        logger.info(
+            "语义模型预物化完成: thread_id=%s datasource_id=%s files=%s",
+            thread_id, datasource_id, prematerialized["total"],
+        )
+    failed_ids = [str(item) for item in prematerialized.get("failed_ids") or [] if str(item).strip()]
+    if not failed_ids:
+        return workspace_paths, workspace_runtime, ""
+    logger.error(
+        "语义模型预物化部分失败: thread_id=%s datasource_id=%s failed_ids=%s",
+        thread_id, datasource_id, failed_ids,
+    )
+    materialize_note = (
+        "注意：本轮语义目录物化不完整，以下语义模型未能生成 YAML 文件："
+        + "、".join(failed_ids)
+        + "。目录中检索不到这些模型不代表数据源组没有该模型；如用户问题命中这些模型，如实说明本轮无法查询它们，不要判定为数据缺失。"
+    )
+    return workspace_paths, workspace_runtime, materialize_note
+
+
+async def _load_runtime_skills_xml(
+    user_id: str,
+    thread_id: str,
+    workspace_runtime: ConversationWorkspaceRuntime,
+) -> str:
+    """加载会话技能快照并生成系统提示词技能清单；失败时本轮不提供技能。"""
+    available_skills: list[dict[str, Any]] = []
+    available_skills_xml = format_skills_prompt([])
+    # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
+    # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
+    try:
+        snapshot_dir = await build_runtime_skill_snapshot_async(user_id, thread_id)
+        available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
+        available_skills_xml = format_skills_prompt(available_skills)
+    except Exception as err:
+        logger.warning("会话技能快照加载失败，本轮不提供技能: %s", err)
+    workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in available_skills]
+    return available_skills_xml
+
+
+async def _resolve_file_attachments(
+    file_ids: list[str] | None,
+    *,
+    user_id: str | None,
+    thread_id: str,
+) -> list[dict[str, Any]]:
+    """解析 file_ids 对应的文件信息，用于追加到用户消息。
+
+    上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
+    """
+    attachments: list[dict[str, Any]] = []
+    if not file_ids:
+        return attachments
+    for fid in file_ids:
+        info = await get_file_info(fid, user_id=user_id or "system", thread_id=thread_id)
+        if not info:
+            logger.warning("关联文件不存在或无权限，已忽略: file_id=%s thread_id=%s", fid, thread_id)
+            continue
+        if info.get("thread_id") and thread_id and info["thread_id"] != thread_id:
+            logger.warning("关联文件会话归属不匹配，已忽略: file_id=%s", fid)
+            continue
+        attachments.append({
+            "file_id": fid,
+            "original_filename": info["original_filename"],
+            "file_type": info["file_type"],
+            "file_size": info["file_size"],
+            "virtual_path": f"/mnt/user-data/uploads/{info['storage_dir']}",
+        })
+    return attachments
+
+
+async def _offload_oversized_user_input(
+    user_query: str,
+    workspace_runtime: ConversationWorkspaceRuntime,
+    thread_id: str,
+) -> tuple[str, dict[str, str]]:
+    """用户输入超长时自动转为文件写入 workspace outputs。
+
+    返回（注入消息的正文, 附件描述字典）。
+    """
+    offload_name = f"input-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    visible_path = f"/mnt/user-data/outputs/{offload_name}"
+    await workspace_runtime.write_text_file(
+        file_path=visible_path,
+        content=user_query,
+        mode="overwrite",
+    )
+    preview = user_query[:USER_INPUT_PREVIEW_CHARS]
+    user_message_content = (
+        f"{preview}...\n\n"
+        f"[用户输入较长（共 {len(user_query)} 字符），完整内容已保存到 {visible_path}，"
+        "请用 file_read 分批读取后再回答。]"
+    )
+    logger.info("用户输入超长已转文件: conversation_id=%s chars=%d path=%s", thread_id, len(user_query), visible_path)
+    return user_message_content, {
+        "original_filename": offload_name,
+        "parsed_path": visible_path,
+    }
+
+
+async def _resolve_checkpointed_turn_state(
+    checkpointer: Any,
+    config: dict[str, Any],
+    *,
+    recovering: bool,
+    resume_answer: dict[str, Any] | None,
+    resume_started: bool,
+    turn_id: str | None,
+    run_id: str | None,
+    owner_token: str | None,
+    adopted_messages: list[HumanMessage] | None,
+) -> tuple[bool, bool, list[HumanMessage] | None]:
+    """恢复场景下对齐 checkpoint 与 inbox，判定本轮的续跑形态。
+
+    返回（当前轮已 checkpoint, checkpoint 续跑生效, 接管消息列表）。
+    """
+    checkpoint_tuple = await checkpointer.aget_tuple(config) if recovering else None
+    checkpoint_message_ids = _checkpoint_message_ids(checkpoint_tuple)
+    current_turn_checkpointed = bool(turn_id and turn_id in checkpoint_message_ids)
+    checkpoint_resume_status = _checkpoint_resume_status(checkpoint_tuple)
+    resume_checkpointed = bool(
+        resume_answer is not None
+        and recovering
+        and checkpoint_tuple is not None
+        and (
+            checkpoint_resume_status is True
+            or (checkpoint_resume_status is None and resume_started)
+        )
+    )
+    if recovering and current_turn_checkpointed and run_id and owner_token:
+        await agent_inbox_service.reconcile_recovered_messages(
+            run_id,
+            checkpoint_message_ids,
+            owner_token,
+        )
+        # Checkpointed messages are already part of graph state; any
+        # claimed-but-uncheckpointed messages were returned to pending
+        # for the steering middleware to inject exactly once.
+        adopted_messages = []
+    return current_turn_checkpointed, resume_checkpointed, adopted_messages
+
+
+def _resolve_agent_initial_state(
+    *,
+    resume_checkpointed: bool,
+    resume_answer: dict[str, Any] | None,
+    current_turn_checkpointed: bool,
+    user_id: str | None,
+    operator_name: str | None,
+    conversation_id: str,
+    adopted_messages: list[HumanMessage] | None,
+    user_message: HumanMessage | None,
+    datasource_id: str | None,
+    semantic_context: SemanticConversationContext,
+    runtime_options: AgentRuntimeOptions,
+    workspace_root: str,
+) -> Any:
+    """按恢复场景决定本轮 agent 的初始状态。"""
+    if resume_checkpointed:
+        return None
+    if resume_answer is not None:
+        return Command(resume=resume_answer)
+    if current_turn_checkpointed:
+        return None
+    return _build_agent_context_state(
+        user_id=user_id,
+        operator_name=operator_name,
+        conversation_id=conversation_id,
+        messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
+        execution_context={
+            "datasource_id": datasource_id,
+            "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
+            "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
+        },
+        workspace={
+            "workspace_root": workspace_root,
+            "workspace_backend": runtime_options.workspace_backend,
+        },
+    )
+
+
+@dataclass
+class _AgentRunStreamCallbacks:
+    """_run_chat_data_agent_stream 拆出的持久化/收口回调共享的运行期上下文。
+
+    user_message / stream_adapter / model_snapshot_writer / adopted_messages
+    在主流程推进过程中被就地赋值，各回调在触发时读取最新值。
+    """
+
+    thread_id: str
+    user_id: str | None
+    username: str | None
+    run_id: str | None
+    owner_token: str | None
+    request: Request | None
+    resume_answer: dict[str, Any] | None
+    resume_turn_id: str | None
+    turn_id: str | None
+    stream_event_id_provider: Callable[[], str | None] | None
+    log_phase: Callable[[str], Any]
+    steering_tracker: SteeringMessageTracker
+    adopted_messages: list[HumanMessage] | None = None
+    user_message: HumanMessage | None = None
+    stream_adapter: "_AgentSseStreamAdapter | None" = None
+    model_snapshot_writer: "_LatestModelSnapshotWriter | None" = None
+    recovering: bool = False
+
+    @property
+    def effective_turn_id(self) -> str:
+        return _resolve_agent_turn_id(
+            self.resume_turn_id, self.turn_id, self.user_message, self.adopted_messages,
+        )
+
+
+def _create_agent_stream_adapter(
+    callbacks: _AgentRunStreamCallbacks,
+    *,
+    agent: Any,
+    initial_state: Any,
+    config: dict[str, Any],
+    request: Request | None,
+) -> "_AgentSseStreamAdapter":
+    """装配本轮 Agent SSE 流适配器，挂到回调上下文并补发恢复重启事件。"""
+    on_stream_started = (
+        partial(agent_inbox_service.mark_question_resume_started, callbacks.run_id, callbacks.owner_token)
+        if callbacks.resume_answer is not None and callbacks.run_id
+        else None
+    )
+    adapter = _AgentSseStreamAdapter(
+        agent=agent,
+        initial_state=initial_state,
+        config=config,
+        request=request,
+        visible_message_filter=_is_chat_data_visible_stream_message,
+        disconnect_log_id=callbacks.thread_id,
+        debug_label="AI Content from model",
+        include_empty_tool_messages=True,
+        on_first_message=partial(callbacks.log_phase, "first_model_chunk"),
+        on_stream_started=on_stream_started,
+        reasoning_turn_id=callbacks.resume_turn_id or callbacks.turn_id or (
+            str(callbacks.user_message.additional_kwargs.get("reasoning_turn_id") or "")
+            if callbacks.user_message else None
+        ),
+    )
+    callbacks.stream_adapter = adapter
+    if callbacks.recovering:
+        adapter.queue_event(_format_sse("run_restarted", {
+            "run_id": callbacks.run_id,
+            "turn_id": callbacks.turn_id,
+        }))
+    return adapter
+
+
+async def _admit_agent_inbox_messages(
+    callbacks: _AgentRunStreamCallbacks,
+    messages: list[HumanMessage],
+) -> None:
+    for message in messages:
+        await conversation_event_service.persist_user_message(
+            conversation_id=callbacks.thread_id,
+            user_id=callbacks.user_id or "system",
+            operator_name=callbacks.username or callbacks.user_id or "system",
+            message=message,
+        )
+
+
+async def _write_agent_model_snapshot(
+    callbacks: _AgentRunStreamCallbacks,
+    state: dict[str, Any],
+) -> None:
+    adapter = callbacks.stream_adapter
+    if adapter is None:
+        return
+    snapshot_stream_id = state.get("__history_stream_id") if isinstance(state, dict) else None
+    await _persist_agent_turn_history(
+        adapter,
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        username=callbacks.username,
+        turn_id=callbacks.effective_turn_id,
+        state_override=state,
+        run_id=callbacks.run_id,
+        owner_token=callbacks.owner_token,
+        stream_event_id_provider=callbacks.stream_event_id_provider,
+        snapshot_stream_id=snapshot_stream_id,
+    )
+
+
+async def _persist_agent_model_snapshot(
+    callbacks: _AgentRunStreamCallbacks,
+    state: dict[str, Any],
+) -> None:
+    """Queue the latest snapshot so model-to-tool transition stays immediate."""
+    snapshot = dict(state or {})
+    # after_model 是异步合并写入。游标必须在提交快照时捕获，
+    # 不能等后台 writer 真正写库时再读取，否则可能跨过未包含
+    # 在该快照内的 Redis 事件，恢复时会跳过内容。
+    snapshot["__history_stream_id"] = (
+        callbacks.stream_event_id_provider() if callbacks.stream_event_id_provider else None
+    )
+    callbacks.model_snapshot_writer.submit(snapshot)
+
+
+async def _flush_agent_model_snapshots(callbacks: _AgentRunStreamCallbacks) -> None:
+    """Wait until the newest submitted snapshot is durable."""
+    await callbacks.model_snapshot_writer.flush()
+
+
+async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> None:
+    if callbacks.user_message is None:
+        return
+    await conversation_event_service.persist_user_message(
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        operator_name=callbacks.username or callbacks.user_id,
+        message=callbacks.user_message,
+    )
+    callbacks.log_phase("persist_user_message")
+
+
+async def _persist_agent_turn_history_snapshot(callbacks: _AgentRunStreamCallbacks) -> None:
+    await _flush_agent_model_snapshots(callbacks)
+    await _persist_agent_turn_history(
+        callbacks.stream_adapter,
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        username=callbacks.username,
+        turn_id=callbacks.effective_turn_id,
+        run_id=callbacks.run_id,
+        owner_token=callbacks.owner_token,
+        stream_event_id_provider=callbacks.stream_event_id_provider,
+    )
+
+
+async def _persist_agent_partial_history(callbacks: _AgentRunStreamCallbacks) -> None:
+    await _flush_agent_model_snapshots(callbacks)
+    await _persist_partial_agent_turn_history(
+        callbacks.stream_adapter,
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        username=callbacks.username,
+        turn_id=callbacks.effective_turn_id,
+        run_id=callbacks.run_id,
+        owner_token=callbacks.owner_token,
+        stream_event_id_provider=callbacks.stream_event_id_provider,
+    )
+    # A stream can fail after LangGraph has checkpointed the
+    # answer but before the normal finish hook. Inspecting the
+    # durable state here prevents the old question from being
+    # resurrected on the next worker.
+    if (
+        callbacks.resume_answer is not None
+        and callbacks.run_id
+        and callbacks.stream_adapter.graph_started
+        and callbacks.stream_adapter.state is not None
+        and not callbacks.stream_adapter.pending_interrupt()
+    ):
+        await agent_inbox_service.mark_question_resume_started(callbacks.run_id, callbacks.owner_token)
+
+
+async def _mark_agent_resume_checkpointed(callbacks: _AgentRunStreamCallbacks) -> None:
+    if (
+        callbacks.resume_answer is not None
+        and callbacks.run_id
+        and callbacks.stream_adapter.graph_started
+        and not callbacks.stream_adapter.pending_interrupt()
+    ):
+        await agent_inbox_service.mark_question_resume_started(callbacks.run_id, callbacks.owner_token)
+
+
+async def _log_agent_stream_done(callbacks: _AgentRunStreamCallbacks) -> None:
+    callbacks.log_phase("agent_stream_done")
+
+
+async def _mark_agent_waiting_for_user(
+    callbacks: _AgentRunStreamCallbacks,
+    question: dict[str, Any],
+) -> None:
+    if not callbacks.run_id:
+        return
+    question["turn_id"] = callbacks.effective_turn_id
+    await agent_inbox_service.mark_waiting_for_user(
+        callbacks.run_id,
+        question,
+        callbacks.user_id or "system",
+        callbacks.username or callbacks.user_id or "system",
+        callbacks.owner_token,
+    )
+
+
+async def _confirm_agent_consumed_messages(callbacks: _AgentRunStreamCallbacks) -> None:
+    if callbacks.run_id:
+        await agent_inbox_service.mark_consumed(
+            callbacks.run_id, callbacks.steering_tracker.drain(), callbacks.owner_token,
+        )
+
+
+async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
+    if callbacks.request and await callbacks.request.is_disconnected():
+        logger.info("客户端已断开，停止流式输出: %s", callbacks.thread_id)
+        if callbacks.resume_answer is not None and callbacks.run_id:
+            await agent_inbox_service.restore_question_answer(
+                callbacks.run_id,
+                callbacks.user_id or "system",
+                callbacks.username or callbacks.user_id or "system",
+                callbacks.owner_token,
+            )
+        return False
+    return True
+
+
+async def _prepare_agent_prompt_bundle(
+    prompt_context: dict[str, Any],
+    semantic_materialize_note: str,
+    user_id: str | None,
+    thread_id: str,
+    workspace_runtime: ConversationWorkspaceRuntime,
+) -> tuple[Any, str]:
+    """构建数据上下文与会话技能提示词清单。"""
+    data_context = await build_conversation_prompt_context(prompt_context)
+    if semantic_materialize_note and isinstance(data_context, dict):
+        data_context["semantic_materialize_note"] = semantic_materialize_note
+    available_skills_xml = await _load_runtime_skills_xml(
+        user_id or "system", thread_id, workspace_runtime,
+    )
+    return data_context, available_skills_xml
+
+
+async def _resolve_agent_turn_inputs(
+    checkpointer: Any,
+    config: dict[str, Any],
+    *,
+    user_query: str,
+    message_content: str,
+    semantic_selection_event: dict[str, Any],
+    vision_attachments: list[dict[str, Any]],
+    skill_names: list[str],
+    recovering: bool,
+    resume_answer: dict[str, Any] | None,
+    resume_started: bool,
+    turn_id: str | None,
+    run_id: str | None,
+    owner_token: str | None,
+    adopted_messages: list[HumanMessage] | None,
+    user_id: str | None,
+    username: str | None,
+    thread_id: str,
+    datasource_id: str | None,
+    semantic_context: Any,
+    runtime_options: Any,
+    workspace_root: str,
+    prompt_context: dict[str, Any],
+    data_context: Any,
+    available_skills_xml: str,
+) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
+    """解析 checkpoint 恢复状态，构建用户消息、initial_state 与系统提示词。
+
+    `adopted_messages` 可能在恢复对齐时被重置为空列表，须回传给主流程继续使用。
+    """
+    message_kwargs: dict[str, Any] = {}
+    if skill_names:
+        message_kwargs["skill_names"] = skill_names
+    current_turn_checkpointed, resume_checkpointed, adopted_messages = (
+        await _resolve_checkpointed_turn_state(
+            checkpointer,
+            config,
+            recovering=recovering,
+            resume_answer=resume_answer,
+            resume_started=resume_started,
+            turn_id=turn_id,
+            run_id=run_id,
+            owner_token=owner_token,
+            adopted_messages=adopted_messages,
+        )
+    )
+    user_message = None
+    if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
+        user_message = _build_user_message(
+            message_content,
+            semantic_selection_event,
+            message_id=turn_id,
+            vision_attachments=vision_attachments,
+            **message_kwargs,
+        )
+    initial_state = _resolve_agent_initial_state(
+        resume_checkpointed=resume_checkpointed,
+        resume_answer=resume_answer,
+        current_turn_checkpointed=current_turn_checkpointed,
+        user_id=user_id,
+        operator_name=username,
+        conversation_id=thread_id,
+        adopted_messages=adopted_messages,
+        user_message=user_message,
+        datasource_id=datasource_id,
+        semantic_context=semantic_context,
+        runtime_options=runtime_options,
+        workspace_root=workspace_root,
+    )
+    system_prompt = build_unified_system_prompt(
+        runtime_options,
+        data_context=data_context,
+        workspace_root=workspace_root,
+        datasource_group_context=prompt_context["datasource_group_context"],
+        available_skills_xml=available_skills_xml,
+    )
+    return user_message, initial_state, system_prompt, adopted_messages
+
+
+async def _admit_adopted_messages(
+    callbacks: "_AgentRunStreamCallbacks",
+    stream_adapter: "_AgentSseStreamAdapter",
+    steering_tracker: SteeringMessageTracker,
+    adopted_messages: list[HumanMessage] | None,
+) -> None:
+    """上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
+    先持久化并通知前端上屏，再随 initial_state 进入本轮对话。"""
+    await _admit_agent_inbox_messages(callbacks, adopted_messages or [])
+    if adopted_messages:
+        adopted_ids = [str(message.id or "") for message in adopted_messages]
+        steering_tracker.record(adopted_ids)
+        stream_adapter.queue_event(_format_sse("inbox_admitted", {
+            "message_ids": adopted_ids,
+        }))
+
+
 async def _run_chat_data_agent_stream(
     *,
     thread_id: str,
@@ -1304,102 +2026,39 @@ async def _run_chat_data_agent_stream(
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
-    normalized_skill_names = skill_names
     semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-    semantic_context = await prepare_semantic_conversation_context(
-        datasource_id=datasource_id,
-        semantic_config_id=semantic_config_id,
-        member_datasource_ids=member_datasource_ids,
-        user_id=user_id,
-        username=username,
-        user_query=user_query,
-    )
-    if semantic_context.semantic_config_error:
-        logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
-        yield _format_sse("error", {"error": semantic_context.semantic_config_error})
-        raise AgentRunStreamFailedError from None
-    datasource_id = semantic_context.datasource_id
-    if datasource_id and semantic_context.datasource_meta is not None:
-        bound_datasource_id = await conversation.resolve_datasource_binding(
-            thread_id,
-            user_id or "system",
-            datasource_id,
-        )
-        if bound_datasource_id != datasource_id:
-            yield _format_sse("error", {"error": "当前会话已绑定其他数据源组，请新建会话后再切换。"})
-            raise AgentRunStreamFailedError from None
-    semantic_config_id = semantic_context.semantic_config_id
-    if semantic_context.semantic_config:
-        logger.info(
-            "智能问数使用手选指标集: %s",
-            semantic_context.semantic_config.get("name") or semantic_context.semantic_config.get("id"),
-        )
-    else:
-        logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
-    prompt_context = build_agent_prompt_context(semantic_context)
-    log_phase("prepare_semantic_context")
-
-    runtime_options = resolve_agent_runtime_options(
-        user_id=user_id,
-        override=(options or {}).get("runtime_options"),
-    )
-    workspace_paths = await prepare_conversation_workspace(thread_id, user_id or "system")
-    workspace_runtime = ConversationWorkspaceRuntime(
-        workspace_root=workspace_paths["root"],
-        user_id=user_id or "system",
-        backend=runtime_options.workspace_backend,
-    )
-    # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
-    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
-    # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
-    # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
-    # 部分模型物化失败不终止本轮，但把缺失清单注入上下文，让模型能区分
-    # “数据源组没有该模型”和“该模型本轮未物化”。
-    semantic_materialize_note = ""
     try:
-        prematerialized = await prematerialize_enabled_semantic_models(
-            workspace_runtime=workspace_runtime,
+        semantic_context, prompt_context = await _prepare_agent_semantic_context(
+            thread_id=thread_id,
+            user_query=user_query,
             datasource_id=datasource_id,
             user_id=user_id,
-            source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+            username=username,
+            member_datasource_ids=member_datasource_ids,
+            semantic_config_id=semantic_config_id,
         )
-        if prematerialized["total"]:
-            logger.info(
-                "语义模型预物化完成: thread_id=%s datasource_id=%s files=%s",
-                thread_id, datasource_id, prematerialized["total"],
-            )
-        failed_ids = [str(item) for item in prematerialized.get("failed_ids") or [] if str(item).strip()]
-        if failed_ids:
-            logger.error(
-                "语义模型预物化部分失败: thread_id=%s datasource_id=%s failed_ids=%s",
-                thread_id, datasource_id, failed_ids,
-            )
-            semantic_materialize_note = (
-                "注意：本轮语义目录物化不完整，以下语义模型未能生成 YAML 文件："
-                + "、".join(failed_ids)
-                + "。目录中检索不到这些模型不代表数据源组没有该模型；如用户问题命中这些模型，如实说明本轮无法查询它们，不要判定为数据缺失。"
-            )
-    except Exception as err:
-        logger.error(
-            "语义模型预物化失败，终止本轮: thread_id=%s datasource_id=%s error=%s",
-            thread_id, datasource_id, err,
+        datasource_id = semantic_context.datasource_id
+        runtime_options = resolve_agent_runtime_options(
+            user_id=user_id,
+            override=(options or {}).get("runtime_options"),
         )
-        yield _format_sse("error", {"error": "语义模型目录初始化失败，请稍后重试。"})
+        workspace_paths, workspace_runtime, semantic_materialize_note = (
+            await _prepare_agent_workspace_runtime(
+                thread_id=thread_id,
+                datasource_id=datasource_id,
+                user_id=user_id,
+                semantic_context=semantic_context,
+                runtime_options=runtime_options,
+            )
+        )
+    except _AgentRunPreparationError as exc:
+        yield _format_sse("error", {"error": exc.message})
         raise AgentRunStreamFailedError from None
-    data_context = await build_conversation_prompt_context(prompt_context)
-    if semantic_materialize_note and isinstance(data_context, dict):
-        data_context["semantic_materialize_note"] = semantic_materialize_note
-    available_skills: list[dict[str, Any]] = []
-    available_skills_xml = format_skills_prompt([])
-    # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
-    # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
-    try:
-        snapshot_dir = await build_runtime_skill_snapshot_async(user_id or "system", thread_id)
-        available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
-        available_skills_xml = format_skills_prompt(available_skills)
-    except Exception as err:
-        logger.warning("会话技能快照加载失败，本轮不提供技能: %s", err)
-    workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
+    log_phase("prepare_semantic_context")
+
+    data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
+        prompt_context, semantic_materialize_note, user_id, thread_id, workspace_runtime,
+    )
 
     config = {
         # 子智能体（subagents.py::build_subagent_invocation_config）读同一常量，
@@ -1411,53 +2070,21 @@ async def _run_chat_data_agent_stream(
         }
     }
 
-    stream_adapter: _AgentSseStreamAdapter | None = None
-    user_message: HumanMessage | None = None
     steering_tracker = SteeringMessageTracker()
-    stream_adapter_ref: dict[str, _AgentSseStreamAdapter] = {}
 
     # 解析 file_ids 对应的文件信息，用于追加到用户消息。
     # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
-    file_attachments: list[dict[str, Any]] = []
-    if file_ids:
-        for fid in file_ids:
-            info = await get_file_info(fid, user_id=user_id or "system", thread_id=thread_id)
-            if not info:
-                logger.warning("关联文件不存在或无权限，已忽略: file_id=%s thread_id=%s", fid, thread_id)
-                continue
-            if info.get("thread_id") and thread_id and info["thread_id"] != thread_id:
-                logger.warning("关联文件会话归属不匹配，已忽略: file_id=%s", fid)
-                continue
-            file_attachments.append({
-                "file_id": fid,
-                "original_filename": info["original_filename"],
-                "file_type": info["file_type"],
-                "file_size": info["file_size"],
-                "virtual_path": f"/mnt/user-data/uploads/{info['storage_dir']}",
-            })
+    file_attachments = await _resolve_file_attachments(
+        file_ids, user_id=user_id, thread_id=thread_id,
+    )
 
     # 用户输入超长时自动转为文件写入 workspace outputs
     user_message_content = user_query
     if len(user_query) > USER_INPUT_OFFLOAD_THRESHOLD:
-        offload_name = f"input-{time.strftime('%Y%m%d-%H%M%S')}.txt"
-        offload_path = f"/mnt/user-data/outputs/{offload_name}"
-        await workspace_runtime.write_text_file(
-            file_path=offload_path,
-            content=user_query,
-            mode="overwrite",
+        user_message_content, offload_attachment = await _offload_oversized_user_input(
+            user_query, workspace_runtime, thread_id,
         )
-        visible_path = f"/mnt/user-data/outputs/{offload_name}"
-        preview = user_query[:USER_INPUT_PREVIEW_CHARS]
-        user_message_content = (
-            f"{preview}...\n\n"
-            f"[用户输入较长（共 {len(user_query)} 字符），完整内容已保存到 {visible_path}，"
-            "请用 file_read 分批读取后再回答。]"
-        )
-        file_attachments.append({
-            "original_filename": offload_name,
-            "parsed_path": visible_path,
-        })
-        logger.info("用户输入超长已转文件: conversation_id=%s chars=%d path=%s", thread_id, len(user_query), visible_path)
+        file_attachments.append(offload_attachment)
 
     try:
         async with get_checkpointer() as checkpointer:
@@ -1469,118 +2096,58 @@ async def _run_chat_data_agent_stream(
             attachment_text = build_file_attachment_text(file_attachments)
             message_content = f"{user_message_content}{attachment_text}"
 
-            message_kwargs: dict[str, Any] = {}
-            if normalized_skill_names:
-                message_kwargs["skill_names"] = normalized_skill_names
-            checkpoint_tuple = await checkpointer.aget_tuple(config) if recovering else None
-            checkpoint_message_ids = _checkpoint_message_ids(checkpoint_tuple)
-            current_turn_checkpointed = bool(turn_id and turn_id in checkpoint_message_ids)
-            checkpoint_resume_status = _checkpoint_resume_status(checkpoint_tuple)
-            resume_checkpointed = bool(
-                resume_answer is not None
-                and recovering
-                and checkpoint_tuple is not None
-                and (
-                    checkpoint_resume_status is True
-                    or (checkpoint_resume_status is None and resume_started)
-                )
-            )
-            if recovering and current_turn_checkpointed and run_id and owner_token:
-                await agent_inbox_service.reconcile_recovered_messages(
-                    run_id,
-                    checkpoint_message_ids,
-                    owner_token,
-                )
-                # Checkpointed messages are already part of graph state; any
-                # claimed-but-uncheckpointed messages were returned to pending
-                # for the steering middleware to inject exactly once.
-                adopted_messages = []
-            user_message = None
-            if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
-                user_message = _build_user_message(
-                    message_content,
-                    semantic_selection_event,
-                    message_id=turn_id,
-                    vision_attachments=vision_attachments,
-                    **message_kwargs,
-                )
-            if resume_checkpointed:
-                initial_state = None
-            elif resume_answer is not None:
-                initial_state = Command(resume=resume_answer)
-            elif current_turn_checkpointed:
-                initial_state = None
-            else:
-                initial_state = _build_agent_context_state(
-                    user_id=user_id,
-                    operator_name=username,
-                    conversation_id=thread_id,
-                    messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
-                    execution_context={
-                        "datasource_id": datasource_id,
-                        "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
-                        "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
-                    },
-                    workspace={
-                        "workspace_root": workspace_paths["root"],
-                        "workspace_backend": runtime_options.workspace_backend,
-                    },
-                )
-            system_prompt = build_unified_system_prompt(
-                runtime_options,
-                data_context=data_context,
+            user_message, initial_state, system_prompt, adopted_messages = (
+                await _resolve_agent_turn_inputs(
+                checkpointer,
+                config,
+                user_query=user_query,
+                message_content=message_content,
+                semantic_selection_event=semantic_selection_event,
+                vision_attachments=vision_attachments,
+                skill_names=skill_names,
+                recovering=recovering,
+                resume_answer=resume_answer,
+                resume_started=resume_started,
+                turn_id=turn_id,
+                run_id=run_id,
+                owner_token=owner_token,
+                adopted_messages=adopted_messages,
+                user_id=user_id,
+                username=username,
+                thread_id=thread_id,
+                datasource_id=datasource_id,
+                semantic_context=semantic_context,
+                runtime_options=runtime_options,
                 workspace_root=workspace_paths["root"],
-                datasource_group_context=prompt_context["datasource_group_context"],
+                prompt_context=prompt_context,
+                data_context=data_context,
                 available_skills_xml=available_skills_xml,
+            )
             )
             log_phase("build_system_prompt")
 
-            async def admit_inbox_messages(messages: list[HumanMessage]) -> None:
-                for message in messages:
-                    await conversation_event_service.persist_user_message(
-                        conversation_id=thread_id,
-                        user_id=user_id or "system",
-                        operator_name=username or user_id or "system",
-                        message=message,
-                    )
-
-            async def write_model_snapshot(state: dict[str, Any]) -> None:
-                adapter = stream_adapter_ref.get("value")
-                if adapter is None:
-                    return
-                snapshot_stream_id = state.get("__history_stream_id") if isinstance(state, dict) else None
-                await _persist_agent_turn_history(
-                    adapter,
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    username=username,
-                    turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
-                    state_override=state,
-                    run_id=run_id,
-                    owner_token=owner_token,
-                    stream_event_id_provider=stream_event_id_provider,
-                    snapshot_stream_id=snapshot_stream_id,
-                )
-
+            callbacks = _AgentRunStreamCallbacks(
+                thread_id=thread_id,
+                user_id=user_id,
+                username=username,
+                run_id=run_id,
+                owner_token=owner_token,
+                request=request,
+                resume_answer=resume_answer,
+                resume_turn_id=resume_turn_id,
+                turn_id=turn_id,
+                stream_event_id_provider=stream_event_id_provider,
+                log_phase=log_phase,
+                steering_tracker=steering_tracker,
+                adopted_messages=adopted_messages,
+                user_message=user_message,
+                recovering=recovering,
+            )
             model_snapshot_writer = _LatestModelSnapshotWriter(
-                write_model_snapshot,
+                partial(_write_agent_model_snapshot, callbacks),
                 task_name=f"chatdata-model-snapshot-{thread_id}",
             )
-
-            async def persist_model_snapshot(state: dict[str, Any]) -> None:
-                """Queue the latest snapshot so model-to-tool transition stays immediate."""
-                snapshot = dict(state or {})
-                # after_model 是异步合并写入。游标必须在提交快照时捕获，
-                # 不能等后台 writer 真正写库时再读取，否则可能跨过未包含
-                # 在该快照内的 Redis 事件，恢复时会跳过内容。
-                snapshot["__history_stream_id"] = (
-                    stream_event_id_provider() if stream_event_id_provider else None
-                )
-                model_snapshot_writer.submit(snapshot)
-
-            async def flush_model_snapshots() -> None:
-                """Wait until the newest submitted snapshot is durable."""
-                await model_snapshot_writer.flush()
+            callbacks.model_snapshot_writer = model_snapshot_writer
 
             agent = create_data_agent(
                 runtime_options,
@@ -1605,158 +2172,31 @@ async def _run_chat_data_agent_stream(
                     run_id=run_id,
                     owner_token=owner_token,
                     inbox_service=agent_inbox_service,
-                    admit_inbox_messages=admit_inbox_messages,
+                    admit_inbox_messages=partial(_admit_agent_inbox_messages, callbacks),
                     steering_tracker=steering_tracker,
                 ),
-                persist_model_snapshot=persist_model_snapshot,
+                persist_model_snapshot=partial(_persist_agent_model_snapshot, callbacks),
             )
             log_phase("create_agent")
-            stream_adapter = _AgentSseStreamAdapter(
-                agent=agent,
-                initial_state=initial_state,
-                config=config,
-                request=request,
-                visible_message_filter=_is_chat_data_visible_stream_message,
-                disconnect_log_id=thread_id,
-                debug_label="AI Content from model",
-                include_empty_tool_messages=True,
-                on_first_message=lambda: log_phase("first_model_chunk"),
-                on_stream_started=(
-                    (lambda: agent_inbox_service.mark_question_resume_started(run_id, owner_token))
-                    if resume_answer is not None and run_id
-                    else None
-                ),
-                reasoning_turn_id=resume_turn_id or turn_id or (
-                    str(user_message.additional_kwargs.get("reasoning_turn_id") or "") if user_message else None
-                ),
+            stream_adapter = _create_agent_stream_adapter(
+                callbacks, agent=agent, initial_state=initial_state, config=config, request=request,
             )
-            stream_adapter_ref["value"] = stream_adapter
-            if recovering:
-                stream_adapter.queue_event(_format_sse("run_restarted", {
-                    "run_id": run_id,
-                    "turn_id": turn_id,
-                }))
-            async def persist_user_message() -> None:
-                if user_message is None:
-                    return
-                await conversation_event_service.persist_user_message(
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    operator_name=username or user_id,
-                    message=user_message,
-                )
-                log_phase("persist_user_message")
 
-            async def persist_turn_history() -> None:
-                await flush_model_snapshots()
-                await _persist_agent_turn_history(
-                    stream_adapter,
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    username=username,
-                    turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
-                    run_id=run_id,
-                    owner_token=owner_token,
-                    stream_event_id_provider=stream_event_id_provider,
-                )
-
-            async def persist_partial_history() -> None:
-                await flush_model_snapshots()
-                await _persist_partial_agent_turn_history(
-                    stream_adapter,
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    username=username,
-                    turn_id=resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or ""),
-                    run_id=run_id,
-                    owner_token=owner_token,
-                    stream_event_id_provider=stream_event_id_provider,
-                )
-                # A stream can fail after LangGraph has checkpointed the
-                # answer but before the normal finish hook. Inspecting the
-                # durable state here prevents the old question from being
-                # resurrected on the next worker.
-                if (
-                    resume_answer is not None
-                    and run_id
-                    and stream_adapter.graph_started
-                    and stream_adapter.state is not None
-                    and not stream_adapter.pending_interrupt()
-                ):
-                    await agent_inbox_service.mark_question_resume_started(run_id, owner_token)
-
-            async def mark_resume_checkpointed() -> None:
-                if (
-                    resume_answer is not None
-                    and run_id
-                    and stream_adapter.graph_started
-                    and not stream_adapter.pending_interrupt()
-                ):
-                    await agent_inbox_service.mark_question_resume_started(run_id, owner_token)
-
-            async def log_agent_stream_done() -> None:
-                log_phase("agent_stream_done")
-
-            async def mark_waiting_for_user(question: dict[str, Any]) -> None:
-                if not run_id:
-                    return
-                question["turn_id"] = resume_turn_id or turn_id or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "") or "")
-                await agent_inbox_service.mark_waiting_for_user(
-                    run_id,
-                    question,
-                    user_id or "system",
-                    username or user_id or "system",
-                    owner_token,
-                )
-
-            async def confirm_consumed_messages() -> None:
-                if run_id:
-                    await agent_inbox_service.mark_consumed(run_id, steering_tracker.drain(), owner_token)
-
-            async def before_stream() -> bool:
-                if request and await request.is_disconnected():
-                    logger.info("客户端已断开，停止流式输出: %s", thread_id)
-                    if resume_answer is not None and run_id:
-                        await agent_inbox_service.restore_question_answer(
-                            run_id,
-                            user_id or "system",
-                            username or user_id or "system",
-                            owner_token,
-                        )
-                    return False
-                return True
-
-            async def cancel_disconnected_run() -> None:
-                # A subscriber disconnect is not a user cancellation. The
-                # background Runtime continues and can be re-subscribed.
-                return None
-
-            # 上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
-            # 先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
-            await admit_inbox_messages(adopted_messages or [])
-            if adopted_messages:
-                adopted_ids = [str(message.id or "") for message in adopted_messages]
-                steering_tracker.record(adopted_ids)
-                stream_adapter.queue_event(_format_sse("inbox_admitted", {
-                    "message_ids": adopted_ids,
-                }))
-
-            async def finalize_resources(success: bool) -> None:
-                _ = success
+            await _admit_adopted_messages(
+                callbacks, stream_adapter, steering_tracker, adopted_messages,
+            )
 
             async for sse_event in stream_agent_turn(
                 stream_adapter=stream_adapter,
                 format_sse=_format_sse,
-                persist_user_message=persist_user_message,
-                persist_turn_history=persist_turn_history,
-                persist_partial_history=persist_partial_history,
-                before_stream=before_stream,
-                after_finish=mark_resume_checkpointed,
-                finalize_resources=finalize_resources,
-                after_turn=log_agent_stream_done,
-                after_stream=confirm_consumed_messages,
-                on_interrupt=mark_waiting_for_user,
-                on_disconnect=cancel_disconnected_run,
+                persist_user_message=partial(_persist_agent_user_message, callbacks),
+                persist_turn_history=partial(_persist_agent_turn_history_snapshot, callbacks),
+                persist_partial_history=partial(_persist_agent_partial_history, callbacks),
+                before_stream=partial(_before_agent_stream, callbacks),
+                after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
+                after_turn=partial(_log_agent_stream_done, callbacks),
+                after_stream=partial(_confirm_agent_consumed_messages, callbacks),
+                on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
             ):
                 yield sse_event
 
@@ -1768,6 +2208,41 @@ async def _run_chat_data_agent_stream(
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
         raise AgentRunStreamFailedError from None
+
+
+@dataclass
+class _CompletionRunOptions:
+    """sql_completion_handler 从 options 中解析出的本轮运行参数。"""
+
+    datasource_id: str | None
+    semantic_config_id: str | None
+    model_id: Any
+    enable_thinking: Any
+    thinking_effort: Any
+    member_datasource_ids: list
+    semantic_config_selection: Any
+    skill_names: list[str]
+
+
+def _parse_completion_run_options(options: Optional[Dict[str, Any]]) -> _CompletionRunOptions:
+    options_data = options or {}
+    raw_skill_names = options_data.get("skill_names") or []
+    if isinstance(raw_skill_names, str):
+        skill_names = [raw_skill_names]
+    elif isinstance(raw_skill_names, list):
+        skill_names = [str(item or "").strip() for item in raw_skill_names if str(item or "").strip()]
+    else:
+        skill_names = []
+    return _CompletionRunOptions(
+        datasource_id=str(options_data.get("datasource_id") or "").strip() or None,
+        semantic_config_id=str(options_data.get("semantic_config_id") or "").strip() or None,
+        model_id=options_data.get("model_id"),
+        enable_thinking=_normalize_enable_thinking(options_data.get("enable_thinking")),
+        thinking_effort=_normalize_thinking_effort(options_data.get("thinking_effort")),
+        member_datasource_ids=options_data.get("member_datasource_ids") or [],
+        semantic_config_selection=options_data.get("semantic_config_selection"),
+        skill_names=skill_names,
+    )
 
 
 async def sql_completion_handler(
@@ -1784,21 +2259,7 @@ async def sql_completion_handler(
     """
     智能问数 completion 处理器。
     """
-    options_data = options or {}
-    datasource_id = str(options_data.get("datasource_id") or "").strip() or None
-    semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None  # 语义配置 ID（可选）
-    model_id = options_data.get("model_id")  # 模型选择（可选）
-    enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
-    thinking_effort = _normalize_thinking_effort(options_data.get("thinking_effort"))
-    member_datasource_ids = options_data.get("member_datasource_ids") or []
-    semantic_config_selection = options_data.get("semantic_config_selection")
-    raw_skill_names = options_data.get("skill_names") or []
-    if isinstance(raw_skill_names, str):
-        skill_names = [raw_skill_names]
-    elif isinstance(raw_skill_names, list):
-        skill_names = [str(item or "").strip() for item in raw_skill_names if str(item or "").strip()]
-    else:
-        skill_names = []
+    run_options = _parse_completion_run_options(options)
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
@@ -1806,16 +2267,16 @@ async def sql_completion_handler(
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。
         "query": "" if queued_message_id else query,
-        "datasource_id": datasource_id,
-        "member_datasource_ids": member_datasource_ids,
-        "semantic_config_id": semantic_config_id,
-        "model_id": model_id,
-        "semantic_config_selection": semantic_config_selection,
-        "enable_thinking": enable_thinking,
-        "thinking_effort": thinking_effort,
-        "skill_names": skill_names,
+        "datasource_id": run_options.datasource_id,
+        "member_datasource_ids": run_options.member_datasource_ids,
+        "semantic_config_id": run_options.semantic_config_id,
+        "model_id": run_options.model_id,
+        "semantic_config_selection": run_options.semantic_config_selection,
+        "enable_thinking": run_options.enable_thinking,
+        "thinking_effort": run_options.thinking_effort,
+        "skill_names": run_options.skill_names,
         "operator_name": username or user_id,
-        "options": options_data,
+        "options": options or {},
         "file_ids": file_ids or [],
     }
     run_id, adopted_messages = await agent_inbox_service.start_run(

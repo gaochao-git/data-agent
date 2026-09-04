@@ -70,22 +70,8 @@ def _embedded_property_indices(args: list[str]) -> set[int]:
     return indices
 
 
-def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
-    if not isinstance(raw_args, list) or not raw_args:
-        raise ValueError("args 必须是非空的 OfficeCLI 子命令与参数数组")
-    args = [str(value) for value in raw_args]
-    if args[0] in {"officecli", "officecli.exe"}:
-        args = args[1:]
-    if not args:
-        raise ValueError("args 必须包含 OfficeCLI 子命令")
-    subcommand = args[0].lower()
-    if subcommand in {"--version", "--help", "-h", "-?"}:
-        return OfficeCliCommand(tuple(args), subcommand, frozenset(), frozenset(), False)
-    if subcommand in OFFICECLI_BANNED_SUBCOMMANDS:
-        raise ValueError(f"officecli_run 禁止子命令: {subcommand}")
-    if subcommand.startswith("-"):
-        raise ValueError("args 第一个元素必须是 OfficeCLI 子命令或全局选项")
-
+def _officecli_file_indices(subcommand: str, args: list[str]) -> set[int]:
+    """按子命令语义解析文件路径参数下标；参数不足时报错。"""
     file_indices: set[int] = set()
     if subcommand in {"view", "get", "query", "validate", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}:
         if len(args) < 2:
@@ -111,20 +97,19 @@ def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
         file_indices.add(1)
         if len(args) >= 4 and not args[3].startswith("-"):
             file_indices.add(3)
-    elif subcommand == "help":
-        return OfficeCliCommand(tuple(args), subcommand, frozenset(), frozenset(), False)
-    else:
-        raise ValueError(f"officecli_run 不支持的子命令: {subcommand}")
+    return file_indices
 
+
+def _officecli_option_indices(args: list[str]) -> set[int]:
     option_indices = _option_value_indices(args, {"--out", "-o", "--save", "--input", "--file"})
     # --data may be an inline JSON object or a JSON file path.
-    data_indices = _option_value_indices(args, {"--data"})
-    for index in data_indices:
-        value = args[index]
-        if not _is_json_value(value):
+    for index in _option_value_indices(args, {"--data"}):
+        if not _is_json_value(args[index]):
             option_indices.add(index)
-    embedded_indices = _embedded_property_indices(args)
-    all_indices = file_indices | option_indices | embedded_indices
+    return option_indices
+
+
+def _officecli_write_indices(subcommand: str, args: list[str]) -> set[int]:
     write_indices = set()
     if subcommand in {"create", "set", "add", "remove", "move", "swap", "raw-set", "add-part", "save", "refresh", "batch", "import"}:
         write_indices.add(1)
@@ -134,6 +119,35 @@ def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
         write_indices.update(_option_value_indices(args, {"--out", "-o"}))
     if subcommand == "get":
         write_indices.update(_option_value_indices(args, {"--save"}))
+    return write_indices
+
+
+def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
+    if not isinstance(raw_args, list) or not raw_args:
+        raise ValueError("args 必须是非空的 OfficeCLI 子命令与参数数组")
+    args = [str(value) for value in raw_args]
+    if args[0] in {"officecli", "officecli.exe"}:
+        args = args[1:]
+    if not args:
+        raise ValueError("args 必须包含 OfficeCLI 子命令")
+    subcommand = args[0].lower()
+    if subcommand in {"--version", "--help", "-h", "-?"}:
+        return OfficeCliCommand(tuple(args), subcommand, frozenset(), frozenset(), False)
+    if subcommand in OFFICECLI_BANNED_SUBCOMMANDS:
+        raise ValueError(f"officecli_run 禁止子命令: {subcommand}")
+    if subcommand.startswith("-"):
+        raise ValueError("args 第一个元素必须是 OfficeCLI 子命令或全局选项")
+
+    file_indices = _officecli_file_indices(subcommand, args)
+    if subcommand == "help":
+        return OfficeCliCommand(tuple(args), subcommand, frozenset(), frozenset(), False)
+    if not file_indices:
+        raise ValueError(f"officecli_run 不支持的子命令: {subcommand}")
+
+    option_indices = _officecli_option_indices(args)
+    embedded_indices = _embedded_property_indices(args)
+    all_indices = file_indices | option_indices | embedded_indices
+    write_indices = _officecli_write_indices(subcommand, args)
     base_mutates = subcommand not in OFFICECLI_READONLY_SUBCOMMANDS and subcommand != "help"
     return OfficeCliCommand(
         tuple(args), subcommand, frozenset(all_indices), frozenset(write_indices),

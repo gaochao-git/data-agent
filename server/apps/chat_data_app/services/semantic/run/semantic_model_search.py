@@ -87,6 +87,39 @@ def _semantic_table_names(config: Dict[str, Any]) -> set[str]:
     return table_names
 
 
+def _column_display_name(column: Dict[str, Any]) -> str:
+    return str((column or {}).get("name") or (column or {}).get("column_name") or "").strip()
+
+
+def _column_display_type(column: Dict[str, Any]) -> str:
+    return str(
+        (column or {}).get("type")
+        or (column or {}).get("mysql_type")
+        or (column or {}).get("hive_type")
+        or (column or {}).get("data_type")
+        or ""
+    ).strip()
+
+
+def _column_display_description(column: Dict[str, Any]) -> str:
+    return _truncate((column or {}).get("description") or (column or {}).get("comment") or "", 80)
+
+
+def _compact_table_columns(table: Dict[str, Any], max_columns: int) -> List[Dict[str, Any]]:
+    columns = []
+    for column in (table.get("columns") or [])[:max_columns]:
+        column_name = _column_display_name(column)
+        if not column_name:
+            continue
+        column_item = {
+            "name": column_name,
+            "type": _column_display_type(column),
+            "description": _column_display_description(column),
+        }
+        columns.append({key: value for key, value in column_item.items() if value})
+    return columns
+
+
 def _compact_table_summary(config: Dict[str, Any], max_columns: int = 80) -> List[Dict[str, Any]]:
     """构造指标集相关表字段摘要，只保留表名、字段名、类型和备注。"""
     table_names = _semantic_table_names(config)
@@ -97,21 +130,10 @@ def _compact_table_summary(config: Dict[str, Any], max_columns: int = 80) -> Lis
         table_name = str((table or {}).get("table_name") or "").strip()
         if not table_name or table_name not in table_names:
             continue
-        columns = []
-        for column in (table.get("columns") or [])[:max_columns]:
-            column_name = str((column or {}).get("name") or (column or {}).get("column_name") or "").strip()
-            if not column_name:
-                continue
-            column_item = {
-                "name": column_name,
-                "type": str((column or {}).get("type") or (column or {}).get("mysql_type") or (column or {}).get("hive_type") or (column or {}).get("data_type") or "").strip(),
-                "description": _truncate((column or {}).get("description") or (column or {}).get("comment") or "", 80),
-            }
-            columns.append({key: value for key, value in column_item.items() if value})
         result.append({
             "table_name": table_name,
             "description": _truncate((table or {}).get("description") or "", 120),
-            "columns": columns,
+            "columns": _compact_table_columns(table or {}, max_columns),
         })
     return result
 

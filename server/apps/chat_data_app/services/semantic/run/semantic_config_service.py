@@ -213,6 +213,32 @@ class SemanticConfigService:
         return bool(value_set and value_set <= mapping_keys)
 
     @classmethod
+    def _merge_dimension_column_dict(cls, dimension: Dict[str, Any], column_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """把字段数据字典信息合并进单个维度：枚举值/映射/逻辑类型/补充说明。"""
+        values = cls._enum_values(column_dict)
+        mapping = cls._enum_mapping(column_dict)
+        if values and not dimension.get("allowed_values"):
+            dimension["allowed_values"] = values
+        if mapping and not dimension.get("mapping"):
+            dimension["mapping"] = mapping
+        if not dimension.get("logical_type") and cls._enum_mapping_covers_values(
+            dimension.get("allowed_values") or [],
+            dimension.get("mapping") or {},
+        ):
+            dimension["logical_type"] = "enum"
+        supplement = cls._format_column_dict_supplement(column_dict)
+        if supplement:
+            dimension["metadata_supplement"] = cls._merge_supplement(dimension.get("metadata_supplement"), supplement)
+        return dimension
+
+    @classmethod
+    def _merge_metric_column_dict(cls, metric: Dict[str, Any], column_dict: Dict[str, Any]) -> Dict[str, Any]:
+        supplement = cls._format_column_dict_supplement(column_dict)
+        if supplement:
+            metric["metadata_supplement"] = cls._merge_supplement(metric.get("metadata_supplement"), supplement)
+        return metric
+
+    @classmethod
     def _merge_column_dict(cls, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]) -> Dict[str, Any]:
         result = dict(config or {})
         dimensions = []
@@ -221,20 +247,7 @@ class SemanticConfigService:
             key = (str(dimension.get("table") or "").strip(), str(dimension.get("column") or dimension.get("field_name") or "").strip())
             column_dict = column_dicts.get(key)
             if column_dict:
-                values = cls._enum_values(column_dict)
-                mapping = cls._enum_mapping(column_dict)
-                if values and not dimension.get("allowed_values"):
-                    dimension["allowed_values"] = values
-                if mapping and not dimension.get("mapping"):
-                    dimension["mapping"] = mapping
-                if not dimension.get("logical_type") and cls._enum_mapping_covers_values(
-                    dimension.get("allowed_values") or [],
-                    dimension.get("mapping") or {},
-                ):
-                    dimension["logical_type"] = "enum"
-                supplement = cls._format_column_dict_supplement(column_dict)
-                if supplement:
-                    dimension["metadata_supplement"] = cls._merge_supplement(dimension.get("metadata_supplement"), supplement)
+                dimension = cls._merge_dimension_column_dict(dimension, column_dict)
             dimensions.append(ensure_dimension_logical_type(dimension))
         metrics = []
         for raw_metric in result.get("metrics") or []:
@@ -242,9 +255,7 @@ class SemanticConfigService:
             key = (str(metric.get("table") or "").strip(), cls._extract_metric_source_column(metric))
             column_dict = column_dicts.get(key)
             if column_dict:
-                supplement = cls._format_column_dict_supplement(column_dict)
-                if supplement:
-                    metric["metadata_supplement"] = cls._merge_supplement(metric.get("metadata_supplement"), supplement)
+                metric = cls._merge_metric_column_dict(metric, column_dict)
             metrics.append(metric)
         result["dimensions"] = dimensions
         result["metrics"] = metrics
@@ -335,19 +346,8 @@ class SemanticConfigService:
             return None
         return await self.get_config_async(datasource_id, config["id"])
 
-    async def generate_basic_public_single_table_configs_async(
-        self,
-        datasource_id: str,
-        *,
-        create_by: str = "",
-        create_by_name: str = "",
-    ) -> Dict[str, Any]:
-        """为尚未建模的物理表创建禁用的公共基础单表模型。"""
-        datasource = await self.datasource_manager.get_datasource_async(datasource_id)
-        if not datasource:
-            raise ValueError(f"数据源不存在: {datasource_id}")
-
-        group_id = str(datasource.get("group_id") or "").strip()
+    async def _scan_existing_single_table_state(self, group_id: str) -> tuple[set, set, list]:
+        """扫描数据源组现有公共模型，返回 (已配置物理表, 已占用名称, 全部配置)。"""
         all_configs = await self.dao.get_by_group_id_async(group_id)
         visible_configs = [config for config in all_configs if is_public_semantic_config(config)]
         configured_tables = {
@@ -360,62 +360,71 @@ class SemanticConfigService:
             for config in visible_configs
             if str(config.get("name") or "").strip()
         }
-        result = {"created": 0, "skipped": 0, "failed": 0, "items": []}
-        pending_configs = []
-        item_order: List[str] = []
-        seen_tables: set[str] = set()
-        table_columns_map = build_table_columns_map(datasource)
-        for table in datasource.get("ds_tables") or []:
-            table_name = str((table or {}).get("table_name") or "").strip()
-            if not table_name or table_name in seen_tables:
-                continue
-            seen_tables.add(table_name)
-            item_order.append(table_name)
-            generated_name = self._basic_single_table_name(table_name)
-            if (
-                table_name in configured_tables
-                or generated_name in existing_names
-                or self._name_exists(all_configs, generated_name)
-            ):
-                result["skipped"] += 1
-                self._set_generation_item(result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order)
-                continue
-            try:
-                config = self._build_basic_single_table_config(
-                    table,
-                    name=generated_name,
-                    create_by=create_by,
-                    create_by_name=create_by_name,
-                )
-                validation_error = await validate_semantic_config_for_save(
-                    self.datasource_manager,
-                    datasource_id,
-                    datasource,
-                    config["metrics"],
-                    config["dimensions"],
-                    config["relationships"],
-                    table_columns_map=table_columns_map,
-                )
-                if validation_error:
-                    logger.warning("批量生成基础语义模型字段校验失败: table=%s error=%s", table_name, validation_error)
-                    result["failed"] += 1
-                    self._set_generation_item(
-                        result,
-                        table_name,
-                        {"table": table_name, "status": "failed", "reason": "字段校验失败"},
-                        item_order,
-                    )
-                    continue
-                persisted = self._build_persisted_config(group_id, **config)
-                pending_configs.append((table_name, persisted))
-                configured_tables.add(table_name)
-                existing_names.add(generated_name)
-            except Exception as exc:
-                logger.warning("批量生成基础语义模型失败: table=%s error=%s", table_name, exc, exc_info=True)
-                result["failed"] += 1
-                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": "模型生成失败"}, item_order)
-        if not pending_configs:
-            return result
+        return configured_tables, existing_names, all_configs
+
+    async def _process_basic_single_table(
+        self,
+        table: Dict[str, Any],
+        *,
+        group_id: str,
+        datasource: Dict[str, Any],
+        datasource_id: str,
+        table_columns_map: Dict[str, Set[str]],
+        configured_tables: set,
+        existing_names: set,
+        all_configs: list,
+        create_by: str,
+        create_by_name: str,
+    ) -> tuple[str, Any]:
+        """处理单张物理表的基础模型生成，返回 (status, payload)。
+
+        status ∈ {"skipped", "failed", "pending"}；skipped/failed 携带原因文案，
+        仅 pending 携带待持久化配置。
+        """
+        table_name = str((table or {}).get("table_name") or "").strip()
+        generated_name = self._basic_single_table_name(table_name)
+        if (
+            table_name in configured_tables
+            or generated_name in existing_names
+            or self._name_exists(all_configs, generated_name)
+        ):
+            return "skipped", None
+        try:
+            config = self._build_basic_single_table_config(
+                table,
+                name=generated_name,
+                create_by=create_by,
+                create_by_name=create_by_name,
+            )
+            validation_error = await validate_semantic_config_for_save(
+                self.datasource_manager,
+                datasource_id,
+                datasource,
+                config["metrics"],
+                config["dimensions"],
+                config["relationships"],
+                table_columns_map=table_columns_map,
+            )
+            if validation_error:
+                logger.warning("批量生成基础语义模型字段校验失败: table=%s error=%s", table_name, validation_error)
+                return "failed", "字段校验失败"
+            persisted = self._build_persisted_config(group_id, **config)
+            configured_tables.add(table_name)
+            existing_names.add(generated_name)
+            return "pending", (table_name, persisted)
+        except Exception as exc:
+            logger.warning("批量生成基础语义模型失败: table=%s error=%s", table_name, exc, exc_info=True)
+            return "failed", "模型生成失败"
+
+    async def _persist_basic_single_table_configs(
+        self,
+        group_id: str,
+        datasource_id: str,
+        pending_configs: List[tuple[str, Dict[str, Any]]],
+        result: Dict[str, Any],
+        item_order: List[str],
+    ) -> None:
+        """批量写入基础模型；批量失败回退单表写入。"""
         persisted_configs = [config for _, config in pending_configs]
         try:
             if not await self.dao.upsert_many_async(group_id, persisted_configs):
@@ -450,6 +459,55 @@ class SemanticConfigService:
                         {"table": table_name, "status": "failed", "reason": "写入失败"},
                         item_order,
                     )
+
+    async def generate_basic_public_single_table_configs_async(
+        self,
+        datasource_id: str,
+        *,
+        create_by: str = "",
+        create_by_name: str = "",
+    ) -> Dict[str, Any]:
+        """为尚未建模的物理表创建禁用的公共基础单表模型。"""
+        datasource = await self.datasource_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            raise ValueError(f"数据源不存在: {datasource_id}")
+
+        group_id = str(datasource.get("group_id") or "").strip()
+        configured_tables, existing_names, all_configs = await self._scan_existing_single_table_state(group_id)
+        result = {"created": 0, "skipped": 0, "failed": 0, "items": []}
+        pending_configs = []
+        item_order: List[str] = []
+        seen_tables: set[str] = set()
+        table_columns_map = build_table_columns_map(datasource)
+        for table in datasource.get("ds_tables") or []:
+            table_name = str((table or {}).get("table_name") or "").strip()
+            if not table_name or table_name in seen_tables:
+                continue
+            seen_tables.add(table_name)
+            item_order.append(table_name)
+            status, payload = await self._process_basic_single_table(
+                table,
+                group_id=group_id,
+                datasource=datasource,
+                datasource_id=datasource_id,
+                table_columns_map=table_columns_map,
+                configured_tables=configured_tables,
+                existing_names=existing_names,
+                all_configs=all_configs,
+                create_by=create_by,
+                create_by_name=create_by_name,
+            )
+            if status == "skipped":
+                result["skipped"] += 1
+                self._set_generation_item(result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order)
+            elif status == "failed":
+                result["failed"] += 1
+                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": payload or "模型生成失败"}, item_order)
+            else:
+                pending_configs.append(payload)
+        if not pending_configs:
+            return result
+        await self._persist_basic_single_table_configs(group_id, datasource_id, pending_configs, result, item_order)
         return result
 
     @staticmethod
