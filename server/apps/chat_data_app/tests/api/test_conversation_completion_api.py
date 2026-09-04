@@ -30,7 +30,7 @@ def _stub_conversation_event_writes(monkeypatch):
 
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
     async def noop_prematerialize(**_kwargs):
-        return 0
+        return {"total": 0, "failed_ids": []}
 
     monkeypatch.setattr(handler_module, "prematerialize_enabled_semantic_models", noop_prematerialize)
 

@@ -119,7 +119,7 @@ def _stub_semantic_conversation_context(monkeypatch):
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”，
     # 需要验证物化行为的用例自行覆盖。
     async def noop_prematerialize(**_kwargs):
-        return 0
+        return {"total": 0, "failed_ids": []}
 
     monkeypatch.setattr(
         "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
@@ -430,11 +430,51 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     assert "5+5=10" in joined
     assert "prompt_context" not in fake_graph.initial_state
     assert "## 当前语义模型" in captured_agent_kwargs["model_invocation"].system_prompt
-    # 系统提示词不再枚举模型目录，未选中时引导 dir_list -> file_grep -> file_read
+    # 系统提示词不再枚举模型目录、不重复检索步骤，指向 semantic-query 技能
     assert "当前可见指标集目录" not in captured_agent_kwargs["model_invocation"].system_prompt
-    assert "dir_list" in captured_agent_kwargs["model_invocation"].system_prompt
+    assert "semantic-query" in captured_agent_kwargs["model_invocation"].system_prompt
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
+
+
+def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkeypatch):
+    """部分模型物化失败不终止本轮，但缺失清单必须注入上下文，让模型能区分“真没有”与“没物化”。"""
+    import asyncio
+
+    captured_agent_kwargs = {}
+
+    def create_agent(_runtime_options, **kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return _FakeGraph(
+            events=[_format_sse("message", {"content": "ok"})],
+            state=SimpleNamespace(tasks=[], values={}),
+        )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+
+    async def partial_prematerialize(**_kwargs):
+        return {"total": 2, "failed_ids": ["sc_broken"]}
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        partial_prematerialize,
+    )
+    _override_semantic_context(monkeypatch)
+
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_partial_prematerialize",
+        user_query="查询订单数",
+        datasource_id="ds_a",
+        semantic_config_id=None,
+    )))
+
+    system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
+    assert "本轮语义目录物化不完整" in system_prompt
+    assert "sc_broken" in system_prompt
+    assert "不要判定为数据缺失" in system_prompt
+    # 部分失败不终止本轮：agent 正常进入循环
+    assert captured_agent_kwargs
 
 
 def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(monkeypatch):

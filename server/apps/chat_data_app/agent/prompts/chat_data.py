@@ -49,6 +49,7 @@ def _format_conversation_context(data_context: dict) -> str:
     if not isinstance(data_context, dict):
         return "{}"
     datasource_group_context = str(data_context.get("datasource_group_context") or "").strip()
+    semantic_materialize_note = str(data_context.get("semantic_materialize_note") or "").strip()
     semantic_configs = data_context.get("semantic_configs") or []
     selected_config = next(
         (
@@ -63,6 +64,7 @@ def _format_conversation_context(data_context: dict) -> str:
         for section in (
             datasource_group_context,
             build_semantic_layer_context(selected_config),
+            semantic_materialize_note,
         )
         if section
     )

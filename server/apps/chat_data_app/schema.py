@@ -633,7 +633,7 @@ class SemanticToolInput(BaseModel):
     )
     semantic_config_id: Optional[str] = Field(
         default=None,
-        description="list_fields 使用的语义模型 ID，必须来自 search_models 返回结果",
+        description="list_fields 使用的语义模型 ID；语义模型检索方式以 semantic-query 技能为准",
     )
     field_type: Literal["all", "metric", "dimension"] = Field(
         default="all",

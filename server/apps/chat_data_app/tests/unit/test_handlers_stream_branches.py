@@ -22,7 +22,7 @@ def _stub_datasource_binding(monkeypatch):
 
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
     async def noop_prematerialize(**_kwargs):
-        return 0
+        return {"total": 0, "failed_ids": []}
 
     monkeypatch.setattr(handlers, "prematerialize_enabled_semantic_models", noop_prematerialize)
 

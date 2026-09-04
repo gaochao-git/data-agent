@@ -125,16 +125,18 @@ async def prematerialize_enabled_semantic_models(
     datasource_id: str | None,
     user_id: str | None,
     source_type: str = "",
-) -> int:
+) -> dict[str, Any]:
     """Run 启动前把当前数据源组全部启用模型物化到 workspace/semantic/。
 
     让模型无需先触发 semantic_search 即可用 dir_list/file_grep/file_read
     检索语义目录；YAML 内容有 sha256 缓存，只有首次或配置变更才真正写盘。
-    返回物化文件数；未绑定数据源组或无启用模型时返回 0。失败由调用方兜底。
+    返回 {"total": 物化文件数, "failed_ids": 物化失败并跳过的模型 ID}；
+    未绑定数据源组或无启用模型时 total 为 0。整体异常由调用方 fail-fast，
+    部分失败（failed_ids）由调用方决定是否提示用户与注入上下文。
     """
     normalized_datasource_id = str(datasource_id or "").strip()
     if not normalized_datasource_id or workspace_runtime is None:
-        return 0
+        return {"total": 0, "failed_ids": []}
     runtime_configs = await get_semantic_config_service().get_runtime_configs_async(
         normalized_datasource_id, str(user_id or "")
     )
@@ -146,7 +148,10 @@ async def prematerialize_enabled_semantic_models(
         semantic_config_ids=enabled_candidate_ids(runtime_configs),
         prune_stale=True,
     )
-    return len(materialized.get("directory") or [])
+    return {
+        "total": len(materialized.get("directory") or []),
+        "failed_ids": list(materialized.get("failed_ids") or []),
+    }
 
 
 def _cache_get(key: str) -> str | None:

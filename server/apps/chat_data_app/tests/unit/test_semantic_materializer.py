@@ -219,10 +219,10 @@ def test_materializer_only_overwrites_selected_models(monkeypatch):
 def test_prematerialize_skips_without_datasource_or_runtime():
     assert asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
         workspace_runtime=_FakeRuntime(), datasource_id=None, user_id="user_1",
-    )) == 0
+    )) == {"total": 0, "failed_ids": []}
     assert asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
         workspace_runtime=None, datasource_id="ds_1", user_id="user_1",
-    )) == 0
+    )) == {"total": 0, "failed_ids": []}
 
 
 def test_materializer_reports_failed_ids_instead_of_silently_skipping(monkeypatch):
@@ -282,14 +282,14 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
     )
     runtime = _FakeRuntime()
 
-    total = asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
+    result = asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
         workspace_runtime=runtime,
         datasource_id="ds_1",
         user_id="user_1",
         source_type="mysql",
     ))
 
-    assert total == 2
+    assert result == {"total": 2, "failed_ids": []}
     assert [path for path, _ in runtime.entries] == [
         "/mnt/user-data/workspace/semantic/订单模型__a.yaml",
         "/mnt/user-data/workspace/semantic/订单模型__b.yaml",

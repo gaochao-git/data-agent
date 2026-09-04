@@ -82,7 +82,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "success": True,
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
-        "message": "已返回相关语义模型的轻量引用。先对候选模型调用 list_fields；当前数据源组全部启用模型的 YAML 已物化到 semantic_dir（materialized_total 个），需要交叉核对其它模型或候选不足时，可用 file_grep/file_read 在该目录检索。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
+        "message": "已返回相关语义模型的轻量引用；字段口径确认与检索方式以 semantic-query 技能为准。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
     }
 
 
@@ -208,8 +208,7 @@ def _list_fields_payload(
         "next_offset": next_offset if has_more else None,
         "fields": page,
         "message": (
-            "已返回字段轻量索引。需要确认字段完整定义、关系或原始表列时，"
-            "使用 semantic_config.path 配合 file_grep/file_read。"
+            "已返回字段轻量索引。字段完整定义与口径确认以 semantic-query 技能为准。"
         ),
     }
 
@@ -241,11 +240,10 @@ def create_semantic_search(
     ) -> str:
         """搜索语义模型，或分页列出模型中的指标和维度。
 
-        - search_models：在当前用户可见的全部启用语义模型中，按完整业务意图检索并返回一个或多个候选，
-          同时把全部启用模型的 Ossie YAML 物化到会话工作区 semantic/ 目录（可用 file_grep/file_read 检索）。
-          同一业务问题只需调用一次，不要按指标、维度或子问题拆成多个并行搜索。
+        - search_models：在当前用户可见的全部启用语义模型中按完整业务意图检索，返回候选模型轻量引用，
+          并确保候选模型的 Ossie YAML 已物化到会话工作区 semantic/ 目录。
         - list_fields：传 semantic_config_id；可用 field_type=all/metric/dimension 和 offset/limit 分页。
-        字段完整定义和模型结构不由本工具返回；使用返回的 path 配合 file_grep/file_read。
+        本工具只做检索辅助；语义模型检索流程、候选确认与字段口径确认一律以 `semantic-query` 技能为准，本工具不重复定义。
         """
         current_datasource_id = bound_datasource_id or extract_datasource_id(state)
         if not current_datasource_id:

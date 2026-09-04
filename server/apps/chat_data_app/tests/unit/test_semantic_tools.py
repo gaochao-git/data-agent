@@ -37,12 +37,14 @@ def _patch_runtime_configs(monkeypatch, configs=None):
     )
 
 
-def test_semantic_search_description_requires_one_complete_model_search():
+def test_semantic_search_description_defers_to_semantic_query_skill():
+    """工具契约不再自行教检索流程，统一指向 semantic-query 技能。"""
     description = create_semantic_search(datasource_id="ds_a").description
 
     assert "当前用户可见的全部启用语义模型" in description
-    assert "同一业务问题只需调用一次" in description
-    assert "不要按指标、维度或子问题拆成多个并行搜索" in description
+    assert "semantic-query" in description
+    assert "本工具不重复定义" in description
+    assert "file_grep" not in description
 
 
 def test_extract_datasource_id_from_state():
@@ -484,7 +486,7 @@ def test_semantic_search_list_fields_reauthorizes_materializes_and_paginates(mon
     assert payload["has_more"] is True
     assert payload["next_offset"] == 3
     assert [item["name"] for item in payload["fields"]] == ["订单总数", "下单时间"]
-    assert "file_grep/file_read" in payload["message"]
+    assert "semantic-query 技能" in payload["message"]
 
 
 def test_semantic_search_list_fields_filters_and_rejects_inaccessible_model(monkeypatch):

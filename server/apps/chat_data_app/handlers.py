@@ -1353,17 +1353,31 @@ async def _run_chat_data_agent_stream(
     # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
     # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
     # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
+    # 部分模型物化失败不终止本轮，但把缺失清单注入上下文，让模型能区分
+    # “数据源组没有该模型”和“该模型本轮未物化”。
+    semantic_materialize_note = ""
     try:
-        prematerialized_total = await prematerialize_enabled_semantic_models(
+        prematerialized = await prematerialize_enabled_semantic_models(
             workspace_runtime=workspace_runtime,
             datasource_id=datasource_id,
             user_id=user_id,
             source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
         )
-        if prematerialized_total:
+        if prematerialized["total"]:
             logger.info(
                 "语义模型预物化完成: thread_id=%s datasource_id=%s files=%s",
-                thread_id, datasource_id, prematerialized_total,
+                thread_id, datasource_id, prematerialized["total"],
+            )
+        failed_ids = [str(item) for item in prematerialized.get("failed_ids") or [] if str(item).strip()]
+        if failed_ids:
+            logger.error(
+                "语义模型预物化部分失败: thread_id=%s datasource_id=%s failed_ids=%s",
+                thread_id, datasource_id, failed_ids,
+            )
+            semantic_materialize_note = (
+                "注意：本轮语义目录物化不完整，以下语义模型未能生成 YAML 文件："
+                + "、".join(failed_ids)
+                + "。目录中检索不到这些模型不代表数据源组没有该模型；如用户问题命中这些模型，如实说明本轮无法查询它们，不要判定为数据缺失。"
             )
     except Exception as err:
         logger.error(
@@ -1373,6 +1387,8 @@ async def _run_chat_data_agent_stream(
         yield _format_sse("error", {"error": "语义模型目录初始化失败，请稍后重试。"})
         raise AgentRunStreamFailedError from None
     data_context = await build_conversation_prompt_context(prompt_context)
+    if semantic_materialize_note and isinstance(data_context, dict):
+        data_context["semantic_materialize_note"] = semantic_materialize_note
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。

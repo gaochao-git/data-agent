@@ -17,9 +17,9 @@ logger = get_logger(__name__)
 
 # 软删除时的改名表达式。
 #
-# 表上有唯一索引 (group_id, semantic_config_name, delete_flag)，而 delete_flag 只有 0/1 两态，
-# 因此「删除 → 用同名重建 → 再次删除」会让两条记录都落到 (name, 1) 上，撞唯一键报 IntegrityError。
-# 删除时把自增主键拼进名字，保证任意多次删除的 (group_id, name, delete_flag) 三元组都互不相同。
+# 生产库实际生效的唯一索引是两列 (group_id, semantic_config_name)：墓碑行若保留原名
+# 会持续占名，导致「删除 → 用同名重建」被唯一键拒绝或被 upsert 复活墓碑。
+# 因此删除时必须同步改名——把自增主键拼进名字，保证任意多次删除互不撞名，同时释放原名。
 #
 # 必须在同一条 UPDATE 的 SQL 表达式里完成，不能用 Python 读-改-写：
 # soft_delete_by_group_id_async 是单条批量 UPDATE（一次可删整组），没有逐行拼值的机会，且读改写有并发竞态。

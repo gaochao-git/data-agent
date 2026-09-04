@@ -297,14 +297,15 @@ class SemanticConfigService:
     ) -> bool:
         """同组内的模型名判重。
 
-        判重口径必须与唯一索引 (group_id, semantic_config_name, delete_flag) 完全一致：
         **同组内模型名全局唯一，不区分 scope_type、不区分 create_by。**
 
-        若此处放宽（例如允许不同用户的 private 模型同名），应用层会先放行、再由 DB
-        唯一键拒绝，最终以 IntegrityError 而非友好 ValueError 的形式暴露给用户。
-
-        注意入参 configs 来自 ``get_by_group_id_async``，已过滤 delete_flag == 0，
-        这与唯一索引包含 delete_flag 的语义一致——已删除的记录不参与判重。
+        入参 configs 来自 ``get_by_group_id_async``（只含 delete_flag == 0 的活跃记录），
+        这是刻意的：软删除会把 semantic_config_name 改写为 ``原名__d<id>_<日期>``
+        （见 dao._DELETED_NAME_EXPR），墓碑不再占用原名，因此「删掉旧模型再建同名」
+        不会撞上墓碑行，判重只需覆盖活跃记录。实际生效的唯一索引是两列
+        ``(group_id, semantic_config_name)``；upsert 的 ON DUPLICATE KEY UPDATE
+        仅作并发兜底，同名活跃记录应在此处被 ValueError 拦截，而不是落到
+        IntegrityError。
         """
         normalized_name = str(name or "").strip()
         if not normalized_name:
