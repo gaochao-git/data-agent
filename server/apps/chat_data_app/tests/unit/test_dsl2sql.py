@@ -78,8 +78,6 @@ def generate(config: dict, payload: dict) -> str:
         order_by=payload.get("order_by", []),
         limit=payload.get("limit"),
         offset=payload.get("offset"),
-        user_query=payload.get("user_query"),
-        compare=payload.get("compare"),
     )
     if not result.get("success"):
         raise ValueError(result.get("error"))
@@ -96,8 +94,6 @@ def generate_result(config: dict, payload: dict) -> dict:
         order_by=payload.get("order_by", []),
         limit=payload.get("limit"),
         offset=payload.get("offset"),
-        user_query=payload.get("user_query"),
-        compare=payload.get("compare"),
     )
 
 
@@ -347,16 +343,35 @@ def test_prompt_dsl_examples_compile_to_sql():
             assert expected in sql
 
 
-def test_compare_is_rejected_by_dsl2sql_policy():
-    with pytest.raises(ValueError, match="不再支持 compare"):
-        generate(
-            build_config(),
-            {
-                "metrics": ["订单数"],
-                "dimensions": [{"name": "下单时间", "time_grain": "month"}],
-                "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
-            },
-        )
+@pytest.mark.asyncio
+async def test_compare_is_rejected_by_dsl2sql_tool_entry(monkeypatch):
+    """compare 拒绝策略由 dsl2sql 工具入口执行（adapter 不再收 compare 形参）。"""
+    import json
+
+    import apps.chat_data_app.agent.tools.dsl2sql as dsl2sql_module
+
+    async def fake_load_semantic_model(*args, **kwargs):
+        return {"source_type": "mysql", "metrics": [], "dimensions": [], "relationships": []}
+
+    monkeypatch.setattr(dsl2sql_module, "load_semantic_model", fake_load_semantic_model)
+    monkeypatch.setattr(
+        dsl2sql_module,
+        "remove_mixed_raw_metrics_for_aggregate_dsl",
+        lambda dsl, config: (dsl, []),
+    )
+
+    dsl2sql_tool = dsl2sql_module.create_dsl2sql_tool(datasource_id="ds-1", user_id="u-1")
+    raw = await dsl2sql_tool.ainvoke({
+        "dsl": {
+            "metrics": ["订单数"],
+            "dimensions": [{"name": "下单时间", "time_grain": "month"}],
+            "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
+        },
+        "semantic_config_id": "sc-1",
+    })
+    payload = json.loads(raw.replace("[dsl2sql_tool]\n", ""))
+    assert payload["success"] is False
+    assert "不再支持 compare" in payload["error"]
 
 
 def test_generator_returns_config_not_support_errors():
@@ -846,7 +861,7 @@ def test_generate_rejects_having_unknown_metric_and_order_direction():
     assert "排序方向" in bad_order["error"]
 
 
-def test_generate_aggregate_metric_is_not_changed_by_user_query_wording():
+def test_generate_aggregate_metric_expression_unchanged():
     config = build_config()
     config["metrics"].append({"name": "订单金额最大值", "expression": "MAX(orders.amount)", "table": "orders"})
 
@@ -856,7 +871,6 @@ def test_generate_aggregate_metric_is_not_changed_by_user_query_wording():
             "metrics": ["订单金额最大值"],
             "dimensions": [],
             "filters": [],
-            "user_query": "查看最大订单金额对应的明细列表",
             "limit": 10,
         },
     )
@@ -875,7 +889,6 @@ def test_generate_metric_expression_is_the_source_of_sql_shape():
         config,
         {
             "metrics": ["订单明细数量"],
-            "user_query": "查询订单明细数量",
         },
     )
 
@@ -1049,7 +1062,6 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
         filters=[],
         having=[],
         order_by=[],
-        user_query="查看明细列表",
     )
     assert aggregate["success"] is True
     assert captured["builder_config"]["aggregations"][0]["func"] == "COUNT"
@@ -1121,7 +1133,6 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
         ],
         having=[],
         order_by=[],
-        user_query="查看表达式状态列表",
     )
     assert result["success"] is True
     builder_config = captured["builder_config"]
@@ -1282,10 +1293,6 @@ def test_generator_error_validation_edges():
     config = build_config()
     generator = SemanticAIQueryAdapter(config)
 
-    compare = generator.generate_sql(metrics=["订单数"], dimensions=[], filters=[], having=[], compare={"type": "yoy"})
-    assert compare["success"] is False
-    assert "compare" in compare["error"]
-
     bad_filter = generator.generate_sql(
         metrics=["订单数"],
         dimensions=[],
@@ -1347,7 +1354,6 @@ def test_generator_remaining_branch_edges(monkeypatch):
         filters=[],
         having=[],
         order_by=[],
-        user_query="查看明细",
     )
     assert result["success"] is True
     assert captured["builder_config"]["aggregations"][0]["column"] == "*"
@@ -1428,7 +1434,6 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
             {"field": "无表达式指标", "direction": "DESC"},
             {"field": "订单状态", "direction": "ASC"},
         ],
-        user_query="查看明细",
     )
 
     assert result["success"] is True
@@ -1466,7 +1471,6 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
         filters=[],
         having=[],
         order_by=[],
-        user_query="查看明细",
     )
 
     assert result["success"] is False

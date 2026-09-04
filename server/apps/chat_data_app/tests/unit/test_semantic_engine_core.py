@@ -409,13 +409,12 @@ def test_compile_semantic_ai_dsl_is_the_shared_compile_facade():
             assert kwargs["metrics"] == ["指标"]
             assert kwargs["limit"] == 25
             assert kwargs["offset"] == 3
-            assert kwargs["user_query"] == "查看指标"
             return {"success": True, "sql": " SELECT 1 ", "warnings": ["warning"]}
 
     result = compile_semantic_ai_dsl(
         {"id": "model"},
         {"metrics": ["指标"]},
-        options=SemanticCompileOptions(user_query="查看指标", max_rows=25, offset=3),
+        options=SemanticCompileOptions(max_rows=25, offset=3),
         generator_cls=FakeGenerator,
     )
 

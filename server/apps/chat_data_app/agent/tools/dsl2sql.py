@@ -13,7 +13,7 @@ from apps.chat_data_app.services.dashboard.spec_service import (
 )
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
-from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from apps.chat_data_app.services.semantic.run.semantic_query_service import compile_semantic_ai_dsl
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)
@@ -30,7 +30,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
     bound_operator_name = str(operator_name or "").strip() or None
 
     @tool("dsl2sql_tool")
-    async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None, user_query: str = "") -> str:
+    async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None) -> str:
         """DSL 模式的校验工具：校验单个查询 DSL，或批量校验完整 dashboard_spec 的卡片 DSL。
 
         只在 DSL 模式使用；SQL 模式直接调用 semantic_query_tool 的顶层 sql，不调用本工具。
@@ -50,7 +50,6 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     dashboard_spec=dsl,
                     datasource_id=bound_datasource_id,
                     semantic_config_id=effective_semantic_config_id,
-                    user_query=user_query or None,
                     user_id=bound_user_id,
                     username=bound_operator_name,
                 )
@@ -74,7 +73,6 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     dashboard_spec={"cards": dsl},
                     datasource_id=bound_datasource_id,
                     semantic_config_id=effective_semantic_config_id,
-                    user_query=user_query or None,
                     user_id=bound_user_id,
                     username=bound_operator_name,
                 )
@@ -113,7 +111,6 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
             result = compile_semantic_ai_dsl(
                 semantic_config,
                 payload,
-                options=SemanticCompileOptions(user_query=user_query or None),
             )
             return "[dsl2sql_tool]\n" + json_dumps({
                 "success": bool(result.get("success")),

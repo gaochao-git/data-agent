@@ -13,7 +13,7 @@ from .service import get_dashboard_service
 from ..datasource.manager import get_datasource_manager
 from ..semantic.run.semantic_model_repository import load_semantic_model
 from ..semantic.run.semantic_config_service import get_semantic_config_service
-from ..semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from ..semantic.run.semantic_query_service import compile_semantic_ai_dsl
 from ..semantic.run.semantic_query_service import SemanticAIQueryAdapter
 from ..sql_run.executor import get_executor, resolve_query_timeout
 
@@ -222,7 +222,7 @@ def resolve_dashboard_card_semantic_config_id(
     return card_id or str(default_semantic_config_id or "").strip()
 
 
-def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticAIQueryAdapter, user_query: Optional[str] = None) -> str:
+def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticAIQueryAdapter) -> str:
     """将看板卡片 DSL 转为面板 SQL。"""
     dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     if dsl.get("compare") or card.get("compare"):
@@ -240,7 +240,6 @@ def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: Semanti
     result = compile_semantic_ai_dsl(
         getattr(generator, "semantic_config", {}),
         payload,
-        options=SemanticCompileOptions(user_query=user_query),
         generator=generator,
     )
     if not result.get("success"):
@@ -324,7 +323,6 @@ def validate_dashboard_spec_structure(
 def build_dashboard_panel_plans(
     cards: List[Any],
     sql_generator: Optional[SemanticAIQueryAdapter] = None,
-    user_query: Optional[str] = None,
     *,
     semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]] = None,
     default_semantic_config_id: Optional[str] = None,
@@ -357,7 +355,7 @@ def build_dashboard_panel_plans(
             }, getattr(generator, "semantic_config", {}))
             for warning in normalize_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
-            sql = build_panel_sql_from_dashboard_card(card, generator, user_query=user_query)
+            sql = build_panel_sql_from_dashboard_card(card, generator)
             if not sql:
                 raise ValueError("SQL 为空")
             chart_type = normalize_dashboard_spec_chart_type(card.get("chart_type"))
@@ -447,7 +445,6 @@ async def validate_dashboard_spec_payload(
     dashboard_spec: Dict[str, Any],
     datasource_id: str,
     semantic_config_id: Optional[str] = None,
-    user_query: Optional[str] = None,
     execute_sql: bool = False,
     user_id: str = "system",
     username: Optional[str] = None,
@@ -484,7 +481,6 @@ async def validate_dashboard_spec_payload(
         semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config)
     panel_plans, warnings = build_dashboard_panel_plans(
         cards,
-        user_query=user_query,
         semantic_config_generators=semantic_config_generators,
         default_semantic_config_id=default_semantic_config_id,
     )
@@ -618,7 +614,6 @@ async def create_dashboard_from_spec_payload(
     conversation_id: Optional[str] = None,
     user_id: str = "system",
     username: Optional[str] = None,
-    user_query: Optional[str] = None,
 ) -> Dict[str, Any]:
     """根据 AI 看板规格创建大屏和面板。"""
     spec = dict(dashboard_spec or {})
@@ -629,7 +624,6 @@ async def create_dashboard_from_spec_payload(
         dashboard_spec=spec,
         datasource_id=datasource_id,
         semantic_config_id=effective_semantic_config_id,
-        user_query=user_query,
         execute_sql=False,
         user_id=user_id,
         username=username,

@@ -505,7 +505,6 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
 
         def generate_sql(self, **kwargs):
             assert kwargs["metrics"] == ["订单数"]
-            assert kwargs["user_query"] == "查订单"
             return {"success": True, "sql": "select 1"}
 
     async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
@@ -889,7 +888,7 @@ def test_semantic_query_tool_rejects_empty_available_member_scope(monkeypatch):
     assert "本次请求没有可用执行对象" in result
 
 
-def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(monkeypatch):
+def test_semantic_query_tool_rejects_sql_inside_dsl(monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
     captured = {}
@@ -899,7 +898,6 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
             assert config["id"] == "cfg_a"
 
         def generate_sql(self, **kwargs):
-            captured["user_query"] = kwargs["user_query"]
             return {"success": True, "sql": "select latest"}
 
     async def fake_load_config(*_args, **_kwargs):
@@ -929,7 +927,6 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
         "state": state,
     }))
     assert '"sql": "select latest"' in result
-    assert captured["user_query"] == "最新问题"
 
     legacy_sql_result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"sql": "select 1"},

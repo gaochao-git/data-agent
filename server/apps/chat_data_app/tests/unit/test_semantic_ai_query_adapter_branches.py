@@ -238,12 +238,6 @@ def test_collect_having_metric_names_collects_nested_binary(adapter):
 # --------------------------------------------------------------------------
 
 
-def test_generate_sql_rejects_compare(adapter):
-    result = adapter.generate_sql([], [], [], [], compare={"period": "yoy"})
-    assert result["success"] is False
-    assert "不再支持 compare" in result["error"]
-
-
 def test_generate_sql_resolves_main_table_from_having_but_has_no_field(adapter):
     """主表只能从 HAVING 指标推断时走到 510->511，随后无可用字段报错（599->600）。"""
     result = adapter.generate_sql(

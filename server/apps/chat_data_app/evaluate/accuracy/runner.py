@@ -357,7 +357,6 @@ async def compile_dsl_locally(
     datasource_id: str,
     semantic_config_id: str,
     dsl: dict[str, Any] | None,
-    user_query: str,
 ) -> dict[str, Any]:
     """Compile captured DSL through the shared semantic query facade."""
     if not isinstance(dsl, dict):
@@ -367,7 +366,6 @@ async def compile_dsl_locally(
         remove_mixed_raw_metrics_for_aggregate_dsl,
     )
     from apps.chat_data_app.services.semantic.run.semantic_query_service import (
-        SemanticCompileOptions,
         compile_semantic_ai_dsl,
     )
 
@@ -379,7 +377,6 @@ async def compile_dsl_locally(
     result = compile_semantic_ai_dsl(
         semantic_config,
         payload,
-        options=SemanticCompileOptions(user_query=user_query),
     )
     return {
         "success": bool(result.get("success")),
@@ -434,7 +431,6 @@ async def compile_or_reuse_agent_sql(
     datasource_id: str,
     semantic_config_id: str,
     predicted_dsl: dict[str, Any] | None,
-    user_query: str,
     dsl_payload: dict[str, Any],
     agent_tool_sql: str,
 ) -> dict[str, Any]:
@@ -448,7 +444,6 @@ async def compile_or_reuse_agent_sql(
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
         dsl=predicted_dsl,
-        user_query=user_query,
     )
     return {
         "compile_success": bool(compile_result.get("success")),
@@ -572,7 +567,6 @@ async def run_live_case(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
             predicted_dsl=predicted_dsl,
-            user_query=question,
             dsl_payload=dsl_payload,
             agent_tool_sql=agent_tool_sql,
         )

@@ -613,7 +613,7 @@ def test_semantic_query_service_remaining_join_and_metric_branches(monkeypatch):
     with pytest.raises(ValueError, match="缺少.*关联路径"):
         no_path_generator._build_builder_joins("orders", {"orders", "u"})
 
-    result = generator.generate_sql(metrics=["总行数"], dimensions=[], filters=[], having=[], user_query="查询明细列表")
+    result = generator.generate_sql(metrics=["总行数"], dimensions=[], filters=[], having=[])
     assert result["success"] is True
 
     def fail_compile(*_args, **_kwargs):

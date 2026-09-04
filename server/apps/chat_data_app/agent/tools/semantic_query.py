@@ -12,7 +12,6 @@ from ...schema import SemanticQueryInput
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_runtime_semantic_config
 from apps.chat_data_app.services.semantic.run.semantic_query_service import (
-    SemanticCompileOptions,
     compile_semantic_ai_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
@@ -206,7 +205,6 @@ async def _compile_tool_query(
     compile_result = compile_semantic_ai_dsl(
         config,
         request.dsl or {},
-        options=SemanticCompileOptions(user_query=context.query_text or None),
     )
     if not compile_result.get("success"):
         return _tool_error(compile_result.get("error") or "DSL2SQL 编译失败")

@@ -7,6 +7,7 @@ BI 可视化入口见 semantic_bi_query_adapter.SemanticBIQueryAdapter，两者�
 """
 
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
@@ -30,6 +31,41 @@ from .semantic_query_plan_builder import (
 )
 
 logger = get_logger(__name__)
+
+
+def _error(error: str) -> Dict[str, Any]:
+    """统一引擎各阶段的错误返回形状。"""
+    return {"success": False, "error": error}
+
+
+@dataclass
+class _UnifiedEnginePlan:
+    """统一引擎流水线（校验 → 映射 → 组装 → 编译）的中间产物，按组装顺序填充。"""
+
+    matched_metrics: List[Dict[str, Any]] = field(default_factory=list)
+    matched_dimensions: List[Any] = field(default_factory=list)
+    dimension_names: List[str] = field(default_factory=list)
+    having_metric_names: List[str] = field(default_factory=list)
+    validated_filters: List[Dict[str, Any]] = field(default_factory=list)
+    validated_having: List[Dict[str, Any]] = field(default_factory=list)
+    validated_order_by: List[Dict[str, Any]] = field(default_factory=list)
+    validated_limit: Optional[int] = None
+    validated_offset: Optional[int] = None
+    requires_grouping_for_raw_fields: bool = False
+    main_table: Optional[str] = None
+    main_table_alias: Optional[str] = None
+    builder_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    builder_dimension_keys: set = field(default_factory=set)
+    builder_aggregations: List[Dict[str, Any]] = field(default_factory=list)
+    builder_filters: List[Dict[str, Any]] = field(default_factory=list)
+    builder_having: List[Dict[str, Any]] = field(default_factory=list)
+    builder_order_by: List[Dict[str, Any]] = field(default_factory=list)
+    metric_alias_to_id: Dict[str, str] = field(default_factory=dict)
+    tables_needed: set = field(default_factory=set)
+
+    @property
+    def has_selectable_fields(self) -> bool:
+        return bool(self.builder_dimensions or self.builder_aggregations)
 
 
 class SemanticAIQueryAdapter:
@@ -412,8 +448,6 @@ class SemanticAIQueryAdapter:
         order_by: List[Dict] = None,
         limit: int = None,
         offset: int = None,
-        user_query: str = None,
-        compare: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         生成 SQL（统一入口）
@@ -426,7 +460,6 @@ class SemanticAIQueryAdapter:
             order_by: 排序条件
             limit: 限制条数
             offset: 跳过条数
-            user_query: 历史兼容参数，保留签名但不参与 SQL 生成
 
         Returns:
             {
@@ -437,7 +470,7 @@ class SemanticAIQueryAdapter:
                 "user_message": str | None  # 仅当 config_not_support 时
             }
         """
-        return self._generate_sql_via_unified_engine(metrics, dimensions, filters, having, order_by, limit, offset, user_query, compare)
+        return self._generate_sql_via_unified_engine(metrics, dimensions, filters, having, order_by, limit, offset)
 
     def _generate_sql_via_unified_engine(
         self,
@@ -448,105 +481,131 @@ class SemanticAIQueryAdapter:
         order_by: List[Dict] = None,
         limit: int = None,
         offset: int = None,
-        user_query: Optional[str] = None,
-        compare: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if compare:
-            return {"success": False, "error": "错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析"}
+        """统一引擎流水线：校验 → 主表推断 → 维度/指标映射 → 过滤/排序映射 → 编译。"""
+        plan = _UnifiedEnginePlan()
+        err = self._validate_unified_engine_inputs(plan, metrics, dimensions, filters, having, order_by, limit, offset)
+        if err:
+            return _error(err)
 
-        matched_metrics = []
+        self._infer_main_table_and_alias(plan)
+        if not plan.main_table:
+            return _error("错误：查询至少需要一个指标或维度来确定数据范围")
+
+        self._build_builder_dimensions(plan)
+        self._build_builder_aggregations(plan)
+        if not plan.has_selectable_fields:
+            return _error("错误：未找到可用于查询的字段")
+        self._build_builder_filters_and_having(plan)
+        self._build_builder_order_by(plan)
+        self._collect_tables_needed(plan)
+        return self._compile_unified_engine_sql(plan, metrics, dimensions, filters, having)
+
+    def _validate_unified_engine_inputs(
+        self,
+        plan: _UnifiedEnginePlan,
+        metrics: List[str],
+        dimensions: List[str],
+        filters: List[Dict],
+        having: List[Dict],
+        order_by: List[Dict],
+        limit: int,
+        offset: int,
+    ) -> Optional[str]:
+        """串行校验各入参并填充校验结果；任一失败返回错误文案，全部通过返回 None。"""
         if metrics:
-            matched_metrics, err = self._normalize_metrics_allow_dimension_raw(metrics)
+            plan.matched_metrics, err = self._normalize_metrics_allow_dimension_raw(metrics)
             if err:
-                return {"success": False, "error": err}
+                return err
 
-        matched_dimensions, err = self.validator.validate_dimensions(dimensions or [])
+        plan.matched_dimensions, err = self.validator.validate_dimensions(dimensions or [])
         if err:
-            return {"success": False, "error": err}
+            return err
 
-        validated_filters, err = self.validator.validate_filters(filters or [])
+        plan.validated_filters, err = self.validator.validate_filters(filters or [])
         if err:
-            return {"success": False, "error": err}
+            return err
 
-        validated_having, err = self.validator.validate_having(having or [])
+        plan.validated_having, err = self.validator.validate_having(having or [])
         if err:
-            return {"success": False, "error": err}
+            return err
 
-        having_metric_names = self._collect_having_metric_names(validated_having)
+        plan.having_metric_names = self._collect_having_metric_names(plan.validated_having)
+        plan.dimension_names = [self._extract_dimension_name(d) for d in plan.matched_dimensions]
 
-        dimension_names = [self._extract_dimension_name(d) for d in matched_dimensions]
-        validated_order_by, err = self.validator.validate_order_by(order_by or [], metrics or [], dimension_names)
+        plan.validated_order_by, err = self.validator.validate_order_by(order_by or [], metrics or [], plan.dimension_names)
         if err:
-            return {"success": False, "error": err}
+            return err
 
-        validated_limit, err = self.validator.validate_limit(limit)
+        plan.validated_limit, err = self.validator.validate_limit(limit)
         if err:
-            return {"success": False, "error": err}
+            return err
 
-        validated_offset, err = self.validator.validate_offset(offset)
+        plan.validated_offset, err = self.validator.validate_offset(offset)
         if err:
-            return {"success": False, "error": err}
+            return err
 
         # SQL 形态只由 DSL 和语义配置决定，不能根据 user_query 的关键词猜测。
         # 只要输出中存在聚合表达式或 HAVING，RAW 字段就必须进入 GROUP BY。
-        requires_grouping_for_raw_fields = bool(validated_having) or any(
+        plan.requires_grouping_for_raw_fields = bool(plan.validated_having) or any(
             metric_func_column(metric.get("expression"))
-            for metric in matched_metrics
+            for metric in plan.matched_metrics
         )
+        return None
 
-        main_table = None
-        if matched_dimensions:
-            first_dim_name = self._extract_dimension_name(matched_dimensions[0])
-            main_table = (self.dimensions_map.get(first_dim_name) or {}).get("table")
-        if not main_table and matched_metrics:
-            main_table = matched_metrics[0].get("table")
-        if not main_table and having_metric_names:
-            main_table = (self.metrics_map.get(having_metric_names[0]) or {}).get("table")
-        if not main_table:
-            return {"success": False, "error": "错误：查询至少需要一个指标或维度来确定数据范围"}
+    def _infer_main_table_and_alias(self, plan: _UnifiedEnginePlan) -> None:
+        """按第一维度表 > 第一指标表 > 第一 HAVING 指标表推断主表及别名。"""
+        if plan.matched_dimensions:
+            first_dim_name = self._extract_dimension_name(plan.matched_dimensions[0])
+            first_dim_cfg = self.dimensions_map.get(first_dim_name) or {}
+            plan.main_table = first_dim_cfg.get("table")
+            plan.main_table_alias = self._table_alias(first_dim_cfg)
+        if not plan.main_table and plan.matched_metrics:
+            first_metric = plan.matched_metrics[0]
+            plan.main_table = first_metric.get("table")
+            plan.main_table_alias = self._table_alias(first_metric)
+        if not plan.main_table and plan.having_metric_names:
+            plan.main_table = (self.metrics_map.get(plan.having_metric_names[0]) or {}).get("table")
+        plan.main_table_alias = plan.main_table_alias or plan.main_table
 
-        builder_dimensions = []
-        builder_dimension_keys: set[tuple[str, str]] = set()
-        for dim_item in matched_dimensions:
+    def _build_builder_dimensions(self, plan: _UnifiedEnginePlan) -> None:
+        for dim_item in plan.matched_dimensions:
             dim_name = self._extract_dimension_name(dim_item)
             dim_cfg = self.dimensions_map.get(dim_name)
             if not dim_cfg:
                 continue
             time_grain = self._extract_time_grain(dim_item)
             transform = "raw"
-            expression = dim_cfg.get("expression")
-            dim_table = dim_cfg.get("table")
-            dim_table_alias = self._table_alias(dim_cfg) or dim_table
             if time_grain in ("year", "quarter", "month", "week", "day", "hour"):
                 transform = time_grain
-            dim_key = (dim_table_alias, dim_cfg.get("column"))
-            builder_dimensions.append({
+            dim_table = dim_cfg.get("table")
+            dim_table_alias = self._table_alias(dim_cfg) or dim_table
+            plan.builder_dimensions.append({
                 "id": f"dim-{dim_name}",
                 "table": dim_table,
                 "tableAlias": dim_table_alias,
                 "column": dim_cfg.get("column"),
                 "alias": dim_name,
-                "expression": expression,
+                "expression": dim_cfg.get("expression"),
                 "transform": transform,
             })
-            builder_dimension_keys.add(dim_key)
+            plan.builder_dimension_keys.add((dim_table_alias, dim_cfg.get("column")))
 
-        builder_aggregations = []
-        metric_alias_to_id: Dict[str, str] = {}
-        for metric in matched_metrics:
+    def _build_builder_aggregations(self, plan: _UnifiedEnginePlan) -> None:
+        for metric in plan.matched_metrics:
             metric_name = metric.get("name")
             metric_expression = (metric.get("expression") or "").strip()
             metric_table = metric.get("table")
             metric_table_alias = self._table_alias(metric) or metric_table
             metric_column = metric.get("column")
             agg_id = f"agg-{metric_name}"
-            metric_alias_to_id[metric_name] = agg_id
+            plan.metric_alias_to_id[metric_name] = agg_id
             parsed = metric_func_column(metric_expression)
             if parsed:
                 func = parsed[0]
                 if parsed[1]:
                     metric_column = parsed[1]
-                builder_aggregations.append({
+                plan.builder_aggregations.append({
                     "id": agg_id,
                     "func": func,
                     "table": metric_table,
@@ -556,82 +615,93 @@ class SemanticAIQueryAdapter:
                     "expression": metric_expression,
                 })
             else:
-                raw_table = metric_table or main_table
-                raw_table_alias = metric_table_alias or raw_table
-                raw_expr = metric_expression or (f"{raw_table_alias}.{metric_column}" if raw_table_alias and metric_column else "")
-                raw_column = metric_column or "*"
-                # 存在聚合输出时，RAW 指标需作为分组字段，避免 SELECT 聚合+非聚合非法。
-                if requires_grouping_for_raw_fields and raw_column != "*":
-                    dim_key = (raw_table_alias, raw_column)
-                    if dim_key not in builder_dimension_keys:
-                        builder_dimensions.append({
-                            "id": f"dim-from-metric-{metric_name}",
-                            "table": raw_table,
-                            "tableAlias": raw_table_alias,
-                            "column": raw_column,
-                            "alias": metric_name,
-                            "expression": raw_expr,
-                            "transform": "raw",
-                        })
-                        builder_dimension_keys.add(dim_key)
-                else:
-                    builder_aggregations.append({
-                        "id": agg_id,
-                        "func": "RAW",
-                        "table": raw_table,
-                        "tableAlias": raw_table_alias,
-                        "column": raw_column,
-                        "alias": metric_name,
-                        "expression": raw_expr,
-                    })
+                self._append_raw_metric_block(
+                    plan, metric_name, metric_table, metric_table_alias, metric_expression, metric_column,
+                )
 
-        if not builder_dimensions and not builder_aggregations:
-            return {"success": False, "error": "错误：未找到可用于查询的字段"}
+    def _append_raw_metric_block(
+        self,
+        plan: _UnifiedEnginePlan,
+        metric_name: Any,
+        metric_table: Optional[str],
+        metric_table_alias: Optional[str],
+        metric_expression: str,
+        metric_column: Optional[str],
+    ) -> None:
+        """RAW 指标映射：存在聚合输出时转分组字段，否则作为 RAW 聚合块。"""
+        raw_table = metric_table or plan.main_table
+        raw_table_alias = metric_table_alias or raw_table
+        raw_expr = metric_expression or (f"{raw_table_alias}.{metric_column}" if raw_table_alias and metric_column else "")
+        raw_column = metric_column or "*"
+        # 存在聚合输出时，RAW 指标需作为分组字段，避免 SELECT 聚合+非聚合非法。
+        if plan.requires_grouping_for_raw_fields and raw_column != "*":
+            dim_key = (raw_table_alias, raw_column)
+            if dim_key not in plan.builder_dimension_keys:
+                plan.builder_dimensions.append({
+                    "id": f"dim-from-metric-{metric_name}",
+                    "table": raw_table,
+                    "tableAlias": raw_table_alias,
+                    "column": raw_column,
+                    "alias": metric_name,
+                    "expression": raw_expr,
+                    "transform": "raw",
+                })
+                plan.builder_dimension_keys.add(dim_key)
+        else:
+            plan.builder_aggregations.append({
+                "id": f"agg-{metric_name}",
+                "func": "RAW",
+                "table": raw_table,
+                "tableAlias": raw_table_alias,
+                "column": raw_column,
+                "alias": metric_name,
+                "expression": raw_expr,
+            })
 
-        builder_filters = []
+    def _build_builder_filters_and_having(self, plan: _UnifiedEnginePlan) -> None:
+        validated_filters = plan.validated_filters
         if len(validated_filters) == 1 and isinstance(validated_filters[0], dict) and ("and" in validated_filters[0] or "or" in validated_filters[0]):
-            builder_filters.append(self._map_filter_node_for_builder(validated_filters[0]))
+            plan.builder_filters.append(self._map_filter_node_for_builder(validated_filters[0]))
         else:
             for fil in validated_filters:
                 if self._is_expression_filter_node(fil):
-                    builder_filters.append(self._map_expression_filter_node_for_builder(fil))
+                    plan.builder_filters.append(self._map_expression_filter_node_for_builder(fil))
                     continue
-                self._append_filter_nodes_for_builder(builder_filters, fil)
+                self._append_filter_nodes_for_builder(plan.builder_filters, fil)
 
-        builder_having = []
-        for hv in validated_having:
+        for hv in plan.validated_having:
             if self._is_expression_having_node(hv):
                 left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
-                having_node = self._metric_aggregation_node(left_metric_name, main_table)
+                having_node = self._metric_aggregation_node(left_metric_name, plan.main_table)
                 having_node.update({
                     "id": f"having-{left_metric_name}",
                     "operator": hv.get("operator", "="),
                     "logic": hv.get("logic", "AND"),
-                    "aggId": metric_alias_to_id.get(left_metric_name),
-                    "rightOperand": self._map_having_operand_for_builder(hv.get("right") or {}, metric_alias_to_id, main_table),
+                    "aggId": plan.metric_alias_to_id.get(left_metric_name),
+                    "rightOperand": self._map_having_operand_for_builder(hv.get("right") or {}, plan.metric_alias_to_id, plan.main_table),
                 })
-                builder_having.append(having_node)
+                plan.builder_having.append(having_node)
                 continue
 
             metric_name = hv.get("metric")
-            having_node = self._metric_aggregation_node(metric_name, main_table)
+            having_node = self._metric_aggregation_node(metric_name, plan.main_table)
             having_node.update({
                 "id": f"having-{metric_name}",
                 "operator": hv.get("operator", "="),
                 "value": hv.get("value"),
                 "logic": hv.get("logic", "AND"),
-                "aggId": metric_alias_to_id.get(metric_name),
+                "aggId": plan.metric_alias_to_id.get(metric_name),
             })
-            builder_having.append(having_node)
+            plan.builder_having.append(having_node)
             self._copy_filter_value_type(hv, having_node)
 
-        builder_order_by = []
-        for od in validated_order_by:
+    def _build_builder_order_by(self, plan: _UnifiedEnginePlan) -> None:
+        for od in plan.validated_order_by:
             field_name = od.get("field")
             direction = od.get("direction", "DESC")
             if field_name in self.metrics_map:
                 metric_cfg = self.metrics_map.get(field_name, {})
-                metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or main_table
+                metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or plan.main_table
                 parsed = metric_func_column(metric_cfg.get("expression"))
                 func = parsed[0] if parsed else "RAW"
                 column = "*"
@@ -639,70 +709,76 @@ class SemanticAIQueryAdapter:
                     column = parsed[1]
                 elif metric_cfg.get("column"):
                     column = metric_cfg.get("column")
-                builder_order_by.append({
+                plan.builder_order_by.append({
                     "id": f"order-{field_name}",
-                    "table": metric_cfg.get("table", main_table),
+                    "table": metric_cfg.get("table", plan.main_table),
                     "tableAlias": metric_table_alias,
                     "column": column,
                     "expression": metric_cfg.get("expression"),
                     "direction": direction,
                     "aggFunc": func,
-                    "aggId": metric_alias_to_id.get(field_name),
+                    "aggId": plan.metric_alias_to_id.get(field_name),
                 })
             else:
                 dim_cfg = self.dimensions_map.get(field_name, {})
-                dim_table_alias = self._table_alias(dim_cfg) or dim_cfg.get("table") or main_table
-                builder_order_by.append({
+                dim_table_alias = self._table_alias(dim_cfg) or dim_cfg.get("table") or plan.main_table
+                plan.builder_order_by.append({
                     "id": f"order-{field_name}",
-                    "table": dim_cfg.get("table", main_table),
+                    "table": dim_cfg.get("table", plan.main_table),
                     "tableAlias": dim_table_alias,
                     "column": dim_cfg.get("column", field_name),
                     "direction": direction,
                 })
 
-        main_table_alias = None
-        if matched_dimensions:
-            first_dim_name = self._extract_dimension_name(matched_dimensions[0])
-            main_table_alias = self._table_alias(self.dimensions_map.get(first_dim_name) or {})
-        if not main_table_alias and matched_metrics:
-            main_table_alias = self._table_alias(matched_metrics[0])
-        main_table_alias = main_table_alias or main_table
+    @staticmethod
+    def _block_table_alias(block: Dict[str, Any]) -> Optional[str]:
+        return block.get("tableAlias") or block.get("table")
 
-        tables_needed = {main_table_alias}
-        for dim in builder_dimensions:
-            if dim.get("tableAlias") or dim.get("table"):
-                tables_needed.add(dim.get("tableAlias") or dim.get("table"))
-        for agg in builder_aggregations:
-            if agg.get("tableAlias") or agg.get("table"):
-                tables_needed.add(agg.get("tableAlias") or agg.get("table"))
-        for hv in builder_having:
-            if hv.get("tableAlias") or hv.get("table"):
-                tables_needed.add(hv.get("tableAlias") or hv.get("table"))
-            self._collect_tables_from_having_operand(hv.get("rightOperand"), tables_needed)
-        for od in builder_order_by:
-            if od.get("tableAlias") or od.get("table"):
-                tables_needed.add(od.get("tableAlias") or od.get("table"))
-        for fil in builder_filters:
-            self._collect_tables_from_filter_node(fil, tables_needed)
+    def _collect_tables_needed(self, plan: _UnifiedEnginePlan) -> None:
+        plan.tables_needed = {plan.main_table_alias}
+        for dim in plan.builder_dimensions:
+            if self._block_table_alias(dim):
+                plan.tables_needed.add(self._block_table_alias(dim))
+        for agg in plan.builder_aggregations:
+            if self._block_table_alias(agg):
+                plan.tables_needed.add(self._block_table_alias(agg))
+        for hv in plan.builder_having:
+            if self._block_table_alias(hv):
+                plan.tables_needed.add(self._block_table_alias(hv))
+            self._collect_tables_from_having_operand(hv.get("rightOperand"), plan.tables_needed)
+        for od in plan.builder_order_by:
+            if self._block_table_alias(od):
+                plan.tables_needed.add(self._block_table_alias(od))
+        for fil in plan.builder_filters:
+            self._collect_tables_from_filter_node(fil, plan.tables_needed)
 
+    def _compile_unified_engine_sql(
+        self,
+        plan: _UnifiedEnginePlan,
+        metrics: List[str],
+        dimensions: List[str],
+        filters: List[Dict],
+        having: List[Dict],
+    ) -> Dict[str, Any]:
         try:
             query_plan = {
-                "mainTable": main_table,
-                "mainAlias": main_table_alias,
-                "joins": self._build_builder_joins(main_table_alias, tables_needed),
-                "dimensions": builder_dimensions,
-                "aggregations": builder_aggregations,
-                "filters": builder_filters,
-                "orderBy": builder_order_by,
-                "limit": validated_limit,
-                "offset": validated_offset,
+                "mainTable": plan.main_table,
+                "mainAlias": plan.main_table_alias,
+                "joins": self._build_builder_joins(plan.main_table_alias, plan.tables_needed),
+                "dimensions": plan.builder_dimensions,
+                "aggregations": plan.builder_aggregations,
+                "filters": plan.builder_filters + plan.builder_having,
+                "orderBy": plan.builder_order_by,
+                "limit": plan.validated_limit,
+                "offset": plan.validated_offset,
             }
-            if builder_having:
-                query_plan["filters"] = query_plan["filters"] + builder_having
             sql = SemanticSQLCompiler(dialect=self.dialect_name, max_rows=self.max_rows).compile(query_plan)
         except Exception as err:
             logger.error(f"统一 DSL2SQL 编译失败: {err}", exc_info=True)
-            return {"success": False, "error": f"错误：SQL 转换失败 - {str(err)}"}
+            return _error(f"错误：SQL 转换失败 - {str(err)}")
 
-        params_block = format_params_for_display(metrics, dimension_names, filters, having, validated_order_by, validated_limit, validated_offset)
+        params_block = format_params_for_display(
+            metrics, plan.dimension_names, filters, having,
+            plan.validated_order_by, plan.validated_limit, plan.validated_offset,
+        )
         return {"success": True, "sql": sql, "params_block": params_block, "error": None}

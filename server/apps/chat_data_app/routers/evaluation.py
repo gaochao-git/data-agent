@@ -763,7 +763,6 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
         dsl=cloned.get("gold_dsl"),
-        user_query=str(cloned.get("nl") or ""),
     )
     cloned["gold_sql"] = str(compile_result.get("sql") or "")
     if not compile_result.get("success"):

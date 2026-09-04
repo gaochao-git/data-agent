@@ -575,7 +575,6 @@ def test_build_panel_sql_from_dashboard_card_passes_normalized_payload():
             },
         },
         FakeGenerator(),
-        user_query="按月统计销售额",
     )
 
     assert sql.endswith("offset 2")
@@ -586,7 +585,6 @@ def test_build_panel_sql_from_dashboard_card_passes_normalized_payload():
     assert captured["order_by"] == [{"field": "月份", "direction": "ASC"}]
     assert captured["limit"] == 5
     assert captured["offset"] == 2
-    assert captured["user_query"] == "按月统计销售额"
 
 
 def test_build_panel_sql_from_dashboard_card_raises_generator_error():

@@ -305,7 +305,6 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl={"metrics": ["销售额"]},
-        user_query="查销售额",
     )
     assert compiled["success"] is True
     assert compiled["warnings"] == ["warning"]
@@ -314,7 +313,6 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl={"compare": {"type": "yoy"}},
-        user_query="查同比",
     )
     assert compare_result["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare_result["error"]
@@ -323,7 +321,6 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl=None,
-        user_query="查",
     )
     assert invalid_result["success"] is False
     assert "未捕获到可编译 DSL" in invalid_result["error"]

@@ -69,7 +69,6 @@ async def compile_semantic_builder_sql(
 class SemanticCompileOptions:
     """语义 DSL 编译选项；应用层负责注入，不由编译器读取环境变量。"""
 
-    user_query: Optional[str] = None
     max_rows: Optional[int] = None
     offset: Optional[int] = None
 
@@ -99,7 +98,6 @@ def compile_semantic_ai_dsl(
         order_by=dsl.get("order_by") or [],
         limit=dsl.get("limit", compile_options.max_rows),
         offset=dsl.get("offset", compile_options.offset),
-        user_query=compile_options.user_query,
     )
     return {
         "success": bool(compile_result.get("success")),

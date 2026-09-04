@@ -310,7 +310,6 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
         def generate_sql(self, **kwargs):
             assert kwargs["metrics"] == ["销售额"]
             assert kwargs["offset"] == 5
-            assert kwargs["user_query"] == "查销售额"
             return {"success": True, "sql": "select sum(amount) from orders", "error": ""}
 
     async def fake_get_config(datasource_id, semantic_config_id, user_id=None, mode="summary"):
@@ -337,7 +336,6 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     single = _strip_tool_payload(await tool.ainvoke({
         "semantic_config_id": "sc_a",
         "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
-        "user_query": "查销售额",
     }))
     assert single["success"] is True
     assert single["mode"] == "single"
@@ -347,12 +345,10 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     batch_from_cards = _strip_tool_payload(await tool.ainvoke({
         "semantic_config_id": "sc_a",
         "dsl": {"cards": [{"title": "销售额"}]},
-        "user_query": "生成看板",
     }))
     batch_from_list = _strip_tool_payload(await tool.ainvoke({
         "semantic_config_id": "sc_a",
         "dsl": [{"title": "销售额"}, {"title": "订单数"}],
-        "user_query": "生成看板",
     }))
     assert batch_from_cards["mode"] == "batch"
     assert batch_from_cards["valid_count"] == 1

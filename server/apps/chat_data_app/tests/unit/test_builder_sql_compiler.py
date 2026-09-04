@@ -1718,7 +1718,7 @@ def test_semantic_unified_engine_allows_dimension_in_metrics():
     assert "GROUP BY order_no, user_id" in sql
 
 
-def test_semantic_unified_engine_uses_dsl_metric_expression_not_user_query():
+def test_semantic_unified_engine_uses_dsl_metric_expression():
     semantic_config = {
         "source_type": "mysql",
         "metrics": [
@@ -1742,7 +1742,6 @@ def test_semantic_unified_engine_uses_dsl_metric_expression_not_user_query():
         having=[],
         order_by=[],
         limit=100,
-        user_query="查看订单明细",
     )
     assert result["success"] is True
     sql = result["sql"]
@@ -1773,7 +1772,6 @@ def test_semantic_unified_engine_dimensions_only_query_is_detail():
         having=[],
         order_by=[],
         limit=100,
-        user_query="查询订单数据",
     )
 
     assert result["success"] is True
