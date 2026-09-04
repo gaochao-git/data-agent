@@ -240,22 +240,21 @@ def test_system_prompt_uses_provided_skills_xml_or_empty_fallback():
 
 
 def test_system_prompt_environment_block_ignores_workspace_root():
-    """现状固化（疑似缺陷，待确认）：`ENVIRONMENT_BLOCK` 已无 `{workspace_root}` 占位符。
-
-    `build_unified_system_prompt` 第 246 行仍在调用
-    ``ENVIRONMENT_BLOCK.format(workspace_root=workspace_root or "未初始化")``，
-    但模板里没有任何 ``{}`` 占位，因此具体路径和 "未初始化" 兜底值**都不会**进入
-    提示词。若希望提示词带上真实工作目录，应把占位符加回 `ENVIRONMENT_BLOCK`，
-    而不是修改本用例。
-    """
+    """环境块是纯静态目录树（含 semantic 快照与 /mnt/skills），workspace_root 入参不参与拼装。"""
     with_root = chat_data.build_unified_system_prompt(
         AgentRuntimeOptions(), workspace_root="/mnt/user-data/workspace"
     )
 
-    assert chat_data.ENVIRONMENT_BLOCK in with_root
+    assert "## 环境" in with_root
+    assert "├── workspace/   主工作区" in with_root
+    # semantic/ 与 /mnt/skills 在环境块集中声明一次
+    assert "└── semantic/  本轮启用语义模型的只读 YAML 快照" in with_root
+    assert "{模型名}__{id后缀}.yaml" in with_root
+    assert "查询结果由系统存于 outputs/query_result/" in with_root
+    assert "/mnt/skills/<技能名>/" in with_root
     assert "工作目录：\n/mnt/user-data/workspace" not in with_root
     assert "未初始化" not in with_root
-    # 两个入参走的是同一段模板，因此产出完全相同
+    # workspace_root 不参与拼装，两个入参产出完全相同
     assert chat_data.build_unified_system_prompt(AgentRuntimeOptions()) == with_root
 
 
