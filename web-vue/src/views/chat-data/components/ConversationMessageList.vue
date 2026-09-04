@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../types'
 import { extractGeneratedSqlFromToolCall } from '../utils/semanticTool'
@@ -18,6 +18,8 @@ interface Props {
   shouldInlineRenderResult?: (toolCall: ToolCallInfo) => boolean
   onSave?: (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void
   conversationId?: string | null
+  /** 本轮 Run 仍活跃（流式进行中 / 链式接续 / 等待用户 / 恢复订阅）时抑制底部 footer */
+  runActive?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -31,6 +33,7 @@ const props = withDefaults(defineProps<Props>(), {
   shouldInlineRenderResult: (toolCall: ToolCallInfo) => (
     toolCall.renderType === 'queryResult' && Boolean(toolCall.renderId)
   ),
+  runActive: false,
 })
 
 const emit = defineEmits<{
@@ -145,6 +148,24 @@ const getCopyableAssistantContent = (message: Message): string => {
 
 const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
 
+/**
+ * run 活跃时，只有「当前 run 产生」的消息（最后一条 user 消息之后的）才抑制 footer；
+ * 历史轮次的 footer 保持稳定，不随新 run 启停闪烁。
+ */
+const activeRunStartIndex = computed(() => {
+  if (!props.runActive) return -1
+  for (let i = props.messages.length - 1; i >= 0; i--) {
+    if (props.messages[i]?.role === 'user') return i
+  }
+  return -1
+})
+
+const shouldShowAssistantFooter = (message: Message, index: number): boolean => {
+  if (message.isStreaming) return false
+  if (props.runActive && index > activeRunStartIndex.value) return false
+  return shouldShowMessageCopyButton(message)
+}
+
 const USER_MESSAGE_SCROLL_LINE_THRESHOLD = 10
 const USER_MESSAGE_SCROLL_MAX_HEIGHT = '240px'
 
@@ -193,7 +214,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
 <template>
   <div class="chat-message-list mx-auto flex w-[90%] max-w-[774px] flex-col gap-5">
     <div
-      v-for="message in messages"
+      v-for="(message, messageIndex) in messages"
       :key="message.id"
       class="flex"
       :class="message.role === 'user' ? 'justify-end' : message.role === 'context_compression' ? 'justify-center' : 'justify-start'"
@@ -349,7 +370,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
             </div>
           </div>
 
-          <div v-if="!message.isStreaming && shouldShowMessageCopyButton(message)" class="mt-1 px-0">
+          <div v-if="shouldShowAssistantFooter(message, messageIndex)" class="mt-1 px-0">
             <AssistantMessageFooter :timestamp="formatDateTimeValue(message.timestamp)">
               <button
                 type="button"

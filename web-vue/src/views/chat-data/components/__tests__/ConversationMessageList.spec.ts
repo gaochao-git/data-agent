@@ -18,10 +18,14 @@ const streamingAssistantMessage: Message = {
   segments: [{ type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' }],
 }
 
-const mountList = (messages: Message[]) => shallowMount(ConversationMessageList, {
-  props: { messages },
+const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}) => shallowMount(ConversationMessageList, {
+  props: { messages, ...extraProps },
   global: {
-    stubs: { ElTooltip: { template: '<div><slot /><slot name="content" /></div>' } },
+    stubs: {
+      ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
+      // shallowMount 的自动 stub 不渲染默认 slot，footer 内的复制按钮与 AI 声明需显式透出
+      AssistantMessageFooter: { template: '<div><slot /><span>本回答由 AI 生成</span></div>' },
+    },
   },
 })
 
@@ -111,5 +115,45 @@ describe('ConversationMessageList', () => {
     expect(wrapper.text()).toContain('上下文已压缩')
     expect(wrapper.text()).toContain('释放 49,000 tokens')
     expect(wrapper.find('.rounded-2xl').exists()).toBe(false)
+  })
+
+  it('shows the assistant footer after streaming finishes', () => {
+    const wrapper = mountList([{
+      id: 'assistant-done',
+      role: 'assistant',
+      content: '已完成回答',
+      isStreaming: false,
+    }])
+
+    expect(wrapper.text()).toContain('复制')
+    expect(wrapper.text()).toContain('本回答由 AI 生成')
+  })
+
+  it('hides the assistant footer while the run is still active even if the message stopped streaming', () => {
+    // 中间事件（等待用户 / 队列准入 / 上下文压缩 / 断流恢复轮询）会把单条消息
+    // 的 isStreaming 提前置 false，但 Run 仍活跃；footer 属于 Run 级语义，必须抑制。
+    const wrapper = mountList([{
+      id: 'assistant-mid-run',
+      role: 'assistant',
+      content: '部分回答',
+      isStreaming: false,
+    }], { runActive: true })
+
+    expect(wrapper.text()).not.toContain('复制')
+    expect(wrapper.text()).not.toContain('本回答由 AI 生成')
+  })
+
+  it('keeps historical assistant footers visible while a new run is active', () => {
+    // 抑制范围只覆盖当前 run（最后一条 user 消息之后），历史轮次 footer 不随新 run 启停闪烁。
+    const wrapper = mountList([
+      { id: 'user-1', role: 'user', content: '第一轮提问', isStreaming: false },
+      { id: 'assistant-old', role: 'assistant', content: '第一轮回答', isStreaming: false },
+      { id: 'user-2', role: 'user', content: '第二轮提问', isStreaming: false },
+      { id: 'assistant-new', role: 'assistant', content: '第二轮部分回答', isStreaming: false },
+    ], { runActive: true })
+
+    // 只有历史消息（assistant-old）显示 footer；当前 run 的消息（assistant-new）被抑制
+    expect(wrapper.text().match(/复制/g)).toHaveLength(1)
+    expect(wrapper.text().match(/本回答由 AI 生成/g)).toHaveLength(1)
   })
 })

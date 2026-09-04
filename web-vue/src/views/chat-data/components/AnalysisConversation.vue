@@ -2917,6 +2917,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :display-content="getConversationDisplayContent"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
+          :run-active="isGenerating || hasActiveRun"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"
         >
