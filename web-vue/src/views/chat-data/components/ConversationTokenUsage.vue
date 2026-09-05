@@ -268,7 +268,7 @@ const formatBreakdownText = (raw: string): string => {
   const re = /['"]text['"]\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/g
   let match: RegExpExecArray | null = re.exec(text)
   while (match !== null) {
-    parts.push(match[2].replace(/\\n/g, '\n'))
+    parts.push((match[2] ?? '').replace(/\\n/g, '\n'))
     match = re.exec(text)
   }
   return parts.length ? parts.join('\n\n') : text

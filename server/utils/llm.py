@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, AIMessageChunk
+from langchain_core.messages import AIMessageChunk
 
 
 _THIRD_PARTY_REASONING_KEYS = ("reasoning_content", "reasoning", "reasoning_text")
@@ -46,27 +46,6 @@ def _patch_langchain_openai_reasoning_fields() -> None:
 
     openai_chat_base._convert_delta_to_message_chunk = patched_convert_delta_to_message_chunk
     _REASONING_PATCHED = True
-
-
-def count_tokens(llm: BaseChatModel, messages: list[BaseMessage], tools: list | None = None) -> int:
-    """
-    统计消息的 token 数量（粗略估算，避免内网环境下 tiktoken 网络请求）
-
-    Args:
-        llm: LLM 实例（未使用，保留参数兼容性）
-        messages: 消息列表
-        tools: 工具列表（可选）
-
-    Returns:
-        token 数量（估算值，约 4 字符 = 1 token）
-    """
-    num_tokens = 0
-    for m in messages:
-        num_tokens += 4  # 消息结构开销
-        num_tokens += len(str(m.content or "")) // 4
-    if tools:
-        num_tokens += len(tools) * 50  # 每个工具约 50 tokens
-    return num_tokens
 
 
 def get_llm(

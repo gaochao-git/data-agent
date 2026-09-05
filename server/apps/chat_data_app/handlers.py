@@ -2272,7 +2272,7 @@ async def sql_completion_handler(
     run_options = _parse_completion_run_options(options)
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
-    await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
+    await conversation.get_or_create_conversation(AGENT_ID, conversation_id, user_id)
     runtime_context = {
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。

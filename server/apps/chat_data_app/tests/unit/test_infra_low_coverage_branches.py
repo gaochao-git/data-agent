@@ -8,7 +8,6 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 import auth
@@ -184,7 +183,7 @@ def test_service_token_and_forwarded_user_auth_branches(monkeypatch):
     assert auth._normalize_header_text(" plain ") == "plain"
 
 
-def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
+def test_llm_get_llm_kwargs(monkeypatch):
     captured = {}
 
     def fake_init_chat_model(**kwargs):
@@ -192,8 +191,6 @@ def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
         return SimpleNamespace(model=kwargs["model"])
 
     monkeypatch.setattr(llm, "init_chat_model", fake_init_chat_model)
-    token_count = llm.count_tokens(None, [HumanMessage(content="12345678"), HumanMessage(content="")], tools=[{"name": "t"}])
-    assert token_count == 60
 
     model = llm.get_llm(
         model="model-a",

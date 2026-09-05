@@ -86,16 +86,16 @@ async def _load_quick_sql_context(
 
 
 async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, user_id: str) -> str | None:
-    existing_agent_id = await conversation.get_agent_id("", payload.conversation_id, user_id)
+    existing_agent_id = await conversation.get_agent_id(payload.conversation_id, user_id)
     if existing_agent_id and existing_agent_id != SQL_ASSIST_AGENT_ID:
         return "对话不存在"
 
     if not existing_agent_id:
-        unowned_agent_id = await conversation.get_agent_id("", payload.conversation_id)
+        unowned_agent_id = await conversation.get_agent_id(payload.conversation_id)
         if unowned_agent_id:
             return "对话不存在"
 
-    await conversation.get_or_create_conversation("", SQL_ASSIST_AGENT_ID, payload.conversation_id, user_id)
+    await conversation.get_or_create_conversation(SQL_ASSIST_AGENT_ID, payload.conversation_id, user_id)
     return None
 
 

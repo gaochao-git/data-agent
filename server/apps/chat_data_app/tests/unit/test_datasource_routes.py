@@ -1263,7 +1263,7 @@ def test_quick_sql_endpoint_creates_new_owned_conversation(monkeypatch):
     text = "".join(_collect_stream_chunks_sync(response))
 
     assert '"sql": "SELECT 3"' in text
-    assert created[-1] == ("", routes.SQL_ASSIST_AGENT_ID, "conv_new", "sql_user")
+    assert created[-1] == (routes.SQL_ASSIST_AGENT_ID, "conv_new", "sql_user")
 
 
 def test_list_semantic_configs_uses_lightweight_existence_check(monkeypatch):
@@ -2634,7 +2634,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
 
-    async def _fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def _fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         captured["agent_id"] = agent_id
         captured["conversation_id"] = conversation_id
         captured["user_id"] = user_id

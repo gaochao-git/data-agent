@@ -73,15 +73,15 @@ def test_conversation_formatting_helpers():
 
 @pytest.mark.asyncio
 async def test_conversation_crud_and_list_branches(conversation_db):
-    created = await conversation_module.create("", "agent_a", user_id="u1")
+    created = await conversation_module.create("agent_a", user_id="u1")
     conv_id = created["id"]
 
-    assert await conversation_module.get_or_create_conversation("", "agent_a", conv_id, user_id="u1") == conv_id
+    assert await conversation_module.get_or_create_conversation("agent_a", conv_id, user_id="u1") == conv_id
     with pytest.raises(PermissionError):
-        await conversation_module.get_or_create_conversation("", "agent_a", conv_id, user_id="u2")
-    assert await conversation_module.get_or_create_conversation("", "agent_b", "conv_b", user_id="u1") == "conv_b"
+        await conversation_module.get_or_create_conversation("agent_a", conv_id, user_id="u2")
+    assert await conversation_module.get_or_create_conversation("agent_b", "conv_b", user_id="u1") == "conv_b"
 
-    listed = await conversation_module.list("", "agent_a", user_id="u1", limit=10, offset=-1)
+    listed = await conversation_module.list("agent_a", user_id="u1", limit=10, offset=-1)
     assert [item["id"] for item in listed] == [conv_id]
     assert await conversation_module.list_by_agent_ids([], user_id="u1") == []
     listed_many = await conversation_module.list_by_agent_ids(["agent_a", "agent_b"], user_id="u1")
@@ -90,12 +90,12 @@ async def test_conversation_crud_and_list_branches(conversation_db):
     all_rows = await conversation_module.list_all({"agent_a": {}, "agent_b": {}}, user_id="u1", limit=5)
     assert len(all_rows) == 2
 
-    assert await conversation_module.get_agent_id("", conv_id, user_id="u1") == "agent_a"
-    assert await conversation_module.update_title("", conv_id, "新标题", user_id="u1") is True
-    assert await conversation_module.update_title("", conv_id, "无权", user_id="u2") is False
-    assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is True
-    assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is False
-    assert await conversation_module.toggle_favorite("", "missing", user_id="u1") is None
+    assert await conversation_module.get_agent_id(conv_id, user_id="u1") == "agent_a"
+    assert await conversation_module.update_title(conv_id, "新标题", user_id="u1") is True
+    assert await conversation_module.update_title(conv_id, "无权", user_id="u2") is False
+    assert await conversation_module.toggle_favorite(conv_id, user_id="u1") is True
+    assert await conversation_module.toggle_favorite(conv_id, user_id="u1") is False
+    assert await conversation_module.toggle_favorite("missing", user_id="u1") is None
     assert await conversation_module.get_datasource_id(conv_id, "u1") is None
     assert await conversation_module.resolve_datasource_binding(conv_id, "u1", "ds_a") == "ds_a"
     assert await conversation_module.get_datasource_id(conv_id, "u1") == "ds_a"
@@ -115,7 +115,7 @@ async def test_grouped_conversations_return_every_group_first_page_without_count
         await conversation_module.sync_thread_to_db("u1", conversation_id, "agent_a", title=conversation_id, is_new=True)
         if datasource_id:
             await conversation_module.resolve_datasource_binding(conversation_id, "u1", datasource_id)
-    await conversation_module.toggle_favorite("", "favorite", user_id="u1")
+    await conversation_module.toggle_favorite("favorite", user_id="u1")
     await conversation_module.sync_thread_to_db("u2", "other-user", "agent_a", title="other", is_new=True)
     await conversation_module.resolve_datasource_binding("other-user", "u2", "ds_private")
 
@@ -167,7 +167,7 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     await conversation_module.sync_thread_to_db("u1", "conv_existing", "agent_a", title="不会重复创建", is_new=True)
     await conversation_module.sync_thread_to_db("", "conv_system", "agent_a", is_new=True)
 
-    listed_without_user = await conversation_module.list("", "agent_a", user_id=None, limit=10, offset=0)
+    listed_without_user = await conversation_module.list("agent_a", user_id=None, limit=10, offset=0)
     assert {item["id"] for item in listed_without_user} >= {"conv_existing", "conv_system"}
 
     listed_by_agents_without_user = await conversation_module.list_by_agent_ids(["agent_a"], user_id=None, limit=10, offset=-10)
@@ -175,18 +175,18 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
 
     original_list = conversation_module.list
 
-    async def sometimes_fails(db_path, agent_id, user_id=None, limit=50, offset=0):
+    async def sometimes_fails(agent_id, user_id=None, limit=50, offset=0):
         if agent_id == "bad_agent":
             raise RuntimeError("list failed")
-        return await original_list(db_path, agent_id, user_id, limit, offset)
+        return await original_list(agent_id, user_id, limit, offset)
 
     monkeypatch.setattr(conversation_module, "list", sometimes_fails)
     rows = await conversation_module.list_all({"bad_agent": {}, "agent_a": {}}, user_id=None, limit=10)
     assert any(item["id"] == "conv_existing" for item in rows)
 
-    assert await conversation_module.update_title("", "conv_existing", "无用户过滤标题", user_id=None) is True
-    assert await conversation_module.toggle_favorite("", "conv_existing", user_id=None) in {True, False}
-    assert await conversation_module.get_agent_id("", "conv_existing", user_id=None) == "agent_a"
+    assert await conversation_module.update_title("conv_existing", "无用户过滤标题", user_id=None) is True
+    assert await conversation_module.toggle_favorite("conv_existing", user_id=None) in {True, False}
+    assert await conversation_module.get_agent_id("conv_existing", user_id=None) == "agent_a"
 
 
 @pytest.mark.asyncio
@@ -199,18 +199,18 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     assert detail["title"] == "更新标题"
     assert detail["messages"] == []
 
-    assert await conversation_module.generate_title("", "missing", "u1") is None
-    assert await conversation_module.generate_title("", "conv_sync", "u1") == "更新标题"
+    assert await conversation_module.generate_title("missing", "u1") is None
+    assert await conversation_module.generate_title("conv_sync", "u1") == "更新标题"
 
-    await conversation_module.update_title("", "conv_sync", "未命名会话", user_id="u1")
+    await conversation_module.update_title("conv_sync", "未命名会话", user_id="u1")
     calls = []
 
-    async def fake_update_title(db_path, conversation_id, title, user_id=None):
+    async def fake_update_title(conversation_id, title, user_id=None):
         calls.append((conversation_id, title, user_id))
         return True
 
     monkeypatch.setattr(conversation_module, "update_title", fake_update_title)
-    assert await conversation_module.generate_title("", "conv_sync", "u1") is None
+    assert await conversation_module.generate_title("conv_sync", "u1") is None
     assert calls == []
 
 
@@ -265,7 +265,7 @@ async def test_conversation_get_detail_with_empty_event_history(conversation_db)
 @pytest.mark.asyncio
 async def test_conversation_generate_title_from_event_history(conversation_db, monkeypatch):
     await conversation_module.sync_thread_to_db("u1", "conv_graph", "agent_a", is_new=True)
-    assert await conversation_module.generate_title("", "conv_graph", "u1") is None
+    assert await conversation_module.generate_title("conv_graph", "u1") is None
     await conversation_module.conversation_event_service.persist_user_message(
         conversation_id="conv_graph",
         user_id="u1",
@@ -287,7 +287,7 @@ async def test_conversation_generate_title_from_event_history(conversation_db, m
 
     monkeypatch.setattr(conversation_module, "_get_title_llm", lambda: object())
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: FakePrompt())
-    assert await conversation_module.generate_title("", "conv_graph", "u1") == "订单销售趋势分析"
+    assert await conversation_module.generate_title("conv_graph", "u1") == "订单销售趋势分析"
 
     class BadChain:
         async def ainvoke(self, _payload):
@@ -298,8 +298,8 @@ async def test_conversation_generate_title_from_event_history(conversation_db, m
             return BadChain()
 
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
-    await conversation_module.update_title("", "conv_graph", "未命名会话", "u1")
-    assert await conversation_module.generate_title("", "conv_graph", "u1") == "请分析订单销售趋势"
+    await conversation_module.update_title("conv_graph", "未命名会话", "u1")
+    assert await conversation_module.generate_title("conv_graph", "u1") == "请分析订单销售趋势"
 
 
 @pytest.mark.asyncio

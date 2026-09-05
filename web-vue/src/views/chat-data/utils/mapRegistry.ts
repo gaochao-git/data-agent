@@ -29,7 +29,6 @@ export async function registerChinaMap(): Promise<void> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       echarts.registerMap('china', (chinaGeoJson.default || chinaGeoJson) as any)
       isMapRegistered = true
-      console.log('[MapRegistry] 中国地图注册成功')
     } catch (error) {
       console.error('[MapRegistry] 中国地图注册失败:', error)
       throw error

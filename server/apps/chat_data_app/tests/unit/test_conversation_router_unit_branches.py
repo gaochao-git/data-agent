@@ -26,21 +26,17 @@ class FakeRequest:
 def router_state(monkeypatch):
     original_configs = dict(conversation_router._agent_configs)
     original_completion = dict(conversation_router._completion_handlers)
-    original_db_path = conversation_router._default_db_path
 
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
-    conversation_router._default_db_path = "db"
     conversation_router._agent_configs.update({
         "agent_a": {
-            "db_path": "db",
             "get_graph": lambda _checkpointer: None,
             "get_checkpointer": lambda: None,
         },
         "agent_nograph": {
-            "db_path": "db",
             "get_graph": None,
             "get_checkpointer": None,
         },
@@ -52,13 +48,12 @@ def router_state(monkeypatch):
     conversation_router._agent_configs.update(original_configs)
     conversation_router._completion_handlers.clear()
     conversation_router._completion_handlers.update(original_completion)
-    conversation_router._default_db_path = original_db_path
 
 
 def test_registration_and_auth_helpers(router_state, monkeypatch):
     conversation_router.register_completion_handler("agent_b", lambda **_kwargs: None)
     assert "agent_b" in conversation_router._completion_handlers
-    assert conversation_router.get_agent_config("agent_a")["db_path"] == "db"
+    assert conversation_router.get_agent_config("agent_a")["get_graph"] is not None
 
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(username="name-only"))
     assert conversation_router._get_user_id(FakeRequest()) == "name-only"
@@ -74,10 +69,11 @@ def test_registration_and_auth_helpers(router_state, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_agent_config_by_conversation_branches(router_state, monkeypatch):
-    conversation_router._default_db_path = None
+    original_configs = dict(conversation_router._agent_configs)
+    conversation_router._agent_configs.clear()
     assert await conversation_router.get_agent_config_by_conversation("conv") is None
+    conversation_router._agent_configs.update(original_configs)
 
-    conversation_router._default_db_path = "db"
     async def get_no_agent(*_args, **_kwargs):
         return None
 
@@ -88,22 +84,22 @@ async def test_get_agent_config_by_conversation_branches(router_state, monkeypat
         return "agent_a"
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
-    assert (await conversation_router.get_agent_config_by_conversation("conv"))["db_path"] == "db"
+    assert (await conversation_router.get_agent_config_by_conversation("conv"))["get_graph"] is not None
 
 
 @pytest.mark.asyncio
 async def test_conversation_crud_routes_success_and_errors(router_state, monkeypatch):
     request = FakeRequest()
 
-    async def fake_create(db_path, agent_id, user_id):
-        return {"id": "conv_new", "agent_id": agent_id, "user_id": user_id, "db_path": db_path}
+    async def fake_create(agent_id, user_id):
+        return {"id": "conv_new", "agent_id": agent_id, "user_id": user_id}
 
     monkeypatch.setattr(conversation_router.conversation, "create", fake_create)
     created = payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))
     assert created["data"]["id"] == "conv_new"
     assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="missing"), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
-    async def fake_list(_db_path, agent_id, user_id, limit, offset):
+    async def fake_list(agent_id, user_id, limit, offset):
         assert agent_id == "agent_a"
         assert user_id == "u1"
         assert offset == 1
@@ -221,7 +217,7 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
 async def test_completion_route_validates_ownership_and_injects_supported_kwargs(router_state, monkeypatch):
     request = FakeRequest()
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+    async def fake_get_agent_id(conversation_id, user_id=None):
         if conversation_id == "owned":
             return "agent_a" if user_id == "u1" else None
         if conversation_id == "other-owned":
@@ -333,7 +329,7 @@ async def test_completion_route_binds_datasource_and_rejects_mismatch(router_sta
         request,
     )
     assert response == {"streamed": True}
-    assert created == [("", "agent_a", "conv", "u1")]
+    assert created == [("agent_a", "conv", "u1")]
     assert handler_options[-1]["datasource_id"] == "ds_a"
 
     restored = await conversation_router.completion(
@@ -485,7 +481,7 @@ def steer_router_state(router_state, monkeypatch):
     """steer 接口测试环境：会话归属校验通过，inbox service 可观察。"""
     calls = {}
 
-    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+    async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
     async def enqueue(conversation_id, user_id, operator_name, content, queue_type="next-turn"):
@@ -660,7 +656,7 @@ async def test_pending_question_is_scoped_to_current_user(router_state, monkeypa
 
 @pytest.mark.asyncio
 async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatch):
-    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+    async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):
@@ -689,7 +685,7 @@ async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatc
 async def test_answer_question_does_not_claim_before_existing_run_done(router_state, monkeypatch):
     calls = {"claim": 0}
 
-    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+    async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):
@@ -720,7 +716,7 @@ async def test_answer_question_does_not_claim_before_existing_run_done(router_st
 async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fails(router_state, monkeypatch):
     calls = {}
 
-    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+    async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):
@@ -755,7 +751,7 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
 async def test_resume_question_subscribes_after_existing_question_events(router_state, monkeypatch):
     calls = {}
 
-    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+    async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
     async def pending(_conversation_id, _user_id):

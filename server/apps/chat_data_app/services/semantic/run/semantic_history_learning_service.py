@@ -169,7 +169,7 @@ async def _load_history_conversation_context(conversation_id: str, user_id: str)
     if not normalized_id:
         return None
     try:
-        agent_id = await conversation.get_agent_id("", normalized_id, user_id)
+        agent_id = await conversation.get_agent_id(normalized_id, user_id)
         if agent_id != AGENT_ID:
             logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
             return None

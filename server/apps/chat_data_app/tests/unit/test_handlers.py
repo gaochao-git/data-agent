@@ -351,7 +351,7 @@ def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
 
 
 def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
-    assert agent_sql_tools._normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
+    assert agent_sql_tools.normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
 
 
 def _FakeMessageChunk(
@@ -1262,7 +1262,7 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert response.media_type == "text/event-stream"
     assert response.headers["X-ChatData-Run-Id"] == "run-test"
     assert response.headers["X-Accel-Buffering"] == "no"
-    assert captured["conversation"] == ("", "chat_data", "conv_sql", "u1")
+    assert captured["conversation"] == ("chat_data", "conv_sql", "u1")
     chunks = asyncio.run(_collect_async_iter(response.body_iterator))
     assert chunks == ["id: test-1-0\nevent: done\ndata: [DONE]\n\n"]
     runtime_context = captured["start_run_args"][3]

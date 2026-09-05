@@ -26,16 +26,13 @@ class FakeRequest:
 def router_state(monkeypatch):
     original_configs = dict(conversation_router._agent_configs)
     original_completion = dict(conversation_router._completion_handlers)
-    original_db_path = conversation_router._default_db_path
 
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
-    conversation_router._default_db_path = "db"
     conversation_router._agent_configs.update({
         conversation_router.AGENT_ID: {
-            "db_path": "db",
             "get_graph": lambda _checkpointer: None,
             "get_checkpointer": lambda: None,
         },
@@ -46,7 +43,6 @@ def router_state(monkeypatch):
     conversation_router._agent_configs.update(original_configs)
     conversation_router._completion_handlers.clear()
     conversation_router._completion_handlers.update(original_completion)
-    conversation_router._default_db_path = original_db_path
 
 
 def identity_sync(request_obj=None):
@@ -58,7 +54,7 @@ def identity_sync(request_obj=None):
 async def test_create_conversation_snapshot_failure_is_non_blocking(router_state, monkeypatch):
     created = []
 
-    async def fake_create(db_path, agent_id, user_id):
+    async def fake_create(agent_id, user_id):
         created.append((agent_id, user_id))
         return {"id": "conv_1"}
 
@@ -155,7 +151,7 @@ async def test_list_conversations_grouped_and_unknown_agent_branches(router_stat
 @pytest.mark.asyncio
 async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
     async def config_found(conversation_id, user_id=None):
-        return {"db_path": "db"}
+        return {"get_checkpointer": None}
 
     async def detail_ok(*_args, **_kwargs):
         return {"id": "conv_1", "messages": ["m"], "reasoning_segments": ["r"], "extra": True}
@@ -177,10 +173,10 @@ async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
     async def config_missing(conversation_id, user_id=None):
         return None
 
-    async def title_ok(db_path, conversation_id, title, user_id):
+    async def title_ok(conversation_id, title, user_id):
         return True
 
-    async def title_fail(db_path, conversation_id, title, user_id):
+    async def title_fail(conversation_id, title, user_id):
         return False
 
     monkeypatch.setattr(conversation_router, "_get_user_id", lambda request_obj: "u1")
@@ -231,13 +227,13 @@ async def test_toggle_favorite_all_branches(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router, "_get_user_id", lambda request_obj: "u1")
 
     async def config_found(conversation_id, user_id=None):
-        return {"db_path": "db"}
+        return {"get_checkpointer": None}
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", config_found)
 
     values = iter([None, True, False])
 
-    async def toggle(db_path, conversation_id, user_id):
+    async def toggle(conversation_id, user_id):
         return next(values)
 
     monkeypatch.setattr(conversation_router.conversation, "toggle_favorite", toggle)
@@ -624,7 +620,7 @@ async def test_get_conversation_context_branches(router_state, monkeypatch):
     assert body["msg"] == "对话不存在"
 
     async def config_ok(conversation_id, user_id=None):
-        return {"db_path": "db"}
+        return {"get_checkpointer": None}
 
     async def datasource_ok(conversation_id, user_id):
         return "ds_a"

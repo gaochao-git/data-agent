@@ -934,7 +934,7 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
 def test_history_context_loader_branches(monkeypatch):
     calls = []
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id):
+    async def fake_get_agent_id(conversation_id, user_id):
         calls.append(("agent", conversation_id, user_id))
         if conversation_id == "boom":
             raise RuntimeError("conversation error")
@@ -1470,7 +1470,7 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
         "relationships": [{"left_table": "", "right_table": "users"}],
     }) == {"orders", "users"}
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id):
+    async def fake_get_agent_id(conversation_id, user_id):
         assert user_id == "user_a"
         return {
             "conv_agent": semantic_history_learning_service.AGENT_ID,

@@ -102,7 +102,6 @@ def _clean_title(title: str, fallback: str = "") -> str:
 # ============ 公共函数 ============
 
 async def get_or_create_conversation(
-    db_path: str,  # 保留参数兼容性，但不再使用
     agent_id: str,
     conversation_id: str,
     user_id: str = "system"
@@ -111,7 +110,6 @@ async def get_or_create_conversation(
     获取或创建会话（确保会话记录存在）
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         agent_id: 代理标识
         conversation_id: 会话ID
         user_id: 用户ID
@@ -136,12 +134,11 @@ async def get_or_create_conversation(
     return conversation_id
 
 
-async def create(db_path: str, agent_id: str, user_id: str = "system") -> Dict[str, Any]:
+async def create(agent_id: str, user_id: str = "system") -> Dict[str, Any]:
     """
     创建新会话
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         agent_id: 代理标识
         user_id: 用户ID
 
@@ -157,12 +154,11 @@ async def create(db_path: str, agent_id: str, user_id: str = "system") -> Dict[s
     return {"id": thread_id, "create_time": now.strftime('%Y-%m-%d %H:%M:%S')}
 
 
-async def list(db_path: str, agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
     """
     获取历史会话列表
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         agent_id: 代理标识
         user_id: 用户ID（可选）
         limit: 返回数量限制
@@ -302,7 +298,7 @@ async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None
     获取所有智能体的历史会话列表
 
     Args:
-        agent_configs: 所有智能体配置 {agent_id: {"db_path": "..."}}
+        agent_configs: 所有智能体配置 {agent_id: config}
         user_id: 用户ID（可选）
         limit: 每个智能体返回数量限制
 
@@ -313,8 +309,7 @@ async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None
 
     for agent_id, config in agent_configs.items():
         try:
-            # 使用统一数据库，db_path 参数不再需要
-            conversations = await list("", agent_id, user_id, limit)
+            conversations = await list(agent_id, user_id, limit)
             all_conversations.extend(conversations)
         except Exception as e:
             logger.warning(f"获取 {agent_id} 会话列表失败: {e}")
@@ -407,12 +402,11 @@ async def get_detail(
     }
 
 
-async def update_title(db_path: str, conversation_id: str, title: str, user_id: Optional[str] = None) -> bool:
+async def update_title(conversation_id: str, title: str, user_id: Optional[str] = None) -> bool:
     """
     更新会话标题
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         conversation_id: 会话ID
         title: 新标题
 
@@ -428,7 +422,6 @@ async def update_title(db_path: str, conversation_id: str, title: str, user_id: 
 
 
 async def generate_title(
-    db_path: str,
     conversation_id: str,
     user_id: Optional[str] = None
 ) -> Optional[str]:
@@ -446,13 +439,12 @@ async def generate_title(
         user_id=str(user_id or thread.user_id),
     )
     if first_message:
-        return await _generate_and_update_title(db_path, conversation_id, first_message, user_id)
+        return await _generate_and_update_title(conversation_id, first_message, user_id)
     logger.warning("生成标题失败: %s - 事件表中没有用户消息", conversation_id)
     return None
 
 
 async def _generate_and_update_title(
-    db_path: str,
     conversation_id: str,
     first_message: str,
     user_id: Optional[str],
@@ -478,17 +470,16 @@ async def _generate_and_update_title(
         title = _clean_title("", query)
 
     # 更新到数据库
-    await update_title(db_path, conversation_id, title, user_id)
+    await update_title(conversation_id, title, user_id)
 
     return title
 
 
-async def toggle_favorite(db_path: str, conversation_id: str, user_id: Optional[str] = None) -> Optional[bool]:
+async def toggle_favorite(conversation_id: str, user_id: Optional[str] = None) -> Optional[bool]:
     """
     切换会话收藏状态
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         conversation_id: 会话ID
 
     Returns:
@@ -502,12 +493,11 @@ async def toggle_favorite(db_path: str, conversation_id: str, user_id: Optional[
     return new_favorited
 
 
-async def get_agent_id(db_path: str, conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
+async def get_agent_id(conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
     """
     通过会话ID获取对应的agent_id
 
     Args:
-        db_path: 数据库路径（已废弃，保留兼容）
         conversation_id: 会话ID
 
     Returns:

@@ -88,7 +88,6 @@ class QuestionAnswerRequest(BaseModel):
 
 _agent_configs: Dict[str, Dict[str, Any]] = {}
 _completion_handlers: Dict[str, Callable] = {}
-_default_db_path: Optional[str] = None  # 默认数据库路径（用于通过 conversation_id 查询 agent_id）
 
 
 def register_agent(
@@ -102,19 +101,13 @@ def register_agent(
         agent_id: 代理标识
         get_graph: 获取graph的函数（可选，某些 agent 无 LangGraph 图）
     """
-    global _default_db_path
-
     # 使用公共 checkpointer
-    from utils.checkpoint import DB_PATH, get_checkpointer
+    from utils.checkpoint import get_checkpointer
 
     _agent_configs[agent_id] = {
-        "db_path": DB_PATH,  # 保留用于兼容，实际已不使用
         "get_graph": get_graph,
         "get_checkpointer": get_checkpointer,
     }
-    # 设置默认数据库路径（用于通过 conversation_id 查询 agent_id）
-    if _default_db_path is None:
-        _default_db_path = DB_PATH
 
 def register_completion_handler(agent_id: str, handler: Callable):
     """
@@ -142,10 +135,10 @@ async def get_agent_config_by_conversation(conversation_id: str, user_id: Option
     Returns:
         agent 配置，找不到返回 None
     """
-    if not _default_db_path:
+    if not _agent_configs:
         return None
 
-    agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
+    agent_id = await conversation.get_agent_id(conversation_id, user_id)
     if not agent_id:
         return None
 
@@ -154,13 +147,13 @@ async def get_agent_config_by_conversation(conversation_id: str, user_id: Option
 
 async def _get_existing_agent_for_completion(conversation_id: str, request_agent_id: str, user_id: str) -> Optional[str]:
     """校验会话归属并读取本用户会话的 agent_id。"""
-    existing_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
+    existing_agent_id = await conversation.get_agent_id(conversation_id, user_id)
     if existing_agent_id and existing_agent_id != request_agent_id:
         return None
     if existing_agent_id:
         return existing_agent_id
 
-    unowned_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id)
+    unowned_agent_id = await conversation.get_agent_id(conversation_id)
     return None if unowned_agent_id else ""
 
 
@@ -263,7 +256,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         config = get_agent_config(request.agent_id)
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-        result = await conversation.create(config["db_path"], request.agent_id, user_id)
+        result = await conversation.create(request.agent_id, user_id)
         if request.agent_id == AGENT_ID:
             # 创建会话即构建本会话全部可见技能的快照；构建失败不阻断会话创建，
             # 首次运行时 build_runtime_skill_snapshot_async 会幂等重试。
@@ -380,7 +373,7 @@ async def list_conversations(
             config = get_agent_config(agent_id)
             if not config:
                 return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-            rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
+            rows = await conversation.list(agent_id, user_id, page_size + 1, offset)
             result = _flat_conversation_page_result(rows, page, page_size)
         else:
             # 不指定 agent_id，查询所有智能体的会话
@@ -465,7 +458,7 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
         if not title:
             return business_response(msg="标题不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
 
-        success = await conversation.update_title(config["db_path"], conversation_id, title, user_id)
+        success = await conversation.update_title(conversation_id, title, user_id)
         if not success:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
@@ -500,7 +493,6 @@ async def generate_conversation_title(conversation_id: str, req: Request):
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         title = await conversation.generate_title(
-            config["db_path"],
             conversation_id,
             user_id
         )
@@ -537,7 +529,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
         if not config:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        is_favorited = await conversation.toggle_favorite(config["db_path"], conversation_id, user_id)
+        is_favorited = await conversation.toggle_favorite(conversation_id, user_id)
         if is_favorited is None:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
@@ -600,7 +592,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         if not handler:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
         if not existing_agent_id:
-            await conversation.get_or_create_conversation("", request.agent_id, conversation_id, user_id)
+            await conversation.get_or_create_conversation(request.agent_id, conversation_id, user_id)
         options = dict(request.options or {})
         binding_response = await _apply_completion_datasource_binding(conversation_id, user_id, options)
         if binding_response:
