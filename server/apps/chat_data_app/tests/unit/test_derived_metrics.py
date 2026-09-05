@@ -29,6 +29,19 @@ from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import
 NOW = datetime(2026, 9, 5, 14, 30, 45)
 
 
+@pytest.fixture(autouse=True)
+def _freeze_builder_time(monkeypatch):
+    """端到端适配器路径不接收 now 参数，冻结 builder 模块的 datetime.now 保证断言稳定。"""
+    import apps.chat_data_app.services.semantic.run.semantic_query_plan_builder as builder_mod
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(builder_mod, "datetime", _FrozenDatetime)
+
+
 def build_derived_config() -> dict:
     """构造含派生指标的语义配置。"""
     return {

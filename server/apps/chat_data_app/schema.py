@@ -437,7 +437,7 @@ class SemanticMetric(BaseModel):
     metadata_supplement: Optional[str] = Field(default=None, description="字段级元数据补充说明")
     compare_type: Optional[Literal["mom", "yoy"]] = Field(default=None, description="预计算同比/环比指标类型：mom=环比，yoy=同比")
     compare_mode: Optional[Literal["trend", "value"]] = Field(default=None, description="预计算同比/环比指标形态：trend=趋势，value=单值")
-    base_metric: Optional[str] = Field(default=None, description="预计算同比/环比指标对应的基础指标名称，如'销售额'")
+    base_metric: Optional[str] = Field(default=None, description="基础指标名称；派生指标为必填（口径来源），预计算同比/环比指标（legacy）亦复用此字段，如'销售额'")
     # 派生/复合指标扩展：metric_kind 缺省（None）即为原子指标
     metric_kind: Optional[Literal["derived", "composite"]] = Field(
         default=None, description="指标类别：derived=派生指标，composite=复合指标，缺省为原子指标"
