@@ -179,6 +179,33 @@ async def save_http_remote_ref_sql_result_cache(
     )
 
 
+def _http_cache_ref_identifiers(cached_result: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    """从缓存 payload 提取远端任务 ID 与来源类型（缺省 hive）。"""
+    cached_result = cached_result or {}
+    remote_task_id = str(cached_result.get("remote_task_id") or "").strip()
+    source_type = str(cached_result.get("source_type") or "").strip().lower() or "hive"
+    return remote_task_id, source_type
+
+
+def _http_cache_ref_unavailable(
+    error: str,
+    *,
+    status: str = "failed",
+    columns: Any = None,
+    data: Any = None,
+    total_count: int = 0,
+) -> Dict[str, Any]:
+    """缓存远端引用不可用的统一返回形态。"""
+    return {
+        "_cache_ref_unavailable": True,
+        "status": status,
+        "error": error,
+        "columns": columns or [],
+        "data": data or [],
+        "total_count": total_count,
+    }
+
+
 async def fetch_http_remote_ref_cache_result(
     cached_result: Dict[str, Any],
     *,
@@ -187,17 +214,9 @@ async def fetch_http_remote_ref_cache_result(
     username: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Read a cached HTTP remote task result and preserve cache hit metadata."""
-    remote_task_id = str((cached_result or {}).get("remote_task_id") or "").strip()
-    source_type = str((cached_result or {}).get("source_type") or "").strip().lower() or "hive"
+    remote_task_id, source_type = _http_cache_ref_identifiers(cached_result)
     if not remote_task_id:
-        return {
-            "_cache_ref_unavailable": True,
-            "status": "failed",
-            "error": "HTTP 缓存缺少远端任务 ID",
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
+        return _http_cache_ref_unavailable("HTTP 缓存缺少远端任务 ID")
     try:
         remote_result = await fetch_remote_result(
             remote_task_id,
@@ -207,23 +226,15 @@ async def fetch_http_remote_ref_cache_result(
         )
     except Exception as err:
         logger.warning("读取 HTTP 远端缓存结果失败: remote_task_id=%s error=%s", remote_task_id, err, exc_info=True)
-        return {
-            "_cache_ref_unavailable": True,
-            "status": "failed",
-            "error": str(err) or "HTTP 远端缓存结果读取失败",
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
+        return _http_cache_ref_unavailable(str(err) or "HTTP 远端缓存结果读取失败")
     if not query_result_succeeded(remote_result):
-        return {
-            "_cache_ref_unavailable": True,
-            "error": remote_result.get("error") or "HTTP 远端缓存结果不可用",
-            "status": query_result_status(remote_result),
-            "columns": remote_result.get("columns") or [],
-            "data": remote_result.get("data") or [],
-            "total_count": int(remote_result.get("total_count") or 0),
-        }
+        return _http_cache_ref_unavailable(
+            remote_result.get("error") or "HTTP 远端缓存结果不可用",
+            status=query_result_status(remote_result),
+            columns=remote_result.get("columns") or [],
+            data=remote_result.get("data") or [],
+            total_count=int(remote_result.get("total_count") or 0),
+        )
     return {
         "status": "succeeded",
         "columns": remote_result.get("columns") or [],

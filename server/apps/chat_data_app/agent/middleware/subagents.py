@@ -352,48 +352,78 @@ def _iter_subagent_stream_events(
             message_id = getattr(message, "id", None) or (id_resolver(message) if id_resolver else None)
             text = _plain_text(getattr(message, "content", ""))
             if text.strip():
-                if message_id and message_id in streamed_text_ids:
-                    events.append({
-                        "event_type": "subagent_message",
-                        "message_id": message_id,
-                        "content": "",
-                        "streamed": True,
-                        "truncated": len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
-                        "parent_tool_call_id": parent_tool_call_id,
-                    })
-                else:
-                    events.append({
-                        "event_type": "subagent_message",
-                        "message_id": message_id,
-                        "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容"),
-                        # 两个分支都显式带 streamed：前端按布尔值判断收敛，
-                        # 不区分「字段缺失」与「未流式」
-                        "streamed": False,
-                        "truncated": len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
-                        "parent_tool_call_id": parent_tool_call_id,
-                    })
-            for tool_call in getattr(message, "tool_calls", None) or []:
-                if not isinstance(tool_call, dict):
-                    continue
-                events.append({
-                    "event_type": "tool_started",
-                    "tool_call_id": tool_call.get("id"),
-                    "tool_name": tool_call.get("name"),
-                    "args": coerce_tool_call_args(tool_call.get("args")) or {},
-                    "parent_tool_call_id": parent_tool_call_id,
-                })
+                events.append(_subagent_message_event(
+                    message_id,
+                    text,
+                    parent_tool_call_id,
+                    already_streamed=bool(message_id and message_id in streamed_text_ids),
+                ))
+            events.extend(_subagent_tool_started_events(message, parent_tool_call_id))
         elif isinstance(message, ToolMessage):
-            raw = _plain_text(getattr(message, "content", ""))
-            status = str(getattr(message, "status", "") or "")
-            events.append({
-                "event_type": "tool_failed" if status == "error" else "tool_completed",
-                "tool_call_id": getattr(message, "tool_call_id", None),
-                "tool_name": getattr(message, "name", None),
-                "content": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
-                "truncated": len(raw) > SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
-                "parent_tool_call_id": parent_tool_call_id,
-            })
+            events.append(_subagent_tool_result_event(message, parent_tool_call_id))
     return events
+
+
+def _subagent_message_event(
+    message_id: str | None,
+    text: str,
+    parent_tool_call_id: str | None,
+    already_streamed: bool,
+) -> dict[str, Any]:
+    """生成 subagent_message 事件。
+
+    已流式转发过的消息（``already_streamed``）不再携带 content（前端已拼出
+    全文），只补 ``truncated`` 标记——只补标记不覆盖。两个分支都显式带
+    ``streamed``：前端按布尔值判断收敛，不区分「字段缺失」与「未流式」。
+    """
+    truncated = len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS
+    if already_streamed:
+        return {
+            "event_type": "subagent_message",
+            "message_id": message_id,
+            "content": "",
+            "streamed": True,
+            "truncated": truncated,
+            "parent_tool_call_id": parent_tool_call_id,
+        }
+    return {
+        "event_type": "subagent_message",
+        "message_id": message_id,
+        "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容"),
+        "streamed": False,
+        "truncated": truncated,
+        "parent_tool_call_id": parent_tool_call_id,
+    }
+
+
+def _subagent_tool_started_events(message: AIMessage, parent_tool_call_id: str | None) -> list[dict[str, Any]]:
+    """把 AIMessage 的 tool_calls 翻译成 tool_started 事件（args 尽力规整为 dict）。"""
+    events: list[dict[str, Any]] = []
+    for tool_call in getattr(message, "tool_calls", None) or []:
+        if not isinstance(tool_call, dict):
+            continue
+        events.append({
+            "event_type": "tool_started",
+            "tool_call_id": tool_call.get("id"),
+            "tool_name": tool_call.get("name"),
+            "args": coerce_tool_call_args(tool_call.get("args")) or {},
+            "parent_tool_call_id": parent_tool_call_id,
+        })
+    return events
+
+
+def _subagent_tool_result_event(message: ToolMessage, parent_tool_call_id: str | None) -> dict[str, Any]:
+    """把 ToolMessage 翻译成 tool_completed / tool_failed 事件（结果截断为预览）。"""
+    raw = _plain_text(getattr(message, "content", ""))
+    status = str(getattr(message, "status", "") or "")
+    return {
+        "event_type": "tool_failed" if status == "error" else "tool_completed",
+        "tool_call_id": getattr(message, "tool_call_id", None),
+        "tool_name": getattr(message, "name", None),
+        "content": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
+        "truncated": len(raw) > SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
+        "parent_tool_call_id": parent_tool_call_id,
+    }
 
 
 class _SubagentStreamState:

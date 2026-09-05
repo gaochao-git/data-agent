@@ -178,17 +178,28 @@ def _is_aggregate_metric(metric: Dict[str, Any]) -> bool:
     return expression.startswith(("COUNT(", "SUM(", "AVG(", "MAX(", "MIN("))
 
 
+def _selected_semantic_metrics(metrics: List[Any], semantic_config: Dict[str, Any]) -> tuple[Dict[Any, Dict[str, Any]], List[Any]]:
+    """按名字索引语义指标定义，并筛出 DSL 选中的那些。"""
+    metrics_map = {item.get("name"): item for item in semantic_config.get("metrics") or [] if item.get("name")}
+    selected = [metrics_map.get(name) for name in metrics if name in metrics_map]
+    return metrics_map, selected
+
+
+def _aggregate_metric_names(metrics: List[Any], metrics_map: Dict[Any, Dict[str, Any]]) -> List[Any]:
+    """metrics 中聚合指标的名字列表（保持原顺序）。"""
+    return [name for name in metrics if metrics_map.get(name) and _is_aggregate_metric(metrics_map[name])]
+
+
 def remove_mixed_raw_metrics_for_aggregate_dsl(dsl: Dict[str, Any], semantic_config: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
     """聚合 DSL 中出现原始值和聚合指标混用时，优先保留聚合指标。"""
     payload = normalize_semantic_dsl_payload(dsl)
     metrics = payload.get("metrics") or []
-    metrics_map = {item.get("name"): item for item in semantic_config.get("metrics") or [] if item.get("name")}
-    selected = [metrics_map.get(name) for name in metrics if name in metrics_map]
+    metrics_map, selected = _selected_semantic_metrics(metrics, semantic_config)
     has_agg = any(item and _is_aggregate_metric(item) for item in selected)
     has_raw = any(item and not _is_aggregate_metric(item) for item in selected)
     if not (has_agg and has_raw):
         return payload, []
-    aggregate_metric_names = [name for name in metrics if metrics_map.get(name) and _is_aggregate_metric(metrics_map[name])]
+    aggregate_metric_names = _aggregate_metric_names(metrics, metrics_map)
     removed = [name for name in metrics if name not in aggregate_metric_names]
     payload["metrics"] = aggregate_metric_names
     return payload, [f"已移除聚合卡片中不能混用的原始值指标：{', '.join(removed)}"]
@@ -300,6 +311,19 @@ def _validate_card_layout(title: str, layout: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def _validate_spec_cards(cards: List[Any], default_semantic_config_id: str) -> List[str]:
+    """逐卡校验结构，并检查卡片级语义模型可解析。"""
+    errors: List[str] = []
+    for index, card in enumerate(cards[:12]):
+        if not isinstance(card, dict):
+            errors.append(f"卡片{index + 1} 必须是对象")
+            continue
+        if not resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id):
+            errors.append(f"卡片「{card.get('title') or index + 1}」缺少 semantic_config_id")
+        errors.extend(validate_dashboard_card_structure(card, index))
+    return errors
+
+
 def validate_dashboard_spec_structure(
     dashboard_spec: Dict[str, Any],
     default_semantic_config_id: Optional[str] = None,
@@ -323,13 +347,7 @@ def validate_dashboard_spec_structure(
     )
     if not default_semantic_config_id and not has_card_semantic_config_id:
         errors.append("semantic_config_id 必填：请在每张卡片中指定，或提供旧规格的顶层默认值")
-    for index, card in enumerate(cards[:12]):
-        if not isinstance(card, dict):
-            errors.append(f"卡片{index + 1} 必须是对象")
-            continue
-        if not resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id):
-            errors.append(f"卡片「{card.get('title') or index + 1}」缺少 semantic_config_id")
-        errors.extend(validate_dashboard_card_structure(card, index))
+    errors.extend(_validate_spec_cards(cards, default_semantic_config_id))
     return errors
 
 

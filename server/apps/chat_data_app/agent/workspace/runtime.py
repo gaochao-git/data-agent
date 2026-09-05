@@ -754,38 +754,56 @@ def _absolute_command_path_tokens(command: str, *, tool_name: str = "bash_run") 
     return paths
 
 
+_OFFICECLI_SELECTOR_COMMANDS = {"get", "query", "set", "add", "remove"}
+
+
 def _officecli_selector_token_indices(tokens: list[str]) -> set[int]:
     """Exclude OfficeCLI DOM selectors from host-path validation."""
     selector_indices: set[int] = set()
-    selector_commands = {"get", "query", "set", "add", "remove"}
     for officecli_index, token in enumerate(tokens):
         if Path(token).name not in {"officecli", "officecli.exe"}:
             continue
-        verb_index = next(
-            (
-                index
-                for index in range(officecli_index + 1, len(tokens))
-                if tokens[index] in selector_commands | {"move", "swap"}
-            ),
-            None,
-        )
+        verb_index = _officecli_verb_index(tokens, officecli_index)
         if verb_index is None:
             continue
-        verb = tokens[verb_index]
-        if verb in selector_commands and verb_index + 2 < len(tokens):
-            selector_indices.add(verb_index + 2)
-        elif verb == "move":
-            if verb_index + 2 < len(tokens):
-                selector_indices.add(verb_index + 2)
-            for option in ("--to", "--after", "--before"):
-                for index in range(verb_index + 3, len(tokens) - 1):
-                    if tokens[index] == option:
-                        selector_indices.add(index + 1)
-        elif verb == "swap":
-            selector_indices.update(
-                index for index in (verb_index + 2, verb_index + 3) if index < len(tokens)
-            )
+        selector_indices.update(_selector_indices_after_verb(tokens, verb_index))
     return selector_indices
+
+
+def _officecli_verb_index(tokens: list[str], officecli_index: int) -> int | None:
+    """定位 officecli 可执行文件后的第一个动词（选择器类或 move/swap）。"""
+    return next(
+        (
+            index
+            for index in range(officecli_index + 1, len(tokens))
+            if tokens[index] in _OFFICECLI_SELECTOR_COMMANDS | {"move", "swap"}
+        ),
+        None,
+    )
+
+
+def _selector_indices_after_verb(tokens: list[str], verb_index: int) -> set[int]:
+    """按动词种类返回 selector token 的下标集合。"""
+    verb = tokens[verb_index]
+    if verb in _OFFICECLI_SELECTOR_COMMANDS and verb_index + 2 < len(tokens):
+        return {verb_index + 2}
+    if verb == "move":
+        return _move_selector_indices(tokens, verb_index)
+    if verb == "swap":
+        return {index for index in (verb_index + 2, verb_index + 3) if index < len(tokens)}
+    return set()
+
+
+def _move_selector_indices(tokens: list[str], verb_index: int) -> set[int]:
+    """move 动词：本体 selector + --to/--after/--before 选项的取值。"""
+    indices: set[int] = set()
+    if verb_index + 2 < len(tokens):
+        indices.add(verb_index + 2)
+    for option in ("--to", "--after", "--before"):
+        for index in range(verb_index + 3, len(tokens) - 1):
+            if tokens[index] == option:
+                indices.add(index + 1)
+    return indices
 
 
 def __getattr__(name: str):

@@ -85,6 +85,33 @@ def _selected_semantic_config_prompt_ref(
     return {"id": config_id, "name": config_name}
 
 
+def _normalize_context_inputs(
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+    user_id: str | None,
+    username: str | None,
+    member_datasource_ids: list[str] | None,
+) -> tuple[str | None, str | None, str, str, list[str]]:
+    """归一化上下文入参：ID 去空白空转 None，成员列表标准化。"""
+    return (
+        str(datasource_id or "").strip() or None,
+        str(semantic_config_id or "").strip() or None,
+        str(user_id or "").strip(),
+        str(username or "").strip(),
+        normalize_member_datasource_ids(member_datasource_ids),
+    )
+
+
+def _resolved_semantic_config_id(
+    normalized_config_id: str | None,
+    resolved_config: dict[str, Any] | None,
+) -> str | None:
+    """手选 ID 优先；未手选但解析出了配置时回填其 ID。"""
+    if resolved_config and not normalized_config_id:
+        return str(resolved_config.get("id") or resolved_config.get("semantic_config_id") or "").strip() or None
+    return normalized_config_id
+
+
 async def prepare_semantic_conversation_context(
     *,
     datasource_id: str | None,
@@ -95,11 +122,9 @@ async def prepare_semantic_conversation_context(
     user_query: str | None,
 ) -> SemanticConversationContext:
     """Prepare the single semantic context contract used by both conversation agents."""
-    normalized_datasource_id = str(datasource_id or "").strip() or None
-    normalized_config_id = str(semantic_config_id or "").strip() or None
-    normalized_user_id = str(user_id or "").strip()
-    normalized_username = str(username or "").strip()
-    selected_member_ids = normalize_member_datasource_ids(member_datasource_ids)
+    normalized_datasource_id, normalized_config_id, normalized_user_id, normalized_username, selected_member_ids = (
+        _normalize_context_inputs(datasource_id, semantic_config_id, user_id, username, member_datasource_ids)
+    )
 
     if not normalized_datasource_id:
         return _empty_context(
@@ -126,8 +151,7 @@ async def prepare_semantic_conversation_context(
         semantic_config_id=normalized_config_id,
         resolved_config=resolved_config,
     )
-    if resolved_config and not normalized_config_id:
-        normalized_config_id = str(resolved_config.get("id") or resolved_config.get("semantic_config_id") or "").strip() or None
+    normalized_config_id = _resolved_semantic_config_id(normalized_config_id, resolved_config)
 
     execution_targets = await _load_authorized_execution_targets(
         manager=manager,

@@ -114,6 +114,28 @@ def _is_history_tool_error_message(text: str) -> bool:
     return "失败" in raw or "错误" in raw or "exception" in lowered or "traceback" in lowered
 
 
+def _collect_user_turn(
+    text: str,
+    timestamp: str,
+    user_turns: List[Dict[str, str]],
+    negative_feedback: List[str],
+) -> None:
+    """记录用户发言（截断至 500 字），负反馈文本额外收集。"""
+    clipped = text[:500]
+    user_turns.append({"content": clipped, "timestamp": timestamp})
+    if _is_negative_feedback_text(text):
+        negative_feedback.append(clipped)
+
+
+def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_errors: List[Dict[str, str]]) -> None:
+    """记录工具错误消息（截断至 600 字）。"""
+    tool_errors.append({
+        "tool_name": str((msg or {}).get("tool_name") or "").strip(),
+        "content": text[:600],
+        "timestamp": timestamp,
+    })
+
+
 def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """裁剪智能问数对话上下文，保留用户意图、反馈和工具错误。"""
     user_turns: List[Dict[str, str]] = []
@@ -127,19 +149,12 @@ def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Di
             continue
         timestamp = str((msg or {}).get("timestamp") or "").strip()
         if role == "user":
-            clipped = text[:500]
-            user_turns.append({"content": clipped, "timestamp": timestamp})
-            if _is_negative_feedback_text(text):
-                negative_feedback.append(clipped)
+            _collect_user_turn(text, timestamp, user_turns, negative_feedback)
         elif role == "assistant":
             if not (msg or {}).get("tool_calls"):
                 assistant_turns.append({"content": text[:500], "timestamp": timestamp})
         elif role == "tool" and _is_history_tool_error_message(text):
-            tool_errors.append({
-                "tool_name": str((msg or {}).get("tool_name") or "").strip(),
-                "content": text[:600],
-                "timestamp": timestamp,
-            })
+            _collect_tool_error(msg, text, timestamp, tool_errors)
     return {
         "user_turns": user_turns[-6:],
         "assistant_turns": assistant_turns[-3:],
@@ -331,6 +346,35 @@ def _extract_expression_columns(expression: Any) -> Set[str]:
     return columns
 
 
+def _index_metric_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
+    """登记单个指标的名字与 表.表达式 索引。"""
+    if not isinstance(item, dict):
+        return
+    table = _normalize_semantic_text(item.get("table"))
+    name = _normalize_semantic_text(item.get("name"))
+    expression = _normalize_semantic_expression(item.get("expression"))
+    if name:
+        indexes["metric_names"].add(name)
+    if table and expression:
+        indexes["metric_expressions"].add(f"{table}.{expression}")
+
+
+def _index_dimension_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
+    """登记单个维度的名字与 表.列 / 表.字段 索引。"""
+    if not isinstance(item, dict):
+        return
+    table = _normalize_semantic_text(item.get("table"))
+    name = _normalize_semantic_text(item.get("name"))
+    field_name = _normalize_semantic_text(item.get("field_name"))
+    column = _normalize_semantic_text(item.get("column") or item.get("field_name"))
+    if name:
+        indexes["dimension_names"].add(name)
+    if table and column:
+        indexes["dimension_columns"].add(f"{table}.{column}")
+    if table and field_name:
+        indexes["dimension_fields"].add(f"{table}.{field_name}")
+
+
 def _build_existing_semantic_indexes(config: Dict[str, Any]) -> Dict[str, Set[str]]:
     """构建当前指标集已维护字段索引，用于过滤历史学习重复建议。"""
     indexes: Dict[str, Set[str]] = {
@@ -341,28 +385,9 @@ def _build_existing_semantic_indexes(config: Dict[str, Any]) -> Dict[str, Set[st
         "dimension_fields": set(),
     }
     for item in config.get("metrics") or []:
-        if not isinstance(item, dict):
-            continue
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        expression = _normalize_semantic_expression(item.get("expression"))
-        if name:
-            indexes["metric_names"].add(name)
-        if table and expression:
-            indexes["metric_expressions"].add(f"{table}.{expression}")
+        _index_metric_item(item, indexes)
     for item in config.get("dimensions") or []:
-        if not isinstance(item, dict):
-            continue
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        field_name = _normalize_semantic_text(item.get("field_name"))
-        column = _normalize_semantic_text(item.get("column") or item.get("field_name"))
-        if name:
-            indexes["dimension_names"].add(name)
-        if table and column:
-            indexes["dimension_columns"].add(f"{table}.{column}")
-        if table and field_name:
-            indexes["dimension_fields"].add(f"{table}.{field_name}")
+        _index_dimension_item(item, indexes)
     return indexes
 
 
@@ -519,6 +544,36 @@ def _normalize_history_suggestion_item(
     return normalized
 
 
+def _normalize_history_suggestion_category(
+    category: str,
+    suggestions: Any,
+    sample_map: Dict[str, Dict[str, Any]],
+    datasource: Dict[str, Any],
+    existing_indexes: Dict[str, Set[str]],
+    skip_counts: Dict[str, Dict[str, int]],
+) -> tuple[List[Dict[str, Any]], int]:
+    """归一化单个类别的建议：剔除非法、已有维护项与重复项；返回 (items, 原始条数)。"""
+    seen: Set[str] = set()
+    raw_items = suggestions.get(category) if isinstance(suggestions, dict) else []
+    limited_items = (raw_items if isinstance(raw_items, list) else [])[:30]
+    items: List[Dict[str, Any]] = []
+    for raw_item in limited_items:
+        item = _normalize_history_suggestion_item(raw_item, category, sample_map, datasource)
+        if not item:
+            skip_counts[category]["invalid"] += 1
+            continue
+        if category in {"metrics", "dimensions"} and _is_existing_history_suggestion(item, category, existing_indexes):
+            skip_counts[category]["existing"] += 1
+            continue
+        key = str(item.get("name") or item.get("title") or "") + "::" + str(item.get("table") or item.get("content") or "")
+        if key in seen:
+            skip_counts[category]["duplicate"] += 1
+            continue
+        seen.add(key)
+        items.append(item)
+    return items, len(limited_items)
+
+
 def _normalize_history_learning_result(
     raw_result: Any,
     samples: List[Dict[str, Any]],
@@ -534,24 +589,9 @@ def _normalize_history_learning_result(
     raw_counts: Dict[str, int] = {}
     skip_counts = _empty_history_learning_skip_counts()
     for category in result.keys():
-        seen: Set[str] = set()
-        raw_items = suggestions.get(category) if isinstance(suggestions, dict) else []
-        limited_items = (raw_items if isinstance(raw_items, list) else [])[:30]
-        raw_counts[category] = len(limited_items)
-        for raw_item in limited_items:
-            item = _normalize_history_suggestion_item(raw_item, category, sample_map, datasource)
-            if not item:
-                skip_counts[category]["invalid"] += 1
-                continue
-            if category in {"metrics", "dimensions"} and _is_existing_history_suggestion(item, category, existing_indexes):
-                skip_counts[category]["existing"] += 1
-                continue
-            key = str(item.get("name") or item.get("title") or "") + "::" + str(item.get("table") or item.get("content") or "")
-            if key in seen:
-                skip_counts[category]["duplicate"] += 1
-                continue
-            seen.add(key)
-            result[category].append(item)
+        result[category], raw_counts[category] = _normalize_history_suggestion_category(
+            category, suggestions, sample_map, datasource, existing_indexes, skip_counts,
+        )
     logger.info(
         "history_learning normalize: raw_counts=%s normalized_counts=%s skip_counts=%s",
         raw_counts,

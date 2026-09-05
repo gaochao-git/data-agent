@@ -732,11 +732,24 @@ def _extract_response_usage(message: AIMessage | None) -> tuple[int, int, int] |
     if message is None:
         return None
     usage = getattr(message, "usage_metadata", None)
-    if isinstance(usage, dict) and any(key in usage for key in ("input_tokens", "output_tokens", "total_tokens")):
-        input_tokens = _optional_non_negative_int(usage.get("input_tokens")) or 0
-        output_tokens = _optional_non_negative_int(usage.get("output_tokens")) or 0
-        total_tokens = _optional_non_negative_int(usage.get("total_tokens"))
-        return input_tokens, output_tokens, total_tokens if total_tokens is not None else input_tokens + output_tokens
+    usage_from_metadata = _usage_from_usage_metadata(usage)
+    if usage_from_metadata is not None:
+        return usage_from_metadata
+    return _usage_from_response_metadata(message)
+
+
+def _usage_from_usage_metadata(usage: Any) -> tuple[int, int, int] | None:
+    """从 usage_metadata dict 提取三元组；缺关键字段返回 None 交给 response_metadata 兜底。"""
+    if not (isinstance(usage, dict) and any(key in usage for key in ("input_tokens", "output_tokens", "total_tokens"))):
+        return None
+    input_tokens = _optional_non_negative_int(usage.get("input_tokens")) or 0
+    output_tokens = _optional_non_negative_int(usage.get("output_tokens")) or 0
+    total_tokens = _optional_non_negative_int(usage.get("total_tokens"))
+    return input_tokens, output_tokens, total_tokens if total_tokens is not None else input_tokens + output_tokens
+
+
+def _usage_from_response_metadata(message: AIMessage) -> tuple[int, int, int] | None:
+    """从 response_metadata 的 openai 风格 payload 提取三元组；全空返回 None。"""
     raw_usage = _response_metadata_usage(message)
     if raw_usage is None:
         return None

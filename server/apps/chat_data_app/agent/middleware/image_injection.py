@@ -141,45 +141,7 @@ def _build_image_injection_message(
     runtime = workspace_runtime_from_state(state if isinstance(state, dict) else {})
     workspace_root = runtime.workspace_root
 
-    image_blocks: list[dict[str, Any]] = []
-    loaded_sources: dict[str, list[str]] = {USER_UPLOAD_SOURCE: [], READ_IMAGE_TOOL_NAME: []}
-    loaded_paths: set[str] = set()
-    failures: list[str] = []
-    for source, file_path in reversed(pending_requests):
-        if len(image_blocks) >= MAX_INJECTED_IMAGES:
-            break
-        if not file_path:
-            failures.append(f"{READ_IMAGE_TOOL_NAME} 结果缺少可追溯的 file_path 参数")
-            continue
-        try:
-            physical = resolve_workspace_path(workspace_root, file_path, writable=False)
-        except ValueError as exc:
-            failures.append(f"{file_path}: {exc}")
-            continue
-        physical_key = str(physical)
-        if physical_key in loaded_paths:
-            continue
-        try:
-            data = physical.read_bytes()
-        except OSError as exc:
-            logger.warning("图片注入读取失败: %s", exc)
-            failures.append(f"{file_path}: 读取文件失败")
-            continue
-        if len(data) > MAX_IMAGE_SIZE:
-            failures.append(f"{file_path}: 图片超过大小上限")
-            continue
-        suffix = physical.suffix.lower().lstrip(".")
-        if suffix not in IMAGE_EXTENSIONS:
-            failures.append(f"{file_path}: 不支持的图片格式")
-            continue
-        mime = _IMAGE_MIME_TYPES.get(suffix, "application/octet-stream")
-        image_blocks.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"},
-        })
-        loaded_paths.add(physical_key)
-        loaded_sources[source].append(file_path)
-
+    image_blocks, loaded_sources, failures = _load_injection_images(workspace_root, pending_requests)
     total = len(image_blocks)
     if total == 0 and not failures:
         return None
@@ -200,6 +162,69 @@ def _build_image_injection_message(
         content=[{"type": "text", "text": "\n".join(lines)}, *image_blocks],
         additional_kwargs={"hide_from_ui": True, "image_injection": True},
     )
+
+
+def _load_injection_images(
+    workspace_root: Any,
+    pending_requests: list[tuple[str, str]],
+) -> tuple[list[dict[str, Any]], dict[str, list[str]], list[str]]:
+    """按逆序加载待注入图片（上限 MAX_INJECTED_IMAGES，按物理路径去重）。
+
+    返回 (image_blocks, loaded_sources, failures)：失败的路径进入 failures，
+    成功的按来源（用户上传 / read_image 工具）归入 loaded_sources。
+    """
+    image_blocks: list[dict[str, Any]] = []
+    loaded_sources: dict[str, list[str]] = {USER_UPLOAD_SOURCE: [], READ_IMAGE_TOOL_NAME: []}
+    loaded_paths: set[str] = set()
+    failures: list[str] = []
+    for source, file_path in reversed(pending_requests):
+        if len(image_blocks) >= MAX_INJECTED_IMAGES:
+            break
+        if not file_path:
+            failures.append(f"{READ_IMAGE_TOOL_NAME} 结果缺少可追溯的 file_path 参数")
+            continue
+        physical = _resolve_injection_image_path(workspace_root, file_path, failures)
+        if physical is None:
+            continue
+        physical_key = str(physical)
+        if physical_key in loaded_paths:
+            continue
+        block, failure = _read_image_block(physical, file_path)
+        if failure:
+            failures.append(failure)
+            continue
+        image_blocks.append(block)
+        loaded_paths.add(physical_key)
+        loaded_sources[source].append(file_path)
+    return image_blocks, loaded_sources, failures
+
+
+def _resolve_injection_image_path(workspace_root: Any, file_path: str, failures: list[str]) -> str | None:
+    """把注入目标解析为可读的物理 Path；解析失败记录原因并返回 None。"""
+    try:
+        return resolve_workspace_path(workspace_root, file_path, writable=False)
+    except ValueError as exc:
+        failures.append(f"{file_path}: {exc}")
+        return None
+
+
+def _read_image_block(physical: Any, file_path: str) -> tuple[dict[str, Any] | None, str | None]:
+    """读取单张图片并编码为 base64 block；超限/格式不支持返回失败原因（文案用原始 file_path）。"""
+    try:
+        data = physical.read_bytes()
+    except OSError as exc:
+        logger.warning("图片注入读取失败: %s", exc)
+        return None, f"{file_path}: 读取文件失败"
+    if len(data) > MAX_IMAGE_SIZE:
+        return None, f"{file_path}: 图片超过大小上限"
+    suffix = physical.suffix.lower().lstrip(".")
+    if suffix not in IMAGE_EXTENSIONS:
+        return None, f"{file_path}: 不支持的图片格式"
+    mime = _IMAGE_MIME_TYPES.get(suffix, "application/octet-stream")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"},
+    }, None
 
 
 def _append_vlm_disabled_notes(

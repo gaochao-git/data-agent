@@ -842,10 +842,7 @@ def build_persistent_query_task_result_payload(result_data: Dict[str, Any], http
     """构建可落库的任务结果，过滤 HTTP 返回数据。"""
     if not http_member_ids:
         return result_data
-    local_results = [
-        item for item in list((result_data or {}).get("results") or [])
-        if str((item or {}).get("member_datasource_id") or "").strip() not in http_member_ids
-    ]
+    local_results = _filter_local_member_results(result_data, http_member_ids)
     if not local_results:
         return None
 
@@ -856,6 +853,14 @@ def build_persistent_query_task_result_payload(result_data: Dict[str, Any], http
         fallback_error=(result_data or {}).get("error"),
         fallback_execution_time_ms=(result_data or {}).get("execution_time_ms"),
     )
+
+
+def _filter_local_member_results(result_data: Dict[str, Any], http_member_ids: Set[str]) -> list:
+    """从结果集中剔除 HTTP 成员的子结果。"""
+    return [
+        item for item in list((result_data or {}).get("results") or [])
+        if str((item or {}).get("member_datasource_id") or "").strip() not in http_member_ids
+    ]
 
 
 def build_query_task_response_data(task_data: Dict[str, Any]) -> Dict[str, Any]:

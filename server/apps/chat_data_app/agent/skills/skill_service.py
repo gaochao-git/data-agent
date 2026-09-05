@@ -581,25 +581,14 @@ class SkillService:
 
     async def copy_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步复制可见用户技能为当前用户私有草稿。"""
-        if await self._get_system_skill_metadata_async(skill_id):
-            raise PermissionError("系统技能不支持复制")
-        source_skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
-        if not source_skill:
-            raise ValueError("技能不存在")
-        if source_skill.get("skill_source") == "system":
-            raise PermissionError("系统技能不支持复制")
+        source_skill = await self._resolve_copy_source_skill_async(skill_id, user_id)
         source_version = await self._get_copy_source_version_async(source_skill, user_id)
         source_dir = _derive_user_version_dir(
             source_skill.get("owner_user_id"),
             source_skill.get("skill_name"),
             source_version.get("skill_version_no"),
         )
-        skill_md_path = source_dir / "SKILL.md"
-        if not await asyncio.to_thread(skill_md_path.is_file):
-            raise ValueError("技能版本目录无效")
-        parsed = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
-        raw_content = await asyncio.to_thread(skill_md_path.read_text, encoding="utf-8", errors="replace")
-        content = _strip_frontmatter(raw_content)
+        parsed, content = await self._read_copy_source_content_async(source_dir)
         source_name = str(source_skill.get("skill_name") or parsed.get("name") or "user-skill").strip()
         source_title = str(source_skill.get("skill_title") or parsed.get("title") or source_name).strip()
         copied_name = await self._next_copy_skill_name_async(source_name, user_id)
@@ -611,6 +600,35 @@ class SkillService:
             "visibility_type": "private",
             "content": content,
         }, user_id=user_id, operator_name=operator_name)
+        return await self._finalize_copied_skill_async(copied_skill, source_dir, user_id)
+
+    async def _resolve_copy_source_skill_async(self, skill_id: str, user_id: str) -> Dict[str, Any]:
+        """校验并取回复制来源技能：系统技能不支持复制，不存在抛 ValueError。"""
+        if await self._get_system_skill_metadata_async(skill_id):
+            raise PermissionError("系统技能不支持复制")
+        source_skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
+        if not source_skill:
+            raise ValueError("技能不存在")
+        if source_skill.get("skill_source") == "system":
+            raise PermissionError("系统技能不支持复制")
+        return source_skill
+
+    async def _read_copy_source_content_async(self, source_dir: Path) -> tuple[Dict[str, Any], str]:
+        """读取来源 SKILL.md：目录无效抛 ValueError，返回 (frontmatter 元数据, 去 frontmatter 正文)。"""
+        skill_md_path = source_dir / "SKILL.md"
+        if not await asyncio.to_thread(skill_md_path.is_file):
+            raise ValueError("技能版本目录无效")
+        parsed = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+        raw_content = await asyncio.to_thread(skill_md_path.read_text, encoding="utf-8", errors="replace")
+        return parsed, _strip_frontmatter(raw_content)
+
+    async def _finalize_copied_skill_async(
+        self,
+        copied_skill: Dict[str, Any],
+        source_dir: Path,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """把来源目录整体拷入新技能草稿版本，清缓存并返回最终详情。"""
         copied_skill_id = str(copied_skill.get("skill_id") or "")
         draft_version_no = int(copied_skill.get("draft_version_no") or 1)
         version_dir = await self._get_editable_version_dir_async(copied_skill_id, draft_version_no, user_id)

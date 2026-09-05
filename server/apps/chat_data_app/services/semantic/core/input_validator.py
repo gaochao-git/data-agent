@@ -312,31 +312,39 @@ class InputValidator:
             return f"错误：表达式过滤 {path} 必须是对象"
         operand_type = str(operand.get('type') or '').strip().lower()
         if operand_type == 'dimension':
-            dim_name = str(operand.get('name') or '').strip()
-            if dim_name not in self.dimensions_map:
-                return f"错误：表达式过滤引用的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
-            return None
+            return self._validate_dimension_operand(operand)
         if operand_type == 'literal':
             value = operand.get('value')
             if isinstance(value, (dict, list)):
                 return f"错误：表达式过滤 {path}.value 只支持字符串、数字、布尔值或空值"
             return None
         if operand_type == 'binary':
-            operator = str(operand.get('operator') or '').strip()
-            if operator not in BINARY_OPERATORS:
-                return f"错误：表达式过滤二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
-            left = operand.get('left')
-            right = operand.get('right')
-            err = self._validate_expression_operand(left, path=f'{path}.left')
-            if err:
-                return err
-            err = self._validate_expression_operand(right, path=f'{path}.right')
-            if err:
-                return err
-            if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
-                return "错误：表达式过滤不允许除以 0"
-            return None
+            return self._validate_binary_operand(operand, path)
         return f"错误：表达式过滤 {path}.type 只支持 dimension、literal、binary"
+
+    def _validate_dimension_operand(self, operand: Any) -> Optional[str]:
+        """校验表达式过滤中的维度引用。"""
+        dim_name = str(operand.get('name') or '').strip()
+        if dim_name not in self.dimensions_map:
+            return f"错误：表达式过滤引用的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+        return None
+
+    def _validate_binary_operand(self, operand: Any, path: str) -> Optional[str]:
+        """校验二元表达式：运算符合法性、两侧递归校验、禁止除以 0。"""
+        operator = str(operand.get('operator') or '').strip()
+        if operator not in BINARY_OPERATORS:
+            return f"错误：表达式过滤二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
+        left = operand.get('left')
+        right = operand.get('right')
+        err = self._validate_expression_operand(left, path=f'{path}.left')
+        if err:
+            return err
+        err = self._validate_expression_operand(right, path=f'{path}.right')
+        if err:
+            return err
+        if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
+            return "错误：表达式过滤不允许除以 0"
+        return None
 
     @staticmethod
     def _is_zero_literal(value: Any) -> bool:
@@ -410,11 +418,21 @@ class InputValidator:
         return None
 
     @staticmethod
+    def _enum_allowed_set(allowed_values: Any) -> set:
+        """归一化枚举允许值集合；配置非法返回空集。"""
+        return {str(item).strip() for item in allowed_values or [] if str(item or '').strip()} if isinstance(allowed_values, list) else set()
+
+    @staticmethod
+    def _enum_mapping_keys(mapping: Any) -> set:
+        """归一化枚举映射键集合（键值均非空才计入）；配置非法返回空集。"""
+        return {str(key).strip() for key, value in (mapping or {}).items() if str(key or '').strip() and str(value or '').strip()} if isinstance(mapping, dict) else set()
+
+    @staticmethod
     def _validate_enum_config(dim_name: str, dim_config: Dict) -> Optional[str]:
         allowed_values = dim_config.get('allowed_values')
         mapping = dim_config.get('mapping')
-        allowed_set = {str(item).strip() for item in allowed_values or [] if str(item or '').strip()} if isinstance(allowed_values, list) else set()
-        mapping_keys = {str(key).strip() for key, value in (mapping or {}).items() if str(key or '').strip() and str(value or '').strip()} if isinstance(mapping, dict) else set()
+        allowed_set = InputValidator._enum_allowed_set(allowed_values)
+        mapping_keys = InputValidator._enum_mapping_keys(mapping)
         if not allowed_set or not mapping_keys:
             return f"错误：维度 '{dim_name}' 的 logical_type 为 enum 时必须同时配置 allowed_values 和 mapping"
         missing_values = sorted(allowed_set - mapping_keys)
@@ -630,31 +648,39 @@ class InputValidator:
             return f"错误：HAVING 表达式 {path} 必须是对象"
         operand_type = str(operand.get('type') or '').strip().lower()
         if operand_type == 'metric':
-            metric_name = str(operand.get('name') or '').strip()
-            if metric_name not in self.metrics_map:
-                return f"错误：HAVING 表达式引用的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
-            return None
+            return self._validate_metric_name_operand(operand)
         if operand_type == 'literal':
             value = operand.get('value')
             if isinstance(value, (dict, list)):
                 return f"错误：HAVING 表达式 {path}.value 只支持字符串、数字、布尔值或空值"
             return None
         if operand_type == 'binary':
-            operator = str(operand.get('operator') or '').strip()
-            if operator not in BINARY_OPERATORS:
-                return f"错误：HAVING 表达式二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
-            left = operand.get('left')
-            right = operand.get('right')
-            err = self._validate_metric_expression_operand(left, path=f'{path}.left')
-            if err:
-                return err
-            err = self._validate_metric_expression_operand(right, path=f'{path}.right')
-            if err:
-                return err
-            if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
-                return "错误：HAVING 表达式不允许除以 0"
-            return None
+            return self._validate_metric_binary_operand(operand, path)
         return f"错误：HAVING 表达式 {path}.type 只支持 metric、literal、binary"
+
+    def _validate_metric_name_operand(self, operand: Any) -> Optional[str]:
+        """校验 HAVING 表达式中的指标引用。"""
+        metric_name = str(operand.get('name') or '').strip()
+        if metric_name not in self.metrics_map:
+            return f"错误：HAVING 表达式引用的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
+        return None
+
+    def _validate_metric_binary_operand(self, operand: Any, path: str) -> Optional[str]:
+        """校验 HAVING 二元表达式：运算符合法性、两侧递归校验、禁止除以 0。"""
+        operator = str(operand.get('operator') or '').strip()
+        if operator not in BINARY_OPERATORS:
+            return f"错误：HAVING 表达式二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
+        left = operand.get('left')
+        right = operand.get('right')
+        err = self._validate_metric_expression_operand(left, path=f'{path}.left')
+        if err:
+            return err
+        err = self._validate_metric_expression_operand(right, path=f'{path}.right')
+        if err:
+            return err
+        if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
+            return "错误：HAVING 表达式不允许除以 0"
+        return None
 
     def validate_order_by(
         self,

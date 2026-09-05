@@ -555,6 +555,24 @@ class QueryHistoryService:
             for _execution, task in rows
             if task and str(task.task_id or "").strip()
         }
+        await self._update_cancel_task_statuses(rows, execution_results, task_by_id, update_task)
+
+        failed_count = sum(1 for item in execution_results if not item.get("success"))
+        return {
+            "total": len(execution_results),
+            "cancelled": len(execution_results) - failed_count,
+            "failed": failed_count,
+            "executions": execution_results,
+        }
+
+    async def _update_cancel_task_statuses(
+        self,
+        rows: list,
+        execution_results: list,
+        task_by_id: Dict[str, Any],
+        update_task: Callable[..., Awaitable[Optional[Dict[str, Any]]]],
+    ) -> None:
+        """按任务聚合停止结果，回写尚未到达终态任务的状态。"""
         for task_id, task_results in self.group_cancel_results_by_task(rows, execution_results).items():
             task = task_by_id.get(task_id)
             task_status = str(task.task_status or "").strip().lower() if task else ""
@@ -568,11 +586,3 @@ class QueryHistoryService:
                 error_message=(None if cancel_status == "cancelled" else "部分 SQL 停止失败"),
                 finished_time=datetime.now(),
             )
-
-        failed_count = sum(1 for item in execution_results if not item.get("success"))
-        return {
-            "total": len(execution_results),
-            "cancelled": len(execution_results) - failed_count,
-            "failed": failed_count,
-            "executions": execution_results,
-        }

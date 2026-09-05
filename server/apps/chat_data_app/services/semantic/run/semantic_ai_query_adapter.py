@@ -513,6 +513,24 @@ class SemanticAIQueryAdapter:
         offset: int,
     ) -> Optional[str]:
         """串行校验各入参并填充校验结果；任一失败返回错误文案，全部通过返回 None。"""
+        err = self._validate_and_fill_query_fields(plan, metrics, dimensions, filters, having, order_by, limit, offset)
+        if err:
+            return err
+        self._fill_query_field_names_and_grouping(plan)
+        return None
+
+    def _validate_and_fill_query_fields(
+        self,
+        plan: _UnifiedEnginePlan,
+        metrics: List[str],
+        dimensions: List[str],
+        filters: List[Dict],
+        having: List[Dict],
+        order_by: List[Dict],
+        limit: int,
+        offset: int,
+    ) -> Optional[str]:
+        """逐项校验指标/维度/过滤/HAVING/排序/limit/offset 并写入 plan。"""
         if metrics:
             plan.matched_metrics, err = self._normalize_metrics_allow_dimension_raw(metrics)
             if err:
@@ -544,14 +562,19 @@ class SemanticAIQueryAdapter:
         plan.validated_offset, err = self.validator.validate_offset(offset)
         if err:
             return err
+        return None
 
-        # SQL 形态只由 DSL 和语义配置决定，不能根据 user_query 的关键词猜测。
-        # 只要输出中存在聚合表达式或 HAVING，RAW 字段就必须进入 GROUP BY。
+    def _fill_query_field_names_and_grouping(self, plan: _UnifiedEnginePlan) -> None:
+        """推导 RAW 字段是否必须进 GROUP BY。
+
+        SQL 形态只由 DSL 和语义配置决定，不能根据 user_query 的关键词猜测。
+        只要输出中存在聚合表达式或 HAVING，RAW 字段就必须进入 GROUP BY。
+        having_metric_names / dimension_names 已在校验阶段填充。
+        """
         plan.requires_grouping_for_raw_fields = bool(plan.validated_having) or any(
             metric_func_column(metric.get("expression"))
             for metric in plan.matched_metrics
         )
-        return None
 
     def _infer_main_table_and_alias(self, plan: _UnifiedEnginePlan) -> None:
         """按第一维度表 > 第一指标表 > 第一 HAVING 指标表推断主表及别名。"""

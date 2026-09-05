@@ -233,14 +233,19 @@ def _build_source_line(host: Any, port: Any, database: Any) -> str | None:
     return f"{normalized_host}:{normalized_port}:{normalized_database}"
 
 
+def _normalized_source_config_field(source_config: Dict[str, Any] | None, key: str) -> str:
+    """读取 source_config 字段并归一化为去除首尾空白的字符串。"""
+    return str((source_config or {}).get(key) or "").strip()
+
+
 def _build_member_source_text_line(source_config: Dict[str, Any] | None) -> str | None:
-    org_name = str((source_config or {}).get("org_name") or "").strip()
-    org_code = str((source_config or {}).get("org_code") or "").strip()
+    org_name = _normalized_source_config_field(source_config, "org_name")
+    org_code = _normalized_source_config_field(source_config, "org_code")
     if not org_name or not org_code:
         return None
-    query_executor_type = str((source_config or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
+    query_executor_type = _normalized_source_config_field(source_config, "query_executor_type").lower() or "direct"
     if query_executor_type == "http":
-        database = str((source_config or {}).get("database") or "").strip()
+        database = _normalized_source_config_field(source_config, "database")
         if not database:
             return None
         return f"{org_name}|{org_code}|http|{database}"

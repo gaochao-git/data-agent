@@ -591,6 +591,11 @@ class SemanticBIQueryAdapter:
                 if normalize_text(agg.get("expression")) == item_expression:
                     return agg
             return None
+        return SemanticBIQueryAdapter._find_aggregation_by_name_or_func(item, aggregations)
+
+    @staticmethod
+    def _find_aggregation_by_name_or_func(item: Dict[str, Any], aggregations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """先按显式名称（semanticName/name/alias/displayName）匹配别名；全部缺失时回退聚合函数+字段键匹配。"""
         name_candidates = [
             normalize_text(item.get("semanticName")),
             normalize_text(item.get("name")),

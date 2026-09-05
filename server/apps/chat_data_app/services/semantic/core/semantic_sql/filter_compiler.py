@@ -48,6 +48,16 @@ def _is_sql_function(value: Any, safe_functions: set[str]) -> bool:
     return not any(token in raw for token in (";", "--", "/*", "*/")) and _has_balanced_parentheses(raw)
 
 
+def _escape_sql_string(value: Any) -> str:
+    """单引号包裹并按 SQL 规则转义单引号。"""
+    return f"'{str(value).replace(chr(39), chr(39) * 2)}'"
+
+
+def _unwrap_quoted_literal(raw: str) -> str:
+    """剥去成对的首尾引号；非成对引号返回空串。"""
+    return raw[1:-1].strip() if len(raw) >= 3 and raw[0] == raw[-1] and raw[0] in "'\"" else ""
+
+
 def _sql_literal(value: Any, value_type: Any = None, safe_functions: Optional[set[str]] = None) -> str:
     if value is None:
         return "NULL"
@@ -55,20 +65,16 @@ def _sql_literal(value: Any, value_type: Any = None, safe_functions: Optional[se
         return str(value).strip()
     raw = str(value).strip()
     normalized_type = str(value_type or "").strip().lower()
-    unwrapped = raw[1:-1].strip() if len(raw) >= 3 and raw[0] == raw[-1] and raw[0] in "'\"" else ""
-    functions = safe_functions or set()
     if normalized_type == "literal":
-        return f"'{str(value).replace(chr(39), chr(39) * 2)}'"
-    if normalized_type == "sql_function":
-        if _is_sql_function(raw, functions):
-            return raw
-        if unwrapped and _is_sql_function(unwrapped, functions):
-            return unwrapped
-    elif _is_sql_function(raw, functions):
+        return _escape_sql_string(value)
+    # 显式声明 sql_function 与未声明时行为一致：raw 或去引号形态命中安全函数白名单即原样输出
+    unwrapped = _unwrap_quoted_literal(raw)
+    functions = safe_functions or set()
+    if _is_sql_function(raw, functions):
         return raw
-    elif unwrapped and _is_sql_function(unwrapped, functions):
+    if unwrapped and _is_sql_function(unwrapped, functions):
         return unwrapped
-    return f"'{str(value).replace(chr(39), chr(39) * 2)}'"
+    return _escape_sql_string(value)
 
 
 def _value_type_for_index(value_type: Any, index: int) -> Optional[str]:

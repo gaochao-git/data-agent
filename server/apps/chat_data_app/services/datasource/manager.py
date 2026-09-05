@@ -287,16 +287,21 @@ def _get_template_member_source_config(datasource: dict) -> Dict[str, Any]:
         member_id = str((member or {}).get("member_datasource_id") or "").strip()
         if template_member_id and member_id != template_member_id:
             continue
-        return {
-            "org_name": (member or {}).get("org_name"),
-            "org_code": (member or {}).get("org_code"),
-            "query_executor_type": (member or {}).get("query_executor_type") or datasource.get("query_executor_type") or "direct",
-            "host": (member or {}).get("host"),
-            "port": (member or {}).get("port"),
-            "database": (member or {}).get("database"),
-        }
-
+        return _member_source_config_fields(member, datasource)
     return {}
+
+
+def _member_source_config_fields(member: Any, datasource: dict) -> Dict[str, Any]:
+    """按模板成员字段提取源配置；query_executor_type 缺省回退数据源配置再回退直连。"""
+    member = member or {}
+    return {
+        "org_name": member.get("org_name"),
+        "org_code": member.get("org_code"),
+        "query_executor_type": member.get("query_executor_type") or datasource.get("query_executor_type") or "direct",
+        "host": member.get("host"),
+        "port": member.get("port"),
+        "database": member.get("database"),
+    }
 
 
 def _build_meta_source_config(datasource: dict) -> Dict[str, Any]:

@@ -618,13 +618,12 @@ async def get_hive_meta_tables_async(
     return [item["table_name"] for item in _normalize_table_items(tables)]
 
 
-async def get_hive_meta_schema_async(
+async def _fetch_hive_meta_table_index(
     source_config: Dict[str, Any],
-    table_names: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    validate_hive_meta_config()
+    user_id: Optional[str],
+    username: Optional[str],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """请求表列表接口并归一化，返回 (table_items, 表名→描述 索引)。"""
     data = await _post_json(
         META_TABLES_URL,
         _build_payload(source_config, user_id=user_id, username=username),
@@ -634,10 +633,23 @@ async def get_hive_meta_schema_async(
         raise RuntimeError("Hive 元数据表列表接口返回缺少 data.tables")
     table_items = _normalize_table_items(tables)
     descriptions = {item["table_name"]: item["description"] for item in table_items if item["description"]}
+    return table_items, descriptions
+
+
+def _normalize_selected_table_names(table_names: Optional[List[str]], table_items: List[Dict[str, Any]]) -> List[str]:
+    """按请求名单（缺省全量）归一化待加载表名，剔除空值。"""
     selected_names = [item["table_name"] for item in table_items] if table_names is None else table_names
-    normalized_names = [str(name).strip() for name in selected_names if str(name or "").strip()]
-    if not normalized_names:
-        return []
+    return [str(name).strip() for name in selected_names if str(name or "").strip()]
+
+
+async def _load_hive_table_schemas(
+    source_config: Dict[str, Any],
+    normalized_names: List[str],
+    descriptions: Dict[str, Any],
+    user_id: Optional[str],
+    username: Optional[str],
+) -> List[Dict[str, Any]]:
+    """并发加载各表结构并按请求顺序排列；接口未返回的表抛 RuntimeError。"""
     semaphore = asyncio.Semaphore(META_SCHEMA_MAX_CONCURRENCY)
 
     async def load_table(table_name: str) -> List[Dict[str, Any]]:
@@ -657,6 +669,20 @@ async def get_hive_meta_schema_async(
     if missing_tables:
         raise RuntimeError(f"Hive 元数据接口未返回表结构: {', '.join(missing_tables)}")
     return [table_by_name[name] for name in normalized_names]
+
+
+async def get_hive_meta_schema_async(
+    source_config: Dict[str, Any],
+    table_names: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+    username: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    validate_hive_meta_config()
+    table_items, descriptions = await _fetch_hive_meta_table_index(source_config, user_id, username)
+    normalized_names = _normalize_selected_table_names(table_names, table_items)
+    if not normalized_names:
+        return []
+    return await _load_hive_table_schemas(source_config, normalized_names, descriptions, user_id, username)
 
 
 class DataSourceMetadataAdapter(ABC):

@@ -55,17 +55,27 @@ def _compact_metric_summary(item: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in summary.items() if value}
 
 
+def _dimension_allowed_values(item: Dict[str, Any]) -> List[str]:
+    """归一化 allowed_values 为截断字符串列表。"""
+    allowed_values = item.get("allowed_values") if isinstance(item.get("allowed_values"), list) else []
+    return [str(value)[:80] for value in allowed_values if str(value or "").strip()]
+
+
+def _dimension_value_mapping(item: Dict[str, Any]) -> Dict[str, str]:
+    """归一化 mapping 为截断字符串字典（键值均非空才保留）。"""
+    mapping = item.get("mapping") if isinstance(item.get("mapping"), dict) else {}
+    return {str(key)[:80]: str(value)[:80] for key, value in mapping.items() if str(key or "").strip() and str(value or "").strip()}
+
+
 def _compact_dimension_summary(item: Dict[str, Any]) -> Dict[str, Any]:
     """构造维度选择摘要，只保留业务语义字段。"""
-    allowed_values = item.get("allowed_values") if isinstance(item.get("allowed_values"), list) else []
-    mapping = item.get("mapping") if isinstance(item.get("mapping"), dict) else {}
     summary = {
         "name": item.get("name") or "",
         "description": _truncate(item.get("description") or "", 160),
         "supplement": _truncate(item.get("metadata_supplement") or "", 240),
         "logical_type": item.get("logical_type") or "",
-        "allowed_values": [str(value)[:80] for value in allowed_values if str(value or "").strip()],
-        "mapping": {str(key)[:80]: str(value)[:80] for key, value in mapping.items() if str(key or "").strip() and str(value or "").strip()},
+        "allowed_values": _dimension_allowed_values(item),
+        "mapping": _dimension_value_mapping(item),
     }
     return {key: value for key, value in summary.items() if value not in ("", [], {})}
 
@@ -333,6 +343,25 @@ def _merge_semantic_config_selections(selections: List[Dict[str, Any]]) -> Dict[
     return {"semantic_config_ids": semantic_config_ids}
 
 
+async def _enabled_semantic_configs(
+    datasource_id: str,
+    user_id: str,
+    semantic_configs: List[Dict[str, Any]] | None,
+) -> List[Dict[str, Any]]:
+    """configs 缺省时读取运行时配置，筛出有 ID 且启用的指标集。"""
+    if semantic_configs is None:
+        configs = await get_semantic_config_service().get_runtime_configs_async(
+            datasource_id,
+            user_id,
+        )
+    else:
+        configs = semantic_configs
+    return [
+        config for config in configs or []
+        if _config_id(config) and bool(config.get("enabled", True))
+    ]
+
+
 async def search_semantic_models(
     datasource_id: str | None,
     user_query: str,
@@ -349,17 +378,7 @@ async def search_semantic_models(
     if not normalized_datasource_id or not normalized_query:
         return None
 
-    if semantic_configs is None:
-        configs = await get_semantic_config_service().get_runtime_configs_async(
-            normalized_datasource_id,
-            normalized_user_id,
-        )
-    else:
-        configs = semantic_configs
-    enabled_configs = [
-        config for config in configs or []
-        if _config_id(config) and bool(config.get("enabled", True))
-    ]
+    enabled_configs = await _enabled_semantic_configs(normalized_datasource_id, normalized_user_id, semantic_configs)
     if not enabled_configs:
         return None
 

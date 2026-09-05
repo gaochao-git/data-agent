@@ -316,6 +316,25 @@ def raise_if_dashboard_panel_execution_failed(payload: Dict[str, Any]) -> None:
     raise RuntimeError(str(error_message))
 
 
+def _panel_execution_fields(
+    panel: Optional[Dict[str, Any]],
+    execution_target: Optional[Dict[str, Any]],
+    user_id: Optional[str],
+    operator_name: Optional[str],
+) -> Dict[str, str]:
+    """归一化面板执行记录的全部字段（目标成员、执行器类型与操作人）。"""
+    target = execution_target or {}
+    return {
+        "datasource_id": str((panel or {}).get("datasource_id") or "").strip(),
+        "sql_text": str((panel or {}).get("sql") or "").strip(),
+        "member_datasource_id": str(target.get("member_datasource_id") or "").strip(),
+        "member_name": str(target.get("member_name") or target.get("group_name") or "").strip(),
+        "executor_type": str(target.get("query_executor_type") or "direct").strip().lower() or "direct",
+        "operator_user_id": str(user_id or "").strip(),
+        "operator_name": str(operator_name or "").strip(),
+    }
+
+
 async def create_dashboard_panel_execution(
     *,
     task_id: str,
@@ -325,35 +344,29 @@ async def create_dashboard_panel_execution(
     operator_name: Optional[str],
 ) -> Optional[str]:
     """为看板面板执行创建 SQL 执行记录。"""
-    datasource_id = str((panel or {}).get("datasource_id") or "").strip()
-    sql_text = str((panel or {}).get("sql") or "").strip()
-    if not task_id or not datasource_id or not sql_text:
+    fields = _panel_execution_fields(panel, execution_target, user_id, operator_name)
+    if not task_id or not fields["datasource_id"] or not fields["sql_text"]:
         return None
-    target = execution_target or {}
-    member_datasource_id = str(target.get("member_datasource_id") or "").strip()
-    member_name = str(target.get("member_name") or target.get("group_name") or "").strip()
-    executor_type = str(target.get("query_executor_type") or "direct").strip().lower() or "direct"
-    operator_user_id = str(user_id or "").strip()
-    now = datetime.now()
     execution_id = uuid.uuid4().hex
+    now = datetime.now()
     async with get_session() as db:
         db.add(ChatDataQueryExecution(
             execution_id=execution_id,
             task_id=task_id,
-            user_id=str(user_id or "").strip(),
-            datasource_id=datasource_id,
-            member_datasource_id=member_datasource_id,
-            member_name=member_name,
-            executor_type=executor_type,
-            sql_text=sql_text,
+            user_id=fields["operator_user_id"],
+            datasource_id=fields["datasource_id"],
+            member_datasource_id=fields["member_datasource_id"],
+            member_name=fields["member_name"],
+            executor_type=fields["executor_type"],
+            sql_text=fields["sql_text"],
             sql_status="pending",
             delete_flag=0,
             create_time=now,
             update_time=now,
-            create_by=operator_user_id,
-            create_by_name=str(operator_name or "").strip(),
-            update_by=operator_user_id,
-            update_by_name=str(operator_name or "").strip(),
+            create_by=fields["operator_user_id"],
+            create_by_name=fields["operator_name"],
+            update_by=fields["operator_user_id"],
+            update_by_name=fields["operator_name"],
         ))
         await db.commit()
     return execution_id
@@ -519,32 +532,23 @@ def log_dashboard_panel_timing(
     )
 
 
-async def prepare_dashboard_batch_context(
-    dashboard_id: str,
-    panel_ids: List[str],
-    panel_member_datasource_ids: Dict[str, str],
-    preloaded_dashboard: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
-    include_public: bool = True,
-) -> tuple[Dict[str, Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
-    """预加载批量执行需要的面板与执行对象，减少每个卡片的重复查库。"""
-    service = get_dashboard_service()
-    dashboard = preloaded_dashboard
-    if dashboard is None:
-        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=include_public)
-    if not dashboard:
-        raise ValueError(f"大屏不存在: {dashboard_id}")
-
-    panel_map = {
+def _build_dashboard_panel_map(dashboard: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """按面板 ID 为大屏面板建索引。"""
+    return {
         str(panel.get("id") or "").strip(): panel
         for panel in (dashboard.get("panels") or [])
         if str(panel.get("id") or "").strip()
     }
-    missing_panel_ids = [panel_id for panel_id in panel_ids if panel_id not in panel_map]
-    if missing_panel_ids:
-        raise ValueError(f"面板不存在: {missing_panel_ids[0]}")
 
+
+async def _load_batch_execution_targets(
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    panel_member_datasource_ids: Dict[str, str],
+    user_id: Optional[str],
+    operator_name: Optional[str],
+) -> Dict[tuple[str, str], Dict[str, Any]]:
+    """为各面板预取授权执行对象，按 (datasource_id, member_id) 缓存去重。"""
     ds_manager = dashboard_runtime().get_datasource_manager()
     execution_target_map: Dict[tuple[str, str], Dict[str, Any]] = {}
     for panel_id in panel_ids:
@@ -564,7 +568,34 @@ async def prepare_dashboard_batch_context(
             username=operator_name,
         )
         execution_target_map[cache_key] = execution_targets[0]
+    return execution_target_map
 
+
+async def prepare_dashboard_batch_context(
+    dashboard_id: str,
+    panel_ids: List[str],
+    panel_member_datasource_ids: Dict[str, str],
+    preloaded_dashboard: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+    include_public: bool = True,
+) -> tuple[Dict[str, Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
+    """预加载批量执行需要的面板与执行对象，减少每个卡片的重复查库。"""
+    service = get_dashboard_service()
+    dashboard = preloaded_dashboard
+    if dashboard is None:
+        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=include_public)
+    if not dashboard:
+        raise ValueError(f"大屏不存在: {dashboard_id}")
+
+    panel_map = _build_dashboard_panel_map(dashboard)
+    missing_panel_ids = [panel_id for panel_id in panel_ids if panel_id not in panel_map]
+    if missing_panel_ids:
+        raise ValueError(f"面板不存在: {missing_panel_ids[0]}")
+
+    execution_target_map = await _load_batch_execution_targets(
+        panel_ids, panel_map, panel_member_datasource_ids, user_id, operator_name,
+    )
     return panel_map, execution_target_map
 
 
