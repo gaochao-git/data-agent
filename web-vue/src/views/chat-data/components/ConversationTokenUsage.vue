@@ -37,8 +37,13 @@ const panelOpen = ref(false)
 const sortMode = ref<TokenUsageSort>('round')
 const expandedMessageKeys = ref<Set<string>>(new Set())
 const buttonRef = ref<HTMLElement | null>(null)
+const panelRef = ref<HTMLElement | null>(null)
 const panelPosition = ref({ left: 24, bottom: 112 })
 const cacheSupportDetected = ref(false)
+
+// 面板层压策略：高于普通页面内容，低于 Element Plus 弹窗/弹层（初始 z-index 2000 起），
+// 避免后台管理、语义配置等业务弹窗打开后被本面板遮盖
+const PANEL_Z_INDEX = 1900
 
 const PANEL_WIDTH = 460
 const PANEL_MARGIN = 16
@@ -129,6 +134,23 @@ const closePanel = () => {
   panelOpen.value = false
   expandedMessageKeys.value = new Set()
   expandedChildKeys.value = new Set()
+}
+
+// 点击面板和触发按钮之外的区域时收起面板：
+// 打开后台管理、语义模型配置等其他弹窗前必然先点击页面，面板会随之自动收起
+const handleDocumentPointerDown = (event: PointerEvent) => {
+  if (!panelOpen.value) return
+  const target = event.target as Node | null
+  if (!target) return
+  if (panelRef.value?.contains(target)) return
+  if (buttonRef.value?.contains(target)) return
+  closePanel()
+}
+
+const handleDocumentKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && panelOpen.value) {
+    closePanel()
+  }
 }
 
 const handleViewportChange = () => {
@@ -405,11 +427,15 @@ const getRowContent = (item: TokenUsageRow): string => {
 onMounted(() => {
   window.addEventListener('resize', handleViewportChange)
   window.addEventListener('scroll', handleViewportChange, true)
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true)
+  document.addEventListener('keydown', handleDocumentKeydown)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleViewportChange)
   window.removeEventListener('scroll', handleViewportChange, true)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 
 defineExpose({
@@ -450,8 +476,9 @@ defineExpose({
     </button>
     <div
       v-if="panelOpen"
-      class="fixed z-[10000] max-h-[calc(100vh-32px)] overflow-y-auto rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
-      :style="panelStyle"
+      ref="panelRef"
+      class="fixed max-h-[calc(100vh-32px)] overflow-y-auto rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
+      :style="{ ...panelStyle, zIndex: PANEL_Z_INDEX }"
     >
       <div class="flex items-center justify-between mb-2">
         <div class="font-semibold text-gray-800">上下文占用明细</div>

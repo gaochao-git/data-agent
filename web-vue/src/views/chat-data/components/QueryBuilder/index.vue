@@ -1197,9 +1197,21 @@ const addFieldToAggregation = (field: BuilderDragFieldData) => {
     showAggregationModeConflictMessage(targetFunc)
     return
   }
-  const dedupKey = (item: { tableAlias?: string; table: string; column: string }) =>
-    isLogicalMetric ? `logical:${semanticName || displayName}` : buildFieldKey(item.tableAlias, item.table, item.column)
-  if (!aggregations.value.find(a => dedupKey(a) === dedupKey({ tableAlias, table, column }) && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
+  // 去重 key 必须基于条目自身判定逻辑/物理，不能读拖拽 field 的闭包，
+  // 否则第二个逻辑指标（或 RAW 物理指标）会被误判为已存在而静默跳过
+  const isLogicalAggregationItem = (item: { table?: string; column?: string; semanticName?: string; metricKind?: string }) =>
+    item.metricKind === 'derived' || item.metricKind === 'composite' ||
+    (!item.table && !item.column && !!item.semanticName)
+  const dedupKey = (item: { tableAlias?: string; table?: string; column?: string; semanticName?: string; displayName?: string; metricKind?: string }) => {
+    if (isLogicalAggregationItem(item)) {
+      return `logical:${item.semanticName || item.displayName}`
+    }
+    return buildFieldKey(item.tableAlias, item.table || '', item.column || '')
+  }
+  const currentKey = isLogicalMetric
+    ? `logical:${semanticName || displayName}`
+    : buildFieldKey(tableAlias, table, column)
+  if (!aggregations.value.find(a => dedupKey(a) === currentKey && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
     aggregations.value.push({
       id: `${Date.now()}`,
       table,
@@ -2966,10 +2978,15 @@ watch(filters, (list) => {
 watch([() => props.semanticConfig, tables, dimensions, aggregations, filters, orderBy], ([semanticConfig]) => {
   if (!semanticConfig) return
   const used = new Set<string>()
-  dimensions.value.forEach(d => used.add(getTableAlias(d)))
-  aggregations.value.forEach(a => used.add(getTableAlias(a)))
-  filters.value.forEach(f => used.add(getTableAlias(f)))
-  orderBy.value.forEach(o => used.add(getTableAlias(o)))
+  // 逻辑指标（派生/复合）无物理表别名，跳过空别名避免污染已选表推导
+  const addUsedAlias = (item: { tableAlias?: string; table?: string }) => {
+    const alias = getTableAlias(item)
+    if (alias) used.add(alias)
+  }
+  dimensions.value.forEach(addUsedAlias)
+  aggregations.value.forEach(addUsedAlias)
+  filters.value.forEach(addUsedAlias)
+  orderBy.value.forEach(addUsedAlias)
   selectedTables.value = buildSemanticSelectedTables(semanticConfig, tables.value, used)
 }, { deep: true, immediate: true })
 
