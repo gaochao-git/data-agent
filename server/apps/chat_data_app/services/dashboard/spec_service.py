@@ -237,13 +237,24 @@ def resolve_dashboard_card_semantic_config_id(
     return card_id or str(default_semantic_config_id or "").strip()
 
 
-def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticAIQueryAdapter) -> str:
-    """将看板卡片 DSL 转为面板 SQL。"""
+def build_panel_sql_from_dashboard_card(
+    card: Dict[str, Any],
+    generator: SemanticAIQueryAdapter,
+    warnings: Optional[List[str]] = None,
+) -> str:
+    """将看板卡片 DSL 转为面板 SQL。
+
+    卡片字段合并走 `_merge_card_dsl_payload` 单一入口；混合指标剔除的警告通过
+    `warnings` 列表输出（传 None 表示不收集）。预检（build_dashboard_panel_plans）
+    与 SQL 生成共用同一份合并结果，避免两套合并逻辑产生口径分歧。
+    """
     dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     if dsl.get("compare") or card.get("compare"):
         raise ValueError("DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
     payload = _merge_card_dsl_payload(dsl, card)
-    payload, _warnings = remove_mixed_raw_metrics_for_aggregate_dsl(payload, getattr(generator, "semantic_config", {}))
+    payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl(payload, getattr(generator, "semantic_config", {}))
+    if warnings is not None:
+        warnings.extend(normalize_warnings)
     result = compile_semantic_ai_dsl(
         getattr(generator, "semantic_config", {}),
         payload,
@@ -255,7 +266,7 @@ def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: Semanti
 
 
 def _merge_card_dsl_payload(dsl: Dict[str, Any], card: Dict[str, Any]) -> Dict[str, Any]:
-    """卡片级字段兜底合并：dsl 字段缺省时回退 card 顶层字段。"""
+    """卡片级字段兜底合并的唯一入口：dsl 字段缺省时回退 card 顶层字段（含 limit/offset）。"""
     return {
         **dsl,
         "metrics": dsl.get("metrics") or card.get("metrics") or [],
@@ -371,20 +382,6 @@ def _resolve_panel_generator(
     return generator
 
 
-def _build_panel_plan_dsl(card: Dict[str, Any]) -> Dict[str, Any]:
-    """合并卡片 dsl 与顶层指标/维度等字段，dsl 缺失时回落卡片字段。"""
-    dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
-    return {
-        **dsl,
-        "metrics": dsl.get("metrics") or card.get("metrics") or [],
-        "dimensions": dsl.get("dimensions") or card.get("dimensions") or [],
-        "filters": dsl.get("filters") or card.get("filters") or [],
-        "having": dsl.get("having") or card.get("having") or [],
-        "order_by": dsl.get("order_by") or card.get("order_by") or [],
-        "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
-    }
-
-
 def _failed_panel_plan(card: Dict[str, Any], index: int, default_semantic_config_id: Optional[str], error: str) -> Dict[str, Any]:
     return {
         "index": index,
@@ -413,13 +410,10 @@ def build_dashboard_panel_plans(
         try:
             semantic_config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
             generator = _resolve_panel_generator(generators, semantic_config_generators, sql_generator, semantic_config_id)
-            dsl = _build_panel_plan_dsl(card)
-            _payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl(
-                dsl, getattr(generator, "semantic_config", {}),
-            )
-            for warning in normalize_warnings:
+            card_warnings: List[str] = []
+            sql = build_panel_sql_from_dashboard_card(card, generator, warnings=card_warnings)
+            for warning in card_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
-            sql = build_panel_sql_from_dashboard_card(card, generator)
             if not sql:
                 raise ValueError("SQL 为空")
             panel_plans.append({

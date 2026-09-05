@@ -694,8 +694,21 @@ def _parse_tool_args_buffer(args_buffer: str, fallback: dict[str, Any] | None = 
     return parsed
 
 
-def _is_tool_result_error(content: Any) -> bool:
-    """根据工具返回文本识别失败状态，便于前端展示。"""
+# 工具层失败文本的统一前缀格式：<工具名> 执行失败: / <工具名> 工具错误:。
+# 只做首行前缀识别，不做全文子串包含——避免成功结果正文恰好包含"执行失败"
+# 等字样（读日志、grep 命中、文档正文）被误判为失败。
+_TOOL_ERROR_TEXT_RE = re.compile(r"^[^\n:：]{0,64}?(?:执行失败|工具错误)[:：]")
+
+
+def _is_tool_result_error(content: Any, native_status: Any = None) -> bool:
+    """识别工具结果失败状态，便于前端展示。
+
+    优先信任 ToolMessage 自带的结构化 status（ToolErrorMiddleware 等失败路径
+    置为 "error"）；query_result envelope 的 failed/cancelled 次之；文本匹配
+    仅兜底工具吞异常后返回的固定前缀失败文本。
+    """
+    if str(native_status or "").strip().lower() == "error":
+        return True
     text = str(content or "").strip()
     if not text:
         return False
@@ -705,7 +718,7 @@ def _is_tool_result_error(content: Any) -> bool:
         payload = None
     if isinstance(payload, dict) and payload.get("type") == "query_result":
         return str(payload.get("status") or "").strip().lower() in {"failed", "cancelled"}
-    return "执行失败" in text or "工具错误" in text or text.lower().startswith("error:")
+    return bool(_TOOL_ERROR_TEXT_RE.match(text)) or text.lower().startswith("error:")
 
 
 def _register_running_tool(running_tool_ids: list[str], tool_call_id: str) -> None:
@@ -830,7 +843,7 @@ class _ToolStreamState:
         msg_data["type"] = "tool"
         msg_data["timestamp"] = _get_timestamp()
         msg_data["tool_name"] = self.tool_names.get(tool_call_id, msg_data.get("name") or "")
-        msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content")) else "completed"
+        msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content"), msg_data.get("status")) else "completed"
         # ToolTimingMiddleware 盖在 additional_kwargs 里的执行起止时间，提升为顶层字段供前端展示。
         tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
         msg_data["started_at_ms"] = tool_additional_kwargs.get("started_at_ms")

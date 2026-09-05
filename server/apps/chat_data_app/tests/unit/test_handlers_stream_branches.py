@@ -147,14 +147,27 @@ def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
     assert '"content": "查询完成"' in completed
 
     state.handle_tool_calls([{"id": "call-2", "name": "semantic_query_tool"}])
+    # 失败文本须为工具层统一前缀格式；裸"执行失败"已不算失败信号（防正文误判）
     failed_payload = state.build_tool_message_payload(FakeChunk(
-        content="执行失败",
+        content="semantic_query_tool 执行失败: 字段不存在",
         msg_type="tool",
         tool_call_id="call-2",
         name="semantic_query_tool",
     ))
 
     assert sse_event_name(state.build_completion_event(failed_payload)) == "tool_failed"
+
+    # ToolMessage 自带 status="error"（ToolErrorMiddleware 路径）时无条件判失败
+    state.handle_tool_calls([{"id": "call-3", "name": "semantic_query_tool"}])
+    native_failed_payload = state.build_tool_message_payload(FakeChunk(
+        content="查询完成",
+        msg_type="tool",
+        tool_call_id="call-3",
+        name="semantic_query_tool",
+        status="error",
+    ))
+
+    assert sse_event_name(state.build_completion_event(native_failed_payload)) == "tool_failed"
 
 
 @pytest.mark.asyncio
@@ -247,16 +260,21 @@ def FakeChunk(
     name="",
     additional_kwargs=None,
     response_metadata=None,
+    status=None,
 ):
     """测试工厂：只返回 LangChain 标准消息 Chunk。"""
     if msg_type == "human":
         return HumanMessageChunk(content=content, additional_kwargs=additional_kwargs or {})
     if msg_type == "tool":
+        chunk_kwargs = {}
+        if status is not None:
+            chunk_kwargs["status"] = status
         return ToolMessageChunk(
             content=content,
             tool_call_id=tool_call_id,
             name=name or None,
             additional_kwargs=additional_kwargs or {},
+            **chunk_kwargs,
         )
     normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
     return AIMessageChunk(
@@ -299,7 +317,11 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert handlers._is_tool_result_error("[dashboard_write] bad json") is False
     assert handlers._is_tool_result_error('[dashboard_write] {"success": false}') is False
     assert handlers._is_tool_result_error("error: bad") is True
-    assert handlers._is_tool_result_error("执行失败") is True
+    # 文本匹配已收紧为首行前缀格式（<工具名> 执行失败:），裸关键字不再算失败信号
+    assert handlers._is_tool_result_error("执行失败") is False
+    assert handlers._is_tool_result_error("正文中间提到执行失败也不算") is False
+    assert handlers._is_tool_result_error("bash_run 执行失败: exit 1") is True
+    assert handlers._is_tool_result_error("file_read 工具错误: 文件不存在") is True
     assert handlers._is_tool_result_error('{"type":"query_result","status":"failed"}') is True
     assert handlers._is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
 

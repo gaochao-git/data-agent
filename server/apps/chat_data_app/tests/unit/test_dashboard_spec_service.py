@@ -742,6 +742,66 @@ def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
     assert any("不再支持 compare" in item for item in warnings)
 
 
+def test_build_panel_sql_from_dashboard_card_falls_back_to_card_top_level():
+    """dsl 缺省字段（含 offset）必须回退 card 顶层字段——预检与 SQL 生成共用同一合并口径。"""
+    captured = {}
+
+    class FakeGenerator:
+        semantic_config = {}
+
+        def generate_sql(self, **kwargs):
+            captured.update(kwargs)
+            return {"success": True, "sql": "select count(*) from orders offset 3"}
+
+    sql = build_panel_sql_from_dashboard_card(
+        {
+            "title": "订单数量",
+            "chart_type": "kpi",
+            "metrics": ["订单数量"],
+            "dimensions": ["日期"],
+            "filters": [{"field": "状态", "op": "=", "value": "paid"}],
+            "limit": 10,
+            "offset": 3,
+        },
+        FakeGenerator(),
+    )
+
+    assert sql.endswith("offset 3")
+    assert captured["metrics"] == ["订单数量"]
+    assert captured["dimensions"] == ["日期"]
+    assert captured["filters"] == [{"dimension": "状态", "operator": "=", "value": "paid"}]
+    assert captured["limit"] == 10
+    assert captured["offset"] == 3
+
+
+def test_build_panel_sql_from_dashboard_card_collects_normalize_warnings():
+    class FakeGenerator:
+        semantic_config = {
+            "metrics": [
+                {"name": "销售额", "expression": "SUM(amount)"},
+                {"name": "用户ID", "expression": "user_id"},
+            ]
+        }
+
+        def generate_sql(self, metrics, **_kwargs):
+            return {"success": True, "sql": f"select {metrics[0]} from orders"}
+
+    collected: list = []
+    build_panel_sql_from_dashboard_card(
+        {"title": "混用指标", "chart_type": "line", "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]}},
+        FakeGenerator(),
+        warnings=collected,
+    )
+
+    assert len(collected) == 1
+    assert "不能混用" in collected[0]
+    # 不传 warnings 时行为不变（默认丢弃）
+    build_panel_sql_from_dashboard_card(
+        {"title": "混用指标", "chart_type": "line", "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]}},
+        FakeGenerator(),
+    )
+
+
 def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(monkeypatch):
     class FakeManager:
         async def get_execution_datasources_async(self, datasource_id, member_ids):

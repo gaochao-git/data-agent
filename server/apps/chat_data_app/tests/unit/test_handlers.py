@@ -316,6 +316,21 @@ def test_is_tool_result_error_detects_plain_errors():
     assert _is_tool_result_error("执行完成") is False
 
 
+def test_is_tool_result_error_prefers_native_status():
+    # 结构化 status="error" 最优先：无论正文长什么样都判失败
+    assert _is_tool_result_error("查询完成", "error") is True
+    assert _is_tool_result_error('{"type":"query_result","status":"succeeded"}', "error") is True
+    # status="success" 时不再全文猜测，成功正文含"执行失败"字样不再误判
+    assert _is_tool_result_error("处理日志：步骤一执行失败,已自动重试成功", "success") is False
+    assert _is_tool_result_error("bash_run 执行失败: exit 1", "success") is True
+    # query_result envelope 的 failed/cancelled 优先于 success 文本
+    assert _is_tool_result_error('{"type":"query_result","status":"failed"}', "success") is True
+    assert _is_tool_result_error('{"type":"query_result","status":"cancelled"}', "success") is True
+    # 旧数据缺 status 时回退文本前缀匹配
+    assert _is_tool_result_error("officecli_run 执行失败: 超时") is True
+    assert _is_tool_result_error("正常结果") is False
+
+
 def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
     import asyncio
     calls = {}
