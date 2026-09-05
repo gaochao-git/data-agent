@@ -8,10 +8,6 @@ from sqlalchemy import and_, func, or_, select, update
 
 from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
-# chat_data_skill.skill_root_dir / chat_data_skill_version.skill_version_dir 已废弃：
-# 不再承载真实路径，写入侧统一写死该占位串，读取侧按 owner_user_id + skill_name + version_no 推导。
-NO_USE_COLUMN = "no_use_column"
-
 
 def get_session():
     """运行时获取业务库会话，避免无数据库环境导入技能模块失败。"""
@@ -65,7 +61,6 @@ class SkillDao:
             "skill_publish_status": row.skill_publish_status,
             "current_skill_version_no": row.current_skill_version_no,
             "owner_user_id": row.owner_user_id,
-            "skill_root_dir": row.skill_root_dir,
             "create_by": row.create_by,
             "create_by_name": row.create_by_name,
             "update_by": row.update_by,
@@ -81,7 +76,6 @@ class SkillDao:
         return {
             "skill_id": row.skill_id,
             "skill_version_no": row.skill_version_no,
-            "skill_version_dir": row.skill_version_dir,
             "version_publish_status": row.version_publish_status,
             "create_time": row.create_time,
             "update_time": row.update_time,
@@ -245,7 +239,6 @@ class SkillDao:
                 skill_publish_status=skill.get("skill_publish_status") or "draft",
                 current_skill_version_no=int(skill.get("current_skill_version_no") or 0),
                 owner_user_id=skill.get("owner_user_id") or "",
-                skill_root_dir=NO_USE_COLUMN,
                 create_by=skill.get("create_by") or "",
                 create_by_name=skill.get("create_by_name") or "",
                 update_by=skill.get("update_by") or "",
@@ -284,7 +277,6 @@ class SkillDao:
         return ChatDataSkillVersion(
             skill_id=version.get("skill_id") or "",
             skill_version_no=int(version.get("skill_version_no") or 0),
-            skill_version_dir=NO_USE_COLUMN,
             version_publish_status=version.get("version_publish_status") or "draft",
             create_by=version.get("create_by") or "",
             create_by_name=version.get("create_by_name") or "",
@@ -331,7 +323,6 @@ class SkillDao:
                 skill_publish_status="disabled",
                 enabled_flag=0,
                 delete_flag=1,
-                skill_root_dir=NO_USE_COLUMN,
                 update_by=update_by or "",
                 update_by_name=update_by_name or "",
             )

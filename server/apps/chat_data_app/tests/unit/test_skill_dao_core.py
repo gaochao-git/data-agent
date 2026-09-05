@@ -65,7 +65,6 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
             "skill_publish_status": "draft",
             "current_skill_version_no": 0,
             "owner_user_id": "u1",
-            "skill_root_dir": "/tmp/owner-skill",
             "create_by": "u1",
             "create_by_name": "用户一",
             "update_by": "u1",
@@ -73,7 +72,6 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
         }, {
             "skill_id": "skill_owner",
             "skill_version_no": 1,
-            "skill_version_dir": "/tmp/owner-skill/v1",
             "version_publish_status": "draft",
             "create_by": "u1",
             "create_by_name": "用户一",
@@ -92,7 +90,6 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
         }, {
             "skill_id": "skill_global",
             "skill_version_no": 1,
-            "skill_version_dir": "/tmp/global-skill/v1",
             "version_publish_status": "published",
         })
         async with skill_db() as session:
@@ -117,7 +114,6 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
         }, {
             "skill_id": "global_draft",
             "skill_version_no": 1,
-            "skill_version_dir": "/tmp/global-draft-skill/v1",
             "version_publish_status": "draft",
         })
 
@@ -134,18 +130,11 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
         assert await dao.get_skill_async("global-draft-skill", user_id="u2") is None
         assert await dao.get_skill_async("owner-skill", user_id="u2") is None
         assert (await dao.get_skill_async("owner-skill", user_id="u1"))["skill_id"] == "skill_owner"
-        # skill_root_dir / skill_version_dir 为废弃列，写入侧统一写死 no_use_column
-        assert owner_skill["skill_root_dir"] == "no_use_column"
-        assert (await dao.get_published_version_async("skill_global", 1))["skill_version_dir"] == "no_use_column"
         assert await dao.get_published_version_async("skill_owner", 1) is None
         assert (await dao.get_latest_draft_version_async("skill_owner"))["skill_version_no"] == 1
         assert (await dao.get_latest_published_version_async("skill_global"))["skill_version_no"] == 1
         assert await dao.next_version_no_async("skill_owner") == 2
         assert await dao.get_skill_async("legacy-system-skill", user_id="u1") is None
-
-        async with skill_db() as session:
-            owner = (await session.execute(select(ChatDataSkill).where(ChatDataSkill.skill_id == "skill_owner"))).scalar_one()
-            assert owner.skill_scope == "analyze"
 
     asyncio.run(run_checks())
 
@@ -162,17 +151,14 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
             "visibility_type": "private",
             "skill_publish_status": "draft",
             "owner_user_id": "u1",
-            "skill_root_dir": "/tmp/demo-skill",
         }, {
             "skill_id": "skill_a",
             "skill_version_no": 1,
-            "skill_version_dir": "/tmp/demo-skill/v1",
             "version_publish_status": "draft",
         })
         assert await dao.insert_version_async({
             "skill_id": "skill_a",
             "skill_version_no": 2,
-            "skill_version_dir": "/tmp/demo-skill/v2",
             "version_publish_status": "draft",
             "create_by": "u1",
             "create_by_name": "用户一",
@@ -191,8 +177,6 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
         assert published["skill_publish_status"] == "published"
         assert published["current_skill_version_no"] == 2
         assert (await dao.get_published_version_async("skill_a", 2))["update_by_name"] == "用户三"
-        # 版本目录列为废弃列，始终写入 no_use_column
-        assert (await dao.get_version_async("skill_a", 2))["skill_version_dir"] == "no_use_column"
 
         await dao.set_favorite_async("u1", "skill_a", True, operator="u1", operator_name="用户一")
         assert (await dao.get_skill_async("skill_a", user_id="u1"))["favorite_flag"] == 1

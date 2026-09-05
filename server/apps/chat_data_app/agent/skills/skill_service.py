@@ -47,8 +47,7 @@ def _resolve_user_skill_path(path: Path, field_name: str = "技能路径") -> Pa
 def _derive_user_skill_root_dir(owner_user_id: Any, skill_name: Any) -> Path:
     """按 ``owner_user_id + skill_name`` 推导用户技能物理根目录。
 
-    ``chat_data_skill.skill_root_dir`` 列已废弃（固定写入 no_use_column），
-    读取侧一律按归属用户与技能标识推导，并限制在用户技能根目录下。
+    物理路径不入库，读取侧一律按归属用户与技能标识推导，并限制在用户技能根目录下。
     """
     user_part = str(owner_user_id or "").strip()
     name_part = str(skill_name or "").strip()
@@ -60,8 +59,7 @@ def _derive_user_skill_root_dir(owner_user_id: Any, skill_name: Any) -> Path:
 def _derive_user_version_dir(owner_user_id: Any, skill_name: Any, version_no: Any) -> Path:
     """按 ``owner_user_id + skill_name + skill_version_no`` 推导用户技能版本物理目录。
 
-    ``chat_data_skill_version.skill_version_dir`` 列已废弃（固定写入 no_use_column），
-    读取侧一律按归属用户、技能标识与版本号推导，并限制在用户技能根目录下。
+    物理路径不入库，读取侧一律按归属用户、技能标识与版本号推导，并限制在用户技能根目录下。
     """
     root_dir = _derive_user_skill_root_dir(owner_user_id, skill_name)
     return _resolve_user_skill_path(root_dir / "versions" / f"v{int(version_no or 0)}", "技能版本目录")
@@ -510,8 +508,7 @@ class SkillService:
             raise ValueError(f"技能标识已存在: {skill_name}")
         skill_id = uuid.uuid4().hex
         version_no = 1
-        # skill_root_dir / skill_version_dir 为废弃列，DAO 统一写入 no_use_column，
-        # 物理路径按 owner_user_id + skill_name + version_no 推导。
+        # 物理路径不入库，按 owner_user_id + skill_name + version_no 推导。
         version_dir = _derive_user_version_dir(user_id, skill_name, version_no)
         skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
         parsed = await asyncio.to_thread(parse_metadata, skill_md_path)
@@ -1038,7 +1035,7 @@ class SkillService:
         owner_user_id = str(skill.get("owner_user_id") or "")
         draft = await self.dao.get_latest_draft_version_async(skill_id)
         if draft:
-            # DB 中的 skill_version_dir 为废弃列，附上按推导规则计算的物理目录。
+            # 版本表不存物理路径，附上按推导规则计算的物理目录。
             draft["skill_version_dir"] = str(_derive_user_version_dir(owner_user_id, skill_name, draft.get("skill_version_no")))
             return draft
         version_no = await self.dao.next_version_no_async(skill_id)
@@ -1189,8 +1186,7 @@ class SkillService:
     async def _archive_user_skill_async(self, skill: Dict[str, Any], user_id: str, operator_name: str = "") -> None:
         """异步归档用户技能记录和目录，释放技能名。
 
-        物理目录随技能根目录整体改名归档；``skill_root_dir`` / ``skill_version_dir``
-        为废弃列（固定 no_use_column），无需再回填归档后的路径。
+        物理目录随技能根目录整体改名归档；物理路径不入库，无需回填归档后的路径。
         """
         original_name = str(skill.get("skill_name") or skill.get("skill_id") or "skill").strip()
         archive_name = f"{original_name}--deleted-{uuid.uuid4().hex[:8]}"

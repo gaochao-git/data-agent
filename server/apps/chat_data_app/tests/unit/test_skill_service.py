@@ -461,7 +461,6 @@ def test_create_user_skill_async_uses_async_dao(tmp_path, monkeypatch):
         "skill_source": "user",
         "owner_user_id": "u1",
         "skill_publish_status": "disabled",
-        "skill_root_dir": str(tmp_path / "demo-skill"),
     }
 
     class FakeStore:
@@ -502,7 +501,7 @@ def test_create_user_skill_async_uses_async_dao(tmp_path, monkeypatch):
     assert archived["skill"] == existing
     assert archived["user_id"] == "u1"
     assert created["skill"]["skill_name"] == "demo-skill"
-    # skill_root_dir / skill_version_dir 为废弃列，创建 payload 不再携带，由 DAO 写死 no_use_column
+    # skill_root_dir / skill_version_dir 为已删除的废弃列，创建 payload 不携带
     assert "skill_root_dir" not in created["skill"]
     assert "skill_version_dir" not in created["version"]
     assert result["name"] == "demo-skill"
@@ -598,7 +597,6 @@ def test_delete_skill_file_creates_draft_from_published_version(tmp_path, monkey
                 "skill_name": "demo-skill",
                 "skill_source": "user",
                 "owner_user_id": "u1",
-                "skill_root_dir": str(root_dir),
                 "current_skill_version_no": 1,
             }
 
@@ -903,7 +901,6 @@ def test_db_skill_metadata_ignores_legacy_system_record(tmp_path, monkeypatch):
         "skill_desc": "描述",
         "skill_category": "system",
         "skill_source": "system",
-        "skill_root_dir": str(root_dir),
         "skill_publish_status": "published",
         "current_skill_version_no": 1,
         "enabled_flag": 1,

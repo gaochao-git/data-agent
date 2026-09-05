@@ -60,7 +60,13 @@ ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT 
 SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
 ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
 
-ALTER TABLE semantic_config RENAME COLUMN ontology_rules TO business_notes;
+-- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
+ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COMMENT '业务说明';
+
+-- 技能表清理废弃字段：skill_scope 从未使用；root_dir/version_dir 已由推导规则替代
+ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
+ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
+ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
 ```
 
 ## 依赖变更
