@@ -87,7 +87,7 @@ def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_
         group_id="group_a",
         semantic_config_name=name,
         semantic_config_desc="描述",
-        ontology_rules="业务规则",
+        business_notes="业务规则",
         enabled_flag=1,
         metrics_json='[{"name":"订单金额"}]',
         dimensions_json='[{"name":"城市"}]',

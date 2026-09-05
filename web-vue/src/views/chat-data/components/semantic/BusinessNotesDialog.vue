@@ -8,13 +8,13 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  save: [ontologyRules: string]
+  save: [businessNotes: string]
 }>()
 
 const visible = defineModel<boolean>('visible', { default: false })
 const editingBusinessFlowText = ref('')
 
-const splitOntologyRules = (text: string) => {
+const splitBusinessNotes = (text: string) => {
   const content = (text || '').trim()
   if (!content) return { businessFlow: '' }
   const businessMatch = content.match(/【业务运转说明】\s*([\s\S]*?)(?=【元数据补充】|$)/)
@@ -29,19 +29,19 @@ const splitOntologyRules = (text: string) => {
   return { businessFlow: content }
 }
 
-const buildOntologyRulesText = () => {
+const buildBusinessNotesText = () => {
   return editingBusinessFlowText.value.trim()
 }
 
 watch(visible, (value) => {
   if (!value) return
-  const parsed = splitOntologyRules(props.config?.ontology_rules || '')
+  const parsed = splitBusinessNotes(props.config?.business_notes || '')
   editingBusinessFlowText.value = parsed.businessFlow
 })
 
 const save = () => {
   if (!props.config) return
-  emit('save', buildOntologyRulesText())
+  emit('save', buildBusinessNotesText())
   visible.value = false
 }
 </script>

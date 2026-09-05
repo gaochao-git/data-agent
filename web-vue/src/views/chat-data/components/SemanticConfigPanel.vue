@@ -34,7 +34,7 @@ import {
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
-import OntologyRulesDialog from './semantic/OntologyRulesDialog.vue'
+import BusinessNotesDialog from './semantic/BusinessNotesDialog.vue'
 import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
 import AutoPrefillDialog from './semantic/AutoPrefillDialog.vue'
 import TablePreviewDialog from './semantic/TablePreviewDialog.vue'
@@ -130,7 +130,7 @@ const buildConfigSignature = (config: SemanticConfigItem) => {
   return JSON.stringify({
     name: config.name || '',
     description: config.description || '',
-    ontology_rules: config.ontology_rules || '',
+    business_notes: config.business_notes || '',
     enabled: !!config.enabled,
     metrics: config.metrics || [],
     dimensions: config.dimensions || [],
@@ -764,7 +764,7 @@ const editingExpressionRowKey = ref('')
 const showMetricExpandDialog = ref(false)
 const metricExpandSourceRowKey = ref('')
 const metricExpandOptions = ref<MetricExpandOption[]>([])
-const showOntologyRulesDialog = ref(false)
+const showBusinessNotesDialog = ref(false)
 const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
   { value: 'text', label: '文本' },
   { value: 'number', label: '数值' },
@@ -2726,14 +2726,14 @@ const saveExpressionEditor = (expression: string) => {
   editingExpressionRowKey.value = ''
 }
 
-const openOntologyRulesDialog = () => {
+const openBusinessNotesDialog = () => {
   if (!activeConfig.value) return
-  showOntologyRulesDialog.value = true
+  showBusinessNotesDialog.value = true
 }
 
-const saveOntologyRules = (ontologyRules: string) => {
+const saveBusinessNotes = (businessNotes: string) => {
   if (!activeConfig.value) return
-  updateConfig(activeConfig.value.id, { ontology_rules: ontologyRules })
+  updateConfig(activeConfig.value.id, { business_notes: businessNotes })
 }
 
 </script>
@@ -3226,9 +3226,9 @@ const saveOntologyRules = (ontologyRules: string) => {
                       <button
                         :class="[
                           'h-7 px-2.5 rounded border bg-white text-[11px] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
-                          activeConfig.ontology_rules ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'
+                          activeConfig.business_notes ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'
                         ]"
-                        @click="openOntologyRulesDialog"
+                        @click="openBusinessNotesDialog"
                       >
                         <i class="fa-regular fa-note-sticky mr-1"></i>业务说明
                       </button>
@@ -3499,11 +3499,11 @@ const saveOntologyRules = (ontologyRules: string) => {
       @save="saveExpressionEditor"
     />
 
-    <OntologyRulesDialog
-      v-model:visible="showOntologyRulesDialog"
+    <BusinessNotesDialog
+      v-model:visible="showBusinessNotesDialog"
       :config="activeConfig"
       :can-manage="canManageConfig(activeConfig)"
-      @save="saveOntologyRules"
+      @save="saveBusinessNotes"
     />
 
     <SemanticHistoryLearningDialog

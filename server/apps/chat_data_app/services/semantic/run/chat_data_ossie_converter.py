@@ -248,7 +248,7 @@ class ChatDataToOssieConverter:
         model = OSISemanticModel(
             name=_text(normalized.get("name") or config_id),
             description=_text(normalized.get("description")) or None,
-            ai_context=_text(normalized.get("ontology_rules")) or None,
+            ai_context=_text(normalized.get("business_notes")) or None,
             datasets=datasets,
             relationships=relationships or None,
             metrics=metrics or None,

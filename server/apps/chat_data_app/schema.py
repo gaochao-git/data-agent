@@ -530,7 +530,7 @@ class SemanticConfig(BaseModel):
     id: str = Field(..., description="配置ID")
     name: str = Field(..., description="配置名称，如'数据库集群分析'")
     description: Optional[str] = Field(default=None, description="指标集短描述")
-    ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
+    business_notes: Optional[str] = Field(default=None, description="业务说明/业务知识")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
     dimensions: List[SemanticDimension] = Field(default_factory=list, description="维度列表")
@@ -541,7 +541,7 @@ class SemanticConfigCreateRequest(BaseModel):
     """创建语义配置请求"""
     name: str = Field(..., description="配置名称")
     description: Optional[str] = Field(default=None, description="指标集短描述")
-    ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
+    business_notes: Optional[str] = Field(default=None, description="业务说明/业务知识")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
     dimensions: List[SemanticDimension] = Field(default_factory=list, description="维度列表")
@@ -552,7 +552,7 @@ class SemanticConfigUpdateRequest(BaseModel):
     """更新语义配置请求"""
     name: Optional[str] = Field(default=None, description="配置名称")
     description: Optional[str] = Field(default=None, description="指标集短描述")
-    ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
+    business_notes: Optional[str] = Field(default=None, description="业务说明/业务知识")
     enabled: Optional[bool] = Field(default=None, description="是否启用")
     metrics: Optional[List[SemanticMetric]] = Field(default=None, description="指标列表")
     dimensions: Optional[List[SemanticDimension]] = Field(default=None, description="维度列表")

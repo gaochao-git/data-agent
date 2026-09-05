@@ -770,7 +770,7 @@ class SemanticConfig(Base):
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     semantic_config_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     semantic_config_desc: Mapped[Optional[str]] = mapped_column(String(128))
-    ontology_rules: Mapped[Optional[str]] = mapped_column(Text)
+    business_notes: Mapped[Optional[str]] = mapped_column(Text)
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
     metrics_json: Mapped[Optional[str]] = mapped_column(Text)
     dimensions_json: Mapped[Optional[str]] = mapped_column(Text)

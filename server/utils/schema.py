@@ -306,7 +306,7 @@ CREATE TABLE `semantic_config` (
   `group_id` varchar(128) NOT NULL COMMENT '所属数据源ID',
   `semantic_config_name` varchar(128) NOT NULL COMMENT '语义配置名称',
   `semantic_config_desc` varchar(128) DEFAULT NULL COMMENT '描述',
-  `ontology_rules` text COMMENT '本体规则/业务规则',
+  `business_notes` text COMMENT '业务说明/业务知识',
   `enabled_flag` tinyint NOT NULL DEFAULT '1' COMMENT '是否启用: 0-否, 1-是',
   `metrics_json` text COMMENT '指标配置JSON',
   `dimensions_json` text COMMENT '维度配置JSON',

@@ -1745,7 +1745,7 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
     payload = SemanticConfigUpdateRequest(
         description="新描述",
-        ontology_rules="规则",
+        business_notes="规则",
         enabled=False,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
@@ -1764,7 +1764,7 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
 
     assert updated["status"] == "success"
     assert manager.updated_kwargs["description"] == "新描述"
-    assert manager.updated_kwargs["ontology_rules"] == "规则"
+    assert manager.updated_kwargs["business_notes"] == "规则"
     assert manager.updated_kwargs["enabled"] is False
     assert manager.updated_kwargs["relationships"][0]["join_type"] == "inner"
 

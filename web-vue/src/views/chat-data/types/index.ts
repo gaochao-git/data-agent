@@ -704,7 +704,7 @@ export interface SemanticConfigItem {
   id: string
   name: string
   description?: string
-  ontology_rules?: string
+  business_notes?: string
   scope_type?: 'public' | 'private'
   can_manage?: boolean
   enabled: boolean

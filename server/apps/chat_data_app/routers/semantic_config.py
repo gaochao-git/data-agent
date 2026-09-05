@@ -560,7 +560,7 @@ async def _create_semantic_config_with_scope(
             datasource_id=datasource_id,
             name=payload.name,
             description=payload.description,
-            ontology_rules=payload.ontology_rules,
+            business_notes=payload.business_notes,
             enabled=payload.enabled,
             metrics=metrics,
             dimensions=dimensions,
@@ -783,7 +783,7 @@ async def learn_admin_semantic_config_from_history(
     return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
-_SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "ontology_rules", "enabled")
+_SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "business_notes", "enabled")
 _SEMANTIC_UPDATE_LIST_FIELDS = ("metrics", "dimensions", "relationships")
 
 

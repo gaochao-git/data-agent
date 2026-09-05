@@ -15,7 +15,7 @@ def _config(relationship_type="many_to_one"):
         "id": "sc_order",
         "name": "订单分析",
         "description": "订单经营分析",
-        "ontology_rules": "用户下单后生成订单，支付成功后计入有效成交。",
+        "business_notes": "用户下单后生成订单，支付成功后计入有效成交。",
         "update_time": "2026-08-05 10:00:00",
         "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"}],
         "dimensions": [{"name": "城市", "table": "orders", "column": "city", "logical_type": "string"}],

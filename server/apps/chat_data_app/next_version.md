@@ -59,6 +59,8 @@ ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT 
 
 SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
 ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
+
+ALTER TABLE semantic_config RENAME COLUMN ontology_rules TO business_notes;
 ```
 
 ## 依赖变更

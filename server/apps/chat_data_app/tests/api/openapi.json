@@ -341,13 +341,29 @@
             ],
             "title": "Options"
           },
+          "preserve_queued_messages": {
+            "default": false,
+            "title": "Preserve Queued Messages",
+            "type": "boolean"
+          },
           "query": {
+            "default": "",
             "title": "Query",
             "type": "string"
+          },
+          "queued_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queued Message Id"
           }
         },
         "required": [
-          "query",
           "agent_id"
         ],
         "title": "CompletionRequest",
@@ -1657,13 +1673,15 @@
           "timeout": {
             "anyOf": [
               {
+                "maximum": 3600.0,
+                "minimum": 1.0,
                 "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "查询超时时间（秒），为空时按数据源类型取全局默认值",
+            "description": "查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600",
             "title": "Timeout"
           },
           "user_id": {
@@ -1804,6 +1822,18 @@
       "SemanticConfigCreateRequest": {
         "description": "创建语义配置请求",
         "properties": {
+          "business_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "业务说明/业务知识",
+            "title": "Business Notes"
+          },
           "description": {
             "anyOf": [
               {
@@ -1843,18 +1873,6 @@
             "title": "Name",
             "type": "string"
           },
-          "ontology_rules": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "业务描述/本体规则",
-            "title": "Ontology Rules"
-          },
           "relationships": {
             "description": "表关系列表",
             "items": {
@@ -1873,6 +1891,18 @@
       "SemanticConfigUpdateRequest": {
         "description": "更新语义配置请求",
         "properties": {
+          "business_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "业务说明/业务知识",
+            "title": "Business Notes"
+          },
           "description": {
             "anyOf": [
               {
@@ -1938,18 +1968,6 @@
             ],
             "description": "配置名称",
             "title": "Name"
-          },
-          "ontology_rules": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "业务描述/本体规则",
-            "title": "Ontology Rules"
           },
           "relationships": {
             "anyOf": [
@@ -2263,6 +2281,33 @@
             "description": "默认过滤条件，如'is_active=1'",
             "title": "Filter"
           },
+          "filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SemanticMetricFilter"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "派生指标修饰词过滤",
+            "title": "Filters"
+          },
+          "formula": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "复合指标公式，如'{销售额} / {订单数}'",
+            "title": "Formula"
+          },
           "metadata_supplement": {
             "anyOf": [
               {
@@ -2275,10 +2320,37 @@
             "description": "字段级元数据补充说明",
             "title": "Metadata Supplement"
           },
+          "metric_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "derived",
+                  "composite"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "指标类别：derived=派生指标，composite=复合指标，缺省为原子指标",
+            "title": "Metric Kind"
+          },
           "name": {
             "description": "指标名称，如'销售额'",
             "title": "Name",
             "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemanticMetricPeriod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "派生指标固定统计周期"
           },
           "table": {
             "description": "所属表名",
@@ -2304,6 +2376,115 @@
           "table"
         ],
         "title": "SemanticMetric",
+        "type": "object"
+      },
+      "SemanticMetricFilter": {
+        "description": "派生指标修饰词过滤",
+        "properties": {
+          "dimension": {
+            "description": "过滤维度名称",
+            "title": "Dimension",
+            "type": "string"
+          },
+          "operator": {
+            "description": "操作符，如 '='、'IN'",
+            "title": "Operator",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "default": "",
+            "description": "筛选值；IN/NOT IN 为字符串数组",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "dimension",
+          "operator"
+        ],
+        "title": "SemanticMetricFilter",
+        "type": "object"
+      },
+      "SemanticMetricPeriod": {
+        "description": "派生指标固定统计周期",
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "between 的结束日期 YYYY-MM-DD",
+            "title": "End"
+          },
+          "kind": {
+            "description": "周期类型",
+            "enum": [
+              "today",
+              "yesterday",
+              "last_n_days",
+              "this_week",
+              "this_month",
+              "between"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "last_n_days 的天数 N",
+            "title": "N"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "between 的开始日期 YYYY-MM-DD",
+            "title": "Start"
+          },
+          "time_dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "用于周期过滤的时间维度名称",
+            "title": "Time Dimension"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SemanticMetricPeriod",
         "type": "object"
       },
       "SemanticPrefillColumn": {

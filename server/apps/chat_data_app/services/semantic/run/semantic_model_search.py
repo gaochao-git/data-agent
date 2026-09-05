@@ -194,7 +194,7 @@ def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "id": config_id,
         "name": _config_name(config),
         "description": _truncate(config.get("description") or config.get("semantic_config_desc") or "", 180),
-        "business_description": _truncate(config.get("ontology_rules") or "", 500),
+        "business_description": _truncate(config.get("business_notes") or "", 500),
         "dimensions_total": len(dimensions),
         "metrics_total": len(metrics),
         "dimensions": [_compact_dimension_summary(item) for item in dimensions],
