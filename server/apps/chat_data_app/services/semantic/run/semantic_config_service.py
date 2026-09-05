@@ -654,23 +654,35 @@ class SemanticConfigService:
             raise ValueError("语义配置名称不能为空")
         if await self._name_exists_async(str(current.get("group_id") or ""), name, exclude_id=config_id):
             raise ValueError(f"语义配置名称已存在: {name}")
-        next_config = {
-            **current,
-            "name": name,
-            "description": kwargs.get("description") if kwargs.get("description") is not None else current.get("description"),
-            "ontology_rules": kwargs.get("ontology_rules") if kwargs.get("ontology_rules") is not None else current.get("ontology_rules"),
-            "enabled": kwargs.get("enabled") if kwargs.get("enabled") is not None else current.get("enabled", True),
-            "metrics": kwargs.get("metrics") if kwargs.get("metrics") is not None else current.get("metrics", []),
-            "dimensions": kwargs.get("dimensions") if kwargs.get("dimensions") is not None else current.get("dimensions", []),
-            "relationships": kwargs.get("relationships") if kwargs.get("relationships") is not None else current.get("relationships", []),
-            "update_time": datetime.now().strftime(TIME_FORMAT),
-            "update_by": str(kwargs.get("update_by") or current.get("update_by") or "").strip(),
-            "update_by_name": str(kwargs.get("update_by_name") or current.get("update_by_name") or "").strip(),
-        }
+        next_config = self._build_update_payload(current, kwargs, name)
         next_config = self._normalize_relationships(next_config)
         if not await self.dao.upsert_async(str(current.get("group_id") or ""), next_config):
             return None
         return await self.get_config_async(datasource_id, config_id)
+
+    @staticmethod
+    def _resolve_updated_value(kwargs: Dict[str, Any], current: Dict[str, Any], key: str, fallback: Any = None) -> Any:
+        """显式传参（非 None）优先，否则沿用当前值；fallback 为当前值缺省。"""
+        value = kwargs.get(key)
+        if value is not None:
+            return value
+        return current.get(key, fallback)
+
+    @classmethod
+    def _build_update_payload(cls, current: Dict[str, Any], kwargs: Dict[str, Any], name: str) -> Dict[str, Any]:
+        return {
+            **current,
+            "name": name,
+            "description": cls._resolve_updated_value(kwargs, current, "description"),
+            "ontology_rules": cls._resolve_updated_value(kwargs, current, "ontology_rules"),
+            "enabled": cls._resolve_updated_value(kwargs, current, "enabled", True),
+            "metrics": cls._resolve_updated_value(kwargs, current, "metrics", []),
+            "dimensions": cls._resolve_updated_value(kwargs, current, "dimensions", []),
+            "relationships": cls._resolve_updated_value(kwargs, current, "relationships", []),
+            "update_time": datetime.now().strftime(TIME_FORMAT),
+            "update_by": str(kwargs.get("update_by") or current.get("update_by") or "").strip(),
+            "update_by_name": str(kwargs.get("update_by_name") or current.get("update_by_name") or "").strip(),
+        }
 
     async def delete_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = "") -> bool:
         config = await self.get_config_async(datasource_id, config_id)

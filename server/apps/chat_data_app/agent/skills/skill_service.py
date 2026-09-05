@@ -197,8 +197,14 @@ def _can_manage_skill(row: Dict[str, Any], user_id: str = "") -> bool:
 
 def _skill_row_to_info(row: Dict[str, Any], user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """将数据库技能行转换为前端技能对象。"""
-    creator_id = str(row.get("create_by") or row.get("owner_user_id") or "").strip()
     can_manage = _can_manage_skill(row, user_id)
+    info = _skill_row_base_info(row)
+    info.update(_skill_row_manage_info(row, can_manage, user_id, user_names))
+    return info
+
+
+def _skill_row_base_info(row: Dict[str, Any]) -> Dict[str, Any]:
+    """技能行的身份与展示字段。"""
     return {
         "skill_id": row.get("skill_id"),
         "name": row.get("skill_name"),
@@ -209,6 +215,18 @@ def _skill_row_to_info(row: Dict[str, Any], user_id: str = "", user_names: Optio
         "source": row.get("skill_source") or "user",
         "visibility_type": row.get("visibility_type") or "private",
         "publish_status": row.get("skill_publish_status") or "draft",
+    }
+
+
+def _skill_row_manage_info(
+    row: Dict[str, Any],
+    can_manage: bool,
+    user_id: str,
+    user_names: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    """技能行的版本/权限/审计字段。"""
+    creator_id = str(row.get("create_by") or row.get("owner_user_id") or "").strip()
+    return {
         "current_version_no": int(row.get("current_skill_version_no") or 0),
         "draft_version_no": int(row.get("draft_skill_version_no") or 0) if can_manage else 0,
         "has_draft": bool(row.get("draft_skill_version_no")) if can_manage else False,
@@ -613,29 +631,59 @@ class SkillService:
             "skill_title": payload.get("skill_title") or skill.get("skill_title") or skill.get("skill_name"),
         }
         _validate_skill_payload(normalized_payload)
-        parsed: Dict[str, Any] = {}
-        if "content" in payload:
-            draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
-            version_dir = _derive_user_version_dir(
-                skill.get("owner_user_id"),
-                skill.get("skill_name"),
-                draft.get("skill_version_no"),
-            )
-            skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
-            parsed = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+        parsed = await self._write_skill_draft_if_needed(skill, normalized_payload, user_id, operator_name=operator_name)
+        visibility_type = self._resolve_skill_visibility(payload, skill)
+        current_version_no = int(skill.get("current_skill_version_no") or 0)
+        await self.dao.update_skill_async(str(skill.get("skill_id")), self._build_skill_update_fields(
+            payload, skill, normalized_payload, parsed, visibility_type, current_version_no,
+        ), update_by=user_id, update_by_name=operator_name)
+        clear_metadata_cache()
+        return await self.get_skill_async(str(skill.get("skill_id")), include_draft=True, user_id=user_id) or {}
+
+    async def _write_skill_draft_if_needed(
+        self,
+        skill: Dict[str, Any],
+        normalized_payload: Dict[str, Any],
+        user_id: str,
+        *,
+        operator_name: str,
+    ) -> Dict[str, Any]:
+        """payload 携带正文时写入草稿版本并解析元数据；否则返回空 dict。"""
+        if "content" not in normalized_payload:
+            return {}
+        draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
+        version_dir = _derive_user_version_dir(
+            skill.get("owner_user_id"),
+            skill.get("skill_name"),
+            draft.get("skill_version_no"),
+        )
+        skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
+        return await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+
+    @staticmethod
+    def _resolve_skill_visibility(payload: Dict[str, Any], skill: Dict[str, Any]) -> str:
+        """可见性取 payload > 现值 > private，非法值回退 private。"""
         visibility_type = str(payload.get("visibility_type") or skill.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
-            visibility_type = "private"
-        current_version_no = int(skill.get("current_skill_version_no") or 0)
-        await self.dao.update_skill_async(str(skill.get("skill_id")), {
+            return "private"
+        return visibility_type
+
+    @staticmethod
+    def _build_skill_update_fields(
+        payload: Dict[str, Any],
+        skill: Dict[str, Any],
+        normalized_payload: Dict[str, Any],
+        parsed: Dict[str, Any],
+        visibility_type: str,
+        current_version_no: int,
+    ) -> Dict[str, Any]:
+        return {
             "skill_title": normalized_payload.get("skill_title") or parsed.get("title") or skill.get("skill_name"),
             "skill_desc": payload.get("skill_desc") if payload.get("skill_desc") is not None else skill.get("skill_desc"),
             "skill_category": payload.get("skill_category") if payload.get("skill_category") is not None else skill.get("skill_category"),
             "visibility_type": visibility_type,
             "skill_publish_status": "published" if current_version_no > 0 else "draft",
-        }, update_by=user_id, update_by_name=operator_name)
-        clear_metadata_cache()
-        return await self.get_skill_async(str(skill.get("skill_id")), include_draft=True, user_id=user_id) or {}
+        }
 
     async def publish_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步发布用户技能最新草稿版本。"""

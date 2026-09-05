@@ -955,99 +955,20 @@ class HiveHttpExecutor(SQLExecutor):
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         resolved_timeout = resolve_query_timeout(self.source_type, timeout)
-        is_valid, error_msg = validate_sql(sql, source_type=self.source_type)
-        if not is_valid:
-            _emit_sql_execution_validation_alarm(
-                sql,
-                error_msg,
-                source_type=self.source_type,
-                execution_scope="http_executor",
-            )
-            return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
+        # 前置检查保持在 try 之外：异常直接向上传播，不落入兜底 except 转成错误结果（与拆分前行为一致）
+        validation_error = self._http_validation_error(sql)
+        if validation_error:
+            return validation_error
         if not self.namespace:
             return {"success": False, "error": "缺少 HTTP 执行标识，请配置机构编码", "columns": [], "data": [], "total_count": 0}
-        if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
-            return {
-                "success": False,
-                "error": "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL",
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-            }
-
+        config_error = self._http_config_error()
+        if config_error:
+            return config_error
         try:
-            sql_with_limit = build_effective_sql(sql, limit, source_type=self.source_type)
-            submit_payload = await self._request_json(
-                "POST",
-                HTTP_SUBMIT_URL,
-                json_payload=self._build_submit_payload(sql_with_limit, limit, user_id, username),
-            )
-            submit_code = _extract_remote_code(submit_payload)
-            if submit_code is not None and submit_code != 20000:
-                return {
-                    "success": False,
-                    "error": _extract_remote_message(submit_payload, "HTTP 查询提交失败"),
-                    "columns": [],
-                    "data": [],
-                    "total_count": 0,
-                }
-            task_id = _extract_task_id(submit_payload)
-            if not task_id:
-                return {
-                    "success": False,
-                    "error": _extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID"),
-                    "columns": [],
-                    "data": [],
-                    "total_count": 0,
-                }
-            await self._notify_remote_task_created(remote_task_callback, task_id)
-
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + resolved_timeout
-            while True:
-                if loop.time() >= deadline:
-                    return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
-                status_params = _add_hive_http_user_params({}, user_id, username)
-                if status_params:
-                    status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id, params=status_params)
-                else:
-                    status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id)
-                status_code = _extract_remote_code(status_payload)
-                if status_code is not None and status_code != 20000:
-                    return {
-                        "success": False,
-                        "error": _extract_remote_message(status_payload, "HTTP 查询失败"),
-                        "columns": [],
-                        "data": [],
-                        "total_count": 0,
-                        **_build_http_execution_times(status_payload, {}),
-                    }
-                normalized_status = _extract_remote_status(status_payload)
-                if normalized_status == "succeeded":
-                    result = self._normalize_result(status_payload)
-                    result["remote_task_id"] = task_id
-                    result["source_type"] = self.source_type
-                    return result
-                if normalized_status == "cancelled":
-                    return {
-                        "success": False,
-                        "error": _extract_remote_message(status_payload, "查询已取消"),
-                        "columns": [],
-                        "data": [],
-                        "total_count": 0,
-                        **_build_http_execution_times(status_payload, {}),
-                    }
-                if normalized_status == "failed":
-                    error_message = _extract_remote_message(status_payload, "HTTP 查询失败")
-                    return {
-                        "success": False,
-                        "error": str(error_message),
-                        "columns": [],
-                        "data": [],
-                        "total_count": 0,
-                        **_build_http_execution_times(status_payload, {}),
-                    }
-                await asyncio.sleep(max(0.2, DEFAULT_HTTP_POLL_INTERVAL_MS / 1000))
+            submit_error, task_id = await self._submit_http_query(sql, limit, user_id, username, remote_task_callback)
+            if submit_error:
+                return submit_error
+            return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
         except asyncio.TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
             return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
@@ -1058,6 +979,125 @@ class HiveHttpExecutor(SQLExecutor):
             logger.error("[HTTPExecutor] 执行 SQL 失败: %s", e)
             engine_name = "MySQL" if self.source_type == "mysql" else "Hive"
             return {"success": False, "error": _friendly_sql_error(engine_name, e), "columns": [], "data": [], "total_count": 0}
+
+    def _http_validation_error(self, sql: str) -> Optional[Dict[str, Any]]:
+        """SQL 校验失败时告警并返回错误结果；合法返回 None。"""
+        is_valid, error_msg = validate_sql(sql, source_type=self.source_type)
+        if is_valid:
+            return None
+        _emit_sql_execution_validation_alarm(
+            sql,
+            error_msg,
+            source_type=self.source_type,
+            execution_scope="http_executor",
+        )
+        return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
+
+    @staticmethod
+    def _http_config_error() -> Optional[Dict[str, Any]]:
+        """执行前置配置检查；缺配置返回错误结果，否则 None。"""
+        if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
+            return {
+                "success": False,
+                "error": "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
+        return None
+
+    async def _submit_http_query(
+        self,
+        sql: str,
+        limit: int,
+        user_id: Optional[str],
+        username: Optional[str],
+        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """提交查询并认领远端任务；返回 (错误结果, None) 或 (None, task_id)。"""
+        sql_with_limit = build_effective_sql(sql, limit, source_type=self.source_type)
+        submit_payload = await self._request_json(
+            "POST",
+            HTTP_SUBMIT_URL,
+            json_payload=self._build_submit_payload(sql_with_limit, limit, user_id, username),
+        )
+        submit_code = _extract_remote_code(submit_payload)
+        if submit_code is not None and submit_code != 20000:
+            return {
+                "success": False,
+                "error": _extract_remote_message(submit_payload, "HTTP 查询提交失败"),
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }, None
+        task_id = _extract_task_id(submit_payload)
+        if not task_id:
+            return {
+                "success": False,
+                "error": _extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID"),
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }, None
+        await self._notify_remote_task_created(remote_task_callback, task_id)
+        return None, task_id
+
+    async def _poll_http_result(
+        self,
+        task_id: str,
+        resolved_timeout: int,
+        user_id: Optional[str],
+        username: Optional[str],
+    ) -> Dict[str, Any]:
+        """轮询远端任务直到成功、失败或超时，返回结构化结果。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + resolved_timeout
+        while True:
+            if loop.time() >= deadline:
+                return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+            status_params = _add_hive_http_user_params({}, user_id, username)
+            if status_params:
+                status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id, params=status_params)
+            else:
+                status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id)
+            status_code = _extract_remote_code(status_payload)
+            if status_code is not None and status_code != 20000:
+                return {
+                    "success": False,
+                    "error": _extract_remote_message(status_payload, "HTTP 查询失败"),
+                    "columns": [],
+                    "data": [],
+                    "total_count": 0,
+                    **_build_http_execution_times(status_payload, {}),
+                }
+            normalized_status = _extract_remote_status(status_payload)
+            if normalized_status == "succeeded":
+                result = self._normalize_result(status_payload)
+                result["remote_task_id"] = task_id
+                result["source_type"] = self.source_type
+                return result
+            if normalized_status in ("cancelled", "failed"):
+                return self._cancelled_or_failed_result(status_payload, normalized_status)
+            await asyncio.sleep(max(0.2, DEFAULT_HTTP_POLL_INTERVAL_MS / 1000))
+
+    def _cancelled_or_failed_result(self, status_payload: Dict[str, Any], normalized_status: str) -> Dict[str, Any]:
+        if normalized_status == "cancelled":
+            return {
+                "success": False,
+                "error": _extract_remote_message(status_payload, "查询已取消"),
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+                **_build_http_execution_times(status_payload, {}),
+            }
+        return {
+            "success": False,
+            "error": str(_extract_remote_message(status_payload, "HTTP 查询失败")),
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+            **_build_http_execution_times(status_payload, {}),
+        }
 
     async def test_connection(self) -> bool:
         """Hive HTTP 模式不再校验直连，仅校验必要配置。"""

@@ -106,24 +106,46 @@ def _operator_clause(
     operator = str(leaf.get("operator", "=")).upper()
     if operator in ("IS NULL", "IS NOT NULL"):
         return f"{expression} {operator}"
-    if leaf.get("valueType") == "field_ref" and leaf.get("rightTable") and leaf.get("rightColumn"):
-        return f"{expression} {operator} {right_expression}"
-    if right_expression is not None:
+    if (
+        leaf.get("valueType") == "field_ref" and leaf.get("rightTable") and leaf.get("rightColumn")
+    ) or right_expression is not None:
         return f"{expression} {operator} {right_expression}"
     if operator in ("IN", "NOT IN") and leaf.get("rightExpression"):
         return f"{expression} {operator} ({str(leaf['rightExpression']).strip()})"
     if leaf.get("valueType") == "expression" and leaf.get("rightExpression"):
         return f"{expression} {operator} {str(leaf['rightExpression']).strip()}"
+    special = _render_special_operator_clause(expression, operator, leaf)
+    if special is not None:
+        return special
+    return _render_value_operator_clause(expression, operator, leaf, safe_functions)
+
+
+def _escape_like_value(value: str) -> str:
+    return value.replace(chr(39), chr(39) * 2)
+
+
+def _render_special_operator_clause(expression: str, operator: str, leaf: Dict[str, Any]) -> Optional[str]:
+    """渲染 EMPTY STRING / STARTS WITH / ENDS WITH / LIKE 族；不匹配返回 None。"""
     if operator == "EMPTY STRING":
         return f"{expression} = ''"
     if operator == "STARTS WITH":
-        return f"{expression} LIKE '{str(leaf.get('value', '')).replace(chr(39), chr(39) * 2)}%'"
+        return f"{expression} LIKE '{_escape_like_value(str(leaf.get('value', '')))}%'"
     if operator == "ENDS WITH":
-        return f"{expression} LIKE '%{str(leaf.get('value', '')).replace(chr(39), chr(39) * 2)}'"
+        return f"{expression} LIKE '%{_escape_like_value(str(leaf.get('value', '')))}'"
     if operator in ("LIKE", "NOT LIKE"):
-        value = str(leaf.get("value", "")).replace(chr(39), chr(39) * 2)
+        value = _escape_like_value(str(leaf.get("value", "")))
         value = value if "%" in value or "_" in value else f"%{value}%"
         return f"{expression} {operator} '{value}'"
+    return None
+
+
+def _render_value_operator_clause(
+    expression: str,
+    operator: str,
+    leaf: Dict[str, Any],
+    safe_functions: set[str],
+) -> str:
+    """渲染 IN / BETWEEN / 通用标量值的子句（兜底分支）。"""
     if operator in ("IN", "NOT IN"):
         return f"{expression} {operator} {_sql_list_literal(leaf.get('value'), leaf.get('value_type'), safe_functions)}"
     if operator == "BETWEEN" and isinstance(leaf.get("value"), list) and len(leaf["value"]) == 2:

@@ -2,7 +2,7 @@
 
 import re
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from .dialect import get_dialect
 from . import filter_compiler
@@ -548,6 +548,37 @@ def _append_limit_offset(
         parts.append(sql_dialect.limit_offset(int(limit), int(offset or 0)))
 
 
+class _QueryPlanInputs(NamedTuple):
+    """从查询计划归一化出的编译输入。"""
+
+    main_table: str
+    main_alias: str
+    dimensions: List[Dict[str, Any]]
+    aggregations: List[Dict[str, Any]]
+    joins: List[Dict[str, Any]]
+    filters: List[Dict[str, Any]]
+    order_by: List[Dict[str, Any]]
+    offset: Any
+    limit: Optional[int]
+
+
+def _plan_compilation_inputs(query_plan: Dict[str, Any], max_rows: int) -> _QueryPlanInputs:
+    """提取编译输入；行数限制在此归一化（先于结构校验，保持原报错优先级）。"""
+    raw_limit = query_plan.get("limit")
+    main_table = (query_plan.get("mainTable") or "").strip()
+    return _QueryPlanInputs(
+        main_table=main_table,
+        main_alias=(query_plan.get("mainAlias") or main_table).strip(),
+        dimensions=query_plan.get("dimensions") or [],
+        aggregations=query_plan.get("aggregations") or [],
+        joins=query_plan.get("joins") or [],
+        filters=query_plan.get("filters") or [],
+        order_by=query_plan.get("orderBy") or [],
+        offset=query_plan.get("offset"),
+        limit=normalize_row_limit(raw_limit, max_rows=max_rows) if raw_limit is not None else None,
+    )
+
+
 def _compile_query_plan_sql(
     query_plan: Dict[str, Any],
     dialect: str = "mysql",
@@ -568,18 +599,18 @@ def _compile_query_plan_sql(
     if not isinstance(query_plan, dict):
         raise ValueError("查询计划格式错误")
     # 行数限制校验先于结构校验，保持与拆分前一致的报错优先级。
-    raw_limit = query_plan.get("limit")
-    limit = normalize_row_limit(raw_limit, max_rows=max_rows) if raw_limit is not None else None
+    inputs = _plan_compilation_inputs(query_plan, max_rows)
     _validate_query_plan(query_plan)
 
-    main_table = (query_plan.get("mainTable") or "").strip()
-    main_alias = (query_plan.get("mainAlias") or main_table).strip()
-    dimensions: List[Dict[str, Any]] = query_plan.get("dimensions") or []
-    aggregations: List[Dict[str, Any]] = query_plan.get("aggregations") or []
-    joins: List[Dict[str, Any]] = query_plan.get("joins") or []
-    filters: List[Dict[str, Any]] = query_plan.get("filters") or []
-    order_by: List[Dict[str, Any]] = query_plan.get("orderBy") or []
-    offset = query_plan.get("offset")
+    main_table = inputs.main_table
+    main_alias = inputs.main_alias
+    dimensions = inputs.dimensions
+    aggregations = inputs.aggregations
+    joins = inputs.joins
+    filters = inputs.filters
+    order_by = inputs.order_by
+    offset = inputs.offset
+    limit = inputs.limit
 
     selected_tables = [main_alias] + [j.get("rightAlias") or j.get("rightTable") for j in joins if j.get("rightTable")]
     is_multi_table = len(selected_tables) > 1

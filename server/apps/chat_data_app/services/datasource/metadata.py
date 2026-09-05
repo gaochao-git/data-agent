@@ -521,30 +521,10 @@ def _normalize_schema_tables(
         columns = table.get("columns")
         if not isinstance(columns, list):
             raise RuntimeError(f"Hive 元数据表结构 {table_name} 缺少 columns")
-        normalized_columns: List[Dict[str, Any]] = []
-        for column_index, column in enumerate(columns, start=1):
-            if not isinstance(column, dict):
-                raise RuntimeError(f"Hive 元数据表结构 {table_name} 第 {column_index} 个字段不是对象")
-            column_name = str(column.get("name") or "").strip()
-            if not column_name:
-                raise RuntimeError(f"Hive 元数据表结构 {table_name} 第 {column_index} 个字段缺少 name")
-            column_type = str(column.get("type") or "").strip()
-            if not column_type:
-                raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 缺少 type")
-            if "is_partition" not in column:
-                raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 缺少 is_partition")
-            is_partition = column.get("is_partition")
-            if not isinstance(is_partition, bool):
-                raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 的 is_partition 必须是布尔值")
-            normalized_columns.append({
-                "name": column_name,
-                "type": column_type,
-                "hive_type": column_type,
-                "description": str(column.get("description") or column_name).strip(),
-                "primary_key": False,
-                "nullable": True,
-                "is_partition": is_partition,
-            })
+        normalized_columns = [
+            _normalize_hive_column(table_name, column, column_index)
+            for column_index, column in enumerate(columns, start=1)
+        ]
         validated_tables.append({
             "table_name": table_name,
             "description": description_map.get(table_name) or table.get("description") or table_name,
@@ -554,6 +534,32 @@ def _normalize_schema_tables(
             "indexes": [],
         })
     return validated_tables
+
+
+def _normalize_hive_column(table_name: str, column: Any, column_index: int) -> Dict[str, Any]:
+    """校验并标准化单个 Hive 字段描述。"""
+    if not isinstance(column, dict):
+        raise RuntimeError(f"Hive 元数据表结构 {table_name} 第 {column_index} 个字段不是对象")
+    column_name = str(column.get("name") or "").strip()
+    if not column_name:
+        raise RuntimeError(f"Hive 元数据表结构 {table_name} 第 {column_index} 个字段缺少 name")
+    column_type = str(column.get("type") or "").strip()
+    if not column_type:
+        raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 缺少 type")
+    if "is_partition" not in column:
+        raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 缺少 is_partition")
+    is_partition = column.get("is_partition")
+    if not isinstance(is_partition, bool):
+        raise RuntimeError(f"Hive 元数据表结构 {table_name}.{column_name} 的 is_partition 必须是布尔值")
+    return {
+        "name": column_name,
+        "type": column_type,
+        "hive_type": column_type,
+        "description": str(column.get("description") or column_name).strip(),
+        "primary_key": False,
+        "nullable": True,
+        "is_partition": is_partition,
+    }
 
 
 def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:

@@ -169,24 +169,23 @@ async def _load_history_conversation_context(conversation_id: str, user_id: str)
         return None
 
 
+_SEMANTIC_SCOPE_FIELD_SPECS = (
+    # (集合键, 该集合条目中参与取表的字段)
+    ("metrics", ("table",)),
+    ("dimensions", ("table",)),
+    ("relationships", ("left_table", "right_table")),
+)
+
+
 def _semantic_scope_tables(config: Dict[str, Any]) -> Set[str]:
     """提取指标集涉及的表。"""
     tables: Set[str] = set()
-    for item in config.get("metrics") or []:
-        table = str((item or {}).get("table") or "").strip()
-        if table:
-            tables.add(table)
-    for item in config.get("dimensions") or []:
-        table = str((item or {}).get("table") or "").strip()
-        if table:
-            tables.add(table)
-    for item in config.get("relationships") or []:
-        left = str((item or {}).get("left_table") or "").strip()
-        right = str((item or {}).get("right_table") or "").strip()
-        if left:
-            tables.add(left)
-        if right:
-            tables.add(right)
+    for collection_key, field_names in _SEMANTIC_SCOPE_FIELD_SPECS:
+        for item in config.get(collection_key) or []:
+            for field_name in field_names:
+                table = str((item or {}).get(field_name) or "").strip()
+                if table:
+                    tables.add(table)
     return tables
 
 
@@ -270,17 +269,28 @@ def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
     conversation_context = sample.get("conversation_context")
     if isinstance(conversation_context, dict) and sample.get("source") == "agent":
         compact["conversation_context"] = conversation_context
-    if semantic_builder_config or builder_config:
-        source_config = semantic_builder_config or builder_config or {}
-        compact["builder_config"] = {
-            "mainTable": source_config.get("mainTable"),
-            "joins": (source_config.get("joins") or [])[:10],
-            "dimensions": (source_config.get("dimensions") or [])[:20],
-            "aggregations": (source_config.get("aggregations") or source_config.get("metrics") or [])[:20],
-            "filters": (source_config.get("filters") or [])[:20],
-            "orderBy": (source_config.get("orderBy") or source_config.get("order_by") or [])[:10],
-        }
+    builder_payload = _compact_builder_config_payload(semantic_builder_config, builder_config)
+    if builder_payload is not None:
+        compact["builder_config"] = builder_payload
     return compact
+
+
+def _compact_builder_config_payload(
+    semantic_builder_config: Optional[Dict[str, Any]],
+    builder_config: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """压缩 builder 配置；两类配置都缺失时返回 None。"""
+    if not semantic_builder_config and not builder_config:
+        return None
+    source_config = semantic_builder_config or builder_config or {}
+    return {
+        "mainTable": source_config.get("mainTable"),
+        "joins": (source_config.get("joins") or [])[:10],
+        "dimensions": (source_config.get("dimensions") or [])[:20],
+        "aggregations": (source_config.get("aggregations") or source_config.get("metrics") or [])[:20],
+        "filters": (source_config.get("filters") or [])[:20],
+        "orderBy": (source_config.get("orderBy") or source_config.get("order_by") or [])[:10],
+    }
 
 
 def _sample_map_by_execution_id(samples: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:

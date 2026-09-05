@@ -240,6 +240,44 @@ async def fetch_http_remote_ref_cache_result(
     }
 
 
+def _cache_identity_fields(cache_identity: Dict[str, Any]) -> Dict[str, str]:
+    """提取缓存身份五元组，供更新与新建分支共用。"""
+    return {
+        "datasource_id": str(cache_identity.get("datasource_id") or ""),
+        "member_datasource_id": str(cache_identity.get("member_datasource_id") or ""),
+        "executor_type": str(cache_identity.get("executor_type") or ""),
+        "source_type": str(cache_identity.get("source_type") or ""),
+        "sql_hash": str(cache_identity.get("sql_hash") or ""),
+    }
+
+
+def _apply_cache_item_update(
+    cache_item: ChatDataSqlResultCache,
+    identity_fields: Dict[str, str],
+    sql_text: str,
+    payload_json: str,
+    result_row_count: int,
+    *,
+    now: datetime,
+    operator_user_id: str,
+    operator_username: str,
+) -> None:
+    """已存在的缓存行：原地覆盖身份、结果与租期。"""
+    cache_item.datasource_id = identity_fields["datasource_id"]
+    cache_item.member_datasource_id = identity_fields["member_datasource_id"]
+    cache_item.executor_type = identity_fields["executor_type"]
+    cache_item.source_type = identity_fields["source_type"]
+    cache_item.sql_hash = identity_fields["sql_hash"]
+    cache_item.sql_text = sql_text
+    cache_item.result_payload = payload_json
+    cache_item.result_row_count = int(result_row_count or 0)
+    cache_item.expire_time = now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS)
+    cache_item.delete_flag = 0
+    cache_item.update_time = now
+    cache_item.update_by = operator_user_id
+    cache_item.update_by_name = operator_username
+
+
 async def _upsert_sql_result_cache_payload(
     cache_identity: Dict[str, Any],
     payload: Dict[str, Any],
@@ -254,33 +292,29 @@ async def _upsert_sql_result_cache_payload(
     now = datetime.now()
     operator_user_id = str(operator_id or "").strip()
     operator_username = str(operator_name or "").strip()
+    identity_fields = _cache_identity_fields(cache_identity)
+    sql_text = str(cache_identity.get("sql_text") or "")
+    payload_json = json.dumps(payload, ensure_ascii=False)
     async with get_session() as db:
         db_result = await db.execute(select(ChatDataSqlResultCache).filter_by(cache_key=cache_key))
         cache_item = db_result.scalar_one_or_none()
         if cache_item:
-            cache_item.datasource_id = str(cache_identity.get("datasource_id") or "")
-            cache_item.member_datasource_id = str(cache_identity.get("member_datasource_id") or "")
-            cache_item.executor_type = str(cache_identity.get("executor_type") or "")
-            cache_item.source_type = str(cache_identity.get("source_type") or "")
-            cache_item.sql_hash = str(cache_identity.get("sql_hash") or "")
-            cache_item.sql_text = str(cache_identity.get("sql_text") or "")
-            cache_item.result_payload = json.dumps(payload, ensure_ascii=False)
-            cache_item.result_row_count = int(result_row_count or 0)
-            cache_item.expire_time = now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS)
-            cache_item.delete_flag = 0
-            cache_item.update_time = now
-            cache_item.update_by = operator_user_id
-            cache_item.update_by_name = operator_username
+            _apply_cache_item_update(
+                cache_item,
+                identity_fields,
+                sql_text,
+                payload_json,
+                result_row_count,
+                now=now,
+                operator_user_id=operator_user_id,
+                operator_username=operator_username,
+            )
         else:
             db.add(ChatDataSqlResultCache(
                 cache_key=cache_key,
-                datasource_id=str(cache_identity.get("datasource_id") or ""),
-                member_datasource_id=str(cache_identity.get("member_datasource_id") or ""),
-                executor_type=str(cache_identity.get("executor_type") or ""),
-                source_type=str(cache_identity.get("source_type") or ""),
-                sql_hash=str(cache_identity.get("sql_hash") or ""),
-                sql_text=str(cache_identity.get("sql_text") or ""),
-                result_payload=json.dumps(payload, ensure_ascii=False),
+                **identity_fields,
+                sql_text=sql_text,
+                result_payload=payload_json,
                 result_row_count=int(result_row_count or 0),
                 expire_time=now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS),
                 hit_count=0,

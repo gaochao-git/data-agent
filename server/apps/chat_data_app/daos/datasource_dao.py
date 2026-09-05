@@ -40,6 +40,11 @@ _MAX_RECOMMENDED_QUESTION_COUNT = 50
 _MAX_RECOMMENDED_QUESTION_LENGTH = 50
 
 
+def _or_value(value: Any, default: Any) -> Any:
+    """等价于 `value or default` 的显式兜底，供映射字典复用。"""
+    return value or default
+
+
 class DataSourceDao:
     """基于 MySQL 的数据源数据访问层。"""
 
@@ -96,8 +101,9 @@ class DataSourceDao:
                 break
         return result
 
-    def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        group_id = row.get("group_id") or ""
+    @staticmethod
+    def _resolve_group_template_info(row: Dict[str, Any]) -> tuple[str, Dict[str, Any], str]:
+        """解析分组模板来源；返回 (template_source, 模板解析结果, 模板成员 ID)。"""
         template_source = str(row.get("template_source") or "").strip()
         parsed_template = _parse_member_source_entry(
             template_source,
@@ -113,6 +119,11 @@ class DataSourceDao:
             None,
         )
         template_member_id = member_entries[0]["datasource_id"] if member_entries else template_source
+        return template_source, parsed_template, template_member_id
+
+    def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        group_id = row.get("group_id") or ""
+        template_source, parsed_template, template_member_id = self._resolve_group_template_info(row)
         return {
             "id": group_id,
             "datasource_id": group_id,
@@ -120,19 +131,19 @@ class DataSourceDao:
             "group_ids": [group_id] if group_id else [],
             "template_datasource_id": template_member_id,
             "template_source": template_source,
-            "member_sources_text": row.get("member_sources_text") or "",
-            "group_name": row.get("group_name") or "",
-            "ds_description": row.get("group_desc") or "",
-            "query_context": row.get("query_context") or "",
+            "member_sources_text": _or_value(row.get("member_sources_text"), ""),
+            "group_name": _or_value(row.get("group_name"), ""),
+            "ds_description": _or_value(row.get("group_desc"), ""),
+            "query_context": _or_value(row.get("query_context"), ""),
             "recommended_questions": self._normalize_recommended_questions(row.get("recommended_questions_json")),
-            "source_type": row.get("source_type") or "",
-            "query_executor_type": parsed_template.get("query_executor_type") or "direct",
-            "create_time": _format_time(row.get("create_time")) or "",
-            "update_time": _format_time(row.get("update_time")) or "",
-            "create_by": row.get("create_by") or "",
-            "create_by_name": row.get("create_by_name") or "",
-            "update_by": row.get("update_by") or "",
-            "update_by_name": row.get("update_by_name") or "",
+            "source_type": _or_value(row.get("source_type"), ""),
+            "query_executor_type": _or_value(parsed_template.get("query_executor_type"), "direct"),
+            "create_time": _or_value(_format_time(row.get("create_time")), ""),
+            "update_time": _or_value(_format_time(row.get("update_time")), ""),
+            "create_by": _or_value(row.get("create_by"), ""),
+            "create_by_name": _or_value(row.get("create_by_name"), ""),
+            "update_by": _or_value(row.get("update_by"), ""),
+            "update_by_name": _or_value(row.get("update_by_name"), ""),
             "ds_tables": [],
             "mapped_modules": _load_json(row.get("mapped_modules_json"), []),
             "is_default": bool(row.get("is_default", 0)),
@@ -424,48 +435,71 @@ class DataSourceDao:
         if not group_id:
             return
         async with self._session_scope() as session:
+            await self._mark_group_relations_deleted(session, group_id, update_by=update_by, update_by_name=update_by_name)
+            relation_rows = self._build_group_relation_rows(group_id, groups, create_by=create_by, create_by_name=create_by_name, update_by=update_by, update_by_name=update_by_name)
+            await self._insert_group_relation_rows(session, relation_rows, update_by=update_by, update_by_name=update_by_name)
+
+    @staticmethod
+    async def _mark_group_relations_deleted(session, group_id: str, *, update_by: str, update_by_name: str) -> None:
+        """软删该分组现有表关系。"""
+        await session.execute(
+            update(DatasourceTableGroupRel)
+            .where(
+                DatasourceTableGroupRel.group_id == group_id,
+                DatasourceTableGroupRel.delete_flag == 0,
+            )
+            .values(
+                delete_flag=1,
+                update_by=update_by or "",
+                update_by_name=update_by_name or "",
+            )
+        )
+
+    @staticmethod
+    def _build_group_relation_rows(
+        group_id: str,
+        groups: List[Dict[str, Any]],
+        *,
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> List[Dict[str, Any]]:
+        """按 (table_group_name, table_name) 去重构建关系行。"""
+        relation_rows = []
+        seen: set[tuple[str, str]] = set()
+        for group in groups or []:
+            table_group_name = str((group or {}).get("table_group_name") or "").strip()
+            if not table_group_name:
+                continue
+            for table_name in _unique_non_empty_texts((group or {}).get("table_names") or []):
+                key = (table_group_name, table_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                relation_rows.append({
+                    "group_id": group_id,
+                    "table_group_name": table_group_name,
+                    "table_name": table_name,
+                    "create_by": create_by or "",
+                    "create_by_name": create_by_name or "",
+                    "update_by": update_by or "",
+                    "update_by_name": update_by_name or "",
+                    "delete_flag": 0,
+                })
+        return relation_rows
+
+    @staticmethod
+    async def _insert_group_relation_rows(session, relation_rows: List[Dict[str, Any]], *, update_by: str, update_by_name: str) -> None:
+        for batch in _batch_items(relation_rows):
+            stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
             await session.execute(
-                update(DatasourceTableGroupRel)
-                .where(
-                    DatasourceTableGroupRel.group_id == group_id,
-                    DatasourceTableGroupRel.delete_flag == 0,
-                )
-                .values(
-                    delete_flag=1,
+                stmt.on_duplicate_key_update(
+                    delete_flag=0,
                     update_by=update_by or "",
                     update_by_name=update_by_name or "",
                 )
             )
-            relation_rows = []
-            seen: set[tuple[str, str]] = set()
-            for group in groups or []:
-                table_group_name = str((group or {}).get("table_group_name") or "").strip()
-                if not table_group_name:
-                    continue
-                for table_name in _unique_non_empty_texts((group or {}).get("table_names") or []):
-                    key = (table_group_name, table_name)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    relation_rows.append({
-                        "group_id": group_id,
-                        "table_group_name": table_group_name,
-                        "table_name": table_name,
-                        "create_by": create_by or "",
-                        "create_by_name": create_by_name or "",
-                        "update_by": update_by or "",
-                        "update_by_name": update_by_name or "",
-                        "delete_flag": 0,
-                    })
-            for batch in _batch_items(relation_rows):
-                stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
-                await session.execute(
-                    stmt.on_duplicate_key_update(
-                        delete_flag=0,
-                        update_by=update_by or "",
-                        update_by_name=update_by_name or "",
-                    )
-                )
 
     async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
         row = await self._get_group_row_by_id_async(datasource_id)

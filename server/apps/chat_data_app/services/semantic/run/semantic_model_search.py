@@ -146,19 +146,24 @@ def _compact_relationship_summary(config: Dict[str, Any]) -> List[Dict[str, Any]
         right_table = str((relationship or {}).get("right_table") or "").strip()
         if not left_table or not right_table:
             continue
-        conditions = []
-        for condition in (relationship or {}).get("join_conditions") or []:
-            left_column = str((condition or {}).get("left_column") or "").strip()
-            right_column = str((condition or {}).get("right_column") or "").strip()
-            if left_column and right_column:
-                conditions.append(f"{left_column}={right_column}")
         result.append({
             "left_table": left_table,
             "right_table": right_table,
             "join_type": str((relationship or {}).get("join_type") or "").strip(),
-            "conditions": conditions,
+            "conditions": _compact_join_conditions(relationship),
         })
     return result
+
+
+def _compact_join_conditions(relationship: Dict[str, Any]) -> List[str]:
+    """拼接有效的 join 条件列对，格式为 left=right。"""
+    conditions: List[str] = []
+    for condition in (relationship or {}).get("join_conditions") or []:
+        left_column = str((condition or {}).get("left_column") or "").strip()
+        right_column = str((condition or {}).get("right_column") or "").strip()
+        if left_column and right_column:
+            conditions.append(f"{left_column}={right_column}")
+    return conditions
 
 
 def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:

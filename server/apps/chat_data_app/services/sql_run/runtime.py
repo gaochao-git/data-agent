@@ -235,39 +235,82 @@ async def update_query_execution(
             return
         if execution.sql_status in {"cancelled", "kill_failed"} and sql_status in {"running", "succeeded", "failed"}:
             return
-        resolved_execution_time_ms = None
-        if execution_time_ms is not None or finished_time is not None:
-            resolved_execution_time_ms = execution_time_ms_for_storage(
-                resolve_execution_time_ms(
-                    execution_time_ms,
-                    started_time or execution.started_time,
-                    finished_time or execution.finished_time,
-                ),
-                execution_id,
-            )
-        if sql_status is not None:
-            execution.sql_status = sql_status
-        if remote_task_id is not None:
-            execution.remote_task_id = remote_task_id
-        if db_connection_id is not None:
-            execution.db_connection_id = db_connection_id
-        if resolved_execution_time_ms is not None:
-            execution.execution_time_ms = resolved_execution_time_ms
-        if result_row_count is not None:
-            execution.result_row_count = result_row_count
-        if result_payload is not None:
-            execution.result_payload = json.dumps(
-                attach_execution_time_to_payload(result_payload, resolved_execution_time_ms),
-                ensure_ascii=False,
-            )
-        if error_message is not None:
-            execution.error_message = error_message or None
-        if started_time is not None:
-            execution.started_time = started_time
-        if finished_time is not None:
-            execution.finished_time = finished_time
+        resolved_execution_time_ms = _resolve_execution_time_for_update(
+            execution, execution_id,
+            execution_time_ms=execution_time_ms, started_time=started_time, finished_time=finished_time,
+        )
+        _apply_execution_field_updates(
+            execution,
+            sql_status=sql_status,
+            remote_task_id=remote_task_id,
+            db_connection_id=db_connection_id,
+            resolved_execution_time_ms=resolved_execution_time_ms,
+            result_row_count=result_row_count,
+            result_payload=result_payload,
+            error_message=error_message,
+            started_time=started_time,
+            finished_time=finished_time,
+        )
         execution.update_time = datetime.now()
         await db.commit()
+
+
+def _resolve_execution_time_for_update(
+    execution: ChatDataQueryExecution,
+    execution_id: str,
+    *,
+    execution_time_ms: Optional[int],
+    started_time: Optional[datetime],
+    finished_time: Optional[datetime],
+) -> Optional[int]:
+    """有结束时间或显式耗时入参时，归一化执行耗时（回退到行内已存时间）。"""
+    if execution_time_ms is None and finished_time is None:
+        return None
+    return execution_time_ms_for_storage(
+        resolve_execution_time_ms(
+            execution_time_ms,
+            started_time or execution.started_time,
+            finished_time or execution.finished_time,
+        ),
+        execution_id,
+    )
+
+
+def _apply_execution_field_updates(
+    execution: ChatDataQueryExecution,
+    *,
+    sql_status: Optional[str],
+    remote_task_id: Optional[str],
+    db_connection_id: Optional[str],
+    resolved_execution_time_ms: Optional[int],
+    result_row_count: Optional[int],
+    result_payload: Any,
+    error_message: Optional[str],
+    started_time: Optional[datetime],
+    finished_time: Optional[datetime],
+) -> None:
+    """仅更新显式传入（非 None）的字段。"""
+    if sql_status is not None:
+        execution.sql_status = sql_status
+    if remote_task_id is not None:
+        execution.remote_task_id = remote_task_id
+    if db_connection_id is not None:
+        execution.db_connection_id = db_connection_id
+    if resolved_execution_time_ms is not None:
+        execution.execution_time_ms = resolved_execution_time_ms
+    if result_row_count is not None:
+        execution.result_row_count = result_row_count
+    if result_payload is not None:
+        execution.result_payload = json.dumps(
+            attach_execution_time_to_payload(result_payload, resolved_execution_time_ms),
+            ensure_ascii=False,
+        )
+    if error_message is not None:
+        execution.error_message = error_message or None
+    if started_time is not None:
+        execution.started_time = started_time
+    if finished_time is not None:
+        execution.finished_time = finished_time
 
 
 def _execution_result_payload(status: str, result: Dict[str, Any]) -> Dict[str, Any]:

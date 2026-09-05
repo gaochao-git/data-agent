@@ -280,37 +280,9 @@ class SemanticBIQueryAdapter:
 
     def _map_filter_node(self, node: Dict[str, Any]) -> Dict[str, Any] | List[Dict[str, Any]]:
         if "and" in node:
-            children = node.get("and") or []
-            if not isinstance(children, list):
-                raise ValueError("语义可视化 and 过滤节点必须是数组")
-            if not children:
-                raise ValueError("语义可视化 and 过滤节点不能为空")
-            mapped_children: List[Dict[str, Any]] = []
-            for index, child in enumerate(children):
-                if not isinstance(child, dict):
-                    raise ValueError(f"语义可视化 and[{index}] 必须是对象")
-                mapped_child = self._map_filter_node(child)
-                if isinstance(mapped_child, list):
-                    mapped_children.extend(mapped_child)
-                else:
-                    mapped_children.append(mapped_child)
-            return {"and": mapped_children}
+            return {"and": self._map_boolean_children(node, "and", extend=True)}
         if "or" in node:
-            children = node.get("or") or []
-            if not isinstance(children, list):
-                raise ValueError("语义可视化 or 过滤节点必须是数组")
-            if not children:
-                raise ValueError("语义可视化 or 过滤节点不能为空")
-            mapped_children = []
-            for index, child in enumerate(children):
-                if not isinstance(child, dict):
-                    raise ValueError(f"语义可视化 or[{index}] 必须是对象")
-                mapped_child = self._map_filter_node(child)
-                if isinstance(mapped_child, list):
-                    mapped_children.append({"and": mapped_child})
-                else:
-                    mapped_children.append(mapped_child)
-            return {"or": mapped_children}
+            return {"or": self._map_boolean_children(node, "or", extend=False)}
         if isinstance(node.get("left"), dict) and "right" in node:
             return self._map_having_filter(node)
         self._validate_filter_value(node)
@@ -318,6 +290,27 @@ class SemanticBIQueryAdapter:
             return self._map_having_filter(node)
         mapped_filters = self._map_dimension_filter_leaves(node)
         return mapped_filters[0] if len(mapped_filters) == 1 else mapped_filters
+
+    def _map_boolean_children(self, node: Dict[str, Any], key: str, *, extend: bool) -> List[Dict[str, Any]]:
+        """映射 and/or 节点的子节点列表；and 平铺子节点，or 把列表子节点包成 and。"""
+        children = node.get(key) or []
+        if not isinstance(children, list):
+            raise ValueError(f"语义可视化 {key} 过滤节点必须是数组")
+        if not children:
+            raise ValueError(f"语义可视化 {key} 过滤节点不能为空")
+        mapped_children: List[Dict[str, Any]] = []
+        for index, child in enumerate(children):
+            if not isinstance(child, dict):
+                raise ValueError(f"语义可视化 {key}[{index}] 必须是对象")
+            mapped_child = self._map_filter_node(child)
+            if isinstance(mapped_child, list):
+                if extend:
+                    mapped_children.extend(mapped_child)
+                else:
+                    mapped_children.append({"and": mapped_child})
+            else:
+                mapped_children.append(mapped_child)
+        return mapped_children
 
     @staticmethod
     def _has_filter_value(value: Any) -> bool:
@@ -394,62 +387,72 @@ class SemanticBIQueryAdapter:
             raise ValueError("HAVING 表达式操作数必须是对象")
         operand_type = normalize_text(operand.get("type")).lower()
         if operand_type == "metric":
-            metric = self._resolve_metric_config({
-                "semanticName": operand.get("name") or operand.get("semanticName"),
-                "name": operand.get("name"),
-                "alias": operand.get("alias"),
-                "displayName": operand.get("displayName"),
-                "func": operand.get("aggFunc") or operand.get("func"),
-                "table": operand.get("table"),
-                "tableAlias": _normalize_alias(operand),
-                "column": operand.get("column"),
-                "expression": operand.get("expression"),
-            })
-            if not metric:
-                raise ValueError(f"HAVING 表达式引用的指标不存在: {operand.get('name') or operand.get('semanticName') or operand.get('column')}")
-            agg = self._map_aggregation({
-                "semanticName": metric.get("name"),
-                "func": operand.get("aggFunc") or operand.get("func"),
-                "table": metric.get("table"),
-                "tableAlias": _semantic_alias(metric),
-                "column": operand.get("column"),
-                "expression": operand.get("expression"),
-            })
-            return {
-                "type": "metric",
-                "name": metric.get("name"),
-                "table": agg.get("table"),
-                "tableAlias": agg.get("tableAlias"),
-                "column": agg.get("column"),
-                "aggFunc": agg.get("func"),
-                "aggId": agg.get("id"),
-                "expression": agg.get("expression"),
-            }
+            return self._map_having_metric_operand(operand)
         if operand_type == "literal":
-            value = operand.get("value")
-            if isinstance(value, (dict, list)):
-                raise ValueError("HAVING 表达式 literal.value 只支持字符串、数字、布尔值或空值")
-            return {"type": "literal", "value": value}
+            return self._map_having_literal_operand(operand)
         if operand_type == "binary":
-            operator = normalize_text(operand.get("operator"))
-            if operator not in {"+", "-", "*", "/"}:
-                raise ValueError("HAVING 表达式二元运算符只支持 +、-、*、/")
-            right = operand.get("right")
-            if operator == "/" and isinstance(right, dict) and right.get("type") == "literal":
-                try:
-                    if float(right.get("value")) == 0:
-                        raise ValueError("HAVING 表达式不允许除以 0")
-                except ValueError:
-                    raise
-                except Exception:
-                    pass
-            return {
-                "type": "binary",
-                "operator": operator,
-                "left": self._map_having_operand(operand.get("left")),
-                "right": self._map_having_operand(right),
-            }
+            return self._map_having_binary_operand(operand)
         raise ValueError("HAVING 表达式操作数只支持 metric、literal、binary")
+
+    def _map_having_metric_operand(self, operand: Dict[str, Any]) -> Dict[str, Any]:
+        metric = self._resolve_metric_config({
+            "semanticName": operand.get("name") or operand.get("semanticName"),
+            "name": operand.get("name"),
+            "alias": operand.get("alias"),
+            "displayName": operand.get("displayName"),
+            "func": operand.get("aggFunc") or operand.get("func"),
+            "table": operand.get("table"),
+            "tableAlias": _normalize_alias(operand),
+            "column": operand.get("column"),
+            "expression": operand.get("expression"),
+        })
+        if not metric:
+            raise ValueError(f"HAVING 表达式引用的指标不存在: {operand.get('name') or operand.get('semanticName') or operand.get('column')}")
+        agg = self._map_aggregation({
+            "semanticName": metric.get("name"),
+            "func": operand.get("aggFunc") or operand.get("func"),
+            "table": metric.get("table"),
+            "tableAlias": _semantic_alias(metric),
+            "column": operand.get("column"),
+            "expression": operand.get("expression"),
+        })
+        return {
+            "type": "metric",
+            "name": metric.get("name"),
+            "table": agg.get("table"),
+            "tableAlias": agg.get("tableAlias"),
+            "column": agg.get("column"),
+            "aggFunc": agg.get("func"),
+            "aggId": agg.get("id"),
+            "expression": agg.get("expression"),
+        }
+
+    @staticmethod
+    def _map_having_literal_operand(operand: Dict[str, Any]) -> Dict[str, Any]:
+        value = operand.get("value")
+        if isinstance(value, (dict, list)):
+            raise ValueError("HAVING 表达式 literal.value 只支持字符串、数字、布尔值或空值")
+        return {"type": "literal", "value": value}
+
+    def _map_having_binary_operand(self, operand: Dict[str, Any]) -> Dict[str, Any]:
+        operator = normalize_text(operand.get("operator"))
+        if operator not in {"+", "-", "*", "/"}:
+            raise ValueError("HAVING 表达式二元运算符只支持 +、-、*、/")
+        right = operand.get("right")
+        if operator == "/" and isinstance(right, dict) and right.get("type") == "literal":
+            try:
+                if float(right.get("value")) == 0:
+                    raise ValueError("HAVING 表达式不允许除以 0")
+            except ValueError:
+                raise
+            except Exception:
+                pass
+        return {
+            "type": "binary",
+            "operator": operator,
+            "left": self._map_having_operand(operand.get("left")),
+            "right": self._map_having_operand(right),
+        }
 
     def _map_dimension_filter(self, node: Dict[str, Any]) -> Dict[str, Any]:
         dim = self._resolve_dimension_config(node)

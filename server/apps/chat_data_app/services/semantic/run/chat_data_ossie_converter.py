@@ -120,6 +120,54 @@ def _represent_flow_style_list(dumper: yaml.Dumper, value: _FlowStyleList) -> An
 _OssieYamlDumper.add_representer(_FlowStyleList, _represent_flow_style_list)
 
 
+def _load_ossie_types() -> tuple[Any, ...]:
+    """按 convert 解包顺序加载 Ossie 类型；未安装时抛 RuntimeError。"""
+    try:
+        from ossie import (
+            OSICustomExtension,
+            OSIDataset,
+            OSIDataType,
+            OSIDimension,
+            OSIDocument,
+            OSIField,
+            OSIExpression,
+            OSIDialectExpression,
+            OSIMetric,
+            OSIRelationship,
+            OSISemanticModel,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Apache Ossie Python 包未安装，无法生成语义模型快照；请安装 apache-ossie"
+        ) from exc
+    return (
+        OSICustomExtension,
+        OSIDataset,
+        OSIDataType,
+        OSIDimension,
+        OSIDocument,
+        OSIField,
+        OSIExpression,
+        OSIDialectExpression,
+        OSIMetric,
+        OSIRelationship,
+        OSISemanticModel,
+    )
+
+
+def _wrap_ossie_key_lists(data: dict[str, Any]) -> None:
+    """把主键/唯一键列表包成 YAML flow style，就地修改 document dump 结果。"""
+    for semantic_model in data.get("semantic_model") or []:
+        for dataset in semantic_model.get("datasets") or []:
+            if "primary_key" in dataset:
+                dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
+            if "unique_keys" in dataset:
+                dataset["unique_keys"] = [
+                    _FlowStyleList(columns)
+                    for columns in dataset["unique_keys"]
+                ]
+
+
 class ChatDataToOssieConverter:
     """Build an Ossie document from one ChatData semantic config."""
 
@@ -128,24 +176,19 @@ class ChatDataToOssieConverter:
         config_id = _config_id(normalized)
         if not config_id:
             raise ValueError("语义配置缺少 semantic_config_id，无法生成 Ossie 快照")
-        try:
-            from ossie import (
-                OSICustomExtension,
-                OSIDataset,
-                OSIDataType,
-                OSIDimension,
-                OSIDocument,
-                OSIField,
-                OSIExpression,
-                OSIDialectExpression,
-                OSIMetric,
-                OSIRelationship,
-                OSISemanticModel,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Apache Ossie Python 包未安装，无法生成语义模型快照；请安装 apache-ossie"
-            ) from exc
+        (
+            OSICustomExtension,
+            OSIDataset,
+            OSIDataType,
+            OSIDimension,
+            OSIDocument,
+            OSIField,
+            OSIExpression,
+            OSIDialectExpression,
+            OSIMetric,
+            OSIRelationship,
+            OSISemanticModel,
+        ) = _load_ossie_types()
 
         tables = self._table_names(normalized)
         datasets = [
@@ -188,15 +231,7 @@ class ChatDataToOssieConverter:
         # out of the root so the serialized snapshot passes that schema too.
         document = OSIDocument(semantic_model=[model])
         data = document.model_dump(by_alias=True, exclude_none=True, mode="json")
-        for semantic_model in data.get("semantic_model") or []:
-            for dataset in semantic_model.get("datasets") or []:
-                if "primary_key" in dataset:
-                    dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
-                if "unique_keys" in dataset:
-                    dataset["unique_keys"] = [
-                        _FlowStyleList(columns)
-                        for columns in dataset["unique_keys"]
-                    ]
+        _wrap_ossie_key_lists(data)
         return yaml.dump(
             data,
             Dumper=_OssieYamlDumper,
@@ -224,6 +259,29 @@ class ChatDataToOssieConverter:
         return result
 
     def _dataset(self, table: str, config: dict[str, Any], dataset_type: Any, field_type: Any, expression_type: Any, dialect_type: Any, dimension_type: Any, extension_type: Any, datatype_type: Any) -> Any:
+        fields = self._dataset_fields(config, table, field_type, expression_type, dialect_type, dimension_type, extension_type, datatype_type)
+        primary_key, unique_keys = self._dataset_keys(table, config)
+        return dataset_type(
+            name=table,
+            source=table,
+            primary_key=primary_key,
+            unique_keys=unique_keys or [[]],
+            fields=fields,
+            custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
+        )
+
+    def _dataset_fields(
+        self,
+        config: dict[str, Any],
+        table: str,
+        field_type: Any,
+        expression_type: Any,
+        dialect_type: Any,
+        dimension_type: Any,
+        extension_type: Any,
+        datatype_type: Any,
+    ) -> list[Any]:
+        """把属于当前表的维度转换为 OSI 字段。"""
         fields = []
         for item in config.get("dimensions") or []:
             if not isinstance(item, dict) or _table_name(item) != table:
@@ -242,15 +300,7 @@ class ChatDataToOssieConverter:
                 datatype=datatype_type(datatype) if datatype else None,
                 custom_extensions=[extension_type(**x) for x in (_extension(_source_reference(item)) or [])],
             ))
-        primary_key, unique_keys = self._dataset_keys(table, config)
-        return dataset_type(
-            name=table,
-            source=table,
-            primary_key=primary_key,
-            unique_keys=unique_keys or [[]],
-            fields=fields,
-            custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
-        )
+        return fields
 
     @staticmethod
     def _find_table_config(config: dict[str, Any], table: str) -> dict[str, Any]:
@@ -359,15 +409,7 @@ class ChatDataToOssieConverter:
             conditions = [condition for condition in item.get("join_conditions") or [] if isinstance(condition, dict)]
             if not left or not right or not conditions:
                 continue
-            rel_type = _relationship_type(item.get("relationship_type"))
-            if rel_type == "one_to_many":
-                from_table, to_table = right, left
-                from_columns = [_text(c.get("right_column")) for c in conditions]
-                to_columns = [_text(c.get("left_column")) for c in conditions]
-            else:
-                from_table, to_table = left, right
-                from_columns = [_text(c.get("left_column")) for c in conditions]
-                to_columns = [_text(c.get("right_column")) for c in conditions]
+            from_table, to_table, from_columns, to_columns, rel_type = self._relationship_direction(item, conditions, left, right)
             if not all(from_columns) or not all(to_columns):
                 continue
             result.append(relationship_type(
@@ -384,5 +426,18 @@ class ChatDataToOssieConverter:
                 }) or [])],
             ))
         return result
+
+    @staticmethod
+    def _relationship_direction(
+        item: dict[str, Any],
+        conditions: list[dict[str, Any]],
+        left: str,
+        right: str,
+    ) -> tuple[str, str, list[str], list[str], str]:
+        """按关系类型决定 from/to 方向：one_to_many 反转，其余保持 left→right；一并返回 rel_type 供扩展字段复用。"""
+        rel_type = _relationship_type(item.get("relationship_type"))
+        if rel_type == "one_to_many":
+            return right, left, [_text(c.get("right_column")) for c in conditions], [_text(c.get("left_column")) for c in conditions], rel_type
+        return left, right, [_text(c.get("left_column")) for c in conditions], [_text(c.get("right_column")) for c in conditions], rel_type
 
 __all__ = ["ChatDataToOssieConverter"]

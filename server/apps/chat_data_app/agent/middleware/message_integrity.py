@@ -68,30 +68,15 @@ def repair_tool_call_messages(messages: list[BaseMessage]) -> tuple[list[BaseMes
         if isinstance(message, AIMessage) and getattr(message, "tool_calls", None):
             call_ids = message_tool_call_ids(message)
             if call_ids and _has_contiguous_tool_results(messages, index, call_ids):
-                repaired.append(message)
-                result_index = index + 1
-                seen_results: set[str] = set()
-                while result_index < len(messages) and isinstance(messages[result_index], ToolMessage):
-                    tool_call_id = str(getattr(messages[result_index], "tool_call_id", "") or "").strip()
-                    if tool_call_id in call_ids and tool_call_id not in seen_results:
-                        repaired.append(messages[result_index])
-                        seen_results.add(tool_call_id)
-                    else:
-                        removed_message_count += 1
-                    result_index += 1
-                index = result_index
+                index, duplicate_removed = _consume_contiguous_tool_results(messages, index, repaired, call_ids)
+                removed_message_count += duplicate_removed
                 continue
 
             removed_call_ids.extend(call_ids or ("<missing-id>",))
             removed_message_count += 1
-            index += 1
-            while index < len(messages) and isinstance(messages[index], ToolMessage):
-                tool_call_id = str(getattr(messages[index], "tool_call_id", "") or "").strip()
-                if not tool_call_id or tool_call_id in call_ids:
-                    removed_message_count += 1
-                    index += 1
-                    continue
-                break
+            skipped_index, orphan_removed = _skip_orphan_tool_results(messages, index + 1, call_ids)
+            removed_message_count += orphan_removed
+            index = skipped_index
             continue
 
         if isinstance(message, ToolMessage):
@@ -106,6 +91,45 @@ def repair_tool_call_messages(messages: list[BaseMessage]) -> tuple[list[BaseMes
         "removed_call_ids": tuple(dict.fromkeys(removed_call_ids)),
         "removed_message_count": removed_message_count,
     }
+
+
+def _consume_contiguous_tool_results(
+    messages: list[BaseMessage],
+    index: int,
+    repaired: list[BaseMessage],
+    call_ids: tuple[str, ...],
+) -> tuple[int, int]:
+    """保留完整的 tool-call 组：AI 消息与连续且相关的 ToolMessage；返回 (新索引, 移除数)。"""
+    repaired.append(messages[index])
+    result_index = index + 1
+    seen_results: set[str] = set()
+    removed = 0
+    while result_index < len(messages) and isinstance(messages[result_index], ToolMessage):
+        tool_call_id = str(getattr(messages[result_index], "tool_call_id", "") or "").strip()
+        if tool_call_id in call_ids and tool_call_id not in seen_results:
+            repaired.append(messages[result_index])
+            seen_results.add(tool_call_id)
+        else:
+            removed += 1
+        result_index += 1
+    return result_index, removed
+
+
+def _skip_orphan_tool_results(
+    messages: list[BaseMessage],
+    index: int,
+    call_ids: tuple[str, ...],
+) -> tuple[int, int]:
+    """丢弃残缺 tool-call 组后续的孤儿 ToolMessage；返回 (新索引, 移除数)。"""
+    removed = 0
+    while index < len(messages) and isinstance(messages[index], ToolMessage):
+        tool_call_id = str(getattr(messages[index], "tool_call_id", "") or "").strip()
+        if not tool_call_id or tool_call_id in call_ids:
+            removed += 1
+            index += 1
+            continue
+        break
+    return index, removed
 
 
 def _has_contiguous_tool_results(

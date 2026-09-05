@@ -227,16 +227,8 @@ def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: Semanti
     dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     if dsl.get("compare") or card.get("compare"):
         raise ValueError("DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
-    payload, _warnings = remove_mixed_raw_metrics_for_aggregate_dsl({
-        **dsl,
-        "metrics": dsl.get("metrics") or card.get("metrics") or [],
-        "dimensions": dsl.get("dimensions") or card.get("dimensions") or [],
-        "filters": dsl.get("filters") or card.get("filters") or [],
-        "having": dsl.get("having") or card.get("having") or [],
-        "order_by": dsl.get("order_by") or card.get("order_by") or [],
-        "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
-        "offset": dsl.get("offset") if dsl.get("offset") is not None else card.get("offset"),
-    }, getattr(generator, "semantic_config", {}))
+    payload = _merge_card_dsl_payload(dsl, card)
+    payload, _warnings = remove_mixed_raw_metrics_for_aggregate_dsl(payload, getattr(generator, "semantic_config", {}))
     result = compile_semantic_ai_dsl(
         getattr(generator, "semantic_config", {}),
         payload,
@@ -245,6 +237,20 @@ def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: Semanti
     if not result.get("success"):
         raise ValueError(str(result.get("error") or "SQL 生成失败"))
     return str(result.get("sql") or "").strip()
+
+
+def _merge_card_dsl_payload(dsl: Dict[str, Any], card: Dict[str, Any]) -> Dict[str, Any]:
+    """卡片级字段兜底合并：dsl 字段缺省时回退 card 顶层字段。"""
+    return {
+        **dsl,
+        "metrics": dsl.get("metrics") or card.get("metrics") or [],
+        "dimensions": dsl.get("dimensions") or card.get("dimensions") or [],
+        "filters": dsl.get("filters") or card.get("filters") or [],
+        "having": dsl.get("having") or card.get("having") or [],
+        "order_by": dsl.get("order_by") or card.get("order_by") or [],
+        "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
+        "offset": dsl.get("offset") if dsl.get("offset") is not None else card.get("offset"),
+    }
 
 
 def validate_dashboard_card_structure(card: Dict[str, Any], index: int) -> List[str]:
@@ -262,6 +268,13 @@ def validate_dashboard_card_structure(card: Dict[str, Any], index: int) -> List[
     if not isinstance(layout, dict):
         errors.append(f"卡片「{title}」缺少 layout 对象")
         return errors
+    errors.extend(_validate_card_layout(title, layout))
+    return errors
+
+
+def _validate_card_layout(title: str, layout: Dict[str, Any]) -> List[str]:
+    """校验卡片 layout 数值合法性；字段缺失或不合法时不做范围检查。"""
+    errors: List[str] = []
     values: Dict[str, int] = {}
     for key in ("x", "y", "w", "h"):
         value = layout.get(key)

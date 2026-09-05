@@ -114,21 +114,29 @@ def resolve_execution_source_config(
 
     resolved = dict(source_config or {})
     if normalized_executor_type == "http":
-        resolved_org_code = str(org_code or resolved.get("org_code") or "").strip()
-        if not resolved_org_code:
-            raise ValueError("HTTP 执行对象缺少机构编码")
-        resolved["org_code"] = resolved_org_code
-        resolved["org_name"] = str(org_name or resolved.get("org_name") or "").strip()
+        _apply_http_source_identity(resolved, org_code=org_code, org_name=org_name)
         return resolved
+    _apply_direct_source_credentials(normalized_source_type, resolved)
+    return resolved
 
+
+def _apply_http_source_identity(resolved: Dict[str, Any], *, org_code: str, org_name: str) -> None:
+    """HTTP 执行：身份参数优先于配置内取值，机构编码必填。"""
+    resolved_org_code = str(org_code or resolved.get("org_code") or "").strip()
+    if not resolved_org_code:
+        raise ValueError("HTTP 执行对象缺少机构编码")
+    resolved["org_code"] = resolved_org_code
+    resolved["org_name"] = str(org_name or resolved.get("org_name") or "").strip()
+
+
+def _apply_direct_source_credentials(normalized_source_type: str, resolved: Dict[str, Any]) -> None:
+    """直连执行：凭据不完整时从服务端凭据通道补齐。"""
     if normalized_source_type == "mysql":
         if not resolved.get("user") or "password" not in resolved:
             resolved.update(resolve_mysql_credentials(resolved))
-        return resolved
-
+        return
     if not resolved.get("username") or "password" not in resolved:
         resolved.update(resolve_hive_credentials(resolved))
-    return resolved
 
 
 def build_hive_connect_params(

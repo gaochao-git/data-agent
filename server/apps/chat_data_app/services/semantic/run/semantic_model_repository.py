@@ -91,7 +91,18 @@ async def load_semantic_model(
         raise ValueError("未找到可用语义配置")
     if not selected.get("enabled", True):
         raise ValueError("语义配置未启用")
+    return await _finalize_semantic_model(selected, datasource, mode, normalized_config_id, normalized_datasource_id, ds_manager)
 
+
+async def _finalize_semantic_model(
+    selected: Dict[str, Any],
+    datasource: Dict[str, Any],
+    mode: SemanticModelLoadMode,
+    normalized_config_id: str,
+    normalized_datasource_id: str,
+    ds_manager: Any,
+) -> Dict[str, Any]:
+    """按加载模式补齐模型元数据（ID 归一、joins 别名、来源与表结构）。"""
     result = dict(selected)
     result["id"] = str(result.get("id") or normalized_config_id).strip()
     if result.get("relationships") and not result.get("joins"):

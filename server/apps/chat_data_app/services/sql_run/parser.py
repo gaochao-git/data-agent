@@ -66,44 +66,21 @@ def _strip_comments_by_scan(sql: str) -> str:
         char = text[i]
         next_char = text[i + 1] if i + 1 < len(text) else ""
         if in_quote:
-            result.append(char)
-            if char == "\\":
-                if i + 1 < len(text):
-                    result.append(text[i + 1])
-                    i += 2
-                    continue
-            elif char == in_quote:
-                if in_quote == "'" and next_char == "'":
-                    result.append(next_char)
-                    i += 2
-                    continue
-                in_quote = ""
-            i += 1
+            i, in_quote = _consume_quoted_char(text, i, in_quote, result)
             continue
-
         if char in {"'", '"', "`"}:
             in_quote = char
             result.append(char)
             i += 1
             continue
         if char == "-" and next_char == "-":
-            newline_index = text.find("\n", i + 2)
-            if newline_index == -1:
-                break
-            result.append("\n")
-            i = newline_index + 1
+            i = _consume_validation_line_comment(text, i, search_offset=2, result=result)
             continue
         if char == "#":
-            newline_index = text.find("\n", i + 1)
-            if newline_index == -1:
-                break
-            result.append("\n")
-            i = newline_index + 1
+            i = _consume_validation_line_comment(text, i, search_offset=1, result=result)
             continue
         if char == "/" and next_char == "*":
-            comment_end = text.find("*/", i + 2)
-            result.append(" ")
-            i = len(text) if comment_end == -1 else comment_end + 2
+            i = _consume_validation_block_comment(text, i, result)
             continue
         result.append(char)
         i += 1
@@ -130,50 +107,59 @@ def _strip_comments_for_validation(sql: str, source_type: str | None = None) -> 
     i = 0
     while i < len(text):
         char = text[i]
-        next_char = text[i + 1] if i + 1 < len(text) else ""
         if in_quote:
-            result.append(char)
-            if char == "\\":
-                if i + 1 < len(text):
-                    result.append(text[i + 1])
-                    i += 2
-                    continue
-            elif char == in_quote:
-                if in_quote == "'" and next_char == "'":
-                    result.append(next_char)
-                    i += 2
-                    continue
-                in_quote = ""
-            i += 1
+            i, in_quote = _consume_quoted_char(text, i, in_quote, result)
             continue
-
         if char in {"'", '"', "`"}:
             in_quote = char
             result.append(char)
             i += 1
             continue
         if char == "-" and _is_validation_dash_comment(text, i, dialect):
-            newline_index = text.find("\n", i + 2)
-            if newline_index == -1:
-                break
-            result.append("\n")
-            i = newline_index + 1
+            i = _consume_validation_line_comment(text, i, search_offset=2, result=result)
             continue
         if char == "#" and dialect == "mysql":
-            newline_index = text.find("\n", i + 1)
-            if newline_index == -1:
-                break
-            result.append("\n")
-            i = newline_index + 1
+            i = _consume_validation_line_comment(text, i, search_offset=1, result=result)
             continue
-        if char == "/" and next_char == "*":
-            comment_end = text.find("*/", i + 2)
-            result.append(" ")
-            i = len(text) if comment_end == -1 else comment_end + 2
+        if char == "/" and (text[i + 1] if i + 1 < len(text) else "") == "*":
+            i = _consume_validation_block_comment(text, i, result)
             continue
         result.append(char)
         i += 1
     return "".join(result)
+
+
+def _consume_quoted_char(text: str, i: int, in_quote: str, result: list[str]) -> tuple[int, str]:
+    """处理引号内字符：转义、成对单引号与引号闭合；返回 (新索引, 引号状态)。"""
+    char = text[i]
+    result.append(char)
+    if char == "\\":
+        if i + 1 < len(text):
+            result.append(text[i + 1])
+            return i + 2, in_quote
+        return i + 1, in_quote
+    if char == in_quote:
+        if in_quote == "'" and text[i + 1:i + 2] == "'":
+            result.append("'")
+            return i + 2, in_quote
+        return i + 1, ""
+    return i + 1, in_quote
+
+
+def _consume_validation_line_comment(text: str, i: int, *, search_offset: int, result: list[str]) -> int:
+    """吞掉行注释：保留换行符；注释到结尾时停止扫描（等价 break）。"""
+    newline_index = text.find("\n", i + search_offset)
+    if newline_index == -1:
+        return len(text)
+    result.append("\n")
+    return newline_index + 1
+
+
+def _consume_validation_block_comment(text: str, i: int, result: list[str]) -> int:
+    """吞掉块注释：以空格占位；未闭合时吞到文本末尾。"""
+    comment_end = text.find("*/", i + 2)
+    result.append(" ")
+    return len(text) if comment_end == -1 else comment_end + 2
 
 
 def _is_query_sql(sql: str) -> bool:

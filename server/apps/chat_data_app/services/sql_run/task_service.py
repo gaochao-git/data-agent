@@ -816,32 +816,49 @@ class QueryTaskService:
         local_cancelled_execution: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """构造单个成员远端实时结果。"""
-        if local_cancelled_execution:
-            local_status = str(local_cancelled_execution.get("sql_status") or "cancelled").strip().lower()
-            return {
-                "member_datasource_id": remote_task.get("member_datasource_id"),
-                "member_name": remote_task.get("member_name"),
-                "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "status": local_status,
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-                "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
-                "started_time": remote_result.get("started_time") or local_cancelled_execution.get("started_time"),
-                "finished_time": remote_result.get("finished_time") or local_cancelled_execution.get("finished_time"),
-                "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
-            }
-        return {
+        base = {
             "member_datasource_id": remote_task.get("member_datasource_id"),
             "member_name": remote_task.get("member_name"),
             "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
+        if local_cancelled_execution:
+            base.update(self._cancelled_member_fields(remote_result, local_cancelled_execution))
+        else:
+            base.update(self._executed_member_fields(remote_result, local_execution))
+        return base
+
+    def _cancelled_member_fields(
+        self,
+        remote_result: Dict[str, Any],
+        local_cancelled_execution: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """本地已取消/停止失败的成员结果字段。"""
+        local_status = str(local_cancelled_execution.get("sql_status") or "cancelled").strip().lower()
+        return {
+            "status": local_status,
+            "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
+            "started_time": remote_result.get("started_time") or local_cancelled_execution.get("started_time"),
+            "finished_time": remote_result.get("finished_time") or local_cancelled_execution.get("finished_time"),
+            "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
+        }
+
+    def _executed_member_fields(
+        self,
+        remote_result: Dict[str, Any],
+        local_execution: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """正常执行的成员结果字段。"""
+        return {
             "status": query_result_status(remote_result),
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
             "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, local_execution),
-            "started_time": remote_result.get("started_time") or ((local_execution or {}).get("started_time") if local_execution else None),
-            "finished_time": remote_result.get("finished_time") or ((local_execution or {}).get("finished_time") if local_execution else None),
+            "started_time": remote_result.get("started_time") or (local_execution or {}).get("started_time"),
+            "finished_time": remote_result.get("finished_time") or (local_execution or {}).get("finished_time"),
             "error": remote_result.get("error"),
         }
 

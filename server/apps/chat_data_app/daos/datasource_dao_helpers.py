@@ -297,37 +297,16 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
     text = str(raw_line or "").strip()
     if not text:
         return None
-
-    parts = [part.strip() for part in text.split("|")]
-    if len(parts) != 4:
-        _warn_parse_once("成员数据源格式无效，仅支持 HTTP=机构名称|机构编码|http|db_name 或直连=机构名称|机构编码|direct|ip:port:db_name: %s", text)
+    fields = _split_member_source_fields(text)
+    if fields is None:
         return None
-    org_name, org_code, executor_type, source_text = parts
-    if not org_name:
-        _warn_parse_once("成员数据源机构名称为空，忽略: %s", text)
-        return None
-    if not org_code:
-        _warn_parse_once("成员数据源机构编码为空，忽略: %s", text)
-        return None
-    if executor_type not in {"direct", "http"}:
-        _warn_parse_once("成员数据源执行方式无效，忽略: %s", text)
-        return None
+    org_name, org_code, executor_type, source_text = fields
     normalized_query_executor_type = _normalize_query_executor_type_for_parse(source_type, executor_type)
 
     if normalized_query_executor_type == "http":
-        database = source_text
-        parsed_legacy_source = _parse_source_line(source_text) if ":" in source_text else None
-        if parsed_legacy_source:
-            database = str(parsed_legacy_source.get("database") or "").strip()
-        if not database:
-            _warn_parse_once("HTTP 成员数据源数据库名为空，忽略: %s", text)
+        parsed = _parse_http_member_source(source_text, text)
+        if parsed is None:
             return None
-        parsed = {
-            "source_line": database,
-            "host": (parsed_legacy_source or {}).get("host"),
-            "port": (parsed_legacy_source or {}).get("port"),
-            "database": database,
-        }
     else:
         parsed = _parse_source_line(source_text)
         if not parsed:
@@ -342,6 +321,42 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
     parsed["query_executor_type"] = normalized_query_executor_type
     parsed["raw_line"] = text
     return parsed
+
+
+def _split_member_source_fields(text: str) -> Optional[tuple[str, str, str, str]]:
+    """校验并拆分「机构名称|机构编码|执行方式|源描述」四段格式。"""
+    parts = [part.strip() for part in text.split("|")]
+    if len(parts) != 4:
+        _warn_parse_once("成员数据源格式无效，仅支持 HTTP=机构名称|机构编码|http|db_name 或直连=机构名称|机构编码|direct|ip:port:db_name: %s", text)
+        return None
+    org_name, org_code, executor_type, source_text = parts
+    if not org_name:
+        _warn_parse_once("成员数据源机构名称为空，忽略: %s", text)
+        return None
+    if not org_code:
+        _warn_parse_once("成员数据源机构编码为空，忽略: %s", text)
+        return None
+    if executor_type not in {"direct", "http"}:
+        _warn_parse_once("成员数据源执行方式无效，忽略: %s", text)
+        return None
+    return org_name, org_code, executor_type, source_text
+
+
+def _parse_http_member_source(source_text: str, raw_text: str) -> Optional[Dict[str, Any]]:
+    """解析 HTTP 成员的数据库名，兼容旧版 ip:port:db_name 格式。"""
+    database = source_text
+    parsed_legacy_source = _parse_source_line(source_text) if ":" in source_text else None
+    if parsed_legacy_source:
+        database = str(parsed_legacy_source.get("database") or "").strip()
+    if not database:
+        _warn_parse_once("HTTP 成员数据源数据库名为空，忽略: %s", raw_text)
+        return None
+    return {
+        "source_line": database,
+        "host": (parsed_legacy_source or {}).get("host"),
+        "port": (parsed_legacy_source or {}).get("port"),
+        "database": database,
+    }
 
 
 def _parse_member_source_entries(
@@ -364,6 +379,22 @@ def _parse_member_source_entries(
         seen.add(member_identity)
         parsed_entries.append(entry)
 
+    template_entry = _resolve_template_entry(parsed_entries, template_line, seen, source_type, query_executor_type)
+    result: List[Dict[str, Any]] = []
+    if template_entry is not None:
+        result.append(template_entry)
+    result.extend(item for item in parsed_entries if item["datasource_id"] != (template_entry or {}).get("datasource_id"))
+    return result
+
+
+def _resolve_template_entry(
+    parsed_entries: List[Dict[str, Any]],
+    template_line: str,
+    seen: set[str],
+    source_type: Any,
+    query_executor_type: Any,
+) -> Optional[Dict[str, Any]]:
+    """确定模板成员条目：优先匹配行文本，其次解析模板行，最后取首个条目。"""
     template_entry: Optional[Dict[str, Any]] = None
     if template_line:
         template_entry = next(
@@ -379,12 +410,7 @@ def _parse_member_source_entries(
                 template_entry = fallback_template_entry
     if template_entry is None and parsed_entries:
         template_entry = parsed_entries[0]
-
-    result: List[Dict[str, Any]] = []
-    if template_entry is not None:
-        result.append(template_entry)
-    result.extend(item for item in parsed_entries if item["datasource_id"] != (template_entry or {}).get("datasource_id"))
-    return result
+    return template_entry
 
 
 def _parse_member_sources_text(member_sources_text: Any, template_source: Any, source_type: Any, query_executor_type: Any) -> List[str]:
