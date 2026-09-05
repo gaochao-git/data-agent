@@ -115,6 +115,6 @@ async def test_response_timestamp_middleware_handles_empty_result():
     assert response.result == []
 
 
-def test_tool_error_callback_returns_fixed_message():
-    assert ar._on_tool_error(RuntimeError("db down"), None) == "工具执行失败，请稍后重试"
-    assert ar._format_tool_error(ValueError("boom")) == "工具执行失败，请稍后重试"
+def test_tool_error_callback_returns_detail_message():
+    assert ar._on_tool_error(RuntimeError("db down"), None) == "工具执行失败: db down"
+    assert ar._format_tool_error(ValueError("boom")) == "工具执行失败: boom"

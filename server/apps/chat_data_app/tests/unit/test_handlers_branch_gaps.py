@@ -487,9 +487,11 @@ def test_build_tool_message_payload_attaches_accumulated_args():
 def test_build_tool_message_payload_marks_error_and_timing():
     state = handlers._ToolStreamState()
 
+    # 成败只认显式协议位：ToolMessage 原生 status="error" 才判失败
     chunk = ToolMessageChunk(
         content="Error: 工具执行失败",
         tool_call_id="call-2",
+        status="error",
         additional_kwargs={"started_at_ms": 100, "ended_at_ms": 250},
     )
     payload = state.build_tool_message_payload(chunk)

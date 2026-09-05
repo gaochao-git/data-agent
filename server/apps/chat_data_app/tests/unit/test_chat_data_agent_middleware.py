@@ -1022,10 +1022,14 @@ async def test_chat_data_context_usage_middleware_raises_when_model_fails(monkey
 def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     errors = []
     monkeypatch.setattr(agent_runtime.logger, "error", lambda *args, **_kwargs: errors.append(args))
+    warnings = []
+    monkeypatch.setattr(agent_runtime.logger, "warning", lambda *args, **_kwargs: warnings.append(args))
 
-    assert agent_runtime._format_tool_error(ValueError("内部连接信息")) == "工具执行失败，请稍后重试"
+    # 预期校验错误走 warning 分级，不刷 error 堆栈
+    assert agent_runtime._format_tool_error(ValueError("内部连接信息")) == "工具执行失败: 内部连接信息"
+    assert warnings
+    assert agent_runtime._format_tool_error(RuntimeError("boom")) == "工具执行失败: boom"
     assert errors
-    assert agent_runtime._format_tool_error(RuntimeError("boom")) == "工具执行失败，请稍后重试"
 
     captured = {}
     selection_tool_kwargs = {}
@@ -1121,7 +1125,7 @@ async def test_tool_error_middleware_returns_error_tool_message(monkeypatch):
     request = SimpleNamespace(tool=None, tool_call={"id": "call_1", "name": "semantic_query_tool"})
     message = await middleware.awrap_tool_call(request, handler)
 
-    assert message.content == "工具执行失败，请稍后重试"
+    assert message.content == "工具执行失败: tool down"
     assert message.name == "semantic_query_tool"
     assert message.tool_call_id == "call_1"
     assert message.status == "error"

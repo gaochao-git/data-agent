@@ -74,10 +74,21 @@ def create_response_timestamp_middleware():
     return response_timestamp_middleware
 
 
+_PRE_VALIDATION_ERRORS = (ValueError, FileNotFoundError, IsADirectoryError, NotADirectoryError)
+
+
 def _format_tool_error(exc: Exception) -> str:
-    """记录完整异常，但只向模型和前端返回固定提示。"""
-    logger.error("[tools] 工具执行异常: %s", exc, exc_info=True)
-    return "工具执行失败，请稍后重试"
+    """记录完整异常，并向模型和前端返回带异常详情的错误提示。
+
+    详情对模型自愈（纠正参数后重试）必要，信息量与工具侧原先吞异常返回的
+    ``"{tool} 执行失败: {exc}"`` 文本一致；成败信号由 ToolMessage.status
+    显式承载，content 只负责让人和模型理解发生了什么。
+    """
+    if isinstance(exc, _PRE_VALIDATION_ERRORS):
+        logger.warning("[tools] 工具执行失败(预期校验错误): %s", exc)
+    else:
+        logger.error("[tools] 工具执行异常: %s", exc, exc_info=True)
+    return f"工具执行失败: {exc}"
 
 
 def _on_tool_error(exc: Exception, _request: Any) -> str:

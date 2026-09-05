@@ -120,6 +120,6 @@ def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
             return _tool_result(payload)
         except Exception as exc:
             logger.error("officecli_run 执行失败: %s", exc, exc_info=True)
-            return f"officecli_run 执行失败: {exc}"
+            raise
 
     return officecli_run

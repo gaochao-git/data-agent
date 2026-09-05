@@ -523,31 +523,30 @@ def test_semantic_search_list_fields_filters_and_rejects_inaccessible_model(monk
         "limit": 1,
     }))
     payload = json.loads(result.replace("[semantic_search]", "", 1).strip())
-    missing = asyncio.run(tool.ainvoke({
-        "operation": "list_fields",
-        "semantic_config_id": "missing",
-    }))
+    with pytest.raises(ValueError, match="未找到当前用户可用的语义模型 missing"):
+        asyncio.run(tool.ainvoke({
+            "operation": "list_fields",
+            "semantic_config_id": "missing",
+        }))
 
     assert payload["field_type"] == "dimension"
     assert payload["total"] == 2
     assert payload["next_offset"] == 1
     assert payload["fields"] == [{"field_type": "dimension", "name": "下单时间"}]
-    assert "未找到当前用户可用的语义模型 missing" in missing
 
 
 def test_semantic_search_error_branches(monkeypatch):
     _patch_runtime_configs(monkeypatch, [])
     select_tool = create_semantic_search(datasource_id="ds_a")
 
-    missing_datasource = asyncio.run(create_semantic_search().ainvoke({"operation": "search_models", "query": "查询订单"}))
-    missing_query = asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": ""}))
+    with pytest.raises(ValueError, match="当前会话未绑定数据源"):
+        asyncio.run(create_semantic_search().ainvoke({"operation": "search_models", "query": "查询订单"}))
+    with pytest.raises(ValueError, match="缺少用户问题"):
+        asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": ""}))
 
     async def boom_search_semantic_models(**_kwargs):
         raise RuntimeError("selector failed")
 
     monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_search.search_semantic_models", boom_search_semantic_models)
-    failed = asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": "查询订单"}))
-
-    assert "未绑定数据源" in missing_datasource
-    assert "缺少用户问题" in missing_query
-    assert "selector failed" in failed
+    with pytest.raises(RuntimeError, match="selector failed"):
+        asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": "查询订单"}))

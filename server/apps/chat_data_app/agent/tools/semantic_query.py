@@ -1,7 +1,7 @@
 """Semantic query agent tool."""
 
 from dataclasses import dataclass
-from typing import Any, Annotated
+from typing import Annotated, Any, NoReturn
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -20,9 +20,7 @@ from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload
 
 logger = get_logger(__name__)
-TOOL_ERROR_PREFIX = "semantic_query_tool 执行失败"
-
-
+# 失败统一走 raise：ToolErrorMiddleware 转 status="error" 的 ToolMessage，content 带详情。
 @dataclass(frozen=True)
 class _PreparedToolRequest:
     dsl: dict[str, Any] | None
@@ -51,8 +49,8 @@ class _CompiledToolQuery:
     confidence: float
 
 
-def _tool_error(message: str) -> str:
-    return f"{TOOL_ERROR_PREFIX}: {message}"
+def _tool_error(message: str) -> NoReturn:
+    raise ValueError(message)
 
 
 def _latest_human_query(messages: list[Any] | None) -> str:
@@ -236,7 +234,7 @@ async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToo
         )
     except Exception as exc:
         logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
-        return _tool_error(str(exc))
+        raise
 
     query_result["sql"] = query_result.get("sql") or query.sql
     query_result["query_mode"] = query.query_mode

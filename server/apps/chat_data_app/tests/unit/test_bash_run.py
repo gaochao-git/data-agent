@@ -149,5 +149,6 @@ async def test_bash_run_tool_failure_wrapped(monkeypatch):
 
     monkeypatch.setattr(bash_run_module, "run_bash_command", _fake_run)
     tool = create_bash_run_tool(_FakeRuntime(_execution()))
-    result = await tool.ainvoke({"command": "echo hi"})
-    assert result == "bash_run 执行失败: boom"
+    # 失败显式化：异常穿透由 ToolErrorMiddleware 转 status="error" 的 ToolMessage
+    with pytest.raises(RuntimeError, match="boom"):
+        await tool.ainvoke({"command": "echo hi"})

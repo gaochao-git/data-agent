@@ -3,6 +3,8 @@ import os
 import shutil
 from pathlib import Path
 
+import pytest
+
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     ensure_conversation_workspace,
@@ -84,18 +86,18 @@ def test_dir_list_shows_tool_results(tmp_path):
 def test_dir_list_rejects_out_of_session(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)
-    out = _call(tools["dir_list"], path="/etc/passwd")
-    assert "路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头" in out
-    out2 = _call(tools["dir_list"], path="../../escape")
-    assert "/mnt/user-data/ 或 /mnt/skills/ 开头" in out2
+    with pytest.raises(ValueError, match="路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头"):
+        _call(tools["dir_list"], path="/etc/passwd")
+    with pytest.raises(ValueError, match="/mnt/user-data/ 或 /mnt/skills/ 开头"):
+        _call(tools["dir_list"], path="../../escape")
 
 
 def test_dir_list_not_a_dir(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     (Path(paths["workspace"]) / "file.txt").write_text("x")
     _, tools = _build_tools(paths)
-    out = _call(tools["dir_list"], path="/mnt/user-data/workspace/file.txt")
-    assert "目标不是目录" in out
+    with pytest.raises(ValueError, match="目标不是目录"):
+        _call(tools["dir_list"], path="/mnt/user-data/workspace/file.txt")
 
 
 def test_dir_list_empty_dir(tmp_path):
@@ -140,6 +142,5 @@ def test_dir_list_skill_path(tmp_path):
 def test_dir_list_unauthorized_skill_rejected(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)
-    out = _call(tools["dir_list"], path="/mnt/skills/unknown/references")
-    # 快照内无此技能：resolve_readonly_skill_path_async 抛「技能不存在或无权限访问」
-    assert "技能不存在" in out or "无权限" in out or "技能路径无效" in out
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        _call(tools["dir_list"], path="/mnt/skills/unknown/references")

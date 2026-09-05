@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, NoReturn
 
 from langchain_core.tools import tool
 
@@ -29,15 +29,18 @@ def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
     return f"[{tool_name}]\n" + json_dumps(payload)
 
 
-def _tool_error(tool_name: str, exc: Exception) -> str:
-    """Return a model-correctable error without logging expected validation traces."""
+def _tool_error(tool_name: str, exc: Exception) -> NoReturn:
+    """按预期/非预期分级记日志后重新抛出。
+
+    异常由 ToolErrorMiddleware 统一转成 ``status="error"`` 的 ToolMessage，
+    content 带异常详情；工具失败从此只走显式协议位，不再以普通文本返回。
+    """
     message = str(exc) or exc.__class__.__name__
     if isinstance(exc, (ValueError, FileNotFoundError, IsADirectoryError, NotADirectoryError)):
         logger.warning("%s 工具错误: %s", tool_name, message)
-        return f"{tool_name} 工具错误: {message}"
     else:
         logger.error("%s 执行失败: %s", tool_name, message, exc_info=True)
-    return f"{tool_name} 工具错误: 工具执行失败，请稍后重试"
+    raise exc
 
 
 def _validate_relative_glob(pattern: str, *, field_name: str) -> str:

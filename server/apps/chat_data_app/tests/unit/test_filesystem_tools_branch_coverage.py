@@ -162,10 +162,10 @@ async def test_file_move_tool_success_and_error():
 
     failing = StubRuntime()
     failing.fail_with = ValueError("目标路径已存在")
-    out = await _invoke(failing, "file_move", {
-        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
-    })
-    assert out.startswith("file_move 工具错误:") and "目标路径已存在" in out
+    with pytest.raises(ValueError, match="目标路径已存在"):
+        await _invoke(failing, "file_move", {
+            "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
+        })
 
 
 @pytest.mark.asyncio
@@ -176,14 +176,13 @@ async def test_file_copy_tool_success_and_unexpected_error():
     }))
     assert payload == {"type": "file", "bytes": 3}
 
-    # 非预期异常必须收敛成通用文案，不能把内部堆栈信息透给模型
+    # 失败改为 raise 原异常，由 ToolErrorMiddleware 统一转成 status="error" 的 ToolMessage
     failing = StubRuntime()
     failing.fail_with = RuntimeError("connection pool exhausted at 10.0.0.5:3306")
-    out = await _invoke(failing, "file_copy", {
-        "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
-    })
-    assert out == "file_copy 工具错误: 工具执行失败，请稍后重试"
-    assert "10.0.0.5" not in out
+    with pytest.raises(RuntimeError, match="connection pool exhausted"):
+        await _invoke(failing, "file_copy", {
+            "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
+        })
 
 
 @pytest.mark.asyncio
@@ -215,7 +214,8 @@ async def test_dir_create_tool_success_and_error():
     assert _payload(await _invoke(runtime, "dir_create", {"path": "/mnt/user-data/workspace/new"}))["type"] == "dir"
     failing = StubRuntime()
     failing.fail_with = ValueError("目录已存在")
-    assert "目录已存在" in await _invoke(failing, "dir_create", {"path": "/mnt/user-data/workspace/new"})
+    with pytest.raises(ValueError, match="目录已存在"):
+        await _invoke(failing, "dir_create", {"path": "/mnt/user-data/workspace/new"})
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +234,12 @@ async def test_file_glob_tool_validates_and_formats():
         "path": "/mnt/user-data/workspace", "pattern": "*.py", "max_results": fs._DEFAULT_GLOB_RESULTS,
     }
 
-    # 路径型 pattern 在沙箱 Files search 语义下不允许
-    assert "只能匹配文件名" in await _invoke(StubRuntime(), "file_glob", {"pattern": "sub/*.py"})
-    assert "pattern 不能为空" in await _invoke(StubRuntime(), "file_glob", {"pattern": "  "})
+    # 路径型 pattern 在沙箱 Files search 语义下不允许（校验失败现在以异常抛出）
+    with pytest.raises(ValueError, match="只能匹配文件名"):
+        await _invoke(StubRuntime(), "file_glob", {"pattern": "sub/*.py"})
+    with pytest.raises(ValueError, match="pattern 不能为空"):
+        await _invoke(StubRuntime(), "file_glob", {"pattern": "  "})
+    # max_results 越界仍以普通文本返回（不走异常通道）
     assert "max_results 必须在 1-500 之间" in await _invoke(
         StubRuntime(), "file_glob", {"pattern": "*.py", "max_results": 0},
     )
@@ -260,9 +263,8 @@ async def test_file_grep_tool_splits_or_patterns_and_reports_skips():
     assert runtime.calls[0][1]["patterns"] == ["error", "warn"]
 
     assert "pattern 不能为空" in await _invoke(StubRuntime(), "file_grep", {"pattern": "||"})
-    assert "glob 只能在指定目录内匹配" in await _invoke(
-        StubRuntime(), "file_grep", {"pattern": "x", "glob": "/etc/*"},
-    )
+    with pytest.raises(ValueError, match="glob 只能在指定目录内匹配"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "glob": "/etc/*"})
     assert "max_results 必须在 1-200 之间" in await _invoke(
         StubRuntime(), "file_grep", {"pattern": "x", "max_results": 500},
     )
@@ -300,11 +302,11 @@ async def test_dir_list_tool_formats_entries_and_bounds_depth():
 
 
 @pytest.mark.asyncio
-async def test_dir_list_tool_error_uses_generic_text_for_unexpected():
+async def test_dir_list_tool_error_raises_unexpected_exception():
     runtime = StubRuntime()
     runtime.fail_with = RuntimeError("sandbox unreachable")
-    out = await _invoke(runtime, "dir_list", {"path": "workspace"})
-    assert out == "dir_list 工具错误: 工具执行失败，请稍后重试"
+    with pytest.raises(RuntimeError, match="sandbox unreachable"):
+        await _invoke(runtime, "dir_list", {"path": "workspace"})
 
 
 @pytest.mark.asyncio

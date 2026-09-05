@@ -306,9 +306,10 @@ def test_parse_tool_args_buffer_unwraps_double_encoded_json():
     assert _parse_tool_args_buffer("raw-string", fallback) == fallback
 
 
-def test_is_tool_result_error_detects_plain_errors():
-    assert _is_tool_result_error("执行失败: 表不存在") is True
-    assert _is_tool_result_error("error: syntax error") is True
+def test_is_tool_result_error_ignores_plain_text_errors():
+    # 成败只认显式协议位（native status / query_result envelope），不再做任何文本匹配
+    assert _is_tool_result_error("执行失败: 表不存在") is False
+    assert _is_tool_result_error("error: syntax error") is False
     assert _is_tool_result_error('{"type":"query_result","status":"failed"}') is True
     assert _is_tool_result_error('{"type":"query_result","status":"cancelled"}') is True
     assert _is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
@@ -320,14 +321,14 @@ def test_is_tool_result_error_prefers_native_status():
     # 结构化 status="error" 最优先：无论正文长什么样都判失败
     assert _is_tool_result_error("查询完成", "error") is True
     assert _is_tool_result_error('{"type":"query_result","status":"succeeded"}', "error") is True
-    # status="success" 时不再全文猜测，成功正文含"执行失败"字样不再误判
+    # 成败只认显式协议位：status="success" 或缺省时一律不算失败，即使正文含"执行失败"字样
     assert _is_tool_result_error("处理日志：步骤一执行失败,已自动重试成功", "success") is False
-    assert _is_tool_result_error("bash_run 执行失败: exit 1", "success") is True
-    # query_result envelope 的 failed/cancelled 优先于 success 文本
+    assert _is_tool_result_error("bash_run 执行失败: exit 1", "success") is False
+    # query_result envelope 的 failed/cancelled 是显式失败信号，优先于 success 文本位
     assert _is_tool_result_error('{"type":"query_result","status":"failed"}', "success") is True
     assert _is_tool_result_error('{"type":"query_result","status":"cancelled"}', "success") is True
-    # 旧数据缺 status 时回退文本前缀匹配
-    assert _is_tool_result_error("officecli_run 执行失败: 超时") is True
+    # 缺 status 且无 envelope 信号时一律视为成功
+    assert _is_tool_result_error("officecli_run 执行失败: 超时") is False
     assert _is_tool_result_error("正常结果") is False
 
 

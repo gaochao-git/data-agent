@@ -247,12 +247,12 @@ def create_semantic_search(
         """
         current_datasource_id = bound_datasource_id or extract_datasource_id(state)
         if not current_datasource_id:
-            return "semantic_search 执行失败: 当前会话未绑定数据源"
+            raise ValueError("当前会话未绑定数据源")
         try:
             if operation == "search_models":
                 user_query = str(query or extract_user_query(state) or "").strip()
                 if not user_query:
-                    return "semantic_search 执行失败: search_models 缺少用户问题"
+                    raise ValueError("search_models 缺少用户问题")
                 payload = await _search_models(
                     query=user_query,
                     datasource_id=current_datasource_id,
@@ -284,10 +284,10 @@ def create_semantic_search(
                     offset=offset,
                     limit=limit,
                 ))
-            return f"semantic_search 执行失败: 不支持的操作 {operation}"
+            raise ValueError(f"不支持的操作 {operation}")
         except Exception as exc:
             logger.error("semantic_search 执行失败: %s", exc, exc_info=True)
-            return f"semantic_search 执行失败: {exc}"
+            raise
 
     return semantic_search
 

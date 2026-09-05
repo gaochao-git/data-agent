@@ -814,3 +814,59 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
     saved = list((Path(paths["outputs"]) / "query_result").glob("*.json"))
     assert len(saved) == 1
     assert json.loads(saved[0].read_text(encoding="utf-8"))["results"][0]["data"] == [{"value": 1}]
+
+
+@pytest.mark.asyncio
+async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
+    """工具 raise 后子图不得崩溃：ToolErrorMiddleware 把异常转成 error ToolMessage，
+    子智能体读到错误详情后继续产出结论（回归：工具失败显式化改造后，
+    子图未挂 ToolErrorMiddleware 会让整个 task 失败）。"""
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.tools import tool as lc_tool
+
+    from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
+    from apps.chat_data_app.services.agent_run import conversation_workspace
+
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    conversation_workspace.ensure_conversation_workspace("conv_raise", "user_raise")
+
+    class _ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, _tools, **_kwargs):
+            return self
+
+    @lc_tool
+    def broken_tool(query: str) -> str:
+        """查询数据（测试用：直接抛异常）。"""
+        raise ValueError("当前会话未绑定数据源")
+
+    model = _ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "id": "inner-e1", "type": "tool_call",
+            "name": "broken_tool", "args": {"query": "总量"},
+        }]),
+        AIMessage(content="工具报错未绑定数据源，无法继续分析"),
+    ])
+
+    spec = _spec(tools=[broken_tool], model=model)
+    tool = build_task_tool([spec])
+
+    result = await tool.coroutine(
+        description="统计总量",
+        subagent_type="deep-analysis",
+        runtime=_fake_runtime({
+            "user_id": "user_raise",
+            "conversation_id": "conv_raise",
+            "workspace": {"workspace_root": str(tmp_path), "workspace_backend": "local"},
+        }),
+    )
+
+    tool_message = result.update["messages"][0]
+    # 子图正常跑完，回传的是模型最终结论而非"子智能体执行失败"
+    assert tool_message.content == "工具报错未绑定数据源，无法继续分析"
+    assert tool_message.status != "error"
+    trail = tool_message.additional_kwargs["subagent_trail"]
+    tool_entries = [item for item in trail if item["kind"] == "tool"]
+    assert len(tool_entries) == 1
+    assert tool_entries[0]["status"] == "error"
+    assert "未绑定数据源" in tool_entries[0]["result"]

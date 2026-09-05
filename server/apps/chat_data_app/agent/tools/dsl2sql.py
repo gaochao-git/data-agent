@@ -42,7 +42,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
         """
         try:
             if not bound_datasource_id:
-                return "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
+                raise ValueError("当前会话未绑定数据源")
             effective_semantic_config_id = str(semantic_config_id or "").strip() or None
             dsl = normalize_dsl_payload(dsl)
             if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
@@ -68,7 +68,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
                     for card in dsl
                 ):
-                    return f"dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}"
+                    raise ValueError(f"批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}")
                 result = await validate_dashboard_spec_payload(
                     dashboard_spec={"cards": dsl},
                     datasource_id=bound_datasource_id,
@@ -87,9 +87,9 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     "panels": result.get("panels") or [],
                 })
             if not isinstance(dsl, dict):
-                return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
+                raise ValueError("dsl 必须是对象或数组")
             if not effective_semantic_config_id:
-                return f"dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID"
+                raise ValueError(f"缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID")
             semantic_config = await load_semantic_model(
                 bound_datasource_id,
                 effective_semantic_config_id,
@@ -124,6 +124,6 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
             })
         except Exception as exc:
             logger.error("dsl2sql_tool 执行失败: %s", exc, exc_info=True)
-            return f"dsl2sql_tool 执行失败: {exc}"
+            raise
 
     return dsl2sql_tool

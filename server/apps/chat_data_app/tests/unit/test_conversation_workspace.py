@@ -602,26 +602,26 @@ async def test_file_edit_requires_unique_existing_content(monkeypatch):
     target = Path(paths["workspace"]) / "report.txt"
     target.write_text("title=old\nvalue=old\n", encoding="utf-8")
 
-    duplicate = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/report.txt",
-        "old_content": "old",
-        "new_content": "new",
-    })
+    with pytest.raises(ValueError, match="匹配多处"):
+        await tools["file_edit"].ainvoke({
+            "file_path": "/mnt/user-data/workspace/report.txt",
+            "old_content": "old",
+            "new_content": "new",
+        })
     success = await tools["file_edit"].ainvoke({
         "file_path": "/mnt/user-data/workspace/report.txt",
         "old_content": "title=old",
         "new_content": "title=new",
     })
-    missing = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/report.txt",
-        "old_content": "missing",
-        "new_content": "new",
-    })
+    with pytest.raises(ValueError, match="未在文件中找到"):
+        await tools["file_edit"].ainvoke({
+            "file_path": "/mnt/user-data/workspace/report.txt",
+            "old_content": "missing",
+            "new_content": "new",
+        })
 
-    assert "匹配多处" in duplicate
     assert "[file_edit]" in success
     assert target.read_text(encoding="utf-8") == "title=new\nvalue=old\n"
-    assert "未在文件中找到" in missing
 
 
 @pytest.mark.asyncio
@@ -629,15 +629,14 @@ async def test_file_write_and_edit_reject_uploads(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_write_uploads_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    write_result = await tools["file_write"].ainvoke({"file_path": "/mnt/user-data/uploads/a.txt", "content": "x"})
-    edit_result = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/uploads/a.txt",
-        "old_content": "x",
-        "new_content": "y",
-    })
-
-    assert write_result.startswith("file_write 工具错误: 只允许写入 workspace/ 或 outputs/")
-    assert edit_result.startswith("file_edit 工具错误: 只允许写入 workspace/ 或 outputs/")
+    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+        await tools["file_write"].ainvoke({"file_path": "/mnt/user-data/uploads/a.txt", "content": "x"})
+    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+        await tools["file_edit"].ainvoke({
+            "file_path": "/mnt/user-data/uploads/a.txt",
+            "old_content": "x",
+            "new_content": "y",
+        })
 
 
 @pytest.mark.asyncio
@@ -1133,9 +1132,8 @@ async def test_file_read_rejects_workspace_root_outside_chat_data_home(monkeypat
     )
     tool = next(tool for tool in filesystem_tool_module.create_filesystem_tools(runtime) if tool.name == "file_read")
 
-    result = await tool.ainvoke({"file_path": "/mnt/user-data/workspace/secret.txt"})
-
-    assert result.startswith("file_read 工具错误: 会话工作区不在 CHAT_DATA_HOME 内")
+    with pytest.raises(ValueError, match="会话工作区不在 CHAT_DATA_HOME 内"):
+        await tool.ainvoke({"file_path": "/mnt/user-data/workspace/secret.txt"})
 
 
 @pytest.mark.asyncio
@@ -1164,9 +1162,8 @@ async def test_file_read_rejects_local_path_escape(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_fail_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_read"].ainvoke({"file_path": "../demo.txt"})
-
-    assert result.startswith("file_read 工具错误: 路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头")
+    with pytest.raises(ValueError, match="路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头"):
+        await tools["file_read"].ainvoke({"file_path": "../demo.txt"})
 
 
 @pytest.mark.asyncio
@@ -1203,9 +1200,8 @@ async def test_file_glob_rejects_path_patterns(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_glob_pattern_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_glob"].ainvoke({"pattern": "**/*.json"})
-
-    assert result.startswith("file_glob 工具错误: pattern 只能匹配文件名")
+    with pytest.raises(ValueError, match="pattern 只能匹配文件名"):
+        await tools["file_glob"].ainvoke({"pattern": "**/*.json"})
 
 
 @pytest.mark.asyncio
@@ -1382,13 +1378,12 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
     target = Path(paths["uploads"]) / "demo.txt"
     target.write_text("old", encoding="utf-8")
 
-    result = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/uploads/demo.txt",
-        "old_content": "old",
-        "new_content": "new",
-    })
-
-    assert "file_edit 工具错误" in result
+    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+        await tools["file_edit"].ainvoke({
+            "file_path": "/mnt/user-data/uploads/demo.txt",
+            "old_content": "old",
+            "new_content": "new",
+        })
 
 
 @pytest.mark.asyncio
@@ -1568,12 +1563,13 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
     tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths)
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
-    assert await tools_without_datasource["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["订单数"]},
-        "state": state_without_datasource,
-    }) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
+    with pytest.raises(ValueError, match="当前会话未绑定数据源"):
+        await tools_without_datasource["semantic_query_tool"].ainvoke({
+            "semantic_config_id": "sc_1",
+            "member_datasource_ids": ["m1"],
+            "dsl": {"metrics": ["订单数"]},
+            "state": state_without_datasource,
+        })
 
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1581,12 +1577,13 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
         datasource_id="ds_1",
     )
     state = _analysis_query_state(paths)
-    assert await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"sql": "select 1"},
-        "state": state,
-    }) == "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
+    with pytest.raises(ValueError, match="sql 必须放在顶层 sql 参数中"):
+        await tools["semantic_query_tool"].ainvoke({
+            "semantic_config_id": "sc_1",
+            "member_datasource_ids": ["m1"],
+            "dsl": {"sql": "select 1"},
+            "state": state,
+        })
 
     with pytest.raises(ValueError, match="semantic_config_id"):
         await sql_tool_module.semantic_query_tool.ainvoke({
@@ -1602,12 +1599,13 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
             "dsl": [{"metrics": ["订单数"]}],
             "state": state,
         })
-    assert await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"cards": []},
-        "state": state,
-    }) == "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
+    with pytest.raises(ValueError, match="dsl 必须是单个查询对象"):
+        await tools["semantic_query_tool"].ainvoke({
+            "semantic_config_id": "sc_1",
+            "member_datasource_ids": ["m1"],
+            "dsl": {"cards": []},
+            "state": state,
+        })
 
 
 @pytest.mark.asyncio
@@ -1643,11 +1641,10 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
     state = _analysis_query_state(paths)
 
     args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "state": state}
-    compile_error = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["bad"]}})
-    empty_sql = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["empty"]}})
-
-    assert compile_error == "semantic_query_tool 执行失败: 指标不存在"
-    assert empty_sql == "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+    with pytest.raises(ValueError, match="指标不存在"):
+        await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["bad"]}})
+    with pytest.raises(ValueError, match="DSL2SQL 未生成 SQL"):
+        await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["empty"]}})
 
 
 @pytest.mark.asyncio
@@ -1677,12 +1674,13 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     )
     state = _analysis_query_state(paths)
 
-    assert await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["订单数"]},
-        "state": state,
-    }) == "semantic_query_tool 执行失败: 执行失败"
+    with pytest.raises(RuntimeError, match="执行失败"):
+        await tools["semantic_query_tool"].ainvoke({
+            "semantic_config_id": "sc_1",
+            "member_datasource_ids": ["m1"],
+            "dsl": {"metrics": ["订单数"]},
+            "state": state,
+        })
 
 
 @pytest.mark.asyncio
@@ -1723,9 +1721,8 @@ async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
         workspace_root=str(workspace_root), user_id="u1", backend="local",
     )
     tool = {item.name: item for item in filesystem_tool_module.create_filesystem_tools(runtime)}["file_read"]
-    result = await tool.ainvoke({"file_path": "/mnt/skills/demo-skill/SKILL.md"})
-
-    assert "技能不存在或无权限访问" in result
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        await tool.ainvoke({"file_path": "/mnt/skills/demo-skill/SKILL.md"})
 
 
 @pytest.mark.asyncio

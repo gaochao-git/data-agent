@@ -95,6 +95,6 @@ def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
             return _tool_result(payload)
         except Exception as exc:
             logger.error("bash_run 执行失败: %s", exc, exc_info=True)
-            return f"bash_run 执行失败: {exc}"
+            raise
 
     return bash_run

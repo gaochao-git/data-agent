@@ -12,7 +12,6 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import dsl2sql
-from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 from apps.chat_data_app.agent.workspace.artifact_registry import (
     parse_chart_spec_payload_value,
@@ -361,19 +360,22 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     assert compare["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare["error"]
 
-    assert await dsl2sql.create_dsl2sql_tool("").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
-    assert await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}}) == f"dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID"
-    assert await tool.ainvoke({"semantic_config_id": "sc_a", "dsl": "不是json"}) == "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
+    # 校验失败现在以 ValueError 抛出，由 ToolErrorMiddleware 统一转成错误 ToolMessage
+    with pytest.raises(ValueError, match="当前会话未绑定数据源"):
+        await dsl2sql.create_dsl2sql_tool("").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
+    with pytest.raises(ValueError, match="缺少 semantic_config_id"):
+        await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}})
+    with pytest.raises(ValueError, match="dsl 必须是对象或数组"):
+        await tool.ainvoke({"semantic_config_id": "sc_a", "dsl": "不是json"})
 
 
 @pytest.mark.asyncio
-async def test_dsl2sql_tool_returns_error_text_when_dependency_raises(monkeypatch):
+async def test_dsl2sql_tool_propagates_dependency_errors(monkeypatch):
     async def fake_get_config(_datasource_id, _semantic_config_id, user_id=None, mode="summary"):
         assert mode == "full"
         raise RuntimeError("配置不存在")
 
     monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_get_config)
 
-    result = await dsl2sql.create_dsl2sql_tool("ds_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
-
-    assert result == "dsl2sql_tool 执行失败: 配置不存在"
+    with pytest.raises(RuntimeError, match="配置不存在"):
+        await dsl2sql.create_dsl2sql_tool("ds_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})

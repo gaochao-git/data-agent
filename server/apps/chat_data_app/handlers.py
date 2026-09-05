@@ -1,8 +1,8 @@
 """ChatData completion handler."""
 
 import json
-import asyncio
 import re
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -694,18 +694,13 @@ def _parse_tool_args_buffer(args_buffer: str, fallback: dict[str, Any] | None = 
     return parsed
 
 
-# 工具层失败文本的统一前缀格式：<工具名> 执行失败: / <工具名> 工具错误:。
-# 只做首行前缀识别，不做全文子串包含——避免成功结果正文恰好包含"执行失败"
-# 等字样（读日志、grep 命中、文档正文）被误判为失败。
-_TOOL_ERROR_TEXT_RE = re.compile(r"^[^\n:：]{0,64}?(?:执行失败|工具错误)[:：]")
-
-
 def _is_tool_result_error(content: Any, native_status: Any = None) -> bool:
     """识别工具结果失败状态，便于前端展示。
 
-    优先信任 ToolMessage 自带的结构化 status（ToolErrorMiddleware 等失败路径
-    置为 "error"）；query_result envelope 的 failed/cancelled 次之；文本匹配
-    仅兜底工具吞异常后返回的固定前缀失败文本。
+    成败只看两个显式协议信号，不做任何文本猜测：
+    1. ``ToolMessage.status == "error"``——工具 raise 后由 ToolErrorMiddleware
+       等失败路径显式标记；
+    2. query_result envelope 的 ``failed``/``cancelled``——SQL 执行的业务失败。
     """
     if str(native_status or "").strip().lower() == "error":
         return True
@@ -715,10 +710,12 @@ def _is_tool_result_error(content: Any, native_status: Any = None) -> bool:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        payload = None
-    if isinstance(payload, dict) and payload.get("type") == "query_result":
-        return str(payload.get("status") or "").strip().lower() in {"failed", "cancelled"}
-    return bool(_TOOL_ERROR_TEXT_RE.match(text)) or text.lower().startswith("error:")
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("type") == "query_result"
+        and str(payload.get("status") or "").strip().lower() in {"failed", "cancelled"}
+    )
 
 
 def _register_running_tool(running_tool_ids: list[str], tool_call_id: str) -> None:

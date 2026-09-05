@@ -1870,9 +1870,12 @@ const handleScroll = () => {
   isNearBottom.value = scrollHeight - scrollTop - clientHeight < 100
 }
 
+// 工具失败现在由后端 ToolMessage.status="error" 显式标记，此处仅为旧数据兜底：
+// 旧后端失败文本格式为「<工具名> 执行失败: …」/「<工具名> 工具错误: …」，
+// 只认首行前缀，避免成功结果正文恰好包含"执行失败"字样被误标为失败。
 const isToolErrorResult = (content?: string) => {
   const text = String(content || '').trim()
-  return text.includes('执行失败') || text.includes('工具错误') || text.toLowerCase().startsWith('error:')
+  return /^[^\n:：]{0,64}?(?:执行失败|工具错误)[:：]/.test(text) || text.toLowerCase().startsWith('error:')
 }
 
 type PresentedSkillArtifact = {

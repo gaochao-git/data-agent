@@ -332,8 +332,9 @@ async def test_tool_wrapper_surfaces_denied_subcommand_and_success(monkeypatch, 
     runtime = _local_runtime(tmp_path)
 
     tool = create_officecli_run_tool(runtime)
-    denied = await tool.ainvoke({"command_args": ["watch", "x.docx"]})
-    assert "officecli_run 执行失败" in denied or "禁止子命令" in denied
+    # 拒绝的子命令现在以 ValueError 抛出，不再返回错误文本
+    with pytest.raises(ValueError, match="禁止子命令"):
+        await tool.ainvoke({"command_args": ["watch", "x.docx"]})
 
     ok = await tool.ainvoke({"command_args": ["--version"]})
     assert "[officecli_run]" in ok
@@ -439,9 +440,9 @@ async def test_dump_out_into_uploads_is_rejected(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tool_wrapper_surfaces_uploads_violation(tmp_path):
-    """工具 wrapper 把 uploads 违规转成友好的失败提示，含 file_copy 指引。"""
+    """uploads 违规以 ValueError 抛出，报错含 file_copy 指引。"""
     runtime = _local_runtime(tmp_path)
     tool = create_officecli_run_tool(runtime)
-    out = await tool.ainvoke({"command_args": ["add", "/mnt/user-data/uploads/x.docx", "/body", "--type", "p"]})
-    assert "uploads" in out
-    assert "file_copy" in out
+    with pytest.raises(ValueError, match="uploads") as excinfo:
+        await tool.ainvoke({"command_args": ["add", "/mnt/user-data/uploads/x.docx", "/body", "--type", "p"]})
+    assert "file_copy" in str(excinfo.value)

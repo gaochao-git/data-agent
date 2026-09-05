@@ -20,7 +20,7 @@ from itertools import count
 from typing import Any, Callable
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentState, AgentMiddleware
+from langchain.agents.middleware import AgentState, AgentMiddleware, ToolErrorMiddleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -38,6 +38,7 @@ from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_result import create_tool_result_middleware
+from ..agent_runtime import _on_tool_error
 
 logger = get_logger(__name__)
 
@@ -154,9 +155,14 @@ def _compile_subagent(spec: SubagentSpec) -> Any:
         # 全量查询数据内联进上下文（顺序与主图 MIDDLEWARE_CANONICAL_ORDER
         # 一致：先归一化入参，再处理出口）。白名单已透传
         # user_id/conversation_id/workspace，卸载副本写入所需的字段齐备。
+        # ToolErrorMiddleware 同为必备：工具失败统一 raise 后，子图 ToolNode
+        # 的默认 handler 只认 ToolInvocationError、其余异常原样上抛会炸掉
+        # 整个子图；挂上后与主图口径一致，异常统一转 status="error" 的
+        # ToolMessage，子智能体可读取错误详情自行纠正。
         middleware=[
             create_tool_call_name_normalizer_middleware(tools),
             create_tool_result_middleware(),
+            ToolErrorMiddleware(_on_tool_error),
         ],
     )
 
