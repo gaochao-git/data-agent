@@ -554,16 +554,22 @@ class QueryTaskService:
         remote_result: Dict[str, Any],
         execution: Dict[str, Any] | None,
     ) -> Dict[str, Any]:
+        local_status = str((execution or {}).get("sql_status") or "").strip().lower()
+        if local_status == "failed":
+            # 本地已终态 failed 的成员以本地为准，防止远端实时状态把失败“复活”
+            status, error = "failed", ((execution or {}).get("error_message") or remote_result.get("error"))
+        else:
+            status, error = query_result_status(remote_result), remote_result.get("error")
         return {
             "member_datasource_id": remote_task.get("member_datasource_id"),
             "member_name": remote_task.get("member_name"),
             "sql": statement.get("sql") or "",
-            "status": query_result_status(remote_result),
+            "status": status,
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
             "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, execution),
-            "error": remote_result.get("error"),
+            "error": error,
         }
 
     @staticmethod
@@ -603,14 +609,22 @@ class QueryTaskService:
             return
         if statement_index < 0 or statement_index >= len(statements):
             return
-        remote_result = await self.fetch_http_query_task_result(
-            str(remote_task.get("remote_task_id") or ""),
-            str(remote_task.get("source_type") or "hive"),
-            user_id=user_id,
-            username=username,
-        )
         statement = statements[statement_index]
         execution = execution_by_remote_task_id.get(str(remote_task.get("remote_task_id") or "").strip())
+        try:
+            remote_result = await self.fetch_http_query_task_result(
+                str(remote_task.get("remote_task_id") or ""),
+                str(remote_task.get("source_type") or "hive"),
+                user_id=user_id,
+                username=username,
+            )
+        except Exception as exc:
+            # 单个远端状态接口抖动只降级该成员，不影响批次内其它语句
+            logger.warning(
+                "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
+                remote_task.get("remote_task_id"), exc,
+            )
+            remote_result = self._degraded_remote_result(exc, execution)
         execution_status = str((execution or {}).get("sql_status") or "").strip().lower()
         if execution_status in {"cancelled", "kill_failed"}:
             remote_result = self._cancelled_remote_result(execution or {}, execution_status)
@@ -785,7 +799,9 @@ class QueryTaskService:
         request_payload = response_data.get("request_payload") or {}
         remote_user_id = str((request_payload or {}).get("user_id") or "").strip()
         remote_username = str((request_payload or {}).get("operator_name") or "").strip()
-        remote_member_results = await asyncio.gather(*[
+        # return_exceptions：单个远端状态接口抖动不能炸掉整个任务查询，
+        # 异常成员降级为本地执行状态（见 _degraded_remote_result）
+        fetched_results = await asyncio.gather(*[
             self.fetch_http_query_task_result(
                 str(remote_task.get("remote_task_id") or ""),
                 str(remote_task.get("source_type") or "hive"),
@@ -793,9 +809,20 @@ class QueryTaskService:
                 username=remote_username,
             )
             for remote_task in remote_tasks
-        ])
+        ], return_exceptions=True)
         local_execution_map = self.build_execution_map_by_member(executions)
         cancelled_execution_map = self.build_cancelled_execution_map(executions)
+        remote_results: List[Dict[str, Any]] = []
+        for remote_task, fetched in zip(remote_tasks, fetched_results):
+            if isinstance(fetched, Exception):
+                logger.warning(
+                    "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
+                    remote_task.get("remote_task_id"), fetched,
+                )
+                member_datasource_id = str(remote_task.get("member_datasource_id") or "").strip()
+                remote_results.append(self._degraded_remote_result(fetched, local_execution_map.get(member_datasource_id)))
+            else:
+                remote_results.append(fetched)
         return [
             self.build_remote_member_result(
                 response_data,
@@ -804,8 +831,21 @@ class QueryTaskService:
                 local_execution_map.get(str(remote_task.get("member_datasource_id") or "").strip()),
                 cancelled_execution_map.get(str(remote_task.get("member_datasource_id") or "").strip()),
             )
-            for remote_task, remote_result in zip(remote_tasks, remote_member_results)
+            for remote_task, remote_result in zip(remote_tasks, remote_results)
         ]
+
+    @staticmethod
+    def _degraded_remote_result(error: Exception, local_execution: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """远端状态接口异常时的降级结果：沿用本地执行状态，不武断终态化。"""
+        local_status = str((local_execution or {}).get("sql_status") or "").strip().lower() or "running"
+        return {
+            "status": local_status,
+            "success": False,
+            "error": (local_execution or {}).get("error_message") or f"远端状态查询失败: {error}",
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
 
     def build_remote_member_result(
         self,
@@ -851,15 +891,40 @@ class QueryTaskService:
         local_execution: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """正常执行的成员结果字段。"""
+        local_status = str((local_execution or {}).get("sql_status") or "").strip().lower()
+        if local_status == "failed":
+            # 本地已终态 failed 的成员以本地为准，防止远端实时状态把失败“复活”
+            return self._member_result_fields(
+                status="failed",
+                error=(local_execution or {}).get("error_message") or remote_result.get("error"),
+                remote_result=remote_result,
+                local_execution=local_execution,
+            )
+        return self._member_result_fields(
+            status=query_result_status(remote_result),
+            error=remote_result.get("error"),
+            remote_result=remote_result,
+            local_execution=local_execution,
+        )
+
+    def _member_result_fields(
+        self,
+        *,
+        status: str,
+        error: Optional[str],
+        remote_result: Dict[str, Any],
+        local_execution: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """构造成员结果公共字段。"""
         return {
-            "status": query_result_status(remote_result),
+            "status": status,
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
             "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, local_execution),
             "started_time": remote_result.get("started_time") or (local_execution or {}).get("started_time"),
             "finished_time": remote_result.get("finished_time") or (local_execution or {}).get("finished_time"),
-            "error": remote_result.get("error"),
+            "error": error,
         }
 
     def merge_direct_and_remote_results(

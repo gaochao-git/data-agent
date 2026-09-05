@@ -51,6 +51,7 @@ DEFAULT_HTTP_POLL_INTERVAL_MS = int(os.getenv("CHAT_DATA_HTTP_POLL_INTERVAL_MS",
 # 对部分语法会降级为 COMMAND，暂不复用通用 SQL 执行口放行。后续如需支持，
 # 应单独提供受控接口并做权限、审计和结果脱敏。
 CONNECT_TIMEOUT_SECONDS = 3
+MYSQL_KILL_TIMEOUT_SECONDS = 5
 HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
 HTTP_STATUS_URL = str(os.getenv("CHAT_DATA_HTTP_STATUS_URL") or "").strip()
 HTTP_STOP_URL = str(os.getenv("CHAT_DATA_HTTP_STOP_URL") or "").strip()
@@ -642,13 +643,23 @@ class MySQLExecutor(SQLExecutor):
 
                     sql_with_limit = build_effective_sql(sql, limit, source_type="mysql")
                     logger.debug(f"[MySQL] 执行 SQL: {sql_with_limit[:200]}...")
-                    # 添加超时控制
+                    # 添加超时控制：execute 与 fetchall 都必须在保护区内，
+                    # 否则查询在超时边界完成后 fetchall 仍可能无限挂起
                     start_time = time.time()
-                    await asyncio.wait_for(
-                        cursor.execute(sql_with_limit),
-                        timeout=resolved_timeout
-                    )
-                    rows = await cursor.fetchall()
+
+                    async def _execute_and_fetch() -> list:
+                        await cursor.execute(sql_with_limit)
+                        return await cursor.fetchall()
+
+                    try:
+                        rows = await asyncio.wait_for(_execute_and_fetch(), timeout=resolved_timeout)
+                    except asyncio.TimeoutError:
+                        # 超时 = 服务端终止 + 废弃连接：客户端取消不会让服务端停跑，
+                        # 半读状态的连接也绝不能释放回连接池（否则污染后续复用者）
+                        await self._kill_timed_out_query(connection_id)
+                        conn.close()
+                        logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s），已发送 KILL 并废弃连接")
+                        return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
                     execution_time_ms = int((time.time() - start_time) * 1000)
                     columns = [desc[0] for desc in cursor.description] if cursor.description else []
                     data = [_serialize_row(dict(zip(columns, row))) for row in rows]
@@ -699,6 +710,18 @@ class MySQLExecutor(SQLExecutor):
         except Exception as e:
             logger.error("[MySQL] 停止查询失败: connection_id=%s error=%s", normalized_connection_id, e)
             return {"success": False, "error": _friendly_sql_error("MySQL", e)}
+
+    async def _kill_timed_out_query(self, connection_id: str) -> None:
+        """超时后服务端终止查询；KILL 失败只告警不阻塞超时返回（连接随后会被废弃）。"""
+        normalized_connection_id = str(connection_id or "").strip()
+        if not normalized_connection_id:
+            return
+        try:
+            kill_result = await asyncio.wait_for(self.kill_query(normalized_connection_id), timeout=MYSQL_KILL_TIMEOUT_SECONDS)
+            if not kill_result.get("success"):
+                logger.warning("[MySQL] 超时查询 KILL 失败: connection_id=%s error=%s", normalized_connection_id, kill_result.get("error"))
+        except Exception as exc:
+            logger.warning("[MySQL] 超时查询 KILL 异常: connection_id=%s error=%s", normalized_connection_id, exc)
 
     async def close(self):
         """关闭连接池"""

@@ -986,9 +986,14 @@ class _FakePool:
 class _FakeConn:
     def __init__(self, cursor):
         self.cursor_obj = cursor
+        self.closed = False
 
     def cursor(self):
         return _FakeCursorContext(self.cursor_obj)
+
+    def close(self):
+        # 超时路径会废弃连接（对应 aiomysql 连接关闭后不归还池）
+        self.closed = True
 
 
 class _FakeMySQLCursor:
