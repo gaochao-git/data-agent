@@ -260,6 +260,20 @@ const toolResultByCallId = computed(() => {
   return map
 })
 
+// 明细展示用文本还原：正文是 content blocks 数组的序列化字符串，提取各对象的 text 字段并还原换行
+const formatBreakdownText = (raw: string): string => {
+  const text = (raw || '').trim()
+  if (!text.startsWith('[') && !text.startsWith('{')) return text
+  const parts: string[] = []
+  const re = /['"]text['"]\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/g
+  let match: RegExpExecArray | null = re.exec(text)
+  while (match !== null) {
+    parts.push(match[2].replace(/\\n/g, '\n'))
+    match = re.exec(text)
+  }
+  return parts.length ? parts.join('\n\n') : text
+}
+
 // token_usage payload 只带计数，正文从会话消息里按 message_id / tool_call_id 反查
 const resolveBreakdownContent = (item: ChatDataTokenUsageBreakdown): string => {
   if (item.content) return item.content // 兼容仍携带正文的旧数据
@@ -283,7 +297,7 @@ const resolveBreakdownContent = (item: ChatDataTokenUsageBreakdown): string => {
 }
 
 const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => {
-  const content = resolveBreakdownContent(item)
+  const content = formatBreakdownText(resolveBreakdownContent(item))
   // 子项 label 已含父项前缀时（如"工具定义 · file_read"）不再重复拼接
   const label = labelPrefix && !item.label.startsWith(labelPrefix) ? `${labelPrefix} · ${item.label}` : item.label
   return {
