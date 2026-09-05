@@ -14,7 +14,12 @@ from utils.models import ChatDataQueryExecution
 from ...schema import QueryTaskCreateRequest
 from ..dashboard import runtime as dashboard_runtime
 from . import runtime as query_runtime
-from .result import build_query_result_payload, query_result_status, query_result_succeeded
+from .result import (
+    QUERY_RUNNING_STATUS,
+    build_query_result_payload,
+    query_result_status,
+    query_result_succeeded,
+)
 from .history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 
 logger = get_logger(__name__)
@@ -836,8 +841,17 @@ class QueryTaskService:
 
     @staticmethod
     def _degraded_remote_result(error: Exception, local_execution: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """远端状态接口异常时的降级结果：沿用本地执行状态，不武断终态化。"""
-        local_status = str((local_execution or {}).get("sql_status") or "").strip().lower() or "running"
+        """远端状态接口异常时的降级结果：沿用本地执行状态，不武断终态化。
+
+        status 收敛到远端结果契约枚举内（见 result.query_result_status）：本地专属状态
+        （如 kill_failed）归一为 failed，避免未识别值透传给下游状态汇总。
+        """
+        local_status = query_result_status(
+            {
+                "status": str((local_execution or {}).get("sql_status") or "").strip().lower() or QUERY_RUNNING_STATUS,
+                "success": False,
+            }
+        )
         return {
             "status": local_status,
             "success": False,

@@ -75,6 +75,40 @@ async def test_degraded_remote_result_keeps_local_failed_status():
 
 
 @pytest.mark.asyncio
+async def test_degraded_remote_result_normalizes_local_only_status():
+    """降级结果只输出契约内状态：本地专属的 kill_failed 归一为 failed。"""
+    degraded = QueryTaskService._degraded_remote_result(
+        RuntimeError("boom"),
+        {"sql_status": "kill_failed", "error_message": "停止执行失败"},
+    )
+    assert degraded["status"] == "failed"
+    assert degraded["error"] == "停止执行失败"
+
+    for raw_status, expected in (("pending", "pending"), ("running", "running"), ("cancelled", "cancelled")):
+        assert QueryTaskService._degraded_remote_result(RuntimeError("boom"), {"sql_status": raw_status})["status"] == expected
+
+
+@pytest.mark.asyncio
+async def test_degraded_remote_result_of_cancelled_member_keeps_kill_failed():
+    """取消语义不受降级归一影响：本地 kill_failed 成员仍按取消分支输出 kill_failed。"""
+    async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
+        raise RuntimeError("远端接口 502")
+
+    service = _build_service(fake_fetch)
+    response_data = {"request_payload": {"user_id": "u1", "operator_name": "op"}}
+    executions = [{"member_datasource_id": "m1", "sql_status": "kill_failed", "error_message": "停止执行失败"}]
+
+    results = await service.fetch_remote_member_results(
+        response_data,
+        [{"remote_task_id": "t-1", "source_type": "hive", "member_datasource_id": "m1", "member_name": "M1"}],
+        executions,
+    )
+
+    assert results[0]["status"] == "kill_failed"
+    assert results[0]["error"] == "停止执行失败"
+
+
+@pytest.mark.asyncio
 async def test_live_merge_local_failed_member_not_resurrected():
     """本地已判 failed 的成员，远端返回 succeeded 也不能把状态覆盖回成功。"""
     async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
