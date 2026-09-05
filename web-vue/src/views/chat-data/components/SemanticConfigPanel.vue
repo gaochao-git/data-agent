@@ -1058,7 +1058,8 @@ const deleteDerivedMetric = (index: number) => {
   const config = derivedMetricConfig.value
   if (!config) return
   const metric = config.metrics[index]
-  if (!confirm(`确定要删除这个${metricKindLabel(metric || {})}吗？`)) return
+  if (!metric) return
+  if (!confirm(`确定要删除这个${metricKindLabel(metric)}吗？`)) return
   const newMetrics = [...config.metrics]
   newMetrics.splice(index, 1)
   updateConfig(config.id, { metrics: newMetrics })

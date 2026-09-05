@@ -152,7 +152,8 @@ watch(visible, value => {
   addFieldColumnKeyword.value = ''
   // 当前类型不属于本作用域时（如从字段配置切到指标扩展入口），回落到第一个可选类型
   if (!availableModes.value.includes(form.value.mode)) {
-    form.value.mode = availableModes.value[0]
+    const firstMode = availableModes.value[0]
+    if (firstMode) form.value.mode = firstMode
   }
   if (isSpecialMode.value) initSpecialForm()
 })
