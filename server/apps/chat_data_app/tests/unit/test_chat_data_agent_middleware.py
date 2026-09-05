@@ -1117,7 +1117,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
 @pytest.mark.asyncio
 async def test_tool_error_middleware_returns_error_tool_message(monkeypatch):
     monkeypatch.setattr(agent_runtime.logger, "error", lambda *args, **_kwargs: None)
-    middleware = ToolErrorMiddleware(agent_runtime._on_tool_error)
+    middleware = ToolErrorMiddleware(agent_runtime.on_tool_error)
 
     async def handler(_request):
         raise RuntimeError("tool down")

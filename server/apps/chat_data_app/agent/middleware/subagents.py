@@ -38,7 +38,7 @@ from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_result import create_tool_result_middleware
-from ..agent_runtime import _on_tool_error
+from ..agent_runtime import on_tool_error
 
 logger = get_logger(__name__)
 
@@ -162,7 +162,7 @@ def _compile_subagent(spec: SubagentSpec) -> Any:
         middleware=[
             create_tool_call_name_normalizer_middleware(tools),
             create_tool_result_middleware(),
-            ToolErrorMiddleware(_on_tool_error),
+            ToolErrorMiddleware(on_tool_error),
         ],
     )
 

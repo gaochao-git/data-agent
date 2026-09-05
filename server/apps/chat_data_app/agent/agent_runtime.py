@@ -77,23 +77,36 @@ def create_response_timestamp_middleware():
 _PRE_VALIDATION_ERRORS = (ValueError, FileNotFoundError, IsADirectoryError, NotADirectoryError)
 
 
-def _format_tool_error(exc: Exception) -> str:
-    """记录完整异常，并向模型和前端返回带异常详情的错误提示。
+def _format_tool_error(exc: Exception, tool_name: str = "") -> str:
+    """记录日志并向模型和前端返回带异常详情的错误提示。
 
-    详情对模型自愈（纠正参数后重试）必要，信息量与工具侧原先吞异常返回的
-    ``"{tool} 执行失败: {exc}"`` 文本一致；成败信号由 ToolMessage.status
-    显式承载，content 只负责让人和模型理解发生了什么。
+    这里是工具失败日志的**唯一权威记录点**（工具层只 raise，不重复记日志），
+    预期/非预期异常的分级判定也只在本处维护。异常详情对模型自愈（纠正参数后
+    重试）必要；成败信号由 ToolMessage.status 显式承载，content 只负责让人和
+    模型理解发生了什么。
     """
+    label = f"[{tool_name}] " if tool_name else ""
     if isinstance(exc, _PRE_VALIDATION_ERRORS):
-        logger.warning("[tools] 工具执行失败(预期校验错误): %s", exc)
+        logger.warning("[tools] %s工具执行失败(预期校验错误): %s", label, exc)
     else:
-        logger.error("[tools] 工具执行异常: %s", exc, exc_info=True)
+        logger.error("[tools] %s工具执行异常: %s", label, exc, exc_info=True)
     return f"工具执行失败: {exc}"
 
 
-def _on_tool_error(exc: Exception, _request: Any) -> str:
-    """官方 ``ToolErrorMiddleware`` 回调：始终把异常转为 error ``ToolMessage`` 内容。"""
-    return _format_tool_error(exc)
+def on_tool_error(exc: Exception, request: Any) -> str:
+    """官方 ``ToolErrorMiddleware`` 回调：把异常转为带详情的 error ``ToolMessage``。
+
+    公开函数：子图中间件（middleware/subagents.py）与主图共用同一兜底。
+    """
+    tool_name = ""
+    try:
+        tool = getattr(request, "tool", None)
+        tool_name = str(getattr(tool, "name", "") or "") or str(
+            (getattr(request, "tool_call", None) or {}).get("name") or ""
+        )
+    except Exception:
+        tool_name = ""
+    return _format_tool_error(exc, tool_name)
 
 
 # 中间件规范顺序（外层 -> 内层，按注册名）。新增 middleware 必须先在此表登记
@@ -159,6 +172,6 @@ def build_standard_agent_middleware(
         "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
         "ToolCallNameNormalizerMiddleware": (create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None),
         "ToolResultMiddleware": tool_result_middleware,
-        "ToolErrorMiddleware": ToolErrorMiddleware(_on_tool_error),
+        "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),
     }
     return [slots[name] for name in MIDDLEWARE_CANONICAL_ORDER if slots[name] is not None]

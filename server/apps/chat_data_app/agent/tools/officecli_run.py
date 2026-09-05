@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from utils.logger import get_logger
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
     command_path_values,
@@ -13,7 +12,6 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
 from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
 from .common import json_dumps
 
-logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
@@ -110,16 +108,12 @@ def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
           但 add/set/remove/save/create 等修改类子命令禁止写入或修改 uploads 路径；
           如需编辑上传文件，先用 file_copy 复制到 /mnt/user-data/workspace 再操作。
         - 不支持后台或监听模式的子命令。"""
-        try:
-            payload = await run_officecli_command(
-                args=command_args,
-                cwd=cwd,
-                timeout_seconds=timeout_seconds,
-                workspace_runtime=workspace_runtime,
-            )
-            return _tool_result(payload)
-        except Exception as exc:
-            logger.error("officecli_run 执行失败: %s", exc, exc_info=True)
-            raise
+        payload = await run_officecli_command(
+            args=command_args,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            workspace_runtime=workspace_runtime,
+        )
+        return _tool_result(payload)
 
     return officecli_run

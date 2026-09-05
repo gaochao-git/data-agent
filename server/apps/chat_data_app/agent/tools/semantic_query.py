@@ -221,20 +221,16 @@ async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToo
         context.datasource_id,
         context.member_datasource_ids,
     )
-    try:
-        query_result = await _execute_sql_real(
-            sql=query.sql,
-            datasource_id=context.datasource_id,
-            member_datasource_ids=context.member_datasource_ids,
-            user_id=context.user_id,
-            semantic_config_id=context.semantic_config_id,
-            query_text=context.query_text,
-            conversation_id=context.conversation_id,
-            operator_name=context.operator_name,
-        )
-    except Exception as exc:
-        logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
-        raise
+    query_result = await _execute_sql_real(
+        sql=query.sql,
+        datasource_id=context.datasource_id,
+        member_datasource_ids=context.member_datasource_ids,
+        user_id=context.user_id,
+        semantic_config_id=context.semantic_config_id,
+        query_text=context.query_text,
+        conversation_id=context.conversation_id,
+        operator_name=context.operator_name,
+    )
 
     query_result["sql"] = query_result.get("sql") or query.sql
     query_result["query_mode"] = query.query_mode

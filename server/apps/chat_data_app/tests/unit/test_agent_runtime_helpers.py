@@ -116,5 +116,15 @@ async def test_response_timestamp_middleware_handles_empty_result():
 
 
 def test_tool_error_callback_returns_detail_message():
-    assert ar._on_tool_error(RuntimeError("db down"), None) == "工具执行失败: db down"
+    assert ar.on_tool_error(RuntimeError("db down"), None) == "工具执行失败: db down"
     assert ar._format_tool_error(ValueError("boom")) == "工具执行失败: boom"
+
+
+def test_on_tool_error_includes_tool_name_in_log(monkeypatch):
+    """工具失败日志的唯一权威点在中间件层，且必须带工具名便于排障。"""
+    logs = []
+    monkeypatch.setattr(ar.logger, "error", lambda *args, **_kwargs: logs.append(args))
+
+    request = SimpleNamespace(tool=None, tool_call={"name": "bash_run"})
+    assert ar.on_tool_error(RuntimeError("boom"), request) == "工具执行失败: boom"
+    assert logs and "bash_run" in str(logs[0])

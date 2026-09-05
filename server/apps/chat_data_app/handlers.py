@@ -1,8 +1,8 @@
 """ChatData completion handler."""
 
 import json
-import re
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress

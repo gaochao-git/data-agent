@@ -6,7 +6,6 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from utils.logger import get_logger
 from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
@@ -16,7 +15,6 @@ from apps.chat_data_app.services.semantic.run.semantic_model_repository import l
 from apps.chat_data_app.services.semantic.run.semantic_query_service import compile_semantic_ai_dsl
 from .common import json_dumps, normalize_json_like_payload
 
-logger = get_logger(__name__)
 
 
 def normalize_dsl_payload(value: Any) -> Any:
@@ -40,90 +38,86 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
         工具会返回 mode=batch、valid_count、warnings 和逐卡 panels。
         不要为看板中的每张卡片分别调用本工具。
         """
-        try:
-            if not bound_datasource_id:
-                raise ValueError("当前会话未绑定数据源")
-            effective_semantic_config_id = str(semantic_config_id or "").strip() or None
-            dsl = normalize_dsl_payload(dsl)
-            if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
-                result = await validate_dashboard_spec_payload(
-                    dashboard_spec=dsl,
-                    datasource_id=bound_datasource_id,
-                    semantic_config_id=effective_semantic_config_id,
-                    user_id=bound_user_id,
-                    username=bound_operator_name,
-                )
-                return "[dsl2sql_tool]\n" + json_dumps({
-                    "success": bool(result.get("valid")),
-                    "mode": "batch",
-                    "datasource_id": bound_datasource_id,
-                    "semantic_config_id": effective_semantic_config_id,
-                    "semantic_config_ids": result.get("semantic_config_ids") or [],
-                    "valid_count": result.get("valid_count") or 0,
-                    "warnings": result.get("warnings") or [],
-                    "panels": result.get("panels") or [],
-                })
-            if isinstance(dsl, list):
-                if not effective_semantic_config_id and not any(
-                    isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
-                    for card in dsl
-                ):
-                    raise ValueError(f"批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}")
-                result = await validate_dashboard_spec_payload(
-                    dashboard_spec={"cards": dsl},
-                    datasource_id=bound_datasource_id,
-                    semantic_config_id=effective_semantic_config_id,
-                    user_id=bound_user_id,
-                    username=bound_operator_name,
-                )
-                return "[dsl2sql_tool]\n" + json_dumps({
-                    "success": bool(result.get("valid")),
-                    "mode": "batch",
-                    "datasource_id": bound_datasource_id,
-                    "semantic_config_id": effective_semantic_config_id,
-                    "semantic_config_ids": result.get("semantic_config_ids") or [],
-                    "valid_count": result.get("valid_count") or 0,
-                    "warnings": result.get("warnings") or [],
-                    "panels": result.get("panels") or [],
-                })
-            if not isinstance(dsl, dict):
-                raise ValueError("dsl 必须是对象或数组")
-            if not effective_semantic_config_id:
-                raise ValueError(f"缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID")
-            semantic_config = await load_semantic_model(
-                bound_datasource_id,
-                effective_semantic_config_id,
+        if not bound_datasource_id:
+            raise ValueError("当前会话未绑定数据源")
+        effective_semantic_config_id = str(semantic_config_id or "").strip() or None
+        dsl = normalize_dsl_payload(dsl)
+        if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
+            result = await validate_dashboard_spec_payload(
+                dashboard_spec=dsl,
+                datasource_id=bound_datasource_id,
+                semantic_config_id=effective_semantic_config_id,
                 user_id=bound_user_id,
-                mode="full",
-            )
-            payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
-            if payload.get("compare"):
-                return "[dsl2sql_tool]\n" + json_dumps({
-                    "success": False,
-                    "mode": "single",
-                    "datasource_id": bound_datasource_id,
-                    "semantic_config_id": effective_semantic_config_id,
-                    "dsl": payload,
-                    "sql": None,
-                    "error": "错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
-                    "warnings": warnings,
-                })
-            result = compile_semantic_ai_dsl(
-                semantic_config,
-                payload,
+                username=bound_operator_name,
             )
             return "[dsl2sql_tool]\n" + json_dumps({
-                "success": bool(result.get("success")),
+                "success": bool(result.get("valid")),
+                "mode": "batch",
+                "datasource_id": bound_datasource_id,
+                "semantic_config_id": effective_semantic_config_id,
+                "semantic_config_ids": result.get("semantic_config_ids") or [],
+                "valid_count": result.get("valid_count") or 0,
+                "warnings": result.get("warnings") or [],
+                "panels": result.get("panels") or [],
+            })
+        if isinstance(dsl, list):
+            if not effective_semantic_config_id and not any(
+                isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
+                for card in dsl
+            ):
+                raise ValueError(f"批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}")
+            result = await validate_dashboard_spec_payload(
+                dashboard_spec={"cards": dsl},
+                datasource_id=bound_datasource_id,
+                semantic_config_id=effective_semantic_config_id,
+                user_id=bound_user_id,
+                username=bound_operator_name,
+            )
+            return "[dsl2sql_tool]\n" + json_dumps({
+                "success": bool(result.get("valid")),
+                "mode": "batch",
+                "datasource_id": bound_datasource_id,
+                "semantic_config_id": effective_semantic_config_id,
+                "semantic_config_ids": result.get("semantic_config_ids") or [],
+                "valid_count": result.get("valid_count") or 0,
+                "warnings": result.get("warnings") or [],
+                "panels": result.get("panels") or [],
+            })
+        if not isinstance(dsl, dict):
+            raise ValueError("dsl 必须是对象或数组")
+        if not effective_semantic_config_id:
+            raise ValueError(f"缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入语义模型ID")
+        semantic_config = await load_semantic_model(
+            bound_datasource_id,
+            effective_semantic_config_id,
+            user_id=bound_user_id,
+            mode="full",
+        )
+        payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
+        if payload.get("compare"):
+            return "[dsl2sql_tool]\n" + json_dumps({
+                "success": False,
                 "mode": "single",
                 "datasource_id": bound_datasource_id,
                 "semantic_config_id": effective_semantic_config_id,
                 "dsl": payload,
-                "sql": result.get("sql"),
-                "error": result.get("error"),
+                "sql": None,
+                "error": "错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
                 "warnings": warnings,
             })
-        except Exception as exc:
-            logger.error("dsl2sql_tool 执行失败: %s", exc, exc_info=True)
-            raise
+        result = compile_semantic_ai_dsl(
+            semantic_config,
+            payload,
+        )
+        return "[dsl2sql_tool]\n" + json_dumps({
+            "success": bool(result.get("success")),
+            "mode": "single",
+            "datasource_id": bound_datasource_id,
+            "semantic_config_id": effective_semantic_config_id,
+            "dsl": payload,
+            "sql": result.get("sql"),
+            "error": result.get("error"),
+            "warnings": warnings,
+        })
 
     return dsl2sql_tool

@@ -18,9 +18,7 @@ from apps.chat_data_app.services.semantic.run.semantic_materializer import (
     materialize_runtime_semantic_models,
 )
 from apps.chat_data_app.services.semantic.run.semantic_config_service import get_semantic_config_service
-from utils.logger import get_logger
 
-logger = get_logger(__name__)
 
 
 def extract_user_query(state: Optional[Dict]) -> Optional[str]:
@@ -248,46 +246,42 @@ def create_semantic_search(
         current_datasource_id = bound_datasource_id or extract_datasource_id(state)
         if not current_datasource_id:
             raise ValueError("当前会话未绑定数据源")
-        try:
-            if operation == "search_models":
-                user_query = str(query or extract_user_query(state) or "").strip()
-                if not user_query:
-                    raise ValueError("search_models 缺少用户问题")
-                payload = await _search_models(
-                    query=user_query,
-                    datasource_id=current_datasource_id,
-                    user_id=bound_user_id,
-                    model_id=model_id,
-                    datasource_group_context=(
-                        bound_group_context
-                        or extract_datasource_group_context(state)
-                    ),
-                    source_type=bound_source_type,
-                    workspace_runtime=workspace_runtime,
-                )
-                return _serialize_result(payload)
-
-            normalized_config_id = str(semantic_config_id or "").strip()
-            config, reference = await _materialize_one(
-                workspace_runtime=workspace_runtime,
+        if operation == "search_models":
+            user_query = str(query or extract_user_query(state) or "").strip()
+            if not user_query:
+                raise ValueError("search_models 缺少用户问题")
+            payload = await _search_models(
+                query=user_query,
                 datasource_id=current_datasource_id,
                 user_id=bound_user_id,
+                model_id=model_id,
+                datasource_group_context=(
+                    bound_group_context
+                    or extract_datasource_group_context(state)
+                ),
                 source_type=bound_source_type,
-                semantic_config_id=normalized_config_id,
+                workspace_runtime=workspace_runtime,
             )
-            if operation == "list_fields":
-                return _serialize_result(_list_fields_payload(
-                    config=config,
-                    reference=reference,
-                    semantic_config_id=normalized_config_id,
-                    field_type=field_type,
-                    offset=offset,
-                    limit=limit,
-                ))
-            raise ValueError(f"不支持的操作 {operation}")
-        except Exception as exc:
-            logger.error("semantic_search 执行失败: %s", exc, exc_info=True)
-            raise
+            return _serialize_result(payload)
+
+        normalized_config_id = str(semantic_config_id or "").strip()
+        config, reference = await _materialize_one(
+            workspace_runtime=workspace_runtime,
+            datasource_id=current_datasource_id,
+            user_id=bound_user_id,
+            source_type=bound_source_type,
+            semantic_config_id=normalized_config_id,
+        )
+        if operation == "list_fields":
+            return _serialize_result(_list_fields_payload(
+                config=config,
+                reference=reference,
+                semantic_config_id=normalized_config_id,
+                field_type=field_type,
+                offset=offset,
+                limit=limit,
+            ))
+        raise ValueError(f"不支持的操作 {operation}")
 
     return semantic_search
 

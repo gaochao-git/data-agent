@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from utils.logger import get_logger
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
 from .common import json_dumps
 
-logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20
 MAX_TIMEOUT_SECONDS = 120
@@ -85,16 +83,12 @@ def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
         - command 必须是短生命周期非交互命令，不支持后台进程、服务管理或提权命令。
         - 生成最终产物前，先把脚本输出写到 workspace/，校验后复制或写入 outputs/。
         """
-        try:
-            payload = await run_bash_command(
-                command=command,
-                cwd=cwd,
-                timeout_seconds=timeout_seconds,
-                workspace_runtime=workspace_runtime,
-            )
-            return _tool_result(payload)
-        except Exception as exc:
-            logger.error("bash_run 执行失败: %s", exc, exc_info=True)
-            raise
+        payload = await run_bash_command(
+            command=command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            workspace_runtime=workspace_runtime,
+        )
+        return _tool_result(payload)
 
     return bash_run
