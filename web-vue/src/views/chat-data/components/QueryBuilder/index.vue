@@ -398,8 +398,10 @@ const isRawAggFunc = (func?: string) => normalizeAggFunc(func) === 'RAW'
 
 const getAggregationModeState = (excludeAggId?: string) => {
   const list = excludeAggId ? aggregations.value.filter(item => item.id !== excludeAggId) : aggregations.value
-  const hasRaw = list.some(item => isRawAggFunc(item.func))
-  const hasAgg = list.some(item => !isRawAggFunc(item.func))
+  // 派生/复合指标为逻辑口径，不参与 RAW/聚合模式约束
+  const physical = list.filter(item => !isLogicalAggregation(item))
+  const hasRaw = physical.some(item => isRawAggFunc(item.func))
+  const hasAgg = physical.some(item => !isRawAggFunc(item.func))
   return { hasRaw, hasAgg }
 }
 
@@ -1133,7 +1135,12 @@ const canConnectTableInSemanticMode = (target: string | { table?: string; tableA
 }
 
 const addFieldToDimension = (field: BuilderDragFieldData) => {
-  const { table, column, label, aggFunc, expression, displayName, semanticName } = field
+  const { table, column, label, aggFunc, expression, displayName, semanticName, metricKind } = field
+  // 派生/复合指标是纯逻辑口径，不支持作为维度
+  if (metricKind === 'derived' || metricKind === 'composite') {
+    ElMessage.warning('扩展指标不支持作为维度，请拖入指标区')
+    return
+  }
   const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
@@ -1174,19 +1181,25 @@ const addFieldToDimension = (field: BuilderDragFieldData) => {
 }
 
 const addFieldToAggregation = (field: BuilderDragFieldData) => {
-  const { table, column, label, aggFunc, displayName, expression, semanticName } = field
+  const { table, column, label, aggFunc, displayName, expression, semanticName, metricKind } = field
+  const isLogicalMetric = metricKind === 'derived' || metricKind === 'composite'
   const tableAlias = getTableAlias(field)
-  if (!table || !column) return
-  if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
-    return
+  // 派生/复合指标按 semanticName 交给后端解析，无物理表字段
+  if (!isLogicalMetric) {
+    if (!table || !column) return
+    if (!canConnectTableInSemanticMode({ table, tableAlias })) {
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
+      return
+    }
   }
-  const targetFunc = (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })) as AggregationField['func']
+  const targetFunc = (isLogicalMetric ? 'RAW' : (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type }))) as AggregationField['func']
   if (!canUseAggregationFunc(targetFunc)) {
     showAggregationModeConflictMessage(targetFunc)
     return
   }
-  if (!aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, table, column) && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
+  const dedupKey = (item: { tableAlias?: string; table: string; column: string }) =>
+    isLogicalMetric ? `logical:${semanticName || displayName}` : buildFieldKey(item.tableAlias, item.table, item.column)
+  if (!aggregations.value.find(a => dedupKey(a) === dedupKey({ tableAlias, table, column }) && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
     aggregations.value.push({
       id: `${Date.now()}`,
       table,
@@ -1196,7 +1209,8 @@ const addFieldToAggregation = (field: BuilderDragFieldData) => {
       displayName,
       expression,
       label: label || column,
-      func: targetFunc
+      func: targetFunc,
+      metricKind
     })
   }
 }
@@ -1425,6 +1439,14 @@ const getDimensionDisplayName = (d: DimensionField) => {
 
 const getMetricDisplayName = (a: AggregationField) => {
   return stripFieldPrefix(a.displayName || a.label || a.column) || a.column
+}
+
+const isLogicalAggregation = (a: AggregationField) => a.metricKind === 'derived' || a.metricKind === 'composite'
+
+// 逻辑口径指标（派生/复合）没有聚合函数概念，chip 显示不带函数前缀
+const formatMetricChipLabel = (a: AggregationField) => {
+  const name = getMetricDisplayName(a)
+  return isLogicalAggregation(a) ? name : `${getAggFuncLabel(a.func)}(${name})`
 }
 
 const getAggFuncLabel = (func?: string) => {
@@ -1707,7 +1729,7 @@ const getFilterFieldLabel = (f: FilterCondition) => {
     const matchedAgg = f.aggId
       ? aggregations.value.find(a => a.id === f.aggId)
       : aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(f.tableAlias, f.table, f.column) && a.func === f.aggFunc)
-    if (matchedAgg) return `${getAggFuncLabel(matchedAgg.func)}(${getMetricDisplayName(matchedAgg)})`
+    if (matchedAgg) return formatMetricChipLabel(matchedAgg)
     const funcLabel = getAggFuncLabel(f.aggFunc)
     if ((f.displayName || '').trim()) return `${funcLabel}(${stripFieldPrefix(f.displayName)})`
     return `${funcLabel || '指标'}(${f.column})`
@@ -2559,6 +2581,11 @@ const loadBuilderConfig = (config: BuilderConfig) => {
     aggregations.value = config.aggregations.map(a => {
       const tableLabel = tables.value.find(t => t.table_name === a.table)?.description || a.table
       const colLabel = a.alias || a.column
+      // 收藏配置未持久化 metricKind，按 semanticName 从语义模型反查回填
+      const semanticMetric = a.semanticName
+        ? props.semanticConfig?.metrics?.find(m => m.name === a.semanticName)
+        : undefined
+      const metricKind = semanticMetric?.metric_kind as AggregationField['metricKind'] | undefined
       return {
         id: a.id || `${Date.now()}-${Math.random()}`,
         table: a.table,
@@ -2568,7 +2595,8 @@ const loadBuilderConfig = (config: BuilderConfig) => {
         displayName: a.alias || a.column,
         expression: a.expression,
         label: `${tableLabel}.${colLabel}`,
-        func: a.func
+        func: a.func,
+        metricKind
       }
     })
   }
@@ -2636,13 +2664,10 @@ const filterAndOrderFieldsGrouped = computed(() => {
   if (aggregations.value.length > 0) {
     groups.push({
       groupLabel: '聚合过滤字段 (HAVING)',
-      fields: aggregations.value.map(a => {
-        const funcLabel = aggFunctions.find(f => f.value === a.func)?.label || a.func
-        return {
-          value: `AGGID:${a.id}`,
-          label: `${funcLabel}(${getMetricDisplayName(a)})`
-        }
-      })
+      fields: aggregations.value.map(a => ({
+        value: `AGGID:${a.id}`,
+        label: formatMetricChipLabel(a)
+      }))
     })
   }
   return groups
@@ -2723,10 +2748,9 @@ const advancedDimensionFieldsGrouped = computed(() => {
 const advancedMetricFieldsGrouped = computed(() => {
   const merged = new Map<string, FieldPickerOption>()
   aggregations.value.forEach((a) => {
-    const funcLabel = getAggFuncLabel(a.func)
     merged.set(`AGGID:${a.id}`, {
       value: `AGGID:${a.id}`,
-      label: `${funcLabel}(${getMetricDisplayName(a)})`
+      label: formatMetricChipLabel(a)
     })
   })
   semanticMetricFilterFields.value.forEach((field) => {
@@ -2809,11 +2833,11 @@ const getOrderFieldValue = (o: OrderByField) => {
 const getOrderFieldLabel = (o: OrderByField) => {
   if (o.aggId) {
     const agg = aggregations.value.find(a => a.id === o.aggId)
-    if (agg) return `${getAggFuncLabel(agg.func)}(${getMetricDisplayName(agg)})`
+    if (agg) return formatMetricChipLabel(agg)
   }
   if (o.aggFunc) {
-    const agg = aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(o.tableAlias, o.table, o.column) && a.func === o.aggFunc)
-    if (agg) return `${getAggFuncLabel(agg.func)}(${getMetricDisplayName(agg)})`
+    const agg = aggregations.value.find(a => (isLogicalAggregation(a) ? a.semanticName === o.semanticName : buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(o.tableAlias, o.table, o.column) && a.func === o.aggFunc))
+    if (agg) return formatMetricChipLabel(agg)
     return `${getAggFuncLabel(o.aggFunc)}(${o.column})`
   }
   const dim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(o.tableAlias, o.table, o.column))
@@ -3201,13 +3225,25 @@ defineExpose({
             <div class="flex-1 flex items-center gap-1.5 flex-wrap min-h-[28px]">
               <template v-if="aggregations.length > 0">
                 <span v-for="(a, index) in aggregations" :key="a.id" class="inline-flex items-center h-[24px] px-2 rounded-[10px] bg-[#ebf1ff] text-[#2e2f32] hover:bg-[#dce5ff] transition-colors shrink-0">
-                  <span class="relative inline-flex items-center cursor-pointer shrink-0">
-                    <IconCaretDown class="mr-1 text-[#3772ff]" />
-                    <span class="text-[12px]">{{ aggFunctions.find(f => f.value === a.func)?.label }}</span>
-                    <select :value="a.func" class="absolute inset-0 opacity-0 cursor-pointer" @click.stop @change="handleAggregationFuncChange(a, ($event.target as HTMLSelectElement).value)">
-                      <option v-for="opt in aggFunctions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </select>
-                  </span><span class="text-[12px]">({{ getMetricDisplayName(a) }})</span>
+                  <template v-if="isLogicalAggregation(a)">
+                    <span class="text-[12px]">{{ getMetricDisplayName(a) }}</span>
+                    <span
+                      class="ml-1 px-1.5 h-[16px] inline-flex items-center rounded text-[10px] text-white"
+                      :class="a.metricKind === 'composite' ? 'bg-[#7c5cd6]' : 'bg-[#3772ff]'"
+                      :title="a.metricKind === 'composite' ? '复合指标：由多个指标四则运算得出' : '派生指标：基础指标 + 统计周期 + 过滤'"
+                    >
+                      {{ a.metricKind === 'composite' ? '复合' : '派生' }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="relative inline-flex items-center cursor-pointer shrink-0">
+                      <IconCaretDown class="mr-1 text-[#3772ff]" />
+                      <span class="text-[12px]">{{ aggFunctions.find(f => f.value === a.func)?.label }}</span>
+                      <select :value="a.func" class="absolute inset-0 opacity-0 cursor-pointer" @click.stop @change="handleAggregationFuncChange(a, ($event.target as HTMLSelectElement).value)">
+                        <option v-for="opt in aggFunctions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                      </select>
+                    </span><span class="text-[12px]">({{ getMetricDisplayName(a) }})</span>
+                  </template>
                   <button class="ml-1 text-[#2e2f3250] hover:text-[#2e2f32] transition-colors" @click.stop="removeAggregation(index)">
                     <IconClose />
                   </button>

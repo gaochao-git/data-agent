@@ -635,6 +635,22 @@ export interface ToolLifecycleEventData extends ToolEventData {
 }
 
 // 语义层配置
+// 派生指标的统计周期；kind 为 between 时使用 start/end，last_n_days 时使用 n
+export interface DerivedMetricPeriod {
+  kind: 'today' | 'yesterday' | 'last_n_days' | 'this_week' | 'this_month' | 'between'
+  n?: number
+  start?: string
+  end?: string
+  time_dimension: string
+}
+
+// 派生指标的修饰词过滤（值支持 IN/BETWEEN 的数组形态）
+export interface DerivedMetricFilter {
+  dimension: string
+  operator?: string
+  value?: string | number | boolean | Array<string | number>
+}
+
 export interface SemanticMetric {
   name: string
   field_name?: string
@@ -645,6 +661,13 @@ export interface SemanticMetric {
   filter?: string
   description?: string
   metadata_supplement?: string
+  // 派生指标：原子指标 + 固定周期 + 修饰词；配置后 expression/table 由基础指标决定
+  metric_kind?: 'derived' | 'composite'
+  base_metric?: string
+  period?: DerivedMetricPeriod
+  filters?: DerivedMetricFilter[]
+  // 复合指标：{指标名} 占位公式（如 "{销售额} / {订单数}"）；配置后 expression/table 由成员指标决定
+  formula?: string
 }
 
 export interface SemanticDimension {
@@ -773,13 +796,13 @@ export interface MetricExpandOption {
   selected: boolean
 }
 
-// 语义配置-新增字段表单
+// 语义配置-新增字段表单；mode 为 derived/composite 时（派生/复合指标）不使用物理表/字段，口径由 baseMetric+period+filters 或 formula 决定
 export interface AddFieldForm {
   tableAlias: string
   column: string
   fieldName: string
   displayName: string
-  mode: 'dimension' | 'metric'
+  mode: 'dimension' | 'metric' | 'derived' | 'composite'
 }
 
 // 语义配置-新增字段弹窗的表选项
@@ -802,4 +825,6 @@ export interface BuilderDragFieldData {
   displayName?: string
   aggFunc?: string
   type?: string
+  // 逻辑口径指标（派生/复合）：无物理表字段，后端按 semanticName 解析
+  metricKind?: 'derived' | 'composite'
 }

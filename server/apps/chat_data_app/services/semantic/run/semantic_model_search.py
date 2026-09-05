@@ -15,6 +15,8 @@ from apps.chat_data_app.agent.context.context_budget import REQUEST_OVERHEAD_TOK
 from ...datasource.manager import get_datasource_manager
 from ...llm_config import get_chat_data_llm
 from .semantic_config_service import get_semantic_config_service
+from .semantic_query_plan_builder import composite_metric_verbalization, derived_metric_verbalization
+from ..core.query_plan import is_composite_metric, is_derived_metric
 
 logger = get_logger(__name__)
 
@@ -45,13 +47,19 @@ def _config_description(config: Dict[str, Any]) -> str:
     return str(config.get("description") or config.get("semantic_config_desc") or "").strip()
 
 
-def _compact_metric_summary(item: Dict[str, Any]) -> Dict[str, Any]:
+def _compact_metric_summary(item: Dict[str, Any], metrics_map: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """构造指标选择摘要，只保留业务语义字段。"""
     summary = {
         "name": item.get("name") or "",
         "description": _truncate(item.get("description") or "", 160),
         "supplement": _truncate(item.get("metadata_supplement") or "", 240),
     }
+    if is_derived_metric(item):
+        # 派生指标向检索器说明固定口径（基础指标+周期+修饰词），便于按时间范围正确选型
+        summary["fixed_definition"] = derived_metric_verbalization(item)
+    elif is_composite_metric(item):
+        # 复合指标向检索器说明运算口径（公式+成员指标表达式），便于按业务比率/差值正确选型
+        summary["fixed_definition"] = _truncate(composite_metric_verbalization(item, metrics_map or {}), 240)
     return {key: value for key, value in summary.items() if value}
 
 
@@ -181,6 +189,7 @@ def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
     metrics = config.get("metrics") or []
     dimensions = config.get("dimensions") or []
     config_id = _config_id(config)
+    metrics_map = {item.get("name"): item for item in metrics if isinstance(item, dict) and item.get("name")}
     return {
         "id": config_id,
         "name": _config_name(config),
@@ -191,7 +200,7 @@ def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "dimensions": [_compact_dimension_summary(item) for item in dimensions],
         "tables": _compact_table_summary(config),
         "relationships": _compact_relationship_summary(config),
-        "metrics": [_compact_metric_summary(item) for item in metrics],
+        "metrics": [_compact_metric_summary(item, metrics_map) for item in metrics],
     }
 
 

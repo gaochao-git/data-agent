@@ -199,7 +199,39 @@ const buildDimensionTooltip = (dim: SemanticDimension) => {
   ].filter(Boolean) as FieldTooltipSection[]
 }
 
+// 派生/复合指标为逻辑口径，不支持拖拽，仅可通过 → 按钮插入指标区
+const isLogicalMetric = (metric: SemanticConfigItem['metrics'][number]) =>
+  metric.metric_kind === 'derived' || metric.metric_kind === 'composite'
+
+// 派生指标口径文案：基础指标 · 周期 · 过滤条件
+const derivedMetricVerbalization = (metric: SemanticConfigItem['metrics'][number]) => {
+  const parts: string[] = [`指标[${metric.base_metric || '-'}]`]
+  const period = metric.period as { kind?: string; n?: number; start?: string; end?: string } | undefined
+  if (period?.kind) {
+    const kindLabels: Record<string, string> = {
+      today: '今日', yesterday: '昨日', this_week: '本周', this_month: '本月', last_n_days: `近${period.n || 7}天`, between: `${period.start || '?'}~${period.end || '?'}`,
+    }
+    parts.push(kindLabels[period.kind] || period.kind)
+  }
+  for (const f of (metric.filters as Array<{ dimension?: string; operator?: string; value?: string }> || [])) {
+    if (f.dimension) parts.push(`${f.dimension}${f.operator || '='}${f.value ?? ''}`)
+  }
+  return parts.join(' · ')
+}
+
 const buildMetricTooltip = (metric: SemanticConfigItem['metrics'][number]) => {
+  if (isLogicalMetric(metric)) {
+    const definition = metric.metric_kind === 'composite'
+      ? (metric.formula || '-')
+      : derivedMetricVerbalization(metric)
+    return [
+      createTooltipSection('扩展指标', [
+        `类型：${metric.metric_kind === 'composite' ? '复合指标' : '派生指标'}`,
+        `口径：${definition}`,
+        metric.description ? `备注：${metric.description}` : '',
+      ].filter(Boolean)),
+    ].filter(Boolean) as FieldTooltipSection[]
+  }
   const expression = metric.expression || ''
   const fieldName = extractMetricSourceFieldName(metric)
   const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
@@ -437,11 +469,14 @@ onUnmounted(() => {
           <div
             v-for="metric in filteredMetrics"
             :key="`metric-${metric.table_alias || metric.table}-${metric.name}`"
-            class="group flex items-center gap-2 h-[28px] px-2 rounded cursor-grab transition-colors duration-100 hover:bg-[#f0f1f3] active:cursor-grabbing"
-            draggable="true"
+            :class="[
+              'group flex items-center gap-2 h-[28px] px-2 rounded transition-colors duration-100 hover:bg-[#f0f1f3]',
+              isLogicalMetric(metric) ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'
+            ]"
+            :draggable="!isLogicalMetric(metric)"
             @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
             @mouseleave="hideTooltip"
-            @dragstart="emit('dragMetric', metric, $event)"
+            @dragstart="!isLogicalMetric(metric) && emit('dragMetric', metric, $event)"
             @dragend="emit('dragEnd')"
           >
             <FieldTypeIcon type="number" class="text-[#165DFF] mr-1.5 shrink-0" />
@@ -452,7 +487,7 @@ onUnmounted(() => {
               type="button"
               draggable="false"
               class="ml-1 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
-              title="填充查询问题"
+              :title="isLogicalMetric(metric) ? '插入到指标区' : '填充查询问题'"
               @mousedown.stop
               @click.stop="handleFillQuestion(metric.name, 'metric')"
             >

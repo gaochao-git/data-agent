@@ -9,6 +9,7 @@ from utils.error_codes import ErrorCode
 from utils.response import business_response
 
 from ..services.semantic.core.common import build_table_columns_map
+from ..services.semantic.core.query_plan import is_composite_metric, is_derived_metric
 
 SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
 
@@ -320,6 +321,9 @@ def _validate_semantic_metric_health(
 ) -> List[Dict[str, Any]]:
     """校验单个语义指标是否匹配物理表。"""
     metric_name = metric.get("name") or metric.get("field_name") or ""
+    # 派生/复合指标不直接携带物理引用：派生复用基础指标，复合口径由成员表达式决定，与 config_validator 口径一致
+    if is_derived_metric(metric) or is_composite_metric(metric):
+        return []
     table_name = metric.get("table")
     expression = str(metric.get("expression") or "").strip()
     target = f"metric:{metric_name}"

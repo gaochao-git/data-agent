@@ -14,6 +14,43 @@ AGGREGATE_EXPRESSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+#: 派生指标的 metric_kind 标识；缺省（无该字段）即为原子指标。
+DERIVED_METRIC_KIND = "derived"
+
+#: 派生指标支持的统计周期预设；between 为自定义起止区间。
+DERIVED_PERIOD_KINDS = {"today", "yesterday", "last_n_days", "this_week", "this_month", "between"}
+
+#: 复合指标的 metric_kind 标识；口径由 formula 对多个原子指标做四则运算得出。
+COMPOSITE_METRIC_KIND = "composite"
+
+#: 复合指标公式中的指标引用占位符，如 "{销售额} / {订单数}"。
+FORMULA_REF_PATTERN = re.compile(r"\{([^{}]+)\}")
+
+#: 复合指标公式去除引用后允许的字符（四则运算、括号、数字、空白）。
+FORMULA_OPERATOR_PATTERN = re.compile(r"^[\d\s+\-*/().]*$")
+
+
+def is_derived_metric(metric_cfg: Any) -> bool:
+    """判断指标配置是否为派生指标（原子指标 + 周期 + 修饰词）。"""
+    return str((metric_cfg or {}).get("metric_kind") or "").strip().lower() == DERIVED_METRIC_KIND
+
+
+def is_composite_metric(metric_cfg: Any) -> bool:
+    """判断指标配置是否为复合指标（多指标四则运算公式）。"""
+    return str((metric_cfg or {}).get("metric_kind") or "").strip().lower() == COMPOSITE_METRIC_KIND
+
+
+def parse_formula_refs(formula: str) -> List[str]:
+    """提取公式中的 {指标引用}，按首次出现顺序去重。"""
+    refs: List[str] = []
+    seen: set[str] = set()
+    for match in FORMULA_REF_PATTERN.finditer(str(formula or "")):
+        name = match.group(1).strip()
+        if name and name not in seen:
+            seen.add(name)
+            refs.append(name)
+    return refs
+
 
 def parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
     """解析语义指标支持的聚合表达式。"""

@@ -12,6 +12,7 @@ from ...chart_types import get_chart_type_label, is_supported_chart_type_input, 
 from .service import get_dashboard_service
 from ..datasource.manager import get_datasource_manager
 from ..semantic.run.semantic_model_repository import load_semantic_model
+from ..semantic.core.query_plan import is_composite_metric, is_derived_metric
 from ..semantic.run.semantic_config_service import get_semantic_config_service
 from ..semantic.run.semantic_query_service import compile_semantic_ai_dsl
 from ..semantic.run.semantic_query_service import SemanticAIQueryAdapter
@@ -174,6 +175,9 @@ def normalize_semantic_dsl_payload(dsl: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_aggregate_metric(metric: Dict[str, Any]) -> bool:
+    # 派生指标编译时展开为基础原子指标的聚合表达式；复合指标代入成员聚合表达式，均按聚合指标处理
+    if is_derived_metric(metric) or is_composite_metric(metric):
+        return True
     expression = str(metric.get("expression") or "").strip().upper()
     return expression.startswith(("COUNT(", "SUM(", "AVG(", "MAX(", "MIN("))
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
 from .services.runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS
+from .services.semantic.core.input_validator import FILTER_OPERATORS
 
 
 class ApiResponse(BaseModel):
@@ -396,6 +397,33 @@ class DatasourceGroupMetadataSyncRequest(BaseModel):
 
 # ============ 语义层配置模型 ============
 
+class SemanticMetricPeriod(BaseModel):
+    """派生指标固定统计周期"""
+    kind: Literal["today", "yesterday", "last_n_days", "this_week", "this_month", "between"] = Field(
+        ..., description="周期类型"
+    )
+    n: Optional[int] = Field(default=None, ge=1, description="last_n_days 的天数 N")
+    start: Optional[str] = Field(default=None, description="between 的开始日期 YYYY-MM-DD")
+    end: Optional[str] = Field(default=None, description="between 的结束日期 YYYY-MM-DD")
+    time_dimension: Optional[str] = Field(default=None, description="用于周期过滤的时间维度名称")
+
+
+class SemanticMetricFilter(BaseModel):
+    """派生指标修饰词过滤"""
+    dimension: str = Field(..., description="过滤维度名称")
+    operator: str = Field(..., description="操作符，如 '='、'IN'")
+    value: Union[str, List[str]] = Field(default="", description="筛选值；IN/NOT IN 为字符串数组")
+
+    @field_validator("operator", mode="before")
+    @classmethod
+    def normalize_operator(cls, value: Any) -> str:
+        """操作符统一大写并收敛到 FILTER_OPERATORS 权威集合。"""
+        operator = str(value or "=").strip().upper()
+        if operator not in FILTER_OPERATORS:
+            raise ValueError(f"修饰词过滤操作符不支持: {operator}")
+        return operator
+
+
 class SemanticMetric(BaseModel):
     """语义层指标定义"""
     name: str = Field(..., description="指标名称，如'销售额'")
@@ -410,6 +438,45 @@ class SemanticMetric(BaseModel):
     compare_type: Optional[Literal["mom", "yoy"]] = Field(default=None, description="预计算同比/环比指标类型：mom=环比，yoy=同比")
     compare_mode: Optional[Literal["trend", "value"]] = Field(default=None, description="预计算同比/环比指标形态：trend=趋势，value=单值")
     base_metric: Optional[str] = Field(default=None, description="预计算同比/环比指标对应的基础指标名称，如'销售额'")
+    # 派生/复合指标扩展：metric_kind 缺省（None）即为原子指标
+    metric_kind: Optional[Literal["derived", "composite"]] = Field(
+        default=None, description="指标类别：derived=派生指标，composite=复合指标，缺省为原子指标"
+    )
+    period: Optional[SemanticMetricPeriod] = Field(default=None, description="派生指标固定统计周期")
+    filters: Optional[List[SemanticMetricFilter]] = Field(default=None, description="派生指标修饰词过滤")
+    formula: Optional[str] = Field(default=None, description="复合指标公式，如'{销售额} / {订单数}'")
+
+    @model_validator(mode="after")
+    def validate_metric_kind_scoped_fields(self) -> "SemanticMetric":
+        """按 metric_kind 分型校验字段归属，避免各类指标口径字段混用。"""
+        kind = self.metric_kind
+        expression_text = str(self.expression or "").strip()
+        if kind == "derived":
+            if not str(self.base_metric or "").strip():
+                raise ValueError(f"派生指标 {self.name} 缺少 base_metric 基础指标")
+            if expression_text:
+                raise ValueError(f"派生指标 {self.name} 不能配置 expression，口径由基础指标 + 周期 + 过滤决定")
+        elif kind == "composite":
+            if not str(self.formula or "").strip():
+                raise ValueError(f"复合指标 {self.name} 缺少 formula 公式")
+            if expression_text:
+                raise ValueError(f"复合指标 {self.name} 不能配置 expression，口径由 formula 决定")
+            if str(self.base_metric or "").strip():
+                raise ValueError(f"复合指标 {self.name} 不能配置 base_metric，成员由公式引用决定")
+        else:
+            if not expression_text:
+                raise ValueError(f"指标 {self.name} 缺少 expression 聚合表达式")
+            if str(self.formula or "").strip():
+                raise ValueError(f"原子指标 {self.name} 不能配置 formula（仅复合指标使用）")
+            if self.period is not None or self.filters:
+                raise ValueError(f"原子指标 {self.name} 不能配置 period/filters（仅派生指标使用）")
+            # base_metric 双语义收敛：原子指标上仅允许同比/环比指标使用（旧口径兼容）
+            if str(self.base_metric or "").strip() and not (self.compare_type or self.compare_mode):
+                raise ValueError(
+                    f"原子指标 {self.name} 不允许配置 base_metric："
+                    "仅派生指标或预计算同比/环比指标（需同时配置 compare_type/compare_mode）使用"
+                )
+        return self
 
 
 class SemanticDimension(BaseModel):

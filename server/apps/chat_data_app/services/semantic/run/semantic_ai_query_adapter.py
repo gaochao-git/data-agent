@@ -25,6 +25,8 @@ from ..core.semantic_sql.compiler import SemanticSQLCompiler
 from ..core.semantic_sql.dialect import get_dialect
 from .semantic_query_plan_builder import (
     assemble_dimension_filter_node,
+    build_metric_base_configs,
+    check_mixed_derived_periods,
     collect_filter_node_tables,
     collect_operand_tables,
     metric_func_column,
@@ -89,6 +91,10 @@ class SemanticAIQueryAdapter:
 
         # 构建表和字段的存在性校验映射
         self._build_table_column_map()
+        # 派生/复合指标统一预解析（共享入口）：编译配置 + 派生固定过滤叶子
+        self._metric_base_cfgs, self._derived_fixed_leaves = build_metric_base_configs(
+            self.metrics_map, self.dimensions_map,
+        )
 
     @staticmethod
     def _extract_dimension_name(dim_item: Any) -> str:
@@ -273,7 +279,7 @@ class SemanticAIQueryAdapter:
         return isinstance(node, dict) and isinstance(node.get("left"), dict) and "right" in node
 
     def _metric_aggregation_node(self, metric_name: str, main_table: str) -> Dict[str, Any]:
-        metric_cfg = self.metrics_map.get(metric_name, {})
+        metric_cfg = self._metric_base_cfgs.get(metric_name) or self.metrics_map.get(metric_name, {})
         metric_table = metric_cfg.get("table") or main_table
         metric_table_alias = self._table_alias(metric_cfg) or metric_table
         parsed = metric_func_column(metric_cfg.get("expression"))
@@ -363,7 +369,8 @@ class SemanticAIQueryAdapter:
         valid_dimension_names = list(self.dimensions_map.keys())
         for name in metrics or []:
             if name in self.metrics_map:
-                normalized_metrics.append(self.metrics_map[name])
+                # 派生指标按预解析的基础原子指标参与编译，别名保留派生指标名
+                normalized_metrics.append({**self._metric_base_cfgs[name], "name": name})
                 continue
             if name in self.dimensions_map:
                 dim_cfg = self.dimensions_map[name]
@@ -487,6 +494,14 @@ class SemanticAIQueryAdapter:
         err = self._validate_unified_engine_inputs(plan, metrics, dimensions, filters, having, order_by, limit, offset)
         if err:
             return _error(err)
+
+        # 不同周期的派生指标混用会因固定过滤交集而算错，提前拦截
+        mixed_err = check_mixed_derived_periods(
+            [metric.get("name") for metric in plan.matched_metrics] + plan.having_metric_names,
+            self.metrics_map,
+        )
+        if mixed_err:
+            return _error(mixed_err)
 
         self._infer_main_table_and_alias(plan)
         if not plan.main_table:
@@ -692,6 +707,8 @@ class SemanticAIQueryAdapter:
                     continue
                 self._append_filter_nodes_for_builder(plan.builder_filters, fil)
 
+        self._inject_derived_fixed_filters(plan)
+
         for hv in plan.validated_having:
             if self._is_expression_having_node(hv):
                 left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
@@ -718,12 +735,29 @@ class SemanticAIQueryAdapter:
             plan.builder_having.append(having_node)
             self._copy_filter_value_type(hv, having_node)
 
+    def _inject_derived_fixed_filters(self, plan: _UnifiedEnginePlan) -> None:
+        """把查询涉及的派生指标的周期/修饰词固定过滤注入 WHERE。
+
+        v1 口径：固定过滤作用于整条查询；同一查询混用不同周期的派生指标时
+        取过滤的交集，由派生指标 verbalization 向模型说明口径。
+        候选覆盖 SELECT 与 HAVING 引用；ORDER BY 由 validate_order_by 限定
+        只能使用请求的指标/维度，相关派生指标已包含在候选内。
+        """
+        candidate_names = [metric.get("name") for metric in plan.matched_metrics] + plan.having_metric_names
+        injected: set = set()
+        for name in candidate_names:
+            if not name or name in injected:
+                continue
+            injected.add(name)
+            for leaf in self._derived_fixed_leaves.get(name) or []:
+                self._append_filter_nodes_for_builder(plan.builder_filters, leaf)
+
     def _build_builder_order_by(self, plan: _UnifiedEnginePlan) -> None:
         for od in plan.validated_order_by:
             field_name = od.get("field")
             direction = od.get("direction", "DESC")
             if field_name in self.metrics_map:
-                metric_cfg = self.metrics_map.get(field_name, {})
+                metric_cfg = self._metric_base_cfgs.get(field_name) or self.metrics_map.get(field_name, {})
                 metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or plan.main_table
                 parsed = metric_func_column(metric_cfg.get("expression"))
                 func = parsed[0] if parsed else "RAW"

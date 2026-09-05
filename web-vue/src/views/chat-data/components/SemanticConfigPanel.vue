@@ -392,7 +392,8 @@ const toggleScopeEntry = (configId: string, entry: TableScopeEntry, checked: boo
   if (!config) return
   const nextAliasSet = new Set(nextScope.map(item => item.alias))
   updateConfig(configId, {
-    metrics: config.metrics.filter(item => nextAliasSet.has(getFieldTableAlias(item))),
+    // 派生/复合指标无物理表归属，不随表作用域收缩被清除
+    metrics: config.metrics.filter(item => item.metric_kind === 'derived' || item.metric_kind === 'composite' || nextAliasSet.has(getFieldTableAlias(item))),
     dimensions: config.dimensions.filter(item => nextAliasSet.has(getFieldTableAlias(item))),
     relationships: config.relationships.filter(item => nextAliasSet.has(getRelationshipLeftAlias(item)) && nextAliasSet.has(getRelationshipRightAlias(item)))
   })
@@ -741,7 +742,11 @@ const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
 const showFieldPhysicalDetails = ref(false)
+
 const showAddFieldDialog = ref(false)
+// 弹窗作用域：field=字段配置（原子/维度），metric=指标扩展（派生/复合）
+const addFieldScope = ref<'field' | 'metric'>('field')
+const metricSectionCollapsed = ref(false)
 const autoPrefillLoading = ref(false)
 const showAutoPrefillModeDialog = ref(false)
 const previewingTableName = ref('')
@@ -969,6 +974,115 @@ const saveMetric = () => {
   }
   updateConfig(editingConfigId.value, { metrics: newMetrics })
   cancelEditing()
+}
+
+// ============ 派生/复合指标操作（复用新增字段弹窗的 derived/composite 模式） ============
+const editingDerivedMetric = ref<SemanticMetric | null>(null)
+const editingDerivedMetricIndex = ref(-1)
+
+const derivedMetricConfig = computed(() => configs.value.find(c => c.id === activeConfig.value?.id) || null)
+
+const metricKindLabel = (metric: SemanticMetric) => (metric.metric_kind === 'composite' ? '复合指标' : '派生指标')
+
+const derivedMetricEntries = computed(() => {
+  const metrics = derivedMetricConfig.value?.metrics || []
+  return metrics
+    .map((metric, index) => ({ metric, index }))
+    .filter(entry => entry.metric.metric_kind === 'derived' || entry.metric.metric_kind === 'composite')
+})
+
+const aggregateMetricCandidates = computed(() => {
+  // 复合指标无聚合表达式，天然被表达式检查排除；派生指标显式排除
+  return (derivedMetricConfig.value?.metrics || []).filter(m => {
+    if (m.metric_kind === 'derived' || m.metric_kind === 'composite') return false
+    return Boolean(parseAggFuncFromExpression(m.expression || ''))
+  })
+})
+
+const timeDimensionCandidates = computed(() => {
+  return (derivedMetricConfig.value?.dimensions || []).filter(d => d.logical_type === 'date' || d.logical_type === 'datetime')
+})
+
+const filterDimensionCandidates = computed(() => {
+  return (derivedMetricConfig.value?.dimensions || []).map(d => ({ name: d.name }))
+})
+
+const derivedMetricDefinition = (metric: SemanticMetric) => {
+  if (metric.metric_kind === 'composite') return metric.formula || ''
+  const parts: string[] = []
+  if (metric.base_metric) parts.push(`指标[${metric.base_metric}]`)
+  const period = metric.period
+  if (period && period.kind) {
+    if (period.kind === 'last_n_days') parts.push(`近${period.n || 0}天`)
+    else if (period.kind === 'between') parts.push(`${period.start || '?'}~${period.end || '?'}`)
+    else if (period.kind === 'today') parts.push('今日')
+    else if (period.kind === 'yesterday') parts.push('昨日')
+    else if (period.kind === 'this_week') parts.push('本周')
+    else if (period.kind === 'this_month') parts.push('本月')
+  }
+  ;(metric.filters || []).forEach(item => {
+    const valueText = Array.isArray(item.value) ? item.value.join('、') : String(item.value ?? '')
+    if (item.dimension) parts.push(`${item.dimension}${item.operator || '='}${valueText}`)
+  })
+  return parts.join(' · ')
+}
+
+const resetEditingDerivedState = () => {
+  editingDerivedMetric.value = null
+  editingDerivedMetricIndex.value = -1
+}
+
+const openEditDerivedMetric = (metric: SemanticMetric, index: number) => {
+  editingDerivedMetric.value = metric
+  editingDerivedMetricIndex.value = index
+  addFieldScope.value = 'metric'
+  addFieldForm.value.mode = metric.metric_kind === 'composite' ? 'composite' : 'derived'
+  addFieldForm.value.displayName = metric.name || ''
+  showAddFieldDialog.value = true
+}
+
+// 指标扩展段入口：派生/复合指标基于原子指标口径，前置校验聚合指标
+const openAddExtensionDialog = () => {
+  if (aggregateMetricCandidates.value.length === 0) {
+    ElMessage.warning('请先在字段配置中创建至少一个原子指标（聚合表达式），再创建扩展指标')
+    return
+  }
+  addFieldScope.value = 'metric'
+  resetEditingDerivedState()
+  addFieldForm.value.mode = 'derived'
+  addFieldForm.value.displayName = ''
+  showAddFieldDialog.value = true
+}
+
+const deleteDerivedMetric = (index: number) => {
+  const config = derivedMetricConfig.value
+  if (!config) return
+  const metric = config.metrics[index]
+  if (!confirm(`确定要删除这个${metricKindLabel(metric || {})}吗？`)) return
+  const newMetrics = [...config.metrics]
+  newMetrics.splice(index, 1)
+  updateConfig(config.id, { metrics: newMetrics })
+}
+
+const confirmDerivedField = (metric: SemanticMetric) => {
+  const config = derivedMetricConfig.value
+  if (!config) return
+  const previousName = editingDerivedMetricIndex.value >= 0 ? editingDerivedMetric.value?.name || '' : ''
+  const conflictingNames = [...config.metrics.map(m => m.name), ...config.dimensions.map(d => d.name)]
+    .filter(n => n && n !== previousName)
+  if (conflictingNames.includes(metric.name)) {
+    ElMessage.warning(`显示名称重复：${metric.name}`)
+    return
+  }
+  const newMetrics = [...config.metrics]
+  if (editingDerivedMetricIndex.value === -1) {
+    newMetrics.push(metric)
+  } else {
+    newMetrics[editingDerivedMetricIndex.value] = metric
+  }
+  updateConfig(config.id, { metrics: newMetrics })
+  resetEditingDerivedState()
+  ElMessage.success(`${metricKindLabel(metric)}已保存`)
 }
 
 // ============ 维度操作 ============
@@ -1598,6 +1712,7 @@ const openAddFieldDialog = () => {
   }
   const firstEntry = addFieldTables.value[0]
   if (!firstEntry) return
+  addFieldScope.value = 'field'
   addFieldForm.value.tableAlias = firstEntry.alias
   addFieldForm.value.column = addFieldColumns.value[0]?.name || ''
   addFieldForm.value.fieldName = getUniqueCustomFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
@@ -1605,6 +1720,7 @@ const openAddFieldDialog = () => {
   addFieldDefaultDisplayName.value = firstCol ? buildAliasAwareDefaultDisplayName(firstEntry, firstCol.name, firstCol.description) : ''
   addFieldForm.value.displayName = addFieldDefaultDisplayName.value
   addFieldForm.value.mode = 'metric'
+  resetEditingDerivedState()
   showAddFieldDialog.value = true
 }
 
@@ -1664,6 +1780,11 @@ const confirmAddField = () => {
   }
   const duplicated = fieldRows.value.some(row => ((row.displayName || '').trim() || row.column) === displayName)
   if (duplicated) {
+    ElMessage.warning(`显示名称重复：${displayName}`)
+    return
+  }
+  const duplicatedDerived = derivedMetricEntries.value.some(entry => (entry.metric.name || '') === displayName)
+  if (duplicatedDerived) {
     ElMessage.warning(`显示名称重复：${displayName}`)
     return
   }
@@ -2462,10 +2583,12 @@ const applyFieldSetting = (showToast = true) => {
       description: r.description || '',
       metadata_supplement: (r.metadataSupplement || '').trim(),
     }))
+  // 派生/复合指标不在 fieldRows 中表达，应用字段设置时原样保留
+  const logicalMetrics = config.metrics.filter(m => m.metric_kind === 'derived' || m.metric_kind === 'composite')
 
   updateConfig(configId, {
     dimensions: nextDimensions,
-    metrics: nextMetrics
+    metrics: [...nextMetrics, ...logicalMetrics]
   })
   clearDefaultDimensionScopeAliases(configId)
   fieldRowsSnapshot.value = buildFieldRowsEditSignature(fieldRows.value)
@@ -3258,6 +3381,91 @@ const saveOntologyRules = (ontologyRules: string) => {
                     </table>
                   </div>
                 </div>
+
+                <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-2.5 flex flex-col shrink-0">
+                  <div class="flex items-center justify-between gap-3" :class="metricSectionCollapsed ? '' : 'mb-1.5'">
+                    <div
+                      class="flex items-center gap-2 min-w-0 cursor-pointer select-none"
+                      :title="metricSectionCollapsed ? '展开指标扩展' : '折叠指标扩展'"
+                      @click="metricSectionCollapsed = !metricSectionCollapsed"
+                    >
+                      <div class="text-xs font-medium text-gray-600 shrink-0">指标扩展</div>
+                      <div class="text-[11px] text-gray-400 truncate">基于原子指标的逻辑口径，查询时自动展开 · {{ derivedMetricEntries.length }} 个</div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <button
+                        class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
+                        @click="openAddExtensionDialog"
+                      >
+                        <i class="fa-solid fa-plus mr-1"></i>新建扩展指标
+                      </button>
+                      <button
+                        class="w-6 h-6 border border-gray-200 rounded bg-white text-gray-400 text-[11px] cursor-pointer hover:text-gray-600 hover:border-gray-300"
+                        :title="metricSectionCollapsed ? '展开指标扩展' : '折叠指标扩展'"
+                        @click.stop="metricSectionCollapsed = !metricSectionCollapsed"
+                      >
+                        <i :class="metricSectionCollapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up'"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="!metricSectionCollapsed">
+                    <div v-if="derivedMetricEntries.length === 0" class="rounded-md border border-dashed border-gray-200 bg-white py-4 flex flex-col items-center justify-center text-gray-400 text-xs">
+                      <i class="fa-regular fa-square-plus mb-1.5"></i>
+                      暂无扩展指标，点击「新建扩展指标」创建派生 / 复合指标
+                    </div>
+                    <div v-else class="overflow-auto rounded-md border border-gray-200 bg-white max-h-64">
+                      <table class="w-full border-collapse text-[12px]">
+                        <thead class="bg-gray-50 text-gray-600">
+                          <tr>
+                            <th class="text-left px-3 py-2 border border-gray-200">显示名称</th>
+                            <th class="text-left px-3 py-2 border border-gray-200">口径定义</th>
+                            <th class="text-left px-3 py-2 border border-gray-200">字段备注</th>
+                            <th class="text-center px-3 py-2 border border-gray-200 w-[72px]">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="entry in derivedMetricEntries" :key="`extension_${entry.index}`" class="hover:bg-blue-50/40">
+                            <td class="px-3 py-2 border border-gray-200">
+                              <div class="flex items-center gap-1.5">
+                                <span class="text-gray-700">{{ entry.metric.name }}</span>
+                                <span
+                                  class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+                                  :class="entry.metric.metric_kind === 'composite' ? 'bg-violet-100 text-violet-600' : 'bg-blue-100 text-blue-600'"
+                                >{{ entry.metric.metric_kind === 'composite' ? '复合' : '派生' }}</span>
+                              </div>
+                            </td>
+                            <td class="px-3 py-2 border border-gray-200">
+                              <span class="text-gray-600 max-w-[520px] truncate block" :title="derivedMetricDefinition(entry.metric)">
+                                {{ derivedMetricDefinition(entry.metric) || '-' }}
+                              </span>
+                            </td>
+                            <td class="px-3 py-2 border border-gray-200">
+                              <span class="text-gray-600 max-w-[200px] truncate block" :title="entry.metric.description || ''">{{ entry.metric.description || '-' }}</span>
+                            </td>
+                            <td class="px-3 py-2 border border-gray-200 text-center">
+                              <div class="flex items-center justify-center gap-1">
+                                <button
+                                  class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300"
+                                  :title="`编辑${metricKindLabel(entry.metric)}`"
+                                  @click="openEditDerivedMetric(entry.metric, entry.index)"
+                                >
+                                  <i class="fa-solid fa-pen text-[11px]"></i>
+                                </button>
+                                <button
+                                  class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-400 hover:text-red-500 hover:border-red-200"
+                                  :title="`删除${metricKindLabel(entry.metric)}`"
+                                  @click="deleteDerivedMetric(entry.index)"
+                                >
+                                  <i class="fa-solid fa-trash text-[11px]"></i>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -3309,10 +3517,16 @@ const saveOntologyRules = (ontologyRules: string) => {
     <AddFieldDialog
       v-model:visible="showAddFieldDialog"
       v-model:form="addFieldForm"
+      :scope="addFieldScope"
       :tables="addFieldTableOptions"
+      :aggregate-metrics="aggregateMetricCandidates"
+      :time-dimensions="timeDimensionCandidates"
+      :filter-dimensions="filterDimensionCandidates"
+      :editing-derived="editingDerivedMetric"
       @table-change="handleAddFieldTableChange"
       @column-change="handleAddFieldColumnChange"
       @confirm="confirmAddField"
+      @confirm-derived="confirmDerivedField"
     />
 
     <MetricExpandDialog

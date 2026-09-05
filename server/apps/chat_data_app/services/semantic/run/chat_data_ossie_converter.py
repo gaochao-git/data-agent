@@ -12,6 +12,14 @@ from typing import Any
 import yaml
 
 from ..core.common import normalize_relationship_type
+from ..core.query_plan import is_derived_metric as _is_derived_metric
+from ..core.query_plan import is_composite_metric as _is_composite_metric
+from ..core.query_plan import parse_formula_refs
+from .semantic_query_plan_builder import (
+    derived_metric_verbalization,
+    resolve_composite_metric,
+    substitute_composite_formula,
+)
 
 
 _DATATYPE_MAP = {
@@ -81,6 +89,26 @@ def _source_reference(item: dict[str, Any]) -> dict[str, str]:
         }.items()
         if value
     }
+
+
+def _metric_extension_data(item: dict[str, Any]) -> dict[str, Any]:
+    """指标扩展描述：物理来源引用；派生/复合指标附加结构化口径定义供 Ossie 侧识别。"""
+    data: dict[str, Any] = dict(_source_reference(item))
+    if _is_derived_metric(item):
+        data.update({
+            "metric_kind": "derived",
+            "base_metric": _text(item.get("base_metric")),
+            "definition": derived_metric_verbalization(item),
+            "period": item.get("period") or {},
+            "filters": item.get("filters") or [],
+        })
+    elif _is_composite_metric(item):
+        data.update({
+            "metric_kind": "composite",
+            "formula": _text(item.get("formula")),
+            "metric_refs": parse_formula_refs(item.get("formula")),
+        })
+    return data
 
 
 def _extension(data: dict[str, Any]) -> list[dict[str, str]] | None:
@@ -381,12 +409,17 @@ class ChatDataToOssieConverter:
         return _datatype(dimension.get("logical_type"))
 
     def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:
+        metrics_map = {
+            item.get("name"): item
+            for item in config.get("metrics") or []
+            if isinstance(item, dict) and item.get("name")
+        }
         result = []
         for item in config.get("metrics") or []:
             if not isinstance(item, dict):
                 continue
             name = _text(item.get("name"))
-            expression = _expression(item, fallback=name)
+            expression = self._metric_expression(item, metrics_map)
             if not name or not expression:
                 continue
             datatype = _datatype(item.get("data_type") or item.get("logical_type"))
@@ -395,9 +428,25 @@ class ChatDataToOssieConverter:
                 expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
                 description=_text(item.get("description") or item.get("metadata_supplement")) or None,
                 datatype=datatype_type(datatype) if datatype else None,
-                custom_extensions=[extension_type(**x) for x in (_extension(_source_reference(item)) or [])],
+                custom_extensions=[extension_type(**x) for x in (_extension(_metric_extension_data(item)) or [])],
             ))
         return result
+
+    @staticmethod
+    def _metric_expression(item: dict[str, Any], metrics_map: dict[str, dict[str, Any]]) -> str:
+        """指标表达式：派生指标复用基础原子指标表达式；复合指标代入成员表达式；配置缺失时跳过导出。"""
+        if _is_derived_metric(item):
+            base_cfg = metrics_map.get(_text(item.get("base_metric"))) or {}
+            return _expression(base_cfg)
+        if _is_composite_metric(item):
+            try:
+                composite_plan = resolve_composite_metric(item, metrics_map)
+            except ValueError:
+                return ""
+            if not composite_plan:
+                return ""
+            return substitute_composite_formula(composite_plan["formula"], composite_plan["members"])
+        return _expression(item, fallback=_text(item.get("name")))
 
     def _relationships(self, config: dict[str, Any], relationship_type: Any, extension_type: Any) -> list[Any]:
         result = []

@@ -9,21 +9,28 @@ AI 侧入口见 semantic_ai_query_adapter.SemanticAIQueryAdapter，两者共享�
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from utils.logger import get_logger
+
 from ...runtime_config import DEFAULT_ROW_LIMIT
 from ..core.filter_normalization import normalize_time_filter_leaf
 from ..core.input_validator import InputValidator
 from ..core.query_plan import (
     SemanticQueryPlanContext,
+    is_composite_metric,
     semantic_table_alias,
 )
 from ..core.semantic_sql.compiler import SemanticSQLCompiler
 from .semantic_query_plan_builder import (
     assemble_dimension_filter_node,
     builder_node_alias,
+    build_metric_base_configs,
+    check_mixed_derived_periods,
     collect_filter_node_tables,
     metric_func_column,
     normalize_text,
 )
+
+logger = get_logger(__name__)
 
 FORBIDDEN_SEMANTIC_BUILDER_KEYS = {"mainTable", "mainAlias", "joins"}
 
@@ -71,6 +78,10 @@ class SemanticBIQueryAdapter:
             self.dimensions_map,
             max_limit=self.max_rows,
         )
+        # 派生/复合指标统一预解析（共享入口）：编译配置 + 派生固定过滤叶子
+        self._metric_base_cfgs, self._derived_fixed_leaves = build_metric_base_configs(
+            self.metrics_map, self.dimensions_map,
+        )
 
     def adapt(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
         """校验并规范化 Builder 输入，不在此阶段生成 SQL。"""
@@ -80,10 +91,17 @@ class SemanticBIQueryAdapter:
         if forbidden:
             raise ValueError(f"语义可视化 DSL 不允许包含前端表关系字段: {', '.join(sorted(forbidden))}")
 
+        self._used_derived_names: List[str] = []
         dimensions = [self._map_dimension(item) for item in _as_list(semantic_builder_config.get("dimensions"), "dimensions")]
         aggregations = [self._map_aggregation(item) for item in _as_list(semantic_builder_config.get("aggregations"), "aggregations")]
         filters = self._map_filter_nodes(semantic_builder_config.get("filters") or [])
         order_by = [self._map_order_by(item, aggregations, dimensions) for item in _as_list(semantic_builder_config.get("orderBy"), "orderBy")]
+        # 不同周期的派生指标混用会因固定过滤交集而算错，提前拦截
+        mixed_err = check_mixed_derived_periods(self._used_derived_names, self.metrics_map)
+        if mixed_err:
+            raise ValueError(mixed_err)
+        # 派生指标固定过滤在全部指标解析完成后注入，确保 order_by/HAVING 引用的派生指标也被覆盖
+        filters.extend(self._derived_fixed_filter_nodes())
         limit = self._validate_limit(semantic_builder_config.get("limit"))
         offset = self._validate_offset(semantic_builder_config.get("offset"))
 
@@ -191,12 +209,35 @@ class SemanticBIQueryAdapter:
         for name in name_candidates:
             normalized = normalize_text(name)
             if normalized and normalized in self.metrics_map:
-                return self.metrics_map[normalized]
+                # 派生指标按预解析的基础原子指标参与编译，别名保留派生指标名
+                self._track_used_derived_metric(normalized)
+                return {**self._metric_base_cfgs[normalized], "name": normalized}
 
         item_func = normalize_text(item.get("func") or "RAW").upper()
         item_keys = _field_keys(item.get("table"), _normalize_alias(item), item.get("column"))
         item_expression = normalize_text(item.get("expression"))
         return self._match_metric_by_field(item, item_expression, item_func, item_keys)
+
+    def _track_used_derived_metric(self, metric_name: str) -> None:
+        """记录本次查询用到的派生指标名（保持首次出现顺序，供固定过滤注入）。"""
+        if self._derived_fixed_leaves.get(metric_name) and metric_name not in self._used_derived_names:
+            self._used_derived_names.append(metric_name)
+
+    def _derived_fixed_filter_nodes(self) -> List[Dict[str, Any]]:
+        """把本次查询涉及的派生指标的周期/修饰词固定过滤映射为 BI 过滤节点。
+
+        v1 口径：固定过滤作用于整条查询；同一查询混用不同周期的派生指标时
+        取过滤的交集，由派生指标 verbalization 向模型说明口径。
+        """
+        nodes: List[Dict[str, Any]] = []
+        for metric_name in self._used_derived_names:
+            for leaf in self._derived_fixed_leaves.get(metric_name) or []:
+                nodes.extend(self._map_dimension_filter_leaves({
+                    "semanticName": leaf.get("dimension"),
+                    "operator": leaf.get("operator"),
+                    "value": leaf.get("value"),
+                }))
+        return nodes
 
     def _map_dimension(self, item: Dict[str, Any]) -> Dict[str, Any]:
         dim = self._resolve_dimension_config(item)
@@ -215,6 +256,17 @@ class SemanticBIQueryAdapter:
     @staticmethod
     def _aggregation_fields_from_metric(item: Dict[str, Any], metric: Dict[str, Any]) -> tuple:
         """命中语义指标时，聚合字段优先取指标配置。"""
+        if is_composite_metric(metric):
+            # 复合指标：formula 已代入为完整聚合表达式，按 RAW 原样直出并绑定成员物理表
+            table = metric.get("table") or item.get("table")
+            return (
+                "RAW",
+                table,
+                _semantic_alias(metric) or table,
+                "*",
+                metric.get("expression"),
+                metric.get("name") or item.get("alias") or item.get("displayName") or table,
+            )
         parsed = metric_func_column(normalize_text(metric.get("expression")))
         func = parsed[0] if parsed else normalize_text(item.get("func") or "RAW").upper()
         column = parsed[1] if parsed else (metric.get("column") or item.get("column") or "*")

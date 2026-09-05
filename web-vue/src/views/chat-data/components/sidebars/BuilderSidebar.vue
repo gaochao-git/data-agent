@@ -99,6 +99,21 @@ const buildSemanticDimensionField = (dim: SemanticDimension) => ({
 })
 
 const buildSemanticMetricField = (metric: SemanticConfigItem['metrics'][number]) => {
+  // 派生/复合指标：无物理表字段与表达式，后端按 semanticName 从语义模型解析口径
+  if (metric.metric_kind === 'derived' || metric.metric_kind === 'composite') {
+    return {
+      table: '',
+      tableAlias: '',
+      tableLabel: '',
+      column: '',
+      semanticName: metric.name,
+      displayName: metric.name,
+      expression: '',
+      label: metric.name,
+      aggFunc: 'RAW',
+      metricKind: metric.metric_kind
+    }
+  }
   const meta = parseMetricDragMeta(metric)
   return {
     table: metric.table,
