@@ -2240,6 +2240,12 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
     return trail
   })
+
+  // 子智能体内部工具落盘（如 OfficeCLI 写 docx）后同步刷新控制台文件树，
+  // 与主智能体工具完成后的刷新行为保持一致；schedule 内部有 500ms 防抖
+  if (event.type === 'tool_completed') {
+    scheduleWorkspaceFilesRefresh()
+  }
 }
 
 const isUnfinishedToolStatus = (status?: ToolCallInfo['status']) => status === 'generating' || status === 'running'
