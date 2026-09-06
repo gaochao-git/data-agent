@@ -1794,6 +1794,27 @@ const handleDownloadPresentedArtifact = async (artifact: PresentedDeliveryArtifa
   }
 }
 
+// outputs 目录下的文件在控制台直接提供下载，不依赖智能体是否调用过展示工具
+const handleDownloadConsoleFile = async () => {
+  const file = selectedConsoleFile.value
+  const conversationId = localConversationId.value
+  if (!file || file.source !== 'outputs' || !conversationId) return
+  try {
+    const blob = await getConversationWorkspaceRawFile(conversationId, file.relativePath)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = file.relativePath.split('/').pop() || file.relativePath
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    console.error('下载输出文件失败:', err)
+    ElMessage.error('文件下载失败，请稍后重试')
+  }
+}
+
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
   const fieldName = String(payload?.fieldName || '').trim()
   if (!fieldName) return
@@ -3364,6 +3385,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </button>
                 </div>
                 <div v-if="selectedConsoleFile" class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ selectedConsoleFile.source }}</div>
+                <button
+                  v-if="selectedConsoleFile?.source === 'outputs'"
+                  type="button"
+                  class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                  title="下载文件"
+                  @click="handleDownloadConsoleFile"
+                >
+                  <i class="fa-solid fa-download"></i>
+                </button>
                 <button
                   v-if="selectedConsoleFile"
                   type="button"

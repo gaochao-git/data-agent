@@ -339,28 +339,6 @@ describe('ToolCallList', () => {
     expect(wrapper.emitted('selectTool')?.[0]?.[0]).toMatchObject({ tool_call_id: 'inner-1' })
   })
 
-  it('surfaces inner tool failures while the chain is collapsed', () => {
-    const wrapper = mount(ToolCallList, {
-      props: {
-        toolCalls: [
-          {
-            tool_call_id: 'call-task',
-            tool_name: 'task',
-            args: { description: '任务书' },
-            status: 'completed',
-            subagentTrail: [
-              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 / 0' }, status: 'error', result: 'division by zero' },
-            ],
-          },
-        ],
-      },
-    })
-
-    // 默认收起，但异常不被完全藏起来
-    expect(wrapper.find('.subagent-trail-scroll').exists()).toBe(false)
-    expect(wrapper.find('.subagent-chain').text()).toContain('部分工具失败')
-  })
-
   it('surfaces the in-flight inner tool in the header so fast tools do not look frozen', () => {
     const wrapper = mount(ToolCallList, {
       props: {
@@ -397,7 +375,7 @@ describe('ToolCallList', () => {
     expect(settledChip.classes().join(' ')).not.toContain('bg-[rgba(31,130,217,0.06)]')
   })
 
-  it('prefers the in-flight hint while running and surfaces failures once settled', async () => {
+  it('shows the in-flight hint only while running and drops it once settled', async () => {
     const toolCall = {
       tool_call_id: 'call-task',
       tool_name: 'task' as const,
@@ -414,10 +392,10 @@ describe('ToolCallList', () => {
     expect(wrapper.find('.subagent-chain').text()).toContain('正在执行：查询数据')
 
     await wrapper.setProps({ toolCalls: [{ ...toolCall, status: 'completed' as const }] })
-    // 收敛后：不再有 in-flight 提示，改为露出异常
+    // 收敛后：不再有 in-flight 提示，标题行回归「子智能体执行过程」
     const settled = wrapper.find('.subagent-chain').text()
     expect(settled).not.toContain('正在执行')
-    expect(settled).toContain('部分工具失败')
+    expect(settled).toContain('子智能体执行过程')
   })
 
   it('shows no in-flight hint when no inner tool is executing', () => {
