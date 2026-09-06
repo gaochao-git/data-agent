@@ -56,7 +56,7 @@
 ### 4.1 核心链路治理
 
 - 智能问数、可视化查询、SQL 查询、看板等共享能力必须复用统一后端结果结构、前端类型和通用组件，不允许在各入口重复拼装一套相似但字段口径不同的逻辑。
-- 多执行对象查询结果统一以 `results[]` 表达，每个成员结果至少保持 `member_datasource_id`、`member_name`、`success`、`status`、`sql`、`columns`、`data`、`total_count`、`execution_time_ms`、`error` 等字段口径一致；新增字段要同步后端返回、前端 API 类型、页面消费和测试。
+- 多执行对象查询结果统一以 `results[]` 表达，每个成员结果至少保持 `member_datasource_id`、`member_name`、`status`、`sql`、`columns`、`data`、`total_count`、`execution_time_ms`、`error` 等字段口径一致；成员成功与否由 `status` 单一表达（`succeeded`/`failed`/`cancelled`/`running`），不使用 `success` 布尔字段；新增字段要同步后端返回、前端 API 类型、页面消费和测试。
 - 查询结果展示统一走共享结果组件；如果智能问数、可视化查询、SQL 查询需要新增展示能力，应扩展共享组件和共享类型，而不是在某个入口单独实现 Tab、状态栏、保存到看板、结果解析等逻辑。
 - `member_name` 用于用户可见展示；`member_datasource_id` 用于执行对象定位、保存到看板、历史回放、权限校验和必要的 hover 详情，不要在各入口自行拼接成不同的可见标题格式。
 - 修改查询执行、结果展示、保存到看板、多数据源执行、历史 SQL 等核心链路时，必须同时 review 后端路由/服务、前端 API/types、智能问数、可视化查询、SQL 查询和看板消费侧，确保字段、状态、执行对象和错误处理口径一致。
