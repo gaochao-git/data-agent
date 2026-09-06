@@ -178,7 +178,7 @@ describe('subagent trail replay', () => {
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '算一下 1+1' } },
       {
         sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
-        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: { description: '算 1+1', subagent_type: 'deep-analysis' } }] },
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: { description: '算 1+1', subagent_type: 'data-explore' } }] },
       },
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',

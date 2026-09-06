@@ -176,7 +176,7 @@ def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatc
     captured = {}
     runtime, base_options = _runtime(tmp_path)
     options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, analysis_subagent_enabled=True
+        workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True
     )
 
     def fake_create_agent(**kwargs):
@@ -207,7 +207,11 @@ def test_build_subagent_middleware_disabled_by_default(tmp_path):
     assert build_subagent_middleware(options, [], model=object()) is None
 
 
-def test_build_subagent_middleware_excludes_interactive_tools(monkeypatch, tmp_path):
+def _subagent_spec_names(middleware) -> list[str]:
+    return [spec.name for spec in middleware.specs]
+
+
+def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
@@ -219,10 +223,15 @@ def test_build_subagent_middleware_excludes_interactive_tools(monkeypatch, tmp_p
         subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
     )
     options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, analysis_subagent_enabled=True
+        workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True
     )
     tools = [
         SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="file_grep"),
+        SimpleNamespace(name="file_write"),
+        SimpleNamespace(name="file_edit"),
+        SimpleNamespace(name="bash_run"),
+        SimpleNamespace(name="officecli_run"),
         SimpleNamespace(name="ask_user_question"),
         SimpleNamespace(name="present_artifacts"),
         SimpleNamespace(name="calculator_tool"),
@@ -232,11 +241,80 @@ def test_build_subagent_middleware_excludes_interactive_tools(monkeypatch, tmp_p
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    task_tool = middleware.tools[0]
-    assert task_tool.name == "task"
+    assert _subagent_spec_names(middleware) == ["data-explore"]
     spec = middleware.specs[0]
-    assert [tool.name for tool in spec.tools] == ["file_read", "calculator_tool"]
+    assert [tool.name for tool in spec.tools] == ["file_read", "file_grep", "calculator_tool"]
     assert spec.model is model
+
+
+def test_build_subagent_middleware_writer_keeps_write_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(
+        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+    )
+    options = AgentRuntimeOptions(
+        workspace_backend="local", bash_enabled=False, writer_subagent_enabled=True
+    )
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="file_write"),
+        SimpleNamespace(name="bash_run"),
+        SimpleNamespace(name="officecli_run"),
+        SimpleNamespace(name="ask_user_question"),
+        SimpleNamespace(name="present_artifacts"),
+    ]
+    model = object()
+
+    middleware = build_subagent_middleware(options, tools, model=model)
+
+    assert middleware is not None
+    assert _subagent_spec_names(middleware) == ["report_writer"]
+    spec = middleware.specs[0]
+    # writer 只扣除人工应答与产物呈现工具，写操作工具全部保留
+    assert [tool.name for tool in spec.tools] == [
+        "file_read", "file_write", "bash_run", "officecli_run",
+    ]
+    assert spec.model is model
+
+
+def test_build_subagent_middleware_supports_both_specs(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(
+        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+    )
+    options = AgentRuntimeOptions(
+        workspace_backend="local", bash_enabled=False,
+        explore_subagent_enabled=True, writer_subagent_enabled=True,
+    )
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="file_write"),
+        SimpleNamespace(name="bash_run"),
+    ]
+    model = object()
+
+    middleware = build_subagent_middleware(options, tools, model=model)
+
+    assert middleware is not None
+    assert _subagent_spec_names(middleware) == ["data-explore", "report_writer"]
+    # 同一工具列表按各自排除集独立过滤：explore 不含写工具，writer 保留
+    explore_tools = [tool.name for tool in middleware.specs[0].tools]
+    writer_tools = [tool.name for tool in middleware.specs[1].tools]
+    assert explore_tools == ["file_read"]
+    assert writer_tools == ["file_read", "file_write", "bash_run"]
+    # task 工具描述中列出全部类型
+    assert "data-explore" in middleware.tools[0].description
+    assert "report_writer" in middleware.tools[0].description
 
 
 @pytest.mark.asyncio

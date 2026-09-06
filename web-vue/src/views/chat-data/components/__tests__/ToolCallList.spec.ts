@@ -12,7 +12,7 @@ describe('ToolCallList', () => {
           {
             tool_call_id: 'call-task',
             tool_name: 'task',
-            args: { description: '任务书', subagent_type: 'deep-analysis' },
+            args: { description: '任务书', subagent_type: 'data-explore' },
             status: 'running',
             subagentTrail: [
               {
@@ -73,7 +73,7 @@ describe('ToolCallList', () => {
           {
             tool_call_id: 'call-task',
             tool_name: 'task',
-            args: { description: '任务书', subagent_type: 'deep-analysis' },
+            args: { description: '任务书', subagent_type: 'data-explore' },
             status: 'running',
             subagentTrail: [
               { kind: 'message', id: 'msg-1', content: '先算一下 1+1' },

@@ -130,7 +130,7 @@ describe('ToolCallCard', () => {
         toolCall: {
           tool_call_id: 'call-task',
           tool_name: 'task',
-          args: { description: '任务书', subagent_type: 'deep-analysis' },
+          args: { description: '任务书', subagent_type: 'data-explore' },
           status: 'running',
           subagentTrail: [
             {

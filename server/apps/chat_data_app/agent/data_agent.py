@@ -27,7 +27,11 @@ from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.steering import create_steering_middleware
-from .prompts.chat_data import ANALYSIS_SUBAGENT_PROMPT, build_unified_system_prompt
+from .prompts.chat_data import (
+    DATA_EXPLORE_SUBAGENT_PROMPT,
+    WRITER_SUBAGENT_PROMPT,
+    build_unified_system_prompt,
+)
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -141,15 +145,45 @@ def assemble_tools(
     return tools
 
 
-# 子智能体不继承的工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
+# 子智能体不继承的基础工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
 # present_artifacts 是用户可见的产物呈现（最终交付由主智能体负责）。
-SUBAGENT_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_artifacts"})
+SUBAGENT_BASE_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_artifacts"})
 
-ANALYSIS_SUBAGENT_NAME = "deep-analysis"
-ANALYSIS_SUBAGENT_DESCRIPTION = (
-    "执行深度数据分析：语义检索、DSL/SQL 查询、结果读取、"
-    "精确计算核对与多步交叉分析，只回传最终结论。"
+# data-explore 在基础排除集之上额外排除的写操作工具：只读事实收集不写文件、
+# 不执行命令、不做文档编辑，避免子智能体在探查过程中产生副作用。
+DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
+    "file_edit",
+    "file_write",
+    "file_move",
+    "file_copy",
+    "file_delete",
+    "dir_create",
+    "dir_delete",
+    "bash_run",
+    "officecli_run",
+})
+
+DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
+DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
+    "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
+    "只回传结构化事实清单，不写文件、不下最终结论。"
+    "适合需要跨多模型/多表摸底数据事实的场景。"
 )
+
+WRITER_SUBAGENT_NAME = "report_writer"
+WRITER_SUBAGENT_DESCRIPTION = (
+    "写作成稿：先收集事实再撰写报告/文档/分析文章，交付文件写入会话工作区，"
+    "只回传文件路径与内容摘要。"
+    "适合用户需要产出报告、周报、分析文档等成稿物的任务。"
+)
+
+
+def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
+    """按排除集过滤子智能体工具。"""
+    return [
+        tool for tool in tools
+        if str(getattr(tool, "name", "") or "") not in excluded
+    ]
 
 
 def build_subagent_middleware(
@@ -158,25 +192,34 @@ def build_subagent_middleware(
     *,
     model,
 ) -> SubagentMiddleware | None:
-    """按运行选项构建子智能体中间件；未启用时返回 None。
+    """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
-    子智能体继承主智能体全部工具（扣除需人工应答与产物呈现的交互工具），
-    使用与主智能体相同的模型，运行在隔离上下文中。
+    子智能体继承主智能体工具（各自扣除排除集），使用与主智能体相同的模型，
+    运行在隔离上下文中；data-explore 额外扣除全部写操作工具保持只读。
     """
-    if not runtime_options.analysis_subagent_enabled:
+    specs: list[SubagentSpec] = []
+    if runtime_options.explore_subagent_enabled:
+        specs.append(SubagentSpec(
+            name=DATA_EXPLORE_SUBAGENT_NAME,
+            description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
+            system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
+            tools=_filter_subagent_tools(
+                tools,
+                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+            ),
+            model=model,
+        ))
+    if runtime_options.writer_subagent_enabled:
+        specs.append(SubagentSpec(
+            name=WRITER_SUBAGENT_NAME,
+            description=WRITER_SUBAGENT_DESCRIPTION,
+            system_prompt=WRITER_SUBAGENT_PROMPT,
+            tools=_filter_subagent_tools(tools, SUBAGENT_BASE_EXCLUDED_TOOL_NAMES),
+            model=model,
+        ))
+    if not specs:
         return None
-    subagent_tools = [
-        tool for tool in tools
-        if str(getattr(tool, "name", "") or "") not in SUBAGENT_EXCLUDED_TOOL_NAMES
-    ]
-    spec = SubagentSpec(
-        name=ANALYSIS_SUBAGENT_NAME,
-        description=ANALYSIS_SUBAGENT_DESCRIPTION,
-        system_prompt=ANALYSIS_SUBAGENT_PROMPT,
-        tools=subagent_tools,
-        model=model,
-    )
-    return SubagentMiddleware([spec])
+    return SubagentMiddleware(specs)
 
 
 def create_data_agent(
