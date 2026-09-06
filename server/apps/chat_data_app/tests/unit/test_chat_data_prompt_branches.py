@@ -5,7 +5,7 @@
 这些函数此前只在"构造 Agent"时被间接调用，单一入参形态覆盖了不到 2/3 的分支。
 本文件直接针对格式化函数做单元级验证，无需 mock、无需构造 Agent。
 
-不可达分支说明：`build_unified_system_prompt` 第 261 行 `if dialect_context_text`
+不可达分支说明：`build_unified_system_prompt` 中 `if dialect_context_text`
 的假分支无法触达 —— `build_dialect_prompt_context` 的返回值是 f-string，MySQL/Hive
 两种取值都非空。下方 `test_dialect_block_is_always_present` 固化该结论。
 """
@@ -206,21 +206,22 @@ def test_dialect_block_is_always_present():
 
 
 # ---------------------------------------------------------------------------
-# build_unified_system_prompt（267->268 bash_enabled）
+# build_unified_system_prompt（bash_enabled 只影响工具注册，不影响提示词）
 # ---------------------------------------------------------------------------
 
 
-def test_system_prompt_appends_bash_block_only_when_enabled():
+def test_system_prompt_invariant_to_bash_flag():
     without_bash = chat_data.build_unified_system_prompt(AgentRuntimeOptions(bash_enabled=False))
     with_bash = chat_data.build_unified_system_prompt(AgentRuntimeOptions(bash_enabled=True))
 
-    assert chat_data.BASH_WORKFLOW_BLOCK not in without_bash
-    assert chat_data.BASH_WORKFLOW_BLOCK in with_bash
-    # 其余段落与 bash 开关无关
+    # bash_enabled 只控制 bash_run 工具注册；系统提示词不再有 bash 专属段落
+    assert without_bash == with_bash
+
+    # 其余段落始终存在
     for block in (
         chat_data.ROLE_BLOCK,
         chat_data.PRIORITY_BLOCK,
-        chat_data.WORKSPACE_WORKFLOW_BLOCK,
+        chat_data.ENVIRONMENT_BLOCK,
         chat_data.OUTPUT_AND_FINAL_ANSWER_BLOCK,
         chat_data.ERROR_HANDLING_BLOCK,
     ):
@@ -246,12 +247,13 @@ def test_system_prompt_environment_block_ignores_workspace_root():
     )
 
     assert "## 环境" in with_root
-    assert "├── workspace/   主工作区" in with_root
+    assert "├── workspace/   中间文件写入该工作区" in with_root
     # semantic/ 与 /mnt/skills 在环境块集中声明一次
     assert "└── semantic/  本轮启用语义模型的只读 YAML 快照" in with_root
     assert "{模型名}__{id后缀}.yaml" in with_root
-    assert "查询结果由系统存于 outputs/query_result/" in with_root
-    assert "/mnt/skills/<技能名>/" in with_root
+    assert "query_result/  查询结果卸载文件" in with_root
+    assert ".tool-offload/ 其它工具大结果卸载文件" in with_root
+    assert "└── skills/" in with_root
     assert "工作目录：\n/mnt/user-data/workspace" not in with_root
     assert "未初始化" not in with_root
     # workspace_root 不参与拼装，两个入参产出完全相同

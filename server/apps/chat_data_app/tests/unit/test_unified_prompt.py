@@ -35,25 +35,30 @@ def test_system_prompt_requires_semantic_skill_gate_before_query():
     assert "每次查询只能使用一个 `semantic_config_id`" not in prompt
     assert "get_field" not in prompt
     assert "source_tool=semantic_search" not in prompt
-    assert ".tool-offload" not in prompt
-    assert "## 执行连续性" in prompt
-    assert "## 工作区与交付" in prompt
+    # 工具结果卸载规则段落已收敛进 ENVIRONMENT_BLOCK 目录树（目录名保留，段落标题不出现）
+    assert "## 工具结果卸载处理" not in prompt
+    # 提示词精简后这些独立段落已删除，环境说明统一在 ## 环境 目录树中
+    assert "## 执行连续性" not in prompt
+    assert "## 工作区与交付" not in prompt
 
 
-def test_execution_continuity_is_separate_from_workspace_rules():
+def test_removed_workflow_blocks_are_absent_and_environment_keeps_tree():
+    """执行连续性/工作区交付/工具结果卸载三个段落已删除，环境目录树保留卸载目录声明。"""
     prompt = build_unified_system_prompt(AgentRuntimeOptions())
 
-    continuity_start = prompt.index("## 执行连续性")
-    workspace_start = prompt.index("## 工作区与交付")
-    continuity = prompt[continuity_start:workspace_start]
-    workspace = prompt[workspace_start:prompt.index("## 工具结果卸载处理")]
+    assert "## 执行连续性" not in prompt
+    assert "## 工作区与交付" not in prompt
+    assert "## 工具结果卸载处理" not in prompt
+    assert "上下文足够时直接执行" not in prompt
+    assert "工具调用前后各用一句话" not in prompt
+    assert "修改已有文件前先读取最新内容" not in prompt
 
-    assert "上下文足够时直接执行" in continuity
-    assert "工具调用前后各用一句话" in continuity
-    assert "上下文足够时直接执行" not in workspace
-    assert "工具调用前后各用一句话" not in workspace
-    assert "修改已有文件前先读取最新内容" in workspace
-    assert "outputs" in workspace
+    assert "## 环境" in prompt
+    assert "├── workspace/" in prompt
+    assert "└── semantic/" in prompt
+    assert "query_result/  查询结果卸载文件" in prompt
+    assert ".tool-offload/ 其它工具大结果卸载文件" in prompt
+    assert "└── uploads/     上传区（只读，不可写）" in prompt
 
 
 def test_system_prompt_keeps_detailed_semantic_rules_in_skill():
