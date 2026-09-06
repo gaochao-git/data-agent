@@ -1026,7 +1026,7 @@ class QueryTaskService:
 
     @staticmethod
     def is_query_task_owned_by_user(task_data: Dict[str, Any], executions: List[Dict[str, Any]], user_id: str) -> bool:
-        """判断查询任务是否归属于当前用户。"""
+        """判断查询任务是否归属于当前用户；owner 信息缺失时 fail-close 拒绝。"""
         normalized_user_id = str(user_id or "").strip()
         if not normalized_user_id:
             return False
@@ -1038,16 +1038,18 @@ class QueryTaskService:
         task_user_id = QueryHistoryService.task_user_id(task_data)
         if task_user_id:
             owner_ids.add(task_user_id)
-        return not owner_ids or normalized_user_id in owner_ids
+        # 任务创建时必填 user_id；owner 集合为空说明数据异常，按无权处理
+        return bool(owner_ids) and normalized_user_id in owner_ids
 
     @staticmethod
     def can_cancel_query_task(task_data: Dict[str, Any], executions: List[ChatDataQueryExecution], user_id: str) -> bool:
-        """判断当前用户是否可停止查询任务。"""
+        """判断当前用户是否可停止查询任务；owner 信息缺失时 fail-close 拒绝。"""
         owner_ids = {str(item.user_id or "").strip() for item in executions if str(item.user_id or "").strip()}
         task_user_id = QueryHistoryService.task_user_id(task_data)
         if not owner_ids and task_user_id:
             owner_ids.add(task_user_id)
-        return not owner_ids or str(user_id or "").strip() in owner_ids
+        # 同 is_query_task_owned_by_user：owner 集合为空视为数据异常，拒绝停止
+        return bool(owner_ids) and str(user_id or "").strip() in owner_ids
 
     async def resolve_execution_target(self, execution: ChatDataQueryExecution) -> Optional[Dict[str, Any]]:
         """根据执行记录解析实际成员数据源配置。"""

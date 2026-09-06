@@ -14,6 +14,7 @@ from utils.logger import get_logger
 from ...runtime_config import DEFAULT_ROW_LIMIT
 from ..core.filter_normalization import normalize_time_filter_leaf
 from ..core.input_validator import InputValidator
+from ..core.semantic_sql.filter_compiler import ensure_safe_sql_expression
 from ..core.query_plan import (
     SemanticQueryPlanContext,
     is_composite_metric,
@@ -392,6 +393,8 @@ class SemanticBIQueryAdapter:
         if value_type == "expression":
             if not normalize_text(node.get("rightExpression")):
                 raise ValueError(f"筛选条件“{label}”请输入表达式")
+            # 与 AI 链路同口径：自由表达式禁止注释、分号与写操作关键字
+            ensure_safe_sql_expression(node.get("rightExpression"), label=f"筛选条件“{label}”的表达式")
             return True
         return False
 

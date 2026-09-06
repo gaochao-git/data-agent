@@ -248,8 +248,10 @@ async def _load_authorized_execution_targets(
                 username=username,
             )
     except Exception as exc:
+        # 授权查询失败必须 fail-close：静默返回空列表会让查询在缺失
+        # 执行对象范围的情况下继续跑，用户无感知地丢失行级范围。
         logger.warning("读取当前用户执行对象失败: datasource_id=%s error=%s", datasource_id, exc)
-        return []
+        raise ValueError("读取执行对象权限失败，请稍后重试") from exc
     return [dict(item) for item in targets or [] if isinstance(item, dict)]
 
 

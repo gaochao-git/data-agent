@@ -73,6 +73,7 @@ import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
 import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
+import { isAbortError } from '@/utils/abort'
 
 const props = defineProps({
   datasourceId: { type: String, required: true },
@@ -92,6 +93,8 @@ const props = defineProps({
 })
 const attrs = useAttrs()
 const { submitSqlTask } = useQueryTask()
+// 当前查询任务轮询的取消通道：组件卸载时中止，避免销毁后仍继续轮询/写状态
+let queryTaskAbortController: AbortController | null = null
 
 const emit = defineEmits<{
   datasourceChange: [dsId: string]
@@ -2265,6 +2268,9 @@ const executeQuery = async () => {
   executedSql.value = ''
   resultTabs.value = []
   activeResultTabIndex.value = 0
+  // 每次执行创建独立取消通道，供组件卸载时中止本次轮询
+  const taskController = new AbortController()
+  queryTaskAbortController = taskController
   try {
     const datasourceId = props.datasourceId
     const semanticConfigId = props.semanticConfigId as string
@@ -2282,6 +2288,7 @@ const executeQuery = async () => {
       skip_query_cache: shouldSkipQueryCache,
     }, {
       returnTerminalTask: true,
+      signal: taskController.signal,
       onProgress: (taskStatus) => {
         executingTaskText.value = taskStatus.progress_text || '执行中...'
         executingTaskId.value = taskStatus.task_id
@@ -2341,18 +2348,21 @@ const executeQuery = async () => {
       }]
     }
   } catch (err) {
-    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
-    const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
-    rawResultData.value = JSON.stringify({
-      status: 'failed',
-      error: message
-    })
-    resultTabs.value = [{
-      title: '结果1',
-      rawResultData: rawResultData.value,
-      executedSql: '',
-      status: 'error',
-    }]
+    // 组件卸载触发的轮询取消不属于查询失败，不向结果区写错误，避免已销毁组件仍弹错误提示
+    if (!isAbortError(err)) {
+      const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
+      const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
+      rawResultData.value = JSON.stringify({
+        status: 'failed',
+        error: message
+      })
+      resultTabs.value = [{
+        title: '结果1',
+        rawResultData: rawResultData.value,
+        executedSql: '',
+        status: 'error',
+      }]
+    }
   } finally {
     executing.value = false
     executingTaskText.value = ''
@@ -2998,6 +3008,9 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('mousemove', onMouseMove)
   document.removeEventListener('mouseup', onMouseUp)
+  // 卸载时中止进行中的查询任务轮询（AbortError 由调用方静默处理）
+  queryTaskAbortController?.abort()
+  queryTaskAbortController = null
 })
 
 // 暴露方法给父组件

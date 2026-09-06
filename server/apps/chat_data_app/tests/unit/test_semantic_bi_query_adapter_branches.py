@@ -672,3 +672,18 @@ async def test_load_runtime_semantic_config_reraises_other_errors(monkeypatch):
 
     with pytest.raises(ValueError, match="数据库连接失败"):
         await load_runtime_semantic_config("ds-1", "cfg-1")
+
+
+def test_validate_filter_value_rejects_unsafe_expression(adapter):
+    """expression 筛选值与 AI 链路同口径：注释/分号/写操作关键字一律拒绝。"""
+    for unsafe in ("1; DROP TABLE users", "1 -- comment", "1 /* block */"):
+        with pytest.raises(ValueError, match="只允许单条只读 SQL 表达式"):
+            adapter._validate_filter_value(
+                {"name": "城市", "operator": "=", "valueType": "expression", "rightExpression": unsafe}
+            )
+
+
+def test_validate_filter_value_allows_normal_expression(adapter):
+    adapter._validate_filter_value(
+        {"name": "城市", "operator": "IN", "valueType": "expression", "rightExpression": "(SELECT city FROM white_list)"}
+    )

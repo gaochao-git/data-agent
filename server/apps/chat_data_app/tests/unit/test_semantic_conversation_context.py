@@ -178,22 +178,20 @@ async def test_prepare_context_does_not_authorize_or_expand_empty_member_scope(m
 
 @pytest.mark.asyncio
 async def test_prepare_context_handles_execution_authorization_failure(monkeypatch):
+    """授权查询失败必须 fail-close：直接报错终止，不允许静默丢失行级范围继续查询。"""
     manager = _FakeDatasourceManager(authorize_error=ValueError("无机构权限"))
 
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
 
-    context = await semantic_conversation_context.prepare_semantic_conversation_context(
-        datasource_id="ds_1",
-        semantic_config_id=None,
-        member_datasource_ids=["m_hz"],
-        user_id="u_1",
-        username="测试用户",
-        user_query="查询杭州分公司",
-    )
-
-    assert context.execution_targets == []
-    assert context.available_member_datasource_ids == []
-    assert context.matched_member_datasource_ids == []
+    with pytest.raises(ValueError, match="读取执行对象权限失败"):
+        await semantic_conversation_context.prepare_semantic_conversation_context(
+            datasource_id="ds_1",
+            semantic_config_id=None,
+            member_datasource_ids=["m_hz"],
+            user_id="u_1",
+            username="测试用户",
+            user_query="查询杭州分公司",
+        )
 
 
 def test_execution_target_context_formats_only_selected_resolvable_members():

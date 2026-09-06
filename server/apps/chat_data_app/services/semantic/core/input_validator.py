@@ -28,10 +28,9 @@ LIKE_OPERATORS = {'LIKE', 'NOT LIKE', 'STARTS WITH', 'ENDS WITH'}
 BUILDER_ONLY_FILTER_FIELDS = {'rightTable', 'rightTableAlias', 'rightColumn'}
 FILTER_VALUE_TYPES = {'literal', 'sql_function'}
 FREE_EXPRESSION_VALUE_TYPE = 'expression'
-UNSAFE_EXPRESSION_PATTERN = re.compile(
-    r";|--|/\*|\*/|\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE|CALL|EXECUTE)\b",
-    re.IGNORECASE,
-)
+# 自由表达式黑名单统一收敛在编译层 filter_compiler，这里按原名字再导出，
+# 保证 AI 链路与 BI 链路（semantic_bi_query_adapter）始终同一份口径。
+from .semantic_sql.filter_compiler import UNSAFE_EXPRESSION_PATTERN  # noqa: E402
 LOGICAL_TYPES = {'text', 'number', 'date', 'datetime', 'enum'}
 DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 DATETIME_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')

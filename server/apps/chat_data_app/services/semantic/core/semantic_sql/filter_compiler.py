@@ -3,6 +3,34 @@
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+#: 过滤操作符唯一白名单：WHERE/HAVING、AI/BI 各链路统一在编译层收口。
+#: operator 字段来自请求侧，不允许携带任意 SQL 片段进入拼接。
+FILTER_OPERATOR_WHITELIST = frozenset({
+    "=", "!=", "<>", ">", "<", ">=", "<=",
+    "IN", "NOT IN", "BETWEEN",
+    "LIKE", "NOT LIKE", "STARTS WITH", "ENDS WITH",
+    "IS NULL", "IS NOT NULL", "EMPTY STRING",
+})
+
+#: 自由 SQL 表达式黑名单：注释、分号与写操作关键字。
+#: WHERE/HAVING 的 rightExpression、维度/指标左侧 expression 都必须过这道检查；
+#: 子查询（IN (SELECT ...)）是 Builder 的显式产品能力，不在黑名单内，
+#: 其安全由执行层 sql_guard（仅 SELECT + 危险函数黑名单）兜底。
+UNSAFE_EXPRESSION_PATTERN = re.compile(
+    r";|--|/\*|\*/|\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE|CALL|EXECUTE)\b",
+    re.IGNORECASE,
+)
+
+
+def ensure_safe_sql_expression(expression: str, *, label: str = "表达式") -> str:
+    """校验自由 SQL 表达式不含注释、分号或写操作关键字；不合法抛 ValueError。"""
+    text = str(expression or "").strip()
+    if not text:
+        raise ValueError(f"{label}不能为空")
+    if UNSAFE_EXPRESSION_PATTERN.search(text):
+        raise ValueError(f"{label}只允许单条只读 SQL 表达式，不允许注释、分号或写操作")
+    return text
+
 
 def _is_numeric_literal(value: Any) -> bool:
     if isinstance(value, (int, float)):
@@ -110,6 +138,15 @@ def _operator_clause(
     safe_functions: set[str],
 ) -> str:
     operator = str(leaf.get("operator", "=")).upper()
+    if operator not in FILTER_OPERATOR_WHITELIST:
+        raise ValueError(
+            f"不支持的筛选操作符 '{operator}'。可选值：{', '.join(sorted(FILTER_OPERATOR_WHITELIST))}"
+        )
+    # rightExpression 是请求侧自由文本，渲染前统一过黑名单；
+    # field_ref 分支的 right_expression 由列名引用构造，不受此影响。
+    raw_right_expression = str(leaf.get("rightExpression") or "").strip()
+    if raw_right_expression:
+        ensure_safe_sql_expression(raw_right_expression, label="rightExpression")
     if operator in ("IS NULL", "IS NOT NULL"):
         return f"{expression} {operator}"
     if (
@@ -176,6 +213,7 @@ def build_where_leaf_clause(
     physical_table = _physical_table_ref(leaf, table)
     column = leaf.get("column", "")
     if (leaf.get("expression") or "").strip():
+        ensure_safe_sql_expression(leaf.get("expression"), label="维度表达式")
         expression = normalize_raw_expression(leaf.get("expression"), table, column, is_multi_table, physical_table)
     else:
         expression = dimension_expr_map.get((table, column)) or get_column_expr(table, column, is_multi_table)

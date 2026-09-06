@@ -1361,7 +1361,9 @@ async def _heartbeat_agent_run(
 ) -> None:
     """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
-        await asyncio.sleep(1)
+        # 租约 120s，5s 心跳已足够及时感知跨 worker 的取消/接管，
+        # 同时把满载时的 inbox UPDATE 频率控制在个位数 QPS。
+        await asyncio.sleep(5)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
             if heartbeat_status == "active" and owner_token:

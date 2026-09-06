@@ -5,6 +5,8 @@
 
 import { ref } from 'vue'
 import { streamCompletion } from '../api'
+import { parseSseChunk } from '@/utils/sse'
+import { isAbortError } from '@/utils/abort'
 
 /**
  * Run 终态：服务端结构化 done 事件的 status 字段。
@@ -55,41 +57,27 @@ const isToolLifecycleEvent = (e: SSEEventType): e is ToolLifecycleEventData['typ
   TOOL_LIFECYCLE_EVENTS.has(e)
 
 /**
- * 解析 SSE 事件流
+ * 解析 SSE 事件流:分帧与字段级解析收敛到共享 parseSseChunk(唯一实现),
+ * 这里只保留本模块的事件类型映射(SSEEventType)与"无 data 不分发"的既有约束。
+ * 行为差异:多行 data 由旧实现的"最后一行覆盖"改为规范的 "\n" 连接,
+ * 不再静默丢行;本接口 data 均为单行 JSON,正常链路不受影响。
  */
 function parseSSEEvents(buffer: string): {
   events: Array<{ event: SSEEventType; data: string; id?: string }>
   remaining: string
 } {
-  const events: Array<{ event: SSEEventType; data: string; id?: string }> = []
-  const blocks = buffer.split('\n\n')
-  const remaining = blocks.pop() || ''
-
-  for (const block of blocks) {
-    if (!block.trim()) continue
-
-    const lines = block.split('\n')
-    let eventType: SSEEventType = 'message'
-    let dataStr = ''
-    let eventId: string | undefined
-
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        eventType = line.substring(6).trim() as SSEEventType
-      } else if (line.startsWith('id:')) {
-        const parsedId = line.substring(3).trim()
-        if (parsedId) eventId = parsedId
-      } else if (line.startsWith('data:')) {
-        dataStr = line.substring(5).trim()
-      }
-    }
-
-    if (dataStr) {
-      events.push({ event: eventType, data: dataStr, id: eventId })
-    }
+  const { events, rest } = parseSseChunk(buffer)
+  return {
+    // 未携带 event: 行时按旧实现的默认事件类型 message 处理
+    events: events
+      .filter(item => Boolean(item.data))
+      .map(item => ({
+        event: (item.event === undefined ? 'message' : item.event) as SSEEventType,
+        data: item.data,
+        id: item.id,
+      })),
+    remaining: rest,
   }
-
-  return { events, remaining }
 }
 
 export function useSqlGenerator() {
@@ -491,8 +479,8 @@ export function useSqlGenerator() {
       // 只有明确成功才触发成功回调；cancelled/failed/waiting_user/legacy 各走自己的状态处理。
       if (doneStatus === 'finished' && !interrupted) onResult?.({} as NL2SQLResult)
     } catch (err) {
-      // 用户主动取消不算错误，也不应误报为成功。
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      // 用户主动取消不算错误,也不应误报为成功
+      if (isAbortError(err)) {
         return
       }
       const errorMsg = err instanceof Error ? err.message : '请求失败'

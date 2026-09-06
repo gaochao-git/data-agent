@@ -5,6 +5,7 @@ SQL 执行器模块
 通过环境变量配置 SQL 安全限制和结果行数限制
 """
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, Tuple, Optional, Callable
 from decimal import Decimal
 from datetime import date, datetime, timedelta
@@ -60,6 +61,11 @@ JS_SAFE_INTEGER_MAX = 2**53 - 1
 
 
 HTTP_AUTH_TOKEN = get_http_auth_token()
+
+# Hive 同步驱动专用线程池。pyhive 无法被 asyncio 取消：wait_for 超时后线程
+# 会继续跑到 socket 超时才收口。用有界专用池隔离，避免这些滞留线程拖垮
+# 进程内共享的默认线程池（asyncio.to_thread 的技能文件 IO 等共用默认池）。
+_HIVE_EXECUTOR_THREAD_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="chatdata-hive-query")
 
 
 def _http_payload_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -414,38 +420,6 @@ def _add_limit_if_needed(sql: str, limit: int, source_type: Optional[str] = None
     return _append_limit(sql, normalized_limit) if _should_auto_add_limit(sql, source_type=source_type) else sql
 
 
-def normalize_sql_aliases(sql: str) -> str:
-    """
-    统一给 SQL 中的中文标识符加反引号，兼容 MySQL 和 Hive
-
-    处理场景：
-    1. AS 后的别名：as 中文 → as `中文`
-    2. ORDER BY 中的列名：ORDER BY 中文 → ORDER BY `中文`
-    3. GROUP BY 中的列名：GROUP BY 中文 → GROUP BY `中文`
-
-    Args:
-        sql: 原始 SQL 语句
-
-    Returns:
-        处理后的 SQL 语句
-    """
-    # 1. 处理 AS 后面的别名（所有别名都加反引号）
-    # 不匹配：as `alias`（已有反引号）, as 'alias'（字符串）, as "alias"（双引号）
-    as_pattern = r'\bAS\s+(?!`|\'|")([a-zA-Z_\u4e00-\u9fa5][a-zA-Z0-9_\u4e00-\u9fa5]*)\b'
-    sql = re.sub(as_pattern, lambda m: f'AS `{m.group(1)}`', sql, flags=re.IGNORECASE)
-
-    # 2. 处理 ORDER BY 中的中文列名（仅处理包含中文的）
-    # 匹配：ORDER BY 中文列名 或 ORDER BY 中文列名 DESC/ASC
-    order_pattern = r'\bORDER\s+BY\s+(?!`)([\u4e00-\u9fa5][a-zA-Z0-9_\u4e00-\u9fa5]*)\b'
-    sql = re.sub(order_pattern, lambda m: f'ORDER BY `{m.group(1)}`', sql, flags=re.IGNORECASE)
-
-    # 3. 处理 GROUP BY 中的中文列名
-    group_pattern = r'\bGROUP\s+BY\s+(?!`)([\u4e00-\u9fa5][a-zA-Z0-9_\u4e00-\u9fa5]*)\b'
-    sql = re.sub(group_pattern, lambda m: f'GROUP BY `{m.group(1)}`', sql, flags=re.IGNORECASE)
-
-    return sql
-
-
 def build_effective_sql(sql: str, limit: int = DEFAULT_ROW_LIMIT, source_type: Optional[str] = None) -> str:
     """生成真实执行 SQL：仅按需追加 LIMIT，出口终检强制行数上限。
 
@@ -772,11 +746,11 @@ class HiveExecutor(SQLExecutor):
             _emit_sql_execution_validation_alarm(sql, error_msg, source_type="hive", execution_scope="hive_executor")
             return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
 
-        # 使用线程池执行同步操作（Hive 查询通常较慢，默认60秒超时）
+        # 使用专用线程池执行同步操作（Hive 查询通常较慢，默认60秒超时）
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(
-                loop.run_in_executor(None, self._execute_sync, sql, limit),
+                loop.run_in_executor(_HIVE_EXECUTOR_THREAD_POOL, self._execute_sync, sql, limit),
                 timeout=resolved_timeout
             )
         except asyncio.TimeoutError:
@@ -821,7 +795,7 @@ class HiveExecutor(SQLExecutor):
         """测试 Hive 连接"""
         loop = asyncio.get_event_loop()
         try:
-            return await loop.run_in_executor(None, self._test_sync)
+            return await loop.run_in_executor(_HIVE_EXECUTOR_THREAD_POOL, self._test_sync)
         except Exception as e:
             _emit_query_database_connection_alarm("hive", self.database, e, host=self.host, port=self.port)
             logger.error(f"[Hive] 连接测试失败: {e}")

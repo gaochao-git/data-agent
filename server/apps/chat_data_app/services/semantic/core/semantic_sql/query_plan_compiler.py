@@ -18,6 +18,7 @@ from .filter_compiler import (
     _is_sql_function,
     _sql_list_literal,
     _sql_literal,
+    ensure_safe_sql_expression,
     _value_type_for_index,
 )
 
@@ -209,6 +210,9 @@ def _normalize_raw_expression(expression: Optional[str], table: str, column: str
     expr = (expression or "").strip()
     if not expr:
         return _get_column_expr(table, column, is_multi_table)
+    # 维度/指标左侧表达式可能来自请求侧（语义配置缺省时的 item 回退），
+    # 与筛选 rightExpression 同口径过黑名单。
+    ensure_safe_sql_expression(expr, label="维度表达式")
     expr = _rewrite_expression_table_qualifier(expr, table, physical_table or table, is_multi_table)
     if _is_simple_column_expr(expr):
         return _get_column_expr(table, expr.replace("`", ""), is_multi_table)

@@ -6,6 +6,7 @@
 
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
+import { parseSseChunk } from '@/utils/sse'
 import type {
   ApiResponse,
   DataSource,
@@ -27,7 +28,6 @@ export * from './query'
 
 // 看板 API 统一复用 ./dashboard 实现，避免重复维护
 export {
-  listDashboards as getDashboards,
   listDashboards,
   getDashboard,
   createDashboard,
@@ -217,22 +217,6 @@ export interface AccuracyEvaluationStreamHandlers {
   onError?: (message: string) => void
 }
 
-function parseAccuracyEvaluationSseBuffer(buffer: string): { events: Array<{ data: string }>; remaining: string } {
-  const events: Array<{ data: string }> = []
-  const blocks = buffer.split('\n\n')
-  const remaining = blocks.pop() || ''
-  for (const block of blocks) {
-    if (!block.trim()) continue
-    const lines = block.split('\n')
-    let dataStr = ''
-    for (const line of lines) {
-      if (line.startsWith('data:')) dataStr = line.substring(5).trim()
-    }
-    if (dataStr) events.push({ data: dataStr })
-  }
-  return { events, remaining }
-}
-
 /** 流式运行准确率评测，逐条回调用例结果 */
 export async function runAccuracyEvaluationStream(
   data: AccuracyEvaluationRunParams,
@@ -258,12 +242,15 @@ export async function runAccuracyEvaluationStream(
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    const parsed = parseAccuracyEvaluationSseBuffer(buffer)
-    buffer = parsed.remaining
-    for (const item of parsed.events) {
+    // 分帧与字段解析复用共享 parseSseChunk;本接口只消费 data 字段,
+    // 事件类型在 data JSON 的 event 字段里,与 SSE event: 行无关。
+    const parsed = parseSseChunk(buffer)
+    buffer = parsed.rest
+    for (const { data: dataStr } of parsed.events) {
+      if (!dataStr) continue
       let payload: Record<string, unknown>
       try {
-        payload = JSON.parse(item.data) as Record<string, unknown>
+        payload = JSON.parse(dataStr) as Record<string, unknown>
       } catch {
         continue
       }

@@ -68,7 +68,7 @@ const emit = defineEmits<{
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
 }>()
 
-const { generateSqlStream } = useSqlGenerator()
+const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
 const userOverridable = ref(false)
 const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
@@ -425,6 +425,8 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
   stopSteerRestorePolling()
+  // 卸载时中止主 SSE 流:useSqlGenerator 对 AbortError 静默返回,不会误报错误
+  stopGeneration()
 })
 const isNearBottom = ref(true)
 

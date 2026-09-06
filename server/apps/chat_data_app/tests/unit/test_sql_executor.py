@@ -327,9 +327,6 @@ def test_auto_add_limit_detects_only_top_level_limit():
 def test_build_effective_sql_only_adds_limit():
     assert sql_executor.build_effective_sql("select amount as 销售额 from orders", 10) == "select amount as 销售额 from orders LIMIT 10"
     assert sql_executor.build_effective_sql("select * from orders limit 5", 10) == "select * from orders limit 5"
-    assert sql_executor.normalize_sql_aliases("select amount AS 销售额 from orders ORDER BY 销售额 GROUP BY 状态") == (
-        "select amount AS `销售额` from orders ORDER BY `销售额` GROUP BY `状态`"
-    )
 
 
 def test_prepare_sql_for_execution_removes_comments_without_touching_string_literals():

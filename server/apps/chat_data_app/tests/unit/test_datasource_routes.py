@@ -1664,7 +1664,8 @@ def test_get_query_task_returns_task_status(monkeypatch):
 def test_get_sql_batch_task_keeps_pending_status_before_statement_results_exist(monkeypatch):
     """首轮轮询不能将尚未初始化的批次结果误判为失败。"""
     _mock_authenticated_user(monkeypatch)
-    task_data = {"task_id": "task_batch_001"}
+    # 生产创建任务时 request_payload 必填（含 user_id），归属校验依赖它
+    task_data = {"task_id": "task_batch_001", "request_payload": json.dumps({"user_id": "10001"})}
     response_data = {
         "task_id": "task_batch_001",
         "task_type": "sql_batch",
@@ -3498,8 +3499,9 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
         "request_payload": "{}",
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[no_owner_pending]))
+    # owner 信息缺失按数据异常 fail-close：任何人都不允许停止
     no_owner_response = asyncio.run(query_execution_routes.cancel_query_task("task_no_owner", SimpleNamespace()))
-    assert _payload(no_owner_response)["data"]["status"] == "cancelled"
+    assert _payload(no_owner_response)["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
 
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: (_ for _ in ()).throw(RuntimeError("cancel crashed")))
     failed = asyncio.run(query_execution_routes.cancel_query_task("task_payload_owner", SimpleNamespace()))
@@ -4476,7 +4478,8 @@ def test_routes_task_owner_and_cancel_status_helpers():
     assert QueryHistoryService.task_user_id({"request_payload": "{bad", "create_by": " creator "}) == "creator"
     assert QueryHistoryService.task_user_id({"request_payload": json.dumps({"user_id": " payload_user "})}) == "payload_user"
     assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "") is False
-    assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "u1") is True
+    # owner 信息缺失按数据异常 fail-close 拒绝，不再对任意用户放行
+    assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "u1") is False
     assert query_providers.query_task_service.is_query_task_owned_by_user({"request_payload": json.dumps({"user_id": "u2"})}, [], "u1") is False
     assert query_providers.query_task_service.is_query_task_owned_by_user({}, [{"user_id": "", "create_by": "u1"}], "u1") is True
     assert QueryHistoryService.task_operator_name({"request_payload": "{bad"}) == ""
