@@ -40,6 +40,22 @@ export interface QueryResult {
   results?: MemberQueryResult[]
 }
 
+/**
+ * 智能问数工具结果在成员级之上扩展的字段，由 agent 语义查询工具注入
+ * （见后端 agent/tools/semantic_query.py），SQL 任务 API（query-tasks）不返回。
+ * 工具结果 JSON 由组件宽松解析（失败成员可能缺列数据），故
+ * MemberQueryResult 的必填字段在此统一放宽为可选。
+ */
+export type ToolQueryResult = Omit<MemberQueryResult, 'columns' | 'data' | 'total_count'> & {
+  columns?: string[]
+  data?: Record<string, unknown>[]
+  total_count?: number
+  query_mode?: string
+  confidence?: number | string
+  semantic_config_id?: string
+  semantic_config_name?: string
+}
+
 export interface QueryTaskCreateResult {
   task_id: string
   task_type: 'sql' | 'sql_batch'

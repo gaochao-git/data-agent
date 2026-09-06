@@ -4,6 +4,7 @@ import AsyncQueryResult from './AsyncQueryResult.vue'
 import ResultTabs from './ResultTabs.vue'
 import { getConversationQueryResult } from '../api'
 import type { ChartType } from '../chartTypes'
+import type { ToolQueryResult } from '../types/query'
 import { isQuerySucceeded } from '../utils'
 
 interface SemanticParams {
@@ -24,26 +25,10 @@ interface VisualizationConfig {
 }
 
 /**
- * 面板内部的单成员查询结果形状。与 types/query.ts 的聚合级 QueryResult
- * 同名会导致消费方误用，故改为成员级命名 PanelMemberResult。
+ * 面板解析的单成员/信封结果：工具结果共享形状（ToolQueryResult）之上，
+ * 追加信封特有字段（多成员 results[]、结果句柄 result_id/meta）。
  */
-interface PanelMemberResult {
-  status?: string | null
-  sql?: string
-  query_mode?: string
-  confidence?: number | string
-  semantic_config_id?: string
-  semantic_config_name?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-  member_datasource_id?: string
-  member_name?: string
+type PanelMemberResult = ToolQueryResult & {
   results?: PanelMemberResult[]
   result_id?: string
   meta?: {

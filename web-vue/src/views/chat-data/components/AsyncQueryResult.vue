@@ -8,30 +8,14 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
+import type { ToolQueryResult } from '../types/query'
 import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryStatus, stripAnsiErrorText } from '../utils'
 
 /**
- * 组件内解析的单成员查询结果形状。与 types/query.ts 的聚合级 QueryResult
- * 同名会导致消费方误用，故改为成员级命名 AsyncQueryResultData。
+ * 组件解析的单成员查询结果 = 共享工具结果形状（types/query.ts 的
+ * ToolQueryResult，含 agent 工具注入的 query_mode/confidence 等扩展字段）。
  */
-interface AsyncQueryResultData {
-  status?: string | null
-  sql?: string
-  query_mode?: string
-  confidence?: number | string
-  semantic_config_id?: string
-  semantic_config_name?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-  member_datasource_id?: string
-  member_name?: string
-}
+type AsyncQueryResultData = ToolQueryResult
 
 interface SemanticParams {
   metrics?: string[]
