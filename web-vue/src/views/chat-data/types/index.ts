@@ -255,6 +255,8 @@ export interface ChatDataContextCompressionInfo {
 
 export interface ChatDataContextCompressionEvent {
   id: string
+  phase?: 'started' | 'completed'
+  compressing?: boolean
   turn_id?: string
   anchor_message_id?: string
   timestamp?: string

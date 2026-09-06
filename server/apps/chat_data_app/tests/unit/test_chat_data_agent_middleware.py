@@ -531,11 +531,18 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
     assert "workspace" not in update
     assert event["turn_id"] == "turn-current"
     assert event["anchor_message_id"] == "turn-current"
-    assert streamed_events == [{
+    # 摘要开始前先推送 started 占位（仅实时流），完成后推送 completed 分界事件
+    assert len(streamed_events) == 2
+    started_payload = streamed_events[0]
+    assert started_payload["type"] == "context_compression"
+    assert started_payload["event"]["phase"] == "started"
+    assert started_payload["event"]["turn_id"] == "turn-current"
+    assert started_payload["archived_turn_messages"] == []
+    assert streamed_events[1] == {
         "type": "context_compression",
         "event": event,
         "archived_turn_messages": [messages[-1]],
-    }]
+    }
 
 
 def test_context_compression_event_excludes_summary_and_anchors_current_message():

@@ -2126,8 +2126,33 @@ const removeEmptyActiveAssistant = () => {
   }
 }
 
+const removeCompressionPlaceholders = () => {
+  const hasPlaceholder = messages.value.some(
+    message => message.role === 'context_compression' && message.contextCompression?.compressing,
+  )
+  if (hasPlaceholder) {
+    messages.value = messages.value.filter(
+      message => !(message.role === 'context_compression' && message.contextCompression?.compressing),
+    )
+  }
+}
+
 const appendContextCompressionEvent = (event: ChatDataContextCompressionEvent) => {
-  if (!event.id || messages.value.some(message => message.id === event.id)) return
+  if (!event.id) return
+  if (event.phase === 'started') {
+    removeEmptyActiveAssistant()
+    messages.value.push({
+      id: event.id,
+      role: 'context_compression',
+      content: '',
+      timestamp: parseDateTimeValue(event.timestamp) || new Date(),
+      contextCompression: { ...event, compressing: true },
+    })
+    return
+  }
+  // 完成事件到达后移除"压缩中"占位，再走原有去重与插入逻辑
+  removeCompressionPlaceholders()
+  if (messages.value.some(message => message.id === event.id)) return
   removeEmptyActiveAssistant()
   const active = activeAssistantMessageId.value
     ? messages.value.find(message => message.id === activeAssistantMessageId.value)
@@ -2620,6 +2645,8 @@ const submitAnalysisQuery = async (
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
+    // 流结束（含异常中断）后清掉未完成的"上下文压缩中"占位
+    removeCompressionPlaceholders()
 
     // 结构化 done 已包含终态和下一轮 Run，不再查询队列。只有旧协议或
     // SSE 意外中断时没有足够信息，才用一次服务端快照恢复状态。
@@ -3384,7 +3411,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     源码
                   </button>
                 </div>
-                <div v-if="selectedConsoleFile" class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ selectedConsoleFile.source }}</div>
                 <button
                   v-if="selectedConsoleFile?.source === 'outputs'"
                   type="button"

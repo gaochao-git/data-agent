@@ -459,3 +459,43 @@ async def test_middleware_emits_compression_event_with_message_updates(monkeypat
     assert event["id"].startswith("context-compression-")
     # 事件只带指标，不带摘要正文
     assert "摘要结果" not in str(event)
+
+
+@pytest.mark.asyncio
+async def test_middleware_emits_compression_started_event_before_completed(monkeypatch):
+    """压缩真正触发时，摘要开始前先推送 phase=started 占位事件，完成后推送 completed。"""
+    captured: list[dict] = []
+    middleware = _middleware(monkeypatch, trigger=1, target=1, hard_limit=100_000)
+    monkeypatch.setattr(context_compression, "get_stream_writer", lambda: (lambda payload: captured.append(payload)))
+    messages = []
+    for index in range(3):
+        messages.extend([
+            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 40, id=f"u-{index}"),
+            AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 40, id=f"a-{index}"),
+        ])
+    messages.append(HumanMessage(content="当前问题", id="u-current"))
+
+    update = await middleware.abefore_model(
+        {"messages": messages, "context_summary": None}, None
+    )
+
+    phases = [payload["event"]["phase"] for payload in captured if payload.get("type") == "context_compression"]
+    assert phases == ["started", "completed"]
+    started_payload = captured[0]["event"]
+    assert started_payload["id"].startswith("context-compression-started-")
+    assert started_payload["turn_id"] == "u-current"
+    # started 是实时占位事件，不写入检查点
+    assert all(event["phase"] == "completed" for event in update["context_compression_events"])
+
+
+@pytest.mark.asyncio
+async def test_middleware_skips_started_event_when_compression_not_triggered(monkeypatch):
+    """未触发摘要压缩时不推送 started 占位，避免每次模型调用都出现占位分界。"""
+    captured: list[dict] = []
+    middleware = _middleware(monkeypatch, trigger=100_000, target=100_000, hard_limit=100_000)
+    monkeypatch.setattr(context_compression, "get_stream_writer", lambda: (lambda payload: captured.append(payload)))
+    messages = [HumanMessage(content="当前问题", id="u-current")]
+
+    await middleware.abefore_model({"messages": messages, "context_summary": None}, None)
+
+    assert not [payload for payload in captured if payload.get("type") == "context_compression"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -60,6 +61,7 @@ async def compress_messages_for_state(
     summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None = None,
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
+    on_compression_started: Callable[[], None] | None = None,
 ) -> tuple[list[BaseMessage], str | None, dict[str, Any]]:
     """压缩旧历史和当前回合较早的完整工具链。"""
     cfg = _config_from_mapping(config)
@@ -146,6 +148,11 @@ async def compress_messages_for_state(
             static_input_tokens=static_tokens,
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
+    if on_compression_started:
+        try:
+            on_compression_started()
+        except Exception:
+            logger.debug("推送压缩开始事件失败，不影响压缩主流程", exc_info=True)
     summary_text, summary_input_report = await _summarize_for_compression(
         messages_to_summarize,
         previous_summary=effective_previous_summary,
@@ -236,6 +243,7 @@ async def build_context_compression_update(
     summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None = None,
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
+    on_compression_started: Callable[[], None] | None = None,
 ) -> tuple[list[BaseMessage] | None, str | None, dict[str, Any]]:
     """构造可写入 LangGraph state 的压缩消息更新。"""
     compressed_messages, summary_text, report = await compress_messages_for_state(
@@ -249,6 +257,7 @@ async def build_context_compression_update(
         summarizer=summarizer,
         summary_input_limit_tokens=summary_input_limit_tokens,
         summary_model_id=summary_model_id,
+        on_compression_started=on_compression_started,
     )
     if not report.get("triggered") and not report.get("legacy_summary_migrated"):
         return None, summary_text, report
@@ -276,6 +285,12 @@ def create_context_compression_middleware(
             legacy_summary,
         )
         budget = compression_budget.configure(system_prompt, request_tools, model_id=model_id)
+
+        def _notify_compression_started() -> None:
+            started_event = _build_context_compression_started_event(messages)
+            if started_event:
+                _emit_context_compression_event(started_event)
+
         message_updates, summary_text, report = await build_context_compression_update(
             messages,
             static_input_tokens=compression_budget.static_input_tokens,
@@ -286,6 +301,7 @@ def create_context_compression_middleware(
             previous_summary=previous_summary,
             summary_input_limit_tokens=_get_summary_input_limit_tokens(model_id),
             summary_model_id=model_id,
+            on_compression_started=_notify_compression_started,
         )
         if report["estimated_tokens_after"] > budget.hard_input_limit_tokens:
             raise ContextInputLimitExceededError("模型固定输入超过上下文硬上限，请检查系统提示词、工具描述和输出预留配置。")
@@ -649,6 +665,7 @@ def _build_context_compression_event(
     event_id = hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:20]
     return {
         "id": f"context-compression-{event_id}",
+        "phase": "completed",
         "turn_id": turn_id,
         "anchor_message_id": anchor_message_id,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -656,6 +673,22 @@ def _build_context_compression_event(
         "estimated_tokens_after": _non_negative_int(report.get("estimated_tokens_after")),
         "estimated_cleared_tokens": _non_negative_int(report.get("estimated_cleared_tokens")),
         "compressed_messages": _non_negative_int(report.get("compressed_messages")),
+    }
+
+
+def _build_context_compression_started_event(messages: list[BaseMessage]) -> dict[str, Any] | None:
+    """生成摘要压缩开始时的用户可见占位事件（仅用于实时流，不写入检查点）。"""
+    turn_id = ""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            turn_id = _message_id(message)
+            if turn_id:
+                break
+    return {
+        "id": f"context-compression-started-{uuid.uuid4().hex[:12]}",
+        "phase": "started",
+        "turn_id": turn_id,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
