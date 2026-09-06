@@ -268,6 +268,6 @@ def test_system_prompt_inlines_data_context_parts():
 
     assert "# 数据上下文" in prompt
     assert "## 数据源组智能问数说明\n数据源组说明" in prompt
-    # 系统提示词不再枚举模型目录，只引导 dir_list 浏览工作区目录
+    # 系统提示词不再枚举模型目录；工具用法（dir_list 等）由工具描述自带，提示词不重复
     assert "当前可见语义模型目录" not in prompt
-    assert "dir_list" in prompt
+    assert "dir_list" not in prompt

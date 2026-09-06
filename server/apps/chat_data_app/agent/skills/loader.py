@@ -165,10 +165,6 @@ def format_skills_prompt(skills: list[dict[str, Any]]) -> str:
         lines.append(f"    <name>{xml_escape(str(meta.get('name') or ''))}</name>")
         lines.append(f"    <skill_file>/mnt/skills/{xml_escape(str(meta.get('name') or ''))}/SKILL.md</skill_file>")
         lines.append(f"    <title>{xml_escape(str(meta.get('title') or ''))}</title>")
-        if meta.get("domain"):
-            lines.append(f"    <domain>{xml_escape(str(meta.get('domain') or ''))}</domain>")
-        if meta.get("category"):
-            lines.append(f"    <category>{xml_escape(str(meta.get('category') or ''))}</category>")
         lines.append(f"    <description>{xml_escape(str(meta['description'] or ''))}</description>")
         lines.append("  </skill>")
     lines.append("</available_skills>")

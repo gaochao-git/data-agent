@@ -129,9 +129,7 @@ EMPTY_AVAILABLE_SKILLS_XML = "<available_skills>\n</available_skills>"
 
 SKILLS_USAGE_BLOCK = """## 技能使用
 - 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
-- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，禁止再向用户确认。
-- 前端已注入的技能信息无需再输出，也无需向用户解释技能选择。
-- `SKILL.md` 是技能入口；需要参考资料、脚本或资源时，严格按其中声明的 `/mnt/skills/<技能名>/...` 路径继续使用 `file_read`、`file_glob` 或 `dir_list`。"""
+- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，禁止再向用户确认。"""
 
 SCENE_ROUTING_BLOCK = """## 场景路由
 - 问候、闲聊、使用帮助和概念解释：直接回答，不调用查询工具。
@@ -184,10 +182,9 @@ DIALECT_BLOCK = """## 方言上下文
 {dialect_context_text}"""
 
 PRIORITY_BLOCK = """## 优先级
-1. 技能优先：`available_skills` 是当前运行时可用技能清单。用户消息匹配可用技能的 name / title / description 或明显意图时，第一步调用 `file_read(file_path="<skill_file>")` 读取其 `SKILL.md`；路径必须使用匹配项声明的 `<skill_file>`，不能自造。
-2. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
-3. 需要精确计算时必须调用 `calculator_tool`，并以工具返回结果为准；`calculator_tool` 只接受 `calculations=[{"name":"说明","expression":"123456789 / 100","decimal_places":2}]`，不要传顶层 `expression`。
-4. 原始结果中超过 5 位的数字，除非用户明确要求或已经通过计算器校验，否则不要反复复述。
+1. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
+2. 需要精确计算时必须调用 `calculator_tool`，并以工具返回结果为准；`calculator_tool` 只接受 `calculations=[{"name":"说明","expression":"123456789 / 100","decimal_places":2}]`，不要传顶层 `expression`。
+3. 原始结果中超过 5 位的数字，除非用户明确要求或已经通过计算器校验，否则不要反复复述。
 """
 
 

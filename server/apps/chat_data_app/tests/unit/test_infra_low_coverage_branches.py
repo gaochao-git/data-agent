@@ -1374,9 +1374,9 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     assert "bad" not in metadata
     prompt = loader.format_skills_prompt([{"name": "good", "title": "G", "description": "A&B", "domain": "d", "category": "c"}])
     assert "&amp;" in prompt
-    minimal_prompt = loader.format_skills_prompt([{"name": "plain", "title": "Plain", "description": "desc"}])
-    assert "<domain>" not in minimal_prompt
-    assert "<category>" not in minimal_prompt
+    # 提示词只保留 name/skill_file/title/description，domain/category 不再注入（匹配规则只按 name/title/description）
+    assert "<domain>" not in prompt
+    assert "<category>" not in prompt
 
 
 def test_calculator_extra_branches():
