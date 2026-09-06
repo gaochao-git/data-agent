@@ -42,7 +42,7 @@ const getRunStatusClass = (status: ConversationItem['run_status']): string => {
 }
 
 const getConversationTimeText = (conv: ConversationItem): string => (
-  formatRelativeConversationTime(conv.updated_at || conv.created_at)
+  formatRelativeConversationTime(conv.updated_at || conv.create_time)
 )
 
 interface Props {
@@ -744,7 +744,7 @@ onUnmounted(() => {
                         <span
                           data-testid="conversation-time"
                           class="absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
-                          :title="conv.updated_at || conv.created_at"
+                          :title="conv.updated_at || conv.create_time"
                         >{{ getConversationTimeText(conv) }}</span>
                         <div
                           data-testid="conversation-actions"

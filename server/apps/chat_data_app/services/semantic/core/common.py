@@ -45,6 +45,3 @@ def ensure_dimension_logical_type(dimension: Dict[str, Any]) -> Dict[str, Any]:
 def is_time_logical_dimension(config: Dict[str, Any]) -> bool:
     return normalize_logical_type((config or {}).get("logical_type")) in {"date", "datetime"}
 
-
-def is_number_logical_dimension(config: Dict[str, Any]) -> bool:
-    return normalize_logical_type((config or {}).get("logical_type")) == "number"

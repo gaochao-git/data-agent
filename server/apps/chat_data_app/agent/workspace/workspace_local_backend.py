@@ -14,11 +14,10 @@ import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
 
 from apps.chat_data_app.agent.workspace.artifact_registry import parse_output_artifact
 from apps.chat_data_app.agent.workspace.runtime import (
@@ -657,29 +656,8 @@ def _grep_local_workspace_text(
 
 
 def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:
-    raw = str(path or "").strip().replace("\\", "/")
-    prefix = f"{SKILLS_VIRTUAL_ROOT}/"
-    if not raw.startswith(prefix):
-        raise ValueError(f"只允许访问技能路径: {path}")
-    parts = PurePosixPath(raw).parts
-    if len(parts) < 4 or parts[1:3] != ("mnt", "skills") or ".." in parts[4:]:
-        raise ValueError(f"技能路径无效: {path}")
-    name = parts[3]
-    snapshot_root = runtime.runtime_skills_dir.resolve()
-    source_entry = runtime.runtime_skills_dir / name
-    source = source_entry.resolve()
-    if (
-        source_entry.is_symlink()
-        or not source.is_dir()
-        or snapshot_root not in source.parents
-    ):
-        raise ValueError(f"技能不存在或无权限访问: {name}")
-    target = source.joinpath(*parts[4:]).resolve()
-    if target != source and source not in target.parents:
-        raise ValueError(f"技能路径越界: {path}")
-    return target, runtime_skill_visible_root(name) + (
-        "/" + "/".join(parts[4:]) if parts[4:] else ""
-    )
+    """本地后端的技能路径解析；安全规则统一走 utils.skill_paths 的共享实现。"""
+    return resolve_skill_snapshot_path(runtime.runtime_skills_dir, path)
 
 
 @dataclass

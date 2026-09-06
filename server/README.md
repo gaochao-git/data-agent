@@ -136,6 +136,12 @@ cd server
 pytest apps/chat_data_app/tests
 ```
 
+覆盖率门槛（行覆盖率要求 > 95%，当前实测约 97%；日常单文件调试直接 `pytest <文件>` 不带覆盖率参数）：
+
+```bash
+pytest apps/chat_data_app/tests --cov=apps --cov-fail-under=95
+```
+
 部分测试依赖 MySQL、LLM 或外部 HTTP 查询服务，需要按 `.env` 配置本地环境。
 
 ## 注意事项

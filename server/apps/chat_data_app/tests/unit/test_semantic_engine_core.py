@@ -62,7 +62,6 @@ def test_sql_dialects_cover_common_functions_and_registry_errors():
     mysql = get_dialect("mysql")
     hive = get_dialect("hive")
 
-    assert mysql.quote_string("a'b") == "'a''b'"
     assert mysql.current_date() == "CURRENT_DATE()"
     assert mysql.current_timestamp() == "NOW()"
     assert mysql.date_add("dt", 1, "day") == "DATE_ADD(dt, INTERVAL 1 DAY)"
@@ -76,7 +75,6 @@ def test_sql_dialects_cover_common_functions_and_registry_errors():
     assert mysql.coalesce("a", "b") == "COALESCE(a, b)"
     assert mysql.ifnull("a", "0") == "IFNULL(a, 0)"
 
-    assert hive.quote_string("a'b") == "'a\\'b'"
     assert hive.date_add("dt", 1, "day") == "DATE_ADD(dt, 1)"
     assert hive.date_add("dt", 1, "month") == "(dt + INTERVAL 1 MONTH)"
     assert hive.date_sub("dt", 1, "day") == "DATE_SUB(dt, 1)"
@@ -127,7 +125,6 @@ def test_sql_dialects_cover_all_builtin_function_variants():
     assert hive.coalesce("a", "b") == "COALESCE(a, b)"
 
     assert SQLDialect.quote_identifier(object(), "x") is None
-    assert SQLDialect.quote_string(object(), "x") is None
     assert SQLDialect.format_date(object(), "dt", "day") is None
     assert SQLDialect.current_date(object()) is None
     assert SQLDialect.current_timestamp(object()) is None

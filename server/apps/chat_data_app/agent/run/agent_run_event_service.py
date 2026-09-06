@@ -9,7 +9,14 @@ import re
 from utils.database import get_session
 from utils.logger import get_logger
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
-from .agent_inbox_service import AgentRunLeaseLostError
+from .agent_inbox_service import (
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_FINISHED,
+    RUN_STATUS_WAITING_USER,
+    AgentRunLeaseLostError,
+    load_run_content,
+)
 from .redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError, build_redis_event_bus
 
 
@@ -18,7 +25,14 @@ logger = get_logger(__name__)
 QUESTION_DONE_WAIT_SECONDS = 10.0
 QUESTION_DONE_DURABLE_POLL_SECONDS = 0.5
 TERMINAL_PERSISTENCE_GRACE_SECONDS = 10.0
-TERMINAL_STATUSES = {"finished", "succeeded", "failed", "cancelled", "waiting_user"}
+# Run 终态集合；"succeeded" 是防御性保留（当前收口只写 finished，历史数据可能存在）。
+TERMINAL_STATUSES = {
+    RUN_STATUS_FINISHED,
+    "succeeded",
+    RUN_STATUS_FAILED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_WAITING_USER,
+}
 
 
 def format_terminal_done(status: str, next_run_id: str | None = None) -> str:
@@ -241,11 +255,8 @@ class AgentRunEventService:
         """读取 inbox Run 行记录的终止事件游标（done 发布成功后写入）。"""
         async with get_session() as session:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
-        if row is None or not row.content:
-            return None
-        try:
-            content = json.loads(row.content)
-        except (TypeError, ValueError):
+        content = load_run_content(row.content if row else None)
+        if not content:
             return None
         terminal_event = content.get("terminal_event")
         return terminal_event if isinstance(terminal_event, dict) else None
@@ -255,11 +266,8 @@ class AgentRunEventService:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
             if row is None:
                 return None
-            try:
-                content = json.loads(row.content or "{}")
-            except (TypeError, ValueError):
-                content = {}
-            next_run_id = content.get("next_run_id") if isinstance(content, dict) else None
+            content = load_run_content(row.content)
+            next_run_id = content.get("next_run_id") or None
             return {
                 "status": row.status,
                 "conversation_id": row.conversation_id,

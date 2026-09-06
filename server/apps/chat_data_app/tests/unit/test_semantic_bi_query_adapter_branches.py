@@ -20,7 +20,7 @@ from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     SemanticBIQueryAdapter,
     compile_semantic_ai_dsl,
     compile_semantic_bi_dsl,
-    load_runtime_semantic_config,
+    load_runtime_semantic_config_strict,
 )
 
 
@@ -622,14 +622,14 @@ def test_adapt_rejects_forbidden_frontend_keys(adapter):
 
 
 # --------------------------------------------------------------------------
-# load_runtime_semantic_config 的错误改写
+# load_runtime_semantic_config_strict 的错误改写
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_load_runtime_semantic_config_requires_ids():
+async def test_load_runtime_semantic_config_strict_requires_ids():
     with pytest.raises(ValueError, match="缺少 datasource_id 或 semantic_config_id"):
-        await load_runtime_semantic_config("", "cfg-1")
+        await load_runtime_semantic_config_strict("", "cfg-1")
 
 
 @pytest.mark.asyncio
@@ -640,18 +640,18 @@ async def test_load_runtime_semantic_config_requires_ids():
         ("未找到可用语义配置", "语义配置不存在: cfg-1"),
     ],
 )
-async def test_load_runtime_semantic_config_maps_to_lookup_error(monkeypatch, message, expected):
+async def test_load_runtime_semantic_config_strict_maps_to_lookup_error(monkeypatch, message, expected):
     async def _boom(*args, **kwargs):
         raise ValueError(message)
 
     monkeypatch.setattr(sqs, "load_semantic_model", _boom)
 
     with pytest.raises(LookupError, match=expected):
-        await load_runtime_semantic_config("ds-1", "cfg-1", user_id="u-1")
+        await load_runtime_semantic_config_strict("ds-1", "cfg-1", user_id="u-1")
 
 
 @pytest.mark.asyncio
-async def test_load_runtime_semantic_config_maps_disabled_config(monkeypatch):
+async def test_load_runtime_semantic_config_strict_maps_disabled_config(monkeypatch):
     """语义配置未启用仍是 ValueError，但要带上配置 ID（1361->1363）。"""
 
     async def _boom(*args, **kwargs):
@@ -660,18 +660,18 @@ async def test_load_runtime_semantic_config_maps_disabled_config(monkeypatch):
     monkeypatch.setattr(sqs, "load_semantic_model", _boom)
 
     with pytest.raises(ValueError, match="语义配置未启用: cfg-1"):
-        await load_runtime_semantic_config("ds-1", "cfg-1")
+        await load_runtime_semantic_config_strict("ds-1", "cfg-1")
 
 
 @pytest.mark.asyncio
-async def test_load_runtime_semantic_config_reraises_other_errors(monkeypatch):
+async def test_load_runtime_semantic_config_strict_reraises_other_errors(monkeypatch):
     async def _boom(*args, **kwargs):
         raise ValueError("数据库连接失败")
 
     monkeypatch.setattr(sqs, "load_semantic_model", _boom)
 
     with pytest.raises(ValueError, match="数据库连接失败"):
-        await load_runtime_semantic_config("ds-1", "cfg-1")
+        await load_runtime_semantic_config_strict("ds-1", "cfg-1")
 
 
 def test_validate_filter_value_rejects_unsafe_expression(adapter):

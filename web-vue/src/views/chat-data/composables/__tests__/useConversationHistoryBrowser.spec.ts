@@ -142,7 +142,7 @@ describe('useConversationHistoryBrowser', () => {
       id: 'new-1',
       title: '新会话',
       datasource_id: '',
-      created_at: '2026-08-16 10:00:00',
+      create_time: '2026-08-16 10:00:00',
       updated_at: '2026-08-16 10:00:00',
       is_favorited: false,
       run_status: null,
@@ -155,7 +155,7 @@ describe('useConversationHistoryBrowser', () => {
     history.upsertConversation({
       id: 'new-1',
       datasource_id: 'ds_a',
-      created_at: '2026-08-16 10:00:00',
+      create_time: '2026-08-16 10:00:00',
       updated_at: '2026-08-16 10:01:00',
       run_status: 'active',
     })

@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
 
 from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
@@ -225,37 +225,14 @@ class ConversationWorkspaceRuntime:
         运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
         ``threads/<uid>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
         快照内不存在即视为无权限。快照缺失时惰性构建。
+        路径安全规则统一在 utils.skill_paths.resolve_skill_snapshot_path。
         """
         raw = str(path or "").strip().replace("\\", "/")
         prefix = f"{SKILLS_VIRTUAL_ROOT}/"
         if not raw.startswith(prefix):
             raise ValueError(f"只允许访问技能路径: {path}")
-        parts = PurePosixPath(raw).parts
-        if len(parts) < 4 or parts[1:3] != ("mnt", "skills"):
-            raise ValueError(f"技能路径无效: {path}")
-        name = parts[3]
-        if not name or name.startswith("."):
-            raise ValueError(f"技能路径无效: {path}")
         await self._ensure_snapshot_async()
-        snapshot_root = self.runtime_skills_dir.resolve()
-        source_entry = self.runtime_skills_dir / name
-        source_dir = source_entry.resolve()
-        if (
-            source_entry.is_symlink()
-            or not source_dir.is_dir()
-            or snapshot_root not in source_dir.parents
-        ):
-            raise ValueError(f"技能不存在或无权限访问: {name}")
-        relative_parts = parts[4:]
-        if ".." in relative_parts:
-            raise ValueError(f"技能路径越界: {path}")
-        target = (source_dir.joinpath(*relative_parts)).resolve()
-        if target != source_dir and source_dir not in target.parents:
-            raise ValueError(f"技能路径越界: {path}")
-        visible = runtime_skill_visible_root(name)
-        if relative_parts:
-            visible += "/" + "/".join(relative_parts)
-        return target, visible
+        return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
 
     def _executable_backend(self) -> ExecutableWorkspaceBackend:
         if not isinstance(self.backend, ExecutableWorkspaceBackend):

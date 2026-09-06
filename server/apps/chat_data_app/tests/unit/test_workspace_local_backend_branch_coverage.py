@@ -256,7 +256,8 @@ def test_resolve_local_skill_path_branches(tmp_path):
         lb._resolve_local_skill_path(runtime, "/mnt/user-data/workspace/a.txt")
     with pytest.raises(ValueError, match="技能路径无效"):
         lb._resolve_local_skill_path(runtime, "/mnt/skills/")
-    with pytest.raises(ValueError, match="技能路径无效"):
+    # 共享实现把 ".." 归类为越界(而非无效),语义更精确
+    with pytest.raises(ValueError, match="技能路径越界"):
         lb._resolve_local_skill_path(runtime, "/mnt/skills/demo-skill/../escape")
     with pytest.raises(ValueError, match="技能不存在或无权限访问"):
         lb._resolve_local_skill_path(runtime, "/mnt/skills/evil-skill/SKILL.md")

@@ -10,7 +10,7 @@ const conversation = (
 ): ConversationItem => ({
   id,
   title: id,
-  created_at: '2026-08-14 10:00:00',
+  create_time: '2026-08-14 10:00:00',
   datasource_id: datasourceId,
   ...options,
 })

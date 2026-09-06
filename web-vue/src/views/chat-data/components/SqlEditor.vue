@@ -18,6 +18,7 @@ import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded, renderMarkdown } from '../utils'
+import useUserStore from '@/store/modules/user'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
@@ -79,7 +80,9 @@ type AiConversationRecord = {
   messages: AiChatMessage[]
 }
 
-const AI_CONVERSATION_HISTORY_KEY = 'chat_data_sql_ai_conversation_history'
+// storage key 统一 chatdata: 前缀,按数据源 + 用户隔离(共享浏览器多账号不互相可见)
+const aiConversationHistoryKey = () =>
+  `chatdata:sql-ai-history:${props.datasourceId || 'default'}:${String(userStore.id || '').trim() || 'anonymous'}`
 const AI_CONVERSATION_HISTORY_LIMIT = 50
 
 const splitAiMessageSegments = (content: string): AiMessageSegment[] => {
@@ -182,6 +185,7 @@ const props = withDefaults(defineProps<Props>(), {
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false
 })
+const userStore = useUserStore()
 const attrs = useAttrs()
 
 // 表结构面板（搜索/展开/悬浮标题，与 QueryBuilder 共享逻辑）
@@ -914,7 +918,7 @@ const aiConversationBackendReady = ref(false)
 
 const readAiConversationHistory = (): AiConversationRecord[] => {
   try {
-    const raw = localStorage.getItem(AI_CONVERSATION_HISTORY_KEY)
+    const raw = localStorage.getItem(aiConversationHistoryKey())
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -927,7 +931,7 @@ const readAiConversationHistory = (): AiConversationRecord[] => {
 
 const writeAiConversationHistory = (items: AiConversationRecord[]) => {
   try {
-    localStorage.setItem(AI_CONVERSATION_HISTORY_KEY, JSON.stringify(items.slice(0, AI_CONVERSATION_HISTORY_LIMIT)))
+    localStorage.setItem(aiConversationHistoryKey(), JSON.stringify(items.slice(0, AI_CONVERSATION_HISTORY_LIMIT)))
   } catch (err) {
     console.error('保存 AI 辅助历史对话失败:', err)
   }

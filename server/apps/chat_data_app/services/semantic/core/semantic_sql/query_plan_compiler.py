@@ -6,20 +6,17 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from .dialect import get_dialect
 from . import filter_compiler
-from .join_compiler import build_join_clauses
+from .join_compiler import _build_from_ref, build_join_clauses  # noqa: F401  历史兼容 re-export，测试从本模块访问
 from .row_limit import normalize_row_limit
 from .select_compiler import compile_select_fields
 from .filter_compiler import (
+    _effective_table_ref,
+    _physical_table_ref,
+    _rewrite_expression_table_qualifier,
     build_filter_tree_clause as compile_filter_tree_clause,
     build_having_leaf_clause as compile_having_leaf_clause,
     build_where_leaf_clause as compile_where_leaf_clause,
-    _has_balanced_parentheses,
-    _is_numeric_literal,
-    _is_sql_function,
-    _sql_list_literal,
-    _sql_literal,
     ensure_safe_sql_expression,
-    _value_type_for_index,
 )
 
 AGG_EXPR_PATTERN = re.compile(r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$", re.IGNORECASE)
@@ -179,31 +176,6 @@ def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
     if _is_real_aggregation_func(agg_func):
         return True
     return _is_aggregate_expression(item.get("expression"))
-
-
-def _effective_table_ref(item: Dict[str, Any], table_key: str = "table", alias_key: str = "tableAlias", fallback: str = "") -> str:
-    return str(item.get(alias_key) or item.get(table_key) or fallback or "").strip()
-
-
-def _physical_table_ref(item: Dict[str, Any], table_key: str = "table", fallback: str = "") -> str:
-    return str(item.get(table_key) or fallback or "").strip()
-
-
-def _build_from_ref(table: str, alias: Optional[str] = None) -> str:
-    table_name = str(table or "").strip()
-    alias_name = str(alias or "").strip()
-    if not table_name:
-        return ""
-    if not alias_name or alias_name == table_name:
-        return table_name
-    return f"{table_name} {alias_name}"
-
-
-def _rewrite_expression_table_qualifier(expression: str, table: str, physical_table: str, is_multi_table: bool) -> str:
-    if not table or not physical_table or table == physical_table:
-        return expression
-    escaped = re.escape(physical_table)
-    return re.sub(rf"(?<![\w`])`?{escaped}`?\.", f"{table}.", expression)
 
 
 def _normalize_raw_expression(expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None) -> str:

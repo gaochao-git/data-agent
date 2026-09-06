@@ -17,7 +17,7 @@ interface ConversationListPayload {
 const sortConversations = (items: ConversationItem[]) => [...items].sort((a, b) => {
   const favoriteDiff = Number(Boolean(b.is_favorited)) - Number(Boolean(a.is_favorited))
   if (favoriteDiff !== 0) return favoriteDiff
-  return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
+  return String(b.updated_at || b.create_time).localeCompare(String(a.updated_at || a.create_time))
 })
 
 const normalizeConversation = (raw: unknown, fallbackAgentId: string): ConversationItem => {
@@ -25,7 +25,7 @@ const normalizeConversation = (raw: unknown, fallbackAgentId: string): Conversat
   return {
     id: String(conversation.id || conversation.conversation_id || ''),
     title: String(conversation.title || conversation.first_message_preview || '未命名会话'),
-    created_at: String(conversation.update_time || conversation.create_time || conversation.created_at || ''),
+    create_time: String(conversation.update_time || conversation.create_time || conversation.created_at || ''),
     updated_at: String(conversation.update_time || conversation.updated_at || conversation.create_time || conversation.created_at || ''),
     agent_id: String(conversation.agent_id || fallbackAgentId),
     datasource_id: typeof conversation.datasource_id === 'string' ? conversation.datasource_id : '',
@@ -215,7 +215,7 @@ export const useConversationHistoryBrowser = (options: {
     ].find(item => item.id === conversation.id)
     const mergedConversation = cachedConversation
       ? { ...cachedConversation, ...conversation }
-      : conversation.title && conversation.created_at
+      : conversation.title && conversation.create_time
         ? conversation as ConversationItem
         : null
     if (!mergedConversation) return

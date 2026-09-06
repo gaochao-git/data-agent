@@ -14,7 +14,7 @@ from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
-from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, is_valid_redis_stream_id, normalize_history_checkpoint
+from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, is_valid_redis_stream_id, load_run_content as _load_run_content, normalize_history_checkpoint
 
 logger = get_logger(__name__)
 
@@ -27,13 +27,6 @@ EVENT_TOKEN_USAGE = "token_usage"
 EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
 
-
-def _load_run_content(content: str | None) -> dict[str, Any]:
-    try:
-        value = json.loads(content or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
 
 
 def _compare_stream_ids(left: str, right: str) -> int:

@@ -147,10 +147,10 @@ async def fake_checkpointer():
 def _patch_completion_dependencies(monkeypatch, graph):
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+    async def fake_get_agent_id(conversation_id, user_id=None):
         return "chat_data" if conversation_id.startswith("conv_") else None
 
-    async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         return conversation_id
 
     async def fake_get_datasource_id(_conversation_id, _user_id):
@@ -392,10 +392,10 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     }
     fake_llm = ToolCallingLLM(tool_args)
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+    async def fake_get_agent_id(conversation_id, user_id=None):
         return "chat_data" if conversation_id.startswith("conv_") else None
 
-    async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         return conversation_id
 
     async def fake_get_datasource_id(_conversation_id, _user_id):

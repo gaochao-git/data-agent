@@ -452,8 +452,8 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     showCaseEditorDialog.value = true
   }
 
-  const removeEvaluationCase = (index: number) => {
-    if (!confirm('确定删除这个评测用例吗？')) return
+  const removeEvaluationCase = async (index: number) => {
+    if (!(await ElMessageBox.confirm('确定删除这个评测用例吗？', '提示', { type: 'warning' }).catch(() => false))) return
     evaluationCases.value.splice(index, 1)
     evaluationCasesDirty.value = true
   }

@@ -1868,3 +1868,26 @@ async def test_workspace_office_preview_service_stabilizes_and_rechecks_size():
     )
     assert oversized["html"] == ""
     assert oversized["truncated"] is True
+
+
+def test_resolve_skill_snapshot_path_security_rules(tmp_path):
+    """本地/沙箱共用的技能路径解析:隐藏名、穿越、前缀越界、symlink 全部拒绝。"""
+    import pytest
+    from utils.skill_paths import resolve_skill_snapshot_path
+
+    skill_dir = tmp_path / "demo"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("demo", encoding="utf-8")
+
+    target, visible = resolve_skill_snapshot_path(tmp_path, "/mnt/skills/demo/SKILL.md")
+    assert target == (skill_dir / "SKILL.md").resolve()
+    assert visible == "/mnt/skills/demo/SKILL.md"
+
+    with pytest.raises(ValueError, match="技能路径无效"):
+        resolve_skill_snapshot_path(tmp_path, "/mnt/skills/.hidden/x")
+    with pytest.raises(ValueError, match="技能路径越界"):
+        resolve_skill_snapshot_path(tmp_path, "/mnt/skills/demo/../../escape")
+    with pytest.raises(ValueError, match="只允许访问技能路径"):
+        resolve_skill_snapshot_path(tmp_path, "/mnt/user-data/x")
+    with pytest.raises(ValueError, match="技能不存在"):
+        resolve_skill_snapshot_path(tmp_path, "/mnt/skills/missing/x")

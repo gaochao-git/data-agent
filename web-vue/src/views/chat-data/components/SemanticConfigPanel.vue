@@ -613,7 +613,7 @@ const openEvaluateDrawer = () => {
 
 // 删除配置
 const handleDeleteConfig = async (configId: string, configName: string) => {
-  if (!confirm(`确定要删除"${configName}"吗？`)) return
+  if (!(await ElMessageBox.confirm(`确定要删除"${configName}"吗？`, '提示', { type: 'warning' }).catch(() => false))) return
   try {
     const res = await semanticConfigDeleteApi.value(props.datasourceId, configId)
     if (res.status !== 'success') {
@@ -708,14 +708,12 @@ watch(() => props.datasourceId, () => {
 })
 
 // ============ 编辑状态 ============
-type EditingType = 'metric' | 'dimension' | 'relationship' | null
+type EditingType = 'relationship' | null
 const editingType = ref<EditingType>(null)
 const editingIndex = ref(-1)
 const editingConfigId = ref<string | null>(null)
 
 // 编辑中的数据
-const editingMetric = ref<SemanticMetric | null>(null)
-const editingDimension = ref<SemanticDimension | null>(null)
 const editingRelationship = ref<SemanticRelationship | null>(null)
 
 interface FieldConfigRow {
@@ -912,68 +910,7 @@ const cancelEditing = () => {
   editingType.value = null
   editingIndex.value = -1
   editingConfigId.value = null
-  editingMetric.value = null
-  editingDimension.value = null
   editingRelationship.value = null
-}
-
-// ============ 指标操作 ============
-const addMetric = (configId: string) => {
-  const scope = getScopeEntries(configId)
-  if (scope.length === 0) {
-    ElMessage.warning('请先在上方选择数据表')
-    return
-  }
-  editingType.value = 'metric'
-  editingIndex.value = -1
-  editingConfigId.value = configId
-  editingMetric.value = {
-    name: '',
-    expression: 'COUNT(*)',
-    table: scope[0]?.table || '',
-    table_alias: scope[0]?.alias || '',
-    data_type: 'bigint',
-    filter: '',
-    description: '',
-  }
-}
-
-const editMetric = (configId: string, metric: SemanticMetric, index: number) => {
-  editingType.value = 'metric'
-  editingIndex.value = index
-  editingConfigId.value = configId
-  editingMetric.value = { ...metric }
-}
-
-const deleteMetric = (configId: string, index: number) => {
-  if (!confirm('确定要删除这个指标吗？')) return
-  const config = configs.value.find(c => c.id === configId)
-  if (!config) return
-  const newMetrics = [...config.metrics]
-  newMetrics.splice(index, 1)
-  updateConfig(configId, { metrics: newMetrics })
-}
-
-const saveMetric = () => {
-  if (!editingMetric.value || !editingConfigId.value) return
-  if (!editingMetric.value.name || !editingMetric.value.expression || !editingMetric.value.table) {
-    ElMessage.warning('请填写必填字段')
-    return
-  }
-  const config = configs.value.find(c => c.id === editingConfigId.value)
-  if (!config) return
-  const newMetrics = [...config.metrics]
-  const normalizedMetric: SemanticMetric = {
-    ...editingMetric.value,
-    data_type: inferMetricDataType(editingMetric.value),
-  }
-  if (editingIndex.value === -1) {
-    newMetrics.push(normalizedMetric)
-  } else {
-    newMetrics[editingIndex.value] = normalizedMetric
-  }
-  updateConfig(editingConfigId.value, { metrics: newMetrics })
-  cancelEditing()
 }
 
 // ============ 派生/复合指标操作（复用新增字段弹窗的 derived/composite 模式） ============
@@ -1054,12 +991,12 @@ const openAddExtensionDialog = () => {
   showAddFieldDialog.value = true
 }
 
-const deleteDerivedMetric = (index: number) => {
+const deleteDerivedMetric = async (index: number) => {
   const config = derivedMetricConfig.value
   if (!config) return
   const metric = config.metrics[index]
   if (!metric) return
-  if (!confirm(`确定要删除这个${metricKindLabel(metric)}吗？`)) return
+  if (!(await ElMessageBox.confirm(`确定要删除这个${metricKindLabel(metric)}吗？`, '提示', { type: 'warning' }).catch(() => false))) return
   const newMetrics = [...config.metrics]
   newMetrics.splice(index, 1)
   updateConfig(config.id, { metrics: newMetrics })
@@ -1084,64 +1021,6 @@ const confirmDerivedField = (metric: SemanticMetric) => {
   updateConfig(config.id, { metrics: newMetrics })
   resetEditingDerivedState()
   ElMessage.success(`${metricKindLabel(metric)}已保存`)
-}
-
-// ============ 维度操作 ============
-const addDimension = (configId: string) => {
-  const scope = getScopeEntries(configId)
-  if (scope.length === 0) {
-    ElMessage.warning('请先在上方选择数据表')
-    return
-  }
-  editingType.value = 'dimension'
-  editingIndex.value = -1
-  editingConfigId.value = configId
-  editingDimension.value = {
-    name: '',
-    column: '',
-    expression: '',
-    table: scope[0]?.table || '',
-    table_alias: scope[0]?.alias || '',
-    logical_type: 'text',
-    description: '',
-  }
-}
-
-const editDimension = (configId: string, dim: SemanticDimension, index: number) => {
-  editingType.value = 'dimension'
-  editingIndex.value = index
-  editingConfigId.value = configId
-  editingDimension.value = { ...dim }
-}
-
-const deleteDimension = (configId: string, index: number) => {
-  if (!confirm('确定要删除这个维度吗？')) return
-  const config = configs.value.find(c => c.id === configId)
-  if (!config) return
-  const newDimensions = [...config.dimensions]
-  newDimensions.splice(index, 1)
-  updateConfig(configId, { dimensions: newDimensions })
-}
-
-const saveDimension = () => {
-  if (!editingDimension.value || !editingConfigId.value) return
-  if (!editingDimension.value.name || !editingDimension.value.column || !editingDimension.value.table) {
-    ElMessage.warning('请填写必填字段')
-    return
-  }
-  const config = configs.value.find(c => c.id === editingConfigId.value)
-  if (!config) return
-  if (!editingDimension.value.expression?.trim()) {
-    editingDimension.value.expression = quoteIdentifier(editingDimension.value.column)
-  }
-  const newDimensions = [...config.dimensions]
-  if (editingIndex.value === -1) {
-    newDimensions.push(editingDimension.value)
-  } else {
-    newDimensions[editingIndex.value] = editingDimension.value
-  }
-  updateConfig(editingConfigId.value, { dimensions: newDimensions })
-  cancelEditing()
 }
 
 // ============ 关系操作 ============
@@ -1184,15 +1063,6 @@ const editRelationship = (configId: string, rel: SemanticRelationship, index: nu
     right_alias: rightEntry?.alias || rightAlias,
     join_conditions: getRelationshipConditions(rel).map(c => ({ ...c }))
   }
-}
-
-const deleteRelationship = (configId: string, index: number) => {
-  if (!confirm('确定要删除这个关系吗？')) return
-  const config = configs.value.find(c => c.id === configId)
-  if (!config) return
-  const newRelationships = [...config.relationships]
-  newRelationships.splice(index, 1)
-  updateConfig(configId, { relationships: newRelationships })
 }
 
 const saveRelationship = () => {
@@ -1482,11 +1352,6 @@ const getColumnsByScopeAlias = (configId: string, alias?: string) => {
   return entry ? getTableColumns(entry.table) : []
 }
 
-// 是否正在编辑某个配置的某个类型
-const isEditing = (configId: string, type: EditingType) => {
-  return editingConfigId.value === configId && editingType.value === type
-}
-
 const hasMultiTables = (configId: string) => {
   return getScopeEntries(configId).length > 1
 }
@@ -1621,32 +1486,6 @@ const isGeneratedFieldDisplayName = (row: FieldConfigRow) => {
     buildTablePrefixedDisplayName(getFieldRowAlias(row), baseName),
   ].filter(Boolean))
   return generatedNames.has(current)
-}
-
-const inferMetricDataType = (metric: SemanticMetric) => {
-  if (metric.data_type) return metric.data_type
-
-  const expression = (metric.expression || '').trim()
-  const fieldName = (metric.field_name || '').trim()
-  const quotedField = fieldName ? quoteIdentifier(fieldName) : ''
-
-  if (fieldName && expression === quotedField) {
-    return getMetricDataType(getTableColumnType(metric.table, fieldName))
-  }
-
-  const simpleColumnMatch = expression.match(/^`?([A-Za-z_][A-Za-z0-9_]*)`?$/)
-  if (simpleColumnMatch?.[1]) {
-    return getMetricDataType(getTableColumnType(metric.table, simpleColumnMatch[1]))
-  }
-
-  const aggregateMatch = expression.match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?`?([A-Za-z_][A-Za-z0-9_]*)`?\)$/i)
-  if (aggregateMatch?.[3]) {
-    const sourceType = getTableColumnType(metric.table, aggregateMatch[3])
-    if (/^COUNT$/i.test(aggregateMatch[1] || '')) return 'bigint'
-    return getMetricDataType(sourceType)
-  }
-
-  return undefined
 }
 
 const normalizeFieldName = (value: string) => (value || '').trim()

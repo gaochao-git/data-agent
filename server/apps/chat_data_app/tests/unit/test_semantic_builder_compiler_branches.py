@@ -488,7 +488,7 @@ def test_semantic_builder_compile_full_path_with_aliases_and_field_ref():
 
 
 @pytest.mark.asyncio
-async def test_load_runtime_semantic_config_branches(monkeypatch):
+async def test_load_runtime_semantic_config_strict_branches(monkeypatch):
     class RuntimeManager:
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id, "source_type": "hive"} if datasource_id == "ds_a" else None
@@ -519,16 +519,16 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
     monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: RuntimeSemanticService())
 
     with pytest.raises(ValueError, match="缺少"):
-        await compiler_module.load_runtime_semantic_config("", "cfg")
+        await compiler_module.load_runtime_semantic_config_strict("", "cfg")
     with pytest.raises(LookupError, match="数据源不存在"):
-        await compiler_module.load_runtime_semantic_config("missing", "cfg")
+        await compiler_module.load_runtime_semantic_config_strict("missing", "cfg")
     with pytest.raises(LookupError, match="语义配置不存在"):
-        await compiler_module.load_runtime_semantic_config("ds_a", "missing")
+        await compiler_module.load_runtime_semantic_config_strict("ds_a", "missing")
     with pytest.raises(ValueError, match="未启用"):
-        await compiler_module.load_runtime_semantic_config("ds_a", "disabled")
+        await compiler_module.load_runtime_semantic_config_strict("ds_a", "disabled")
 
-    loaded = await compiler_module.load_runtime_semantic_config("ds_a", "missing_id")
-    plain = await compiler_module.load_runtime_semantic_config("ds_a", "plain")
+    loaded = await compiler_module.load_runtime_semantic_config_strict("ds_a", "missing_id")
+    plain = await compiler_module.load_runtime_semantic_config_strict("ds_a", "plain")
     assert loaded["id"] == "missing_id"
     assert loaded["source_type"] == "hive"
     assert loaded["joins"] == loaded["relationships"]
@@ -543,19 +543,19 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
 
     monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: fallback_manager)
     monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: FallbackSemanticService())
-    fallback = await compiler_module.load_runtime_semantic_config("ds_b", "cfg_b")
+    fallback = await compiler_module.load_runtime_semantic_config_strict("ds_b", "cfg_b")
     assert "source_type" not in fallback
     assert fallback["joins"] == [{"left_table": "x"}]
 
 
 @pytest.mark.asyncio
 async def test_compile_semantic_builder_sql_uses_runtime_config(monkeypatch):
-    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+    async def fake_load_runtime_semantic_config_strict(datasource_id, semantic_config_id, user_id=None):
         assert datasource_id == "ds_runtime"
         assert semantic_config_id == "cfg_runtime"
         return build_semantic_config()
 
-    monkeypatch.setattr(compiler_module, "load_runtime_semantic_config", fake_load_runtime_semantic_config)
+    monkeypatch.setattr(compiler_module, "load_runtime_semantic_config_strict", fake_load_runtime_semantic_config_strict)
 
     result = await compiler_module.compile_semantic_builder_sql(
         "ds_runtime",
@@ -568,7 +568,7 @@ async def test_compile_semantic_builder_sql_uses_runtime_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_load_runtime_semantic_config_rejects_other_users_private_config(monkeypatch):
+async def test_load_runtime_semantic_config_strict_rejects_other_users_private_config(monkeypatch):
     class PrivateConfigManager:
         async def get_datasource_async(self, _datasource_id):
             return {"id": "ds_private", "source_type": "mysql"}
@@ -587,10 +587,10 @@ async def test_load_runtime_semantic_config_rejects_other_users_private_config(m
     monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: private_manager)
     monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: PrivateSemanticService())
 
-    owner_config = await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="owner_user")
+    owner_config = await compiler_module.load_runtime_semantic_config_strict("ds_private", "cfg_private", user_id="owner_user")
     assert owner_config["id"] == "cfg_private"
     with pytest.raises(LookupError, match="语义配置不存在"):
-        await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="other_user")
+        await compiler_module.load_runtime_semantic_config_strict("ds_private", "cfg_private", user_id="other_user")
 
 
 def test_semantic_query_service_remaining_join_and_metric_branches(monkeypatch):

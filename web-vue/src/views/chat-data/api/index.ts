@@ -529,17 +529,6 @@ export function unsetAdminDefaultDatasource(dsId: string): Promise<ApiResponse<n
 }
 
 /** 更新数据源元信息 */
-export function updateAdminDatasource(
-  datasourceId: string,
-  data: DatasourceMetaUpdatePayload
-): Promise<ApiResponse<DataSource>> {
-  return request({
-    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}`,
-    method: 'patch',
-    data
-  })
-}
-
 /** 更新数据源映射模块 */
 export function updateAdminMappedModules(datasourceId: string, mappedModules: string[]): Promise<ApiResponse<null>> {
   return request({

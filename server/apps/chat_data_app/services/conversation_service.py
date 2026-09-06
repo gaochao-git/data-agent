@@ -25,6 +25,8 @@ from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 
 logger = get_logger(__name__)
+# 实例建在本模块：单测通过 monkeypatch 本模块 get_session 打桩，
+# 若收敛为 daos 模块级单例会在导入期绑定真实会话工厂、破坏测试缝
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 PINNED_GROUP_KEY = "system:pinned"

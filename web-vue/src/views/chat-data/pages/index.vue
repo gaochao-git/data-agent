@@ -96,8 +96,9 @@ const adminDatasourceCache = ref<Record<string, DataSource>>({})
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
-const CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY = 'chat-data:conversation-semantic-config'
-const CONVERSATION_MODEL_STORAGE_KEY = 'chat-data:conversation-model'
+// storage key 统一 chatdata: 前缀;按用户隔离,避免共享浏览器多账号互相可见
+const semanticConfigStorageKey = () => `chatdata:conversation-semantic-config:${currentUser.value.id || 'anonymous'}`
+const conversationModelStorageKey = () => `chatdata:conversation-model:${currentUser.value.id || 'anonymous'}`
 
 const noMatchedDatasourceTitle = computed(() => {
   if (parentComponentName.value) {
@@ -587,7 +588,7 @@ const ensureConversationId = async (): Promise<string | null> => {
         title: '新会话',
         agent_id: 'chat_data',
         datasource_id: selectedDatasourceId.value || '',
-        created_at: res.data.create_time || new Date().toISOString(),
+        create_time: res.data.create_time || new Date().toISOString(),
         updated_at: res.data.create_time || new Date().toISOString(),
         is_favorited: false,
         run_status: null,
@@ -601,7 +602,7 @@ const ensureConversationId = async (): Promise<string | null> => {
 }
 
 // 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺
-const CONVERSATION_VIEW_MODE_KEY = 'chatdata-conversation-view-mode'
+const CONVERSATION_VIEW_MODE_KEY = 'chatdata:view-mode'
 
 const readLocalStorage = (key: string): string | null => {
   try {
@@ -800,7 +801,7 @@ const handleDatasourceChange = (dsId: string) => {
 const readConversationSemanticConfigSelection = (datasourceId: string) => {
   if (typeof window === 'undefined' || !datasourceId) return null
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY)
+    const raw = window.localStorage.getItem(semanticConfigStorageKey())
     if (!raw) return null
     const data = JSON.parse(raw) as Record<string, string>
     return String(data?.[datasourceId] || '').trim() || null
@@ -812,14 +813,14 @@ const readConversationSemanticConfigSelection = (datasourceId: string) => {
 const writeConversationSemanticConfigSelection = (datasourceId: string, configId: string | null) => {
   if (typeof window === 'undefined' || !datasourceId) return
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY)
+    const raw = window.localStorage.getItem(semanticConfigStorageKey())
     const data = raw ? JSON.parse(raw) as Record<string, string> : {}
     if (configId) {
       data[datasourceId] = configId
     } else {
       delete data[datasourceId]
     }
-    window.localStorage.setItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY, JSON.stringify(data))
+    window.localStorage.setItem(semanticConfigStorageKey(), JSON.stringify(data))
   } catch (err) {
     // 本地存储不可用时保持当前页面内状态即可
   }
@@ -832,7 +833,7 @@ const getConversationModelStorageUserKey = () => {
 const readConversationModelSelection = () => {
   if (typeof window === 'undefined') return ''
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    const raw = window.localStorage.getItem(conversationModelStorageKey())
     if (!raw) return ''
     const data = JSON.parse(raw) as Record<string, string>
     return String(data?.[getConversationModelStorageUserKey()] || '').trim()
@@ -844,7 +845,7 @@ const readConversationModelSelection = () => {
 const writeConversationModelSelection = (modelId: string) => {
   if (typeof window === 'undefined') return
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    const raw = window.localStorage.getItem(conversationModelStorageKey())
     const data = raw ? JSON.parse(raw) as Record<string, string> : {}
     const userKey = getConversationModelStorageUserKey()
     const normalizedModelId = String(modelId || '').trim()
@@ -853,7 +854,7 @@ const writeConversationModelSelection = (modelId: string) => {
     } else {
       delete data[userKey]
     }
-    window.localStorage.setItem(CONVERSATION_MODEL_STORAGE_KEY, JSON.stringify(data))
+    window.localStorage.setItem(conversationModelStorageKey(), JSON.stringify(data))
   } catch (err) {
     // 本地存储不可用时保持当前页面内状态即可
   }
@@ -1366,7 +1367,25 @@ const handleConversationSemanticConfigSelected = (payload: SemanticConfigSelecti
   writeConversationSemanticConfigSelection(selectedDatasourceId.value, selectedId)
 }
 
+// storage key 统一前缀改造后的一次性迁移：清掉历史版本的孤儿键，
+// 避免旧键里上一个账号的数据永久残留在浏览器
+const LEGACY_STORAGE_KEYS = [
+  'chat-data:conversation-semantic-config',
+  'chat-data:conversation-model',
+  'chatdata-conversation-view-mode',
+  'chat_data_sql_ai_conversation_history',
+]
+const cleanupLegacyStorageKeys = () => {
+  try {
+    LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key))
+    sessionStorage.removeItem('chatdata-active-run-conversation')
+  } catch {
+    // storage 不可用（如宿主禁用）时清理失败无影响
+  }
+}
+
 onMounted(async () => {
+  cleanupLegacyStorageKeys()
   // 确保主系统用户信息已加载，后端统一从主系统认证中解析当前用户。
   let userId = String(currentUser.value.id || '').trim()
   let userName = String(currentUser.value.name || '').trim()

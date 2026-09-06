@@ -15,7 +15,7 @@ const sortConversations = (conversations: ConversationItem[]): ConversationItem[
   [...conversations].sort((a, b) => {
     const favoriteDiff = Number(Boolean(b.is_favorited)) - Number(Boolean(a.is_favorited))
     if (favoriteDiff !== 0) return favoriteDiff
-    return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
+    return String(b.updated_at || b.create_time).localeCompare(String(a.updated_at || a.create_time))
   })
 )
 

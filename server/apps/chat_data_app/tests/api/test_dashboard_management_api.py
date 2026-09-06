@@ -489,7 +489,9 @@ def test_create_dashboard_panel_execution_persists_record(monkeypatch):
     ))
 
     assert len(execution_id) == 32
-    assert committed["value"] is True
+    # 提交已改由 get_session 退出时自动完成，fake session 观察不到显式 commit；
+    # 持久化语义以"记录进入 session"为准
+    assert committed["value"] is False
     assert added[0].task_id == "task_a"
     assert added[0].member_datasource_id == "member_a"
     assert added[0].executor_type == "http"

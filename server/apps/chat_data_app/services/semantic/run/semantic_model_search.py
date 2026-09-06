@@ -42,10 +42,6 @@ def _config_name(config: Dict[str, Any]) -> str:
     return str(config.get("name") or config.get("semantic_config_name") or "").strip()
 
 
-def _config_description(config: Dict[str, Any]) -> str:
-    """读取指标集描述。"""
-    return str(config.get("description") or config.get("semantic_config_desc") or "").strip()
-
 
 def _compact_metric_summary(item: Dict[str, Any], metrics_map: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """构造指标选择摘要，只保留业务语义字段。"""

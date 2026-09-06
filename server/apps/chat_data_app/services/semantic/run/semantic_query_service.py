@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from ...datasource.manager import get_datasource_manager
-from ...sql_run.result import build_query_result_payload, query_result_status
+from ...sql_run.result import query_result_status
 from ...runtime_config import DEFAULT_ROW_LIMIT
 from .semantic_bi_query_adapter import (  # noqa: F401  历史兼容 re-export，存量调用方与测试从本模块导入
     FORBIDDEN_SEMANTIC_BUILDER_KEYS,
@@ -27,7 +27,9 @@ from .semantic_config_service import get_semantic_config_service
 from .semantic_query_plan_builder import normalize_text
 
 
-async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: str, user_id: str | None = None) -> Dict[str, Any]:
+async def load_runtime_semantic_config_strict(datasource_id: str, semantic_config_id: str, user_id: str | None = None) -> Dict[str, Any]:
+    """加载运行时语义配置并做错误映射；与 repository 的静默版(load_runtime_semantic_config)
+    不同：未找到/未启用时抛出带用户可读信息的 LookupError/ValueError，供编译流程直出错误。"""
     normalized_datasource_id = normalize_text(datasource_id)
     normalized_config_id = normalize_text(semantic_config_id)
     if not normalized_datasource_id or not normalized_config_id:
@@ -58,7 +60,7 @@ async def compile_semantic_builder_sql(
     semantic_builder_config: Dict[str, Any],
     user_id: str | None = None,
 ) -> Dict[str, Any]:
-    semantic_config = await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id) if user_id else await load_runtime_semantic_config(datasource_id, semantic_config_id)
+    semantic_config = await load_runtime_semantic_config_strict(datasource_id, semantic_config_id, user_id=user_id)
     result = compile_semantic_bi_dsl(semantic_config, semantic_builder_config)
     if not result.get("success"):
         raise ValueError(str(result.get("error") or "BI 语义 DSL 编译失败"))
@@ -186,19 +188,3 @@ def build_member_query_result(
         "member_name": member_name,
     }
 
-
-def build_multi_member_query_result(sql: str, member_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build a normalized multi-member query result payload."""
-    return build_query_result_payload(sql=sql, member_results=member_results)
-
-
-class SemanticQueryService:
-    """AI/BI 语义编译和查询执行的统一无状态门面。"""
-
-    compile_ai_dsl = staticmethod(compile_semantic_ai_dsl)
-    compile_bi_dsl = staticmethod(compile_semantic_bi_dsl)
-    compile_bi_query = staticmethod(compile_semantic_builder_sql)
-    execute_sql = staticmethod(execute_semantic_query_sql)
-    normalize_member_ids = staticmethod(normalize_member_datasource_ids)
-    build_member_result = staticmethod(build_member_query_result)
-    build_multi_member_result = staticmethod(build_multi_member_query_result)

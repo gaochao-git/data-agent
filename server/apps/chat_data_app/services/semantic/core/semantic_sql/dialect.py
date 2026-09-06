@@ -35,19 +35,6 @@ class SQLDialect(ABC):
         """
         pass
 
-    @abstractmethod
-    def quote_string(self, value: str) -> str:
-        """
-        字符串值引用
-
-        Args:
-            value: 字符串值
-
-        Returns:
-            引用后的字符串
-        """
-        pass
-
     # ========== 日期/时间函数 ==========
 
     @abstractmethod
@@ -146,10 +133,6 @@ class MySQLDialect(SQLDialect):
     def quote_identifier(self, name: str) -> str:
         return f"`{name}`"
 
-    def quote_string(self, value: str) -> str:
-        escaped = value.replace("'", "''")
-        return f"'{escaped}'"
-
     def format_date(self, column: str, grain: str) -> str:
         formats = {
             "year": f"DATE_FORMAT({column}, '%Y')",
@@ -205,10 +188,6 @@ class HiveDialect(SQLDialect):
 
     def quote_identifier(self, name: str) -> str:
         return f"`{name}`"
-
-    def quote_string(self, value: str) -> str:
-        escaped = value.replace("'", "\\'")
-        return f"'{escaped}'"
 
     def format_date(self, column: str, grain: str) -> str:
         formats = {

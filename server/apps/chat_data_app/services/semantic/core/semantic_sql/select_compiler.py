@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .filter_compiler import _effective_table_ref, _physical_table_ref
+
 
 @dataclass(frozen=True)
 class SelectCompilation:
@@ -49,8 +51,8 @@ def _compile_dimension_field(
     dimension_alias_map: Dict[Tuple[str, str], str],
 ) -> None:
     """编译单个维度字段；transform 非 raw 时按日期变换展开。"""
-    table = _effective_table_ref(dimension, main_alias)
-    physical_table = _physical_table_ref(dimension, table)
+    table = _effective_table_ref(dimension, fallback=main_alias)
+    physical_table = _physical_table_ref(dimension, fallback=table)
     column = dimension.get("column", "")
     transform = dimension.get("transform") or "raw"
     display_name = dimension.get("displayName") or dimension.get("alias") or column
@@ -113,8 +115,8 @@ def _compile_aggregation_field(
     fields: List[str],
 ) -> None:
     """编译单个指标字段，落入 SELECT 列表。"""
-    table = _effective_table_ref(aggregation, main_alias)
-    physical_table = _physical_table_ref(aggregation, table)
+    table = _effective_table_ref(aggregation, fallback=main_alias)
+    physical_table = _physical_table_ref(aggregation, fallback=table)
     column = aggregation.get("column", "")
     function = (aggregation.get("func") or "RAW").upper()
     expression = aggregation.get("expression")
@@ -191,9 +193,5 @@ def compile_select_fields(
     return SelectCompilation(fields, dimension_expr_map, group_expr_map, dimension_alias_map)
 
 
-def _effective_table_ref(item: Dict[str, Any], fallback: str) -> str:
-    return str(item.get("tableAlias") or item.get("table") or fallback or "").strip()
 
 
-def _physical_table_ref(item: Dict[str, Any], fallback: str) -> str:
-    return str(item.get("table") or fallback or "").strip()

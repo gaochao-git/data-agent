@@ -332,7 +332,7 @@ export interface SemanticConfigSelectionInfo {
 export interface ConversationItem {
   id: string
   title: string
-  created_at: string
+  create_time: string
   updated_at?: string
   agent_id?: string
   datasource_id?: string
@@ -507,38 +507,6 @@ export interface SqlHistoryItem {
   }> | null
 }
 
-// 看板
-export interface Dashboard {
-  id: string
-  name: string
-  description?: string
-  user_id: string
-  datasource_id?: string
-  theme: 'light' | 'dark'
-  background_id?: string
-  is_public: boolean
-  can_manage?: boolean
-  panels?: Panel[]
-  create_time: string
-  update_time: string
-}
-
-// 面板
-export interface Panel {
-  id: string
-  dashboard_id: string
-  name: string
-  sql: string
-  chart_type: ChartType
-  chart_config?: Record<string, unknown>
-  layout: { i: string; x: number; y: number; w: number; h: number }
-  refresh_interval?: number
-  source_thread_id?: string
-  datasource_id?: string
-  create_time: string
-  update_time: string
-}
-
 // 视图模式
 export type ViewMode = 'conversation' | 'builder' | 'editor' | 'dashboard' | 'metricConfig'
 export type ChatDataModeLabels = Record<Exclude<ViewMode, 'metricConfig'>, string> & Partial<Record<'metricConfig', string>>
@@ -550,6 +518,7 @@ export interface ChatDataSqlChangePayload {
 }
 
 // 对外嵌入配置（ChatDataDialog / ChatDataFloat 统一使用）
+// 嵌入前提：宿主项目需已安装并注册 vue-router 与 pinia（页面使用 useRoute 与 user store）
 export interface ChatDataOptions {
   /** 调用方组件/模块名称，用于标识来源 */
   parentComponentName?: string

@@ -122,11 +122,11 @@ def _sql_list_literal(values: Any, value_type: Any, safe_functions: set[str]) ->
     ) + ")"
 
 
-def _effective_table_ref(item: Dict[str, Any], fallback: str) -> str:
+def _effective_table_ref(item: Dict[str, Any], fallback: str = "") -> str:
     return str(item.get("tableAlias") or item.get("table") or fallback or "").strip()
 
 
-def _physical_table_ref(item: Dict[str, Any], fallback: str) -> str:
+def _physical_table_ref(item: Dict[str, Any], fallback: str = "") -> str:
     return str(item.get("table") or fallback or "").strip()
 
 
@@ -209,8 +209,8 @@ def build_where_leaf_clause(
     get_column_expr: Callable[..., str],
     safe_functions: set[str],
 ) -> str:
-    table = _effective_table_ref(leaf, main_table)
-    physical_table = _physical_table_ref(leaf, table)
+    table = _effective_table_ref(leaf, fallback=main_table)
+    physical_table = _physical_table_ref(leaf, fallback=table)
     column = leaf.get("column", "")
     if (leaf.get("expression") or "").strip():
         ensure_safe_sql_expression(leaf.get("expression"), label="维度表达式")
@@ -239,7 +239,7 @@ def _match_aggregation(
     """优先按 aggId 匹配聚合定义，否则按表/列/聚合函数兜底匹配。"""
     matched = agg_by_id.get(str(leaf.get("aggId"))) if leaf.get("aggId") else None
     if not matched and not str(leaf.get("expression") or "").strip():
-        matched = next((item for item in aggregations if _effective_table_ref(item, main_table) == table and item.get("column") == column and str(item.get("func") or "").upper() == agg_func), None)
+        matched = next((item for item in aggregations if _effective_table_ref(item, fallback=main_table) == table and item.get("column") == column and str(item.get("func") or "").upper() == agg_func), None)
     return matched
 
 
@@ -290,10 +290,10 @@ def _build_aggregate_expr(
     normalize_expression: bool = False,
 ) -> str:
     agg_func = str(leaf.get("aggFunc", "RAW")).upper()
-    table = _effective_table_ref(leaf, main_table)
+    table = _effective_table_ref(leaf, fallback=main_table)
     column = leaf.get("column", "")
     matched = _match_aggregation(leaf, agg_by_id, aggregations, main_table, table, column, agg_func)
-    physical_table = _physical_table_ref(matched or leaf, table)
+    physical_table = _physical_table_ref(matched or leaf, fallback=table)
     expression = (matched or {}).get("expression") or leaf.get("expression")
     normalized = _aggregate_expression_output(
         expression,

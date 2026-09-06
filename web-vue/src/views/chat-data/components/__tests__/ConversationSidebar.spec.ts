@@ -16,7 +16,7 @@ describe('ConversationSidebar history groups', () => {
         groupedConversations: [{
           key: 'datasource:ds_a',
           label: '业务数据',
-          items: [{ id: 'conv-a', title: '查询销售额', created_at: '2026-08-14 10:00:00' }],
+          items: [{ id: 'conv-a', title: '查询销售额', create_time: '2026-08-14 10:00:00' }],
         }],
       },
     })
@@ -42,12 +42,12 @@ describe('ConversationSidebar history groups', () => {
           {
             key: 'system:pinned',
             label: '置顶',
-            items: [{ id: 'favorite', title: '收藏会话', created_at: '2026-08-14 10:00:00' }],
+            items: [{ id: 'favorite', title: '收藏会话', create_time: '2026-08-14 10:00:00' }],
           },
           {
             key: 'datasource:ds_pinned',
             label: '置顶（数据源）',
-            items: [{ id: 'datasource', title: '同名数据源会话', created_at: '2026-08-14 09:00:00' }],
+            items: [{ id: 'datasource', title: '同名数据源会话', create_time: '2026-08-14 09:00:00' }],
           },
         ],
       },
@@ -75,7 +75,7 @@ describe('ConversationSidebar history groups', () => {
         groupedConversations: [{
           key: 'datasource:ds_a',
           label: '业务数据',
-          items: [{ id: 'conv-a', title: '查询销售额', created_at: '2026-08-14 10:00:00' }],
+          items: [{ id: 'conv-a', title: '查询销售额', create_time: '2026-08-14 10:00:00' }],
           has_more: true,
         }],
       },
@@ -102,7 +102,7 @@ describe('ConversationSidebar history groups', () => {
           items: Array.from({ length: 20 }, (_, index) => ({
             id: `conv-${index}`,
             title: `查询销售额 ${index}`,
-            created_at: '2026-08-14 10:00:00',
+            create_time: '2026-08-14 10:00:00',
           })),
         }],
       },
@@ -141,8 +141,8 @@ describe('ConversationSidebar conversation row role zone', () => {
   it('shows relative time by default and keeps actions hidden until hover', () => {
     const updatedAt = fiveMinutesAgo()
     const wrapper = mountSidebar([
-      { id: 'conv-time', title: '五分钟前的会话', created_at: updatedAt, updated_at: updatedAt },
-      { id: 'conv-old', title: '超龄会话', created_at: '2026-01-05 10:00:00', updated_at: '2026-01-05 10:00:00' },
+      { id: 'conv-time', title: '五分钟前的会话', create_time: updatedAt, updated_at: updatedAt },
+      { id: 'conv-old', title: '超龄会话', create_time: '2026-01-05 10:00:00', updated_at: '2026-01-05 10:00:00' },
     ])
 
     const times = wrapper.findAll('[data-testid="conversation-time"]')
@@ -161,7 +161,7 @@ describe('ConversationSidebar conversation row role zone', () => {
   })
 
   it('stacks time and buttons in one fixed-width zone so the hover swap causes no layout shift', () => {
-    const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', created_at: '2026-08-14 10:00:00' }])
+    const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', create_time: '2026-08-14 10:00:00' }])
 
     // 两态共用同一固定宽度容器（2×24px 按钮 + 4px 间距），hover 时互不挤占
     const zone = wrapper.find('[data-testid="conversation-role-zone"]')
@@ -183,7 +183,7 @@ describe('ConversationSidebar conversation row role zone', () => {
   it('keeps pinned rows quiet by default and reveals the pinned state only on hover', () => {
     const updatedAt = fiveMinutesAgo()
     const wrapper = mountSidebar([
-      { id: 'conv-pinned', title: '已置顶会话', created_at: updatedAt, updated_at: updatedAt, is_favorited: true },
+      { id: 'conv-pinned', title: '已置顶会话', create_time: updatedAt, updated_at: updatedAt, is_favorited: true },
     ])
 
     // 默认态仍是时间：置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知）
