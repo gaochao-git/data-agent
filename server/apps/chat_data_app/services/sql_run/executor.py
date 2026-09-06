@@ -18,10 +18,13 @@ from utils.logger import get_logger
 from utils.alarm import DB_FAIL_DATASOURCE, emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
 from utils.db_failover import is_mysql_connection_error
 from ..datasource.credentials import (
+    add_http_user_params,
     apply_hive_socket_timeout,
     build_hive_connect_params,
+    build_http_auth_headers,
     get_http_auth_token,
     HIVE_SOCKET_TIMEOUT_SECONDS,
+    open_http_client,
     resolve_execution_source_config,
 )
 
@@ -56,7 +59,6 @@ MYSQL_KILL_TIMEOUT_SECONDS = 5
 HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
 HTTP_STATUS_URL = str(os.getenv("CHAT_DATA_HTTP_STATUS_URL") or "").strip()
 HTTP_STOP_URL = str(os.getenv("CHAT_DATA_HTTP_STOP_URL") or "").strip()
-HTTP_VERIFY_TLS = str(os.getenv("CHAT_DATA_HTTP_VERIFY_TLS", "false")).strip().lower() in {"1", "true", "yes", "on"}
 JS_SAFE_INTEGER_MAX = 2**53 - 1
 
 
@@ -500,15 +502,11 @@ def _is_hive_connection_exception(err: Exception) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _add_hive_http_user_params(payload: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
-    """补充 Hive 外部 HTTP 请求的用户参数。"""
-    normalized_user_id = str(user_id or "").strip()
-    normalized_username = str(username or "").strip()
-    if normalized_user_id:
-        payload["userId"] = normalized_user_id
-    if normalized_username:
-        payload["username"] = normalized_username
-    return payload
+def _http_error_result(error: Optional[str], **extra: Any) -> Dict[str, Any]:
+    """HTTP 链路统一错误结果结构；extra 携带 status、耗时等补充字段。"""
+    result: Dict[str, Any] = {"success": False, "error": error, "columns": [], "data": [], "total_count": 0}
+    result.update(extra)
+    return result
 
 
 class SQLExecutor(ABC):
@@ -829,10 +827,7 @@ class HiveHttpExecutor(SQLExecutor):
         self.org_name = str(org_name or "").strip()
 
     def _build_headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if HTTP_AUTH_TOKEN:
-            headers["Authorization"] = f"Bearer {HTTP_AUTH_TOKEN}"
-        return headers
+        return build_http_auth_headers(HTTP_AUTH_TOKEN)
 
     def _render_url(self, template: str, task_id: str) -> str:
         if "{task_id}" in template:
@@ -840,12 +835,7 @@ class HiveHttpExecutor(SQLExecutor):
         return template
 
     async def _request_json(self, method: str, url: str, *, json_payload: Optional[Dict[str, Any]] = None, task_id: str = "", params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        import httpx
-
-        request_kwargs: Dict[str, Any] = {
-            "headers": self._build_headers(),
-            "timeout": max(CONNECT_TIMEOUT_SECONDS, resolve_query_timeout(self.source_type)),
-        }
+        request_kwargs: Dict[str, Any] = {}
         if method.upper() == "GET":
             query_params = dict(params or {})
             if task_id and "{task_id}" not in url:
@@ -864,7 +854,10 @@ class HiveHttpExecutor(SQLExecutor):
             _http_payload_summary(request_kwargs.get("json")),
         )
         try:
-            async with httpx.AsyncClient(verify=HTTP_VERIFY_TLS) as client:
+            async with open_http_client(
+                timeout_seconds=max(CONNECT_TIMEOUT_SECONDS, resolve_query_timeout(self.source_type)),
+                headers=self._build_headers(),
+            ) as client:
                 response = await client.request(method.upper(), request_url, **request_kwargs)
                 response.raise_for_status()
                 payload = response.json()
@@ -898,7 +891,7 @@ class HiveHttpExecutor(SQLExecutor):
             "orgName": self.org_name,
             "limit": limit,
         }
-        _add_hive_http_user_params(payload, user_id, username)
+        add_http_user_params(payload, user_id, username)
         return payload
 
     def _normalize_result(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -957,7 +950,7 @@ class HiveHttpExecutor(SQLExecutor):
         if validation_error:
             return validation_error
         if not self.namespace:
-            return {"success": False, "error": "缺少 HTTP 执行标识，请配置机构编码", "columns": [], "data": [], "total_count": 0}
+            return _http_error_result("缺少 HTTP 执行标识，请配置机构编码")
         config_error = self._http_config_error()
         if config_error:
             return config_error
@@ -968,14 +961,14 @@ class HiveHttpExecutor(SQLExecutor):
             return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
         except asyncio.TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
-            return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+            return _http_error_result(f"查询超时（{resolved_timeout}秒）")
         except ValueError as e:
             logger.warning("[HTTPExecutor] SQL 执行参数非法: %s", e)
-            return {"success": False, "error": str(e), "columns": [], "data": [], "total_count": 0}
+            return _http_error_result(str(e))
         except Exception as e:
             logger.error("[HTTPExecutor] 执行 SQL 失败: %s", e)
             engine_name = "MySQL" if self.source_type == "mysql" else "Hive"
-            return {"success": False, "error": _friendly_sql_error(engine_name, e), "columns": [], "data": [], "total_count": 0}
+            return _http_error_result(_friendly_sql_error(engine_name, e))
 
     def _http_validation_error(self, sql: str) -> Optional[Dict[str, Any]]:
         """SQL 校验失败时告警并返回错误结果；合法返回 None。"""
@@ -988,19 +981,13 @@ class HiveHttpExecutor(SQLExecutor):
             source_type=self.source_type,
             execution_scope="http_executor",
         )
-        return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
+        return _http_error_result(error_msg)
 
     @staticmethod
     def _http_config_error() -> Optional[Dict[str, Any]]:
         """执行前置配置检查；缺配置返回错误结果，否则 None。"""
         if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
-            return {
-                "success": False,
-                "error": "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL",
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-            }
+            return _http_error_result("未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL")
         return None
 
     async def _submit_http_query(
@@ -1020,22 +1007,10 @@ class HiveHttpExecutor(SQLExecutor):
         )
         submit_code = _extract_remote_code(submit_payload)
         if submit_code is not None and submit_code != 20000:
-            return {
-                "success": False,
-                "error": _extract_remote_message(submit_payload, "HTTP 查询提交失败"),
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-            }, None
+            return _http_error_result(_extract_remote_message(submit_payload, "HTTP 查询提交失败")), None
         task_id = _extract_task_id(submit_payload)
         if not task_id:
-            return {
-                "success": False,
-                "error": _extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID"),
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-            }, None
+            return _http_error_result(_extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID")), None
         await self._notify_remote_task_created(remote_task_callback, task_id)
         return None, task_id
 
@@ -1051,22 +1026,18 @@ class HiveHttpExecutor(SQLExecutor):
         deadline = loop.time() + resolved_timeout
         while True:
             if loop.time() >= deadline:
-                return {"success": False, "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
-            status_params = _add_hive_http_user_params({}, user_id, username)
+                return _http_error_result(f"查询超时（{resolved_timeout}秒）")
+            status_params = add_http_user_params({}, user_id, username)
             if status_params:
                 status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id, params=status_params)
             else:
                 status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id)
             status_code = _extract_remote_code(status_payload)
             if status_code is not None and status_code != 20000:
-                return {
-                    "success": False,
-                    "error": _extract_remote_message(status_payload, "HTTP 查询失败"),
-                    "columns": [],
-                    "data": [],
-                    "total_count": 0,
+                return _http_error_result(
+                    _extract_remote_message(status_payload, "HTTP 查询失败"),
                     **_build_http_execution_times(status_payload, {}),
-                }
+                )
             normalized_status = _extract_remote_status(status_payload)
             if normalized_status == "succeeded":
                 result = self._normalize_result(status_payload)
@@ -1078,23 +1049,11 @@ class HiveHttpExecutor(SQLExecutor):
             await asyncio.sleep(max(0.2, DEFAULT_HTTP_POLL_INTERVAL_MS / 1000))
 
     def _cancelled_or_failed_result(self, status_payload: Dict[str, Any], normalized_status: str) -> Dict[str, Any]:
-        if normalized_status == "cancelled":
-            return {
-                "success": False,
-                "error": _extract_remote_message(status_payload, "查询已取消"),
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-                **_build_http_execution_times(status_payload, {}),
-            }
-        return {
-            "success": False,
-            "error": str(_extract_remote_message(status_payload, "HTTP 查询失败")),
-            "columns": [],
-            "data": [],
-            "total_count": 0,
+        default_message = "查询已取消" if normalized_status == "cancelled" else "HTTP 查询失败"
+        return _http_error_result(
+            _extract_remote_message(status_payload, default_message),
             **_build_http_execution_times(status_payload, {}),
-        }
+        )
 
     async def test_connection(self) -> bool:
         """Hive HTTP 模式不再校验直连，仅校验必要配置。"""
@@ -1108,7 +1067,7 @@ class HiveHttpExecutor(SQLExecutor):
 async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
     """按远端任务 ID 查询 HTTP 任务状态与结果。"""
     executor = HiveHttpExecutor(namespace="_remote_task_lookup_", source_type=source_type)
-    status_params = _add_hive_http_user_params({}, user_id, username)
+    status_params = add_http_user_params({}, user_id, username)
     if status_params:
         payload = await executor._request_json("GET", HTTP_STATUS_URL, task_id=remote_task_id, params=status_params)
     else:
@@ -1116,25 +1075,11 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
     status_code = _extract_remote_code(payload)
     if status_code is not None and status_code != 20000:
         normalized_status = _extract_remote_status(payload)
-        if normalized_status == "failed":
-            return {
-                "status": "failed",
-                "success": False,
-                "error": _extract_remote_message(payload, "HTTP 查询失败"),
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-                **_build_http_execution_times(payload, {}),
-            }
-        return {
-            "status": normalized_status or "failed",
-            "success": False,
-            "error": _extract_remote_message(payload, "HTTP 查询失败"),
-            "columns": [],
-            "data": [],
-            "total_count": 0,
+        return _http_error_result(
+            _extract_remote_message(payload, "HTTP 查询失败"),
+            status=normalized_status or "failed",
             **_build_http_execution_times(payload, {}),
-        }
+        )
 
     normalized_status = _extract_remote_status(payload)
     if normalized_status == "succeeded":
@@ -1151,23 +1096,12 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
             "error": None,
         }
     if normalized_status in {"failed", "cancelled"}:
-        return {
-            "status": normalized_status,
-            "success": False,
-            "error": _extract_remote_message(payload, "查询已取消" if normalized_status == "cancelled" else "HTTP 查询失败"),
-            "columns": [],
-            "data": [],
-            "total_count": 0,
+        return _http_error_result(
+            _extract_remote_message(payload, "查询已取消" if normalized_status == "cancelled" else "HTTP 查询失败"),
+            status=normalized_status,
             **_build_http_execution_times(payload, {}),
-        }
-    return {
-        "status": normalized_status,
-        "success": False,
-        "error": None,
-        "columns": [],
-        "data": [],
-        "total_count": 0,
-    }
+        )
+    return _http_error_result(None, status=normalized_status)
 
 
 async def stop_http_query_task(remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
@@ -1179,7 +1113,7 @@ async def stop_http_query_task(remote_task_id: str, source_type: str = "hive", u
         return {"success": False, "error": "未配置 HTTP 停止接口，请检查 CHAT_DATA_HTTP_STOP_URL"}
     executor = HiveHttpExecutor(namespace="_remote_task_cancel_", source_type=source_type)
     try:
-        stop_payload = _add_hive_http_user_params({"task_id": normalized_task_id}, user_id, username)
+        stop_payload = add_http_user_params({"task_id": normalized_task_id}, user_id, username)
         payload = await executor._request_json("POST", HTTP_STOP_URL, json_payload=stop_payload)
         status_code = _extract_remote_code(payload)
         if status_code is not None and status_code != 20000:

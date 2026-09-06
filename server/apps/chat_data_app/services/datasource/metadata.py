@@ -10,20 +10,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Type
 
 import aiomysql
-import httpx
 from pyhive import hive
 
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
 from .credentials import (
+    add_http_user_params,
     apply_hive_socket_timeout,
     build_hive_connect_params,
+    build_http_auth_headers,
     get_http_auth_token,
     HIVE_SOCKET_TIMEOUT_SECONDS,
+    open_http_client,
     resolve_hive_credentials,
     resolve_mysql_credentials,
 )
-from ..runtime_config import read_bool_env, read_positive_int_env
+from ..runtime_config import read_positive_int_env
 
 logger = get_logger(__name__)
 
@@ -37,7 +39,6 @@ META_TABLES_URL = str(os.getenv("CHAT_DATA_META_TABLES_URL") or "").strip()
 META_SCHEMA_URL = str(os.getenv("CHAT_DATA_META_SCHEMA_URL") or "").strip()
 META_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_META_TIMEOUT_SECONDS", 30)
 META_SCHEMA_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_META_SCHEMA_MAX_CONCURRENCY", 10)
-HTTP_VERIFY_TLS = read_bool_env("CHAT_DATA_HTTP_VERIFY_TLS", False)
 HTTP_AUTH_TOKEN = get_http_auth_token()
 
 
@@ -427,24 +428,7 @@ def validate_hive_meta_config() -> None:
 
 
 def _build_headers() -> Dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    if HTTP_AUTH_TOKEN:
-        headers["Authorization"] = f"Bearer {HTTP_AUTH_TOKEN}"
-    return headers
-
-
-def _add_user_payload(
-    payload: Dict[str, Any],
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
-    normalized_user_id = str(user_id or "").strip()
-    normalized_username = str(username or "").strip()
-    if normalized_user_id:
-        payload["userId"] = normalized_user_id
-    if normalized_username:
-        payload["username"] = normalized_username
-    return payload
+    return build_http_auth_headers(HTTP_AUTH_TOKEN)
 
 
 def _meta_payload_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -488,7 +472,7 @@ def _build_payload(
         payload["host"] = source_config["host"]
     if source_config.get("port") is not None:
         payload["port"] = int(source_config["port"])
-    _add_user_payload(payload, user_id, username)
+    add_http_user_params(payload, user_id, username)
     if table_names is not None:
         payload["table_names"] = table_names
     return payload
@@ -580,8 +564,8 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
 async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[HiveMetaHTTP] 请求对方接口: url=%s payload=%s", url, _meta_payload_summary(payload))
     try:
-        async with httpx.AsyncClient(verify=HTTP_VERIFY_TLS, timeout=META_TIMEOUT_SECONDS) as client:
-            response = await client.post(url, json=payload, headers=_build_headers())
+        async with open_http_client(timeout_seconds=META_TIMEOUT_SECONDS, headers=_build_headers()) as client:
+            response = await client.post(url, json=payload)
             response.raise_for_status()
             response_payload = response.json()
             logger.debug(

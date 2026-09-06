@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
 
 from utils.crypto import decrypt_password
 from utils.logger import get_logger
-from ..runtime_config import read_positive_int_env
+from ..runtime_config import read_bool_env, read_positive_int_env
 
 logger = get_logger(__name__)
 HIVE_SOCKET_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_HIVE_SOCKET_TIMEOUT_SECONDS", 10)
+# 外部 HTTP 接口 TLS 校验开关的唯一解析口径（查询执行与元数据链路共用）
+HTTP_VERIFY_TLS = read_bool_env("CHAT_DATA_HTTP_VERIFY_TLS", False)
 
 
 def _get_env_value(name: str) -> str | None:
@@ -28,6 +31,50 @@ def _get_env_password(name: str) -> str | None:
 def get_http_auth_token() -> str:
     """读取外部 HTTP 服务认证 token，环境变量中存储 SM4 密文。"""
     return _get_env_password("CHAT_DATA_HTTP_AUTH_TOKEN") or ""
+
+
+def build_http_auth_headers(auth_token: str) -> Dict[str, str]:
+    """构造外部 HTTP 接口统一请求头。
+
+    token 由调用方传入（调用方模块级解析、可测试 patch），本函数只负责组装。
+    """
+    headers = {"Content-Type": "application/json"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    return headers
+
+
+def add_http_user_params(
+    payload: Dict[str, Any],
+    user_id: str | None = None,
+    username: str | None = None,
+) -> Dict[str, Any]:
+    """补充外部 HTTP 接口统一用户参数（仅边界层使用对方要求的驼峰命名）。"""
+    normalized_user_id = str(user_id or "").strip()
+    normalized_username = str(username or "").strip()
+    if normalized_user_id:
+        payload["userId"] = normalized_user_id
+    if normalized_username:
+        payload["username"] = normalized_username
+    return payload
+
+
+@asynccontextmanager
+async def open_http_client(*, timeout_seconds: float, headers: Optional[Dict[str, str]] = None):
+    """统一构造外部 HTTP AsyncClient，TLS 校验口径单点。
+
+    headers 由调用方传入（各调用方模块的 token 解析保留模块级测试 patch seam）；
+    httpx 在函数内导入：executor 测试通过 sys.modules 注入伪实现，模块属性
+    级导入会使该 patch 方式失效，与 executor 既有模式保持一致。
+    """
+    import httpx
+
+    async with httpx.AsyncClient(
+        verify=HTTP_VERIFY_TLS,
+        timeout=timeout_seconds,
+        headers=headers,
+    ) as client:
+        yield client
 
 
 def apply_hive_socket_timeout(transport: Any, timeout_seconds: int) -> None:

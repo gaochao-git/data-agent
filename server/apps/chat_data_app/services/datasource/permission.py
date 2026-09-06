@@ -5,17 +5,15 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-import httpx
-
+from .credentials import add_http_user_params, open_http_client
 from .direct_org_codes import get_direct_org_codes
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
-from ..runtime_config import read_bool_env, read_positive_int_env
+from ..runtime_config import read_positive_int_env
 
 logger = get_logger(__name__)
 HTTP_PERMISSION_URL = str(os.getenv("CHAT_DATA_HTTP_PERMISSION_URL") or "").strip()
 HTTP_PERMISSION_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_HTTP_PERMISSION_TIMEOUT_SECONDS", 5)
-HTTP_VERIFY_TLS = read_bool_env("CHAT_DATA_HTTP_VERIFY_TLS", False)
 
 
 def normalize_org_codes(items: Any) -> Set[str]:
@@ -42,7 +40,7 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
         logger.debug("跳过 HTTP 执行对象权限查询: user_id 为空 url=%s", HTTP_PERMISSION_URL)
         return set()
 
-    payload = {"userId": normalized_user_id, "username": normalized_username}
+    payload = add_http_user_params({}, normalized_user_id, normalized_username)
     logger.debug(
         "开始查询 HTTP 执行对象权限: url=%s timeout=%ss user_id=%s username=%s",
         HTTP_PERMISSION_URL,
@@ -51,10 +49,7 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
         normalized_username or "-",
     )
     try:
-        async with httpx.AsyncClient(
-            timeout=HTTP_PERMISSION_TIMEOUT_SECONDS,
-            verify=HTTP_VERIFY_TLS,
-        ) as client:
+        async with open_http_client(timeout_seconds=HTTP_PERMISSION_TIMEOUT_SECONDS) as client:
             response = await client.post(HTTP_PERMISSION_URL, json=payload)
             response.raise_for_status()
             response_payload = response.json()

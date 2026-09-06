@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import copy
+import httpx
 
 import pytest
 
@@ -11,6 +12,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from apps.chat_data_app.services.datasource import credentials as datasource_credentials
 from apps.chat_data_app.services.datasource import manager as datasource_manager_module
 from apps.chat_data_app.services.datasource import permission as execution_permission
 from apps.chat_data_app.services.datasource.manager import (
@@ -347,7 +349,7 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
             return self.payload
 
     class FakeClient:
-        def __init__(self, timeout, verify):
+        def __init__(self, timeout, verify, headers=None):
             calls.append(("init", timeout, verify))
 
         async def __aenter__(self):
@@ -362,8 +364,8 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
 
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
-    monkeypatch.setattr(execution_permission, "HTTP_VERIFY_TLS", False)
-    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(datasource_credentials, "HTTP_VERIFY_TLS", False)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     permission_alarms = []
     monkeypatch.setattr(execution_permission, "emit_external_api_alarm", lambda *args, **kwargs: permission_alarms.append((args, kwargs)))
 
@@ -372,6 +374,14 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
     assert calls == [
         ("init", 9, False),
         ("post", "http://permission.local", {"userId": "user_a", "username": "用户A"}),
+    ]
+
+    # username 为空时不携带该字段（与其他 HTTP 接口的用户参数口径一致）
+    calls.clear()
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "")) == {"ORG_A", "ORG_B"}
+    assert calls == [
+        ("init", 9, False),
+        ("post", "http://permission.local", {"userId": "user_a"}),
     ]
 
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "")
@@ -383,7 +393,7 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
         async def post(self, url, json):
             raise RuntimeError("network error")
 
-    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", ErrorClient)
+    monkeypatch.setattr(httpx, "AsyncClient", ErrorClient)
     assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
     assert permission_alarms[0][0][0] == "chat_data_http_permission"
     assert permission_alarms[0][1]["url"] == "http://permission.local"
@@ -392,14 +402,14 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
         async def post(self, url, json):
             return FakeResponse({"code": 50000, "data": ["ORG_A"]})
 
-    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", BadCodeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", BadCodeClient)
     assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
 
     class MissingCodeClient(FakeClient):
         async def post(self, url, json):
             return FakeResponse({"data": ["ORG_A"]})
 
-    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", MissingCodeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", MissingCodeClient)
     assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
 
 

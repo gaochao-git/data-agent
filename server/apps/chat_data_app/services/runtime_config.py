@@ -27,11 +27,21 @@ def read_positive_int_env(name: str, default: int) -> int:
 
 
 def read_bool_env(name: str, default: bool = False) -> bool:
-    """读取布尔环境变量，非法或未配置时回退默认值。"""
+    """读取布尔环境变量，仅接受 true/false（大小写不敏感），非法值告警并回退默认值。
+
+    不接受 1/0、yes/on 等变体：配置口径与 .env.example 保持严格一致，避免
+    拼写或习惯写法（如 ture、1）被静默当作另一个值处理——对 TLS 校验开关
+    这类安全配置，静默降级比启动报错更危险，这里选择告警后回退默认。
+    """
     raw_value = str(os.getenv(name) or "").strip().lower()
     if not raw_value:
         return default
-    return raw_value in {"1", "true", "yes", "y", "on"}
+    if raw_value == "true":
+        return True
+    if raw_value == "false":
+        return False
+    logger.warning("环境变量 %s=%r 不是合法布尔值，回退默认值 %s", name, raw_value, default)
+    return default
 
 
 DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)

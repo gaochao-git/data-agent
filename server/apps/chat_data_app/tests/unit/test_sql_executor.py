@@ -1212,8 +1212,9 @@ def test_hive_http_request_json_builds_get_and_post_requests(monkeypatch):
             return {"code": 20000, "data": {"ok": True}}
 
     class FakeAsyncClient:
-        def __init__(self, verify=False):
-            self.verify = verify
+        def __init__(self, **kwargs):
+            self.verify = kwargs.get("verify")
+            requests.append(("init", kwargs))
 
         async def __aenter__(self):
             return self
@@ -1228,7 +1229,7 @@ def test_hive_http_request_json_builds_get_and_post_requests(monkeypatch):
     import types
     monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=FakeAsyncClient))
     monkeypatch.setattr(sql_executor, "HTTP_AUTH_TOKEN", "token_a")
-    monkeypatch.setattr(sql_executor, "HTTP_VERIFY_TLS", True)
+    monkeypatch.setattr(datasource_credentials, "HTTP_VERIFY_TLS", True)
     executor = sql_executor.HiveHttpExecutor(namespace="ns_a")
 
     get_payload = asyncio.run(executor._request_json("GET", "http://host/tasks", task_id="task_1", params={"userId": "u1"}))
@@ -1236,19 +1237,22 @@ def test_hive_http_request_json_builds_get_and_post_requests(monkeypatch):
 
     assert get_payload == {"code": 20000, "data": {"ok": True}}
     assert post_payload == {"code": 20000, "data": {"ok": True}}
-    assert requests[0][2]["headers"]["Authorization"] == "Bearer token_a"
-    assert requests[0][2]["params"] == {"userId": "u1", "task_id": "task_1"}
-    assert requests[1][1] == "http://host/tasks/task_2"
-    assert requests[1][2]["json"] == {"sql": "select 1"}
-    assert requests[0][3] is True
+    # client 构造层：verify 单点透传 + headers（含 Authorization）
+    assert requests[0][1]["verify"] is True
+    assert requests[0][1]["headers"]["Authorization"] == "Bearer token_a"
+    # GET 请求体只带 params
+    assert requests[1][2]["params"] == {"userId": "u1", "task_id": "task_1"}
+    # POST：URL 渲染 + json 载荷
+    assert requests[3][1] == "http://host/tasks/task_2"
+    assert requests[3][2]["json"] == {"sql": "select 1"}
 
 
 def test_hive_http_request_json_failure_writes_external_api_alarm(monkeypatch):
     alarms = []
 
     class FakeAsyncClient:
-        def __init__(self, verify=False):
-            self.verify = verify
+        def __init__(self, **kwargs):
+            pass
 
         async def __aenter__(self):
             return self
@@ -1285,8 +1289,8 @@ def test_hive_http_request_json_get_without_task_id_uses_plain_url(monkeypatch):
             return ["not dict"]
 
     class FakeAsyncClient:
-        def __init__(self, verify=False):
-            self.verify = verify
+        def __init__(self, **kwargs):
+            requests.append(("init", kwargs))
 
         async def __aenter__(self):
             return self
@@ -1306,10 +1310,10 @@ def test_hive_http_request_json_get_without_task_id_uses_plain_url(monkeypatch):
     payload = asyncio.run(executor._request_json("GET", "http://host/tasks", task_id="", params={}))
 
     assert payload == {}
-    assert requests == [("GET", "http://host/tasks", {
-        "headers": {"Content-Type": "application/json"},
-        "timeout": sql_executor.DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS,
-    })]
+    # 构造层带默认 verify/timeout 与无 token 的 headers；GET 无参时请求体为空
+    assert requests[0][1]["verify"] is False
+    assert requests[0][1]["headers"] == {"Content-Type": "application/json"}
+    assert requests[1] == ("GET", "http://host/tasks", {})
 
 
 def test_hive_http_payload_and_connection_helpers(monkeypatch):
