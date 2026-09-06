@@ -19,6 +19,18 @@ export interface MemberQueryResult {
   cache_expires_in_seconds?: number | null
 }
 
+/**
+ * 聚合级查询结果。
+ *
+ * 聚合约定（消费方必读，与后端 build_query_result_payload 对齐），状态按序判定：
+ * - 任一成员仍在 `pending`/`running`：顶层 `status=running`，
+ *   `error` 为固定提示“部分执行对象仍在查询中”。
+ * - 无运行中成员且有任一成员成功：顶层 `status=succeeded` 且 `error` 为
+ *   `null`；部分成员失败的信息只在对应 `results[]` 成员的 `status`/`error`
+ *   上。判断整体成败必须遍历 `results[]`，不能只看顶层字段。
+ * - 全部成员取消：顶层 `status=cancelled`；其余情况为 `failed`，这两种情形
+ *   顶层 `error` 聚合各成员错误。
+ */
 export interface QueryResult {
   status?: string | null
   sql?: string

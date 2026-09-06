@@ -75,7 +75,20 @@ def build_query_result_payload(
     fallback_error: Optional[str] = None,
     fallback_execution_time_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Build the public query result payload; row data only lives in results[]."""
+    """Build the public query result payload; row data only lives in results[].
+
+    聚合约定（消费方必读），状态按序判定：
+    - 任一成员仍在 ``pending``/``running``：顶层 ``status=running``，
+      ``error`` 为固定提示“部分执行对象仍在查询中”（不聚合成员错误）。
+    - 无运行中成员且有任一成员成功：顶层 ``status=succeeded`` 且 ``error``
+      为 ``None``；部分成员失败的信息只在对应 ``results[]`` 成员的
+      ``status``/``error`` 上。消费方判断整体成败必须遍历 ``results[]``，
+      不能只看顶层字段。
+    - 全部成员取消：顶层 ``status=cancelled``；其余情况为 ``failed``，
+      这两种情形顶层 ``error`` 聚合各成员错误。
+    - 成员成功与否由 ``status`` 单一表达（``succeeded``/``failed``/
+      ``cancelled``/``running``），不使用 ``success`` 布尔字段。
+    """
     normalized_results = _normalize_member_results(member_results)
     succeeded_results = [item for item in normalized_results if query_result_succeeded(item)]
     status, error_message = _resolve_query_result_status(normalized_results, succeeded_results, fallback_error)

@@ -10,7 +10,11 @@ import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
 import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryStatus, stripAnsiErrorText } from '../utils'
 
-interface QueryResult {
+/**
+ * 组件内解析的单成员查询结果形状。与 types/query.ts 的聚合级 QueryResult
+ * 同名会导致消费方误用，故改为成员级命名 AsyncQueryResultData。
+ */
+interface AsyncQueryResultData {
   status?: string | null
   sql?: string
   query_mode?: string
@@ -124,9 +128,9 @@ watch(showChartMenu, (val) => {
 })
 
 // 解析查询结果
-const parseResult = computed<{ result: QueryResult | null; error: string | null }>(() => {
+const parseResult = computed<{ result: AsyncQueryResultData | null; error: string | null }>(() => {
   try {
-    return { result: JSON.parse(props.resultData) as QueryResult, error: null }
+    return { result: JSON.parse(props.resultData) as AsyncQueryResultData, error: null }
   } catch {
     return { result: null, error: '无法解析查询结果' }
   }

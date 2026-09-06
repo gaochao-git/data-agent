@@ -316,6 +316,8 @@ DashboardEditor.vue
 - `columns` 保留服务端返回顺序，前端表格不要仅从 `data[0]` 推断列顺序。
 - `data` 是当前成员结果行，不承载多成员合并身份字段。
 
+聚合级 `status`/`error` 约定（与 `build_query_result_payload` 对齐），状态按序判定：任一成员仍在 `pending`/`running` 时顶层为 `running`、`error` 为固定提示；无运行中成员且有任一成员成功时顶层为 `succeeded` 且 `error` 为 `null`，部分成员失败的信息只在对应 `results[]` 成员的 `status`/`error` 上，消费方判断整体成败必须遍历 `results[]`，不能只看顶层字段；全部成员取消时顶层为 `cancelled`，其余为 `failed`，这两种情形顶层 `error` 聚合各成员错误。
+
 新增查询入口或结果字段时，需要同步检查：
 
 ```text

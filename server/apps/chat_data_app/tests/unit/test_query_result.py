@@ -64,6 +64,41 @@ def test_build_query_result_payload_uses_member_errors_for_failed_result():
     assert payload["total_count"] == 0
 
 
+def test_build_query_result_payload_running_wins_over_partial_success():
+    """任一成员仍在运行时聚合为 running，即使已有成员成功。"""
+    payload = build_query_result_payload(
+        sql="select 1",
+        member_results=[
+            {
+                "status": "succeeded",
+                "member_datasource_id": "m1",
+                "columns": ["a"],
+                "data": [{"a": 1}],
+                "total_count": 1,
+            },
+            {"status": "running", "member_datasource_id": "m2"},
+        ],
+    )
+
+    assert payload["status"] == "running"
+    assert payload["error"] == "部分执行对象仍在查询中"
+    assert payload["total_count"] == 1
+
+
+def test_build_query_result_payload_all_cancelled_reports_cancelled():
+    """全部成员取消时聚合为 cancelled，error 聚合成员错误。"""
+    payload = build_query_result_payload(
+        sql="select 1",
+        member_results=[
+            {"status": "cancelled", "member_datasource_id": "m1", "error": "已停止"},
+            {"status": "cancelled", "member_datasource_id": "m2", "error": ""},
+        ],
+    )
+
+    assert payload["status"] == "cancelled"
+    assert payload["error"] == "已停止"
+
+
 def test_build_sql_task_results_merges_execution_metadata_and_normalizes_status():
     results = QueryTaskService.build_sql_task_results(
         {

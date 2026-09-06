@@ -23,7 +23,11 @@ interface VisualizationConfig {
   y_field?: string
 }
 
-interface QueryResult {
+/**
+ * 面板内部的单成员查询结果形状。与 types/query.ts 的聚合级 QueryResult
+ * 同名会导致消费方误用，故改为成员级命名 PanelMemberResult。
+ */
+interface PanelMemberResult {
   status?: string | null
   sql?: string
   query_mode?: string
@@ -40,7 +44,7 @@ interface QueryResult {
   cache_expires_in_seconds?: number | null
   member_datasource_id?: string
   member_name?: string
-  results?: QueryResult[]
+  results?: PanelMemberResult[]
   result_id?: string
   meta?: {
     result_id?: string
@@ -111,13 +115,13 @@ const emit = defineEmits<{
 }>()
 
 const activeIndex = ref(0)
-const offloadedResult = ref<QueryResult | null>(null)
+const offloadedResult = ref<PanelMemberResult | null>(null)
 const offloadedResultLoading = ref(false)
 const offloadedResultError = ref('')
 
 /** 内联结果可能是统一响应包裹：data 字段里嵌套完整结果对象 */
-type InlineQueryResult = Omit<QueryResult, 'data'> & {
-  data?: QueryResult | Record<string, unknown>[]
+type InlineQueryResult = Omit<PanelMemberResult, 'data'> & {
+  data?: PanelMemberResult | Record<string, unknown>[]
 }
 
 const parseInlineResult = (raw: string | null | undefined): { result: InlineQueryResult | null; error: string | null } => {
@@ -135,17 +139,17 @@ const resultId = computed(() => String(
   inlineParse.value.result?.meta?.result_id ||
   ''
 ).trim())
-const panelResult = computed<QueryResult | null>(() => {
+const panelResult = computed<PanelMemberResult | null>(() => {
   if (offloadedResult.value) return offloadedResult.value
   const parsed = inlineParse.value.result
   if (!parsed) return null
   const envelopeData = parsed.data
   if (envelopeData && !Array.isArray(envelopeData)) return envelopeData
-  return parsed as QueryResult
+  return parsed as PanelMemberResult
 })
 const parseError = computed(() => inlineParse.value.error)
 
-const resultToData = (result: QueryResult) => JSON.stringify(result)
+const resultToData = (result: PanelMemberResult) => JSON.stringify(result)
 const getMemberFullTitle = (item: Pick<QueryResultPanelItem, 'memberName' | 'memberDatasourceId'> | null | undefined) => {
   const memberName = String(item?.memberName || '').trim()
   const memberDatasourceId = String(item?.memberDatasourceId || '').trim()
@@ -265,7 +269,7 @@ watch(
     }
     offloadedResultLoading.value = true
     try {
-      const response = await getConversationQueryResult<QueryResult>(conversationId, id)
+      const response = await getConversationQueryResult<PanelMemberResult>(conversationId, id)
       if (id !== resultId.value || conversationId !== String(props.conversationId || '').trim()) return
       offloadedResult.value = response.data || null
       if (!offloadedResult.value) offloadedResultError.value = '查询结果详情为空'
