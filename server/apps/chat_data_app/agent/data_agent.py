@@ -173,8 +173,9 @@ DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
 WRITER_SUBAGENT_NAME = "report_writer"
 WRITER_SUBAGENT_DESCRIPTION = (
     "写作成稿：先收集事实再撰写报告/文档/分析文章，交付文件写入会话工作区，"
-    "只回传文件路径与内容摘要。"
-    "适合用户需要产出报告、周报、分析文档等成稿物的任务。"
+    "只回传文件路径与内容摘要。适合用户需要产出报告、周报、分析文档等成稿物的任务。"
+    "子智能体看不到 available_skills 技能清单：任务与本轮可用技能（尤其用户自定义技能）"
+    "相关时，必须在任务书中写明技能名称与 skill_file 路径，让它按技能规范成稿。"
 )
 
 

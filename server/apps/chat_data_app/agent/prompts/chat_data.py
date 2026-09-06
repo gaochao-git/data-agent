@@ -205,6 +205,7 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
+- 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
 - 涉及语义模型时，第一步先用 `file_read` 读取 `/mnt/skills/semantic-query/SKILL.md` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
@@ -224,6 +225,7 @@ WRITER_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 先收集后写作：按任务书先用查询/读文件等工具收集必要事实与数据，再开始成稿；
   数据性内容必须有真实工具返回作依据，禁止凭空撰写。
+- 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行，按技能规范成稿；任务书未提及的技能不要虚构路径。
 - 涉及语义模型时，第一步先用 `file_read` 读取 `/mnt/skills/semantic-query/SKILL.md` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
 - 成稿用 `file_write` 写入 `workspace`；任务书指定了文件名、格式（如 docx/xlsx）或
   结构提纲时严格按其执行。
