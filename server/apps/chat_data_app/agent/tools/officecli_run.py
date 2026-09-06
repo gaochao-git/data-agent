@@ -10,7 +10,7 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
     parse_officecli_args,
 )
 from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
-from .common import json_dumps
+from .common import tool_result_payload
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -28,10 +28,6 @@ def _under_uploads(path: str) -> bool:
         if p == prefix or p.startswith(f"{prefix}/"):
             return True
     return False
-
-
-def _tool_result(payload: dict) -> str:
-    return "[officecli_run]\n" + json_dumps(payload)
 
 
 def _validate_args(args: list[str]) -> list[str]:
@@ -114,6 +110,6 @@ def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
             timeout_seconds=timeout_seconds,
             workspace_runtime=workspace_runtime,
         )
-        return _tool_result(payload)
+        return tool_result_payload("officecli_run", payload)
 
     return officecli_run

@@ -239,13 +239,11 @@ async def test_file_glob_tool_validates_and_formats():
         await _invoke(StubRuntime(), "file_glob", {"pattern": "sub/*.py"})
     with pytest.raises(ValueError, match="pattern 不能为空"):
         await _invoke(StubRuntime(), "file_glob", {"pattern": "  "})
-    # max_results 越界仍以普通文本返回（不走异常通道）
-    assert "max_results 必须在 1-500 之间" in await _invoke(
-        StubRuntime(), "file_glob", {"pattern": "*.py", "max_results": 0},
-    )
-    assert "max_results 必须在 1-500 之间" in await _invoke(
-        StubRuntime(), "file_glob", {"pattern": "*.py", "max_results": 9999},
-    )
+    # max_results 越界同样以异常抛出，由 ToolErrorMiddleware 统一转成 error ToolMessage
+    with pytest.raises(ValueError, match="max_results 必须在 1-500 之间"):
+        await _invoke(StubRuntime(), "file_glob", {"pattern": "*.py", "max_results": 0})
+    with pytest.raises(ValueError, match="max_results 必须在 1-500 之间"):
+        await _invoke(StubRuntime(), "file_glob", {"pattern": "*.py", "max_results": 9999})
 
 
 @pytest.mark.asyncio
@@ -262,12 +260,12 @@ async def test_file_grep_tool_splits_or_patterns_and_reports_skips():
     assert payload["skipped_large"] == 1
     assert runtime.calls[0][1]["patterns"] == ["error", "warn"]
 
-    assert "pattern 不能为空" in await _invoke(StubRuntime(), "file_grep", {"pattern": "||"})
+    with pytest.raises(ValueError, match="pattern 不能为空"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "||"})
     with pytest.raises(ValueError, match="glob 只能在指定目录内匹配"):
         await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "glob": "/etc/*"})
-    assert "max_results 必须在 1-200 之间" in await _invoke(
-        StubRuntime(), "file_grep", {"pattern": "x", "max_results": 500},
-    )
+    with pytest.raises(ValueError, match="max_results 必须在 1-200 之间"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "max_results": 500})
 
 
 # ---------------------------------------------------------------------------
@@ -286,9 +284,8 @@ async def test_dir_list_tool_formats_entries_and_bounds_depth():
     assert runtime.calls[0][1] == {"path": "workspace", "max_depth": 3}
 
     for bad_depth in (0, 6):
-        assert "max_depth 必须在 1-5 之间" in await _invoke(
-            StubRuntime(), "dir_list", {"max_depth": bad_depth},
-        )
+        with pytest.raises(ValueError, match="max_depth 必须在 1-5 之间"):
+            await _invoke(StubRuntime(), "dir_list", {"max_depth": bad_depth})
 
     empty = StubRuntime()
     empty.results["list_dir"] = []
@@ -312,10 +309,24 @@ async def test_dir_list_tool_error_raises_unexpected_exception():
 @pytest.mark.asyncio
 async def test_file_read_tool_rejects_bad_pagination_before_runtime():
     runtime = StubRuntime()
-    assert "offset 必须大于等于 0" in await _invoke(runtime, "file_read", {
-        "file_path": "/mnt/user-data/workspace/a.txt", "offset": -1,
-    })
-    assert "limit 必须在 1-500 之间" in await _invoke(runtime, "file_read", {
-        "file_path": "/mnt/user-data/workspace/a.txt", "limit": 0,
-    })
+    with pytest.raises(ValueError, match="offset 必须大于等于 0"):
+        await _invoke(runtime, "file_read", {
+            "file_path": "/mnt/user-data/workspace/a.txt", "offset": -1,
+        })
+    with pytest.raises(ValueError, match="limit 必须在 1-500 之间"):
+        await _invoke(runtime, "file_read", {
+            "file_path": "/mnt/user-data/workspace/a.txt", "limit": 0,
+        })
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_tool_rejects_blank_old_content_before_runtime():
+    runtime = StubRuntime()
+    # 非字符串类型在 ainvoke 入口先被 langchain 参数 pydantic 校验拦截；
+    # 空字符串才落到工具体校验，统一以异常抛出
+    with pytest.raises(ValueError, match="old_content 必须是非空字符串"):
+        await _invoke(runtime, "file_edit", {
+            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "", "new_content": "new",
+        })
     assert runtime.calls == []

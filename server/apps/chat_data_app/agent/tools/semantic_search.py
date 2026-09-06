@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
@@ -18,6 +17,7 @@ from apps.chat_data_app.services.semantic.run.semantic_materializer import (
     materialize_runtime_semantic_models,
 )
 from apps.chat_data_app.services.semantic.run.semantic_config_service import get_semantic_config_service
+from .common import tool_result_payload
 
 
 
@@ -82,10 +82,6 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
         "message": "已返回相关语义模型的轻量引用；字段口径确认与检索方式以 semantic-query 技能为准。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
     }
-
-
-def _serialize_result(payload: dict[str, Any]) -> str:
-    return "[semantic_search]\n" + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
 def _materialized_configs(materialized: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -262,7 +258,7 @@ def create_semantic_search(
                 source_type=bound_source_type,
                 workspace_runtime=workspace_runtime,
             )
-            return _serialize_result(payload)
+            return tool_result_payload("semantic_search", payload)
 
         normalized_config_id = str(semantic_config_id or "").strip()
         config, reference = await _materialize_one(
@@ -273,7 +269,7 @@ def create_semantic_search(
             semantic_config_id=normalized_config_id,
         )
         if operation == "list_fields":
-            return _serialize_result(_list_fields_payload(
+            return tool_result_payload("semantic_search", _list_fields_payload(
                 config=config,
                 reference=reference,
                 semantic_config_id=normalized_config_id,

@@ -25,8 +25,8 @@ from langgraph.types import Command
 
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
-from utils import conversation
 from utils.tool_call_args import coerce_tool_call_args
+from .services import conversation_service as conversation
 from .agent import (
     create_data_agent,
     AgentRunControls,

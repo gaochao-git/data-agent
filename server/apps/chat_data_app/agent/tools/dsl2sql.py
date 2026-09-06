@@ -13,13 +13,54 @@ from apps.chat_data_app.services.dashboard.spec_service import (
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
 from apps.chat_data_app.services.semantic.run.semantic_query_service import compile_semantic_ai_dsl
-from .common import json_dumps, normalize_json_like_payload
+from .common import normalize_json_like_payload, tool_result_payload
 
 
 
 def normalize_dsl_payload(value: Any) -> Any:
     """兼容模型把 DSL 作为 JSON 字符串或二次转义字符串传入。"""
     return normalize_json_like_payload(value)
+
+
+def _batch_result_payload(
+    result: dict[str, Any],
+    datasource_id: str,
+    semantic_config_id: str | None,
+) -> dict[str, Any]:
+    """dashboard_spec 批量校验的统一结果结构（字段顺序即输出顺序）。"""
+    return {
+        "success": bool(result.get("valid")),
+        "mode": "batch",
+        "datasource_id": datasource_id,
+        "semantic_config_id": semantic_config_id,
+        "semantic_config_ids": result.get("semantic_config_ids") or [],
+        "valid_count": result.get("valid_count") or 0,
+        "warnings": result.get("warnings") or [],
+        "panels": result.get("panels") or [],
+    }
+
+
+def _single_result_payload(
+    *,
+    datasource_id: str,
+    semantic_config_id: str | None,
+    dsl: Any,
+    sql: Any,
+    error: Any,
+    warnings: list[Any],
+    success: bool,
+) -> dict[str, Any]:
+    """单条 DSL 校验的统一结果结构（字段顺序即输出顺序）。"""
+    return {
+        "success": success,
+        "mode": "single",
+        "datasource_id": datasource_id,
+        "semantic_config_id": semantic_config_id,
+        "dsl": dsl,
+        "sql": sql,
+        "error": error,
+        "warnings": warnings,
+    }
 
 
 def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = None, operator_name: str | None = None):
@@ -50,16 +91,10 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                 user_id=bound_user_id,
                 username=bound_operator_name,
             )
-            return "[dsl2sql_tool]\n" + json_dumps({
-                "success": bool(result.get("valid")),
-                "mode": "batch",
-                "datasource_id": bound_datasource_id,
-                "semantic_config_id": effective_semantic_config_id,
-                "semantic_config_ids": result.get("semantic_config_ids") or [],
-                "valid_count": result.get("valid_count") or 0,
-                "warnings": result.get("warnings") or [],
-                "panels": result.get("panels") or [],
-            })
+            return tool_result_payload(
+                "dsl2sql_tool",
+                _batch_result_payload(result, bound_datasource_id, effective_semantic_config_id),
+            )
         if isinstance(dsl, list):
             if not effective_semantic_config_id and not any(
                 isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
@@ -73,16 +108,10 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                 user_id=bound_user_id,
                 username=bound_operator_name,
             )
-            return "[dsl2sql_tool]\n" + json_dumps({
-                "success": bool(result.get("valid")),
-                "mode": "batch",
-                "datasource_id": bound_datasource_id,
-                "semantic_config_id": effective_semantic_config_id,
-                "semantic_config_ids": result.get("semantic_config_ids") or [],
-                "valid_count": result.get("valid_count") or 0,
-                "warnings": result.get("warnings") or [],
-                "panels": result.get("panels") or [],
-            })
+            return tool_result_payload(
+                "dsl2sql_tool",
+                _batch_result_payload(result, bound_datasource_id, effective_semantic_config_id),
+            )
         if not isinstance(dsl, dict):
             raise ValueError("dsl 必须是对象或数组")
         if not effective_semantic_config_id:
@@ -95,29 +124,33 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
         )
         payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
         if payload.get("compare"):
-            return "[dsl2sql_tool]\n" + json_dumps({
-                "success": False,
-                "mode": "single",
-                "datasource_id": bound_datasource_id,
-                "semantic_config_id": effective_semantic_config_id,
-                "dsl": payload,
-                "sql": None,
-                "error": "错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
-                "warnings": warnings,
-            })
+            return tool_result_payload(
+                "dsl2sql_tool",
+                _single_result_payload(
+                    datasource_id=bound_datasource_id,
+                    semantic_config_id=effective_semantic_config_id,
+                    dsl=payload,
+                    sql=None,
+                    error="错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
+                    warnings=warnings,
+                    success=False,
+                ),
+            )
         result = compile_semantic_ai_dsl(
             semantic_config,
             payload,
         )
-        return "[dsl2sql_tool]\n" + json_dumps({
-            "success": bool(result.get("success")),
-            "mode": "single",
-            "datasource_id": bound_datasource_id,
-            "semantic_config_id": effective_semantic_config_id,
-            "dsl": payload,
-            "sql": result.get("sql"),
-            "error": result.get("error"),
-            "warnings": warnings,
-        })
+        return tool_result_payload(
+            "dsl2sql_tool",
+            _single_result_payload(
+                datasource_id=bound_datasource_id,
+                semantic_config_id=effective_semantic_config_id,
+                dsl=payload,
+                sql=result.get("sql"),
+                error=result.get("error"),
+                warnings=warnings,
+                success=bool(result.get("success")),
+            ),
+        )
 
     return dsl2sql_tool

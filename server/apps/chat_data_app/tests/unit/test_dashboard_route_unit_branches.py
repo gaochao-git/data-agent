@@ -339,7 +339,8 @@ async def test_create_dashboard_panel_execution_persists_expected_record(dashboa
     )
 
     assert execution_id
-    assert commits == [True]
+    # dao 不再显式 commit，提交由 get_session 退出自动完成（fake session 观察不到）
+    assert commits == []
     assert added[0].task_id == "task_a"
     assert added[0].datasource_id == "ds_a"
     assert added[0].sql_text == "select 1"

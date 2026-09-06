@@ -1,6 +1,6 @@
 """
-公共会话管理模块
-提供会话的创建、查询、更新、删除等通用功能
+会话管理服务
+提供会话的创建、查询、更新、删除等业务编排
 
 使用 SQLAlchemy 统一管理业务数据库操作
 """
@@ -16,12 +16,13 @@ from typing import Optional, List, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
+from utils.database import get_session
 from utils.logger import get_logger
+from utils.models import UserThread
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
+from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
-from .database import get_session
-from .models import UserThread
 
 logger = get_logger(__name__)
 conversation_dao = ConversationDao(session_context=lambda: get_session())
@@ -32,29 +33,6 @@ DATASOURCE_GROUP_PREFIX = "datasource:"
 
 
 # ============ 内部函数 ============
-
-TITLE_GENERATION_PROMPT = """你是一个对话标题生成助手。根据用户的第一条消息，生成一个简短、精准的对话标题。
-
-要求：
-1. 标题长度：严格控制在10-15个汉字（不少于10个字，不超过15个字）
-2. 直接概括用户问题的核心内容，不要创造性发挥或生成用户未提及的内容
-3. 使用简洁、专业的语言
-4. 只返回标题文本，不要任何其他内容
-5. 不要加引号、书名号、标点符号等
-6. 绝对不允许使用表情符号
-7. 不要直接照抄用户原句作为标题，应概括为更短的主题短语
-
-示例：
-用户消息：某科技公司于2024年1月至6月期间，在未取得支付业务许可证的情况下...
-标题：某科技公司无证支付业务案件
-
-用户消息：请帮我分析这个案例的违反条款
-标题：案例违反条款分析咨询
-
-用户消息：小微商户使用信用卡收款余额超1000元，手续费超规定5元...
-标题：小微商户信用卡收款超限问题
-
-现在，请为以下用户消息生成标题："""
 
 
 def _get_title_llm():

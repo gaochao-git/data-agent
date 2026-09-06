@@ -12,9 +12,6 @@ base64 不进入工具结果，避免 checkpoint 膨胀。
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
@@ -24,12 +21,9 @@ from apps.chat_data_app.agent.workspace.runtime import (
     to_visible_path,
 )
 from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
+from .common import tool_result_payload
 
 logger = get_logger(__name__)
-
-
-def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
-    return f"[{tool_name}]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> list:
@@ -51,11 +45,11 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
         try:
             physical = resolve_workspace_path(root, file_path, writable=False)
         except ValueError as exc:
-            return _json_result("read_image", {"success": False, "error": f"file_path 无效: {exc}"})
+            return tool_result_payload("read_image", {"success": False, "error": f"file_path 无效: {exc}"})
 
         suffix = physical.suffix.lower().lstrip(".")
         if suffix not in IMAGE_EXTENSIONS:
-            return _json_result(
+            return tool_result_payload(
                 "read_image",
                 {
                     "success": False,
@@ -64,15 +58,15 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
                 },
             )
         if not physical.exists() or not physical.is_file():
-            return _json_result("read_image", {"success": False, "error": "file_path 指向的文件不存在"})
+            return tool_result_payload("read_image", {"success": False, "error": "file_path 指向的文件不存在"})
 
         try:
             size_bytes = physical.stat().st_size
         except OSError as exc:
             logger.error("read_image 读取文件信息失败: %s", exc, exc_info=True)
-            return _json_result("read_image", {"success": False, "error": "读取文件信息失败"})
+            return tool_result_payload("read_image", {"success": False, "error": "读取文件信息失败"})
         if size_bytes > MAX_IMAGE_SIZE:
-            return _json_result(
+            return tool_result_payload(
                 "read_image",
                 {
                     "success": False,
@@ -80,7 +74,7 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
                 },
             )
 
-        return _json_result(
+        return tool_result_payload(
             "read_image",
             {
                 "success": True,

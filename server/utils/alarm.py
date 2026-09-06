@@ -291,7 +291,8 @@ def _mark_exception_once(exc: BaseException, marker: str) -> bool:
         return False
     try:
         setattr(exc, attr, True)
-    except Exception:
+    except Exception as exc:
+        logger.warning("告警异常对象打去重标记失败,按首次告警继续上报: marker=%s error=%s", marker, exc)
         return True
     return True
 

@@ -9,6 +9,7 @@ import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataToke
 import { useSqlGenerator, type RunDoneStatus } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
+import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
@@ -647,28 +648,15 @@ const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
 
 const selectedDatasource = computed(() => props.selectedDatasourceId || props.datasource?.id || '')
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (
-  sql: string,
-  chartType: string,
-  memberDatasourceId?: string,
-  memberDatasourceIds?: string[],
-) => {
-  saveSql.value = sql
-  saveChartType.value = chartType || 'table'
-  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || [])
-    .map(item => String(item || '').trim())
-    .filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑（chartType 为空时回退 'table'）
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel({ getFallbackChartType: () => 'table' })
 const recommendationPage = ref(0)
 const recommendationPageSize = 5
 const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)

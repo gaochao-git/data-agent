@@ -11,6 +11,10 @@ from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # SQLite 用 Integer（才能自增），MySQL 用 BigInteger
 AutoIncrementId = BigInteger().with_variant(Integer, "sqlite")
 MediumTextType = Text().with_variant(MEDIUMTEXT(), "mysql")
@@ -329,13 +333,15 @@ class ChatDataQueryTask(Base):
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("查询任务 result_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
                 result_payload = None
         request_payload = None
         if self.request_payload:
             try:
                 request_payload = json.loads(self.request_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("查询任务 request_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
                 request_payload = None
         return {
             "task_id": self.task_id,
@@ -403,7 +409,8 @@ class ChatDataQueryExecution(Base):
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("SQL 执行明细 result_payload 解析 JSON 失败,按 None 返回: execution_id=%s error=%s", self.execution_id, exc)
                 result_payload = None
         return {
             "id": self.id,

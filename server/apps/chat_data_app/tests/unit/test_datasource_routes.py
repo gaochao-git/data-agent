@@ -2163,7 +2163,8 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
     assert result["execution_time_ms"] == 7
     assert result["total_count"] == 1
     assert cache_item.hit_count == 1
-    assert session.committed is True
+    # 命中后回写 hit_count 的提交由 get_session 退出自动完成，fake session 观察不到
+    assert session.committed is False
 
 
 def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():

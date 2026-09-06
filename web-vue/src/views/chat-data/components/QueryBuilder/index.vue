@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
+import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../../composables/useTableSchemaPanel'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import QuickQueries, { type BuilderConfig, type BuilderFilterNode } from '../QuickQueries.vue'
@@ -32,6 +33,7 @@ import type {
   ExecutionTargetOption,
 } from '../../types'
 import { isQuerySucceeded } from '../../utils'
+import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../../utils/executionTargets'
 import type {
   AggregationField,
   ColumnInfo,
@@ -194,46 +196,17 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   }))
 )
 
-const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
-  const members = props.datasource?.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || props.datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!props.datasourceId) return []
-  return [{
-    member_datasource_id: props.datasource?.template_datasource_id || props.datasourceId,
-    source_type: props.datasource?.source_type || '',
-    host: props.datasource?.source_config?.host,
-    port: props.datasource?.source_config?.port,
-    database: props.datasource?.source_config?.database,
-    label: props.datasource?.group_name || props.datasourceId,
-  }]
-})
+// 本地兜底执行对象选项：优先使用父级传入的 executionTargets
+const localExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: props.datasource, fallbackId: props.datasourceId })
+))
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => props.executionTargets ?? localExecutionTargets.value)
 const internalSelectedMemberDatasourceIds = ref<string[]>([])
-const normalizeSelectedMemberDatasourceIds = (value: string[]) => (
-  props.executionTargetMultiple ? value : value.slice(0, 1)
-)
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
-}
 const selectedMemberDatasourceIds = computed({
   get: () => props.selectedMemberDatasourceIds ?? internalSelectedMemberDatasourceIds.value,
   set: (value: string[]) => {
-    const normalizedValue = normalizeSelectedMemberDatasourceIds(value)
+    const normalizedValue = normalizeSelectedMemberDatasourceIds(value, props.executionTargetMultiple)
     if (props.selectedMemberDatasourceIds !== undefined) {
       if (isSameStringArray(normalizedValue, props.selectedMemberDatasourceIds)) return
       emit('update:selectedMemberDatasourceIds', normalizedValue)
@@ -252,7 +225,7 @@ const syncSelectedExecutionTargets = () => {
   }
   const retainedIds = selectedMemberDatasourceIds.value.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
-    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds)
+    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds, props.executionTargetMultiple)
     return
   }
   const templateId = props.datasource?.template_datasource_id
@@ -334,22 +307,18 @@ const favoriteContent = ref('')
 const favoriteBuilderConfig = ref<Record<string, unknown> | null>(null)
 const pendingFavoriteBuilderConfig = ref<BuilderConfig | null>(null)
 
-// 保存到看板
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref<ChartType>('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = (chartType as ChartType) || selectedChartType.value
-  saveMemberDatasourceId.value = String(memberDatasourceId || resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑（chartType 回退当前图表类型、执行对象回退当前结果页签）
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel({
+  getFallbackChartType: () => selectedChartType.value,
+  getFallbackMemberDatasourceId: () => resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId,
+})
 
 // 拖动调整高度
 const configPanelRef = ref<HTMLDivElement | null>(null)

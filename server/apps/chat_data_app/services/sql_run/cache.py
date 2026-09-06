@@ -8,18 +8,18 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from sqlalchemy import select
-
 from utils.database import get_session
 from utils.logger import get_logger
-from utils.models import ChatDataSqlResultCache
 
+from ...daos.sql_result_cache_dao import SqlResultCacheDao
 from .result import query_result_status, query_result_succeeded
 from ..runtime_config import QUERY_CACHE_ENABLED, QUERY_CACHE_TTL_SECONDS
 
 logger = get_logger(__name__)
 
 HTTP_REMOTE_REF_CACHE_TYPE = "http_remote_ref"
+
+sql_result_cache_dao = SqlResultCacheDao(session_context=lambda: get_session())
 
 
 def is_http_execution_target(execution_target: Dict[str, Any]) -> bool:
@@ -85,27 +85,12 @@ async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[
     if not cache_key:
         return None
     now = datetime.now()
-    async with get_session() as db:
-        result = await db.execute(
-            select(ChatDataSqlResultCache)
-            .filter_by(cache_key=cache_key, delete_flag=0)
-            .where(ChatDataSqlResultCache.expire_time > now)
-        )
-        cache_item = result.scalar_one_or_none()
-        if not cache_item:
-            return None
-        try:
-            payload = json.loads(cache_item.result_payload or "{}")
-        except Exception as err:
-            logger.warning("SQL 结果缓存解析失败: cache_key=%s error=%s", cache_key, err)
-            cache_item.delete_flag = 1
-            cache_item.update_time = now
-            await db.commit()
-            return None
-        cache_item.hit_count = int(cache_item.hit_count or 0) + 1
-        cache_item.last_hit_time = now
-        cache_item.update_time = now
-        await db.commit()
+    read_result = await sql_result_cache_dao.read_and_touch_cache(cache_key, now=now)
+    if read_result is None:
+        return None
+    cache_item, payload = read_result
+    if payload is None:
+        return None
     cache_age_seconds = max(0, int((now - cache_item.create_time).total_seconds())) if cache_item.create_time else None
     cache_expires_in_seconds = max(0, int((cache_item.expire_time - now).total_seconds())) if cache_item.expire_time else None
     payload["status"] = query_result_status(payload)
@@ -262,33 +247,6 @@ def _cache_identity_fields(cache_identity: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def _apply_cache_item_update(
-    cache_item: ChatDataSqlResultCache,
-    identity_fields: Dict[str, str],
-    sql_text: str,
-    payload_json: str,
-    result_row_count: int,
-    *,
-    now: datetime,
-    operator_user_id: str,
-    operator_username: str,
-) -> None:
-    """已存在的缓存行：原地覆盖身份、结果与租期。"""
-    cache_item.datasource_id = identity_fields["datasource_id"]
-    cache_item.member_datasource_id = identity_fields["member_datasource_id"]
-    cache_item.executor_type = identity_fields["executor_type"]
-    cache_item.source_type = identity_fields["source_type"]
-    cache_item.sql_hash = identity_fields["sql_hash"]
-    cache_item.sql_text = sql_text
-    cache_item.result_payload = payload_json
-    cache_item.result_row_count = int(result_row_count or 0)
-    cache_item.expire_time = now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS)
-    cache_item.delete_flag = 0
-    cache_item.update_time = now
-    cache_item.update_by = operator_user_id
-    cache_item.update_by_name = operator_username
-
-
 async def _upsert_sql_result_cache_payload(
     cache_identity: Dict[str, Any],
     payload: Dict[str, Any],
@@ -301,40 +259,14 @@ async def _upsert_sql_result_cache_payload(
     if not cache_key:
         return
     now = datetime.now()
-    operator_user_id = str(operator_id or "").strip()
-    operator_username = str(operator_name or "").strip()
-    identity_fields = _cache_identity_fields(cache_identity)
-    sql_text = str(cache_identity.get("sql_text") or "")
-    payload_json = json.dumps(payload, ensure_ascii=False)
-    async with get_session() as db:
-        db_result = await db.execute(select(ChatDataSqlResultCache).filter_by(cache_key=cache_key))
-        cache_item = db_result.scalar_one_or_none()
-        if cache_item:
-            _apply_cache_item_update(
-                cache_item,
-                identity_fields,
-                sql_text,
-                payload_json,
-                result_row_count,
-                now=now,
-                operator_user_id=operator_user_id,
-                operator_username=operator_username,
-            )
-        else:
-            db.add(ChatDataSqlResultCache(
-                cache_key=cache_key,
-                **identity_fields,
-                sql_text=sql_text,
-                result_payload=payload_json,
-                result_row_count=int(result_row_count or 0),
-                expire_time=now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS),
-                hit_count=0,
-                delete_flag=0,
-                create_time=now,
-                update_time=now,
-                create_by=operator_user_id,
-                create_by_name=operator_username,
-                update_by=operator_user_id,
-                update_by_name=operator_username,
-            ))
-        await db.commit()
+    await sql_result_cache_dao.upsert_cache(
+        cache_key=cache_key,
+        identity_fields=_cache_identity_fields(cache_identity),
+        sql_text=str(cache_identity.get("sql_text") or ""),
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        result_row_count=int(result_row_count or 0),
+        now=now,
+        expire_time=now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS),
+        operator_user_id=str(operator_id or "").strip(),
+        operator_name=str(operator_name or "").strip(),
+    )

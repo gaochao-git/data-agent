@@ -6,15 +6,11 @@ from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
-from .common import json_dumps
+from .common import tool_result_payload
 
 
 DEFAULT_TIMEOUT_SECONDS = 20
 MAX_TIMEOUT_SECONDS = 120
-
-
-def _tool_result(payload: dict) -> str:
-    return "[bash_run]\n" + json_dumps(payload)
 
 
 def _validate_command(command: str) -> str:
@@ -89,6 +85,6 @@ def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
             timeout_seconds=timeout_seconds,
             workspace_runtime=workspace_runtime,
         )
-        return _tool_result(payload)
+        return tool_result_payload("bash_run", payload)
 
     return bash_run

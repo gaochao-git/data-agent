@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from langchain_core.messages import HumanMessage
 
-from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session
 from utils.logger import get_logger
@@ -18,6 +17,7 @@ from utils.llm_json import parse_llm_json
 from ....agent.prompts.history_learning import build_history_learning_prompt
 from ....daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from .... import AGENT_ID
+from ... import conversation_service as conversation
 from ..core.common import LOGICAL_TYPE_VALUES, build_table_columns_map
 from ...llm_config import get_chat_data_llm
 from ...sql_run.parser import extract_physical_tables
@@ -108,8 +108,8 @@ def _is_history_tool_error_message(text: str) -> bool:
                 return True
             error_value = payload.get("error")
             return error_value not in (None, "", False)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("历史学习工具消息 JSON 解析失败,回退关键词识别失败语义: error=%s", exc)
     lowered = raw.lower()
     return "失败" in raw or "错误" in raw or "exception" in lowered or "traceback" in lowered
 

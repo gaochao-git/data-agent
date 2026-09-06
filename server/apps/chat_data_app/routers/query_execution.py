@@ -14,13 +14,13 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
-from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response, safe_user_error_message
 from .. import agent as agent_module
 from ..agent.sql_assist_agent import create_sql_assist_agent
+from ..services import conversation_service as conversation
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
     QueryTaskCreateRequest,

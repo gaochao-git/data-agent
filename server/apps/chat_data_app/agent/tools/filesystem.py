@@ -16,15 +16,12 @@ from .common import (
     MAX_READ_LIMIT,
     format_lines,
     json_dumps,
+    tool_result_payload,
 )
 
 
 _DEFAULT_GLOB_RESULTS = 100
 _DEFAULT_GREP_RESULTS = 100
-
-
-def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
-    return f"[{tool_name}]\n" + json_dumps(payload)
 
 
 def _validate_relative_glob(pattern: str, *, field_name: str) -> str:
@@ -73,9 +70,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         /mnt/user-data/outputs/.tool-offload/<id>.json 或 .txt 是普通工具的大结果缓存。两类系统结果都不会作为用户产物展示，不能通过其它文件工具修改、复制、移动或删除。
         """
         if offset < 0:
-            return "offset 必须大于等于 0"
+            raise ValueError("offset 必须大于等于 0")
         if limit < 1 or limit > MAX_READ_LIMIT:
-            return f"limit 必须在 1-{MAX_READ_LIMIT} 之间"
+            raise ValueError(f"limit 必须在 1-{MAX_READ_LIMIT} 之间")
         result = await workspace_runtime.read_text_file(
             file_path=file_path,
             offset=offset,
@@ -130,14 +127,14 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         找不到或匹配多处时会失败，不会修改文件。新建文件或整体覆盖请使用 file_write。
         """
         if not isinstance(old_content, str) or not old_content:
-            return "old_content 必须是非空字符串；请先用 file_read 读取文件后传入待替换的完整原文"
+            raise ValueError("old_content 必须是非空字符串；请先用 file_read 读取文件后传入待替换的完整原文")
         text = new_content if isinstance(new_content, str) else json_dumps(new_content)
         payload = await workspace_runtime.replace_text_file(
             file_path=file_path,
             old_content=old_content,
             new_content=text,
         )
-        return _json_result("file_edit", payload)
+        return tool_result_payload("file_edit", payload)
 
     @tool("file_write")
     async def file_write(
@@ -155,7 +152,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             content=text,
             mode="overwrite",
         )
-        return _json_result("file_write", payload)
+        return tool_result_payload("file_write", payload)
 
     @tool("file_move")
     async def file_move(source_path: str, destination_path: str) -> str:
@@ -164,7 +161,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             source_path=source_path,
             destination_path=destination_path,
         )
-        return _json_result("file_move", payload)
+        return tool_result_payload("file_move", payload)
 
     @tool("file_copy")
     async def file_copy(source_path: str, destination_path: str) -> str:
@@ -173,7 +170,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             source_path=source_path,
             destination_path=destination_path,
         )
-        return _json_result("file_copy", payload)
+        return tool_result_payload("file_copy", payload)
 
     @tool("file_delete")
     async def file_delete(file_path: str) -> str:
@@ -183,7 +180,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             recursive=False,
             expected_type="file",
         )
-        return _json_result("file_delete", payload)
+        return tool_result_payload("file_delete", payload)
 
     @tool("file_glob")
     async def file_glob(
@@ -194,7 +191,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         """在指定目录内递归按文件名匹配，例如 `*.json` 或 `README.*`。默认搜索 /mnt/user-data/workspace，最多返回 500 项。"""
         normalized_pattern = _validate_filename_pattern(pattern, field_name="pattern")
         if max_results < 1 or max_results > MAX_GLOB_RESULTS:
-            return f"max_results 必须在 1-{MAX_GLOB_RESULTS} 之间"
+            raise ValueError(f"max_results 必须在 1-{MAX_GLOB_RESULTS} 之间")
         entries = await workspace_runtime.search_files(
             path=str(path or "/mnt/user-data/workspace").strip(),
             pattern=normalized_pattern,
@@ -206,7 +203,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             "count": len(entries),
             "entries": entries,
         }
-        return _json_result("file_glob", payload)
+        return tool_result_payload("file_glob", payload)
 
     @tool("file_grep")
     async def file_grep(
@@ -222,10 +219,10 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         """
         patterns = [p for p in str(pattern or "").split("|") if p]
         if not patterns:
-            return "pattern 不能为空"
+            raise ValueError("pattern 不能为空")
         normalized_glob = _validate_relative_glob(glob, field_name="glob")
         if max_results < 1 or max_results > MAX_GREP_RESULTS:
-            return f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间"
+            raise ValueError(f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间")
         result = await workspace_runtime.grep_text(
             path=str(path or "/mnt/user-data/workspace").strip(),
             patterns=patterns,
@@ -243,12 +240,12 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             "skipped_large": int(result.get("skipped_large") or 0),
             "matches": result.get("matches") or [],
         }
-        return _json_result("file_grep", payload)
+        return tool_result_payload("file_grep", payload)
 
     @tool("dir_create")
     async def dir_create(path: str) -> str:
         """在 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下创建目录。不能创建根目录或操作隐藏工具结果缓存。"""
-        return _json_result("dir_create", await workspace_runtime.create_dir(path=path))
+        return tool_result_payload("dir_create", await workspace_runtime.create_dir(path=path))
 
     @tool("dir_list")
     async def dir_list(path: str = "workspace", max_depth: int = 2) -> str:
@@ -258,7 +255,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         max_depth 默认 2，范围 1-5；系统管理的 outputs/query_result 和 outputs/.tool-offload 不会出现在结果中。
         """
         if max_depth < 1 or max_depth > 5:
-            return "max_depth 必须在 1-5 之间"
+            raise ValueError("max_depth 必须在 1-5 之间")
         raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
         entries = await workspace_runtime.list_dir(path=raw, max_depth=max_depth)
         if not entries:
@@ -279,7 +276,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             recursive=recursive,
             expected_type="dir",
         )
-        return _json_result("dir_delete", payload)
+        return tool_result_payload("dir_delete", payload)
 
     return [
         file_read,

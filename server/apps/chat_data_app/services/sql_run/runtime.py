@@ -13,13 +13,13 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy import select
-
 from utils.database import get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
 from utils.alarm import emit_dangerous_sql_alarm
 
+from ...daos.query_execution_dao import QueryExecutionDao
+from ...daos.query_task_dao import QueryTaskDao
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from . import cache as query_cache
 from ..datasource.manager import get_datasource_manager
@@ -38,6 +38,9 @@ from .result import (
 logger = get_logger(__name__)
 
 MAX_EXECUTION_TIME_MS = 86_400_000
+
+query_task_dao = QueryTaskDao(session_context=lambda: get_session())
+query_execution_dao = QueryExecutionDao(session_context=lambda: get_session())
 
 
 def _datasource_source_type(datasource: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -174,36 +177,27 @@ async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequ
         username=operator_name,
     )
     operator_user_id = str(request.user_id or "").strip()
-    now = datetime.now()
-    execution_map: Dict[str, str] = {}
-    async with get_session() as db:
-        for target in execution_targets:
-            member_datasource_id = str((target or {}).get("member_datasource_id") or "").strip()
-            member_name = str((target or {}).get("member_name") or (target or {}).get("group_name") or "").strip()
-            executor_type = str((target or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
-            execution_id = uuid.uuid4().hex
-            execution_map[member_datasource_id] = execution_id
-            db.add(ChatDataQueryExecution(
-                execution_id=execution_id,
-                task_id=task_id,
-                user_id=str(request.user_id or "").strip(),
-                datasource_id=request.datasource_id,
-                member_datasource_id=member_datasource_id,
-                member_name=member_name,
-                executor_type=executor_type,
-                # 执行阶段再生成实际 SQL，语法错误也需要拥有独立的历史明细。
-                sql_text=request.sql,
-                sql_status="pending",
-                delete_flag=0,
-                create_time=now,
-                update_time=now,
-                create_by=operator_user_id,
-                create_by_name=str(operator_name or "").strip(),
-                update_by=operator_user_id,
-                update_by_name=str(operator_name or "").strip(),
-            ))
-        await db.commit()
-    return execution_map
+    member_ids: List[str] = []
+    specs: List[Dict[str, str]] = []
+    for target in execution_targets:
+        member_datasource_id = str((target or {}).get("member_datasource_id") or "").strip()
+        member_name = str((target or {}).get("member_name") or (target or {}).get("group_name") or "").strip()
+        executor_type = str((target or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
+        member_ids.append(member_datasource_id)
+        specs.append({
+            "execution_id": uuid.uuid4().hex,
+            "task_id": task_id,
+            "user_id": operator_user_id,
+            "datasource_id": request.datasource_id,
+            "member_datasource_id": member_datasource_id,
+            "member_name": member_name,
+            "executor_type": executor_type,
+            # 执行阶段再生成实际 SQL，语法错误也需要拥有独立的历史明细。
+            "sql_text": request.sql,
+            "operator_name": str(operator_name or "").strip(),
+        })
+    execution_ids = await query_execution_dao.create_pending_executions(specs)
+    return dict(zip(member_ids, execution_ids))
 
 
 async def update_query_execution(
@@ -222,19 +216,12 @@ async def update_query_execution(
     """更新 SQL 执行明细。"""
     if not execution_id:
         return
-    async with get_session() as db:
-        # 行锁读取：取消操作与执行线程并发写时，先锁定再校验终态守卫，
+
+    def apply_execution_updates(execution: ChatDataQueryExecution) -> bool:
+        # 行锁读取后校验终态守卫：取消操作与执行线程并发写时，先锁定再校验，
         # 避免 REPEATABLE READ 快照读读到旧的 cancelled 前状态、回写覆盖终态。
-        result = await db.execute(
-            select(ChatDataQueryExecution)
-            .filter_by(execution_id=execution_id, delete_flag=0)
-            .with_for_update()
-        )
-        execution = result.scalar_one_or_none()
-        if not execution:
-            return
         if execution.sql_status in {"cancelled", "kill_failed"} and sql_status in {"running", "succeeded", "failed"}:
-            return
+            return False
         resolved_execution_time_ms = _resolve_execution_time_for_update(
             execution, execution_id,
             execution_time_ms=execution_time_ms, started_time=started_time, finished_time=finished_time,
@@ -251,8 +238,9 @@ async def update_query_execution(
             started_time=started_time,
             finished_time=finished_time,
         )
-        execution.update_time = datetime.now()
-        await db.commit()
+        return True
+
+    await query_execution_dao.update_execution_locked(execution_id, apply_execution_updates)
 
 
 def _resolve_execution_time_for_update(
@@ -350,9 +338,7 @@ async def get_query_execution_status(execution_id: str) -> str:
     """读取 SQL 执行明细当前状态。"""
     if not execution_id:
         return ""
-    async with get_session() as db:
-        result = await db.execute(select(ChatDataQueryExecution.sql_status).filter_by(execution_id=execution_id, delete_flag=0))
-        return str(result.scalar_one_or_none() or "").strip().lower()
+    return await query_execution_dao.get_execution_status(execution_id)
 
 
 def _normalize_remote_task_entry(remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -385,20 +371,18 @@ async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any
     if normalized_remote_task is None:
         return None
 
-    async with get_session() as db:
-        stmt = select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0).with_for_update()
-        result = await db.execute(stmt)
-        task = result.scalar_one_or_none()
-        if not task:
-            return None
+    def append_remote_entry(task: ChatDataQueryTask) -> bool:
         remote_tasks = load_remote_tasks(task.remote_task_payload)
-        if not _remote_task_entry_exists(remote_tasks, normalized_remote_task):
-            remote_tasks.append(normalized_remote_task)
-            task.remote_task_payload = json.dumps(remote_tasks, ensure_ascii=False)
-            task.update_time = datetime.now()
-            await db.commit()
-            await db.refresh(task)
-        return build_query_task_response_data(build_query_task_runtime_data(task))
+        if _remote_task_entry_exists(remote_tasks, normalized_remote_task):
+            return False
+        remote_tasks.append(normalized_remote_task)
+        task.remote_task_payload = json.dumps(remote_tasks, ensure_ascii=False)
+        return True
+
+    task = await query_task_dao.update_task_locked(task_id, append_remote_entry)
+    if task is None:
+        return None
+    return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
 def _coerce_member_result(item: Any) -> Dict[str, Any]:
@@ -909,23 +893,16 @@ async def get_query_executions(task_id: str) -> List[Dict[str, Any]]:
     """读取任务下的 SQL 执行明细。"""
     if not task_id:
         return []
-    async with get_session() as db:
-        result = await db.execute(
-            select(ChatDataQueryExecution)
-            .filter_by(task_id=task_id, delete_flag=0)
-            .order_by(ChatDataQueryExecution.create_time.asc(), ChatDataQueryExecution.id.asc())
-        )
-        executions = [item.to_dict() for item in result.scalars().all()]
-        if executions:
-            task_result = await db.execute(select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0))
-            task = task_result.scalar_one_or_none()
-            operator_name = str((task.create_by_name or task.update_by_name) if task else "").strip()
-            if not operator_name and task:
-                operator_name = get_task_operator_name(build_query_task_runtime_data(task))
-            if operator_name:
-                for item in executions:
-                    item["operator_name"] = item.get("create_by_name") or item.get("update_by_name") or operator_name
-        return executions
+    execution_models, task = await query_execution_dao.list_executions_with_task(task_id)
+    executions = [item.to_dict() for item in execution_models]
+    if executions:
+        operator_name = str((task.create_by_name or task.update_by_name) if task else "").strip()
+        if not operator_name and task:
+            operator_name = get_task_operator_name(build_query_task_runtime_data(task))
+        if operator_name:
+            for item in executions:
+                item["operator_name"] = item.get("create_by_name") or item.get("update_by_name") or operator_name
+    return executions
 
 
 async def create_task_record(
@@ -939,26 +916,17 @@ async def create_task_record(
     """创建异步任务记录。"""
     operator_user_id = str((request_payload or {}).get("user_id") or "").strip()
     operator_name = str((request_payload or {}).get("operator_name") or "").strip()
-    task = ChatDataQueryTask(
+    task = await query_task_dao.create_task(
         task_id=uuid.uuid4().hex,
         task_type=task_type,
         datasource_id=datasource_id,
         query_type=query_type or "sql",
-        task_status="pending",
+        request_payload_json=json.dumps(request_payload, ensure_ascii=False),
         progress_text=progress_text,
-        request_payload=json.dumps(request_payload, ensure_ascii=False),
-        delete_flag=0,
-        create_time=datetime.now(),
-        create_by=operator_user_id,
-        create_by_name=operator_name,
-        update_by=operator_user_id,
-        update_by_name=operator_name,
+        operator_user_id=operator_user_id,
+        operator_name=operator_name,
     )
-    async with get_session() as db:
-        db.add(task)
-        await db.flush()
-        await db.refresh(task)
-        return build_query_task_response_data(build_query_task_runtime_data(task))
+    return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
 async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
@@ -1056,12 +1024,10 @@ async def create_task_for_execute_request(
 
 async def get_query_task(task_id: str) -> Optional[Dict[str, Any]]:
     """读取异步查询任务。"""
-    async with get_session() as db:
-        result = await db.execute(select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0))
-        task = result.scalar_one_or_none()
-        if not task:
-            return None
-        return build_query_task_runtime_data(task)
+    task = await query_task_dao.get_task(task_id)
+    if not task:
+        return None
+    return build_query_task_runtime_data(task)
 
 
 async def is_query_task_cancelled(task_id: str) -> bool:
@@ -1081,18 +1047,11 @@ async def update_query_task(
     finished_time: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """更新异步查询任务。"""
-    async with get_session() as db:
-        # 行锁读取：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。
-        result = await db.execute(
-            select(ChatDataQueryTask)
-            .filter_by(task_id=task_id, delete_flag=0)
-            .with_for_update()
-        )
-        task = result.scalar_one_or_none()
-        if not task:
-            return None
+
+    def apply_task_updates(task: ChatDataQueryTask) -> bool:
+        # 行锁读取后校验终态守卫：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。
         if task.task_status == "cancelled" and status in {"running", "succeeded", "failed", "partial_success"}:
-            return build_query_task_response_data(build_query_task_runtime_data(task))
+            return False
         if status is not None:
             task.task_status = status
         if progress_text is not None:
@@ -1105,10 +1064,12 @@ async def update_query_task(
             task.started_time = started_time
         if finished_time is not None:
             task.finished_time = finished_time
-        task.update_time = datetime.now()
-        await db.commit()
-        await db.refresh(task)
-        return build_query_task_response_data(build_query_task_runtime_data(task))
+        return True
+
+    task = await query_task_dao.update_task_locked(task_id, apply_task_updates)
+    if task is None:
+        return None
+    return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
 async def run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:

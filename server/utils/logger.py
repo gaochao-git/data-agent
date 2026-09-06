@@ -354,6 +354,7 @@ class LoggerManager:
             try:
                 cls._file_handler.close()
             except Exception:
+                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
                 pass
         cls._file_handler = cls._build_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._file_handler_key = handler_key
@@ -377,6 +378,7 @@ class LoggerManager:
             try:
                 cls._access_file_handler.close()
             except Exception:
+                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
                 pass
         cls._access_file_handler = cls._build_access_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._access_file_handler_key = handler_key
@@ -400,6 +402,7 @@ class LoggerManager:
             try:
                 cls._alarm_file_handler.close()
             except Exception:
+                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
                 pass
         cls._alarm_file_handler = cls._build_alarm_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._alarm_file_handler_key = handler_key

@@ -11,6 +11,7 @@ import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
 import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
+import { useSaveToPanel } from '../composables/useSaveToPanel'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -39,22 +40,15 @@ const emit = defineEmits<{
   select: []
 }>()
 
-// 保存到看板弹窗
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = chartType
-  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel()
 
 
 // 折叠状态

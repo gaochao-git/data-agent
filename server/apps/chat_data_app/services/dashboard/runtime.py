@@ -12,9 +12,9 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
 from utils.database import get_session
-from utils.models import ChatDataQueryExecution
 from utils.logger import get_logger
 
+from ...daos.query_execution_dao import QueryExecutionDao
 from .service import get_dashboard_service
 from ..sql_run.result import build_query_result_payload, query_result_succeeded
 from ..runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
@@ -23,6 +23,7 @@ from ..sql_run.executor import resolve_query_timeout
 logger = get_logger(__name__)
 DASHBOARD_PANEL_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY", 8)
 _dashboard_sql_semaphore: ContextVar[Optional[asyncio.Semaphore]] = ContextVar("dashboard_sql_semaphore", default=None)
+query_execution_dao = QueryExecutionDao(session_context=lambda: get_session())
 
 
 @dataclass
@@ -348,27 +349,17 @@ async def create_dashboard_panel_execution(
     if not task_id or not fields["datasource_id"] or not fields["sql_text"]:
         return None
     execution_id = uuid.uuid4().hex
-    now = datetime.now()
-    async with get_session() as db:
-        db.add(ChatDataQueryExecution(
-            execution_id=execution_id,
-            task_id=task_id,
-            user_id=fields["operator_user_id"],
-            datasource_id=fields["datasource_id"],
-            member_datasource_id=fields["member_datasource_id"],
-            member_name=fields["member_name"],
-            executor_type=fields["executor_type"],
-            sql_text=fields["sql_text"],
-            sql_status="pending",
-            delete_flag=0,
-            create_time=now,
-            update_time=now,
-            create_by=fields["operator_user_id"],
-            create_by_name=fields["operator_name"],
-            update_by=fields["operator_user_id"],
-            update_by_name=fields["operator_name"],
-        ))
-        await db.commit()
+    await query_execution_dao.create_pending_executions([{
+        "execution_id": execution_id,
+        "task_id": task_id,
+        "user_id": fields["operator_user_id"],
+        "datasource_id": fields["datasource_id"],
+        "member_datasource_id": fields["member_datasource_id"],
+        "member_name": fields["member_name"],
+        "executor_type": fields["executor_type"],
+        "sql_text": fields["sql_text"],
+        "operator_name": fields["operator_name"],
+    }])
     return execution_id
 
 

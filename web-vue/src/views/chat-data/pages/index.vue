@@ -30,6 +30,7 @@ import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
 import { formatSemanticConfigOptionLabel } from '../utils'
+import { buildExecutionTargets, isSameStringArray } from '../utils/executionTargets'
 import type { ConversationViewMode } from '../utils/conversationHistory'
 import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
 
@@ -110,17 +111,6 @@ const noMatchedDatasourceDesc = computed(() => {
   }
   return '请在数据源管理中添加可用数据源'
 })
-
-const normalizeOrgCode = (value: unknown) => String(value || '').trim()
-
-const getMemberOrgCode = (member: NonNullable<DataSource['member_sources']>[number]) => {
-  return normalizeOrgCode(member.org_code)
-}
-
-const getDatasourceOrgCode = (datasource: DataSource) => {
-  const sourceConfig = datasource.source_config || {}
-  return normalizeOrgCode(sourceConfig.org_code)
-}
 
 // 后台管理弹窗
 const showAdminModal = ref(false)
@@ -1073,35 +1063,9 @@ const conversationSidebarBootstrapLoading = computed(() => {
   return false
 })
 
-const buildExecutionTargets = (datasource: DataSource | null): ExecutionTargetOption[] => {
-  const members = datasource?.member_sources || []
-  if (members.length > 0) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: getMemberOrgCode(member),
-        source_type: member.source_type || datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!datasource?.id) return []
-  return [{
-    member_datasource_id: datasource.template_datasource_id || datasource.id,
-    org_code: getDatasourceOrgCode(datasource),
-    source_type: datasource.source_type || '',
-    host: datasource.source_config?.host as string | undefined,
-    port: datasource.source_config?.port as number | undefined,
-    database: datasource.source_config?.database as string | undefined,
-    label: datasource.group_name || datasource.id,
-  }]
-}
-
-const executionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
+const executionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: currentDatasource.value, fallbackId: currentDatasource.value?.id })
+))
 const selectedMemberDatasourceIds = ref<string[]>([])
 const conversationMemberDatasourceIds = ref<string[]>([])
 
@@ -1131,11 +1095,6 @@ const resolveSelectedExecutionTargetIds = (
   }
 
   return [availableIds[0]!]
-}
-
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
 }
 
 const syncSelectedExecutionTargets = () => {
@@ -1197,7 +1156,9 @@ const draftDatasource = computed(() => {
   return datasources.value.find(ds => ds.id === datasourceId) || null
 })
 
-const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(draftDatasource.value))
+const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: draftDatasource.value, fallbackId: draftDatasource.value?.id })
+))
 
 const canChangeDraftDatasource = computed(() => {
   if (datasources.value.length <= 1) return false

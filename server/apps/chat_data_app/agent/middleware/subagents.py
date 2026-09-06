@@ -674,7 +674,9 @@ def build_task_tool(specs: list[SubagentSpec]) -> StructuredTool:
         # writer 必须在子图调用前获取：调用后当前上下文会切进子图运行
         try:
             writer = get_stream_writer()
-        except Exception:
+        except Exception as exc:
+            # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
+            logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
             writer = None
         collected: list = []
         try:

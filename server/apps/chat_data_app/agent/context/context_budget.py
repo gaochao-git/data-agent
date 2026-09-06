@@ -11,6 +11,8 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
+from utils.logger import get_logger
+
 from apps.chat_data_app.services.llm_config import (
     get_chat_data_model_configs,
     get_chat_data_output_max_tokens,
@@ -22,6 +24,8 @@ from apps.chat_data_app.services.runtime_config import (
     is_context_usage_system_prompt_visible,
     read_compression_trigger_ratio_env,
 )
+
+logger = get_logger(__name__)
 
 
 REQUEST_OVERHEAD_TOKENS = 3
@@ -120,7 +124,9 @@ def count_tools_tokens(tools: list[Any] | None) -> int:
     for tool in tools or []:
         try:
             payload = tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
-        except Exception:
+        except Exception as exc:
+            # schema 转换失败只影响该工具的 token 估算精度,不能让预算计算中断,降级用字符串估算。
+            logger.warning("工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=%s error=%s", getattr(tool, "name", type(tool).__name__), exc)
             payload = str(tool)
         total += estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
     return int(total)

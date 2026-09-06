@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 import httpx
 
-from mock.direct_org_codes import DIRECT_ORG_CODES
+from .direct_org_codes import get_direct_org_codes
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
 from ..runtime_config import read_bool_env, read_positive_int_env
@@ -94,7 +94,7 @@ async def get_allowed_org_codes_by_executor(
     for callers that do not know the datasource executor types.
     """
     return {
-        "direct": {str(code).strip() for code in DIRECT_ORG_CODES if str(code).strip()},
+        "direct": get_direct_org_codes(),
         "http": (
             await get_http_permission_org_codes(user_id, username)
             if include_http_permission

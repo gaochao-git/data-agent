@@ -104,7 +104,9 @@ def on_tool_error(exc: Exception, request: Any) -> str:
         tool_name = str(getattr(tool, "name", "") or "") or str(
             (getattr(request, "tool_call", None) or {}).get("name") or ""
         )
-    except Exception:
+    except Exception as exc:
+        # 工具名提取失败不能阻断错误兜底,降级为无名工具继续格式化错误消息。
+        logger.warning("工具错误回调提取工具名失败,按无名工具兜底: error=%s", exc)
         tool_name = ""
     return _format_tool_error(exc, tool_name)
 

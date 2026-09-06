@@ -2,6 +2,8 @@
 
 `daos` 是 ChatData 的数据库访问层，负责 SQL/ORM 查询、持久化读写和数据库模型映射。
 
+查询任务、执行明细与 SQL 结果缓存的读写统一由 `query_task_dao.py`、`query_execution_dao.py`、`sql_result_cache_dao.py` 承接，service 层不再直连这三张表。
+
 约束：
 - DAO 不处理 HTTP 入参、权限和响应包装。
 - DAO 不编排业务流程，不拼前端展示文案。

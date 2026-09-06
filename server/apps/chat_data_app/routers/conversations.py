@@ -11,12 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from utils.error_codes import ErrorCode
-from utils import conversation
 from utils.response import business_response
 from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..services import conversation_service as conversation
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,

@@ -10,9 +10,7 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 from langchain_core.tools import tool
 
@@ -22,12 +20,9 @@ from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
 )
 from apps.chat_data_app.agent.workspace.uploaded_file_parser import parse_uploaded_file_to_markdown
+from .common import tool_result_payload
 
 logger = get_logger(__name__)
-
-
-def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
-    return f"[{tool_name}]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) -> list:
@@ -52,22 +47,22 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
         try:
             src_physical = resolve_workspace_path(root, source_path, writable=False)
         except ValueError as exc:
-            return _json_result("parse_document", {"success": False, "error": f"source_path 无效: {exc}"})
+            return tool_result_payload("parse_document", {"success": False, "error": f"source_path 无效: {exc}"})
 
         uploads_physical_root = (Path(root) / "uploads").resolve()
         if uploads_physical_root not in src_physical.parents and src_physical != uploads_physical_root:
-            return _json_result(
+            return tool_result_payload(
                 "parse_document",
                 {"success": False, "error": "source_path 必须是本会话 /mnt/user-data/uploads/ 下的文件"},
             )
         if not src_physical.exists() or not src_physical.is_file():
-            return _json_result("parse_document", {"success": False, "error": "source_path 指向的文件不存在"})
+            return tool_result_payload("parse_document", {"success": False, "error": "source_path 指向的文件不存在"})
 
         try:
             content = await parse_uploaded_file_to_markdown(src_physical)
         except Exception as exc:
             logger.error("parse_document 解析失败: %s", exc, exc_info=True)
-            return _json_result("parse_document", {"success": False, "error": f"解析失败: {exc}"})
+            return tool_result_payload("parse_document", {"success": False, "error": f"解析失败: {exc}"})
 
         try:
             # 走工作区运行时写入，与 file_write 等文件工具一致：
@@ -79,10 +74,10 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
             )
         except Exception as exc:
             logger.error("parse_document 写入失败: %s", exc, exc_info=True)
-            return _json_result("parse_document", {"success": False, "error": f"写入失败: {exc}"})
+            return tool_result_payload("parse_document", {"success": False, "error": f"写入失败: {exc}"})
 
         written_path = str(write_payload.get("file_path") or target_path)
-        return _json_result(
+        return tool_result_payload(
             "parse_document",
             {
                 "success": True,

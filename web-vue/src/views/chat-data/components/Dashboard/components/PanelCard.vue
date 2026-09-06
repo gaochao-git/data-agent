@@ -12,6 +12,7 @@ import { EditorView } from '@codemirror/view'
 import { ElMessage } from 'element-plus'
 import type { Panel, PanelData } from '../../../api/dashboard'
 import type { DataSource, ExecutionTargetOption } from '../../../types'
+import { buildExecutionTargets } from '../../../utils/executionTargets'
 import { CHART_TYPE_HELP_TEXT } from '../../../chartTypes'
 import type { ThemeConfig } from '../constants'
 import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
@@ -170,35 +171,11 @@ const editState = reactive({
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => {
   const datasource = currentDatasource.value
-  if (!datasource) {
-    return props.panel.member_datasource_id
-      ? [{ member_datasource_id: props.panel.member_datasource_id, label: props.panel.member_datasource_id }]
-      : []
-  }
-
-  const members = datasource.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || datasource.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-
-  const fallbackId = datasource.template_datasource_id || props.panel.member_datasource_id || datasource.id
-  if (!fallbackId) return []
-  return [{
-    member_datasource_id: fallbackId,
-    label: datasource.group_name || fallbackId,
-    source_type: datasource.source_type || '',
-  }]
+  // 兜底 ID：优先模板数据源，其次面板已保存的执行对象，最后数据源 ID；无数据源时仅用面板已保存的执行对象
+  const fallbackId = datasource
+    ? datasource.template_datasource_id || props.panel.member_datasource_id || datasource.id
+    : props.panel.member_datasource_id
+  return buildExecutionTargets({ datasource, fallbackId })
 })
 
 const allExecutionTargetIds = computed<string[]>(() => executionTargets.value

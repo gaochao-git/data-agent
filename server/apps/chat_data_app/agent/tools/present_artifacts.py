@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 
 from utils.logger import get_logger
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
-from .common import json_dumps
+from .common import tool_result_payload
 
 logger = get_logger(__name__)
 
@@ -88,6 +88,6 @@ def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntim
             "artifact_count": len(artifacts),
             "errors": errors,
         }
-        return "[present_artifacts]\n" + json_dumps(payload)
+        return tool_result_payload("present_artifacts", payload)
 
     return present_artifacts

@@ -1233,6 +1233,8 @@ class _SessionQueue:
 
 
 def _patch_query_runtime_session(monkeypatch, session):
+    # dao 层不再显式 commit，提交由 get_session 退出自动完成；
+    # fake session 观察不到自动提交，因此 commits 断言均为 0。
     @asynccontextmanager
     async def fake_get_session():
         yield session
@@ -1259,7 +1261,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     _patch_query_runtime_session(monkeypatch, bad_session)
     assert asyncio.run(query_cache.get_sql_result_cache({"cache_key": "bad"})) is None
     assert bad_cache.delete_flag == 1
-    assert bad_session.commits == 1
+    assert bad_session.commits == 0
 
     hit_cache = SimpleNamespace(
         result_payload=json.dumps({"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}),
@@ -1277,7 +1279,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     assert payload["cache_age_seconds"] >= 0
     assert payload["cache_expires_in_seconds"] >= 0
     assert hit_cache.hit_count == 3
-    assert hit_session.commits == 1
+    assert hit_session.commits == 0
 
 
 def test_update_query_execution_and_task_db_branches(monkeypatch):
@@ -1320,7 +1322,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     assert execution.error_message is None
     assert execution.started_time == started
     assert execution.finished_time == finished
-    assert execution_session.commits == 1
+    assert execution_session.commits == 0
 
     cancelled = SimpleNamespace(sql_status="cancelled")
     cancelled_session = _SessionQueue(_ScalarResult(cancelled))
@@ -1351,7 +1353,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     asyncio.run(query_runtime.update_query_execution("exec_optional"))
     assert optional_execution.sql_status == "pending"
     assert optional_execution.remote_task_id == "old_remote"
-    assert optional_execution_session.commits == 1
+    assert optional_execution_session.commits == 0
 
     task = SimpleNamespace(
         task_id="task_1",
@@ -1389,7 +1391,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     assert task.progress_text == "执行中"
     assert json.loads(task.result_payload) == {"success": True}
     assert task.error_message == ""
-    assert task_session.commits == 1
+    assert task_session.commits == 0
     assert task_session.refreshes == [task]
 
     cancelled_task = SimpleNamespace(**{**task.__dict__, "task_status": "cancelled"})
@@ -1405,7 +1407,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     optional_response = asyncio.run(query_runtime.update_query_task("task_optional"))
     assert optional_response["status"] == "pending"
     assert optional_task.progress_text == "old"
-    assert optional_task_session.commits == 1
+    assert optional_task_session.commits == 0
 
     missing_task_session = _SessionQueue(_ScalarResult(None))
     _patch_query_runtime_session(monkeypatch, missing_task_session)
@@ -1484,7 +1486,7 @@ def test_update_query_execution_from_result_falls_back_to_started_finished(monke
     assert 4500 <= execution.execution_time_ms <= 5500
     assert execution.finished_time is not None
     assert json.loads(execution.result_payload)["execution_time_ms"] == execution.execution_time_ms
-    assert session.commits == 1
+    assert session.commits == 0
 
 
 def test_get_query_executions_applies_operator_fallbacks(monkeypatch):

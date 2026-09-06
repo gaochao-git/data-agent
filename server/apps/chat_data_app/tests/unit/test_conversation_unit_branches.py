@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from utils import conversation as conversation_module
+from apps.chat_data_app.services import conversation_service as conversation_module
 from utils.models import Base, UserThread
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao

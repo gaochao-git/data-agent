@@ -410,9 +410,15 @@ def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
         return {"ORG_HTTP"}
 
     monkeypatch.setattr(execution_permission, "get_http_permission_org_codes", fake_http_codes)
+    monkeypatch.setenv("CHAT_DATA_DIRECT_ORG_CODES", " ORG_CODE1 , ORG_CODE2，ORG_CODE3")
     allowed = asyncio.run(execution_permission.get_allowed_org_codes_by_executor("u1", "用户1"))
-    assert "ORG_CODE1" in allowed["direct"]
+    assert allowed["direct"] == {"ORG_CODE1", "ORG_CODE2", "ORG_CODE3"}
     assert allowed["http"] == {"ORG_HTTP"}
+
+    # 未配置白名单时直连执行对象不默认放行
+    monkeypatch.delenv("CHAT_DATA_DIRECT_ORG_CODES", raising=False)
+    allowed_empty = asyncio.run(execution_permission.get_allowed_org_codes_by_executor("u1", "用户1"))
+    assert allowed_empty["direct"] == set()
 
     assert execution_permission.filter_datasource_members_by_allowed_org_codes(
         {"member_sources": []},
@@ -451,6 +457,7 @@ def test_execution_permission_skips_http_lookup_when_not_required(monkeypatch):
         raise AssertionError("direct-only execution must not query HTTP permissions")
 
     monkeypatch.setattr(execution_permission, "get_http_permission_org_codes", fail_http_lookup)
+    monkeypatch.setenv("CHAT_DATA_DIRECT_ORG_CODES", "ORG_CODE1")
     allowed = asyncio.run(
         execution_permission.get_allowed_org_codes_by_executor(
             "u1",
@@ -458,7 +465,7 @@ def test_execution_permission_skips_http_lookup_when_not_required(monkeypatch):
             include_http_permission=False,
         )
     )
-    assert allowed["direct"]
+    assert allowed["direct"] == {"ORG_CODE1"}
     assert allowed["http"] == set()
 
 

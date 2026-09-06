@@ -497,8 +497,10 @@ class SemanticBIQueryAdapter:
                     raise ValueError("HAVING 表达式不允许除以 0")
             except ValueError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                # 除零校验是防御性前置检查:读取 literal.value 的意外异常不在此处拦截,
+                # 交由后续表达式编译与参数校验兜底,这里仅留痕避免静默。
+                logger.warning("HAVING 除零校验读取 literal.value 异常,跳过前置校验: value=%r error=%s", right.get("value"), exc)
         return {
             "type": "binary",
             "operator": operator,

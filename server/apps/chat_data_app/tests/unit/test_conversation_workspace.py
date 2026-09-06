@@ -890,9 +890,13 @@ async def test_file_read_rejects_invalid_offset_and_limit(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_invalid_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    assert await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "offset": -1}) == "offset 必须大于等于 0"
-    assert await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "limit": 0}) == "limit 必须在 1-500 之间"
-    assert await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "limit": 501}) == "limit 必须在 1-500 之间"
+    # 参数校验失败统一 raise，由 ToolErrorMiddleware 转成 error ToolMessage
+    with pytest.raises(ValueError, match="offset 必须大于等于 0"):
+        await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "offset": -1})
+    with pytest.raises(ValueError, match="limit 必须在 1-500 之间"):
+        await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "limit": 0})
+    with pytest.raises(ValueError, match="limit 必须在 1-500 之间"):
+        await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/workspace/demo.txt", "limit": 501})
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nex
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
+import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
@@ -20,6 +21,7 @@ import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded, renderMar
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
+import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../utils/executionTargets'
 
 const { submitSqlTask } = useQueryTask()
 const SQL_ASSIST_AGENT_ID = 'chat_data_sql_assist'
@@ -476,32 +478,10 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
 )
 const queryHistoryRefreshKey = ref(0)
 
-const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
-  const members = props.datasource?.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || props.datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!props.datasourceId) return []
-  return [{
-    member_datasource_id: props.datasource?.template_datasource_id || props.datasourceId,
-    source_type: props.datasource?.source_type || '',
-    host: props.datasource?.source_config?.host,
-    port: props.datasource?.source_config?.port,
-    database: props.datasource?.source_config?.database,
-    label: props.datasource?.group_name || props.datasourceId,
-  }]
-})
+// 本地兜底执行对象选项：优先使用父级传入的 executionTargets
+const localExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: props.datasource, fallbackId: props.datasourceId })
+))
 
 const emit = defineEmits<{
   'update:selectedMemberDatasourceIds': [value: string[]]
@@ -509,17 +489,10 @@ const emit = defineEmits<{
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => props.executionTargets ?? localExecutionTargets.value)
 const internalSelectedMemberDatasourceIds = ref<string[]>([])
-const normalizeSelectedMemberDatasourceIds = (value: string[]) => (
-  props.executionTargetMultiple ? value : value.slice(0, 1)
-)
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
-}
 const selectedMemberDatasourceIds = computed({
   get: () => props.selectedMemberDatasourceIds ?? internalSelectedMemberDatasourceIds.value,
   set: (value: string[]) => {
-    const normalizedValue = normalizeSelectedMemberDatasourceIds(value)
+    const normalizedValue = normalizeSelectedMemberDatasourceIds(value, props.executionTargetMultiple)
     if (props.selectedMemberDatasourceIds !== undefined) {
       if (isSameStringArray(normalizedValue, props.selectedMemberDatasourceIds)) return
       emit('update:selectedMemberDatasourceIds', normalizedValue)
@@ -538,7 +511,7 @@ const syncSelectedExecutionTargets = () => {
   }
   const retainedIds = selectedMemberDatasourceIds.value.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
-    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds)
+    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds, props.executionTargetMultiple)
     return
   }
   const templateId = props.datasource?.template_datasource_id
@@ -907,22 +880,15 @@ const handleCancelAllRunningHistory = async () => {
   }
 }
 
-// 保存到看板
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = chartType
-  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel()
 
 // 编辑器引用
 const containerRef = ref<HTMLDivElement | null>(null)

@@ -596,8 +596,11 @@ def _check_rg_available() -> bool:
         try:
             subprocess.run(["rg", "--version"], capture_output=True, timeout=5)
             _rg_available = True
-        except Exception:
+        except Exception as exc:
+            # 一次性降级缓存:rg 缺失属部署环境问题,缓存 False 避免每次 grep 都重复拉起
+            # 失败子进程;调用方随后会给出明确的安装提示错误,不再重试探测。
             _rg_available = False
+            logger.warning("检测 ripgrep (rg) 失败,本进程内按未安装处理,file_grep 将返回安装提示: %s", exc)
     return _rg_available
 
 
