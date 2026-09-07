@@ -370,3 +370,51 @@ async def test_dao_group_first_pages_without_window_functions():
     ]
 
     await engine.dispose()
+
+
+def test_llm_model_id_helper_falls_back():
+    """_llm_model_id 按 model_name > model > unknown 取值，容忍构造失败的 None。"""
+    assert conversation_module._llm_model_id(None) == "unknown"
+    assert conversation_module._llm_model_id(SimpleNamespace(model_name="m1")) == "m1"
+    assert conversation_module._llm_model_id(SimpleNamespace(model="m2")) == "m2"
+    assert conversation_module._llm_model_id(SimpleNamespace()) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_failure_alarm_carries_model_id(conversation_db, monkeypatch):
+    """标题生成连接失败时，告警 ext1 须带 model_id，与主链路告警字段对齐。"""
+    await conversation_module.sync_thread_to_db("u1", "conv_title_alarm", "agent_a", is_new=True)
+    await conversation_module.conversation_event_service.persist_user_message(
+        conversation_id="conv_title_alarm",
+        user_id="u1",
+        operator_name="用户一",
+        message=HumanMessage(content="请分析订单销售趋势", id="title-alarm-turn"),
+    )
+
+    class TitleLLM:
+        model_name = "qwen3.6-35b-a3b"
+
+    class BadChain:
+        async def ainvoke(self, _payload):
+            raise RuntimeError("Connection error.")
+
+    class BadPrompt:
+        def __or__(self, _llm):
+            return BadChain()
+
+    captured: dict = {}
+
+    def fake_alarm(_exc, *, ext1=None, ext2=None):
+        captured["ext1"] = ext1
+        return True
+
+    monkeypatch.setattr(conversation_module, "_get_title_llm", lambda: TitleLLM())
+    monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
+    monkeypatch.setattr(conversation_module, "emit_llm_connection_alarm_if_needed", fake_alarm)
+
+    assert await conversation_module.generate_title("conv_title_alarm", "u1") == "请分析订单销售趋势"
+    assert captured["ext1"] == {
+        "purpose": "conversation_title",
+        "conversation_id": "conv_title_alarm",
+        "model_id": "qwen3.6-35b-a3b",
+    }

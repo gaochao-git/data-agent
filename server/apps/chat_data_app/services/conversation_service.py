@@ -42,6 +42,11 @@ def _get_title_llm():
     return get_chat_data_llm(streaming=False, max_tokens=30)
 
 
+def _llm_model_id(llm: Any) -> str:
+    """告警用：尽力从 LLM 实例解析模型标识，与主链路告警的 model_id 字段对齐。"""
+    return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or "unknown")
+
+
 def _format_thread(t: UserThread, run_status: Optional[str] = None) -> Dict[str, Any]:
     """转换会话列表返回结构"""
     result = {
@@ -431,6 +436,7 @@ async def _generate_and_update_title(
 ) -> str:
     """根据首条用户消息生成并更新会话标题。"""
     query = first_message.strip()[:500]
+    llm = None
     try:
         llm = _get_title_llm()
         prompt = ChatPromptTemplate.from_messages([
@@ -444,7 +450,11 @@ async def _generate_and_update_title(
     except Exception as e:
         emit_llm_connection_alarm_if_needed(
             e,
-            ext1={"purpose": "conversation_title", "conversation_id": conversation_id},
+            ext1={
+                "purpose": "conversation_title",
+                "conversation_id": conversation_id,
+                "model_id": _llm_model_id(llm),
+            },
         )
         logger.warning(f"LLM生成标题失败: {e}")
         title = _clean_title("", query)
