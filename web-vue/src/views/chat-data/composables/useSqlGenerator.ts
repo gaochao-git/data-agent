@@ -5,8 +5,8 @@
 
 import { ref } from 'vue'
 import { streamCompletion } from '../api'
-import { parseSseChunk } from '@/utils/sse'
-import { isAbortError } from '@/utils/abort'
+import { parseSseChunk } from '../utils/sse'
+import { isAbortError } from '../utils/abort'
 
 /**
  * Run 终态：服务端结构化 done 事件的 status 字段。

@@ -6,7 +6,7 @@
 
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
-import { parseSseChunk } from '@/utils/sse'
+import { parseSseChunk } from '../utils/sse'
 import type {
   ApiResponse,
   DataSource,

@@ -1,5 +1,5 @@
 import { createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
-import { abortableSleep, createAbortError } from '@/utils/abort'
+import { abortableSleep, createAbortError } from '../utils/abort'
 
 const DEFAULT_POLL_INTERVAL_MS = 1500
 

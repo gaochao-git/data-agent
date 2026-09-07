@@ -23,8 +23,8 @@ import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } 
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
 import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../utils/executionTargets'
-import { parseSseChunk } from '@/utils/sse'
-import { isAbortError } from '@/utils/abort'
+import { parseSseChunk } from '../utils/sse'
+import { isAbortError } from '../utils/abort'
 
 const { submitSqlTask } = useQueryTask()
 // 当前查询任务轮询的取消通道:组件卸载时中止,避免销毁后仍继续轮询/写状态

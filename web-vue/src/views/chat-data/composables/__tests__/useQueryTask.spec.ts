@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createAbortError } from '@/utils/abort'
+import { createAbortError } from '../../utils/abort'
 
 // 只 mock 用到的查询任务接口,避免拉起完整 api 模块(axios 等副作用)
 vi.mock('../../api', () => ({

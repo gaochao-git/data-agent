@@ -25,7 +25,7 @@ import {
   type ThemeType,
   type PanelDataStateMap,
 } from '../constants'
-import { isAbortError } from '@/utils/abort'
+import { isAbortError } from '../../../utils/abort'
 
 export function useDashboard(
   dashboardId: string,

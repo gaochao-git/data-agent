@@ -73,7 +73,7 @@ import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
 import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
-import { isAbortError } from '@/utils/abort'
+import { isAbortError } from '../../utils/abort'
 
 const props = defineProps({
   datasourceId: { type: String, required: true },

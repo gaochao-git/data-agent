@@ -5,8 +5,8 @@
 
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
-import { parseSseChunk } from '@/utils/sse'
-import { abortableSleep, createAbortError } from '@/utils/abort'
+import { parseSseChunk } from '../utils/sse'
+import { abortableSleep, createAbortError } from '../utils/abort'
 import type { ChartType } from '../chartTypes'
 import type { MemberQueryResult } from '../types'
 
