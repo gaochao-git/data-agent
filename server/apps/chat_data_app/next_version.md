@@ -78,7 +78,7 @@ python -m pip install opensandbox==0.1.15
 python -m pip install redis==7.0.1
 ```
 
-Redis 配置（密码为 SM4 密文，加密方式：`ENCRYPT_KEY=<密钥> python -m utils.crypto encrypt <明文密码>`）：
+Redis 配置（密码为 SM4 密文，加密方式：`CHAT_DATA_ENV=dev python scripts/crypto.py encrypt <明文密码>`）：
 
 ```env
 CHAT_DATA_REDIS_SENTINELS=62.234.152.217:26380

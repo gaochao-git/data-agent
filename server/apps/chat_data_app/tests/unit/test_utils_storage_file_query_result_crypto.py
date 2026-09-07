@@ -104,33 +104,6 @@ def test_crypto_key_validation_encrypt_decrypt_and_errors(monkeypatch):
         crypto.decrypt_password(f"{base64.b64encode(b'1'*16).decode()}:{base64.b64encode(b'bad').decode()}")
 
 
-def test_crypto_command_line_usage(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["crypto.py"])
-    with pytest.raises(SystemExit) as exc:
-        crypto.main()
-    assert exc.value.code == 1
-    assert "用法:" in capsys.readouterr().out
-
-
-def test_crypto_command_line_encrypt_decrypt_and_error(monkeypatch, capsys):
-    monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
-
-    monkeypatch.setattr("sys.argv", ["crypto.py", "encrypt", "secret"])
-    crypto.main()
-    encrypted = capsys.readouterr().out.strip()
-    assert ":" in encrypted
-
-    monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", encrypted])
-    crypto.main()
-    assert capsys.readouterr().out.strip() == "secret"
-
-    monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", "bad-format"])
-    with pytest.raises(SystemExit) as exc:
-        crypto.main()
-    assert exc.value.code == 1
-    assert "错误:" in capsys.readouterr().out
-
-
 def test_decrypt_env_value_requires_ciphertext_when_configured(monkeypatch):
     monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
     monkeypatch.delenv("OPTIONAL_SECRET", raising=False)
