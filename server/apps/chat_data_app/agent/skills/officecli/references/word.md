@@ -333,3 +333,6 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 | `size` 按半磅翻倍（22pt 写 44） | `size` 单位是磅，映射表 pt 值原样写；半磅只出现在 `raw-set` 改 `w:sz` 时 |
 | 行距写成 `line` | 属性名是 `lineSpacing=28pt` 配 `lineRule=exact`；不存在 `line` |
 | `merge` 写成 `-o` | 位置参数：先 `<template>` 再 `<output>`，数据走 `--data` |
+| batch 条目漏 `command` 字段 | 每个条目必须有 `command`（裸动词 `add`/`set`/…），缺了整批被拒 `missing required 'command' field` |
+| batch/单条命令里属性裸写 `text=xxx` | 单条命令必须 `--prop text=xxx`；batch JSON 里属性是 `props` 对象的 key，不带 `--prop` 前缀，两种形态别混 |
+| 用 `file_write` 造 .docx，或指望 `add` 自动建文件 | .docx 是 ZIP 包，0 字节不是合法文档——新建唯一入口是 `officecli create`（或 `file_copy` 已有文件），`add`/`batch` 只能改已存在的合法文档 |
