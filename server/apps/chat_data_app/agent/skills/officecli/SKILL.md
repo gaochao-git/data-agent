@@ -12,7 +12,7 @@ metadata:
 
 ## 适用目标
 
-处理 `.docx`、`.xlsx`、`.pptx` 文件：创建文档、修改文字和格式、编辑工作簿单元格/公式，或调整演示文稿页面和形状。
+处理 `.docx`、`.xlsx`、`.pptx` 文件（含宏格式 `.docm`/`.xlsm`/`.pptm`，1.0.144+ 支持就地打开编辑；保存新文件时仍用标准扩展名）：创建文档、修改文字和格式、编辑工作簿单元格/公式，或调整演示文稿页面和形状。
 
 OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft Office、LibreOffice 或其他依赖。
 
@@ -41,7 +41,11 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
 4. 编辑已有上传文件时，先复制到 workspace，例如：`file_copy(source_path="/mnt/user-data/uploads/原文件.docx", destination_path="/mnt/user-data/workspace/修订稿.docx")`。不要覆盖 uploads 中的原文件。
    技能内的 .docx 是只读样式样板，仅供 `view`/`get` 查看参考；新建起点按第 3 条执行；`/mnt/skills/` 禁止作为 OfficeCLI 的写入目标。
 5. 用 `view`、`get` 或 `query` 读取当前文件结构，例如 `officecli_run(command_args=["view", "/mnt/user-data/workspace/报告.docx", "outline"])`；每次编辑前重新读取目标结构。DOM 选择器（如 `/body/p[1]`、`/slide[1]`、`/Sheet1/A1`）是文档内部定位，作为独立数组元素原样传入即可。
-6. 用 `create`、`add`、`set`、`remove`、`move` 或 `batch` 完成修改，例如 `officecli_run(command_args=["set", "/mnt/user-data/workspace/报告.docx", "/body/p[1]", "--prop", "bold=true"])`。`batch` 仅在已通过 `help` 确认 JSON 结构时使用；**`batch` 不接受内联 JSON 位置参数**，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再用 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交（详见各格式参考文档的 batch 章节）；不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
+6. 用 `create`、`add`、`set`、`remove`、`move` 或 `batch` 完成修改，例如 `officecli_run(command_args=["set", "/mnt/user-data/workspace/报告.docx", "/body/p[1]", "--prop", "bold=true"])`。**按场景选择写入方式**：
+   - 新建文档铺整篇（段落/表格/幻灯片较多时）：优先用一个 `batch` 提交全部结构（一次工具调用写完，实测 200 段约 0.4s，逐段 `add` 每段一轮工具调用，很慢）；段落只有两三个时逐条 `add` 更简单；
+   - 编辑已有文档：先 `view`/`query` 读取结构，建议用 `@paraId` 选择器定位目标段落后再修改；注意 `batch` 内的 remove/move 会使后续**位置索引**动态重算，按删除前快照写 `p[N]` 会错位——含 remove/move 的批量应改用 `@paraId` 定位；
+   - 修改已存在文件先 `file_copy` 到 workspace 再操作。
+   `batch` 不接受内联 JSON 位置参数，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交；batch 是原子的，一条失败整批不落盘（exit=1），按逐条 ERROR 修复后整批重提。不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
 7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；`view screenshot` 在当前环境会触发钥匙串弹窗并阻塞，同样禁用，视觉检查用 `view html`。）
 8. 用 `file_copy` 把最终文件复制到 `/mnt/user-data/outputs/<业务名>.<docx|xlsx|pptx>`，确认文件存在后调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>"])`。
 

@@ -24,7 +24,7 @@ officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "ann
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "html"])      # 读返回的 HTML 路径：第一批视觉检查（层级、空段、缺 TOC）
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "svg"])       # 矢量预览
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "screenshot", "--grid", "auto", "-o", "/mnt/user-data/workspace/sheet.png"])
-officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "issues"])    # 空段、缺 alt、间距异常
+officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "issues"])    # 空段、缺 alt、间距异常；可用 --type format|content|structure 与 --limit N 收窄
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "stats"])     # 段落计数、字体/样式分布
 ```
 
@@ -35,7 +35,7 @@ officecli_run(command_args=["get", "/mnt/user-data/workspace/report.docx", "/foo
 officecli_run(command_args=["get", "/mnt/user-data/workspace/report.docx", "/numbering", "--depth", "2"])
 ```
 
-**跨文档查询**（CSS 风格选择器，`=`、`!=`、`~=`、`>=`、`<=`、`[attr]`）：
+**跨文档查询**（CSS 风格选择器，`=`、`!=`、`~=`、`>=`、`<=`、`[attr]`、`:contains("文本")`、`:empty`、`:has(formula)`、`:no-alt`；布尔 and/or 可组合）：
 ```text
 officecli_run(command_args=["query", "/mnt/user-data/workspace/report.docx", 'paragraph[style=Heading1]'])   # 全部 H1
 officecli_run(command_args=["query", "/mnt/user-data/workspace/report.docx", 'p:empty'])                    # 空段落（噪音）
@@ -46,6 +46,30 @@ officecli_run(command_args=["query", "/mnt/user-data/workspace/report.docx", 'fi
 ## 创建与编辑
 
 动词：`add`（新建）、`set`（改属性）、`remove`、`move`、`swap`、`batch`、`raw-set`（最后手段 XML）。九成工作量是段落、run、表格、几张图、一个目录、一个页脚。
+
+**执行策略：按场景选择写入方式**——新建文档铺整篇时优先把段落/表格生成为一个 JSON 数组走 `batch`（见下方 batch 章节），一次工具调用写完，段落只有两三个时逐条 `add` 更简单；编辑已有文档先 `view`/`query` 读结构并优先用 `@paraId` 定位目标，再批量或点状修改，含 remove/move 的批量建议改用 `@paraId`（位置索引会动态重算，易错位）。
+
+### 查找与替换（编辑已有文档的主力）
+
+`set` 顶层的 `--find` / `--replace`：**路径控制范围**（`/` 全文，`/body/p[N]` 单段，`/header[1]`/`/footer[1]` 页眉脚），匹配可**跨 run 边界**，不用自己拼选择器逐段改。
+
+```text
+# 全文替换（改错别字、统一术语、换年份）
+officecli_run(command_args=["set", "F", "/", "--find", "2025年目标", "--replace", "2026年目标"])
+# 只格式化不替换：匹配文本自动拆 run 后加格式（数字标红加粗等）
+officecli_run(command_args=["set", "F", "/body/p[2]", "--find", "\\d+\\.\\d+%", "--prop", "regex=true", "--prop", "bold=true", "--prop", "color=C00000"])
+# 修订式替换（保留痕迹）
+officecli_run(command_args=["set", "F", "/", "--find", "草稿", "--replace", "终稿", "--prop", "revision.author=系统修订"])
+```
+
+规则与易错点：默认大小写敏感，不敏感用 `--prop find=(?i)error --prop regex=true`；**无匹配也是成功退出**，必须带 `--json` 读 `matched: N` 确认命中数，为 0 时检查文本是否跨样式 run；正则里的 `\d`、`\.` 在 command_args 数组元素里原样写一个反斜杠即可（无 shell 二次转义）。
+
+**文本锚点插入**：`--after find:X` / `--before find:X` 按匹配文本定位插入点（与 `--index` 互斥）：内联元素（run/hyperlink/picture）插入匹配点旁，块类型（paragraph/table）会**自动拆开所在段落**插入。找不到锚文本即报错，比盲写位置索引稳。
+```text
+officecli_run(command_args=["add", "F", "/body/p[1]", "--type", "run", "--after", "find:利润率提升", "--prop", "text=（经审计）"])
+```
+
+**克隆**：`add F /body --from /body/p[3]` 带跨部分关系复制现有元素——复制带样式段落/表格再改文字，比从零拼 props 短得多。
 
 ### 段落、run、样式
 
@@ -64,7 +88,7 @@ officecli_run(command_args=["set", "F", "/body/p[1]/r[1]", "--prop", "color=1F4E
 
 ### 表格
 
-`/body/tbl[N]`，行 `tr[N]`，单元格 `tc[N]`。先按行列数建，再填。
+`/body/tbl[N]`，行 `tr[N]`，单元格 `tc[N]`。先按行列数建，再填。同时给 `data=` 和显式 `rows=`/`cols=` 时，显式尺寸是**下限**：解析出的网格更小会补空行/列到显式值（1.0.145 起；此前全空行会被坍缩丢失，导致后续 `set tr[2]` 报 Row not found）。
 
 ```text
 officecli_run(command_args=["add", "F", "/body", "--type", "table", "--prop", "rows=4", "--prop", "cols=3", "--prop", "width=100%"])
@@ -171,9 +195,15 @@ officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop"
 - 批注：`add "/body/p[4]" --type comment --prop author=… --prop text=…`；`--prop parentId=N` 建回复线程；`set "/comments/comment[N]" --prop done=true` 标记已解决（保留审计轨迹优于删除）。
 - 水印：`officecli_run(command_args=["add", "F", "/", "--type", "watermark", "--prop", "text=DRAFT", "--prop", "color=BFBFBF", "--prop", "opacity=0.8"])`。
 
-### batch（JSON 批量，用 `--input` 文件）
+### batch（JSON 批量，用 `--input` 文件）——新建文档的首选路径
 
-`batch` **不接受内联 JSON 位置参数**（实测 `officecli batch file '[{...}]'` 报 `Unrecognized command or argument`）。JSON 必须经 **`--input` 文件** 传入。无 shell 模型下最干净的做法：用 `file_write` 把 JSON 数组写成 workspace 临时文件，再交给 `batch --input`。结构：`command` 是裸动词，`parent`/`path`/`props` 是同级的字段。
+三条关键语义（实测确认）：
+
+1. **原子性**：一条命令失败，整批不落盘（`atomic: no changes were applied`，exit=1），不会产生写了一半的文档。逐条 ERROR 自带修复信息（合法元素类型、可用路径范围），按提示修 JSON 后整批重提即可。
+2. **位置索引在 batch 内动态重算**：remove/move 之后的 `p[N]` 按最新结构解析，按删除前快照写的索引必错位。
+3. **`@paraId` 是稳定锚点**：`view`/`get` 会显示每段的 `@paraId`，不受增删影响。**编辑已有文档时先读 paraId、用 `/body/p[@paraId=…]` 定位**，含 remove/move 的批量也安全；新建文档无此问题，直接顺序 add。
+
+`batch` **不接受内联 JSON 位置参数**（实测 `officecli batch file '[{...}]'` 报 `Unrecognized command or argument`）。JSON 必须经 **`--input` 文件** 传入。无 shell 模型下最干净的做法：用 `file_write` 把 JSON 数组写成 workspace 临时文件，再交给 `batch --input`。结构：`command` 是裸动词，`parent`/`path`/`props` 是同级的字段。大批量建议按章节拆成多个 batch 文件，单批失败重提成本更低。默认原子；`--best-effort` 可改"成功的保留、失败的跳过"（dump 回放等允许有损的场景用），`--stop-on-error` 只控制遇错是否提前停止（剩余条目标记 skipped），需与 `--best-effort` 组合才能"停在首错且保留已成功项"。
 
 ```text
 # 1) 用 file_write 把 batch JSON 写入 workspace 临时文件（无 shell 转义顾虑）
@@ -186,6 +216,13 @@ file_delete(file_path="/mnt/user-data/workspace/_batch.json")
 ```
 
 > 注意：word 的 batch 与 pptx/xlsx 同构，但 `props` 里的 key 仍是 `--prop` 的 `key=value`（如 `text`、`style`、`color`）。`merge` 仍是独立子命令（见上），不要与 batch 混用。
+
+batch 能力边界与常见用法（实测确认）：
+
+- **能进 batch 的动词**：add/set/remove/move/swap/get/query/raw-set 等文档内容操作；`create`、`merge`、`import` 是文件级独立子命令，不进 batch（流程：`create` → `batch` → 需要时 `merge`/`import`）。
+- **item 字段白名单**：`command, op, path, parent, type, from, index, after, before, to, path2, props, selector, text, mode, depth, part, xpath, action, xml, dumpversion`。写出白名单外字段整批被拒，报错会列出完整白名单。
+- **元素易错点**：hyperlink 是内联元素，必须挂在段落里（`parent` 写 `/body/p[N]` 不能写 `/body`），属性名是 `url`（不是 address）；watermark 会自动创建 default/first/even 三个 header，之后再 add header 会报已存在，改水印文字用 `set /watermark --prop text=…`；raw-set 需要显式 `action`（append/prepend/insertbefore/insertafter/replace/remove/setattr）。
+- **试错成本低**：任何一条失败整批回滚、文档不落半成品；逐条 ERROR 自带合法值列表和解法提示，修 JSON 重提即可，不会损坏文档。
 
 ### merge（模板占位符 + JSON 数据，高价值）
 
@@ -202,7 +239,7 @@ officecli_run(command_args=["merge", "/mnt/user-data/workspace/tpl.docx", "/mnt/
 ```
 实测：`merge` 返回 `Replaced keys: 3`，文本里 `{{name}}` 等被替换。模板可含多个占位符；`--data` 也可指向 `.json` 文件路径（见 `help merge`）。合并后建议 `validate` + `view text` 确认无残留 `{{...}}`。
 
-> `refresh`（重算 TOC 页码 / PAGE / NUMPAGES / 交叉引用）对 `.docx` **需要 Word + Windows** 才能生效，其余环境靠 `updateFields=true` 交给 Word 打开时重算；`dump` 把子树序列化为可重放的 batch 脚本（辅助批量改造）。
+> `refresh`（重算 TOC 页码 / PAGE / NUMPAGES / 交叉引用）：无 Word 的环境（1.0.147 起）自动走 **headless-HTML 回退**（返回 `backend: html`），但 HTML 分页与真实 Word 分页有偏差，算出的是**近似页码**——交付主路径仍是 `updateFields=true` 交给收件人 Word 打开时重算；`refresh` 只用于交付前预填一个比空白好的近似值并如实标注。`dump` 把子树序列化为可重放的 batch 脚本（辅助批量改造，回放配 `--best-effort` 容忍单条不支持项）。
 
 ## 报告级配方
 
@@ -284,6 +321,7 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 | 间距用原始 twips | 用带单位的：`12pt`、`0.5cm`、`1.5x` |
 | 空段落撑间距 | 用 `spaceBefore`/`spaceAfter` |
 | 行级 `set` 做单元格格式 | 行 `set` 只支持 `height`/`header`/`c1..cN`；格式设在单元格段落/run |
+| 逐段 `set` 改错别字/统一术语 | 一条 `set F / --find X --replace Y` 搞定（跨 run 匹配），带 `--json` 读 `matched` 确认命中数 |
 | `listStyle` 设在 run | 它是段落属性 |
 | 行首空格缩进 | `indent=720`/`firstLineIndent=360`/`hangingIndent=720` |
 | 封面免页码用 `set differentFirstPage=true` | 不支持——加 first 类型空页脚：`--type footer --prop type=first --prop text=` |
