@@ -399,6 +399,11 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
       </template>
     </div>
 
+    <!-- 表计数（底部状态栏） -->
+    <div v-if="datasource && !loading" class="py-1 text-center text-[11px] text-[#939495] border-t border-[#f0f1f3]">
+      {{ searchText.trim() ? `匹配 ${filteredTables.length} 张，共 ${datasource?.ds_tables?.length ?? 0} 张表` : `共 ${datasource?.ds_tables?.length ?? 0} 张表` }}
+    </div>
+
     <!-- Tooltip（右侧弹出） -->
     <Teleport to="body">
       <div
