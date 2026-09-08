@@ -15,6 +15,7 @@ from utils.logger import get_logger
 
 from apps.chat_data_app.services.llm_config import (
     get_chat_data_model_configs,
+    get_chat_data_model_max_output_tokens,
     get_chat_data_output_max_tokens,
     get_context_compression_summary_output_max_tokens,
 )
@@ -186,7 +187,7 @@ class ContextBudget:
 def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | None = None) -> ContextBudget:
     """按模型窗口、输出预留和质量阈值构造统一预算。"""
     context_window = max(int(get_context_window(model_id)), 1)
-    requested_output = max(int(max_output_tokens or get_chat_data_output_max_tokens()), 1)
+    requested_output = max(int(max_output_tokens or get_chat_data_model_max_output_tokens(model_id)), 1)
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
     trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
@@ -213,10 +214,11 @@ def validate_context_budget_startup_config() -> None:
     for config in get_chat_data_model_configs():
         model_id = str(config.get("id") or "")
         context_window = max(int(config.get("context_window") or 0), 1)
-        if output_tokens >= context_window:
+        if not config.get("max_output_tokens") and output_tokens >= context_window:
+            # 注册表内联值已在解析时校验小于 context_window，此处只校验回退全局值的模型
             errors.append(
                 f"模型 {model_id} 的 CHAT_DATA_OUTPUT_MAX_TOKENS={output_tokens} "
-                f"必须小于上下文窗口 {context_window}"
+                f"必须小于上下文窗口 {context_window}（可在注册表为该模型配置 max_output_tokens）"
             )
         if summary_output_tokens >= context_window:
             errors.append(

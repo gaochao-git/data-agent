@@ -110,6 +110,9 @@ def test_duplicate_model_id_rejected(monkeypatch, tmp_path):
         (_ox_alpha(temperature=2.5), "temperature"),
         (_ox_alpha(context_window=0), "context_window"),
         (_ox_alpha(vlm="yes"), "vlm"),
+        (_ox_alpha(max_output_tokens=0), "max_output_tokens"),
+        (_ox_alpha(max_output_tokens=True), "max_output_tokens"),
+        (_ox_alpha(max_output_tokens=256000), "必须小于 context_window"),
         (_ox_alpha(thinking={"mode": "maybe"}), "mode"),
         (_ox_alpha(thinking={"mode": "forced", "dialect": "anthropic"}), "dialect"),
         (
@@ -167,6 +170,7 @@ def test_registry_parses_thinking_capability(monkeypatch, tmp_path):
         efforts=("low", "high"), default_on=False, default_effort="high",
     )
     assert configs[2]["thinking"] == ThinkingCapability(mode="none")
+    assert configs[0]["max_output_tokens"] is None
     assert llm_config.get_default_chat_data_model() == "stealth/ox-alpha"
 
 
@@ -334,6 +338,37 @@ def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch, tmp_
 def test_get_chat_data_temperature_reads_registry(monkeypatch, tmp_path):
     _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
     assert llm_config.get_chat_data_temperature("stealth/ox-alpha") == 0.2
+
+
+def test_max_output_tokens_prefers_registry_then_env_default(monkeypatch, tmp_path):
+    _set_registry(monkeypatch, tmp_path, [_ox_alpha(max_output_tokens=8192), _glm_free()])
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "4096")
+
+    assert llm_config.get_chat_data_model_max_output_tokens("stealth/ox-alpha") == 8192
+    assert llm_config.get_chat_data_model_max_output_tokens("z-ai/glm-5.2:free") == 4096
+
+    monkeypatch.delenv("CHAT_DATA_OUTPUT_MAX_TOKENS", raising=False)
+    assert (
+        llm_config.get_chat_data_model_max_output_tokens("z-ai/glm-5.2:free")
+        == llm_config.DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS
+    )
+
+
+def test_get_chat_data_llm_uses_per_model_max_tokens(monkeypatch, tmp_path):
+    captured = {}
+    _set_registry(monkeypatch, tmp_path, [_ox_alpha(max_output_tokens=8192), _glm_free()])
+    monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
+    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "4096")
+
+    llm_config.get_chat_data_llm()
+    assert captured["max_tokens"] == 8192
+
+    llm_config.get_chat_data_llm(model="z-ai/glm-5.2:free")
+    assert captured["max_tokens"] == 4096
+
+    llm_config.get_chat_data_llm(model="stealth/ox-alpha", max_tokens=1024)
+    assert captured["max_tokens"] == 1024
 
 
 def test_get_chat_data_model_options_exposes_thinking(monkeypatch, tmp_path):

@@ -199,11 +199,25 @@ def _parse_model_entry(entry: Any, *, path: str) -> dict[str, Any]:
         "应为正整数",
     )
     vlm = _require("vlm", lambda v: isinstance(v, bool), "应为布尔")
+    max_output_raw = entry.get("max_output_tokens")
+    max_output_tokens: int | None = None
+    if max_output_raw is not None:
+        if not isinstance(max_output_raw, int) or isinstance(max_output_raw, bool) or max_output_raw <= 0:
+            raise ValueError(
+                f"{path} 中模型 {model_id} 的 max_output_tokens 无效: {max_output_raw!r}（应为正整数）"
+            )
+        if max_output_raw >= int(context_window):
+            raise ValueError(
+                f"{path} 中模型 {model_id} 的 max_output_tokens={max_output_raw} "
+                f"必须小于 context_window={context_window}"
+            )
+        max_output_tokens = max_output_raw
     thinking = _parse_thinking(entry.get("thinking"), path=path, model_id=model_id)
     return {
         "id": model_id,
         "temperature": float(temperature),
         "context_window": int(context_window),
+        "max_output_tokens": max_output_tokens,
         "vlm": vlm,
         "thinking": thinking,
     }
@@ -263,6 +277,12 @@ def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
 def get_chat_data_temperature(model: str | None = None) -> float:
     """读取模型温度。"""
     return float(get_chat_data_model_config(model).get("temperature"))
+
+
+def get_chat_data_model_max_output_tokens(model: str | None = None) -> int:
+    """解析单次模型调用的最大输出：注册表 max_output_tokens > 环境变量全局默认 > 代码兜底。"""
+    per_model = get_chat_data_model_config(model).get("max_output_tokens")
+    return int(per_model) if per_model else get_chat_data_output_max_tokens()
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +390,7 @@ def get_chat_data_llm(
         streaming=streaming,
         stream_usage=stream_usage,
         temperature=selected_config["temperature"] if temperature is None else temperature,
-        max_tokens=max_tokens or get_chat_data_output_max_tokens(),
+        max_tokens=max_tokens or get_chat_data_model_max_output_tokens(selected_model),
         timeout=timeout,
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),

@@ -260,6 +260,24 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
     assert budget.compression_target_tokens == 21000
 
 
+def test_model_context_budget_uses_registry_max_output_tokens(monkeypatch, tmp_path):
+    """注册表内联 max_output_tokens 优先于全局环境变量。"""
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "max_output_tokens": 8000, "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
+
+    budget = get_model_context_budget("budget-model")
+
+    assert budget.max_output_tokens == 8000
+    assert budget.hard_input_limit_tokens == 92000
+
+
 def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch, tmp_path):
     import json
 

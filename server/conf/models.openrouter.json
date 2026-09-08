@@ -3,6 +3,7 @@
     "id": "z-ai/glm-5.3-flash",
     "temperature": 0.2,
     "context_window": 256000,
+    "max_output_tokens": 32768,
     "vlm": true,
     "thinking": {
       "mode": "forced",

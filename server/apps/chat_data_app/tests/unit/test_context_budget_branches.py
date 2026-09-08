@@ -163,6 +163,18 @@ def test_startup_validation_rejects_summary_reserve_larger_than_window(monkeypat
         cb.validate_context_budget_startup_config()
 
 
+def test_startup_validation_skips_models_with_inline_max_output_tokens(monkeypatch):
+    """注册表内联 max_output_tokens 的模型跳过全局输出预留校验（解析时已校验）。"""
+    _patch_startup_budget_sources(
+        monkeypatch,
+        configs=[{"id": "inline", "context_window": 1_000, "max_output_tokens": 512}],
+        output_tokens=5_000,
+        summary_output_tokens=100,
+    )
+
+    cb.validate_context_budget_startup_config()
+
+
 def test_startup_validation_collects_errors_for_every_model(monkeypatch):
     """多个模型各自违规时错误信息用分号拼接；缺失 context_window 按 1 兜底。"""
     _patch_startup_budget_sources(

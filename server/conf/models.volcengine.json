@@ -3,6 +3,7 @@
     "id": "glm-5.3-flash",
     "temperature": 0.2,
     "context_window": 256000,
+    "max_output_tokens": 32768,
     "vlm": true,
     "thinking": {
       "mode": "forced",
@@ -15,6 +16,7 @@
     "id": "glm-5-2-260617",
     "temperature": 0.2,
     "context_window": 256000,
+    "max_output_tokens": 8192,
     "vlm": false,
     "thinking": {
       "mode": "optional",

@@ -3,7 +3,20 @@
     "id": "deepseek-v4-flash",
     "temperature": 0.2,
     "context_window": 128000,
+    "max_output_tokens": 8192,
     "vlm": false,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "reasoning_effort",
+      "default_on": false
+    }
+  },
+  {
+    "id": "deepseek-v4.1-flash-expires-on-0910",
+    "temperature": 0.2,
+    "context_window": 128000,
+    "max_output_tokens": 8192,
+    "vlm": true,
     "thinking": {
       "mode": "optional",
       "dialect": "reasoning_effort",
