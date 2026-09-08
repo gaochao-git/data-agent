@@ -34,7 +34,7 @@ def _patch_env(monkeypatch, tmp_path, sources):
     )
 
 
-def test_build_snapshot_freezes_within_conversation(tmp_path, monkeypatch):
+def test_build_snapshot_reuses_when_sources_unchanged(tmp_path, monkeypatch):
     src_root = tmp_path / "mgmt"
     sources = [("skill-a", _make_skill(src_root, "skill-a"))]
     _patch_env(monkeypatch, tmp_path, sources)
@@ -42,10 +42,49 @@ def test_build_snapshot_freezes_within_conversation(tmp_path, monkeypatch):
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
     assert (target / "skill-a" / "SKILL.md").is_file()
 
-    # 管理域新增技能后再次调用：会话内冻结，不重建
-    sources.append(("skill-b", _make_skill(src_root, "skill-b")))
+    # 管理域未变化：直接复用快照，不再复制
+    copy_calls: list[str] = []
+    real_copy = snapshot_module._copy_skill_dir
+
+    def counting_copy(src, dst):
+        copy_calls.append(src.name)
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(snapshot_module, "_copy_skill_dir", counting_copy)
     again = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
     assert again == target
+    assert copy_calls == []
+
+
+def test_build_snapshot_rebuilds_when_skill_content_changes(tmp_path, monkeypatch):
+    skill_dir = _make_skill(tmp_path / "mgmt", "skill-a")
+    _patch_env(monkeypatch, tmp_path, [("skill-a", skill_dir)])
+
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+    assert (target / "skill-a" / "SKILL.md").read_text(encoding="utf-8") == "# skill"
+
+    # 管理域技能内容变更：下次运行原子重建，快照跟上最新内容
+    (skill_dir / "SKILL.md").write_text("# skill v2", encoding="utf-8")
+    rebuilt = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+    assert rebuilt == target
+    assert (target / "skill-a" / "SKILL.md").read_text(encoding="utf-8") == "# skill v2"
+
+
+def test_build_snapshot_rebuilds_when_skill_added_or_removed(tmp_path, monkeypatch):
+    src_root = tmp_path / "mgmt"
+    sources = [("skill-a", _make_skill(src_root, "skill-a"))]
+    _patch_env(monkeypatch, tmp_path, sources)
+
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+
+    # 新增技能：重建后纳入
+    sources.append(("skill-b", _make_skill(src_root, "skill-b")))
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
+    assert (target / "skill-b" / "SKILL.md").is_file()
+
+    # 移除技能：重建后剔除
+    sources.pop()
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
     assert not (target / "skill-b").exists()
 
 
@@ -86,17 +125,21 @@ def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
     assert leftovers == []
 
 
-def test_build_snapshot_concurrent_winner_reused(tmp_path, monkeypatch):
+def test_build_snapshot_upgrades_legacy_snapshot_without_fingerprint(tmp_path, monkeypatch):
+    """早期无指纹的存量快照：下次运行自动重建对齐（写入指纹、纳入当前可见技能）。"""
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     conv_dir = tmp_path / "threads" / "u1" / "c1"
     existing = conv_dir / "runtime-skills"
     existing.mkdir(parents=True)
-    (existing / "skill-old").mkdir()  # 已有内容视为并发请求先完成的快照
+    (existing / "skill-old").mkdir()  # 早期快照：非空但标记无指纹
+    (existing / snapshot_module.SNAPSHOT_READY_MARKER).touch()
 
-    # 已存在非空快照：直接复用，不重建
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
     assert target == existing
-    assert not (existing / "skill-a").exists()
+    assert (target / "skill-a").is_dir()
+    assert not (target / "skill-old").exists()
+    # 升级后再运行即走指纹复用路径
+    assert snapshot_module._read_snapshot_fingerprints(target) is not None
 
 
 def test_build_snapshot_populates_precreated_empty_dir(tmp_path, monkeypatch):
@@ -115,10 +158,36 @@ def test_build_snapshot_empty_sources_are_frozen(tmp_path, monkeypatch):
     assert (target / snapshot_module.SNAPSHOT_READY_MARKER).is_file()
     assert snapshot_module.list_snapshot_skill_names(target) == []
 
-    # 后续发布系统技能也不能改变已冻结会话的空快照。
+    # 管理域发布系统技能后，下次运行重建快照纳入新技能
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
-    assert not (target / "skill-a").exists()
+    assert (target / "skill-a" / "SKILL.md").is_file()
+
+
+def test_snapshot_fingerprint_roundtrip_and_change_detection(tmp_path, monkeypatch):
+    """指纹计算对内容/mtime 敏感，标记读写往返一致。"""
+    skill_dir = _make_skill(tmp_path / "mgmt", "skill-a")
+    sources = [("skill-a", skill_dir)]
+
+    fingerprints = snapshot_module.compute_skill_fingerprints(sources)
+    assert set(fingerprints) == {"skill-a"}
+
+    # 同一内容重复计算指纹稳定
+    assert snapshot_module.compute_skill_fingerprints(sources) == fingerprints
+
+    # 内容变化 → 指纹变化
+    (skill_dir / "SKILL.md").write_text("# changed", encoding="utf-8")
+    assert snapshot_module.compute_skill_fingerprints(sources) != fingerprints
+
+    # 源目录缺失 → 占位指纹，不抛异常
+    missing = snapshot_module.compute_skill_fingerprints([("gone", tmp_path / "nope")])
+    assert set(missing) == {"gone"}
+
+    # 标记写入/读取往返；损坏标记降级为 None
+    snapshot_module._write_ready_marker(tmp_path, fingerprints)
+    assert snapshot_module._read_snapshot_fingerprints(tmp_path) == fingerprints
+    (tmp_path / snapshot_module.SNAPSHOT_READY_MARKER).write_text("not-json", encoding="utf-8")
+    assert snapshot_module._read_snapshot_fingerprints(tmp_path) is None
 
 
 def test_list_snapshot_skill_metadata_uses_runtime_directory_name(tmp_path):

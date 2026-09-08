@@ -2,8 +2,12 @@
 
 管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``threads/<uid>/<cid>/runtime-skills/``）
 解耦：模型在运行期只看到 ``/mnt/skills/<name>/...``，读取的是本会话快照，不直接访问管理域，
-也不跨用户 / 跨历史会话越权。快照在会话首次运行时原子构建，此后会话内保持不变：
-技能的编辑、发布、回滚不影响已运行会话，新会话获取新快照。
+也不跨用户 / 跨历史会话越权。
+
+刷新语义：每次运行前对管理域做指纹校验（各技能目录的文件路径/大小/mtime 摘要），
+指纹一致直接复用快照；管理域发生变化（技能新增/移除/内容变更）则在轮次开始前
+原子重建快照——单轮执行期间快照保持稳定，技能变更从用户的下一条消息起生效。
+早期无指纹的存量快照视为待升级，下一次运行自动重建对齐。
 
 可见技能集合 = 系统技能 + 当前用户自己的当前版本 + 他人 ``visibility_type=global`` 的当前版本。
 ``chat_data_skill.uniq_skill_name`` 已保证名称全局唯一，因此扁平快照 ``/mnt/skills/<name>`` 无冲突。
@@ -12,11 +16,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import shutil
 import stat
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -94,6 +100,72 @@ def _ignore_symlinks(directory: str, names: list[str]) -> set[str]:
     return {name for name in names if (Path(directory) / name).is_symlink()}
 
 
+def compute_skill_fingerprints(sources: Iterable[tuple[str, Path]]) -> dict[str, str]:
+    """对每个技能源目录计算内容指纹（相对路径 + 大小 + mtime 的摘要）。
+
+    返回 ``{技能名: 指纹}``；目录缺失的技能记为占位指纹（构建阶段会自然报错），
+    不在指纹计算阶段抛异常，保证校验路径永不比构建路径先失败。
+    """
+    fingerprints: dict[str, str] = {}
+    for name, source_dir in sources:
+        entries: list[str] = []
+        root = Path(source_dir)
+        if not root.is_dir():
+            entries.append("<missing>")
+        else:
+            for path in sorted(root.rglob("*")):
+                if path.is_symlink():
+                    continue
+                rel = path.relative_to(root).as_posix()
+                if path.is_dir():
+                    entries.append(f"d:{rel}")
+                else:
+                    file_stat = path.stat()
+                    entries.append(f"f:{rel}:{file_stat.st_size}:{file_stat.st_mtime_ns}")
+        digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+        fingerprints[name] = digest
+    return fingerprints
+
+
+def _write_ready_marker(target_dir: Path, fingerprints: dict[str, str]) -> None:
+    """把指纹写入完成标记文件，供后续运行做变更检测。"""
+    (target_dir / SNAPSHOT_READY_MARKER).write_text(
+        json.dumps({"skills": fingerprints}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _read_snapshot_fingerprints(snapshot_dir: Path) -> dict[str, str] | None:
+    """读取快照标记中的技能指纹；缺失、损坏或早期空标记返回 None（视为待升级）。"""
+    marker = Path(snapshot_dir) / SNAPSHOT_READY_MARKER
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in skills.items()
+    ):
+        return None
+    return skills
+
+
+def _describe_fingerprint_changes(stored: dict[str, str] | None, current: dict[str, str]) -> str:
+    """生成人类可读的技能变更摘要（用于重建日志）。"""
+    if stored is None:
+        return "升级无指纹的存量快照"
+    stored_names, current_names = set(stored), set(current)
+    parts = [
+        f"{name}(新增)" for name in sorted(current_names - stored_names)
+    ]
+    parts += [f"{name}(移除)" for name in sorted(stored_names - current_names)]
+    parts += [
+        f"{name}(内容变更)"
+        for name in sorted(stored_names & current_names)
+        if stored[name] != current[name]
+    ]
+    return "、".join(parts) if parts else "指纹不一致（无明细）"
+
+
 def _rmtree(path: Path) -> None:
     """兼容各 Python 版本的 rmtree：3.12+ 用 onexc，更早版本用 onerror。"""
     if sys.version_info >= (3, 12):
@@ -140,21 +212,33 @@ def _sweep_stale_siblings(target: Path) -> None:
 
 
 async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str) -> Path:
-    """原子构建（或复用）本会话的 runtime-skills 快照，返回快照目录。
+    """按管理域当前状态构建（指纹一致时复用）本会话的 runtime-skills 快照，返回快照目录。
 
-    快照在会话创建/首次运行时构建，此后会话内保持不变：技能的编辑、发布、回滚
-    不影响已运行会话，新会话才会获取新快照。
+    每次调用先取技能源并计算指纹：与快照标记中的指纹一致则直接复用；不一致
+    （技能新增/移除/内容变更）或早期无指纹的存量快照则原子重建。重建发生在
+    轮次开始前，单轮执行期间快照保持稳定。
     注意：``ensure_conversation_workspace`` 会预先建出空的 runtime-skills 目录，
-    空目录视为未构建，必须填充；无可见技能时通过隐藏完成标记冻结空快照，
-    防止后续工具调用重新从管理域纳入新发布的技能。
+    空目录视为未构建，必须填充；无可见技能时通过带指纹的隐藏完成标记冻结空快照。
     """
     target = runtime_skills_snapshot_dir(user_id, conversation_id)
-    if is_runtime_skill_snapshot_ready(target):
-        return target
+    was_ready = is_runtime_skill_snapshot_ready(target)
 
     from apps.chat_data_app.agent.skills.skill_service import skill_service
 
     sources = await skill_service.list_runtime_skill_sources_async(user_id)
+    current_fingerprints = compute_skill_fingerprints(sources)
+
+    if was_ready:
+        stored_fingerprints = _read_snapshot_fingerprints(target)
+        if stored_fingerprints == current_fingerprints:
+            return target
+        logger.info(
+            "会话技能快照重建: user=%s conversation=%s 原因=%s",
+            user_id,
+            conversation_id,
+            _describe_fingerprint_changes(stored_fingerprints, current_fingerprints),
+        )
+
     await asyncio.to_thread(_sweep_stale_siblings, target)
 
     tmp = target.with_name(f"{target.name}.building-{uuid4().hex}")
@@ -166,17 +250,17 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
         def _populate() -> None:
             for name, source_dir in sources:
                 _copy_skill_dir(source_dir, tmp / name)
-            # 即使技能集合为空，也必须明确冻结本会话的运行时视图。
-            (tmp / SNAPSHOT_READY_MARKER).touch()
+            # 即使技能集合为空，也必须明确冻结本会话的运行时视图（标记带指纹）。
+            _write_ready_marker(tmp, current_fingerprints)
 
         await asyncio.to_thread(_populate)
 
-        if is_runtime_skill_snapshot_ready(target):
-            # 并发请求已先完成构建；快照会话内不变，丢弃本次临时目录并复用
+        if not was_ready and is_runtime_skill_snapshot_ready(target):
+            # 填充期间并发请求已先完成构建；快照会话内不变，丢弃本次临时目录并复用
             _remove_tree(tmp)
             return target
         if target.exists():
-            # ensure_conversation_workspace 预先创建的空目录，移除后就位
+            # 重建路径：移除旧快照（空目录或指纹过期的旧版本）后就位
             _remove_tree(target)
         tmp.rename(target)
     except BaseException:
@@ -193,5 +277,6 @@ __all__ = [
     "list_snapshot_skill_names",
     "list_snapshot_skill_metadata",
     "is_runtime_skill_snapshot_ready",
+    "compute_skill_fingerprints",
     "build_runtime_skill_snapshot_async",
 ]
