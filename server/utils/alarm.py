@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Iterable
 
+from langchain_core.exceptions import ModelConnectionError, ModelTimeoutError
+
 from utils.logger import get_alarm_logger, get_logger
 
 
@@ -249,6 +251,11 @@ def _iter_exception_chain(exc: BaseException) -> Iterable[BaseException]:
 
 def is_llm_connection_exception(exc: BaseException) -> bool:
     """Best-effort classifier for model provider connectivity failures."""
+    # langchain-core 1.6+ 标准模型异常族:类型即事实,优先按类型判定,
+    # 避免依赖厂商报错文案(内网 vLLM 的报错措辞不受我们控制)。
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, (ModelConnectionError, ModelTimeoutError)):
+            return True
     markers = (
         "api connection",
         "api timeout",

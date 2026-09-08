@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError, ModelTimeoutError
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 import auth
@@ -100,6 +101,14 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert alarm_module.is_llm_connection_exception(llm_error) is True
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is True
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
+
+    # langchain-core 标准模型异常族:连接/超时类型直判命中;嵌在异常链里同样命中;
+    # 非连接类(如限流)不误报。
+    assert alarm_module.is_llm_connection_exception(ModelConnectionError("vllm unreachable")) is True
+    wrapped = RuntimeError("agent run failed")
+    wrapped.__cause__ = ModelTimeoutError("first token timed out")
+    assert alarm_module.is_llm_connection_exception(wrapped) is True
+    assert alarm_module.is_llm_connection_exception(ModelRateLimitError("429")) is False
 
     # 大模型异常大类：连接失败与首 token 超时共用 LLM_EXCEPTION，细分落在 error_code。
     llm_records = records[3:]
