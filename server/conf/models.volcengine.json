@@ -1,0 +1,25 @@
+[
+  {
+    "id": "glm-5.3-flash",
+    "temperature": 0.2,
+    "context_window": 256000,
+    "vlm": true,
+    "thinking": {
+      "mode": "forced",
+      "dialect": "reasoning_effort",
+      "efforts": ["low", "high"],
+      "default_effort": "low"
+    }
+  },
+  {
+    "id": "glm-5-2-260617",
+    "temperature": 0.2,
+    "context_window": 256000,
+    "vlm": false,
+    "thinking": {
+      "mode": "optional",
+      "dialect": "chat_template",
+      "default_on": false
+    }
+  }
+]

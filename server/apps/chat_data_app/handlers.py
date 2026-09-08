@@ -4,6 +4,8 @@ import json
 import asyncio
 import re
 import time
+
+import openai
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -103,6 +105,19 @@ REASONING_TOOL_DISPLAY_NAMES = {
 
 class AgentRunStreamFailedError(RuntimeError):
     """SSE 已发送用户可见错误，外层只需按失败状态收口 Run。"""
+
+
+def _model_failure_user_message(exc: Exception) -> str:
+    """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
+    if isinstance(exc, openai.APITimeoutError):
+        return "模型服务响应超时，请点击继续重试。"
+    if isinstance(exc, openai.AuthenticationError):
+        return "模型服务认证失败，请检查模型服务 API Key 配置后重试。"
+    if isinstance(exc, openai.RateLimitError):
+        return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
+    if isinstance(exc, openai.APIConnectionError):
+        return "模型服务连接中断，请点击继续重试。"
+    return "智能问数执行失败，请稍后重试。"
 
 
 def _get_timestamp() -> str:
@@ -1341,11 +1356,11 @@ async def _generate_chat_data_stream(
         # 若在此吞掉，Runtime 会把失败流当作正常结束走 complete_run，误标为 finished。
         logger.info("ChatData Agent 流式执行失败结束: conversation_id=%s", thread_id)
         raise
-    except Exception:
+    except Exception as exc:
         # 进入内层守卫段之前（准备阶段）的失败：内层来不及产出 error 事实，
         # 这里补发一条；终态收口与 done 发布同样交给 Runtime。
         logger.error("智能问数执行准备失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
+        yield _format_sse("error", {"error": _model_failure_user_message(exc)})
         raise
     finally:
         if heartbeat_task:
@@ -2216,9 +2231,9 @@ async def _run_chat_data_agent_stream(
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
         yield _format_sse("error", {"error": str(exc)})
         raise AgentRunStreamFailedError from None
-    except Exception:
+    except Exception as exc:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
+        yield _format_sse("error", {"error": _model_failure_user_message(exc)})
         raise AgentRunStreamFailedError from None
 
 

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
 import pytest
+import httpx
+import openai
 from langchain_core.messages import AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -29,6 +31,7 @@ from apps.chat_data_app.handlers import (
     _prepare_conversation_workspace_sync,
     _generate_chat_data_stream,
     _finish_running_tool,
+    _model_failure_user_message,
     _register_running_tool,
     _resolve_active_tool_call_id,
     prepare_conversation_workspace,
@@ -330,6 +333,32 @@ def test_is_tool_result_error_prefers_native_status():
     # 缺 status 且无 envelope 信号时一律视为成功
     assert _is_tool_result_error("officecli_run 执行失败: 超时") is False
     assert _is_tool_result_error("正常结果") is False
+
+
+def _make_openai_status_error(exc_cls, status_code: int) -> Exception:
+    request = httpx.Request("POST", "https://model.example.com/v1/chat/completions")
+    response = httpx.Response(status_code, request=request)
+    return exc_cls("model service error", response=response, body=None)
+
+
+def test_model_failure_user_message_maps_friendly_text():
+    # 429 限流/过载（今天 ServerOverloaded 场景）
+    rate_error = _make_openai_status_error(openai.RateLimitError, 429)
+    assert "繁忙" in _model_failure_user_message(rate_error)
+    # 401 认证失败（key 配置错误场景）
+    auth_error = _make_openai_status_error(openai.AuthenticationError, 401)
+    assert "认证失败" in _model_failure_user_message(auth_error)
+    # 连接中断（流中途被上游断开场景）
+    conn_error = openai.APIConnectionError(
+        message="Connection error.",
+        request=httpx.Request("POST", "https://model.example.com/v1/chat/completions"),
+    )
+    assert "连接中断" in _model_failure_user_message(conn_error)
+    # 读超时是 APIConnectionError 子类，须优先命中超时文案
+    timeout_error = openai.APITimeoutError("Request timed out")
+    assert "超时" in _model_failure_user_message(timeout_error)
+    # 其他异常一律兜底通用文案，不透出原始错误
+    assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
 
 
 def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
