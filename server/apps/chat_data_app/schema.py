@@ -688,49 +688,6 @@ OrFilter.model_rebuild()
 
 # ============ 语义工具输入模型 ============
 
-class SemanticToolInput(BaseModel):
-    """语义模型检索和字段查看工具的输入参数。"""
-    operation: Literal["search_models", "list_fields"] = Field(
-        ...,
-        description="操作类型：搜索相关模型或分页列出模型字段",
-    )
-    query: Optional[str] = Field(
-        default=None,
-        description="search_models 使用的用户问题；不传时使用当前会话最近一条用户消息",
-    )
-    semantic_config_id: Optional[str] = Field(
-        default=None,
-        description="list_fields 使用的语义模型 ID；语义模型检索方式以 semantic-query 技能为准",
-    )
-    field_type: Literal["all", "metric", "dimension"] = Field(
-        default="all",
-        description="list_fields 的字段范围",
-    )
-    offset: int = Field(
-        default=0,
-        ge=0,
-        description="list_fields 分页起点",
-    )
-    limit: int = Field(
-        default=100,
-        ge=1,
-        le=200,
-        description="list_fields 单次最多返回的字段数",
-    )
-    intent: str = Field(
-        default="",
-        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
-    )
-
-    @model_validator(mode="after")
-    def validate_operation_parameters(self):
-        if self.operation == "search_models":
-            return self
-        if not str(self.semantic_config_id or "").strip():
-            raise ValueError(f"{self.operation} 必须传 semantic_config_id")
-        return self
-
-
 class ExecuteSemanticInput(BaseModel):
     """语义查询执行工具的输入参数（供 LangGraph Agent 工具使用）"""
     model_config = {"extra": "ignore"}
@@ -806,20 +763,6 @@ class CalculatorItem(BaseModel):
         ge=0,
         le=12,
         description="需要四舍五入时保留的小数位数；不传则返回计算结果原值",
-    )
-
-
-class CalculatorInput(BaseModel):
-    """确定性计算工具的输入参数"""
-    calculations: List[CalculatorItem] = Field(
-        ...,
-        min_length=1,
-        max_length=20,
-        description="批量计算项；单个计算也只传一条记录",
-    )
-    intent: str = Field(
-        default="",
-        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
     )
 
 

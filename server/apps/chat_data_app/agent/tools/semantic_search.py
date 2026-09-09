@@ -8,8 +8,8 @@ from langchain_core.messages import HumanMessage
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
+from pydantic import Field
 
-from ...schema import SemanticToolInput
 from apps.chat_data_app.services.semantic.run.semantic_model_search import search_semantic_models
 from apps.chat_data_app.services.semantic.run.semantic_materializer import (
     SEMANTIC_SNAPSHOT_DIR,
@@ -222,14 +222,14 @@ def create_semantic_search(
     bound_group_context = str(datasource_group_context or "").strip()
     bound_source_type = str(source_type or "").strip()
 
-    @tool("semantic_search", args_schema=SemanticToolInput)
+    @tool("semantic_search", parse_docstring=True)
     async def semantic_search(
-        operation: str,
+        operation: Literal["search_models", "list_fields"],
         query: str | None = None,
         semantic_config_id: str | None = None,
-        field_type: str = "all",
-        offset: int = 0,
-        limit: int = 100,
+        field_type: Literal["all", "metric", "dimension"] = "all",
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
         intent: str = "",
         state: Annotated[dict, InjectedState] = None,
     ) -> str:
@@ -239,7 +239,19 @@ def create_semantic_search(
           并确保候选模型的 Ossie YAML 已物化到会话工作区 semantic/ 目录。
         - list_fields：传 semantic_config_id；可用 field_type=all/metric/dimension 和 offset/limit 分页。
         本工具只做检索辅助；语义模型检索流程、候选确认与字段口径确认一律以 `semantic-query` 技能为准，本工具不重复定义。
+
+        Args:
+            operation: 操作类型：search_models 搜索相关语义模型，list_fields 分页列出模型字段。
+            query: search_models 使用的用户问题；不传时使用当前会话最近一条用户消息。
+            semantic_config_id: list_fields 使用的语义模型 ID；语义模型检索方式以 semantic-query 技能为准。
+            field_type: list_fields 的字段范围：all、metric、dimension。
+            offset: list_fields 分页起点，从 0 开始。
+            limit: list_fields 单次最多返回的字段数，范围 1-200。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
+        normalized_config_id = str(semantic_config_id or "").strip()
+        if operation != "search_models" and not normalized_config_id:
+            raise ValueError(f"{operation} 必须传 semantic_config_id")
         current_datasource_id = bound_datasource_id or extract_datasource_id(state)
         if not current_datasource_id:
             raise ValueError("当前会话未绑定数据源")
@@ -261,7 +273,6 @@ def create_semantic_search(
             )
             return tool_result_payload("semantic_search", payload)
 
-        normalized_config_id = str(semantic_config_id or "").strip()
         config, reference = await _materialize_one(
             workspace_runtime=workspace_runtime,
             datasource_id=current_datasource_id,
@@ -278,7 +289,6 @@ def create_semantic_search(
                 offset=offset,
                 limit=limit,
             ))
-        raise ValueError(f"不支持的操作 {operation}")
 
     return semantic_search
 

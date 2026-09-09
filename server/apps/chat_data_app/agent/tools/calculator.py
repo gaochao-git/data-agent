@@ -5,12 +5,13 @@ import json
 import operator
 import re
 from decimal import Decimal, ROUND_HALF_UP, getcontext
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from pydantic import Field
 
 from utils.logger import get_logger
-from ...schema import CalculatorInput
+from ...schema import CalculatorItem
 
 logger = get_logger(__name__)
 
@@ -78,12 +79,16 @@ def _calculate_item(item: Any) -> dict[str, Any]:
         return result
 
 
-@tool(args_schema=CalculatorInput)
-async def calculator_tool(calculations: list[dict[str, Any]], intent: str = "") -> str:
-    """
-    对查询结果中的长数字、比例、差值或单位换算做确定性计算。
+@tool("calculator_tool", parse_docstring=True)
+async def calculator_tool(
+    calculations: Annotated[list[CalculatorItem], Field(min_length=1, max_length=20)],
+    intent: str = "",
+) -> str:
+    """对查询结果中的长数字、比例、差值或单位换算做确定性计算。
 
-    calculations 中每个 expression 只能包含数字、括号和 + - * /；单位换算时直接把倍率写进表达式。
+    Args:
+        calculations: 批量计算项（1-20 条）；单个计算也只传一条记录，每项包含必填的 expression、可选的 name 和 decimal_places。
+        intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
     """
     getcontext().prec = 50
     results = [_calculate_item(item) for item in calculations]

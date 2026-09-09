@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from apps.chat_data_app.agent.tools import ask_user_question as auq_module
 from apps.chat_data_app.agent.tools.ask_user_question import (
-    AskUserQuestionInput,
     UserQuestion,
     ask_user_question_tool,
 )
@@ -35,18 +34,20 @@ def test_question_rejects_duplicate_option_labels():
 
 
 def test_input_rejects_duplicate_question_ids():
-    with pytest.raises(ValidationError, match="问题 ID 不能重复"):
-        AskUserQuestionInput(questions=[_question(), _question()])
+    with pytest.raises(ValueError, match="问题 ID 不能重复"):
+        ask_user_question_tool.invoke({"questions": [_question(), _question()]})
 
 
 def test_input_requires_at_least_one_question():
     with pytest.raises(ValidationError):
-        AskUserQuestionInput(questions=[])
+        ask_user_question_tool.invoke({"questions": []})
 
 
 def test_input_rejects_more_than_five_questions():
     with pytest.raises(ValidationError):
-        AskUserQuestionInput(questions=[_question(id=f"q{i}") for i in range(6)])
+        ask_user_question_tool.invoke(
+            {"questions": [_question(id=f"q{i}") for i in range(6)]}
+        )
 
 
 def test_tool_interrupts_with_payload_and_merges_answer(monkeypatch):

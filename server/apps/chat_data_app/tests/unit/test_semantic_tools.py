@@ -47,6 +47,14 @@ def test_semantic_search_description_defers_to_semantic_query_skill():
     assert "file_grep" not in description
 
 
+def test_semantic_search_list_fields_requires_semantic_config_id():
+    """list_fields 必须显式传 semantic_config_id（原 SemanticToolInput 校验分支）。"""
+    tool = create_semantic_search(datasource_id="ds_a")
+
+    with pytest.raises(ValueError, match="必须传 semantic_config_id"):
+        asyncio.run(tool.ainvoke({"operation": "list_fields"}))
+
+
 def test_extract_datasource_id_from_state():
     assert extract_datasource_id({"datasource_id": "ds_001"}) == "ds_001"
     assert extract_datasource_id({"datasource_id": "  ds_002  "}) == "ds_002"

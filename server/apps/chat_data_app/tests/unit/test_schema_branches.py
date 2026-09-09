@@ -17,7 +17,6 @@ from apps.chat_data_app.schema import (
     DbConnectionRequest,
     QueryTaskCreateRequest,
     SemanticQueryInput,
-    SemanticToolInput,
     _normalize_recommended_questions,
 )
 
@@ -122,18 +121,6 @@ def test_connection_accepts_valid_payloads():
 # ---------------------------------------------------------------------------
 # 语义工具入参
 # ---------------------------------------------------------------------------
-
-
-def test_list_fields_requires_semantic_config_id():
-    """list_fields 必须指定语义模型 ID（原缺失分支 658->659）。"""
-    with pytest.raises(ValidationError, match="必须传 semantic_config_id"):
-        SemanticToolInput(operation="list_fields")
-
-
-def test_search_models_skips_semantic_config_id_check():
-    """search_models 不需要 semantic_config_id，直接放行（覆盖 656->657 的对照分支）。"""
-    payload = SemanticToolInput(operation="search_models", query="最近成交额")
-    assert payload.semantic_config_id is None
 
 
 def test_normalize_dsl_passes_none_through():
