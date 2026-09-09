@@ -74,7 +74,7 @@ def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
     async def bash_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS, intent: str = "") -> str:
         """在当前会话工作区执行非交互命令，可用于 ls/find/python3/node/bash 等。
 
-        command 必须是短生命周期非交互命令：不支持后台进程、服务管理或提权命令；最终产物应写入 outputs/。
+        command 必须是短生命周期非交互命令：不支持后台进程、服务管理或提权命令。
 
         Args:
             command: 要执行的非交互命令字符串。

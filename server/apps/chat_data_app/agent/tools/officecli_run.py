@@ -97,7 +97,7 @@ def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
         """在会话工作区运行 OfficeCLI 编辑/查询 Office 文件（docx/xlsx/pptx），通过 exec 直接执行，不依赖 bash_run。
 
         - DOM 选择器（如 /slide[1]、/Sheet1/A1、/body/p[1]）是文档内部定位，不是文件路径。
-        - uploads 只读，修改上传文件先 file_copy 到 workspace。
+        - 修改上传文件先 file_copy 到 workspace。
         - 完整用法、编辑工作流与样式示例见 officecli 技能（SKILL.md），文档交付前必读。
 
         Args:

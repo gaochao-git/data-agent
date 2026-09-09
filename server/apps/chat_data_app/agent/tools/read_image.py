@@ -31,15 +31,11 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
 
     @tool("read_image", parse_docstring=True)
     async def read_image(file_path: str, intent: str = "") -> str:
-        """读取当前会话中的图片文件（png/jpg/jpeg/webp/gif），把图片内容加载进视觉上下文。
+        """读取当前会话中的图片文件（png/jpg/jpeg/webp/gif），把图片内容加载进视觉上下文。单张不超过 5MB。
 
         Args:
             file_path: 图片路径，形如 /mnt/user-data/uploads/<文件名> 或 /mnt/user-data/workspace/<文件名>，必须是本会话目录内真实存在的文件。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
-
-        使用说明：调用成功后图片会在下一轮自动附加到你的视觉上下文（无需再读取文本），
-        直接基于图片内容继续分析即可。单张不超过 5MB。文档、表格等非图片文件请改用
-        file_read 或 parse_document。
         """
         root = workspace_runtime.workspace_root
         try:

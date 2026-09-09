@@ -64,12 +64,10 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
         返回头中的 total_lines 是文件真实总行数：大文件先按 total_lines 评估规模，优先用
         file_grep 定位或按 offset 精确分页，不要从文件头开始逐页翻完整个大文件。
-
-        /mnt/user-data/outputs/query_result/<id>.json 是查询工具统一保存的结果文件；后续分析应按查询工具返回的 result_path 分页读取。
-        /mnt/user-data/outputs/.tool-offload/<id>.json 或 .txt 是普通工具的大结果缓存。两类系统结果都不会作为用户产物展示，不能通过其它文件工具修改、复制、移动或删除。
+        outputs/query_result 与 outputs/.tool-offload 是系统写入的结果文件，不会作为用户产物展示，不能通过其它文件工具修改、复制、移动或删除。
 
         Args:
-            file_path: 要读取的文件路径,读取当前会话的 /mnt/user-data/{workspace,outputs,uploads} 文本文件，或有权访问的技能只读 /mnt/skills 路径
+            file_path: 要读取的文件路径。
             offset: 起始行偏移，从 0 开始，默认从头读取。
             limit: 本次最多读取的源行数，默认 200、最大 500。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
@@ -157,7 +155,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         """
         在 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 新建或整体覆盖文本文件。
 
-        修改已有局部内容请使用 file_edit，避免无意覆盖文件。最终用户产物应写入 outputs/。
+        修改已有局部内容请使用 file_edit，避免无意覆盖文件。
 
         Args:
             file_path: 新建或覆盖的目标文件路径。
