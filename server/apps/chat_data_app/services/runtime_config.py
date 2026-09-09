@@ -95,9 +95,9 @@ CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED",
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env(
     "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False
 )
-# 是否注册 report_writer 子智能体（事实收集 + 写作成稿，交付文件写入会话工作区）。
-CHAT_DATA_DEFAULT_WRITER_SUBAGENT_ENABLED = read_bool_env(
-    "CHAT_DATA_DEFAULT_WRITER_SUBAGENT_ENABLED", False
+# 是否注册 plan 子智能体（统一规划：产出计划文件，只规划不执行）。
+CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env(
+    "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False
 )
 # 是否注册 semantic_search 工具（LLM 打分召回 + 兜底物化）；关闭后主/子智能体纯走
 # 预物化目录（dir_list/file_grep/file_read）检索语义模型。预物化本身不受此开关影响。
@@ -186,7 +186,7 @@ def get_chat_data_runtime_config() -> dict:
             "workspace_backend": CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
             "bash_enabled": CHAT_DATA_DEFAULT_BASH_ENABLED,
             "explore_subagent_enabled": CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
-            "writer_subagent_enabled": CHAT_DATA_DEFAULT_WRITER_SUBAGENT_ENABLED,
+            "plan_subagent_enabled": CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
         },
         "user_overridable": CHAT_DATA_CAPABILITY_USER_OVERRIDABLE,
         "default_row_limit": DEFAULT_ROW_LIMIT,

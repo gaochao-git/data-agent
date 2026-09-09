@@ -29,7 +29,7 @@ from .middleware.tool_call_history_repair import create_tool_call_history_repair
 from .middleware.steering import create_steering_middleware
 from .prompts.chat_data import (
     DATA_EXPLORE_SUBAGENT_PROMPT,
-    WRITER_SUBAGENT_PROMPT,
+    PLAN_SUBAGENT_PROMPT,
     build_unified_system_prompt,
 )
 from .tools.calculator import calculator_tool
@@ -163,6 +163,24 @@ DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
     "officecli_run",
 })
 
+# plan 在基础排除集之上额外排除执行类工具：规划子智能体只盘点资料与产出计划，
+# 不运行查询、不做计算、不编辑文档，保证规划与执行分离（执行由主智能体完成）。
+PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
+    "file_edit",
+    "file_move",
+    "file_copy",
+    "file_delete",
+    "dir_create",
+    "dir_delete",
+    "bash_run",
+    "officecli_run",
+    "semantic_query_tool",
+    "dsl2sql_tool",
+    "calculator_tool",
+    "read_image",
+    "parse_document",
+})
+
 DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
 DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
     "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
@@ -170,12 +188,14 @@ DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
     "适合需要跨多模型/多表摸底数据事实的场景。"
 )
 
-WRITER_SUBAGENT_NAME = "report_writer"
-WRITER_SUBAGENT_DESCRIPTION = (
-    "写作成稿：先收集事实再撰写报告/文档/分析文章，交付文件写入会话工作区，"
-    "只回传文件路径与内容摘要。适合用户需要产出报告、周报、分析文档等成稿物的任务。"
+PLAN_SUBAGENT_NAME = "plan"
+PLAN_SUBAGENT_DESCRIPTION = (
+    "统一规划：为复杂任务产出可执行计划文件（步骤分解、输入路径、期望产出、验收标准），"
+    "报告类任务按办公技能 report-workflow 产出需求说明、样式清单与大纲。"
+    "只规划不执行，计划写入会话工作区，只回传计划路径与步骤清单。"
+    "适合多步骤报告、跨数据源综合分析等先规划后执行的任务。"
     "子智能体看不到 available_skills 技能清单：任务与本轮可用技能（尤其用户自定义技能）"
-    "相关时，必须在任务书中写明技能名称与 skill_file 路径，让它按技能规范成稿。"
+    "相关时，必须在任务书中写明技能名称与 skill_file 路径，否则无从读取。"
 )
 
 
@@ -210,12 +230,15 @@ def build_subagent_middleware(
             ),
             model=model,
         ))
-    if runtime_options.writer_subagent_enabled:
+    if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
-            name=WRITER_SUBAGENT_NAME,
-            description=WRITER_SUBAGENT_DESCRIPTION,
-            system_prompt=WRITER_SUBAGENT_PROMPT,
-            tools=_filter_subagent_tools(tools, SUBAGENT_BASE_EXCLUDED_TOOL_NAMES),
+            name=PLAN_SUBAGENT_NAME,
+            description=PLAN_SUBAGENT_DESCRIPTION,
+            system_prompt=PLAN_SUBAGENT_PROMPT,
+            tools=_filter_subagent_tools(
+                tools,
+                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+            ),
             model=model,
         ))
     if not specs:

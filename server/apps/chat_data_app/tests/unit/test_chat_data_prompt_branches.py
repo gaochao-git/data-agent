@@ -235,7 +235,7 @@ def test_memory_block_only_in_main_agent_prompt():
 
     assert chat_data.MEMORY_BLOCK in prompt
     assert chat_data.MEMORY_BLOCK not in chat_data.DATA_EXPLORE_SUBAGENT_PROMPT
-    assert chat_data.MEMORY_BLOCK not in chat_data.WRITER_SUBAGENT_PROMPT
+    assert chat_data.MEMORY_BLOCK not in chat_data.PLAN_SUBAGENT_PROMPT
     # 防回归：MEMORY_BLOCK 独立成块，若并入 ENVIRONMENT_BLOCK 会被子智能体 prompt 连带引用
     assert chat_data.MEMORY_BLOCK not in chat_data.ENVIRONMENT_BLOCK
 

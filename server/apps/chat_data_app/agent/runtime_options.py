@@ -5,7 +5,7 @@
 - ``workspace_backend``: ``local`` 使用受限的本地会话目录；``sandbox`` 使用 OpenSandbox。
 - ``bash_enabled``: 是否注册 ``bash_run``。
 - ``explore_subagent_enabled``: 注册 ``data-explore`` 子智能体（只读事实收集）。
-- ``writer_subagent_enabled``: 注册 ``report_writer`` 子智能体（事实收集 + 写作成稿）。
+- ``plan_subagent_enabled``: 注册 ``plan`` 子智能体（统一规划，产出计划文件）。
   两者任一启用即注册 ``task`` 工具，允许主智能体把长任务派发给隔离上下文的
   子智能体（见 ``middleware/subagents.py`` 与 ``data_agent.build_subagent_middleware``）。
 
@@ -25,7 +25,7 @@ class AgentRuntimeOptions:
     workspace_backend: WorkspaceBackend = "local"
     bash_enabled: bool = False
     explore_subagent_enabled: bool = False
-    writer_subagent_enabled: bool = False
+    plan_subagent_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.workspace_backend not in ("local", "sandbox"):
@@ -38,14 +38,14 @@ def get_chat_data_default_runtime_options() -> AgentRuntimeOptions:
         CHAT_DATA_DEFAULT_BASH_ENABLED,
         CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
         CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
-        CHAT_DATA_DEFAULT_WRITER_SUBAGENT_ENABLED,
+        CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
     )
 
     return AgentRuntimeOptions(
         workspace_backend=CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
         bash_enabled=CHAT_DATA_DEFAULT_BASH_ENABLED,
         explore_subagent_enabled=CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
-        writer_subagent_enabled=CHAT_DATA_DEFAULT_WRITER_SUBAGENT_ENABLED,
+        plan_subagent_enabled=CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
     )
 
 
@@ -71,8 +71,8 @@ def resolve_agent_runtime_options(
             explore_subagent_enabled=_coerce_bool(
                 override.get("explore_subagent_enabled"), base.explore_subagent_enabled
             ),
-            writer_subagent_enabled=_coerce_bool(
-                override.get("writer_subagent_enabled"), base.writer_subagent_enabled
+            plan_subagent_enabled=_coerce_bool(
+                override.get("plan_subagent_enabled"), base.plan_subagent_enabled
             ),
         )
     return base

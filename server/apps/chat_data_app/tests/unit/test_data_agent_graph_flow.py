@@ -247,7 +247,7 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     assert spec.model is model
 
 
-def test_build_subagent_middleware_writer_keeps_write_tools(monkeypatch, tmp_path):
+def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
@@ -258,7 +258,7 @@ def test_build_subagent_middleware_writer_keeps_write_tools(monkeypatch, tmp_pat
         subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
     )
     options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, writer_subagent_enabled=True
+        workspace_backend="local", bash_enabled=False, plan_subagent_enabled=True
     )
     tools = [
         SimpleNamespace(name="file_read"),
@@ -273,12 +273,10 @@ def test_build_subagent_middleware_writer_keeps_write_tools(monkeypatch, tmp_pat
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["report_writer"]
+    assert _subagent_spec_names(middleware) == ["plan"]
     spec = middleware.specs[0]
-    # writer 只扣除人工应答与产物呈现工具，写操作工具全部保留
-    assert [tool.name for tool in spec.tools] == [
-        "file_read", "file_write", "bash_run", "officecli_run",
-    ]
+    # plan 只保留盘点与计划落盘工具：执行类工具（bash/officecli）与人工应答/产物呈现全部扣除
+    assert [tool.name for tool in spec.tools] == ["file_read", "file_write"]
     assert spec.model is model
 
 
@@ -294,7 +292,7 @@ def test_build_subagent_middleware_supports_both_specs(monkeypatch, tmp_path):
     )
     options = AgentRuntimeOptions(
         workspace_backend="local", bash_enabled=False,
-        explore_subagent_enabled=True, writer_subagent_enabled=True,
+        explore_subagent_enabled=True, plan_subagent_enabled=True,
     )
     tools = [
         SimpleNamespace(name="file_read"),
@@ -306,15 +304,15 @@ def test_build_subagent_middleware_supports_both_specs(monkeypatch, tmp_path):
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["data-explore", "report_writer"]
-    # 同一工具列表按各自排除集独立过滤：explore 不含写工具，writer 保留
+    assert _subagent_spec_names(middleware) == ["data-explore", "plan"]
+    # 同一工具列表按各自排除集独立过滤：explore 不含写工具，plan 只留盘点与计划落盘
     explore_tools = [tool.name for tool in middleware.specs[0].tools]
-    writer_tools = [tool.name for tool in middleware.specs[1].tools]
+    plan_tools = [tool.name for tool in middleware.specs[1].tools]
     assert explore_tools == ["file_read"]
-    assert writer_tools == ["file_read", "file_write", "bash_run"]
+    assert plan_tools == ["file_read", "file_write"]
     # task 工具描述中列出全部类型
     assert "data-explore" in middleware.tools[0].description
-    assert "report_writer" in middleware.tools[0].description
+    assert "plan" in middleware.tools[0].description
 
 
 @pytest.mark.asyncio
