@@ -37,7 +37,12 @@ def get_current_time_payload(
     return payload
 
 
-@tool("get_current_time")
-async def get_current_time_tool(detail: bool) -> str:
-    """获取当前北京时间。detail 为必填参数：false 只返回时间；true 返回时区、偏移、星期和 Unix 时间戳。"""
+@tool("get_current_time", parse_docstring=True)
+async def get_current_time_tool(detail: bool, intent: str = "") -> str:
+    """获取当前北京时间。detail 为必填参数：false 只返回时间；true 返回时区、偏移、星期和 Unix 时间戳。
+
+    Args:
+        detail: 是否返回详细时间信息；false 只返回时间，true 返回时区、偏移、星期和 Unix 时间戳。
+        intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
+    """
     return json.dumps(get_current_time_payload(detail=detail), ensure_ascii=False)

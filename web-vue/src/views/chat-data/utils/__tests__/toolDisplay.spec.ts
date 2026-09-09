@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getToolCompactDescription, getToolDisplayName } from '../toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -116,5 +116,35 @@ describe('toolDisplay', () => {
       description: '只给了任务书没有类型',
     })).toBe('只给了任务书没有类型')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
+  })
+
+  it('prefers the model-provided intent over the args-derived technical description', () => {
+    expect(getToolCompactDescription('officecli_run', {
+      intent: '为月报刷标准报告表格样式',
+      command_args: ['batch', '/mnt/user-data/workspace/月报.docx', '--file', 'styles.json'],
+    })).toBe('为月报刷标准报告表格样式')
+    // 无 intent 时回退到技术细节，行为不变
+    expect(getToolCompactDescription('officecli_run', {
+      command_args: ['view', '/mnt/user-data/workspace/报告.docx'],
+    })).toBe('view /mnt/user-data/workspace/报告.docx')
+    // intent 为空白/非字符串时忽略
+    expect(getToolCompactDescription('file_read', { intent: '   ', file_path: 'a.md' })).toBe('a.md')
+    expect(getToolCompactDescription('file_read', { intent: 123, file_path: 'a.md' })).toBe('123')
+    // 超长 intent 截断
+    const longIntent = '长'.repeat(100)
+    expect(getToolCompactDescription('file_read', { intent: longIntent, file_path: 'a.md' })).toBe(
+      `${'长'.repeat(80)}...`
+    )
+  })
+
+  it('keeps the technical description independent of intent for hover display', () => {
+    const args = {
+      intent: '为月报刷标准报告表格样式',
+      command_args: ['batch', '/mnt/user-data/workspace/月报.docx'],
+    }
+    expect(getToolTechnicalDescription('officecli_run', args)).toBe(
+      'batch /mnt/user-data/workspace/月报.docx'
+    )
+    expect(getToolTechnicalDescription('unknown_tool', { intent: 'x' })).toBe('')
   })
 })

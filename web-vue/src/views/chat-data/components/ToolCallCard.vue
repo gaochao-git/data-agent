@@ -74,6 +74,7 @@ const PARAM_LABELS: Record<string, string> = {
   reference_names: '参考文档',
   file_path: '文件路径',
   command_args: '命令参数',
+  intent: '执行意图',
   source_path: '源路径',
   target_path: '目标路径',
   destination_path: '目标路径',

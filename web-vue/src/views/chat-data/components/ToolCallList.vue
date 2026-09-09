@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import ToolCallCard from './ToolCallCard.vue'
-import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../utils/toolDisplay'
 import { renderMarkdown } from '../utils'
 import type { ExecutionTargetOption, SubagentTrailItem, ToolCallInfo } from '../types'
 
@@ -77,6 +77,8 @@ interface TrailView {
   toolCall?: ToolCallInfo
   displayName?: string
   compactDescription?: string
+  // 由工具名 + 参数推导的技术细节（命令/文件路径），悬浮展示用
+  technicalDescription?: string
   isRunning?: boolean
   isError?: boolean
   // 文本条目
@@ -129,6 +131,7 @@ const buildTrailView = (item: SubagentTrailItem, isParentRunning: boolean): Trai
     },
     displayName: getToolDisplayName(item.tool_name || ''),
     compactDescription: getToolCompactDescription(item.tool_name || '', item.args),
+    technicalDescription: getToolTechnicalDescription(item.tool_name || '', item.args),
     isRunning: item.status === 'running',
     isError: item.status === 'error',
   }
@@ -375,7 +378,7 @@ watch(
                   'border-[rgba(31,130,217,0.15)] bg-[rgba(31,130,217,0.06)] text-[#1f82d9] hover:bg-[rgba(31,130,217,0.1)]': entry.isRunning,
                   'border-red-200 bg-red-50 text-red-600 hover:bg-red-100': entry.isError,
                 }"
-                :title="entry.compactDescription || entry.displayName"
+                :title="entry.technicalDescription || entry.compactDescription || entry.displayName"
                 @click.stop="entry.toolCall && onSubToolClick(entry.toolCall)"
               >
                 <i class="fa-solid fa-wrench text-[10px] shrink-0"></i>

@@ -68,8 +68,8 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
     bound_user_id = str(user_id or "system").strip() or "system"
     bound_operator_name = str(operator_name or "").strip() or None
 
-    @tool("dsl2sql_tool")
-    async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None) -> str:
+    @tool("dsl2sql_tool", parse_docstring=True)
+    async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None, intent: str = "") -> str:
         """DSL 模式的校验工具：校验单个查询 DSL，或批量校验完整 dashboard_spec 的卡片 DSL。
 
         只在 DSL 模式使用；SQL 模式直接调用 semantic_query_tool 的顶层 sql，不调用本工具。
@@ -78,6 +78,11 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
         作为一次 dsl 传入；每张卡片必须有 semantic_config_id，或由旧规格顶层字段提供默认值。
         工具会返回 mode=batch、valid_count、warnings 和逐卡 panels。
         不要为看板中的每张卡片分别调用本工具。
+
+        Args:
+            dsl: 单个查询 DSL 对象，或包含 dashboard_name 与 cards 的完整 dashboard_spec。
+            semantic_config_id: 语义模型配置 ID；单个卡片未携带时的默认值。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         if not bound_datasource_id:
             raise ValueError("当前会话未绑定数据源")

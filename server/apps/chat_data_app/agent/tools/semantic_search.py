@@ -230,6 +230,7 @@ def create_semantic_search(
         field_type: str = "all",
         offset: int = 0,
         limit: int = 100,
+        intent: str = "",
         state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """搜索语义模型，或分页列出模型中的指标和维度。

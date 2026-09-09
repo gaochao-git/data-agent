@@ -32,6 +32,11 @@ class UserQuestion(BaseModel):
 
 class AskUserQuestionInput(BaseModel):
     questions: list[UserQuestion] = Field(min_length=1, max_length=5)
+    intent: str = Field(
+        default="",
+        max_length=100,
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
+    )
 
     @model_validator(mode="after")
     def validate_question_ids(self):
@@ -42,7 +47,7 @@ class AskUserQuestionInput(BaseModel):
 
 
 @tool("ask_user_question", args_schema=AskUserQuestionInput)
-def ask_user_question_tool(questions: list[dict[str, Any]]) -> dict[str, Any]:
+def ask_user_question_tool(questions: list[dict[str, Any]], intent: str = "") -> dict[str, Any]:
     """需要用户补充信息、确认选择或授权后才能继续时暂停执行并提问。
 
     每个问题使用稳定且唯一的 id。options 为空时允许用户自由输入；有选项时仍允许用户补充自定义答案。

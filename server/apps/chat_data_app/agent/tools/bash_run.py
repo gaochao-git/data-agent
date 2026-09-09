@@ -70,14 +70,15 @@ async def run_bash_command(
 
 
 def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
-    @tool("bash_run")
-    async def bash_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> str:
+    @tool("bash_run", parse_docstring=True)
+    async def bash_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS, intent: str = "") -> str:
         """
-        在当前会话工作区执行非交互命令，可用于 ls/find/python3/node/bash 等。
 
-        - cwd 必须是规范形式路径：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 或已加载的只读 /mnt/skills/<技能名>/...；默认 /mnt/user-data/workspace。
-        - command 必须是短生命周期非交互命令，不支持后台进程、服务管理或提权命令。
-        - 生成最终产物前，先把脚本输出写到 workspace/，校验后复制或写入 outputs/。
+        Args:
+            command: 要执行的非交互命令字符串。
+            cwd: 工作目录，必须是规范形式路径：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 或已加载的只读 /mnt/skills/<技能名>/...；默认 /mnt/user-data/workspace。
+            timeout_seconds: 命令超时秒数。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         payload = await run_bash_command(
             command=command,

@@ -28,20 +28,14 @@ logger = get_logger(__name__)
 def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) -> list:
     """构建按需解析上传文件的单一工具。"""
 
-    @tool("parse_document")
-    async def parse_document(source_path: str, target_path: str) -> str:
+    @tool("parse_document", parse_docstring=True)
+    async def parse_document(source_path: str, target_path: str, intent: str = "") -> str:
         """把用户上传的原始文件解析为 Markdown 并写入 workspace。
 
         Args:
-            source_path: 用户上传的原始文件路径，形如 /mnt/user-data/uploads/<原始文件名>。
-                必须是本会话 uploads 下真实存在的文件。
-            target_path: 解析后 Markdown 写入路径，形如 /mnt/user-data/workspace/<业务名>.md。
-                文件名由你根据文件内容含义自行起一个清晰、可读的名字（不要带随机后缀）；
-                只允许写入 workspace（或 outputs）。
-
-        典型流程：先用 file_read 尝试直接读取用户上传的原始文件；若读到的内容不可读
-        （xlsx/pptx/pdf/docx 等二进制），再对本文件调用本工具解析为 Markdown，最后用 file_read
-        读取 target_path 的 Markdown 内容。
+            source_path: 用户上传的原始文件路径，形如 /mnt/user-data/uploads/<原始文件名>，必须是本会话 uploads 下真实存在的文件。
+            target_path: 解析后 Markdown 写入路径，形如 /mnt/user-data/workspace/<业务名>.md，文件名根据文件内容含义自行起清晰可读的名字（不要带随机后缀），只允许写入 workspace（或 outputs）。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         root = workspace_runtime.workspace_root
         try:

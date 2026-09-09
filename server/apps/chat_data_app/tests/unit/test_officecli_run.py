@@ -325,6 +325,26 @@ async def test_sandbox_run_officecli_passes_command_and_validates_bounds(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_tool_wrapper_accepts_intent_metadata(monkeypatch, tmp_path):
+    """intent 为展示元数据：工具可正常调用，且不会透传到 officecli argv。"""
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    tool = create_officecli_run_tool(runtime)
+    ok = await tool.ainvoke({
+        "command_args": ["--version"],
+        "intent": "确认工作区 OfficeCLI 可用",
+    })
+    assert "[officecli_run]" in ok
+    assert "OFFICECLI_CALLED" in ok
+
+    argv_text = log_path.read_text()
+    assert "确认工作区 OfficeCLI 可用" not in argv_text
+
+
+@pytest.mark.asyncio
 async def test_tool_wrapper_surfaces_denied_subcommand_and_success(monkeypatch, tmp_path):
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)

@@ -241,6 +241,7 @@ async def semantic_query_tool(
     sql: str | None = None,
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
+    intent: str = "",
 ) -> str:
     """
     使用 DSL 模式或 SQL 模式执行数据库查询并返回统一查询结果。

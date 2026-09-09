@@ -87,23 +87,25 @@ async def run_officecli_command(
 
 
 def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
-    @tool("officecli_run")
+    @tool("officecli_run", parse_docstring=True)
     async def officecli_run(
         command_args: list[str],
         cwd: str = "/mnt/user-data/workspace",
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        intent: str = "",
     ) -> str:
         """在会话工作区运行 OfficeCLI 编辑/查询 Office 文件（docx/xlsx/pptx），通过 exec 直接执行，不依赖 bash_run。
 
-        - command_args：OfficeCLI 子命令与参数数组，例如 ["view", "/mnt/user-data/workspace/报告.docx", "outline"]。
-          每个元素是一个独立参数，不要加引号、不要拼成一整条命令；路径含空格或选择器含 [N] 都照原样写。
-          第一个元素不能是禁用子命令：plugins / watch / unwatch / open / close / mcp / install / skills。
-          OfficeCLI 的 DOM 选择器（如 /slide[1]、/Sheet1/A1、/body/p[1]）是文档内部定位，不是文件路径。
-        - cwd 必须位于 /mnt/user-data/workspace、outputs 或 uploads；默认 workspace。
-        - uploads 为只读区：view/get/query/validate 等只读子命令可读取 uploads 文件，
-          但 add/set/remove/save/create 等修改类子命令禁止写入或修改 uploads 路径；
-          如需编辑上传文件，先用 file_copy 复制到 /mnt/user-data/workspace 再操作。
-        - 不支持后台或监听模式的子命令。"""
+        - DOM 选择器（如 /slide[1]、/Sheet1/A1、/body/p[1]）是文档内部定位，不是文件路径。
+        - uploads 只读，修改上传文件先 file_copy 到 workspace。
+        - 完整用法、编辑工作流与样式示例见 officecli 技能（SKILL.md），文档交付前必读。
+
+        Args:
+            command_args: OfficeCLI 子命令与参数数组，例如 ["view", "/mnt/user-data/workspace/报告.docx", "outline"]；每个元素是独立参数，不要加引号或拼成一条命令；第一个元素不能是 plugins/watch/unwatch/open/close/mcp/install/skills。
+            cwd: 工作目录，默认 /mnt/user-data/workspace。
+            timeout_seconds: 命令超时秒数。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
+        """
         payload = await run_officecli_command(
             args=command_args,
             cwd=cwd,

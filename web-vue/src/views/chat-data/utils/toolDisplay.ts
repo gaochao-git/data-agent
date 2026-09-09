@@ -123,7 +123,25 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   },
 }
 
+/**
+ * 模型提供的调用意图（args.intent）：一句中文说明本次工具调用的目的。
+ * 有值时列表默认展示意图，技术细节（命令/文件路径）降级为悬浮内容。
+ */
+const intentDescription = (args: ToolArgs): string => compactInlineText(args.intent, 80)
+
 export function getToolCompactDescription(
+  toolName?: string | null,
+  args: ToolArgs = {},
+): string {
+  const intent = intentDescription(args)
+  if (intent) return intent
+  return getToolTechnicalDescription(toolName, args)
+}
+
+/**
+ * 技术细节描述：由工具名 + 参数规则推导（命令、文件路径等），适合悬浮展示。
+ */
+export function getToolTechnicalDescription(
   toolName?: string | null,
   args: ToolArgs = {},
 ): string {

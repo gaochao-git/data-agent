@@ -717,6 +717,10 @@ class SemanticToolInput(BaseModel):
         le=200,
         description="list_fields 单次最多返回的字段数",
     )
+    intent: str = Field(
+        default="",
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
+    )
 
     @model_validator(mode="after")
     def validate_operation_parameters(self):
@@ -775,6 +779,10 @@ class SemanticQueryInput(BaseModel):
         min_length=1,
         description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
+    intent: str = Field(
+        default="",
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
+    )
 
     @field_validator("dsl", mode="before")
     @classmethod
@@ -808,6 +816,10 @@ class CalculatorInput(BaseModel):
         min_length=1,
         max_length=20,
         description="批量计算项；单个计算也只传一条记录",
+    )
+    intent: str = Field(
+        default="",
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
     )
 
 

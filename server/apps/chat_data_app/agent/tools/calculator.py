@@ -79,7 +79,7 @@ def _calculate_item(item: Any) -> dict[str, Any]:
 
 
 @tool(args_schema=CalculatorInput)
-async def calculator_tool(calculations: list[dict[str, Any]]) -> str:
+async def calculator_tool(calculations: list[dict[str, Any]], intent: str = "") -> str:
     """
     对查询结果中的长数字、比例、差值或单位换算做确定性计算。
 
