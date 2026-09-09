@@ -302,7 +302,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         return tool_result_payload("dir_create", await workspace_runtime.create_dir(path=path))
 
     @tool("dir_list", parse_docstring=True)
-    async def dir_list(path: str = "workspace", max_depth: int = 2, intent: str = "") -> str:
+    async def dir_list(path: str = "/mnt/user-data/workspace", max_depth: int = 2, intent: str = "") -> str:
         """
         列出当前会话目录内容。path 必须是规范形式：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 之一，或只读技能路径 /mnt/skills/<技能名>/...。
 
