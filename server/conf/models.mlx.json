@@ -3,7 +3,7 @@
     "id": "Qwen3.6-35B-A3B-4bit",
     "temperature": 0.2,
     "context_window": 48000,
-    "max_output_tokens": 8192,
+    "max_output_tokens": 8000,
     "vlm": true,
     "thinking": {
       "mode": "optional",
@@ -15,7 +15,7 @@
     "id": "Qwen3.8-27B-MLX-4bit",
     "temperature": 0.2,
     "context_window": 48000,
-    "max_output_tokens": 8192,
+    "max_output_tokens": 8000,
     "vlm": true,
     "thinking": {
       "mode": "optional",
