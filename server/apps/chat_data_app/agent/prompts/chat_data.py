@@ -178,6 +178,16 @@ ENVIRONMENT_BLOCK = """## 环境
 - 上传文件位于 `uploads` 且未预解析：纯文本可直接读取；二进制文档先使用 `parse_document` 转为 `workspace` 中的可读文件，再继续处理。
 - 图片文件无法按文本阅读；需要查看 `uploads`、`workspace`、`outputs` 中的图片内容时，调用 `read_image(file_path=...)`，图片会自动附加到视觉上下文，随后直接基于图片内容回答。"""
 
+# 会话记忆约定（仅主智能体）：独立成块，不得并入 ENVIRONMENT_BLOCK——
+# 子智能体 prompt 以 f-string 引用 ENVIRONMENT_BLOCK，会连带拿到本段。
+# 条目不要求带日期：主提示词不注入当前时间，弱模型会编造日期；文件内顺序即新旧。
+MEMORY_BLOCK = """## 会话记忆
+本会话确认过的口径、偏好与纠错结论沉淀在 `workspace/memory.md`（仅本会话可见）：
+- 用户确认了数据口径、纠正过你的错误、或交代了格式/习惯偏好时，把结论追加到该文件：先 `file_read` 读取已有内容，与新条目合并后用 `file_write` 写回（`file_write` 是整文件覆盖，不先读旧内容会丢失已有记录）。
+- 每条一行写清结论与适用范围；同一口径发生变化时追加新条目而不改旧条目，读取时以文件中更靠后的条目为准。整份文件控制在 20 行以内，超出时合并同类或淘汰最早的条目。
+- 再次执行同类任务（如再生成一期报告）前，或对口径、格式拿不准时，先读取该文件再动手，避免向用户重复追问。
+- 闲聊、一次性查询和过程性中间结果不记，只记后续还会用到的结论。"""
+
 DIALECT_BLOCK = """## 方言上下文
 {dialect_context_text}"""
 
@@ -266,6 +276,10 @@ def build_unified_system_prompt(
 
     # ENVIRONMENT_BLOCK 为纯静态文本（目录树已在常量内声明，无占位符）。
     sections.append(ENVIRONMENT_BLOCK)
+
+    # 会话记忆约定仅挂主智能体：子智能体是受委派的一次性执行者，
+    # 看不到主对话历史，也没有维护会话记忆的职责。
+    sections.append(MEMORY_BLOCK)
 
     sections.append("# 数据上下文\n\n" + context_text)
 

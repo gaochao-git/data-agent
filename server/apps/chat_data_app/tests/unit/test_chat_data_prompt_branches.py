@@ -229,6 +229,17 @@ def test_system_prompt_invariant_to_bash_flag():
         assert block in with_bash
 
 
+def test_memory_block_only_in_main_agent_prompt():
+    """会话记忆约定仅主智能体可见：子智能体是一次性执行者，不维护会话记忆。"""
+    prompt = chat_data.build_unified_system_prompt(AgentRuntimeOptions())
+
+    assert chat_data.MEMORY_BLOCK in prompt
+    assert chat_data.MEMORY_BLOCK not in chat_data.DATA_EXPLORE_SUBAGENT_PROMPT
+    assert chat_data.MEMORY_BLOCK not in chat_data.WRITER_SUBAGENT_PROMPT
+    # 防回归：MEMORY_BLOCK 独立成块，若并入 ENVIRONMENT_BLOCK 会被子智能体 prompt 连带引用
+    assert chat_data.MEMORY_BLOCK not in chat_data.ENVIRONMENT_BLOCK
+
+
 def test_system_prompt_uses_provided_skills_xml_or_empty_fallback():
     custom_xml = '<available_skills>\n  <skill name="demo" />\n</available_skills>'
 
