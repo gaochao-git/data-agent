@@ -34,6 +34,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
    - 党政机关公文：生成前必须读取 `/mnt/skills/officecli/references/gb-t-9704-2012.md`。
    - Word 命令手册（只含命令用法与结构校验，不含排版口径）：`/mnt/skills/officecli/references/word.md`。
    - Excel：`/mnt/skills/officecli/references/excel.md`；PowerPoint：`/mnt/skills/officecli/references/powerpoint.md`。
+   - 多章节长报告成稿（需求整理→样式解析→分块生成→校验的过程治理）：`/mnt/skills/officecli/references/report-workflow.md`。
 3. 先确定 Word 起始文件，优先级如下：
    - 用户提供或明确指定模板：保留用户模板，不套系统默认模板。
    - 党政机关正式公文（请示、通知、决定、函等）：按 `/mnt/skills/officecli/references/gb-t-9704-2012.md` 和用户单位模板处理，不使用标准汇报模版冒充正式公文。
