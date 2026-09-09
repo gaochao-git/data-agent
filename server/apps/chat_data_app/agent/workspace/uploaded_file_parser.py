@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from pathlib import Path
 
+from docx import Document as _load_docx_document
 from markitdown import MarkItDown
 
 from utils.logger import get_logger
@@ -32,13 +34,80 @@ def _convert_local_upload(source_path: Path) -> str:
     if not source_path.is_file():
         raise FileNotFoundError(f"文件不存在: {source_path.name}")
 
-    try:
-        result = MarkItDown(enable_plugins=False).convert_local(source_path)
-    except Exception as exc:
-        logger.error("MarkItDown 解析失败: path=%s error=%s", source_path, exc, exc_info=True)
-        raise ValueError("文件解析失败") from exc
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            convert_path = _resolve_markitdown_source(source_path, suffix, Path(tmp_dir))
+            result = MarkItDown(enable_plugins=False).convert_local(convert_path)
+        except Exception as exc:
+            logger.error("MarkItDown 解析失败: path=%s error=%s", source_path, exc, exc_info=True)
+            raise ValueError("文件解析失败") from exc
 
     content = str(result.text_content or "").strip()
     if not content:
         raise ValueError("文件未提取到可分析内容")
     return content
+
+
+def _resolve_markitdown_source(source_path: Path, suffix: str, tmp_dir: Path) -> Path:
+    """docx 含合并单元格时生成矩形化副本供解析，其余情况原样返回。
+
+    GFM 表格语法无法表达 gridSpan/vMerge，markitdown(mammoth) 会丢弃合并延续格，
+    导致行内格子数不足、后续列整体左移（串行）。展开策略与 pandoc 一致：
+    锚点内容复制到每个被覆盖坐标，数据保真。
+    """
+    if suffix != ".docx":
+        return source_path
+    try:
+        document = _load_docx_document(str(source_path))
+        merged_tables = [table for table in document.tables if _table_has_merge(table)]
+    except Exception as exc:
+        logger.warning(
+            "docx 表格预处理跳过（交由 markitdown 原样解析）: path=%s error=%s",
+            source_path.name,
+            exc,
+        )
+        return source_path
+    if not merged_tables:
+        return source_path
+    for table in merged_tables:
+        _rebuild_table_rectangular(document, table)
+    normalized_path = tmp_dir / f"{source_path.stem or 'docx'}.docx"
+    document.save(str(normalized_path))
+    return normalized_path
+
+
+def _table_has_merge(table) -> bool:
+    """python-docx 对合并坐标返回同一底层 tc，元素重复出现即存在合并。"""
+    seen_tc_ids: set[int] = set()
+    for row in table.rows:
+        for cell in row.cells:
+            tc_id = id(cell._tc)
+            if tc_id in seen_tc_ids:
+                return True
+            seen_tc_ids.add(tc_id)
+    return False
+
+
+def _rebuild_table_rectangular(document, table) -> None:
+    """将合并表重建为等尺寸普通表，合并内容按锚点重复填充。"""
+    row_count = len(table.rows)
+    col_count = len(table.columns)
+    grid = [[table.cell(row, col).text for col in range(col_count)] for row in range(row_count)]
+
+    rebuilt = document.add_table(rows=row_count, cols=col_count)
+    rebuilt.style = table.style
+    for row, values in enumerate(grid):
+        for col, text in enumerate(values):
+            _set_cell_paragraphs(rebuilt.cell(row, col), text)
+
+    old_tbl = table._tbl
+    old_tbl.addprevious(rebuilt._tbl)
+    old_tbl.getparent().remove(old_tbl)
+
+
+def _set_cell_paragraphs(cell, text: str) -> None:
+    """按 cell.text 的换行语义回填（\\n 对应独立段落），保持段落结构与原表一致。"""
+    lines = text.split("\n")
+    cell.paragraphs[0].text = lines[0]
+    for line in lines[1:]:
+        cell.add_paragraph(line)

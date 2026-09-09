@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from docx import Document as build_docx
 
 from apps.chat_data_app.agent.workspace import uploaded_file_parser
 
@@ -49,3 +50,64 @@ def test_parser_rejects_unsupported_or_empty_files(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="未提取到"):
         uploaded_file_parser._convert_local_upload(source)
+
+
+def _build_merged_docx(path: Path) -> None:
+    """构造含横向(gridSpan)与纵向(vMerge)合并单元格的 docx。"""
+    document = build_docx()
+    table = document.add_table(rows=4, cols=4)
+    table.style = "Table Grid"
+    for col, header in enumerate(["机构", "一季度", "二季度", "合计"]):
+        table.cell(0, col).text = header
+
+    merged_row = table.rows[1]
+    merged_row.cells[1].text = "半年数据"
+    merged_row.cells[1].merge(merged_row.cells[2])
+    merged_row.cells[3].text = "100"
+
+    table.cell(2, 0).text = "B 机构"
+    table.cell(2, 0).merge(table.cell(3, 0))
+    for col, value in ((1, "60"), (2, "70"), (3, "130")):
+        table.cell(2, col).text = value
+    for col, value in ((1, "80"), (2, "90"), (3, "170")):
+        table.cell(3, col).text = value
+    document.save(str(path))
+
+
+def test_docx_merged_cells_expanded_before_markitdown(tmp_path):
+    source = tmp_path / "merged.docx"
+    _build_merged_docx(source)
+
+    content = uploaded_file_parser._convert_local_upload(source)
+
+    table_rows = [line for line in content.splitlines() if line.startswith("|")]
+    assert table_rows, "应解析出 markdown 表格"
+    cell_pipes = {row.count("|") for row in table_rows}
+    assert cell_pipes == {5}, f"所有表格行应为等宽 4 列, 实际: {table_rows}"
+    assert sum(row.count("半年数据") for row in table_rows) == 2, "横向合并内容应重复填充"
+    assert sum(row.count("B 机构") for row in table_rows) == 2, "纵向合并内容应重复填充"
+    last_row = table_rows[-1]
+    assert all(token in last_row for token in ("B 机构", "80", "90", "170")), \
+        "延续行不得串列"
+
+
+def test_docx_without_merge_keeps_original_file(tmp_path):
+    document = build_docx()
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "A"
+    table.cell(1, 1).text = "B"
+    source = tmp_path / "plain.docx"
+    document.save(str(source))
+
+    assert uploaded_file_parser._resolve_markitdown_source(source, ".docx", tmp_path) == source
+
+    non_docx = tmp_path / "note.txt"
+    non_docx.write_text("hello", encoding="utf-8")
+    assert uploaded_file_parser._resolve_markitdown_source(non_docx, ".txt", tmp_path) == non_docx
+
+
+def test_docx_preprocess_failure_falls_back_to_original(tmp_path):
+    broken = tmp_path / "broken.docx"
+    broken.write_bytes(b"not-a-real-docx")
+
+    assert uploaded_file_parser._resolve_markitdown_source(broken, ".docx", tmp_path) == broken
