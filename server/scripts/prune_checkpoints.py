@@ -465,8 +465,10 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
 # ---------------- 主流程 ----------------
 
 def main() -> int:
+    started_at = datetime.now()
     apply_delete = parse_mode()
     mode = "EXECUTE(真删)" if apply_delete else "DRY-RUN(只统计)"
+    print("开始时间 %s" % started_at.strftime("%Y-%m-%d %H:%M:%S"))
     print("目标库 %s:%s/%s  模式 %s  策略: 体积>%sMB 且闲置>%s天 → keep-latest 裁剪" % (
         DB_HOST, DB_PORT, DB_NAME, mode, MIN_MB, MIN_IDLE_DAYS))
     conn = connect(DB_NAME)
@@ -500,6 +502,9 @@ def main() -> int:
         print("提示：InnoDB 不自动归还磁盘空间，页仅作 free 复用；确需缩表低峰执行 OPTIMIZE TABLE。")
     failed = [r for r in results
               if str(r.get("status", "")).startswith("error") or "FAIL" in str(r.get("status", ""))]
+    ended_at = datetime.now()
+    print("结束时间 %s  耗时 %.1f 秒" % (
+        ended_at.strftime("%Y-%m-%d %H:%M:%S"), (ended_at - started_at).total_seconds()))
     if failed:
         print("!! %d 个会话失败或自检未通过，请人工复核" % len(failed))
         return 1
