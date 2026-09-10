@@ -15,7 +15,9 @@
   - 两段式发现，避免全表扫大列：先对 checkpoints 做覆盖索引扫取每线程
     MAX(checkpoint_id)（时间序 uuid6，字典序即时间序）筛闲置候选，
     再只对候选线程走 thread_id 索引精确统计 blob 体积。
-  - 每批删除独立事务提交，批间休眠 SLEEP_MS，绝不使用一个大事务。
+  - autocommit=True 运行：每批 DELETE 单语句自提交，绝不使用一个大事务，
+    批间休眠 SLEEP_MS 限速；规划读用 conn.begin() 显式圈一致快照、
+    try/finally 收口，任何退出路径（skip/dry-run/异常）不遗留事务。
   - 锁冲突(1205/1213)自动退避重试。
   - 保留集按最新快照的 channel_versions 引用取，不按"每通道最大版本"取。
   - 删除前重新校验该会话仍然闲置（发现阶段到执行阶段之间可能有人回来续聊）。
@@ -75,7 +77,7 @@ def parse_mode() -> bool:
 def connect(db_name: str):
     conn = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER,
                            password=DB_PASSWORD, database=db_name,
-                           charset="utf8mb4", autocommit=False)
+                           charset="utf8mb4", autocommit=True)
     with conn.cursor() as cur:
         cur.execute("SET SESSION innodb_lock_wait_timeout = %s", (LOCK_TIMEOUT,))
     return conn
@@ -123,16 +125,14 @@ def _idle_too_short(last: Optional[datetime]) -> bool:
 
 
 def run_with_retry(conn, sql: str, params: tuple) -> int:
-    """单批删除：独立事务提交，锁冲突退避重试。"""
+    """单批删除：单语句原子，autocommit 下即删即持久，无事务可收口；
+    锁冲突(1205/1213)退避重试。"""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-                affected = cur.rowcount
-            conn.commit()
-            return affected
+                return cur.rowcount
         except pymysql.err.OperationalError as err:
-            conn.rollback()
             code = err.args[0] if err.args else None
             if code not in RETRYABLE_MYSQL_CODES or attempt >= MAX_RETRIES:
                 raise
@@ -413,34 +413,42 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
     """对单个会话执行 keep-latest 裁剪。"""
     thread_id = target["thread_id"]
     result = {"thread_id": thread_id, "reclaim_mb": 0.0}
-    with conn.cursor() as cur:
-        keepers = load_keepers(cur, thread_id)
-        if not keepers:
-            result["status"] = "skip(无checkpoint)"
-            return result
-        last = keeper_activity(cur, thread_id, keepers)
-        if _idle_too_short(last):
-            reason = ("已重新活跃 %s" % last.strftime("%m-%d %H:%M")) if last else "无法判定活动时间"
-            result["status"] = "skip(%s)" % reason
-            return result
-        refs = referenced_versions(cur, thread_id, keepers)
-        blob_plan, blob_rows, blob_bytes, kept_rows = plan_blobs(cur, thread_id, refs)
-        old_ids = plan_old_snapshots(cur, thread_id, keepers)
-        orphans = collect_orphan_writes(cur, thread_id)
-        ck_rows = sum(len(v) for v in old_ids.values())
-        orphan_rows = sum(len(v) for v in orphans.values())
-        old_keepers = keeper_old_format_ids(cur, thread_id, keepers)
+    # 规划阶段显式开事务：五条规划读必须共享同一 REPEATABLE READ 快照，
+    # 否则规划中途落库的新 checkpoint 的 blob 会被误判为"未引用"而删除。
+    # autocommit=True 下用 begin() 圈定，finally commit 保证 skip/dry-run/
+    # 异常等所有退出路径都收口，事务绝不遗留。
+    conn.begin()
+    try:
+        with conn.cursor() as cur:
+            keepers = load_keepers(cur, thread_id)
+            if not keepers:
+                result["status"] = "skip(无checkpoint)"
+                return result
+            last = keeper_activity(cur, thread_id, keepers)
+            if _idle_too_short(last):
+                reason = ("已重新活跃 %s" % last.strftime("%m-%d %H:%M")) if last else "无法判定活动时间"
+                result["status"] = "skip(%s)" % reason
+                return result
+            refs = referenced_versions(cur, thread_id, keepers)
+            blob_plan, blob_rows, blob_bytes, kept_rows = plan_blobs(cur, thread_id, refs)
+            old_ids = plan_old_snapshots(cur, thread_id, keepers)
+            orphans = collect_orphan_writes(cur, thread_id)
+            ck_rows = sum(len(v) for v in old_ids.values())
+            orphan_rows = sum(len(v) for v in orphans.values())
+            old_keepers = keeper_old_format_ids(cur, thread_id, keepers)
 
-    print("  [裁剪] %s… %.0fMB, 闲置至 %s | 待删 blob %d 行/%.1fMB, 旧快照 %d, 孤儿 writes %d, 保留 %d 行" % (
-        thread_id[:13], target["mb"], last.strftime("%m-%d"), blob_rows,
-        blob_bytes / MB, ck_rows, orphan_rows, kept_rows))
-    if old_keepers:
-        print("    !! 警告：keeper 含 %d 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
-              "将不可迁移（仅影响中断续跑），请人工确认" % len(old_keepers))
-    result["reclaim_mb"] = round(blob_bytes / MB, 1)
-    if not apply_delete:
-        result["status"] = "dry-run"
-        return result
+        print("  [裁剪] %s… %.0fMB, 闲置至 %s | 待删 blob %d 行/%.1fMB, 旧快照 %d, 孤儿 writes %d, 保留 %d 行" % (
+            thread_id[:13], target["mb"], last.strftime("%m-%d"), blob_rows,
+            blob_bytes / MB, ck_rows, orphan_rows, kept_rows))
+        if old_keepers:
+            print("    !! 警告：keeper 含 %d 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
+                  "将不可迁移（仅影响中断续跑），请人工确认" % len(old_keepers))
+        result["reclaim_mb"] = round(blob_bytes / MB, 1)
+        if not apply_delete:
+            result["status"] = "dry-run"
+            return result
+    finally:
+        conn.commit()
 
     ck_del, wr_del = prune_snapshots(conn, thread_id, old_ids)
     orphan_del = prune_orphan_writes(conn, thread_id, orphans)
@@ -466,13 +474,13 @@ def main() -> int:
     try:
         with conn.cursor() as cur:
             prune_targets = discover_prune_targets(cur)
-        conn.commit()  # 结束发现阶段的只读事务，避免长快照拖住 undo 回收
+        # autocommit=True：发现阶段各 SELECT 已自提交，无遗留事务
         print("发现裁剪目标 %d 个" % len(prune_targets))
         for target in prune_targets:
             try:
                 results.append(prune_one(conn, target, apply_delete))
-            except Exception as err:  # 单会话失败不影响其余
-                conn.rollback()
+            except Exception as err:  # 单会话失败不影响其余（prune_one 的
+                # finally 已收口其规划事务，此处无遗留事务需要 rollback）
                 print("    !! 裁剪失败 %s: %s: %s" % (
                     target["thread_id"], type(err).__name__, err))
                 results.append({"thread_id": target["thread_id"], "status": "error:%s" % err,
