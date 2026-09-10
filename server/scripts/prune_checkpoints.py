@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover
 # ============ 固定配置（按部署环境修改） ============
 DB_HOST = "62.234.152.217"
 DB_PORT = 3307
-DB_USER = "gaochao"
+DB_USER = "xxxx"
 DB_PASSWORD = "xxxx"
 DB_NAME = "langchian_checkpoint"          # checkpointer 库
 
