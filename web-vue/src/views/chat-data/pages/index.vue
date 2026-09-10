@@ -257,8 +257,8 @@ const isSidebarVisible = ref(true)
 const sidebarBodyRef = ref<HTMLElement | null>(null)
 const sidebarCollapseTop = ref(15)
 
-// 侧边栏宽度拖拽调整
-const sidebarWidth = ref(280)
+// 侧边栏宽度拖拽调整（默认 320：会话项需容纳标题 + 时间 + 运行状态 + 收藏）
+const sidebarWidth = ref(320)
 const isResizingSidebar = ref(false)
 
 const startSidebarResize = (e: MouseEvent) => {
@@ -292,6 +292,7 @@ const activeSidebarTab = ref<string>('metrics')
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
+    tabs.push({ key: 'conversation', label: '对话历史', icon: 'fa-comments' })
     tabs.push({ key: 'metrics', label: '语义模型', icon: 'fa-bullseye' })
   } else if (viewMode.value === 'dashboard') {
     tabs.push({ key: 'dashboard', label: '数据看板', icon: 'fa-chart-pie' })
@@ -386,7 +387,7 @@ watch(viewMode, () => {
     metricConfigMounted.value = true
   }
   if (viewMode.value === 'conversation') {
-    activeSidebarTab.value = 'metrics'
+    activeSidebarTab.value = 'conversation'
     return
   }
   if (viewMode.value === 'dashboard') {
@@ -494,32 +495,8 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
-const showHistoryPopover = ref(false)
-const hasEnteredConversationOnce = ref(false)
 const selectedConversationModelId = ref('')
 const conversationModelStorageUserKey = computed(() => currentUser.value.id || currentUser.value.name || 'default')
-let historyPopoverHideTimer: ReturnType<typeof setTimeout> | null = null
-
-const openHistoryPopover = () => {
-  if (historyPopoverHideTimer) {
-    clearTimeout(historyPopoverHideTimer)
-    historyPopoverHideTimer = null
-  }
-  void ensureConversationsLoaded()
-  showHistoryPopover.value = true
-}
-
-const closeHistoryPopoverWithDelay = () => {
-  if (historyPopoverHideTimer) clearTimeout(historyPopoverHideTimer)
-  historyPopoverHideTimer = setTimeout(() => {
-    showHistoryPopover.value = false
-    historyPopoverHideTimer = null
-  }, 180)
-}
-
-const canShowNewConversationButton = computed(() => {
-  return hasEnteredConversationOnce.value || !!currentConversationId.value
-})
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
@@ -702,7 +679,6 @@ const selectConversation = async (id: string): Promise<boolean> => {
     }
   }
   currentConversationId.value = id
-  hasEnteredConversationOnce.value = true
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationDatasourceId.value = conversationDatasourceId || null
   conversationKey.value++ // 强制重新渲染以加载历史
@@ -734,8 +710,7 @@ const ensureConversationDatasource = async (): Promise<boolean> => {
 }
 
 const handleHistoryConversationSelect = async (id: string) => {
-  if (!await selectConversation(id)) return
-  showHistoryPopover.value = false
+  await selectConversation(id)
 }
 
 const handleUpdateConversationTitle = (conversationId: string, title: string) => {
@@ -763,7 +738,6 @@ const handleToggleConversationFavorite = async (conversationId: string, isFavori
 
 // 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
 const handleFirstMessageStarted = async (convId: string) => {
-  hasEnteredConversationOnce.value = true
   const datasourcePromise = loadConversationDatasourceId(convId)
   const titlePromise = generateConversationTitle(convId)
     .catch(error => {
@@ -1270,9 +1244,10 @@ watch(
 
 watch(
   [selectedDatasourceId, viewMode, activeSidebarTab],
-  ([datasourceId, mode, sidebarTab]) => {
+  ([datasourceId, mode]) => {
     if (!datasourceId) return
-    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || (mode === 'conversation' && sidebarTab === 'metrics')) {
+    // conversation 模式下「语义模型」面板与「对话」面板共存（v-show），切换 tab 不能省掉 schema 加载
+    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || mode === 'conversation') {
       void loadDatasourceSchema(datasourceId)
     }
   },
@@ -1407,10 +1382,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateSidebarCollapseTop)
-  if (historyPopoverHideTimer) {
-    clearTimeout(historyPopoverHideTimer)
-    historyPopoverHideTimer = null
-  }
 })
 </script>
 
@@ -1462,58 +1433,11 @@ onUnmounted(() => {
           <button
             v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
-            title="历史会话"
-            @mouseenter="openHistoryPopover"
-            @mouseleave="closeHistoryPopoverWithDelay"
-            @click.stop="showHistoryPopover = !showHistoryPopover"
-          >
-            <i class="fa-solid fa-clock-rotate-left text-[12px]"></i>
-          </button>
-          <button
-            v-if="viewMode === 'conversation' && canShowNewConversationButton"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-700 text-sm cursor-pointer shadow-sm hover:bg-slate-50"
-            title="新对话"
-            @click="handleNewConversation"
-          >
-            <i class="fa-solid fa-circle-plus text-[13px]"></i>
-          </button>
-          <button
-            v-if="viewMode === 'conversation'"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
             title="控制台"
             @click="openConversationConsole"
           >
             <i class="fa-solid fa-terminal text-[12px]"></i>
           </button>
-
-          <div
-            v-if="showHistoryPopover"
-            class="absolute right-0 top-full mt-2 z-[140] flex h-[70vh] w-[360px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_10px_30px_rgba(0,0,0,0.12)]"
-            @mouseenter="openHistoryPopover"
-            @mouseleave="closeHistoryPopoverWithDelay"
-          >
-            <div class="flex h-14 shrink-0 items-center border-b border-slate-100 px-4 text-base font-semibold text-slate-800">历史对话</div>
-            <div class="min-h-0 flex-1 overflow-hidden">
-              <ConversationSidebar
-                active-tab="conversation"
-                :grouped-conversations="groupedConversations"
-                :current-conversation-id="currentConversationId"
-                :is-loading="isLoadingConversations"
-                :is-loading-more="isLoadingMoreConversations"
-                :has-more="hasMoreConversations"
-                :show-new-conversation-button="false"
-                :conversation-view-mode="conversationViewMode"
-                :hide-management="!!parentComponentName"
-                @select-conversation="handleHistoryConversationSelect"
-                @new-conversation="handleNewConversation"
-                @load-more-conversations="loadMoreConversations"
-                @load-more-conversation-group="loadMoreConversationGroup"
-                @update-conversation-title="handleUpdateConversationTitle"
-                @toggle-conversation-favorite="handleToggleConversationFavorite"
-                @toggle-conversation-view-mode="toggleConversationViewMode"
-              />
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -1613,6 +1537,28 @@ onUnmounted(() => {
             <i class="fa-solid fa-chevron-left text-[10px]"></i>
           </button>
 
+          <!-- 左栏一级 Tab：仅智能问数模式有多个（对话历史 / 语义模型） -->
+          <div
+            v-if="viewMode === 'conversation' && sidebarTabs.length > 1"
+            class="shrink-0 border-b border-slate-200 bg-white px-3 py-2"
+          >
+            <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+              <button
+                v-for="tab in sidebarTabs"
+                :key="tab.key"
+                type="button"
+                class="flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[13px] transition-colors"
+                :class="activeSidebarTab === tab.key
+                  ? 'bg-white font-medium text-[#165DFF] shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'"
+                @click="activeSidebarTab = tab.key"
+              >
+                <i :class="['fa-solid', tab.icon]" class="text-[11px]"></i>
+                <span>{{ tab.label }}</span>
+              </button>
+            </div>
+          </div>
+
           <!-- 看板（懒挂载，避免首屏无关请求） -->
           <div v-if="dashboardMounted" v-show="activeSidebarTab === 'dashboard'" class="sidebar-unified-shell h-full">
             <DashboardPanel
@@ -1625,8 +1571,27 @@ onUnmounted(() => {
             />
           </div>
 
-          <!-- 智能问数：指标 / 会话 -->
+          <!-- 智能问数：对话 / 语义模型 -->
           <template v-if="viewMode === 'conversation'">
+            <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
+              <ConversationSidebar
+                active-tab="conversation"
+                :grouped-conversations="groupedConversations"
+                :current-conversation-id="currentConversationId"
+                :is-loading="isLoadingConversations"
+                :is-loading-more="isLoadingMoreConversations"
+                :has-more="hasMoreConversations"
+                :conversation-view-mode="conversationViewMode"
+                :hide-management="!!parentComponentName"
+                @select-conversation="handleHistoryConversationSelect"
+                @new-conversation="handleNewConversation"
+                @load-more-conversations="loadMoreConversations"
+                @load-more-conversation-group="loadMoreConversationGroup"
+                @update-conversation-title="handleUpdateConversationTitle"
+                @toggle-conversation-favorite="handleToggleConversationFavorite"
+                @toggle-conversation-view-mode="toggleConversationViewMode"
+              />
+            </div>
             <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
               <ConversationSidebar
                 active-tab="metrics"

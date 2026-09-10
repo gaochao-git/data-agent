@@ -108,6 +108,22 @@ const toggleConversationGroup = (key: string) => {
   collapsedGroups.value = next
 }
 
+// 会话搜索：本地过滤已加载的会话（按标题模糊匹配，不区分大小写）。
+// 仅过滤客户端已有数据，不触发额外的服务端查询——如需搜索更早的会话，仍走各分组底部的「加载更多」。
+const conversationSearchKeyword = ref('')
+const hasConversationSearch = computed(() => conversationSearchKeyword.value.trim().length > 0)
+
+const filteredConversationGroups = computed<ConversationGroupView[]>(() => {
+  const keyword = conversationSearchKeyword.value.trim().toLowerCase()
+  if (!keyword) return props.groupedConversations
+  return props.groupedConversations
+    .map(group => ({
+      ...group,
+      items: group.items.filter(conv => (conv.title || '').toLowerCase().includes(keyword)),
+    }))
+    .filter(group => group.items.length > 0)
+})
+
 // 指标集列表
 const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
 const internalIsLoadingConfigs = ref(false)
@@ -642,42 +658,51 @@ onUnmounted(() => {
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ==================== 会话 Tab ==================== -->
     <template v-if="activeTab === 'conversation'">
-      <!-- 新建会话按钮 -->
-      <div v-if="showNewConversationButton" class="p-4">
+      <!-- 会话工具栏：新建 + 视图切换（固定，不随列表滚动） -->
+      <div class="flex shrink-0 items-center gap-2 px-3 py-2">
         <button
-          class="w-[82%] mx-auto flex items-center justify-center gap-2 px-5 py-3 border-none rounded-lg bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-sm font-medium cursor-pointer transition-all duration-200 shadow-[0_2px_8px_rgba(31,130,217,0.3)] hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(31,130,217,0.4)]"
+          v-if="showNewConversationButton"
+          type="button"
+          class="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-[#1f82d9] px-2.5 text-xs font-medium text-white transition-colors hover:bg-[#1668b3]"
           @click="emit('newConversation')"
         >
-          <i class="fa-solid fa-plus"></i>
-          <span>新建会话</span>
+          <i class="fa-solid fa-plus text-[10px]"></i>
+          <span>新建任务</span>
+        </button>
+        <div class="relative min-w-0 flex-1">
+          <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
+          <input
+            v-model="conversationSearchKeyword"
+            type="text"
+            placeholder="搜索任务"
+            class="h-7 w-full rounded-md border border-slate-200 bg-white pl-6 pr-2 text-xs text-gray-700 outline-none transition-colors placeholder:text-slate-400 focus:border-[#1f82d9]/50"
+          />
+        </div>
+        <button
+          type="button"
+          class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+          :title="props.conversationViewMode === 'grouped' ? '切换为平铺列表' : '切换为按数据源分组'"
+          @click="emit('toggleConversationViewMode')"
+        >
+          <i :class="props.conversationViewMode === 'grouped' ? 'fa-solid fa-list' : 'fa-solid fa-layer-group'" class="text-[10px]"></i>
+          {{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}
         </button>
       </div>
 
       <!-- 会话列表 -->
       <div data-testid="conversation-scroll" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
-        <div class="flex justify-end pt-1">
-          <button
-            type="button"
-            class="flex h-7 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
-            :title="props.conversationViewMode === 'grouped' ? '切换为平铺列表' : '切换为按数据源分组'"
-            @click="emit('toggleConversationViewMode')"
-          >
-            <i :class="props.conversationViewMode === 'grouped' ? 'fa-solid fa-list' : 'fa-solid fa-layer-group'" class="text-[10px]"></i>
-            {{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}
-          </button>
-        </div>
         <div v-if="isLoading" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
           <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
           <span>加载历史会话...</span>
         </div>
 
-        <div v-else-if="groupedConversations.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
-          <i class="fa-regular fa-message text-2xl opacity-50"></i>
-          <span>暂无会话</span>
+        <div v-else-if="filteredConversationGroups.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+          <i :class="['text-2xl opacity-50', hasConversationSearch ? 'fa-regular fa-face-frown' : 'fa-regular fa-message']"></i>
+          <span>{{ hasConversationSearch ? '未找到匹配的任务' : '暂无会话' }}</span>
         </div>
 
         <template v-else>
-          <template v-for="group in groupedConversations" :key="group.key">
+          <template v-for="group in filteredConversationGroups" :key="group.key">
             <div class="mb-1">
               <button
                 v-if="group.label"
@@ -695,7 +720,7 @@ onUnmounted(() => {
                 ></i>
                 <span class="min-w-0 flex-1 truncate text-left">{{ group.label }}</span>
               </button>
-              <template v-if="!group.label || !isConversationGroupCollapsed(group.key)">
+              <template v-if="!group.label || !isConversationGroupCollapsed(group.key) || hasConversationSearch">
                 <div
                   class="conversation-group-items scrollbar-thin scrollbar-thumb-black/10"
                   :class="group.label ? 'ml-[18px] border-l border-slate-200 pl-3' : ''"
