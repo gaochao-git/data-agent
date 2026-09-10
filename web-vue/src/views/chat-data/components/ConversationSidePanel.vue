@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, ref } from 'vue'
+
 interface Props {
   open: boolean
   title: string
@@ -17,6 +19,68 @@ const emit = defineEmits<{
   open: []
   close: []
 }>()
+
+const MIN_PANEL_WIDTH = 320
+const MAX_PANEL_WIDTH = 900
+// 面板最宽不超过视口的该比例，避免窗口变窄后把会话区挤没
+const MAX_VIEWPORT_RATIO = 0.7
+
+// 宽度：null 表示沿用样式表的 `w-[40%]`（含 min/max clamp），首次拖拽后转为固定 px
+const panelWidth = ref<number | null>(null)
+const isResizing = ref(false)
+const panelRef = ref<HTMLElement | null>(null)
+let detachResizeListeners: (() => void) | null = null
+
+const maxAllowedWidth = () => Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * MAX_VIEWPORT_RATIO))
+
+const clampPanelWidth = (width: number) => (
+  Math.max(MIN_PANEL_WIDTH, Math.min(maxAllowedWidth(), Math.round(width)))
+)
+
+const panelStyle = computed(() => (panelWidth.value === null ? undefined : {
+  width: `${panelWidth.value}px`,
+  // 内联覆盖 min-w-[380px] / max-w-[580px]，否则拖拽会被样式表的 clamp 顶回去
+  minWidth: `${MIN_PANEL_WIDTH}px`,
+  maxWidth: `${MAX_PANEL_WIDTH}px`,
+}))
+
+const stopResize = () => {
+  isResizing.value = false
+  document.body.classList.remove('is-resizing')
+  detachResizeListeners?.()
+  detachResizeListeners = null
+}
+
+const startResize = (event: MouseEvent) => {
+  const panel = panelRef.value
+  if (!panel) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startWidth = panel.getBoundingClientRect().width
+  isResizing.value = true
+  document.body.classList.add('is-resizing')
+
+  const onMove = (moveEvent: MouseEvent) => {
+    // 面板贴右，鼠标左移 => 面板变宽
+    panelWidth.value = clampPanelWidth(startWidth + (startX - moveEvent.clientX))
+  }
+  const onUp = () => stopResize()
+  const onWindowResize = () => {
+    if (panelWidth.value !== null) panelWidth.value = clampPanelWidth(panelWidth.value)
+  }
+
+  // capture 保证光标移出面板甚至移出窗口后仍持续收到事件
+  document.addEventListener('mousemove', onMove, true)
+  document.addEventListener('mouseup', onUp, true)
+  window.addEventListener('resize', onWindowResize)
+  detachResizeListeners = () => {
+    document.removeEventListener('mousemove', onMove, true)
+    document.removeEventListener('mouseup', onUp, true)
+    window.removeEventListener('resize', onWindowResize)
+  }
+}
+
+onBeforeUnmount(stopResize)
 </script>
 
 <template>
@@ -31,8 +95,22 @@ const emit = defineEmits<{
 
   <aside
     v-if="open"
-    class="flex w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
+    ref="panelRef"
+    class="relative flex w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
+    :style="panelStyle"
   >
+    <!-- 左边缘拖拽调宽 -->
+    <div
+      class="group absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize transition-colors"
+      :class="isResizing ? 'bg-blue-400/60' : 'hover:bg-blue-300/60'"
+      @mousedown="startResize"
+    >
+      <div
+        class="absolute left-1/2 top-1/2 h-8 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300 transition-colors group-hover:bg-blue-400"
+        :class="{ 'bg-blue-400': isResizing }"
+      />
+    </div>
+
     <div class="flex h-14 items-center justify-between border-b border-slate-100 px-4">
       <div class="min-w-0">
         <div class="text-sm font-semibold text-slate-800">{{ title }}</div>
