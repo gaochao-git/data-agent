@@ -29,7 +29,13 @@ import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
-import { formatSemanticConfigOptionLabel } from '../utils'
+import {
+  formatSemanticConfigOptionLabel,
+  readLocalStorage,
+  rememberSidebarTab,
+  resolveSidebarTab,
+  writeLocalStorage,
+} from '../utils'
 import { buildExecutionTargets, isSameStringArray } from '../utils/executionTargets'
 import type { ConversationViewMode } from '../utils/conversationHistory'
 import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
@@ -286,9 +292,7 @@ const startSidebarResize = (e: MouseEvent) => {
   document.addEventListener('mouseup', onUp, true)
 }
 
-// 侧边栏 Tab（公用）
-const activeSidebarTab = ref<string>('metrics')
-
+// 侧边栏 Tab（公用）：tab 选择记忆见 utils/sidebarTab
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
@@ -303,6 +307,23 @@ const sidebarTabs = computed(() => {
   }
   return tabs
 })
+
+const availableSidebarTabKeys = computed(() => sidebarTabs.value.map((tab) => tab.key))
+
+const activeSidebarTab = ref<string>(
+  resolveSidebarTab(viewMode.value, availableSidebarTabKeys.value),
+)
+
+// 单点写入：点击切换、模式切换回落都经此记忆，避免遗漏写入点；
+// 无可用 tab 的模式（如语义模型配置，侧栏面板不消费 tab）不落记忆
+watch(
+  activeSidebarTab,
+  (tab) => {
+    if (availableSidebarTabKeys.value.length === 0) return
+    rememberSidebarTab(viewMode.value, tab)
+  },
+  { flush: 'sync' },
+)
 
 // 计算侧边栏收起按钮垂直位置：跟随当前可见面板首个控件中心点
 const updateSidebarCollapseTop = async () => {
@@ -386,20 +407,12 @@ watch(viewMode, () => {
   } else if (viewMode.value === 'metricConfig') {
     metricConfigMounted.value = true
   }
-  if (viewMode.value === 'conversation') {
-    activeSidebarTab.value = 'conversation'
-    return
-  }
+  // 切模式时恢复该模式记住的 tab（无记忆或记忆失效则回落该模式默认 tab），
+  // 各模式 tab 相互独立，避免在 A 模式的选择被 B 模式覆盖
+  activeSidebarTab.value = resolveSidebarTab(viewMode.value, availableSidebarTabKeys.value)
   if (viewMode.value === 'dashboard') {
-    activeSidebarTab.value = 'dashboard'
     ensureDefaultDashboard()
-    return
   }
-  if (viewMode.value === 'metricConfig') {
-    activeSidebarTab.value = 'metrics'
-    return
-  }
-  activeSidebarTab.value = 'tables'
 }, { immediate: true })
 
 // 打开看板编辑器
@@ -418,7 +431,6 @@ const handleDashboardCreatedFromConversation = (dashboard: Dashboard) => {
   dashboardMounted.value = true
   dashboardEditorMounted.value = true
   viewMode.value = 'dashboard'
-  activeSidebarTab.value = 'dashboard'
 }
 
 const handleDashboardsChange = (nextDashboards: Dashboard[]) => {
@@ -580,23 +592,6 @@ const ensureConversationId = async (): Promise<string | null> => {
 
 // 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺
 const CONVERSATION_VIEW_MODE_KEY = 'chatdata:view-mode'
-
-const readLocalStorage = (key: string): string | null => {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    // 嵌入宿主禁用 storage 时降级为默认模式，不阻断页面
-    return null
-  }
-}
-
-const writeLocalStorage = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // 写入失败只丢失偏好记忆，不影响功能
-  }
-}
 
 const conversationViewMode = ref<ConversationViewMode>(
   readLocalStorage(CONVERSATION_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'grouped',

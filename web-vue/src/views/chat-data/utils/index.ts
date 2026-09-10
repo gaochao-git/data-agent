@@ -2,6 +2,15 @@
  * ChatData 工具函数导出
  */
 
+export { readLocalStorage, writeLocalStorage } from './localStorage'
+export {
+  SIDEBAR_TAB_STORAGE_KEY,
+  defaultSidebarTab,
+  readSidebarTabMemory,
+  rememberSidebarTab,
+  resolveSidebarTab,
+} from './sidebarTab'
+export type { SidebarTabMemory } from './sidebarTab'
 export { formatSql, parseSqlStatements } from './sqlFormatter'
 export { cleanDisplayError, dedupeRepeatedErrorText, normalizeErrorKey, stripAnsiErrorText } from './errorText'
 export { hideSemanticConfigSelectionPayloads, normalizeMarkdownFences, renderMarkdown } from './markdown'
