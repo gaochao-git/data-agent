@@ -53,6 +53,9 @@ DB_NAME = "langchian_checkpoint"          # checkpointer 库
 MIN_MB = 20.0                # checkpoint 总体积超过该值才进入裁剪
 MIN_IDLE_DAYS = 60           # 最后活动早于该天数才裁剪（活跃会话跳过）
 BATCH_ROWS = 200             # 单条 DELETE 覆盖的最大行数
+BLOB_BATCH_MB = 8            # blob 表单条 DELETE 的累计字节上限（binlog_format=ROW
+                             # 时前像整行进 undo/binlog，messages blob 均值 84KB，
+                             # 纯按行 200 条可放大到 16MB+，按字节再切一刀）
 SLEEP_MS = 100               # 每批提交后的间歇
 LOCK_TIMEOUT = 5             # innodb_lock_wait_timeout 秒
 MAX_RETRIES = 3
@@ -292,13 +295,29 @@ def keeper_old_format_ids(cur, thread_id: str, keepers: List[dict]) -> List[str]
 
 
 def prune_blobs(conn, thread_id: str, plan: Dict[tuple, list]) -> int:
+    """删除待删 blob。plan 值为 (version, 字节数) 列表（见 plan_blobs），
+    按累计字节 ≤ BLOB_BATCH_MB 且行数 ≤ BATCH_ROWS 双限分批。"""
     sql_tpl = ("DELETE FROM checkpoint_blobs WHERE thread_id = %s AND checkpoint_ns_hash = %s "
                "AND channel = %s AND version IN ({ph})")
+    byte_limit = BLOB_BATCH_MB * MB
     deleted = 0
-    for (ns_hash, channel), versions in plan.items():
-        for chunk in _chunks(versions, BATCH_ROWS):
+    for (ns_hash, channel), items in plan.items():
+        chunk = []          # type: List[str]
+        chunk_bytes = 0
+        for version, nbytes in items:
+            chunk.append(version)
+            chunk_bytes += nbytes
+            if len(chunk) >= BATCH_ROWS or chunk_bytes >= byte_limit:
+                sql = sql_tpl.format(ph=", ".join(["%s"] * len(chunk)))
+                deleted += run_with_retry(conn, sql,
+                                          (thread_id, ns_hash, channel) + tuple(chunk))
+                time.sleep(SLEEP_MS / 1000)
+                chunk = []
+                chunk_bytes = 0
+        if chunk:
             sql = sql_tpl.format(ph=", ".join(["%s"] * len(chunk)))
-            deleted += run_with_retry(conn, sql, (thread_id, ns_hash, channel) + tuple(chunk))
+            deleted += run_with_retry(conn, sql,
+                                      (thread_id, ns_hash, channel) + tuple(chunk))
             time.sleep(SLEEP_MS / 1000)
     return deleted
 
