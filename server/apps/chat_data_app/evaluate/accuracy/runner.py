@@ -18,6 +18,13 @@ except ImportError:
     from scorers import score_dsl
 
 
+def _result_succeeded(result: Any) -> bool:
+    """查询结果是否成功；status 为唯一权威口径（query_result_succeeded 内兼容旧 success 记录）。"""
+    from apps.chat_data_app.services.sql_run.result import query_result_succeeded
+
+    return query_result_succeeded(result)
+
+
 ACCURACY_DIR = Path(__file__).resolve().parent
 SERVER_DIR = ACCURACY_DIR.parents[3]
 if str(SERVER_DIR) not in sys.path:
@@ -349,7 +356,7 @@ def summarize_execution_success(tool_traces: list[ToolTrace]) -> bool | None:
     execute_payloads = [payload for payload in execute_payloads if payload]
     if not execute_payloads:
         return None
-    return bool(execute_payloads[-1].get("success"))
+    return _result_succeeded(execute_payloads[-1])
 
 
 async def compile_dsl_locally(
@@ -462,7 +469,7 @@ async def maybe_execute_generated_sql(
     if args.skip_execution or not compile_success:
         return None, ""
     execution_result = await execute_sql_locally(sql=generated_sql, datasource_id=datasource_id, user_id=args.user_id)
-    execution_success = bool(execution_result.get("success"))
+    execution_success = _result_succeeded(execution_result)
     if execution_success:
         return execution_success, ""
     return execution_success, str(execution_result.get("error") or "SQL 执行失败")

@@ -90,7 +90,6 @@ export interface QueryTaskStatusResult {
 export interface CancelQueryExecutionResult {
   execution_id?: string
   status?: string
-  success?: boolean
   message?: string | null
 }
 

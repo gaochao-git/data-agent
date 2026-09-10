@@ -849,12 +849,10 @@ class QueryTaskService:
         local_status = query_result_status(
             {
                 "status": str((local_execution or {}).get("sql_status") or "").strip().lower() or QUERY_RUNNING_STATUS,
-                "success": False,
             }
         )
         return {
             "status": local_status,
-            "success": False,
             "error": (local_execution or {}).get("error_message") or f"远端状态查询失败: {error}",
             "columns": [],
             "data": [],
@@ -1125,7 +1123,7 @@ class QueryTaskService:
         if current_status not in {"pending", "running"}:
             return self.noop_cancel_result(execution, current_status)
         stop_result = await self.stop_query_execution(execution, current_status, cleanup_without_target, operator_name)
-        success = bool(stop_result.get("success"))
+        success = str(stop_result.get("status") or "").strip().lower() == "succeeded"
         await self.update_query_execution(
             execution.execution_id,
             sql_status="cancelled" if success else "kill_failed",
@@ -1135,7 +1133,6 @@ class QueryTaskService:
         return {
             "execution_id": execution.execution_id,
             "status": "cancelled" if success else "kill_failed",
-            "success": success,
             "message": None if success else str(stop_result.get("error") or "停止执行失败"),
         }
 
@@ -1145,7 +1142,6 @@ class QueryTaskService:
         return {
             "execution_id": execution.execution_id,
             "status": status,
-            "success": True,
             "message": "无需停止",
         }
 
@@ -1162,8 +1158,8 @@ class QueryTaskService:
         if execution.db_connection_id:
             return await self.stop_mysql_query_execution(execution)
         if current_status == "pending" or cleanup_without_target:
-            return {"success": True, "error": None}
-        return {"success": False, "error": "缺少可停止的远端任务ID或数据库连接ID"}
+            return {"status": "succeeded", "error": None}
+        return {"status": "failed", "error": "缺少可停止的远端任务ID或数据库连接ID"}
 
     async def stop_remote_query_execution(
         self,
@@ -1190,7 +1186,7 @@ class QueryTaskService:
             target = await self.resolve_execution_target(execution)
         except Exception as err:
             logger.error("解析 MySQL 停止数据源失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True)
-            return {"success": False, "error": "解析执行数据源失败"}
+            return {"status": "failed", "error": "解析执行数据源失败"}
         return await self.kill_mysql_query(target or {}, execution.db_connection_id)
 
     async def run_sql_query_task(self, task_id: str, task: Dict[str, Any]) -> None:

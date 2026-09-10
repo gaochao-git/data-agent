@@ -820,7 +820,7 @@ const handleCancelHistoryItem = async (item: SqlHistoryItem) => {
       ElMessage.error(response.msg || '停止失败')
       return
     }
-    if (response.data?.success === false || response.data?.status === 'kill_failed') {
+    if (response.data?.status === 'kill_failed') {
       ElMessage.warning(response.data?.message || '本条 SQL 停止失败')
     } else {
       ElMessage.success('已提交停止本条 SQL 请求')

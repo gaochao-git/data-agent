@@ -208,7 +208,7 @@ def test_cancel_query_executions_continues_when_one_execution_stops_with_error()
                 return await cancel_execution(execution, operator_name=operator_name)
             except Exception:
                 await update_execution(execution.execution_id, sql_status="kill_failed")
-                return {"execution_id": execution.execution_id, "status": "kill_failed", "success": False}
+                return {"execution_id": execution.execution_id, "status": "kill_failed"}
 
     service = QueryTaskService(
         query_history_service=HistoryService(),
@@ -221,7 +221,7 @@ def test_cancel_query_executions_continues_when_one_execution_stops_with_error()
     async def cancel_execution(execution, **_kwargs):
         if execution.execution_id == "exec_failed":
             raise RuntimeError("stop failed")
-        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+        return {"execution_id": execution.execution_id, "status": "cancelled"}
 
     async def update_execution(execution_id, **kwargs):
         updates.append((execution_id, kwargs))
@@ -281,7 +281,7 @@ def test_build_sql_task_results_falls_back_to_position_when_member_id_is_missing
     results = QueryTaskService.build_sql_task_results(
         {
             "sql": "select 1",
-            "results": [{"columns": ["a"], "data": [{"a": 1}], "total_count": 1, "success": True}],
+            "results": [{"columns": ["a"], "data": [{"a": 1}], "total_count": 1}],
         },
         [{"execution_id": "exec_1", "sql_status": "succeeded", "member_name": "默认库"}],
     )

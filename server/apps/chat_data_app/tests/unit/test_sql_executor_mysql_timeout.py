@@ -90,14 +90,14 @@ async def test_mysql_timeout_kills_query_and_discards_connection(monkeypatch):
 
     async def fake_kill(connection_id):
         kill_calls.append(connection_id)
-        return {"success": True, "error": None}
+        return {"status": "succeeded", "error": None}
 
     executor.kill_query = fake_kill
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert "超时" in result["error"]
     assert kill_calls == ["12345"]
     assert conn.close_called is True
@@ -109,14 +109,14 @@ async def test_mysql_timeout_returns_error_even_when_kill_fails(monkeypatch):
     executor, conn, _cursor = _build_executor()
 
     async def fake_kill(connection_id):
-        return {"success": False, "error": "KILL 失败"}
+        return {"status": "failed", "error": "KILL 失败"}
 
     executor.kill_query = fake_kill
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert "超时" in result["error"]
     assert conn.close_called is True
 
@@ -129,14 +129,14 @@ async def test_mysql_timeout_without_connection_id_skips_kill_but_discards_conne
 
     async def fake_kill(connection_id):
         kill_calls.append(connection_id)
-        return {"success": True, "error": None}
+        return {"status": "succeeded", "error": None}
 
     executor.kill_query = fake_kill
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert kill_calls == []
     assert conn.close_called is True
 
@@ -150,7 +150,7 @@ async def test_mysql_success_path_does_not_close_connection(monkeypatch):
 
     async def fake_kill(connection_id):
         kill_calls.append(connection_id)
-        return {"success": True, "error": None}
+        return {"status": "succeeded", "error": None}
 
     executor.kill_query = fake_kill
 
@@ -167,7 +167,7 @@ async def test_mysql_success_path_does_not_close_connection(monkeypatch):
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["db_connection_id"] == "12345"
     assert kill_calls == []
     assert conn.close_called is False

@@ -387,7 +387,7 @@ def test_hive_http_executor_returns_limit_error_without_generic_sql_error(monkey
 
     result = asyncio.run(executor.execute(f"select 1 limit {over_limit}", limit=sql_executor.DEFAULT_ROW_LIMIT))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert f"查询结果最多返回 {sql_executor.DEFAULT_ROW_LIMIT} 条" in result["error"]
     assert "SQL执行错误" not in result["error"]
 
@@ -451,7 +451,7 @@ def test_hive_http_executor_submits_sql_org_code_limit_and_user_id(monkeypatch):
     )
     result = asyncio.run(executor.execute("select 1", limit=50, user_id="10001", username="测试用户", remote_task_callback=captured_remote_tasks.append))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert captured_requests[0]["json_payload"] == {
         "sql": "select 1 LIMIT 50",
         "database": "dw",
@@ -482,7 +482,7 @@ def test_mysql_http_executor_uses_mysql_timeout(monkeypatch):
 
     result = asyncio.run(executor.execute("select 1"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "查询超时（60秒）"
 
 
@@ -497,7 +497,7 @@ def test_hive_http_executor_returns_submit_msg_when_code_is_not_20000(monkeypatc
     executor = sql_executor.HiveHttpExecutor(namespace="hive-localhost")
     result = asyncio.run(executor.execute("select 1"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "SQL 不合法"
 
 
@@ -516,7 +516,7 @@ def test_hive_http_executor_rejects_disallowed_sql_before_submit(monkeypatch):
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("delete from orders"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert "只允许执行以下类型" in result["error"]
     assert captured["called"] is False
     assert alarms[0][0][0] == "delete from orders"
@@ -536,7 +536,7 @@ def test_hive_http_executor_rejects_multiple_sql_before_submit(monkeypatch):
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1; drop table orders"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert "一次只能执行一条 SQL" in result["error"]
     assert captured["called"] is False
 
@@ -562,7 +562,7 @@ def test_hive_http_executor_returns_missing_task_id_message(monkeypatch):
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "提交成功但无任务"
 
 
@@ -584,9 +584,9 @@ def test_hive_http_executor_handles_cancelled_and_failed_status(monkeypatch):
     cancelled = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1"))
     failed = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1"))
 
-    assert cancelled["success"] is False
+    assert cancelled["status"] == "cancelled"
     assert cancelled["error"] == "用户取消"
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
     assert failed["error"] == "表不存在"
 
 
@@ -615,7 +615,7 @@ def test_hive_http_executor_polls_running_then_success_and_async_callback(monkey
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1", remote_task_callback=fake_callback))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["remote_task_id"] == "task_001"
     assert result["source_type"] == "hive"
     assert result["data"] == [{"a": 1}]
@@ -637,7 +637,7 @@ def test_hive_http_executor_returns_status_code_error_without_failed_status(monk
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "网关异常"
 
 
@@ -651,7 +651,7 @@ def test_hive_http_executor_handles_generic_request_error(monkeypatch):
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "connect failed"
 
 
@@ -672,7 +672,7 @@ def test_hive_http_executor_returns_status_msg_when_status_query_failed(monkeypa
     result = asyncio.run(executor.execute("select 1"))
 
     assert captured_calls == ["POST", "GET"]
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "无权限访问该表"
 
 
@@ -693,7 +693,7 @@ def test_stop_http_query_task_uses_stop_url(monkeypatch):
 
     result = asyncio.run(sql_executor.stop_http_query_task("remote_001", "hive", user_id="user_a", username="测试用户"))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert captured == {
         "method": "POST",
         "url": "http://hive/query-tasks/cancel",
@@ -707,7 +707,7 @@ def test_stop_http_query_task_requires_stop_url(monkeypatch):
 
     result = asyncio.run(sql_executor.stop_http_query_task("remote_001", "hive"))
 
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert "CHAT_DATA_HTTP_STOP_URL" in result["error"]
 
 
@@ -729,8 +729,8 @@ def test_stop_http_query_task_returns_remote_error_and_exception(monkeypatch):
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json_error)
     error = asyncio.run(sql_executor.stop_http_query_task("remote_002", "hive"))
 
-    assert failed == {"success": False, "error": "不能取消"}
-    assert error == {"success": False, "error": "stop failed"}
+    assert failed == {"status": "failed", "error": "不能取消"}
+    assert error == {"status": "failed", "error": "stop failed"}
 
 
 def test_fetch_http_query_task_result_status_variants(monkeypatch):
@@ -751,11 +751,11 @@ def test_fetch_http_query_task_result_status_variants(monkeypatch):
     cancelled = asyncio.run(sql_executor.fetch_http_query_task_result("task_3"))
     failed = asyncio.run(sql_executor.fetch_http_query_task_result("task_4"))
 
-    assert succeeded["success"] is True
+    assert succeeded["status"] == "succeeded"
     assert succeeded["columns"] == ["a"]
     assert succeeded["data"] == [{"a": 1}]
     assert running["status"] == "running"
-    assert running["success"] is False
+    assert running["status"] != "succeeded"
     assert cancelled["status"] == "cancelled"
     assert cancelled["error"] == "已取消"
     assert failed["status"] == "failed"
@@ -782,7 +782,7 @@ def test_fetch_http_query_task_result_uses_remote_cost_and_start_time(monkeypatc
 
     result = asyncio.run(sql_executor.fetch_http_query_task_result("task_with_time"))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["execution_time_ms"] == 1780
     assert result["started_time"] == "2026-07-07 16:58:47"
     assert result["finished_time"] == "2026-07-07 16:58:48"
@@ -848,14 +848,14 @@ def test_fetch_http_query_task_result_non_failed_error_status(monkeypatch):
     result = asyncio.run(sql_executor.fetch_http_query_task_result("task_1"))
 
     assert result["status"] == "running"
-    assert result["success"] is False
+    assert result["status"] != "succeeded"
     assert result["error"] == "网关异常"
 
 
 def test_stop_http_query_task_rejects_missing_task_id():
     result = asyncio.run(sql_executor.stop_http_query_task(""))
 
-    assert result == {"success": False, "error": "缺少远端任务ID"}
+    assert result == {"status": "failed", "error": "缺少远端任务ID"}
 
 
 def test_hive_executor_sync_success_value_error_and_connection_test(monkeypatch):
@@ -890,7 +890,7 @@ def test_hive_executor_sync_success_value_error_and_connection_test(monkeypatch)
     connected = executor._test_sync()
     close_result = asyncio.run(executor.close())
 
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
     assert success["data"] == [{"id": 1}]
     assert connection.cursor_obj.executed[0] == "select 1 LIMIT 10"
     assert connected is True
@@ -899,7 +899,7 @@ def test_hive_executor_sync_success_value_error_and_connection_test(monkeypatch)
     monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")))
     failed = executor._execute_sync("select 1", 10)
 
-    assert failed["success"] is False
+    assert failed["status"] != "succeeded"
     assert failed["error"] == "limit too large"
 
 
@@ -915,7 +915,7 @@ def test_kill_mysql_query_rejects_non_mysql_and_closes(monkeypatch):
 
     result = asyncio.run(sql_executor.kill_mysql_query({"source_type": "sqlite", "source_config": {}}, "123"))
 
-    assert result == {"success": False, "error": "当前执行器不支持直连停止"}
+    assert result == {"status": "failed", "error": "当前执行器不支持直连停止"}
     assert fake_executor.closed is True
 
 
@@ -925,7 +925,7 @@ def test_kill_mysql_query_success_and_init_error(monkeypatch):
             pass
 
         async def kill_query(self, connection_id):
-            return {"success": True, "connection_id": connection_id}
+            return {"status": "succeeded", "connection_id": connection_id}
 
         async def close(self):
             self.closed = True
@@ -937,9 +937,9 @@ def test_kill_mysql_query_success_and_init_error(monkeypatch):
     monkeypatch.setattr(sql_executor, "get_executor", lambda _datasource: (_ for _ in ()).throw(RuntimeError("init failed")))
     failed = asyncio.run(sql_executor.kill_mysql_query({"source_type": "mysql", "source_config": {}}, "123"))
 
-    assert success == {"success": True, "connection_id": "123"}
+    assert success == {"status": "succeeded", "connection_id": "123"}
     assert fake_executor.closed is True
-    assert failed == {"success": False, "error": "init failed"}
+    assert failed == {"status": "failed", "error": "init failed"}
 
 
 class _FakeAcquireContext:
@@ -1027,7 +1027,7 @@ def test_mysql_executor_success_callbacks_kill_and_close(monkeypatch):
     executor._pool = pool
     close_result = asyncio.run(executor.close())
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["columns"] == ["id", "amount"]
     assert result["data"] == [{"id": 1, "amount": "12.5"}]
     assert result["db_connection_id"] == "12345"
@@ -1036,7 +1036,7 @@ def test_mysql_executor_success_callbacks_kill_and_close(monkeypatch):
     assert cursor.executed[1] == "select * from orders LIMIT 10"
     assert connection_ok is True
     assert "SELECT 1" in cursor.executed
-    assert kill_result == {"success": True, "error": None}
+    assert kill_result == {"status": "succeeded", "error": None}
     assert "KILL QUERY 12345" in cursor.executed
     assert close_result is None
     assert pool.closed is True
@@ -1054,7 +1054,7 @@ def test_mysql_executor_optional_connection_and_sync_callback_branches(monkeypat
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(no_connection_cursor)))
 
     no_connection = asyncio.run(executor.execute("select 1", limit=10))
-    assert no_connection["success"] is True
+    assert no_connection["status"] == "succeeded"
     assert no_connection["db_connection_id"] == ""
     assert no_connection_cursor.executed[1] == "select 1 LIMIT 10"
 
@@ -1084,7 +1084,7 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
     invalid_sql = asyncio.run(executor.execute("delete from orders"))
-    assert invalid_sql["success"] is False
+    assert invalid_sql["status"] != "succeeded"
     assert "只允许执行以下类型" in invalid_sql["error"]
     assert dangerous_alarms[0][1]["execution_scope"] == "mysql_executor"
 
@@ -1098,7 +1098,7 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     timeout_pool = _FakePool(TimeoutCursor())
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=timeout_pool))
     timeout = asyncio.run(executor.execute("select 1", timeout=1))
-    assert timeout["success"] is False
+    assert timeout["status"] != "succeeded"
     assert timeout["error"] == "查询超时（1秒）"
 
     class FailingCursor(_FakeMySQLCursor):
@@ -1109,10 +1109,10 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=failing_pool))
     assert asyncio.run(executor.test_connection()) is False
     failed = asyncio.run(executor.execute("select 1"))
-    assert failed["success"] is False
+    assert failed["status"] != "succeeded"
     assert failed["error"] == "table missing"
     assert db_alarms == []
-    assert asyncio.run(executor.kill_query("abc")) == {"success": False, "error": "无效的 MySQL 连接ID"}
+    assert asyncio.run(executor.kill_query("abc")) == {"status": "failed", "error": "无效的 MySQL 连接ID"}
 
 
 def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
@@ -1128,7 +1128,7 @@ def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
 
     failed = asyncio.run(executor.execute("select 1"))
 
-    assert failed["success"] is False
+    assert failed["status"] != "succeeded"
     assert db_alarms[0][0][0] == "查询数据源连接异常"
     assert db_alarms[0][1]["reason_code"] == alarm_module.DB_FAIL_DATASOURCE
     assert db_alarms[0][1]["ext1"]["source_type"] == "mysql"
@@ -1162,14 +1162,14 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
     monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
     invalid_sql = asyncio.run(executor.execute("delete from orders"))
-    assert invalid_sql["success"] is False
+    assert invalid_sql["status"] != "succeeded"
     assert "只允许执行以下类型" in invalid_sql["error"]
     assert dangerous_alarms[0][1]["execution_scope"] == "hive_executor"
 
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *_args, **_kwargs: 0.001)
-    monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"success": True})
+    monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"status": "succeeded"})
     timeout = asyncio.run(executor.execute("select 1"))
-    assert timeout["success"] is False
+    assert timeout["status"] != "succeeded"
     assert timeout["error"] == "查询超时（0.001秒）"
 
     monkeypatch.setattr(executor, "_test_sync", lambda: (_ for _ in ()).throw(RuntimeError("connect failed")))
@@ -1197,7 +1197,7 @@ def test_hive_executor_connection_and_sync_generic_error(monkeypatch):
 
     monkeypatch.setattr(executor, "_get_connection", lambda: (_ for _ in ()).throw(RuntimeError("hive down")))
     failed = executor._execute_sync("select 1", 10)
-    assert failed["success"] is False
+    assert failed["status"] != "succeeded"
     assert failed["error"] == "hive down"
 
 
@@ -1380,12 +1380,12 @@ def test_hive_http_execute_deadline_timeout_and_value_error(monkeypatch):
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
 
     timeout = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns").execute("select 1"))
-    assert timeout["success"] is False
+    assert timeout["status"] != "succeeded"
     assert "查询超时" in timeout["error"]
 
     monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")))
     value_error = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns").execute("select 1"))
-    assert value_error["success"] is False
+    assert value_error["status"] != "succeeded"
     assert value_error["error"] == "limit too large"
 
 
@@ -1471,9 +1471,9 @@ def test_abstract_executor_and_mysql_error_branches(monkeypatch):
     monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit invalid")))
     monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=FakePool()))
     invalid = asyncio.run(mysql.execute("select 1"))
-    assert invalid["success"] is False
+    assert invalid["status"] != "succeeded"
     assert invalid["error"] == "limit invalid"
 
     monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=SimpleNamespace(acquire=lambda: (_ for _ in ()).throw(RuntimeError("pool down")))))
     assert asyncio.run(mysql.test_connection()) is False
-    assert asyncio.run(mysql.kill_query("123"))["success"] is False
+    assert asyncio.run(mysql.kill_query("123"))["status"] != "succeeded"

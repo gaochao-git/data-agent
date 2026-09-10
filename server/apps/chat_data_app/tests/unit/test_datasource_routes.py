@@ -1798,7 +1798,7 @@ def test_cancel_query_task_stops_remote_execution(monkeypatch):
 
     async def fake_stop(remote_task_id: str, source_type: str = "hive", **kwargs):
         stopped.append((remote_task_id, source_type, kwargs))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     async def fake_update_execution(execution_id: str, **kwargs):
         updates.append(("execution", execution_id, kwargs))
@@ -1919,7 +1919,7 @@ def test_cancel_query_task_kills_mysql_execution(monkeypatch):
 
     async def fake_kill(target: dict, connection_id: str):
         killed.append((target, connection_id))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[execution]))
@@ -1958,7 +1958,7 @@ def test_cancel_query_execution_waits_for_mysql_connection_id(monkeypatch):
 
     async def fake_kill(target: dict, connection_id: str):
         killed.append((target, connection_id))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     async def fake_update_execution(execution_id: str, **kwargs):
         updated.append((execution_id, kwargs))
@@ -1999,7 +1999,6 @@ def test_cancel_query_execution_running_without_target_marks_kill_failed(monkeyp
     result = asyncio.run(query_providers.query_task_service.cancel_query_execution(execution))
 
     assert result["status"] == "kill_failed"
-    assert result["success"] is False
     assert updated[-1][1]["sql_status"] == "kill_failed"
 
 
@@ -3453,7 +3452,7 @@ def test_cancel_query_task_missing_final_partial_and_http_error(monkeypatch):
         "request_payload": json.dumps({"user_id": "10001"}),
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[running]))
-    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "kill_failed", "success": False}))
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "kill_failed"}))
     updates = []
     monkeypatch.setattr(query_providers.query_task_service, "update_query_task", lambda task_id, **kwargs: asyncio.sleep(0, result=updates.append((task_id, kwargs))))
     partial = _payload(asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace())))
@@ -3480,7 +3479,7 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
         "request_payload": json.dumps({"user_id": "10001", "operator_name": "任务用户"}),
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[pending_without_user]))
-    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "cancelled", "success": True}))
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "cancelled"}))
     updates = []
     monkeypatch.setattr(query_providers.query_task_service, "update_query_task", lambda task_id, **kwargs: asyncio.sleep(0, result=updates.append((task_id, kwargs))))
 
@@ -4530,7 +4529,6 @@ def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
     assert done_result == {
         "execution_id": "ex_succeeded",
         "status": "succeeded",
-        "success": True,
         "message": "无需停止",
     }
 
@@ -4642,7 +4640,7 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
         raise RuntimeError("resolve failed")
 
     monkeypatch.setattr(query_providers.query_task_service, "resolve_execution_target", resolve_error)
-    monkeypatch.setattr(query_providers.query_task_service, "stop_http_query_task", lambda *args, **kwargs: asyncio.sleep(0, result={"success": True}))
+    monkeypatch.setattr(query_providers.query_task_service, "stop_http_query_task", lambda *args, **kwargs: asyncio.sleep(0, result={"status": "succeeded", "error": None}))
     monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", lambda *args, **kwargs: asyncio.sleep(0, result=None))
     http_cancel = asyncio.run(query_providers.query_task_service.cancel_query_execution(SimpleNamespace(
         execution_id="ex_http",

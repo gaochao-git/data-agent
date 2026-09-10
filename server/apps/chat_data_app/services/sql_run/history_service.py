@@ -327,7 +327,11 @@ class QueryHistoryService:
 
     @staticmethod
     def _history_raw_status(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> Any:
-        """兼容 success 旧口径，推断成员结果的原始状态。"""
+        """兼容 success 旧口径，推断成员结果的原始状态。
+
+        读侧兼容（勿删）：result_payload 持久化在执行记录里，status 契约
+        上线前的历史行只有 success 字段，读取时在此映射为 status。
+        """
         raw_status = payload.get("status")
         if not raw_status and payload.get("success") is True:
             return "succeeded"
@@ -519,7 +523,6 @@ class QueryHistoryService:
             return {
                 "execution_id": execution.execution_id,
                 "status": "kill_failed",
-                "success": False,
                 "message": "停止执行失败",
             }
 
@@ -557,7 +560,7 @@ class QueryHistoryService:
         }
         await self._update_cancel_task_statuses(rows, execution_results, task_by_id, update_task)
 
-        failed_count = sum(1 for item in execution_results if not item.get("success"))
+        failed_count = sum(1 for item in execution_results if str(item.get("status") or "") == "kill_failed")
         return {
             "total": len(execution_results),
             "cancelled": len(execution_results) - failed_count,

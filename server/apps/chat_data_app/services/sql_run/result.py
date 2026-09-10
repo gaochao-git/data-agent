@@ -15,6 +15,9 @@ def query_result_status(result: Dict[str, Any]) -> str:
     raw_status = str((result or {}).get("status") or "").strip().lower()
     if raw_status in {"pending", QUERY_RUNNING_STATUS, QUERY_SUCCEEDED_STATUS, QUERY_FAILED_STATUS, QUERY_CANCELLED_STATUS}:
         return raw_status
+    # 读侧兼容（勿删）：生产端已全部只写 status，但持久化数据仍可能只有
+    # success 旧字段——如 status 契约上线前写入的 SQL 结果缓存（cache.py
+    # 读取时经此处映射），以及滚动部署窗口内旧版本节点返回的成员结果。
     if (result or {}).get("success"):
         return QUERY_SUCCEEDED_STATUS
     if raw_status in {"canceled", "cancel"}:

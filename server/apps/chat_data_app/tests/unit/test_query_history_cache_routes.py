@@ -725,7 +725,7 @@ def test_cancel_running_query_history_continues_when_failure_status_update_fails
         if execution.execution_id == "ex_u1_ds1_pending":
             raise RuntimeError("stop failed")
         cancelled_ids.append(execution.execution_id)
-        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+        return {"execution_id": execution.execution_id, "status": "cancelled"}
 
     async def failing_update(execution_id, **_kwargs):
         if execution_id == "ex_u1_ds1_pending":
@@ -802,7 +802,7 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
     asyncio.run(_seed_http_query_history(route_db))
 
     async def fake_fetch(*_args, **_kwargs):
-        return {"status": "failed", "success": False, "error": "结果文件已清理"}
+        return {"status": "failed", "error": "结果文件已清理"}
 
     response = asyncio.run(query_history_routes.get_query_history_result(
         "ex_http",
