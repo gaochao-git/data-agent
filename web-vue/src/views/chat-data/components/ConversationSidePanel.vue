@@ -22,8 +22,8 @@ const emit = defineEmits<{
 
 const MIN_PANEL_WIDTH = 320
 const MAX_PANEL_WIDTH = 900
-// 面板最宽不超过视口的该比例，避免窗口变窄后把会话区挤没
-const MAX_VIEWPORT_RATIO = 0.7
+// 会话区至少要保留的宽度，避免拖拽把对话挤成 0 宽
+const MIN_CHAT_WIDTH = 280
 
 // 宽度：null 表示沿用样式表的 `w-[40%]`（含 min/max clamp），首次拖拽后转为固定 px
 const panelWidth = ref<number | null>(null)
@@ -31,10 +31,15 @@ const isResizing = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
 let detachResizeListeners: (() => void) | null = null
 
-const maxAllowedWidth = () => Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * MAX_VIEWPORT_RATIO))
+// 上限取决于父容器实际可用宽度，而非视口——父容器被左右两栏挤占后往往远小于视口
+const maxAllowedWidth = () => {
+  const container = panelRef.value?.parentElement
+  const available = container?.getBoundingClientRect().width ?? window.innerWidth
+  return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, Math.round(available - MIN_CHAT_WIDTH)))
+}
 
-const clampPanelWidth = (width: number) => (
-  Math.max(MIN_PANEL_WIDTH, Math.min(maxAllowedWidth(), Math.round(width)))
+const clampPanelWidth = (width: number, upper: number = maxAllowedWidth()) => (
+  Math.max(MIN_PANEL_WIDTH, Math.min(upper, Math.round(width)))
 )
 
 const panelStyle = computed(() => (panelWidth.value === null ? undefined : {
@@ -57,12 +62,14 @@ const startResize = (event: MouseEvent) => {
   event.preventDefault()
   const startX = event.clientX
   const startWidth = panel.getBoundingClientRect().width
+  // 容器已放不下当前宽度时（默认 40% / 380 可能已超）只允许变窄、不再变宽，避免一按就跳变
+  const dragMax = Math.max(startWidth, maxAllowedWidth())
   isResizing.value = true
   document.body.classList.add('is-resizing')
 
   const onMove = (moveEvent: MouseEvent) => {
     // 面板贴右，鼠标左移 => 面板变宽
-    panelWidth.value = clampPanelWidth(startWidth + (startX - moveEvent.clientX))
+    panelWidth.value = clampPanelWidth(startWidth + (startX - moveEvent.clientX), dragMax)
   }
   const onUp = () => stopResize()
   const onWindowResize = () => {
