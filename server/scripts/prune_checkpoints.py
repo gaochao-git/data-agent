@@ -234,7 +234,10 @@ def referenced_versions(cur, thread_id: str, keepers: List[dict]) -> Dict[tuple,
 
 
 def plan_blobs(cur, thread_id: str, refs: Dict[tuple, Set[str]]) -> Tuple[dict, int, int, int]:
-    """blob 行按"是否被保留快照引用"切分。返回 (待删分组, 待删行数, 待删字节, 保留行数)。"""
+    """blob 行按"是否被保留快照引用"切分。返回 (待删分组, 待删行数, 待删字节, 保留行数)。
+
+    待删分组值为 (version, 字节数) 列表，prune_blobs 据此按累计字节分批。
+    """
     cur.execute(
         """SELECT checkpoint_ns_hash, channel, version, COALESCE(LENGTH(`blob`), 0)
            FROM checkpoint_blobs WHERE thread_id = %s""",
@@ -246,7 +249,7 @@ def plan_blobs(cur, thread_id: str, refs: Dict[tuple, Set[str]]) -> Tuple[dict, 
         if str(version) in refs.get((ns_hash, channel), ()):
             kept_rows += 1
             continue
-        plan.setdefault((ns_hash, channel), []).append(str(version))
+        plan.setdefault((ns_hash, channel), []).append((str(version), int(nbytes)))
         del_rows += 1
         del_bytes += int(nbytes)
     return plan, del_rows, del_bytes, kept_rows
@@ -268,9 +271,11 @@ def plan_old_snapshots(cur, thread_id: str, keepers: List[dict]) -> Dict[bytes, 
 def keeper_old_format_ids(cur, thread_id: str, keepers: List[dict]) -> List[str]:
     """keeper 中 checkpoint 格式 v<4 的旧格式快照 id。
 
-    v<4 时 saver 续聊会读父快照的 __pregel_tasks writes 做 pending-sends
-    迁移（saver 源码 aget_tuple）；父快照被裁后迁移静默落空。新写入均为
-    v=4，此检查只为对历史老数据给出人工复核提示。
+    v<4 时 saver 续聊会读父快照的 pending sends 做迁移：aio_base.py 的
+    aget_tuple 在 `checkpoint.v < 4 and parent_checkpoint_id` 时查父快照
+    的 writes（_select_pending_sends_sql），父快照被裁后查空、迁移静默
+    落空（仅影响中断续跑，不崩）。新写入均为 v=4，此检查只为对历史老数据
+    给出人工复核提示。
     """
     old_ids = []
     for k in keepers:
@@ -321,6 +326,11 @@ def collect_orphan_writes(cur, thread_id: str) -> Dict[bytes, list]:
 
     plan_old_snapshots 只覆盖 checkpoints 表出现过的 id，这类孤儿行
     常规路径清不到，故用 LEFT JOIN 反查。per-thread 走 thread_id 索引。
+
+    安全前提（必须满足，否则会误删在飞数据）：saver 的 put_writes 先于
+    checkpoint 行落库，所以一个正在执行的 superstep，其 writes 在库里
+    看起来就是"孤儿"。本函数安全完全依赖"闲置 MIN_IDLE_DAYS 天"这道闸——
+    不得把 MIN_IDLE_DAYS 调到接近 0，也不得把本函数复用到活跃会话上。
     """
     cur.execute(
         """SELECT DISTINCT cw.checkpoint_ns_hash, cw.checkpoint_id
