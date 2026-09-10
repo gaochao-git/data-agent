@@ -11,6 +11,9 @@ const router = useRouter()
 // 侧边栏折叠状态
 const sidebarCollapsed = ref(false)
 
+// 左侧模块导航栏是否展示：当前隐藏（与顶部导航「智能问数」重复），代码保留以便后续恢复
+const showModuleSidebar = ref(false)
+
 // 顶部一级导航菜单
 const topMenuItems = [
   { key: 'chatdata', label: '智能问数', icon: 'fa-chart-simple', path: '/chatdata' },
@@ -74,7 +77,7 @@ const navigateTo = (menuKey: string) => {
     <!-- 顶部 Header -->
     <header class="main-header">
       <div class="header-left">
-        <button class="toggle-btn" @click="toggleSidebar">
+        <button v-if="showModuleSidebar" class="toggle-btn" @click="toggleSidebar">
           <i class="fa-solid fa-bars"></i>
         </button>
           <div class="logo">
@@ -121,9 +124,9 @@ const navigateTo = (menuKey: string) => {
     </header>
 
     <!-- 主体区域 -->
-    <div class="main-body">
-      <!-- 侧边导航 -->
-      <aside class="main-sidebar" :class="{ collapsed: sidebarCollapsed }">
+    <div class="main-body" :class="{ 'no-sidebar': !showModuleSidebar }">
+      <!-- 侧边导航（showModuleSidebar=false 时隐藏，代码保留） -->
+      <aside v-if="showModuleSidebar" class="main-sidebar" :class="{ collapsed: sidebarCollapsed }">
         <!-- 模块卡片 -->
         <div v-if="!sidebarCollapsed" class="sidebar-module-card">
           <div class="module-icon">
@@ -346,6 +349,11 @@ const navigateTo = (menuKey: string) => {
   overflow: hidden;
   min-height: 0;
   background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+/* 无侧边导航时补上左侧留白（有侧边栏时由 .main-sidebar 的 margin 提供） */
+.main-body.no-sidebar {
+  padding-left: 24px;
 }
 
 /* 侧边栏 - 参考桌面项目（圆角卡片样式） */
