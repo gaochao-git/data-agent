@@ -1633,22 +1633,31 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 底部：统一上下文选择 / 数据源组管理 -->
+        <!-- 底部：统一上下文选择 / 数据源组管理
+             两者并存时并成一体控件组（外框统一圆角/描边/阴影，中间 1px 分隔），
+             避免两个各自带边框的独立按钮并排产生割裂感 -->
         <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
-          <div class="flex items-center gap-2 min-w-0">
+          <div
+            class="flex items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+            :class="showSidebarContextBar ? 'min-w-0 flex-1' : 'ml-auto shrink-0'"
+          >
             <button
               v-if="showSidebarContextBar"
-              class="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 h-9 text-left shadow-sm transition-all hover:bg-slate-50"
+              class="flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-slate-50"
               :title="currentContextSummary"
               @click="openContextSelector"
             >
               <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-800">{{ currentContextSummary }}</span>
               <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0"></i>
             </button>
+            <!-- 显式分隔线（不用 divide-x：此项目 Tailwind 下未生成边框宽度） -->
+            <span
+              v-if="showSidebarContextBar && canManageDatasource"
+              class="w-px shrink-0 bg-slate-200"
+            ></span>
             <button
               v-if="canManageDatasource"
-              class="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 shadow-sm hover:bg-slate-100 hover:text-slate-600 transition-all"
-              :class="showSidebarContextBar ? '' : 'ml-auto'"
+              class="flex h-9 w-9 shrink-0 items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
               title="后台管理"
               @click="openDatasourceManager"
             >
