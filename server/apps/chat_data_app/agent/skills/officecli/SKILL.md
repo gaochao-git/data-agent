@@ -47,7 +47,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
    - 编辑已有文档：先 `view`/`query` 读取结构，建议用 `@paraId` 选择器定位目标段落后再修改；注意 `batch` 内的 remove/move 会使后续**位置索引**动态重算，按删除前快照写 `p[N]` 会错位——含 remove/move 的批量应改用 `@paraId` 定位；
    - 修改已存在文件先 `file_copy` 到 workspace 再操作。
    `batch` 不接受内联 JSON 位置参数，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交；batch 是原子的，一条失败整批不落盘（exit=1），按逐条 ERROR 修复后整批重提。不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
-7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；`view screenshot` 在当前环境会触发钥匙串弹窗并阻塞，同样禁用，视觉检查用 `view html`。）
+7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；视觉检查：优先 `view screenshot` 截图后用 `file_read` 看图复核，报 `No headless browser available` 时改用 `view html`，不要尝试自行安装浏览器。）
 8. 用 `file_copy` 把最终文件复制到 `/mnt/user-data/outputs/<业务名>.<docx|xlsx|pptx>`，确认文件存在后调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>"])`。
 
 ## 输出要求

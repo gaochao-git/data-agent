@@ -9,7 +9,7 @@
 1. 用 `officecli_run(command_args=["validate", file])` 检查 OpenXML 结构。
 2. 用 `officecli_run(command_args=["view", file, "issues"])` 检查空内容、溢出、破损引用、缺失资源和格式问题。
 3. 用 `officecli_run(command_args=["view", file, "text"])` 检查占位符、残留转义字符和明显的截断内容。
-4. 需要视觉确认时使用 `view html` 或 `view screenshot`，返回的预览文件用 `file_read` 读取；结构校验通过不等于页面排版正确。
+4. 需要视觉确认时优先 `view screenshot` 截图后用 `file_read` 读图（报 `No headless browser available` 时改用 `view html`）；结构校验通过不等于页面排版正确。
 5. 通过检查后，将最终文件放入 `outputs/` 并调用 `present_artifacts`。检查失败时修复后重跑，不声称已交付。
 
 ## Word

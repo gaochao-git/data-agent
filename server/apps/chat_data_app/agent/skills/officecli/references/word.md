@@ -303,7 +303,7 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 2. `officecli_run(command_args=["view", "F", "outline"])` — 标题层级（无 H1→H3 跳跃）、TOC 是否存在、节数。
 3. `officecli_run(command_args=["view", "F", "text", "--max-lines", "400"])` — 错别字、残留 `\$`/`\t`/`\n` 字面、占位符令牌。
 4. `officecli_run(command_args=["validate", "F"])` — schema 校验（交付门在落盘文件上重跑）。
-5. **视觉检查**：优先 `view html`。**macOS 环境禁用 `view screenshot`**：拉起的渲染组件触发钥匙串密码弹窗、后台进程阻塞至超时，不得尝试或重试；Linux 无头环境无钥匙串机制、Windows+Word 可走真实 Word 渲染整页拼图（分页、空白页、标题节奏、页边距、TOC/封面位置），这两类环境验证一次后可启用。截图拼图可能把页面放在画布左侧、右侧/底部留空灰底（渲染视口大于纸面），这是渲染特性，不是文档版式问题。无法视觉验证时在交付标注"跨页对齐/节奏未视觉验证"。"validate 通过"不等于"可交付"。
+5. **视觉检查**：优先 `view screenshot`（真实分页渲染，能查分页位置、空白页、标题节奏、页边距、TOC/封面位置），截图后用 `file_read` 读图复核。`view screenshot` 报 `No headless browser available` 表示该环境未装无头浏览器，改用 `view html` 做近似视觉检查，**不要尝试安装浏览器**（浏览器由运维统一安装）。截图拼图可能把页面放在画布左侧、右侧/底部留空灰底（渲染视口大于纸面），这是渲染特性，不是文档版式问题。HTML 渲染不响应 keepNext/pageStart 等分页属性，分页细节以 `validate`/`view issues` 为准。无法视觉验证时在交付标注"跨页对齐/节奏未视觉验证"。"validate 通过"不等于"可交付"。
 6. 任一失败→修复→**重跑整轮**（一次修复常引入新问题）。
 
 **域按结构判断，不按可见文本**：PAGE 页脚 `get /footer[N] --depth 3` 应见 begin/instrText/separate/cached/end 的 run 链（单个 PAGE ≥5 个 run，复合 "Page X of Y" ≥11 个）；只有一个含 "Page" 的 run = 域缺失，重加 `--prop field=page`。TOC `get /toc[1] --depth 2` 看域结构；页码可能读 `1 1 1 1` 直到重算。MERGEFIELD 用 `query 'field[fieldType=mergefield]'` 确认每槽一个、别处无字面 `{{name}}`。

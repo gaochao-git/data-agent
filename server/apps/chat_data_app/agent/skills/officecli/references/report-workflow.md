@@ -40,7 +40,7 @@
 
 ## 6. 视觉校验
 
-对照样式清单逐项检查：字体字号、行距、页边距、页眉页脚与页码、图表位置与编号、跨页约束（表格表头跨页重复、标题不悬空）。工具侧检查按 `delivery-quality.md` 通用交付门执行（`validate`、`view issues`、`view text`、`view html`），本流程不重复定义命令。
+对照样式清单逐项检查：字体字号、行距、页边距、页眉页脚与页码、图表位置与编号、跨页约束（表格表头跨页重复、标题不悬空）。工具侧检查按 `delivery-quality.md` 通用交付门执行（`validate`、`view issues`、`view text`、视觉复核按其优先级走 `view screenshot`/`view html`），本流程不重复定义命令。
 
 ## 7. 最终交付
 
