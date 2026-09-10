@@ -107,6 +107,17 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
+
+/**
+ * Run 是否处于"执行中"的统一视图：本地 SSE 订阅（isGenerating）与
+ * 刷新/SSE 断开后从服务端恢复的活跃 Run（hasActiveRun）必须表现一致，
+ * 否则会出现消息流显示"正在生成"、输入栏却退回发送态的割裂。
+ * waiting_user 是 Run 在等用户回答问题，不算执行中。
+ */
+const runBusy = computed(() =>
+  isGenerating.value
+  || (hasActiveRun.value && activeRunStatus.value !== 'waiting_user')
+)
 const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
 const focusInput = () => {
   inputBarRef.value?.focus()
@@ -3233,10 +3244,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :runtime-options="selectedRuntimeOptions"
             :user-overridable="userOverridable"
             :model-options="modelOptions"
-            :is-generating="isGenerating"
-            :can-submit="isGenerating ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
+            :is-generating="runBusy"
+            :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
             :input-focused="inputFocused"
-            :show-skill-button="!isGenerating"
+            :show-skill-button="!runBusy"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"
