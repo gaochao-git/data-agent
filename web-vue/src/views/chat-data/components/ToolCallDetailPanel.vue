@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ToolCallInfo } from '../types'
-import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText } from '../utils/toolDisplay'
 
 interface Props {
   toolCall?: ToolCallInfo | null
@@ -38,6 +38,18 @@ const toolResult = computed(() => {
   const fallback = toolCall.status === 'completed' ? '已完成，工具未返回文本内容。' : '执行中...'
   return props.formatText(toolCall.result || fallback)
 })
+
+// 执行信息：状态 + 起止时间/耗时（数据来自 ToolTimingMiddleware 盖章，历史与直播同源）
+const STATUS_META: Record<ToolCallInfo['status'], { label: string; className: string }> = {
+  generating: { label: '执行中', className: 'text-[#1f82d9]' },
+  running: { label: '执行中', className: 'text-[#1f82d9]' },
+  completed: { label: '已完成', className: 'text-emerald-600' },
+  error: { label: '执行失败', className: 'text-red-500' },
+}
+const statusMeta = computed(() => STATUS_META[props.toolCall?.status || 'running'])
+const durationText = computed(() => formatToolDuration(props.toolCall?.started_at_ms, props.toolCall?.ended_at_ms))
+const timingText = computed(() => formatToolTimingText(props.toolCall?.started_at_ms, props.toolCall?.ended_at_ms))
+const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.toolCall?.ended_at_ms))
 </script>
 
 <template>
@@ -81,6 +93,26 @@ const toolResult = computed(() => {
         </button>
         <div v-if="resultExpanded" class="px-4 pb-4">
           <pre class="m-0 max-h-[56vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ toolResult }}</pre>
+        </div>
+      </section>
+
+      <section class="px-4 py-3">
+        <div class="text-xs font-medium text-slate-500">执行信息</div>
+        <div class="mt-2 flex flex-col gap-1.5">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-14 shrink-0 text-slate-400">状态</span>
+            <span :class="statusMeta.className">{{ statusMeta.label }}</span>
+          </div>
+          <template v-if="hasTiming">
+            <div v-if="durationText" class="flex items-center gap-2 text-xs">
+              <span class="w-14 shrink-0 text-slate-400">耗时</span>
+              <span class="font-mono text-slate-700">{{ durationText }}</span>
+            </div>
+            <div class="flex items-start gap-2 text-xs">
+              <span class="w-14 shrink-0 pt-0.5 text-slate-400">时间</span>
+              <span class="min-w-0 break-all font-mono text-slate-700">{{ timingText }}</span>
+            </div>
+          </template>
         </div>
       </section>
     </div>

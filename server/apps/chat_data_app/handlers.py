@@ -889,10 +889,17 @@ class _ToolStreamState:
             "tool_call_id": tool_call_id,
             "status": "running",
             "args": args or {},
+            # 直播侧 tool_started 占位即带开始时间（epoch 毫秒）；结果事件以 ToolTimingMiddleware 盖章值为准。
+            "started_at_ms": int(time.time() * 1000),
         }
         return [
             _format_tool_lifecycle_event("tool_started", payload),
-            _format_tool_event(**payload),
+            _format_tool_event(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                status="running",
+                args=args or {},
+            ),
         ]
 
 

@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText } from '../utils/toolDisplay'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 
 interface Props {
@@ -135,6 +135,10 @@ const displayName = computed(() => getToolDisplayName(props.toolCall.tool_name))
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')
 const isCompleted = computed(() => props.toolCall.status === 'completed')
 const isError = computed(() => props.toolCall.status === 'error')
+
+// 工具执行耗时与起止时间（格式化逻辑在 utils/toolDisplay 共享）
+const durationText = computed(() => formatToolDuration(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
+const timingTitle = computed(() => formatToolTimingText(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
 
 const getResultField = (field: string): string => {
   const result = String(props.toolCall.result || '')
@@ -476,10 +480,15 @@ function getSqlTokenClass(type: string): string {
     @click="emit('select')"
   >
     <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
-    <span class="flex min-w-0 items-center" :title="compactDescription || toolCall.tool_name">
+    <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
       <span class="shrink-0 font-semibold">{{ displayName }}</span>
       <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
     </span>
+    <span
+      v-if="durationText"
+      class="shrink-0 font-mono text-[11px] text-slate-400 transition-colors duration-200 group-hover:text-slate-600"
+      :title="timingTitle"
+    >{{ durationText }}</span>
     <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
     <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
   </div>
@@ -501,6 +510,11 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-wrench"></i>
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
+        <span
+          v-if="durationText"
+          class="shrink-0 rounded bg-black/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-gray-400"
+          :title="timingTitle"
+        >{{ durationText }}</span>
         <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
       </div>
       <div class="flex shrink-0 items-center gap-2">

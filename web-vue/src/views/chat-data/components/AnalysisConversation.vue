@@ -68,6 +68,8 @@ const emit = defineEmits<{
   'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
+  /** 控制台面板可见性广播：页面右上角的控制台开关按钮据此切换图标与提示。 */
+  consoleVisibilityChanged: [visible: boolean]
 }>()
 
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
@@ -1770,6 +1772,24 @@ const openConsolePanel = () => {
   sidePanelOpen.value = true
 }
 
+/**
+ * 控制台面板开关（页面右上角按钮用）。
+ *
+ * 能改可见性的路径不止这一处——点击工具卡（工具详情）、切换/清空会话等都会动
+ * sidePanelOpen，所以状态只认它：按钮只管调用本方法，图标/提示由
+ * consoleVisibilityChanged 广播回来的值决定，避免两边各存一份状态而说法不一致
+ * （面板在别处被关掉、按钮还停在「收起」态）。
+ */
+const toggleConsolePanel = () => {
+  if (sidePanelOpen.value) {
+    sidePanelOpen.value = false
+    return
+  }
+  openConsolePanel()
+}
+
+watch(sidePanelOpen, (visible) => emit('consoleVisibilityChanged', visible), { immediate: true })
+
 const handleOpenAttachment = async (attachment: MessageAttachment) => {
   const conversationId = localConversationId.value
   if (!conversationId) {
@@ -1857,6 +1877,7 @@ const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dim
 
 defineExpose({
   openConsolePanel,
+  toggleConsolePanel,
   fillSemanticFieldQuestion,
 })
 
@@ -2527,6 +2548,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
         args: { ...(existing?.args || {}), ...(tc.args || {}) },
         result: existing?.result,
         status: existing?.status || 'generating',
+        started_at_ms: existing?.started_at_ms ?? null,
+        ended_at_ms: existing?.ended_at_ms ?? null,
       }
       upsertToolMessage(toolInfo)
     }
@@ -2541,6 +2564,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
       args: { ...(existing?.args || {}), ...(msg.accumulated_args || {}) },
       result,
       status: msg.status === 'error' || isToolErrorResult(result) ? 'error' : 'completed',
+      started_at_ms: msg.started_at_ms ?? existing?.started_at_ms ?? null,
+      ended_at_ms: msg.ended_at_ms ?? existing?.ended_at_ms ?? null,
     }
     upsertToolMessage(toolInfo)
     return
@@ -2669,6 +2694,8 @@ const submitAnalysisQuery = async (
             args: { ...(existing?.args || {}), ...(toolInfo.args || {}) },
             result: existing?.result,
             status: 'running',
+            started_at_ms: existing?.started_at_ms ?? null,
+            ended_at_ms: existing?.ended_at_ms ?? null,
           }
           upsertToolMessage(updated)
         },
@@ -2712,6 +2739,8 @@ const submitAnalysisQuery = async (
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
+            started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
+            ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
           upsertToolMessage(toolInfo)
         },
@@ -3446,6 +3475,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :title="sidePanelTitle"
       :subtitle="sidePanelSubtitle"
       :show-trigger="false"
+      :show-close="false"
       @open="openConsolePanel"
       @close="sidePanelOpen = false"
     >
@@ -3454,18 +3484,19 @@ const handleKeyDown = (event: KeyboardEvent) => {
             <div class="mb-2 flex items-center justify-between gap-2">
               <div class="shrink-0 text-xs font-medium text-slate-500">工作区文件</div>
               <div class="flex min-w-0 items-center gap-1.5">
-                <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开 -->
+                <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开。
+                     图标方按钮（与面板头部关闭按钮同一套视觉语言），文案走 title/aria-label
+                     而非行内文字——标题行窄，文字会把「N 个文件」挤掉行。 -->
                 <button
                   v-if="consoleTreeCollapsiblePaths.length"
                   type="button"
-                  class="flex h-5 shrink-0 items-center gap-1 rounded border border-transparent bg-transparent px-1 text-[10px] text-slate-400 transition-colors hover:border-slate-200 hover:bg-white hover:text-slate-600"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
                   :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
                   :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
                   data-console-tree-toggle="true"
                   @click="toggleConsoleTreeCollapsed"
                 >
                   <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
-                  <span>{{ isConsoleTreeFullyCollapsed ? '展开全部' : '折叠全部' }}</span>
                 </button>
                 <div class="shrink-0 text-[10px] text-slate-400">{{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}</div>
               </div>

@@ -173,6 +173,20 @@ const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   }
 }
 
+// 工具执行起止时间（epoch 毫秒）：tool_result 事件 payload 顶层字段，非法值丢弃
+const readExecutionTiming = (payload: unknown): Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'> | undefined => {
+  if (!payload || typeof payload !== 'object') return undefined
+  const raw = payload as Record<string, unknown>
+  const normalize = (value: unknown): number | null => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null
+  }
+  const started = normalize(raw.started_at_ms)
+  const ended = normalize(raw.ended_at_ms)
+  if (started === null && ended === null) return undefined
+  return { started_at_ms: started, ended_at_ms: ended }
+}
+
 // 子智能体过程快照：随 task 的 tool_result payload 持久化（后端盖在
 // additional_kwargs.subagent_trail），历史回放时据此还原「子智能体内部逻辑」。
 // 逐条目校验，坏数据丢弃条目而不是整块丢弃。
@@ -215,6 +229,7 @@ const withHistoryToolResult = (
   toolCall: ToolCallInfo,
   result: string,
   subagentTrail?: SubagentTrailItem[],
+  timing?: Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'>,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -237,6 +252,8 @@ const withHistoryToolResult = (
     renderType,
     semanticParams,
     subagentTrail,
+    started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
+    ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
 }
 
@@ -359,8 +376,9 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     if (!target?.toolCalls?.length) continue
     const result = String(messagePayload.content || '')
     const subagentTrail = normalizeSubagentTrail(messagePayload.subagent_trail)
+    const timing = readExecutionTiming(messagePayload)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing) : toolCall
     ))
   }
   return displayMessages
@@ -483,8 +501,9 @@ export const buildHistoryMessages = (
     if (!target?.toolCalls?.length) continue
     const result = String(rawMessage.content || '')
     const subagentTrail = normalizeSubagentTrail(rawMessage.subagent_trail)
+    const timing = readExecutionTiming(rawMessage)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing) : toolCall
     ))
   }
 

@@ -310,6 +310,9 @@ export interface LangGraphMessage {
   // 后端在流式模式下累积的完整工具参数
   accumulated_args?: Record<string, unknown>
   timestamp?: string
+  // 工具消息的执行起止时间（epoch 毫秒，build_tool_message_payload 提升为顶层字段）
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
 }
 
 export interface ThinkingSegment {
@@ -450,6 +453,9 @@ export interface ToolCallInfo {
   visualization?: VisualizationConfig
   // 语义参数（从关联的 dsl2sql_tool 获取）
   semanticParams?: SemanticParams
+  // 工具执行起止时间（epoch 毫秒，后端 ToolTimingMiddleware 盖章）：耗时由两者相减得出
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
   // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
   subagentTrail?: SubagentTrailItem[]
 }
@@ -586,6 +592,9 @@ export interface ToolEventData {
   result?: string
   message?: string
   timestamp?: string
+  // 执行起止时间（epoch 毫秒）：tool_started 只带 started_at_ms，结果事件两者都带
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {

@@ -514,8 +514,12 @@ const conversationModelStorageUserKey = computed(() => currentUser.value.id || c
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
 const conversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
 
-const openConversationConsole = () => {
-  conversationRef.value?.openConsolePanel()
+// 控制台面板可见性：由 AnalysisConversation 广播（面板内的 ✕ 也会触发），
+// 右上角开关按钮的图标与提示都读它，不自己另存状态。
+const conversationConsoleVisible = ref(false)
+
+const toggleConversationConsole = () => {
+  conversationRef.value?.toggleConsolePanel()
 }
 
 // 加载数据源
@@ -1427,11 +1431,21 @@ onUnmounted(() => {
         <div class="relative shrink-0 flex items-center gap-2">
           <button
             v-if="viewMode === 'conversation'"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
-            title="控制台"
-            @click="openConversationConsole"
+            class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
+            :title="conversationConsoleVisible ? '收起控制台' : '展开控制台'"
+            :aria-label="conversationConsoleVisible ? '收起控制台' : '展开控制台'"
+            :aria-expanded="conversationConsoleVisible"
+            data-conversation-console-toggle="true"
+            @click="toggleConversationConsole"
           >
-            <i class="fa-solid fa-terminal text-[12px]"></i>
+            <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板在右侧，
+                 展开时箭头朝左、收起时朝右，点击即在开/关之间切换。 -->
+            <svg class="h-[18px] w-[18px]" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.55" y="2.65" width="12.9" height="10.7" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.3" />
+              <line x1="5.75" y1="2.65" x2="5.75" y2="13.35" stroke="currentColor" stroke-width="1.3" />
+              <path v-if="conversationConsoleVisible" d="M12.35 8 8.55 5.1v5.8L12.35 8Z" fill="currentColor" />
+              <path v-else d="M8.55 8 12.35 5.1v5.8L8.55 8Z" fill="currentColor" />
+            </svg>
           </button>
         </div>
       </div>
@@ -1718,6 +1732,7 @@ onUnmounted(() => {
                   class="h-full"
                   @first-message-started="handleFirstMessageStarted"
                   @run-status-changed="handleConversationRunStatusChanged"
+                  @console-visibility-changed="conversationConsoleVisible = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"

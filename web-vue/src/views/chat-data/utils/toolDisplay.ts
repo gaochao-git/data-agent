@@ -31,6 +31,32 @@ export function getToolDisplayName(toolName?: string | null): string {
   return TOOL_DISPLAY_NAMES[name] || '工具调用'
 }
 
+/** 工具执行耗时文案：由后端盖章的起止时间（epoch 毫秒）相减得出，数据无效返回空串。 */
+export function formatToolDuration(startedAtMs?: number | null, endedAtMs?: number | null): string {
+  if (!startedAtMs || !endedAtMs || endedAtMs < startedAtMs) return ''
+  const ms = endedAtMs - startedAtMs
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  const totalSeconds = Math.round(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  return minutes > 0
+    ? `${minutes}m${String(totalSeconds % 60).padStart(2, '0')}s`
+    : `${totalSeconds}s`
+}
+
+/** 工具执行起止本地时间文案（xxxx-xx-xx xx:xx:xx.xxx），无开始时间返回空串。 */
+export function formatToolTimingText(startedAtMs?: number | null, endedAtMs?: number | null): string {
+  if (!startedAtMs) return ''
+  const format = (ms: number): string => {
+    const date = new Date(ms)
+    const pad = (value: number, length = 2) => String(value).padStart(length, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`
+  }
+  return endedAtMs && endedAtMs >= startedAtMs
+    ? `${format(startedAtMs)} ~ ${format(endedAtMs)}`
+    : `开始 ${format(startedAtMs)}`
+}
+
 const normalizeVisiblePath = (value: unknown): string => (
   String(value || '')
     .trim()

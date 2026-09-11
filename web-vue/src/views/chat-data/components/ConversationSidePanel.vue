@@ -7,12 +7,15 @@ interface Props {
   subtitle?: string
   triggerLabel?: string
   showTrigger?: boolean
+  /** 是否渲染面板头部的关闭按钮（✕）。调用方若已有其它开关入口可传 false 隐藏。 */
+  showClose?: boolean
 }
 
 withDefaults(defineProps<Props>(), {
   subtitle: '',
   triggerLabel: '控制台',
   showTrigger: true,
+  showClose: true,
 })
 
 const emit = defineEmits<{
@@ -125,7 +128,10 @@ onBeforeUnmount(stopResize)
           {{ subtitle }}
         </div>
       </div>
+      <!-- 关闭按钮：工具栏右上角已有同功能的开关按钮，调用方传 show-close=false 时隐藏。
+           保留实现而非删除，需要时把 :show-close="false" 去掉即可恢复。 -->
       <button
+        v-if="showClose"
         type="button"
         class="h-8 w-8 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
         @click="emit('close')"
