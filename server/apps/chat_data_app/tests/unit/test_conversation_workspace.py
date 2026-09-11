@@ -48,6 +48,16 @@ from apps.chat_data_app.agent.workspace.workspace_special_services import (
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
+uploaded_file_service_module = importlib.import_module(
+    "apps.chat_data_app.services.agent_run.uploaded_file_service"
+)
+
+
+def _isolated_workspace(monkeypatch, tmp_path, conversation_id: str, user_id: str = "user_a"):
+    """把会话工作区建在 tmp_path 下，避免用例之间共享 CHAT_DATA_HOME。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    return ensure_conversation_workspace(conversation_id, user_id)
 
 
 def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
@@ -1891,3 +1901,268 @@ def test_resolve_skill_snapshot_path_security_rules(tmp_path):
         resolve_skill_snapshot_path(tmp_path, "/mnt/user-data/x")
     with pytest.raises(ValueError, match="技能不存在"):
         resolve_skill_snapshot_path(tmp_path, "/mnt/skills/missing/x")
+
+
+def test_resolve_workspace_path_opens_uploads_only_for_explicit_switch(monkeypatch, tmp_path):
+    """uploads 写权限只能由人侧删除接口显式打开，模型工具链路始终被拒。"""
+    paths = _isolated_workspace(monkeypatch, tmp_path, f"conv_uploads_switch_{uuid.uuid4().hex}")
+
+    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+        resolve_workspace_path(paths["root"], "/mnt/user-data/uploads/a.txt", writable=True)
+
+    target = resolve_workspace_path(
+        paths["root"],
+        "/mnt/user-data/uploads/a.txt",
+        writable=True,
+        allow_uploads_write=True,
+    )
+
+    assert target == Path(paths["uploads"]) / "a.txt"
+    # 审计目录的保护不随开关放宽
+    for audit_path in (
+        "/mnt/user-data/outputs/query_result/result_1.json",
+        "/mnt/user-data/outputs/.tool-offload/result_1.json",
+    ):
+        with pytest.raises(ValueError, match="系统结果目录"):
+            resolve_workspace_path(
+                paths["root"], audit_path, writable=True, allow_uploads_write=True,
+            )
+
+
+def test_delete_local_workspace_file_removes_single_file_in_all_three_roots(monkeypatch, tmp_path):
+    paths = _isolated_workspace(monkeypatch, tmp_path, f"conv_delete_local_{uuid.uuid4().hex}")
+
+    for directory in ("workspace", "outputs", "uploads"):
+        target = Path(paths[directory]) / f"{directory}.txt"
+        target.write_text("payload", encoding="utf-8")
+
+        payload = workspace_local_backend_module.delete_local_workspace_file(
+            paths["root"],
+            f"/mnt/user-data/{directory}/{target.name}",
+            allow_uploads=True,
+        )
+
+        assert payload == {"path": f"/mnt/user-data/{directory}/{target.name}", "type": "file"}
+        assert not target.exists()
+
+
+def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypatch, tmp_path):
+    paths = _isolated_workspace(monkeypatch, tmp_path, f"conv_delete_guard_{uuid.uuid4().hex}")
+    nested = Path(paths["workspace"]) / "reports"
+    nested.mkdir()
+    (nested / "a.txt").write_text("x", encoding="utf-8")
+    audit = Path(paths["outputs"]) / "query_result" / "result_1.json"
+    audit.parent.mkdir()
+    audit.write_text("{}", encoding="utf-8")
+    uploaded = Path(paths["uploads"]) / "a.txt"
+    uploaded.write_text("x", encoding="utf-8")
+
+    # 目录不通过人侧接口删除（递归删除需要独立确认交互）
+    with pytest.raises(ValueError, match="不能作为file删除"):
+        workspace_local_backend_module.delete_local_workspace_file(
+            paths["root"], "/mnt/user-data/workspace/reports", allow_uploads=True,
+        )
+    for root_path in (
+        "/mnt/user-data/workspace",
+        "/mnt/user-data/outputs",
+        "/mnt/user-data/uploads",
+    ):
+        with pytest.raises(ValueError, match="不允许操作工作区根目录"):
+            workspace_local_backend_module.delete_local_workspace_file(
+                paths["root"], root_path, allow_uploads=True,
+            )
+    with pytest.raises(ValueError, match="系统结果目录"):
+        workspace_local_backend_module.delete_local_workspace_file(
+            paths["root"], "/mnt/user-data/outputs/query_result/result_1.json", allow_uploads=True,
+        )
+    # 不开开关时（模型工具链路）uploads 同样不可删
+    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+        workspace_local_backend_module.delete_local_workspace_file(
+            paths["root"], "/mnt/user-data/uploads/a.txt",
+        )
+
+    assert audit.exists()
+    assert nested.exists()
+    assert uploaded.exists()
+
+
+@pytest.mark.asyncio
+async def test_has_running_agent_run_blocks_only_running_statuses(monkeypatch):
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(conversation_workspace_module, "get_session", lambda: FakeSession())
+
+    for status, expected in (
+        ("pending", True),
+        ("active", True),
+        ("cancelling", True),
+        # waiting_user 是挂起等待用户输入，Run 不在写盘，前端 runBusy 此刻也为 false
+        ("waiting_user", False),
+        ("finished", False),
+    ):
+        async def snapshot(_session, _conversation_id, _user_id, _status=status):
+            return SimpleNamespace(status=_status)
+
+        monkeypatch.setattr(
+            conversation_workspace_module.agent_inbox_dao, "get_active_run_snapshot", snapshot,
+        )
+        assert await conversation_workspace_module._has_running_agent_run("conv_a", "user_a") is expected
+
+    async def no_run(_session, _conversation_id, _user_id):
+        return None
+
+    monkeypatch.setattr(
+        conversation_workspace_module.agent_inbox_dao, "get_active_run_snapshot", no_run,
+    )
+    assert await conversation_workspace_module._has_running_agent_run("conv_a", "user_a") is False
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit_result(monkeypatch, tmp_path):
+    conversation_id = f"conv_delete_outputs_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    report = Path(paths["outputs"]) / "report.docx"
+    report.write_bytes(b"docx")
+    audit = Path(paths["outputs"]) / "query_result" / "result_1.json"
+    audit.parent.mkdir()
+    audit.write_text('{"rows":[1]}', encoding="utf-8")
+
+    async def no_running_run(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", no_running_run)
+
+    payload = await conversation_workspace_module.delete_conversation_workspace_file(
+        conversation_id, user_id="user_a", path="/mnt/user-data/outputs/report.docx",
+    )
+
+    assert payload == {
+        "path": "/mnt/user-data/outputs/report.docx",
+        "type": "file",
+        "record_cleaned": False,
+    }
+    assert not report.exists()
+
+    # 查询结果是审计留存：既不删文件，也不给「删了」的成功返回
+    with pytest.raises(ValueError, match="留存审计"):
+        await conversation_workspace_module.delete_conversation_workspace_file(
+            conversation_id, user_id="user_a", path="/mnt/user-data/outputs/query_result/result_1.json",
+        )
+    assert audit.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_workspace_file_rejects_running_run(monkeypatch, tmp_path):
+    conversation_id = f"conv_delete_running_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    draft = Path(paths["workspace"]) / "draft.md"
+    draft.write_text("draft", encoding="utf-8")
+
+    async def running_run(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", running_run)
+
+    with pytest.raises(conversation_workspace_module.WorkspaceFileDeleteConflictError, match="正在执行"):
+        await conversation_workspace_module.delete_conversation_workspace_file(
+            conversation_id, user_id="user_a", path="/mnt/user-data/workspace/draft.md",
+        )
+
+    assert draft.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_workspace_file_cleans_uploaded_file_record(monkeypatch, tmp_path):
+    conversation_id = f"conv_delete_uploads_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    uploaded = Path(paths["uploads"]) / "月报.xlsx"
+    uploaded.write_bytes(b"xlsx")
+    parsed = Path(paths["uploads"]) / "月报.parsed.txt"
+    parsed.write_text("parsed", encoding="utf-8")
+    untouched = Path(paths["uploads"]) / "其他.xlsx"
+    untouched.write_bytes(b"other")
+
+    async def no_running_run(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", no_running_run)
+    deleted: list[tuple[str, str, str]] = []
+
+    class FakeUploadedFileService:
+        async def get_files_by_thread(self, thread_id, user_id="system"):
+            assert (thread_id, user_id) == (conversation_id, "user_a")
+            return [
+                {"id": "file_1", "storage_dir": "月报.xlsx"},
+                {"id": "file_2", "storage_dir": "其他.xlsx"},
+            ]
+
+        async def delete_file(self, file_id, user_id="system", thread_id=""):
+            # 复刻真实实现：删原文件与解析产物，再软删记录
+            deleted.append((file_id, user_id, thread_id))
+            uploaded.unlink(missing_ok=True)
+            parsed.unlink(missing_ok=True)
+            return True
+
+    monkeypatch.setattr(
+        uploaded_file_service_module, "get_uploaded_file_service", lambda: FakeUploadedFileService(),
+    )
+
+    payload = await conversation_workspace_module.delete_conversation_workspace_file(
+        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/月报.xlsx",
+    )
+
+    assert deleted == [("file_1", "user_a", conversation_id)]
+    assert payload == {
+        "path": "/mnt/user-data/uploads/月报.xlsx",
+        "type": "file",
+        "record_cleaned": True,
+    }
+    assert not uploaded.exists()
+    assert not parsed.exists()
+    assert untouched.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_workspace_file_falls_back_when_upload_record_is_absent(monkeypatch, tmp_path):
+    """uploads 里没有上传记录的条目（解析产物、子目录文件）走纯物理删除。"""
+    conversation_id = f"conv_delete_uploads_fallback_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    orphan = Path(paths["uploads"]) / "parse-cache.txt"
+    orphan.write_text("cache", encoding="utf-8")
+    nested_dir = Path(paths["uploads"]) / "2026"
+    nested_dir.mkdir()
+    nested = nested_dir / "nested.csv"
+    nested.write_text("a,b", encoding="utf-8")
+
+    async def no_running_run(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", no_running_run)
+
+    class FakeUploadedFileService:
+        async def get_files_by_thread(self, _thread_id, user_id="system"):
+            return [{"id": "file_1", "storage_dir": "月报.xlsx"}]
+
+        async def delete_file(self, *_args, **_kwargs):
+            raise AssertionError("没有匹配记录时不应触碰上传记录")
+
+    monkeypatch.setattr(
+        uploaded_file_service_module, "get_uploaded_file_service", lambda: FakeUploadedFileService(),
+    )
+
+    orphan_payload = await conversation_workspace_module.delete_conversation_workspace_file(
+        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/parse-cache.txt",
+    )
+    nested_payload = await conversation_workspace_module.delete_conversation_workspace_file(
+        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/2026/nested.csv",
+    )
+
+    assert orphan_payload["record_cleaned"] is False
+    assert nested_payload["record_cleaned"] is False
+    assert not orphan.exists()
+    assert not nested.exists()

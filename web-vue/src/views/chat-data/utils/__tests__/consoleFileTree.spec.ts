@@ -7,6 +7,7 @@ import {
   expandAllDirectories,
   formatFileSize,
   isTreeFullyCollapsed,
+  isWorkspaceFileDeletable,
   isWorkspaceFileDownloadable,
   syncTruncatedTitle,
   type FileTreeCollapseNode,
@@ -165,6 +166,38 @@ describe('isWorkspaceFileDownloadable（SQL 查询结果不允许下载）', () 
     expect(isWorkspaceFileDownloadable('   ')).toBe(false)
     expect(isWorkspaceFileDownloadable(null)).toBe(false)
     expect(isWorkspaceFileDownloadable(undefined)).toBe(false)
+  })
+})
+
+describe('isWorkspaceFileDeletable（查询结果需留存审计）', () => {
+  it('uploads / workspace / outputs 下的普通文件都可删除', () => {
+    expect(isWorkspaceFileDeletable('uploads/明细.xlsx')).toBe(true)
+    expect(isWorkspaceFileDeletable('workspace/月报/2025年11月经营月报.docx')).toBe(true)
+    expect(isWorkspaceFileDeletable('outputs/经营月报.docx')).toBe(true)
+  })
+
+  it('SQL 查询结果与工具卸载缓存不可删除', () => {
+    expect(isWorkspaceFileDeletable('outputs/query_result/abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('outputs/query_result')).toBe(false)
+    expect(isWorkspaceFileDeletable('outputs/.tool-offload/abc.json')).toBe(false)
+  })
+
+  it('目录名只是前缀相似的不受影响', () => {
+    expect(isWorkspaceFileDeletable('outputs/query_result_backup/abc.csv')).toBe(true)
+    expect(isWorkspaceFileDeletable('outputs/query_results/abc.csv')).toBe(true)
+  })
+
+  it('规范化带沙箱前缀与 Windows 分隔符的路径', () => {
+    expect(isWorkspaceFileDeletable('/mnt/user-data/outputs/query_result/abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('\\outputs\\query_result\\abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('/mnt/user-data/uploads/明细.xlsx')).toBe(true)
+  })
+
+  it('空路径与缺省值一律不可删除（拿不到真实路径时不给入口）', () => {
+    expect(isWorkspaceFileDeletable('')).toBe(false)
+    expect(isWorkspaceFileDeletable('   ')).toBe(false)
+    expect(isWorkspaceFileDeletable(null)).toBe(false)
+    expect(isWorkspaceFileDeletable(undefined)).toBe(false)
   })
 })
 

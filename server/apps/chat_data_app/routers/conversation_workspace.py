@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status as http_status
 from fastapi.responses import Response
 
 from utils.error_codes import ErrorCode
@@ -12,7 +12,9 @@ from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
 from ..services.agent_run.conversation_workspace import (
+    WorkspaceFileDeleteConflictError,
     can_access_conversation_workspace,
+    delete_conversation_workspace_file as delete_workspace_file_for_conversation,
     ensure_conversation_workspace,
     list_conversation_workspace_files as list_workspace_files_for_conversation,
     read_conversation_query_result,
@@ -68,6 +70,39 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
     except Exception as e:
         logger.error("获取会话工作区文件失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
         return business_response(msg="获取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED, status="error")
+
+
+@router.delete("/conversations/{conversation_id}/workspace-files")
+async def delete_conversation_workspace_file(conversation_id: str, path: str, request: Request):
+    """删除会话工作区中的单个文件（SQL 查询结果需留存审计，不可删除）。"""
+    try:
+        current_user = _get_current_user(request)
+        if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
+            return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if _is_internal_workspace_file(path):
+            return business_response(msg="文件不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        payload = await delete_workspace_file_for_conversation(
+            conversation_id,
+            user_id=str(current_user.user_id),
+            path=path,
+        )
+        return business_response(data=payload, msg="删除成功")
+    except HTTPException:
+        raise
+    except WorkspaceFileDeleteConflictError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_AGENT_RUN_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except FileNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error("删除会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
+        return business_response(msg="删除工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_DELETE_FAILED, status="error")
 
 
 @router.get("/conversations/{conversation_id}/workspace-files/content")

@@ -4,14 +4,14 @@
  * 左侧展示流式消息与工具调用，右侧展示当前工具结果和工作区产物预览。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../types'
 import { useSqlGenerator, type RunDoneStatus } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteConversationWorkspaceFile, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -35,7 +35,8 @@ import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../utils/analysisTodos'
 import { createTopReachTracker } from '../utils/scrollReach'
-import { collapseAllDirectories, collectCollapsibleDirectoryPaths, DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES, expandAllDirectories, formatFileSize, isTreeFullyCollapsed, isWorkspaceFileDownloadable, syncTruncatedTitle } from '../utils/consoleFileTree'
+import { collapseAllDirectories, collectCollapsibleDirectoryPaths, DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES, expandAllDirectories, formatFileSize, isTreeFullyCollapsed, isWorkspaceFileDeletable, isWorkspaceFileDownloadable, syncTruncatedTitle } from '../utils/consoleFileTree'
+import { evictWorkspaceFileCache } from '../utils/workspacePreviewCache'
 
 interface Props {
   datasource?: DataSource | null
@@ -1934,6 +1935,82 @@ const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedCon
   }
 }
 
+// 删除工作区文件：uploads / workspace / outputs 一视同仁，唯独 SQL 查询结果与工具结果缓存例外
+// ——它们是审计留存，后端删除接口同样拒绝（前端这层是纵深防御，见 utils/consoleFileTree.ts）。
+// 物理删除不可恢复，因此必须走二次确认；uploads 里的文件还会由后端连带清理 uploaded_files 记录，
+// 否则历史消息里的附件卡片会指向一个已不存在的文件。
+// 删除被设计成「单文件」：目录递归删需要独立的确认交互，不在这一版里提供。
+// 删除成功后必须连同预览缓存一起作废，否则「删除 → 重传同名 → 点预览」会命中旧缓存：
+// 文本预览显示上一份文件的内容、二进制预览复用一个指向已删文件的 blob URL，而且缓存命中
+// 就不再发请求，这个状态不会自愈。这不是理论风险——uploads 的重名策略是「已存在才加 -1 后缀」
+// （后端 uploaded_file_service.py::_unique_storage_name），文件删掉后重传同名拿回的就是
+// 删除前的原路径，缓存必然命中。
+// 失效规则本身在 utils/workspacePreviewCache.ts（纯函数，有单测），这里只做反射式赋值与 revoke。
+const forgetWorkspaceFileCache = (path: string) => {
+  const { contents, blobs, revokedUrl } = evictWorkspaceFileCache(
+    path,
+    workspaceFileContents.value,
+    workspaceFileBlobs.value,
+  )
+  workspaceFileContents.value = contents
+  workspaceFileBlobs.value = blobs
+  if (revokedUrl) URL.revokeObjectURL(revokedUrl)
+}
+
+const deletingConsoleFilePath = ref<string | null>(null)
+
+const handleDeleteConsoleFile = async (file: ProducedFile | null = null) => {
+  const conversationId = props.conversationId || localConversationId.value
+  if (!file) return
+  const fileName = file.relativePath.split('/').pop() || file.relativePath
+  if (!isWorkspaceFileDeletable(file.relativePath)) {
+    ElMessage.warning('查询结果需要留存审计，不支持删除')
+    return
+  }
+  if (!conversationId) {
+    ElMessage.warning('会话未就绪，无法删除文件')
+    return
+  }
+  // Run 执行中删工作区文件，会让沙箱回写被判成「应用侧已变更」而使该轮落盘失败。
+  // 前端按 runBusy 拦截，后端对 pending/active/cancelling 同样返回 409，双保险。
+  if (runBusy.value) {
+    ElMessage.warning('智能体执行中，暂不能删除文件')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除「${fileName}」？删除后不可恢复。`, '删除文件', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+
+  deletingConsoleFilePath.value = file.relativePath
+  try {
+    const response = await deleteConversationWorkspaceFile(conversationId, file.relativePath)
+    if (response.status !== 'success') {
+      ElMessage.error(response.msg || '删除失败')
+      return
+    }
+    ElMessage.success(`已删除 ${fileName}`)
+    // 删掉的正是当前预览的文件时清空选中，否则预览区会继续渲染一份已不存在的文件。
+    // key 取归一化路径：预览缓存的 key 就是 selectedConsoleFilePath 的坐标系（见 selectConsoleFile）。
+    const previewKey = normalizeVisiblePath(file.relativePath)
+    if (selectedConsoleFilePath.value === previewKey) {
+      selectedConsoleFilePath.value = null
+    }
+    // 缓存也要一并作废，否则重传同名文件后点预览会读回旧内容（理由见 forgetWorkspaceFileCache）
+    forgetWorkspaceFileCache(previewKey)
+    await loadWorkspaceFiles(conversationId)
+  } catch {
+    ElMessage.error('文件删除失败，请稍后重试')
+  } finally {
+    deletingConsoleFilePath.value = null
+  }
+}
+
 // 面板内补充文件：只把文件落进 uploads（会话工作区），**不**进入 pendingFiles，
 // 也就是不挂到下一轮消息的附件上——智能体需要时通过 parse_document/file_list 自行读取。
 // 这条链路是现成的：app 侧 uploads 为权威副本，沙箱在执行前按 manifest 增量镜像，
@@ -3753,6 +3830,20 @@ const handleKeyDown = (event: KeyboardEvent) => {
                           @click="handleDownloadConsoleFile(item.node.file)"
                         >
                           <i class="fa-solid fa-download"></i>
+                        </button>
+                        <!-- 删除：与预览/下载同列（行尾操作组），危险动作用红色区分。
+                             查询结果（outputs/query_result、outputs/.tool-offload）不提供删除，
+                             那是审计留存；run 执行中禁用，避免打断沙箱回写。 -->
+                        <button
+                          v-if="isWorkspaceFileDeletable(item.node.file.relativePath)"
+                          type="button"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="删除文件"
+                          :disabled="runBusy || deletingConsoleFilePath === item.node.file.relativePath"
+                          data-console-file-delete="true"
+                          @click="handleDeleteConsoleFile(item.node.file)"
+                        >
+                          <i class="fa-solid" :class="deletingConsoleFilePath === item.node.file.relativePath ? 'fa-spinner fa-spin' : 'fa-trash-can'"></i>
                         </button>
                       </div>
                     </div>

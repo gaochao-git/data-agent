@@ -283,3 +283,85 @@ def test_can_access_conversation_workspace_queries_user_thread(monkeypatch):
     )
 
     assert asyncio.run(workspace_routes.can_access_conversation_workspace("conv_a", "u1")) is True
+
+
+def test_conversation_workspace_delete_route_removes_file(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def delete_file(conversation_id, *, user_id, path):
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "/mnt/user-data/uploads/a.txt")
+        return {"path": path, "type": "file", "record_cleaned": True}
+
+    monkeypatch.setattr(workspace_routes, "delete_workspace_file_for_conversation", delete_file)
+
+    response = client.delete(
+        "/api/chatdata/conversations/conv_a/workspace-files",
+        params={"path": "/mnt/user-data/uploads/a.txt"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "path": "/mnt/user-data/uploads/a.txt",
+        "type": "file",
+        "record_cleaned": True,
+    }
+
+
+def test_conversation_workspace_delete_route_reports_running_run_as_conflict(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def delete_file(*_args, **_kwargs):
+        raise workspace_routes.WorkspaceFileDeleteConflictError("智能体正在执行当前会话")
+
+    monkeypatch.setattr(workspace_routes, "delete_workspace_file_for_conversation", delete_file)
+
+    response = client.delete(
+        "/api/chatdata/conversations/conv_a/workspace-files",
+        params={"path": "/mnt/user-data/workspace/draft.md"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == ErrorCode.CHATDATA_AGENT_RUN_ACTIVE
+
+
+def test_conversation_workspace_delete_route_maps_audit_and_missing_files(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def reject_audit(*_args, **_kwargs):
+        raise ValueError("查询结果需要留存审计，不支持删除")
+
+    monkeypatch.setattr(workspace_routes, "delete_workspace_file_for_conversation", reject_audit)
+
+    audit_response = client.delete(
+        "/api/chatdata/conversations/conv_a/workspace-files",
+        params={"path": "/mnt/user-data/outputs/query_result/result_1.json"},
+        headers=auth_headers,
+    )
+    missing_response = client.delete(
+        "/api/chatdata/conversations/conv_a/workspace-files",
+        params={"path": "/mnt/user-data/workspace/data_context.json"},
+        headers=auth_headers,
+    )
+
+    assert audit_response.json()["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    # 内部上下文文件对外表现为「不存在」，与读取接口口径一致
+    assert missing_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+def test_conversation_workspace_delete_route_reports_unexpected_failure(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("disk offline")
+
+    monkeypatch.setattr(workspace_routes, "delete_workspace_file_for_conversation", boom)
+
+    response = client.delete(
+        "/api/chatdata/conversations/conv_a/workspace-files",
+        params={"path": "/mnt/user-data/workspace/draft.md"},
+        headers=auth_headers,
+    )
+
+    assert response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_DELETE_FAILED

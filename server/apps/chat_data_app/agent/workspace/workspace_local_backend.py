@@ -452,14 +452,31 @@ def _list_local_workspace_dir(
     return entries
 
 
-def _resolve_local_mutable_path(workspace_root: str, path: str) -> Path:
-    target = resolve_workspace_path(workspace_root, path, writable=True)
+def _resolve_local_mutable_path(
+    workspace_root: str,
+    path: str,
+    *,
+    allow_uploads: bool = False,
+) -> Path:
+    """解析应用侧可变更路径。
+
+    ``allow_uploads`` 只为人侧删除接口打开 uploads：用户要能清理自己上传的文件，
+    但 uploads 根目录本身仍不可操作（只删文件，不删目录结构）。
+    """
+    target = resolve_workspace_path(
+        workspace_root,
+        path,
+        writable=True,
+        allow_uploads_write=allow_uploads,
+    )
     mutable_roots = {
         resolve_workspace_path(workspace_root, "/mnt/user-data/workspace"),
         resolve_workspace_path(workspace_root, "/mnt/user-data/outputs"),
     }
+    if allow_uploads:
+        mutable_roots.add(resolve_workspace_path(workspace_root, "/mnt/user-data/uploads"))
     if target in mutable_roots:
-        raise ValueError("不允许操作 workspace 或 outputs 根目录")
+        raise ValueError("不允许操作工作区根目录")
     return target
 
 
@@ -476,8 +493,10 @@ def _delete_local_path(
     path: str,
     recursive: bool,
     expected_type: Literal["file", "dir"],
+    *,
+    allow_uploads: bool = False,
 ) -> dict[str, Any]:
-    target = _resolve_local_mutable_path(workspace_root, path)
+    target = _resolve_local_mutable_path(workspace_root, path, allow_uploads=allow_uploads)
     if target.is_symlink():
         raise ValueError("不允许操作符号链接")
     if not target.exists():
@@ -494,6 +513,27 @@ def _delete_local_path(
     else:
         target.unlink()
     return {"path": to_visible_path(workspace_root, target), "type": "dir" if is_dir else "file"}
+
+
+def delete_local_workspace_file(
+    workspace_root: str,
+    path: str,
+    *,
+    allow_uploads: bool = False,
+) -> dict[str, Any]:
+    """删除应用侧权威副本中的单个文件（人侧 HTTP 接口入口）。
+
+    刻意只暴露「删单个文件」这一种能力：目录递归删除需要独立的确认交互，不由这里代劳。
+    路径安全完全复用 ``_delete_local_path``（符号链接拒绝、realpath 越界校验、
+    系统结果目录拒绝），因此 query_result 这类审计留存目录在这里就被挡住。
+    """
+    return _delete_local_path(
+        workspace_root,
+        path,
+        recursive=False,
+        expected_type="file",
+        allow_uploads=allow_uploads,
+    )
 
 
 def _move_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:

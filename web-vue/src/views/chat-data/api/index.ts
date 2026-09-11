@@ -832,6 +832,18 @@ export function toCanonicalWorkspacePath(path: string): string {
   return `/mnt/user-data/${value.replace(/^\/+/, '')}`
 }
 
+/** 删除会话工作区中的单个文件。SQL 查询结果需留存审计，后端会拒绝并返回业务错误。 */
+export function deleteConversationWorkspaceFile(
+  conversationId: string,
+  path: string,
+): Promise<ApiResponse<{ path: string; type: string; record_cleaned: boolean }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files`,
+    method: 'delete',
+    params: { path: toCanonicalWorkspacePath(path) }
+  })
+}
+
 /** 读取会话工作区文本文件。 */
 export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
   return request({

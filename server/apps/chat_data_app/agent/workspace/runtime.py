@@ -444,8 +444,13 @@ def resolve_workspace_path(
     *,
     writable: bool = False,
     allow_managed_semantic_model_write: bool = False,
+    allow_uploads_write: bool = False,
 ) -> Path:
-    """解析模型可见路径并按解析后的真实路径实施目录边界。"""
+    """解析模型可见路径并按解析后的真实路径实施目录边界。
+
+    ``allow_uploads_write`` 仅在「人侧 uploads 删除接口」这一条链路上打开，见
+    ``WorkspacePathPolicy.assert_writable`` 的说明；模型工具始终走默认值。
+    """
     root = Path(workspace_root).resolve()
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
     if logical_path.is_skill:
@@ -454,6 +459,7 @@ def resolve_workspace_path(
         WORKSPACE_PATH_POLICY.assert_writable(
             logical_path,
             allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+            allow_uploads_write=allow_uploads_write,
         )
     else:
         WORKSPACE_PATH_POLICY.assert_readable(logical_path)

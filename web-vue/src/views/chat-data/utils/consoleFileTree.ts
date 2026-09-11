@@ -86,34 +86,51 @@ export function isTreeFullyCollapsed(
 }
 
 /**
- * 不提供下载入口的工作区子目录。
+ * 系统结果目录：`outputs/query_result`（SQL 查询结果）与 `outputs/.tool-offload`（工具结果卸载缓存）。
  *
- * `outputs/query_result` 是 SQL 查询结果、`outputs/.tool-offload` 是工具结果卸载缓存，
- * 两者都是「原始数据」：放开下载等于绕过问数的权限边界，会造成数据泄漏。
- * 后端 `is_system_result_workspace_path` 已在「文件列表」与「raw 读取」两侧拦截，
- * 这些路径本就不会出现在文件树里；这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
+ * 两者都是「原始数据 + 审计留存」：放开下载等于绕过问数的权限边界，会造成数据泄漏；
+ * 删除则会让审计链路失去凭证。后端 `is_system_result_workspace_path` 已在「文件列表」
+ * 「raw 读取」与删除接口三侧拦截，这些路径本就不会出现在文件树里；
+ * 这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
  */
-export const NON_DOWNLOADABLE_WORKSPACE_PREFIXES = [
+export const SYSTEM_RESULT_WORKSPACE_PREFIXES = [
   'outputs/query_result',
   'outputs/.tool-offload',
 ] as const
 
-/**
- * 判断工作区文件是否提供下载入口。
- *
- * 接受相对路径（`outputs/query_result/a.csv`）、带沙箱前缀的可见路径
- * （`/mnt/user-data/outputs/query_result/a.csv`）或 Windows 分隔符写法，内部统一规范化。
- */
-export function isWorkspaceFileDownloadable(relativePath: string | null | undefined): boolean {
-  const path = String(relativePath || '')
+/** 下载侧沿用的历史导出名（语义等价于系统结果目录）。 */
+export const NON_DOWNLOADABLE_WORKSPACE_PREFIXES = SYSTEM_RESULT_WORKSPACE_PREFIXES
+
+/** 把相对路径、带沙箱前缀的可见路径或 Windows 分隔符写法统一成 `outputs/...` 形式。 */
+function normalizeWorkspaceRelativePath(relativePath: string | null | undefined): string {
+  return String(relativePath || '')
     .trim()
     .replace(/\\/g, '/')
     .replace(/^\/mnt\/user-data\/?/, '')
     .replace(/^\/+/, '')
+}
+
+function isSystemResultWorkspacePath(relativePath: string | null | undefined): boolean {
+  const path = normalizeWorkspaceRelativePath(relativePath)
   if (!path) return false
-  return !NON_DOWNLOADABLE_WORKSPACE_PREFIXES.some(
+  return SYSTEM_RESULT_WORKSPACE_PREFIXES.some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   )
+}
+
+/** 判断工作区文件是否提供下载入口。空路径视为不可下载（保守取值）。 */
+export function isWorkspaceFileDownloadable(relativePath: string | null | undefined): boolean {
+  return Boolean(normalizeWorkspaceRelativePath(relativePath)) && !isSystemResultWorkspacePath(relativePath)
+}
+
+/**
+ * 判断工作区文件是否提供删除入口。
+ *
+ * 目前与下载共用同一组排除目录，但语义独立：下载被拦是防泄漏，删除被拦是保审计留存。
+ * 两者将来分化（例如允许下载但不允许删）时改各自的函数即可，不必动常量。
+ */
+export function isWorkspaceFileDeletable(relativePath: string | null | undefined): boolean {
+  return Boolean(normalizeWorkspaceRelativePath(relativePath)) && !isSystemResultWorkspacePath(relativePath)
 }
 
 /**

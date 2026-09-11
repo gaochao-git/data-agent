@@ -105,8 +105,17 @@ class WorkspacePathPolicy:
         logical_path: LogicalWorkspacePath,
         *,
         allow_managed_semantic_model_write: bool = False,
+        allow_uploads_write: bool = False,
     ) -> None:
-        if logical_path.kind not in {"workspace", "outputs"}:
+        """校验逻辑路径可写。
+
+        ``allow_uploads_write`` 只服务于**人侧**的 uploads 删除接口（用户清理自己上传的文件），
+        默认为 False：uploads 在沙箱内是只读挂载，智能体的 file_write/file_edit 不应拿到写权限。
+        绝不要用「把 uploads 加进白名单」的方式实现，否则等于顺带把写权限也给了模型工具。
+        """
+        if logical_path.kind not in {"workspace", "outputs"} and not (
+            allow_uploads_write and logical_path.kind == "uploads"
+        ):
             raise ValueError("只允许写入 workspace/ 或 outputs/")
         if logical_path.is_system_result:
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
