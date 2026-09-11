@@ -35,6 +35,7 @@ import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../utils/analysisTodos'
 import { createTopReachTracker } from '../utils/scrollReach'
+import { collapseAllDirectories, collectCollapsibleDirectoryPaths, expandAllDirectories, isTreeFullyCollapsed } from '../utils/consoleFileTree'
 
 interface Props {
   datasource?: DataSource | null
@@ -939,6 +940,23 @@ const isFileTreeNodeCollapsed = (path: string): boolean => collapsedConsoleDirec
 const toggleConsoleDirectory = (path: string) => {
   const normalized = normalizeVisiblePath(path)
   setConsoleDirectoryCollapsed(normalized, !isFileTreeNodeCollapsed(normalized))
+}
+
+// 一键折叠/展开整棵目录树。按钮文案直接由「是否已全部折叠」推导，不另存 UI 状态，
+// 这样逐层点击与一键操作共用同一个 collapsedConsoleDirectories，不会出现两边说法不一致。
+const consoleTreeCollapsiblePaths = computed(() =>
+  collectCollapsibleDirectoryPaths(producedFileTree.value.directories),
+)
+
+const isConsoleTreeFullyCollapsed = computed(() =>
+  isTreeFullyCollapsed(consoleTreeCollapsiblePaths.value, collapsedConsoleDirectories.value),
+)
+
+const toggleConsoleTreeCollapsed = () => {
+  const paths = consoleTreeCollapsiblePaths.value
+  collapsedConsoleDirectories.value = isConsoleTreeFullyCollapsed.value
+    ? expandAllDirectories(paths, collapsedConsoleDirectories.value)
+    : collapseAllDirectories(paths, collapsedConsoleDirectories.value)
 }
 
 const selectConsoleFile = (path: string) => {
@@ -3433,9 +3451,24 @@ const handleKeyDown = (event: KeyboardEvent) => {
     >
         <template v-if="sidePanelTab === 'console'">
           <div class="mb-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <div class="mb-2 flex items-center justify-between">
-              <div class="text-xs font-medium text-slate-500">工作区文件</div>
-              <div class="text-[10px] text-slate-400">{{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}</div>
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <div class="shrink-0 text-xs font-medium text-slate-500">工作区文件</div>
+              <div class="flex min-w-0 items-center gap-1.5">
+                <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开 -->
+                <button
+                  v-if="consoleTreeCollapsiblePaths.length"
+                  type="button"
+                  class="flex h-5 shrink-0 items-center gap-1 rounded border border-transparent bg-transparent px-1 text-[10px] text-slate-400 transition-colors hover:border-slate-200 hover:bg-white hover:text-slate-600"
+                  :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+                  :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+                  data-console-tree-toggle="true"
+                  @click="toggleConsoleTreeCollapsed"
+                >
+                  <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
+                  <span>{{ isConsoleTreeFullyCollapsed ? '展开全部' : '折叠全部' }}</span>
+                </button>
+                <div class="shrink-0 text-[10px] text-slate-400">{{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}</div>
+              </div>
             </div>
             <div class="rounded-md bg-white px-2 py-2 text-xs">
               <div class="flex h-7 items-center gap-2 rounded px-1.5 font-mono text-slate-700">
