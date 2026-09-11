@@ -1432,8 +1432,8 @@ onUnmounted(() => {
           <button
             v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
-            :title="conversationConsoleVisible ? '收起控制台' : '展开控制台'"
-            :aria-label="conversationConsoleVisible ? '收起控制台' : '展开控制台'"
+            :title="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
+            :aria-label="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
             :aria-expanded="conversationConsoleVisible"
             data-conversation-console-toggle="true"
             @click="toggleConversationConsole"

@@ -13,7 +13,7 @@ interface Props {
 
 withDefaults(defineProps<Props>(), {
   subtitle: '',
-  triggerLabel: '控制台',
+  triggerLabel: '工作区',
   showTrigger: true,
   showClose: true,
 })
@@ -121,12 +121,17 @@ onBeforeUnmount(stopResize)
       />
     </div>
 
-    <div class="flex h-14 items-center justify-between border-b border-slate-100 px-4">
-      <div class="min-w-0">
-        <div class="text-sm font-semibold text-slate-800">{{ title }}</div>
-        <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
-          {{ subtitle }}
+    <div class="flex h-14 items-center gap-3 border-b border-slate-100 px-4">
+      <div class="flex min-w-0 flex-1 items-center gap-2">
+        <div class="min-w-0">
+          <div class="truncate text-sm font-semibold text-slate-800">{{ title }}</div>
+          <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
+            {{ subtitle }}
+          </div>
         </div>
+        <!-- 头部附加信息（如工作区文件数量、一键折叠目录）：紧贴标题右侧，
+             供调用方把原本挤在内容区卡片标题行上的状态挪上来 -->
+        <slot name="header-extra" />
       </div>
       <!-- 关闭按钮：工具栏右上角已有同功能的开关按钮，调用方传 show-close=false 时隐藏。
            保留实现而非删除，需要时把 :show-close="false" 去掉即可恢复。 -->

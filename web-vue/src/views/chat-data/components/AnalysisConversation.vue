@@ -759,10 +759,12 @@ const activeToolCall = computed(() => {
 const getVisibleToolCalls = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
   return toolCalls || []
 }
-const sidePanelTitle = computed(() => sidePanelTab.value === 'console' ? '控制台' : '工具详情')
+const sidePanelTitle = computed(() => sidePanelTab.value === 'console' ? '工作区' : '工具详情')
+// 工作区 tab 不再在头部重复显示根路径——文件树根节点已经写着同一个路径，
+// 需要恢复时把下面的 '' 换回 producedFileTree.value.root
 const sidePanelSubtitle = computed(() => (
   sidePanelTab.value === 'console'
-    ? producedFileTree.value.root
+    ? ''
     : '工具调用参数与结果'
 ))
 
@@ -960,6 +962,12 @@ const toggleConsoleTreeCollapsed = () => {
     ? expandAllDirectories(paths, collapsedConsoleDirectories.value)
     : collapseAllDirectories(paths, collapsedConsoleDirectories.value)
 }
+
+// 两处占位文案（树为空时的「暂无文件」、未选中文件时的「点击工作区文件查看内容。」）
+// 被认为冗余——文件数量已在面板头部、树本身空不空一眼可见。这里只隐藏渲染，
+// 模板与样式全部保留，需要恢复时把对应常量改回 true 即可。
+const SHOW_CONSOLE_EMPTY_STATE = false
+const SHOW_CONSOLE_FILE_PLACEHOLDER = false
 
 const selectConsoleFile = (path: string) => {
   const normalizedPath = normalizeVisiblePath(path)
@@ -3479,91 +3487,92 @@ const handleKeyDown = (event: KeyboardEvent) => {
       @open="openConsolePanel"
       @close="sidePanelOpen = false"
     >
-        <template v-if="sidePanelTab === 'console'">
-          <div class="mb-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <div class="shrink-0 text-xs font-medium text-slate-500">工作区文件</div>
-              <div class="flex min-w-0 items-center gap-1.5">
-                <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开。
-                     图标方按钮（与面板头部关闭按钮同一套视觉语言），文案走 title/aria-label
-                     而非行内文字——标题行窄，文字会把「N 个文件」挤掉行。 -->
-                <button
-                  v-if="consoleTreeCollapsiblePaths.length"
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
-                  :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-                  :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-                  data-console-tree-toggle="true"
-                  @click="toggleConsoleTreeCollapsed"
-                >
-                  <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
-                </button>
-                <div class="shrink-0 text-[10px] text-slate-400">{{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}</div>
-              </div>
+        <!-- 文件数量与「折叠全部目录」上移到面板头部「工作区」标题右侧，
+             内容区不再需要「工作区文件」卡片标题行，整层卡片外壳随之取消（少一层嵌套）。 -->
+        <template v-if="sidePanelTab === 'console'" #header-extra>
+          <div class="flex shrink-0 items-center gap-1.5">
+            <div class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">
+              {{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}
             </div>
-            <div class="rounded-md bg-white px-2 py-2 text-xs">
-              <div class="flex h-7 items-center gap-2 rounded px-1.5 font-mono text-slate-700">
-                <i class="fa-regular fa-folder-open w-4 text-center text-amber-500"></i>
-                <span class="font-medium">{{ producedFileTree.root }}</span>
-              </div>
-              <div class="mt-1 max-h-[300px] space-y-0.5 overflow-auto pr-1">
-                <div
-                  v-for="directory in producedFileTree.directories"
-                  :key="directory.name"
+            <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开。
+                 图标方按钮，文案走 title/aria-label 而非行内文字——头部行窄，文字会挤压标题。 -->
+            <button
+              v-if="consoleTreeCollapsiblePaths.length"
+              type="button"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
+              :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+              :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+              data-console-tree-toggle="true"
+              @click="toggleConsoleTreeCollapsed"
+            >
+              <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
+            </button>
+          </div>
+        </template>
+
+        <template v-if="sidePanelTab === 'console'">
+          <div class="mb-3 px-1 py-1 text-xs">
+            <div class="flex h-7 items-center gap-2 rounded px-1.5 font-mono text-slate-700">
+              <i class="fa-regular fa-folder-open w-4 text-center text-amber-500"></i>
+              <span class="font-medium">{{ producedFileTree.root }}</span>
+            </div>
+            <div class="mt-1 max-h-[300px] space-y-0.5 overflow-auto pr-1">
+              <div
+                v-for="directory in producedFileTree.directories"
+                :key="directory.name"
+              >
+                <button
+                  type="button"
+                  class="flex h-7 w-full items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-700 hover:bg-slate-50"
+                  @click="toggleConsoleDirectory(directory.path)"
                 >
-                  <button
-                    type="button"
-                    class="flex h-7 w-full items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-700 hover:bg-slate-50"
-                    @click="toggleConsoleDirectory(directory.path)"
+                  <i class="w-3 text-[10px] text-slate-400" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
+                  <i class="fa-regular w-4 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
+                  <span class="truncate font-mono font-semibold">{{ directory.name }}</span>
+                  <span class="shrink-0 text-slate-400">{{ directory.label }}</span>
+                  <span v-if="getFileCount(directory)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
+                </button>
+                <div v-if="directory.children.length && !isConsoleDirectoryCollapsed(directory.name)" class="space-y-0.5">
+                  <div
+                    v-for="item in flattenFileTreeNodes(directory.children)"
+                    :key="item.node.path"
+                    class="flex min-w-0 items-center text-slate-600"
                   >
-                    <i class="w-3 text-[10px] text-slate-400" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                    <i class="fa-regular w-4 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
-                    <span class="truncate font-mono font-semibold">{{ directory.name }}</span>
-                    <span class="shrink-0 text-slate-400">{{ directory.label }}</span>
-                    <span v-if="getFileCount(directory)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
-                  </button>
-                  <div v-if="directory.children.length && !isConsoleDirectoryCollapsed(directory.name)" class="space-y-0.5">
-                    <div
-                      v-for="item in flattenFileTreeNodes(directory.children)"
-                      :key="item.node.path"
-                      class="flex min-w-0 items-center text-slate-600"
+                    <button
+                      type="button"
+                      v-if="item.node.file"
+                      :class="[
+                        'flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-blue-50 hover:text-blue-700',
+                        selectedConsoleFilePath === item.node.file.relativePath ? 'bg-blue-50 text-blue-700' : ''
+                      ]"
+                      :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
+                      @click="selectConsoleFile(item.node.file.relativePath)"
                     >
-                      <button
-                        type="button"
-                        v-if="item.node.file"
-                        :class="[
-                          'flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-blue-50 hover:text-blue-700',
-                          selectedConsoleFilePath === item.node.file.relativePath ? 'bg-blue-50 text-blue-700' : ''
-                        ]"
-                        :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
-                        @click="selectConsoleFile(item.node.file.relativePath)"
-                      >
-                        <span class="w-3"></span>
-                        <i class="fa-regular fa-file-lines w-4 text-center text-slate-400"></i>
-                        <span class="truncate font-mono text-[13px]">{{ item.node.name }}</span>
-                      </button>
-                      <div
-                        v-else
-                        role="button"
-                        tabindex="0"
-                        class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-slate-50"
-                        :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
-                        @click="toggleConsoleDirectory(item.node.path)"
-                        @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
-                        @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
-                      >
-                        <i class="w-3 text-[10px] text-slate-400" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                        <i class="fa-regular w-4 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
-                        <span class="truncate font-mono text-[13px] font-semibold">{{ item.node.name }}</span>
-                        <span v-if="getFileCount(item.node)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
-                      </div>
+                      <span class="w-3"></span>
+                      <i class="fa-regular fa-file-lines w-4 text-center text-slate-400"></i>
+                      <span class="truncate font-mono text-[13px]">{{ item.node.name }}</span>
+                    </button>
+                    <div
+                      v-else
+                      role="button"
+                      tabindex="0"
+                      class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-slate-50"
+                      :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
+                      @click="toggleConsoleDirectory(item.node.path)"
+                      @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
+                      @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
+                    >
+                      <i class="w-3 text-[10px] text-slate-400" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
+                      <i class="fa-regular w-4 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
+                      <span class="truncate font-mono text-[13px] font-semibold">{{ item.node.name }}</span>
+                      <span v-if="getFileCount(item.node)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
                     </div>
                   </div>
                 </div>
               </div>
-              <div v-if="!producedFiles.length" class="mt-2 rounded bg-slate-50 px-2 py-2 text-xs text-slate-400">
-                暂无文件
-              </div>
+            </div>
+            <div v-if="SHOW_CONSOLE_EMPTY_STATE && !producedFiles.length" class="mt-2 rounded bg-slate-50 px-2 py-2 text-xs text-slate-400">
+              暂无文件
             </div>
           </div>
 
@@ -3729,7 +3738,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <pre v-else :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700' : 'm-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700'">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
             </div>
           </div>
-          <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
+          <div v-else-if="SHOW_CONSOLE_FILE_PLACEHOLDER" class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
             点击工作区文件查看内容。
           </div>
         </template>
