@@ -391,6 +391,8 @@ async def get_conversation_detail(
     conversation_id: str,
     req: Request,
     view: Literal["full", "timeline"] = "full",
+    limit: Optional[int] = Query(default=None, ge=1, le=600, description="仅返回最近 limit 条历史事件，用于长会话分页"),
+    before_sequence: Optional[int] = Query(default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"),
 ):
     """
     获取会话详情
@@ -402,6 +404,9 @@ async def get_conversation_detail(
         "status": "success",
         "data": {"id": "...", "title": "...", "messages": [...], "is_favorited": bool}
     }
+
+    limit 省略时返回全量历史（兼容旧行为）；指定后按轮次对齐返回尾部窗口，
+    并附带 has_more / earliest_sequence_no 供向上翻页。
     """
     try:
         if not conversation_id:
@@ -416,6 +421,8 @@ async def get_conversation_detail(
             conversation_id,
             user_id,
             include_derived_history=view == "full",
+            limit=limit,
+            before_sequence=before_sequence,
         )
         if not result:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")

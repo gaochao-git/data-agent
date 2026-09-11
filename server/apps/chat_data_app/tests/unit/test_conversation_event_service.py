@@ -741,3 +741,148 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
         content="结论", tool_call_id="call-3", name="task", additional_kwargs={"subagent_trail": []},
     ))
     assert "subagent_trail" not in empty
+
+
+async def _persist_qa_turn(
+    service,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    question: str,
+    answer: str,
+    extra_answers: tuple[str, ...] = (),
+    user_id: str = "user-1",
+) -> None:
+    """写入一轮「提问 + 回答」，默认产生两条事件；extra_answers 用于拉长单轮。"""
+    user = HumanMessage(content=question, id=turn_id)
+    await service.persist_user_message(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name="用户一",
+        message=user,
+    )
+    replies = [AIMessage(content=answer, id=f"assistant-{turn_id}")]
+    replies.extend(AIMessage(content=text, id=f"assistant-{turn_id}-{index}") for index, text in enumerate(extra_answers, start=1))
+    await service.persist_turn(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name="用户一",
+        turn_id=turn_id,
+        messages=[user, *replies],
+        reasoning_segments=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_history_window_pages_backwards_until_exhausted(conversation_event_service):
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-page", "user-1")
+    for index in range(1, 4):
+        await _persist_qa_turn(
+            service,
+            conversation_id="conv-page",
+            turn_id=f"turn-{index}",
+            question=f"问题{index}",
+            answer=f"回答{index}",
+        )
+
+    first_page = await service.load_history_with_recovery(
+        conversation_id="conv-page", user_id="user-1", limit=2,
+    )
+    assert first_page["has_more"] is True
+    assert [event["payload"]["content"] for event in first_page["history_events"]] == ["问题3", "回答3"]
+    assert first_page["earliest_sequence_no"] == first_page["history_events"][0]["sequence_no"]
+
+    second_page = await service.load_history_with_recovery(
+        conversation_id="conv-page", user_id="user-1", limit=2,
+        before_sequence=first_page["earliest_sequence_no"],
+    )
+    assert second_page["has_more"] is True
+    assert [event["payload"]["content"] for event in second_page["history_events"]] == ["问题2", "回答2"]
+
+    last_page = await service.load_history_with_recovery(
+        conversation_id="conv-page", user_id="user-1", limit=2,
+        before_sequence=second_page["earliest_sequence_no"],
+    )
+    assert last_page["has_more"] is False
+    assert [event["payload"]["content"] for event in last_page["history_events"]] == ["问题1", "回答1"]
+
+    merged = (
+        last_page["history_events"] + second_page["history_events"] + first_page["history_events"]
+    )
+    assert [event["event_type"] for event in merged] == ["user_message", "assistant_message"] * 3
+    assert [event["sequence_no"] for event in merged] == sorted(event["sequence_no"] for event in merged)
+
+
+@pytest.mark.asyncio
+async def test_history_window_extends_leading_turn_boundary(conversation_event_service):
+    """窗口截断处落在轮次中间时，必须补齐该轮更早的事件。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-boundary", "user-1")
+    for index in range(1, 4):
+        await _persist_qa_turn(
+            service,
+            conversation_id="conv-boundary",
+            turn_id=f"turn-{index}",
+            question=f"问题{index}",
+            answer=f"回答{index}",
+        )
+
+    # 尾部 3 条正好从 turn-2 的回答开始，属于切断轮次的情形
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-boundary", user_id="user-1", limit=3,
+    )
+    assert [event["payload"]["content"] for event in page["history_events"]] == [
+        "问题2", "回答2", "问题3", "回答3",
+    ]
+    assert page["has_more"] is True
+
+    older = await service.load_history_with_recovery(
+        conversation_id="conv-boundary", user_id="user-1", limit=3,
+        before_sequence=page["earliest_sequence_no"],
+    )
+    assert [event["payload"]["content"] for event in older["history_events"]] == ["问题1", "回答1"]
+    assert older["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_history_window_finishes_single_turn_longer_than_limit(conversation_event_service):
+    """单轮事件数超过 limit 时，补齐轮次后应判定为没有更早，避免多翻一次空页。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-long-turn", "user-1")
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-long-turn",
+        turn_id="turn-1",
+        question="长轮次问题",
+        answer="回答1",
+        extra_answers=("回答2", "回答3", "回答4"),
+    )
+
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-long-turn", user_id="user-1", limit=2,
+    )
+    assert [event["payload"]["content"] for event in page["history_events"]] == [
+        "长轮次问题", "回答1", "回答2", "回答3", "回答4",
+    ]
+    assert page["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_history_window_returns_full_history_when_shorter_than_limit(conversation_event_service):
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-short", "user-1")
+    await _persist_qa_turn(
+        service, conversation_id="conv-short", turn_id="turn-1", question="唯一问题", answer="唯一回答",
+    )
+
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-short", user_id="user-1", limit=50,
+    )
+    assert [event["payload"]["content"] for event in page["history_events"]] == ["唯一问题", "唯一回答"]
+    assert page["has_more"] is False
+
+    # 未指定 limit 时保持旧行为：全量 + has_more 恒为 False
+    full = await service.load_history_with_recovery(conversation_id="conv-short", user_id="user-1")
+    assert len(full["history_events"]) == 2
+    assert full["has_more"] is False

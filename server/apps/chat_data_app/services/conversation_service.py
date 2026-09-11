@@ -357,8 +357,13 @@ async def get_detail(
     user_id: Optional[str] = None,
     *,
     include_derived_history: bool = True,
+    limit: Optional[int] = None,
+    before_sequence: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    """从业务表和事件表获取会话详情。"""
+    """从业务表和事件表获取会话详情。
+
+    limit 指定时只返回历史事件的尾部窗口，配合 has_more 支持向上翻页。
+    """
     # 从数据库获取会话元信息
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if not thread:
@@ -370,6 +375,8 @@ async def get_detail(
         conversation_id=conversation_id,
         user_id=str(thread.user_id),
         include_derived=include_derived_history,
+        limit=limit,
+        before_sequence=before_sequence,
     )
     messages = [*(event_history.get("messages") or [])]
     history_events = [*(event_history.get("history_events") or [])]
@@ -383,6 +390,8 @@ async def get_detail(
         "reasoning_segments": reasoning_segments,
         "token_usage": event_history.get("token_usage"),
         "active_run": event_history.get("active_run"),
+        "has_more": bool(event_history.get("has_more")),
+        "earliest_sequence_no": event_history.get("earliest_sequence_no"),
         "is_favorited": is_favorited,
     }
 

@@ -1853,7 +1853,15 @@ const syncHistoryToolCalls = () => {
   toolCallsMap.value = nextMap
 }
 
-const { isLoadingHistory, loadedConversationId, loadHistory, resetHistory } = useConversationHistory({
+const {
+  isLoadingHistory,
+  loadedConversationId,
+  loadHistory,
+  resetHistory,
+  hasMoreHistory,
+  isLoadingEarlierHistory,
+  loadEarlierHistory,
+} = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
   tokenUsage,
@@ -1885,11 +1893,63 @@ watch(
 
 const getConversationDisplayContent = (content: string) => hideSemanticConfigSelectionPayloads(content).trim()
 
+// 距底部 100px 内视为「贴底」：内容增长时自动跟随，也容忍用户的小幅回滚
+const NEAR_BOTTOM_THRESHOLD_PX = 100
+
+const isScrolledToBottom = (container: HTMLElement) =>
+  container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
+
 const handleScroll = () => {
   const container = chatContainerRef.value
   if (!container) return
-  const { scrollTop, scrollHeight, clientHeight } = container
-  isNearBottom.value = scrollHeight - scrollTop - clientHeight < 100
+  isNearBottom.value = isScrolledToBottom(container)
+}
+
+// 用户上翻浏览历史后（isNearBottom=false）由「回到最新」按钮触发回到底部。
+// 平滑滚动途中每次 @scroll 都会按当前距离重算，会让按钮在滚到底前又冒出来，
+// 因此滚动期间用 rAF 维持跟随态，停稳（连续两帧 scrollTop 不变）后按真实位置校正。
+const scrollToLatest = () => {
+  const container = chatContainerRef.value
+  if (!container) return
+  isNearBottom.value = true
+  if (typeof container.scrollTo !== 'function') {
+    container.scrollTop = container.scrollHeight
+    return
+  }
+  container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+  let lastTop = container.scrollTop
+  // 负初值给出平滑滚动启动宽限，避免起手几帧就被判定为「已停稳」
+  let stableFrames = -6
+  const settle = () => {
+    // 组件已卸载或切了会话，锚点失效，放弃校正
+    if (container !== chatContainerRef.value) return
+    if (container.scrollTop !== lastTop) {
+      lastTop = container.scrollTop
+      stableFrames = 0
+      isNearBottom.value = true
+      requestAnimationFrame(settle)
+      return
+    }
+    if (++stableFrames < 2) {
+      requestAnimationFrame(settle)
+      return
+    }
+    isNearBottom.value = isScrolledToBottom(container)
+  }
+  requestAnimationFrame(settle)
+}
+
+// 向上翻页时把视口锚定在原消息上：补入更早内容后 scrollHeight 变大，
+// 若不补偿 scrollTop，视图会跳到别处，用户会失去阅读位置。
+const handleLoadEarlier = async () => {
+  const container = chatContainerRef.value
+  const previousHeight = container?.scrollHeight ?? 0
+  const previousTop = container?.scrollTop ?? 0
+  await loadEarlierHistory()
+  await nextTick()
+  if (!container) return
+  const grew = container.scrollHeight - previousHeight
+  if (grew > 0) container.scrollTop = previousTop + grew
 }
 
 // 工具失败现在由后端 ToolMessage.status="error" 显式标记，此处仅为旧数据兜底：
@@ -2032,6 +2092,8 @@ watch(
       activeAssistantMessageId.value = null
       resetTokenUsagePanel()
       resetHistory()
+      // 清空会话后视口回到顶部即底部，重置跟随状态，避免「回到最新」按钮残留
+      isNearBottom.value = true
       focusInput()
     }
   }
@@ -2919,6 +2981,17 @@ const handleKeyDown = (event: KeyboardEvent) => {
         ]"
         @scroll="handleScroll"
       >
+        <div v-if="hasMoreHistory && !isLoadingHistory" class="mb-3 flex justify-center">
+          <button
+            type="button"
+            class="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 text-[12px] text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="isLoadingEarlierHistory"
+            @click="handleLoadEarlier"
+          >
+            <i :class="['fa-solid text-[10px]', isLoadingEarlierHistory ? 'fa-spinner fa-spin' : 'fa-arrow-up']"></i>
+            <span>{{ isLoadingEarlierHistory ? '正在加载更早的消息...' : '加载更早的消息' }}</span>
+          </button>
+        </div>
         <div v-if="isLoadingHistory" class="h-full flex items-center justify-center text-sm text-slate-400">
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
@@ -3095,6 +3168,22 @@ const handleKeyDown = (event: KeyboardEvent) => {
             </div>
           </template>
         </ConversationMessageList>
+      </div>
+
+      <!-- 「回到最新」悬浮按钮：h-0 锚点贴在滚动区下边界，不占布局高度；
+           放在滚动容器之外，按钮不随内容滚动、也不会压住正文。
+           水平居中于输入栏上方（业内惯例位置），也自然避开右侧轮次导航刻度带。 -->
+      <div class="relative z-20 h-0">
+        <button
+          v-if="!isNearBottom"
+          type="button"
+          class="absolute -top-14 left-1/2 inline-flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-[0_6px_16px_rgba(15,23,42,0.14)] transition-colors hover:border-blue-200 hover:text-[#1677FF]"
+          title="回到最新"
+          aria-label="回到最新"
+          @click="scrollToLatest"
+        >
+          <i class="fa-solid fa-chevron-down text-xs"></i>
+        </button>
       </div>
 
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">

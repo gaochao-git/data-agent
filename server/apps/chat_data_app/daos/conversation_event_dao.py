@@ -203,17 +203,102 @@ class ConversationEventDao:
         user_id: str,
     ) -> list[ChatDataConversationEvent]:
         """在调用方事务内读取可见历史事件。"""
+        rows, _ = await self.list_visible_event_window_in_session(
+            session,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        return rows
+
+    @staticmethod
+    def _visible_event_filters(*, conversation_id: str, user_id: str) -> list[Any]:
+        """可见历史事件共用的过滤条件；每次返回新列表，调用方可安全追加条件。"""
+        return [
+            ChatDataConversationEvent.conversation_id == conversation_id,
+            ChatDataConversationEvent.user_id == user_id,
+            ChatDataConversationEvent.delete_flag == 0,
+            ChatDataConversationEvent.event_type != "token_usage",
+        ]
+
+    async def list_visible_event_window_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        user_id: str,
+        limit: int | None = None,
+        before_sequence: int | None = None,
+    ) -> tuple[list[ChatDataConversationEvent], bool]:
+        """读取可见历史事件窗口，返回 (按序号升序的事件, 是否还有更早)。
+
+        limit 为空时返回全量且 has_more 恒为 False，与旧行为一致。
+        指定 limit 时按 sequence_no 倒序取尾部若干条，再把最早一条所属轮次的前半段
+        补齐——否则首屏可能从某一轮中间截断，渲染出没有提问的半截回答。
+        """
+        conditions = self._visible_event_filters(conversation_id=conversation_id, user_id=user_id)
+        if before_sequence is not None:
+            conditions.append(ChatDataConversationEvent.sequence_no < before_sequence)
+        stmt = select(ChatDataConversationEvent).where(*conditions)
+        if limit is None:
+            result = await session.execute(
+                stmt.order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
+            )
+            return list(result.scalars().all()), False
+
+        result = await session.execute(
+            stmt.order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc())
+            .limit(limit)
+        )
+        rows = list(reversed(list(result.scalars().all())))
+        rows = await self._extend_leading_turn(session, rows, conditions=conditions)
+        if not rows:
+            return [], False
+        has_more = await self._has_earlier_events_in_session(
+            session,
+            conditions=conditions,
+            earlier_than=int(rows[0].sequence_no),
+        )
+        return rows, has_more
+
+    async def _extend_leading_turn(
+        self,
+        session: AsyncSession,
+        rows: list[ChatDataConversationEvent],
+        *,
+        conditions: list[Any],
+    ) -> list[ChatDataConversationEvent]:
+        """补齐窗口最早一条所属轮次的更早事件，保证轮次不被切断。"""
+        if not rows:
+            return rows
+        leading_turn_id = str(rows[0].turn_id or "").strip()
+        if not leading_turn_id:
+            return rows
         result = await session.execute(
             select(ChatDataConversationEvent)
             .where(
-                ChatDataConversationEvent.conversation_id == conversation_id,
-                ChatDataConversationEvent.user_id == user_id,
-                ChatDataConversationEvent.delete_flag == 0,
-                ChatDataConversationEvent.event_type != "token_usage",
+                *conditions,
+                ChatDataConversationEvent.turn_id == leading_turn_id,
+                ChatDataConversationEvent.sequence_no < rows[0].sequence_no,
             )
             .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
         )
-        return list(result.scalars().all())
+        leading = list(result.scalars().all())
+        return leading + rows if leading else rows
+
+    @staticmethod
+    async def _has_earlier_events_in_session(
+        session: AsyncSession,
+        *,
+        conditions: list[Any],
+        earlier_than: int,
+    ) -> bool:
+        """只探测是否还存在更早事件，不读取 payload。"""
+        probe = await session.scalar(
+            select(ChatDataConversationEvent.id)
+            .where(*conditions, ChatDataConversationEvent.sequence_no < earlier_than)
+            .limit(1)
+        )
+        return probe is not None
 
     async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
         """读取会话级 token_usage 快照（event_key 固定为 token_usage:latest 的单行 upsert）。"""

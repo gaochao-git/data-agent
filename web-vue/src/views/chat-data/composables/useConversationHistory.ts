@@ -535,6 +535,21 @@ interface UseConversationHistoryOptions {
   } | null) => void
 }
 
+/** 历史事件单页条数：长会话全量拉取的字节量随会话线性增长，是加载变慢的主因 */
+export const HISTORY_PAGE_SIZE = 100
+
+/** 读取窗口内最小 sequence_no，作为向上翻页的游标；无法解析时返回 null */
+const readEarliestSequenceNo = (events: unknown[]): number | null => {
+  let earliest: number | null = null
+  for (const raw of events) {
+    if (!raw || typeof raw !== 'object') continue
+    const value = Number((raw as { sequence_no?: unknown }).sequence_no)
+    if (!Number.isFinite(value)) continue
+    if (earliest === null || value < earliest) earliest = value
+  }
+  return earliest
+}
+
 export function useConversationHistory({
   conversationId,
   messages,
@@ -544,6 +559,16 @@ export function useConversationHistory({
   const isLoadingHistory = ref(false)
   const loadedConversationId = ref<string | null>(null)
   const isFirstMessage = ref(true)
+  // 保留原始事件而非只保留渲染结果，向上翻页时才能把更早事件拼回同一序列重建消息
+  const historyEvents = ref<unknown[]>([])
+  const hasMoreHistory = ref(false)
+  const isLoadingEarlierHistory = ref(false)
+
+  const applyHistoryEvents = (events: unknown[]) => {
+    historyEvents.value = events
+    messages.value = buildHistoryMessagesFromEvents(events)
+    isFirstMessage.value = messages.value.length === 0
+  }
 
   // 加载历史消息
   const loadHistory = async (convId: string, force = false) => {
@@ -561,27 +586,66 @@ export function useConversationHistory({
     const showLoading = !force || messages.value.length === 0
     if (showLoading) isLoadingHistory.value = true
     try {
-      const response = await getConversationHistory(convId)
+      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE })
 
       if (response.ok) {
         const data = await response.json()
         const historyMessages = data.data?.messages || []
-        const historyEvents = data.data?.history_events
+        const historyEventsRaw = data.data?.history_events
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
         const historyTokenUsage = data.data?.token_usage
         tokenUsage && (tokenUsage.value = historyTokenUsage && typeof historyTokenUsage === 'object' ? historyTokenUsage as ChatDataTokenUsage : null)
         onActiveRunLoaded?.(normalizeActiveRun(data.data?.active_run))
 
-        messages.value = Array.isArray(historyEvents) && historyEvents.length > 0
-          ? buildHistoryMessagesFromEvents(historyEvents)
-          : buildHistoryMessages(historyMessages, historyReasoningSegments)
-        isFirstMessage.value = messages.value.length === 0
+        if (Array.isArray(historyEventsRaw) && historyEventsRaw.length > 0) {
+          applyHistoryEvents(historyEventsRaw)
+        } else {
+          historyEvents.value = []
+          messages.value = buildHistoryMessages(historyMessages, historyReasoningSegments)
+          isFirstMessage.value = messages.value.length === 0
+        }
+        hasMoreHistory.value = Boolean(data.data?.has_more)
       }
       loadedConversationId.value = convId
     } catch (error) {
       console.error('加载历史消息失败:', error)
     } finally {
       if (showLoading) isLoadingHistory.value = false
+    }
+  }
+
+  // 向上翻页：拉取比当前窗口更早的一页，拼回序列后重建消息
+  const loadEarlierHistory = async () => {
+    const convId = conversationId.value
+    if (!convId || isLoadingEarlierHistory.value || !hasMoreHistory.value) return
+    const cursor = readEarliestSequenceNo(historyEvents.value)
+    if (cursor === null) {
+      // 拿不到游标说明历史结构异常，停止翻页避免死循环
+      hasMoreHistory.value = false
+      return
+    }
+    isLoadingEarlierHistory.value = true
+    try {
+      const response = await getConversationHistory(convId, {
+        limit: HISTORY_PAGE_SIZE,
+        beforeSequence: cursor,
+      })
+      // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
+      if (!response.ok || conversationId.value !== convId) return
+      const data = await response.json()
+      const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
+      hasMoreHistory.value = Boolean(data.data?.has_more)
+      if (olderEvents.length === 0) return
+      historyEvents.value = [...olderEvents, ...historyEvents.value]
+      // 前拼而不是整表重建：messages 里还有历史窗口之外的本会话实时消息
+      // （已发送未落库的提问、流式进行中的回答），applyHistoryEvents 全量重建会把它们抹掉。
+      // 后端保证每页两端都是轮次边界，旧页单独构建与前拼的结果和全量重建一致。
+      messages.value = [...buildHistoryMessagesFromEvents(olderEvents), ...messages.value]
+      isFirstMessage.value = messages.value.length === 0
+    } catch (error) {
+      console.error('加载更早的历史消息失败:', error)
+    } finally {
+      isLoadingEarlierHistory.value = false
     }
   }
 
@@ -607,6 +671,8 @@ export function useConversationHistory({
   const resetHistory = () => {
     loadedConversationId.value = null
     isFirstMessage.value = true
+    historyEvents.value = []
+    hasMoreHistory.value = false
   }
 
   return {
@@ -615,6 +681,9 @@ export function useConversationHistory({
     isFirstMessage,
     loadHistory,
     resetHistory,
+    hasMoreHistory,
+    isLoadingEarlierHistory,
+    loadEarlierHistory,
   }
 }
 

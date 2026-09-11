@@ -271,8 +271,8 @@ def test_build_history_payload_tolerates_empty_rows():
 @pytest.mark.asyncio
 async def test_load_history_in_session_survives_token_usage_failure():
     class SessionDao(SnapshotDao):
-        async def list_visible_events_in_session(self, _session, **_kwargs):
-            return [_row(1, "user_message", '{"id":"turn-1","role":"user","content":"保留"}')]
+        async def list_visible_event_window_in_session(self, _session, **_kwargs):
+            return [_row(1, "user_message", '{"id":"turn-1","role":"user","content":"保留"}')], False
 
         async def get_latest_token_usage_payload_in_session(self, _session, **_kwargs):
             raise RuntimeError("token usage 表不可用")
@@ -292,8 +292,8 @@ async def test_load_history_in_session_survives_token_usage_failure():
 @pytest.mark.asyncio
 async def test_load_history_with_recovery_exposes_active_run_watermark():
     class SessionDao(SnapshotDao):
-        async def list_visible_events_in_session(self, _session, **_kwargs):
-            return [_row(1, "user_message", '{"id":"turn-1","role":"user","content":"保留"}')]
+        async def list_visible_event_window_in_session(self, _session, **_kwargs):
+            return [_row(1, "user_message", '{"id":"turn-1","role":"user","content":"保留"}')], False
 
         async def get_latest_token_usage_payload_in_session(self, _session, **_kwargs):
             return '{"total": 5}'

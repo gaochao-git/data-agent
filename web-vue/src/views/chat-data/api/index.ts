@@ -1438,11 +1438,18 @@ export function streamQuickSql(data: {
   })
 }
 
-/** 获取会话历史（流式接口） */
-export function getConversationHistory(conversationId: string): Promise<Response> {
+/** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
+export function getConversationHistory(
+  conversationId: string,
+  options?: { limit?: number; beforeSequence?: number },
+): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}`,
-    params: { view: 'timeline' },
+    params: {
+      view: 'timeline',
+      limit: options?.limit,
+      before_sequence: options?.beforeSequence,
+    },
   })
 }
 

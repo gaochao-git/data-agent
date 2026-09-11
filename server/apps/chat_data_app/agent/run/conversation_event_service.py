@@ -242,13 +242,22 @@ class ConversationEventService:
         conversation_id: str,
         user_id: str,
         include_derived: bool = True,
+        limit: int | None = None,
+        before_sequence: int | None = None,
     ) -> dict[str, Any]:
-        """在同一事务读取历史和活跃 Run 的恢复水位。"""
+        """在同一事务读取历史和活跃 Run 的恢复水位。
+
+        limit 为空时返回全量会话历史；指定 limit 时只返回尾部窗口，并通过
+        has_more / earliest_sequence_no 支持向上翻页。长会话全量拉取会让
+        payload 字节数随会话线性增长，是历史加载变慢的主因。
+        """
         async with self._dao.session_context() as session:
-            rows = await self._dao.list_visible_events_in_session(
+            rows, has_more = await self._dao.list_visible_event_window_in_session(
                 session,
                 conversation_id=conversation_id,
                 user_id=user_id,
+                limit=limit,
+                before_sequence=before_sequence,
             )
             try:
                 token_usage_payload = await self._dao.get_latest_token_usage_payload_in_session(
@@ -271,6 +280,8 @@ class ConversationEventService:
             return {
                 **self._build_history_payload(rows, token_usage_payload, include_derived),
                 "active_run": self._active_run_payload(active_run),
+                "has_more": has_more,
+                "earliest_sequence_no": int(rows[0].sequence_no) if rows else None,
             }
 
     @staticmethod
