@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatRelativeConversationTime } from '../dateTime'
+import { formatEpochDateTime, formatRelativeConversationTime } from '../dateTime'
 
 const buildNow = (): Date => new Date('2026-08-28T12:00:00')
 
@@ -36,5 +36,35 @@ describe('formatRelativeConversationTime', () => {
     expect(formatRelativeConversationTime(undefined, buildNow())).toBe('')
     expect(formatRelativeConversationTime('', buildNow())).toBe('')
     expect(formatRelativeConversationTime('not-a-date', buildNow())).toBe('')
+  })
+})
+
+describe('formatEpochDateTime（秒级时间戳，工作区文件的 st_mtime）', () => {
+  // 用本地时间字符串反推时间戳，避免测试依赖运行环境的时区
+  const secondsOf = (localText: string): number =>
+    Math.floor(new Date(localText.replace(' ', 'T')).getTime() / 1000)
+
+  it('输出 YYYY-MM-DD HH:mm:ss 本地时间', () => {
+    expect(formatEpochDateTime(secondsOf('2026-09-11 14:32:05'))).toBe('2026-09-11 14:32:05')
+    expect(formatEpochDateTime(secondsOf('2025-11-01 09:05:00'))).toBe('2025-11-01 09:05:00')
+  })
+
+  it('每行等宽：个位数的月/日/时/分/秒都补零', () => {
+    const text = formatEpochDateTime(secondsOf('2026-01-02 03:04:05'))
+    expect(text).toBe('2026-01-02 03:04:05')
+    expect(text).toHaveLength(19)
+  })
+
+  it('st_mtime 的小数部分被截断（秒级精度足够）', () => {
+    expect(formatEpochDateTime(secondsOf('2026-09-11 14:32:05') + 0.87)).toBe('2026-09-11 14:32:05')
+  })
+
+  it('0 / 负数 / 非有限值 / 空值返回空串，不显示成 1970-01-01', () => {
+    expect(formatEpochDateTime(0)).toBe('')
+    expect(formatEpochDateTime(-1)).toBe('')
+    expect(formatEpochDateTime(Number.NaN)).toBe('')
+    expect(formatEpochDateTime(Number.POSITIVE_INFINITY)).toBe('')
+    expect(formatEpochDateTime(null)).toBe('')
+    expect(formatEpochDateTime(undefined)).toBe('')
   })
 })

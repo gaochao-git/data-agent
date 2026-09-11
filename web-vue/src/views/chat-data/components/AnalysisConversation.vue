@@ -27,7 +27,7 @@ import SkillCommandMenu from './SkillCommandMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
+import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -35,7 +35,7 @@ import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../utils/analysisTodos'
 import { createTopReachTracker } from '../utils/scrollReach'
-import { collapseAllDirectories, collectCollapsibleDirectoryPaths, expandAllDirectories, isTreeFullyCollapsed } from '../utils/consoleFileTree'
+import { collapseAllDirectories, collectCollapsibleDirectoryPaths, DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES, expandAllDirectories, formatFileSize, isTreeFullyCollapsed, isWorkspaceFileDownloadable, syncTruncatedTitle } from '../utils/consoleFileTree'
 
 interface Props {
   datasource?: DataSource | null
@@ -635,7 +635,8 @@ const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
 const sidePanelTab = ref<'console' | 'tool'>('console')
 const selectedConsoleFilePath = ref<string | null>(null)
-const collapsedConsoleDirectories = ref<Set<string>>(new Set(['uploads']))
+// 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
+const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
@@ -801,6 +802,10 @@ interface ProducedFile {
   displayPath: string
   source: string
   status: string
+  /** 字节数，来自工作区列表接口的 st_size；行尾展示用，拿不到时为 0 且不渲染 */
+  size: number
+  /** 修改时间（秒级 Unix 时间戳，后端 st_mtime）；行尾展示用，拿不到时为 0 且不渲染 */
+  mtime: number
 }
 
 interface ProducedFileTreeNode {
@@ -835,19 +840,27 @@ const toSandboxDisplayPath = (path: unknown): string => {
   return `/mnt/user-data/${relativePath}`
 }
 
-const pushProducedFile = (files: ProducedFile[], path: string, source: string, status: string) => {
+const pushProducedFile = (files: ProducedFile[], path: string, source: string, status: string, size: number, mtime: number) => {
   const relativePath = normalizeVisiblePath(path)
   const rootDirectory = relativePath.split('/')[0] || ''
   if (!['uploads', 'workspace', 'outputs'].includes(rootDirectory)) return
   const displayPath = relativePath ? toSandboxDisplayPath(relativePath) : ''
   if (!path || !relativePath) return
-  files.push({ path, fullPath: displayPath, relativePath, displayPath, source, status })
+  files.push({ path, fullPath: displayPath, relativePath, displayPath, source, status, size, mtime })
 }
 
 const producedFiles = computed(() => {
   const files: ProducedFile[] = []
   for (const file of workspaceFiles.value) {
-    pushProducedFile(files, file.relative_path || file.path, file.source || 'workspace', 'completed')
+    // 列表接口已带 size/mtime（后端 list_workspace_files 里 stat 一次就有），无需额外请求
+    pushProducedFile(
+      files,
+      file.relative_path || file.path,
+      file.source || 'workspace',
+      'completed',
+      Number(file.size) || 0,
+      Number(file.mtime) || 0,
+    )
   }
   return files
 })
@@ -1021,6 +1034,36 @@ const flattenFileTreeNodes = (nodes: ProducedFileTreeNode[], depth = 1): Visible
   })
   return visible
 }
+
+// 文件树每级的左缩进。基准 6px 必须等于顶层目录行按钮的 px-1.5，之后每级固定 +18px——
+// 两端用同一个基准，「顶层目录 → 它的子节点」这一步的跨度才和更深层一致。
+// （此前基准写的是 10px：第一级跨度 22px、后面 18px，居中那一级看着就比上下两级偏右。）
+const CONSOLE_TREE_INDENT_BASE_PX = 6
+const CONSOLE_TREE_INDENT_STEP_PX = 18
+const consoleTreeIndentStyle = (depth: number) => ({
+  paddingLeft: `${CONSOLE_TREE_INDENT_BASE_PX + depth * CONSOLE_TREE_INDENT_STEP_PX}px`,
+})
+
+// 行首「展开箭头 / 占位」槽位宽度。文件行用 w-3 的空 span（正好 12px），目录行的箭头是 FA 图标——
+// FA 7 在 `.fa-solid/.fa-regular` 上有一条 `width: var(--fa-width, 1.25em)`，优先级与 `.w-3` 相同且更靠后，
+// 所以 w-3/w-4 这类宽度类在图标上是不生效的：箭头实际宽 1.25em（text-[10px] 时为 12.5px），
+// 比文件行宽 0.5px，会让「目录行」的同名列比「文件行」整体右移半像素。这里显式钉成 12px 对齐。
+// 箭头字形在盒内左对齐，钉窄后字形本身不动，只有其后的文件夹图标与名字左移 0.5px。
+const CONSOLE_TREE_LEAD_SLOT_PX = 12
+const consoleTreeLeadSlotStyle = { width: `${CONSOLE_TREE_LEAD_SLOT_PX}px` }
+
+// 行尾「修改时间 / 大小」两列。
+// 时间是 YYYY-MM-DD HH:mm:ss（19 字符定长），每行天然等宽，给 shrink-0 就够，不必钉宽度；
+// 大小则长度不一（「7 KB」28.8px vs「18.7 KB」44.7px），不钉宽度会把时间列的右边缘顶得忽左忽右，
+// 所以按实测最大内容给固定宽度 + 右对齐（字号改动需同步复测）。
+//
+// 两侧还会在面板被拖窄时整体收起（见 CONSOLE_TREE_META_VISIBILITY_CLASS）：这两列合计约 167px，
+// 加上 24px 缩进、33px 占位+图标、56px 行尾操作位与内边距，面板一窄就只剩名字被压成省略号。
+// 用容器查询（`@container` 落在树包裹层上）而不是 JS 监听宽度：拖拽改的是行内 width，
+// 容器查询会自动响应，且不必因为几像素变化就重渲染整棵树。
+const CONSOLE_TREE_META_VISIBILITY_CLASS = 'hidden @min-[400px]:block'
+const CONSOLE_TREE_TIME_COLUMN_CLASS = `shrink-0 text-[10px] tabular-nums text-slate-400 ${CONSOLE_TREE_META_VISIBILITY_CLASS}`
+const CONSOLE_TREE_SIZE_COLUMN_CLASS = `w-[46px] shrink-0 text-right text-[10px] tabular-nums text-slate-400 ${CONSOLE_TREE_META_VISIBILITY_CLASS}`
 
 const parseToolResultPayload = (result?: string): Record<string, unknown> | null => {
   const text = String(result || '').trim()
@@ -1402,6 +1445,14 @@ const scheduleWorkspaceFilesRefresh = () => {
     workspaceFilesRefreshTimer.value = null
     loadWorkspaceFiles(localConversationId.value)
   }, 500)
+}
+
+// 手动刷新文件列表（预览区头部按钮）。tool_result 与 run 结束都会自动刷新，
+// 这里只是给用户一个兜底入口。传 localConversationId 与自动刷新保持一致：
+// loadWorkspaceFiles 在 id 不匹配时会丢弃结果且不复位 loading 态。
+const refreshWorkspaceFiles = () => {
+  if (!localConversationId.value) return
+  void loadWorkspaceFiles(localConversationId.value)
 }
 
 const OFFICE_HTML_PREVIEW_EXTENSIONS = new Set(['docx', 'xlsx', 'pptx'])
@@ -1852,11 +1903,21 @@ const handleDownloadPresentedArtifact = async (artifact: PresentedDeliveryArtifa
   }
 }
 
-// outputs 目录下的文件在控制台直接提供下载，不依赖智能体是否调用过展示工具
-const handleDownloadConsoleFile = async () => {
-  const file = selectedConsoleFile.value
-  const conversationId = localConversationId.value
-  if (!file || file.source !== 'outputs' || !conversationId) return
+// 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
+// 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
+// SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
+// file 由文件树每行的下载按钮传入；不传时回退到当前选中文件（兼容旧调用点）。
+const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedConsoleFile.value) => {
+  const conversationId = props.conversationId || localConversationId.value
+  if (!file) return
+  if (!isWorkspaceFileDownloadable(file.relativePath)) {
+    ElMessage.warning('该文件不允许下载')
+    return
+  }
+  if (!conversationId) {
+    ElMessage.warning('会话未就绪，无法下载文件')
+    return
+  }
   try {
     const blob = await getConversationWorkspaceRawFile(conversationId, file.relativePath)
     const url = URL.createObjectURL(blob)
@@ -1868,8 +1929,64 @@ const handleDownloadConsoleFile = async () => {
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch (err) {
-    console.error('下载输出文件失败:', err)
+    console.error('下载工作区文件失败:', err)
     ElMessage.error('文件下载失败，请稍后重试')
+  }
+}
+
+// 面板内补充文件：只把文件落进 uploads（会话工作区），**不**进入 pendingFiles，
+// 也就是不挂到下一轮消息的附件上——智能体需要时通过 parse_document/file_list 自行读取。
+// 这条链路是现成的：app 侧 uploads 为权威副本，沙箱在执行前按 manifest 增量镜像，
+// 而 agent 的文件工具对 uploads 只读，用户是 uploads 唯一合法写入者。
+const workspaceUploadInputRef = ref<HTMLInputElement | null>(null)
+const isWorkspaceFileUploading = ref(false)
+
+const openWorkspaceUploadPicker = () => {
+  if (isWorkspaceFileUploading.value) return
+  workspaceUploadInputRef.value?.click()
+}
+
+const handleWorkspaceUploadSelected = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  if (!ACCEPTED_FILE_TYPES.includes(ext)) {
+    ElMessage.warning(`仅支持 ${ACCEPTED_FILE_TYPES.join('、')} 格式`)
+    return
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    ElMessage.warning('文件大小不能超过 50MB')
+    return
+  }
+
+  let convId = props.conversationId || localConversationId.value
+  if (!convId) {
+    convId = (await props.ensureConversationId?.()) ?? null
+    if (!convId) {
+      ElMessage.error('创建会话失败，请稍后重试')
+      return
+    }
+    localConversationId.value = convId
+    // 刚创建的新会话无历史，标记已加载，避免触发历史加载导致 isLoadingHistory 闪烁
+    loadedConversationId.value = convId
+  }
+
+  isWorkspaceFileUploading.value = true
+  try {
+    const res = await uploadFile(convId, file)
+    if (res.status !== 'success') {
+      ElMessage.error(res.msg || '上传失败')
+      return
+    }
+    ElMessage.success(`已上传 ${res.data.original_filename}`)
+    scheduleWorkspaceFilesRefresh()
+  } catch {
+    ElMessage.error('文件上传失败')
+  } finally {
+    isWorkspaceFileUploading.value = false
   }
 }
 
@@ -3475,6 +3592,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
         :accept="ACCEPTED_FILE_TYPES.join(',')"
         @change="handleFileSelected"
       />
+      <!-- 工作区面板的补充文件入口：与输入栏上传复用同一接口，但结果只落 uploads、不挂到消息附件 -->
+      <input
+        ref="workspaceUploadInputRef"
+        type="file"
+        class="hidden"
+        :accept="ACCEPTED_FILE_TYPES.join(',')"
+        data-workspace-upload-input="true"
+        @change="handleWorkspaceUploadSelected"
+      />
       <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
     </div>
 
@@ -3487,85 +3613,169 @@ const handleKeyDown = (event: KeyboardEvent) => {
       @open="openConsolePanel"
       @close="sidePanelOpen = false"
     >
-        <!-- 文件数量与「折叠全部目录」上移到面板头部「工作区」标题右侧，
-             内容区不再需要「工作区文件」卡片标题行，整层卡片外壳随之取消（少一层嵌套）。 -->
+        <!-- 头部这一行从左到右：标题「工作区」→ 工作区根路径 →「折叠/展开全部」按钮 →（行尾）文件数量。
+             根路径原先占着文件树的第一行（/mnt/user-data 文件夹行），上移到标题行后树里不再有
+             这一级、同一件事不重复表达，树也少一行高度；一键折叠/展开按钮跟着根路径走——它折叠的
+             就是这棵树里的全部目录，与各目录行左侧的箭头属同一族操作，紧挨根路径放语义最直白。
+             上传是 uploads 目录专属的写入入口，已下沉到 uploads 目录行（就近绑定）。
+             数量徽标贴行尾：pr-[13px] 让它与下方文件树里的数量徽标落在同一条竖线上——头部容器有 px-4(16px)，
+             文件树里的数量徽标右边缘距面板右沿 29px（内容区 p-4 16 + 树容器 px-1 4 + 目录区域边框 1 + 滚动容器 px-1 4 + 行 pr-1 4），
+             这里补 13px 补齐差值。改文件树的内边距或边框时要同步这一处。 -->
+        <template v-if="sidePanelTab === 'console'" #header-inline>
+          <span class="min-w-0 truncate font-mono text-xs font-normal text-slate-400">{{ producedFileTree.root }}</span>
+          <button
+            v-if="consoleTreeCollapsiblePaths.length"
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
+            :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+            :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
+            data-console-tree-toggle="true"
+            @click="toggleConsoleTreeCollapsed"
+          >
+            <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
+          </button>
+        </template>
+
         <template v-if="sidePanelTab === 'console'" #header-extra>
-          <div class="flex shrink-0 items-center gap-1.5">
+          <div class="flex shrink-0 items-center pr-[13px]">
             <div class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">
               {{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}
             </div>
-            <!-- 一键折叠/展开全部目录：目录多、层级深时不必一层层点开。
-                 图标方按钮，文案走 title/aria-label 而非行内文字——头部行窄，文字会挤压标题。 -->
-            <button
-              v-if="consoleTreeCollapsiblePaths.length"
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
-              :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-              :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-              data-console-tree-toggle="true"
-              @click="toggleConsoleTreeCollapsed"
-            >
-              <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
-            </button>
           </div>
         </template>
 
         <template v-if="sidePanelTab === 'console'">
-          <div class="mb-3 px-1 py-1 text-xs">
-            <div class="flex h-7 items-center gap-2 rounded px-1.5 font-mono text-slate-700">
-              <i class="fa-regular fa-folder-open w-4 text-center text-amber-500"></i>
-              <span class="font-medium">{{ producedFileTree.root }}</span>
-            </div>
-            <div class="mt-1 max-h-[300px] space-y-0.5 overflow-auto pr-1">
+          <!-- 树的左缩进体系：顶层目录行用 px-1.5（6px）作基准，子层用 consoleTreeIndentStyle(depth)。
+               改这里的 px-1.5 时必须同步 CONSOLE_TREE_INDENT_BASE_PX，否则第一级跨度会与后续级不等。
+               根路径（/mnt/user-data）那一行已上移到面板头部标题行，这里直接从顶层目录开始。
+               目录区域套一圈细边框，把「树」从面板的空白底上框出来：目录行是 7px 高、缩进逐级变化的
+               文字行，没有边界时视线容易散到面板空白处；框住之后区域范围一眼可见（也顺带标出
+               滚动区的范围）。空树时整块不渲染——留一个空框比不画更难解释。
+               树容器仍带 @container：「时间 / 大小」两列的显隐按它的宽度算，与边框无关。 -->
+          <div v-if="producedFileTree.directories.length" class="mb-3 px-1 py-1 text-xs @container">
+            <div class="max-h-[300px] space-y-0.5 overflow-auto rounded-md border border-slate-200 px-1 py-1">
               <div
                 v-for="directory in producedFileTree.directories"
                 :key="directory.name"
               >
-                <button
-                  type="button"
-                  class="flex h-7 w-full items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-700 hover:bg-slate-50"
-                  @click="toggleConsoleDirectory(directory.path)"
-                >
-                  <i class="w-3 text-[10px] text-slate-400" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                  <i class="fa-regular w-4 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
-                  <span class="truncate font-mono font-semibold">{{ directory.name }}</span>
-                  <span class="shrink-0 text-slate-400">{{ directory.label }}</span>
-                  <span v-if="getFileCount(directory)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
-                </button>
+                <div class="flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50">
+                  <button
+                    type="button"
+                    class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left text-slate-700"
+                    @click="toggleConsoleDirectory(directory.path)"
+                  >
+                    <i class="w-3 shrink-0 text-[10px] text-slate-400" :style="consoleTreeLeadSlotStyle" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
+                    <i class="fa-regular w-4 shrink-0 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
+                    <span class="truncate font-mono font-semibold" @mouseenter="syncTruncatedTitle">{{ directory.name }}</span>
+                    <span class="shrink-0 text-slate-400">{{ directory.label }}</span>
+                  </button>
+                  <!-- 上传入口挂在 uploads 目录行：它是 uploads 的唯一写入方，
+                       与「往这个目录补文件」在语义上就近绑定，比塞在面板头部更好找。
+                       该目录行由 PRODUCED_FILE_DIRECTORIES 常驻渲染，空会话也有入口。
+                       文件只落 uploads（不进 pendingFiles、不挂到下一轮消息附件），
+                       智能体需要时经 parse_document / file_list 自行读取。 -->
+                  <button
+                    v-if="directory.name === 'uploads'"
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-50"
+                    title="上传文件到工作区"
+                    aria-label="上传文件到工作区"
+                    :disabled="isWorkspaceFileUploading"
+                    data-console-upload="true"
+                    @click="openWorkspaceUploadPicker"
+                  >
+                    <i class="fa-solid" :class="isWorkspaceFileUploading ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
+                  </button>
+                  <!-- 数量徽标统一放在每行最右端（按钮在其左侧），与面板头部同序：
+                       所有数量落在同一条竖线上，扫一眼就能纵向比对。 -->
+                  <span v-if="getFileCount(directory)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
+                </div>
                 <div v-if="directory.children.length && !isConsoleDirectoryCollapsed(directory.name)" class="space-y-0.5">
                   <div
                     v-for="item in flattenFileTreeNodes(directory.children)"
                     :key="item.node.path"
-                    class="flex min-w-0 items-center text-slate-600"
+                    class="min-w-0"
                   >
-                    <button
-                      type="button"
+                    <!-- 文件行：单行承载「选中预览 + 行尾操作」。预览/下载按钮默认透明，
+                         hover 或该文件已选中时显现——面板窄、文件名长，常显会把文件名压没。
+                         预览按钮与点文件名等价（选中并在下方面板渲染），只是把动作显式化。 -->
+                    <div
                       v-if="item.node.file"
                       :class="[
-                        'flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-blue-50 hover:text-blue-700',
-                        selectedConsoleFilePath === item.node.file.relativePath ? 'bg-blue-50 text-blue-700' : ''
+                        'group flex h-7 min-w-0 items-center gap-0.5 rounded pr-1 transition-colors hover:bg-blue-50',
+                        selectedConsoleFilePath === item.node.file.relativePath ? 'bg-blue-50' : ''
                       ]"
-                      :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
-                      @click="selectConsoleFile(item.node.file.relativePath)"
                     >
-                      <span class="w-3"></span>
-                      <i class="fa-regular fa-file-lines w-4 text-center text-slate-400"></i>
-                      <span class="truncate font-mono text-[13px]">{{ item.node.name }}</span>
-                    </button>
+                      <button
+                        type="button"
+                        :class="[
+                          'flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left transition-colors',
+                          selectedConsoleFilePath === item.node.file.relativePath ? 'text-blue-700' : 'text-slate-600 hover:text-blue-700'
+                        ]"
+                        :style="consoleTreeIndentStyle(item.depth)"
+                        @click="selectConsoleFile(item.node.file.relativePath)"
+                      >
+                        <!-- 占位与图标必须 shrink-0：文件名的 flex-basis 是 auto，取的是 max-content
+                             （长文件名可达 460px+）；只靠 truncate 的话，行内放不下时收缩量会按基础宽度
+                             比例摊到所有子项，这个 12px 占位和 16px 图标会被一起挤窄，
+                             导致「长文件名那一行」的图标与文字比上下行左移 6px/12px。 -->
+                        <span class="w-3 shrink-0"></span>
+                        <i class="fa-regular fa-file-lines w-4 shrink-0 text-center text-slate-400"></i>
+                        <!-- 名字被截断时悬浮显示完整文件名：面板窄、长文件名必然省略号截断 -->
+                        <span class="min-w-0 flex-1 truncate font-mono text-[13px]" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
+                        <!-- 修改时间 + 文件大小：行尾两个扫读列（行内样式常量见 CONSOLE_TREE_TIME/SIZE_COLUMN_CLASS），
+                             名字让出空间（flex-1 + truncate），长名靠悬浮提示看全。
+                             时间用绝对格式 YYYY-MM-DD HH:mm:ss——文件多是版本对照，需要能直接比出具体时刻。 -->
+                        <span :class="CONSOLE_TREE_TIME_COLUMN_CLASS">{{ formatEpochDateTime(item.node.file.mtime) }}</span>
+                        <span :class="CONSOLE_TREE_SIZE_COLUMN_CLASS">{{ formatFileSize(item.node.file.size) }}</span>
+                      </button>
+                      <div
+                        class="flex shrink-0 items-center gap-0.5 transition-opacity"
+                        :class="selectedConsoleFilePath === item.node.file.relativePath ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
+                      >
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
+                          title="预览文件"
+                          data-console-file-preview="true"
+                          @click="selectConsoleFile(item.node.file.relativePath)"
+                        >
+                          <i class="fa-solid fa-eye"></i>
+                        </button>
+                        <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）不提供下载，
+                             防数据泄漏；后端两侧已拦截，这里只是前端侧的纵深防御。 -->
+                        <button
+                          v-if="isWorkspaceFileDownloadable(item.node.file.relativePath)"
+                          type="button"
+                          class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
+                          title="下载文件"
+                          data-console-file-download="true"
+                          @click="handleDownloadConsoleFile(item.node.file)"
+                        >
+                          <i class="fa-solid fa-download"></i>
+                        </button>
+                      </div>
+                    </div>
                     <div
                       v-else
-                      role="button"
-                      tabindex="0"
-                      class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-slate-50"
-                      :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
-                      @click="toggleConsoleDirectory(item.node.path)"
-                      @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
-                      @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
+                      class="flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50"
                     >
-                      <i class="w-3 text-[10px] text-slate-400" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                      <i class="fa-regular w-4 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
-                      <span class="truncate font-mono text-[13px] font-semibold">{{ item.node.name }}</span>
-                      <span v-if="getFileCount(item.node)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
+                      <div
+                        role="button"
+                        tabindex="0"
+                        class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left text-slate-600"
+                        :style="consoleTreeIndentStyle(item.depth)"
+                        @click="toggleConsoleDirectory(item.node.path)"
+                        @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
+                        @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
+                      >
+                        <i class="w-3 shrink-0 text-[10px] text-slate-400" :style="consoleTreeLeadSlotStyle" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
+                        <i class="fa-regular w-4 shrink-0 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
+                        <span class="truncate font-mono text-[13px] font-semibold" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
+                      </div>
+                      <!-- 数量徽标与顶层目录行同构：放在可点击区域之外的行尾，
+                           所有数量徽标的右边缘落在同一条竖线上（放在按钮内时会被 px-1.5 推走 2px）。 -->
+                      <span v-if="getFileCount(item.node)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
                     </div>
                   </div>
                 </div>
@@ -3627,14 +3837,18 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     源码
                   </button>
                 </div>
+                <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
+                     这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
                 <button
-                  v-if="selectedConsoleFile?.source === 'outputs'"
+                  v-if="selectedConsoleFile"
                   type="button"
-                  class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-                  title="下载文件"
-                  @click="handleDownloadConsoleFile"
+                  class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+                  :title="isWorkspaceFilesLoading ? '正在刷新文件列表' : '刷新文件列表'"
+                  :disabled="isWorkspaceFilesLoading"
+                  data-console-files-refresh="true"
+                  @click="refreshWorkspaceFiles"
                 >
-                  <i class="fa-solid fa-download"></i>
+                  <i class="fa-solid fa-rotate-right" :class="isWorkspaceFilesLoading ? 'fa-spin' : ''"></i>
                 </button>
                 <button
                   v-if="selectedConsoleFile"

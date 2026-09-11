@@ -77,3 +77,16 @@ export const formatRelativeConversationTime = (value?: Date | string | null, now
   if (elapsedDays <= RELATIVE_FALLBACK_DAYS) return `${elapsedDays}天前`
   return `${padDateTimePart(date.getMonth() + 1)}-${padDateTimePart(date.getDate())}`
 }
+
+/**
+ * 秒级 Unix 时间戳（后端 `os.stat().st_mtime` 的口径）→ `YYYY-MM-DD HH:mm:ss` 本地时间。
+ *
+ * 工作区文件行用绝对时间而非相对时间：文件是版本对照的场景，需要能直接比出先后与具体时刻。
+ * 该格式每行等宽（19 字符），所以时间列不需要额外钉宽度就能对齐。
+ * 0 / 负数 / 非有限值一律返回空串：这些值代表「没有时间信息」，
+ * 换算成 1970 年会显示成 1970-01-01 00:00:00，比不显示更容易误导。
+ */
+export const formatEpochDateTime = (seconds?: number | null): string => {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return ''
+  return formatLocalDateTime(new Date(seconds * 1000))
+}

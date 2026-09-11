@@ -27,7 +27,7 @@ export {
   isQuerySucceeded,
   normalizeQueryStatus,
 } from './queryResult'
-export { buildRecentDaysDateTimeRange, formatDateTimeValue, formatLocalDateTime, formatRelativeConversationTime, parseDateTimeValue } from './dateTime'
+export { buildRecentDaysDateTimeRange, formatDateTimeValue, formatLocalDateTime, formatEpochDateTime, formatRelativeConversationTime, parseDateTimeValue } from './dateTime'
 export {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
   SQL_FUNCTION_GROUPS,
