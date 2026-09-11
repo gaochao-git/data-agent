@@ -247,20 +247,31 @@ def test_get_info_delete_content_path_branches(uploads_root):
 
     Path.unlink = blocked_unlink
     try:
-        assert asyncio.run(service.delete_file("f1", user_id="u1", thread_id="t1")) is True
+        # 物理删除失败：保留记账记录并返回失败，避免"账删了文件还在"的孤儿；
+        # dao.deleted 仍只有上面首次成功删除的那条，说明本次失败未删账
+        assert asyncio.run(service.delete_file("f1", user_id="u1", thread_id="t1")) is False
+        assert dao.deleted == [("f1", "u1")]
     finally:
         Path.unlink = original_unlink
+
+    # 重试（不再阻塞）可正常删除
+    assert asyncio.run(service.delete_file("f1", user_id="u1", thread_id="t1")) is True
+    assert dao.deleted == [("f1", "u1"), ("f1", "u1")]
 
     dao.rows.clear()
     assert asyncio.run(service.delete_file("f1", user_id="u1")) is False
 
+    # 新语义：重试删除后记录与文件都已删除，不能再按孤儿文件读到内容
     dao.rows["f1"] = make_row()
+    assert (uploads_root / "报告.pdf").exists() is False
     content = asyncio.run(service.get_file_content("f1", user_id="u1", thread_id="t1"))
-    assert content == b"raw"
+    assert content is None
     dao.rows["f1"] = make_row(storage_dir="missing.bin")
     assert asyncio.run(service.get_file_content("f1", user_id="u1", thread_id="t1")) is None
 
+    # get_file_path_by_id 独立建一份文件+记录验证（上一段已按新语义删净）
     dao.rows["f1"] = make_row()
+    (uploads_root / "报告.pdf").write_bytes(b"raw")
     path = asyncio.run(service.get_file_path_by_id("f1", user_id="u1", thread_id="t1"))
     assert path is not None and path.endswith("报告.pdf")
 

@@ -27,11 +27,12 @@ def read_positive_int_env(name: str, default: int) -> int:
 
 
 def read_bool_env(name: str, default: bool = False) -> bool:
-    """读取布尔环境变量，仅接受 true/false（大小写不敏感），非法值告警并回退默认值。
+    """读取布尔环境变量，仅接受 true/false（大小写不敏感），非法值直接报错。
 
-    不接受 1/0、yes/on 等变体：配置口径与 .env.example 保持严格一致，避免
-    拼写或习惯写法（如 ture、1）被静默当作另一个值处理——对 TLS 校验开关
-    这类安全配置，静默降级比启动报错更危险，这里选择告警后回退默认。
+    不接受 1/0、yes/on 等变体：配置口径与 .env.example 保持严格一致。
+    对 TLS 校验开关这类安全配置，非法值静默回退默认值等于静默改变安全语义
+    （如 CHAT_DATA_HTTP_VERIFY_TLS=1 回退成 False），必须 fail-fast 让运维
+    在启动时就看到配置错误，而不是运行期踩坑。
     """
     raw_value = str(os.getenv(name) or "").strip().lower()
     if not raw_value:
@@ -40,8 +41,10 @@ def read_bool_env(name: str, default: bool = False) -> bool:
         return True
     if raw_value == "false":
         return False
-    logger.warning("环境变量 %s=%r 不是合法布尔值，回退默认值 %s", name, raw_value, default)
-    return default
+    raise ValueError(
+        f"环境变量 {name}={raw_value!r} 不是合法布尔值（仅接受 true/false，"
+        "大小写不敏感）。安全相关开关不允许静默回退默认值，请修正配置后重启。"
+    )
 
 
 DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)

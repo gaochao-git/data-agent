@@ -15,13 +15,13 @@ import type {
   TableInfo,
 } from '../../types'
 import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
+import { findColumnDict, type FieldTooltipSection } from '../../utils/fieldDict'
 import {
-  buildFieldDictSection,
-  createTooltipSection,
-  extractMetricFieldName as extractMetricSourceFieldName,
-  findColumnDict,
-  type FieldTooltipSection
-} from '../../utils/fieldDict'
+  buildDimensionTooltip as sharedBuildDimensionTooltip,
+  buildMetricTooltip as sharedBuildMetricTooltip,
+  metricIconColorClass,
+  type SemanticTooltipContext,
+} from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import { formatRelativeConversationTime } from '../../utils'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
@@ -532,82 +532,15 @@ const getDimensionIconType = (dimension: SemanticDimension): 'string' | 'number'
   return 'string'
 }
 
-const buildMetadataSupplementSection = (metadataSupplement?: string) => {
-  const content = String(metadataSupplement || '').trim()
-  if (!content) return null
-  return createTooltipSection('元数据补充', content
-    .split(/\n+/)
-    .map(item => item.trim())
-    .filter(Boolean))
-}
+const tooltipContext = (): SemanticTooltipContext => ({
+  tables: props.tables,
+  resolveColumnDict: (tableName, columnName) =>
+    getColumnDict(props.datasourceId, tableName || '', columnName || '')
+    || findColumnDict(props.tables, tableName, columnName),
+})
 
-const getTableDescription = (tableName?: string) => {
-  if (!tableName) return '-'
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.description || '-'
-}
-
-const getTableBusinessDesc = (tableName?: string) => {
-  if (!tableName) return ''
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.business_desc || ''
-}
-
-const buildTableBusinessDescLines = (tableName?: string) => {
-  const businessDesc = getTableBusinessDesc(tableName)
-  return businessDesc ? [`表业务说明：${businessDesc}`] : []
-}
-
-const getTableRoleLabel = (table?: string, alias?: string) => {
-  const tableName = String(table || '').trim()
-  const tableAlias = String(alias || tableName).trim()
-  if (!tableName) return tableAlias || '-'
-  if (!tableAlias || tableAlias === tableName) return tableName
-  return `${tableAlias}（${tableName}）`
-}
-
-const buildDimensionTooltip = (dimension: SemanticDimension) => {
-  const expression = dimension.expression || `\`${dimension.column}\``
-  const fieldDict = getColumnDict(props.datasourceId, dimension.table, dimension.column)
-    || findColumnDict(props.tables, dimension.table, dimension.column)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(dimension.table, dimension.table_alias)}`,
-      `数据表备注：${getTableDescription(dimension.table)}`,
-      ...buildTableBusinessDescLines(dimension.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${dimension.name || '-'}`,
-      `字段名称：${dimension.column || '-'}`,
-      `表达式：${expression}`,
-      dimension.description ? `描述：${dimension.description}` : '',
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(dimension.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
-
-const buildMetricTooltip = (metric: SemanticMetric) => {
-  const expression = metric.expression || ''
-  const fieldName = extractMetricSourceFieldName(metric)
-  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
-    || findColumnDict(props.tables, metric.table, fieldName)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-      `数据表备注：${getTableDescription(metric.table)}`,
-      ...buildTableBusinessDescLines(metric.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${metric.name || '-'}`,
-      `字段名称：${fieldName || '-'}`,
-      `表达式：${expression || '-'}`,
-      metric.description ? `描述：${metric.description}` : '',
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(metric.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
+const buildDimensionTooltip = (dimension: SemanticDimension) => sharedBuildDimensionTooltip(dimension, tooltipContext())
+const buildMetricTooltip = (metric: SemanticMetric) => sharedBuildMetricTooltip(metric, tooltipContext())
 
 const handleFillMetric = (metric: SemanticMetric) => {
   emit('fillQuestion', { fieldName: metric.name, fieldType: 'metric' })
@@ -655,7 +588,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+  <div class="conversation-tab-root flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ==================== 会话 Tab ==================== -->
     <template v-if="activeTab === 'conversation'">
       <!-- 会话工具栏：新建 + 视图切换（固定，不随列表滚动） -->
@@ -667,7 +600,7 @@ onUnmounted(() => {
           @click="emit('newConversation')"
         >
           <i class="fa-solid fa-plus text-[10px]"></i>
-          <span>新建任务</span>
+          <span class="conversation-toolbar-btn-text">新建任务</span>
         </button>
         <div class="relative min-w-0 flex-1">
           <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
@@ -685,7 +618,7 @@ onUnmounted(() => {
           @click="emit('toggleConversationViewMode')"
         >
           <i :class="props.conversationViewMode === 'grouped' ? 'fa-solid fa-list' : 'fa-solid fa-layer-group'" class="text-[10px]"></i>
-          {{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}
+          <span class="conversation-toolbar-btn-text">{{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}</span>
         </button>
       </div>
 
@@ -765,10 +698,10 @@ onUnmounted(() => {
                       <!-- 右侧固定角色区：平时显示相对时间，hover 淡出时间、淡入置顶/编辑按钮。
                            两态共用同一固定宽度容器（w-[52px] = 2×24px 按钮 + 4px 间距），互不挤占、不跳动。
                            置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
-                      <div data-testid="conversation-role-zone" class="relative h-6 w-[52px] shrink-0">
+                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[52px] shrink-0">
                         <span
                           data-testid="conversation-time"
-                          class="absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
+                          class="conversation-time-text absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
                           :title="conv.updated_at || conv.create_time"
                         >{{ getConversationTimeText(conv) }}</span>
                         <div
@@ -1019,7 +952,7 @@ onUnmounted(() => {
                     @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
                     @mouseleave="hideTooltip"
                   >
-                    <FieldTypeIcon type="number" class="mr-1.5 text-[#7C3AED]" />
+                    <FieldTypeIcon type="number" :class="['mr-1.5', metricIconColorClass(metric)]" />
                     <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
                     <button
                       type="button"
@@ -1066,6 +999,31 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 会话 Tab 作为容器查询上下文：侧栏拖窄时按宽度分级降级，
+   优先级「保标题 > 保时间 > 保工具栏文字」 */
+.conversation-tab-root {
+  container-type: inline-size;
+}
+
+/* 窄侧栏（< 300px）：先让出时间占的 52px 给会话标题，
+   标题能多显示约 3~4 个汉字；hover 的置顶/编辑按钮仍在（absolute 临时盖在标题右端） */
+@container (max-width: 299px) {
+  .conversation-role-zone {
+    width: 0;
+  }
+
+  .conversation-time-text {
+    display: none;
+  }
+}
+
+/* 更窄（< 260px）：顶部「新建任务 / 分组」按钮只留图标 */
+@container (max-width: 259px) {
+  .conversation-toolbar-btn-text {
+    display: none;
+  }
+}
+
 .semantic-config-list {
   container-type: inline-size;
 }

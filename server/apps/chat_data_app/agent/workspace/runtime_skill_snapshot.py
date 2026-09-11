@@ -120,7 +120,13 @@ def compute_skill_fingerprints(sources: Iterable[tuple[str, Path]]) -> dict[str,
                 if path.is_dir():
                     entries.append(f"d:{rel}")
                 else:
-                    file_stat = path.stat()
+                    try:
+                        file_stat = path.stat()
+                    except OSError:
+                        # rglob 枚举与 stat 之间文件可能被并发删除/替换；
+                        # 跳过该文件让指纹自然失配触发快照重建，
+                        # 而不是让异常冒泡违背"指纹计算永不抛"的约定
+                        continue
                     entries.append(f"f:{rel}:{file_stat.st_size}:{file_stat.st_mtime_ns}")
         digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
         fingerprints[name] = digest

@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
-import type { SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
+import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import { findColumnDict, type FieldTooltipSection } from '../../utils/fieldDict'
 import {
-  buildFieldDictSection,
-  createTooltipSection,
-  extractMetricFieldName as extractMetricSourceFieldName,
-  findColumnDict,
-  type FieldTooltipSection
-} from '../../utils/fieldDict'
+  buildDimensionTooltip as sharedBuildDimensionTooltip,
+  buildMetricTooltip as sharedBuildMetricTooltip,
+  isLogicalMetric,
+  metricIconColorClass,
+  type SemanticTooltipContext,
+} from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 
 interface Props {
@@ -128,128 +129,20 @@ const getDimensionType = (dim: SemanticDimension): 'string' | 'number' | 'date' 
   return 'string'
 }
 
-const extractFieldName = (expression?: string) => {
-  const expr = (expression || '').trim()
-  if (!expr) return '-'
-  const inner = expr.match(/\((.*)\)/)?.[1] || expr
-  const cleaned = inner.replace(/DISTINCT/ig, '').replace(/`/g, '').trim()
-  if (!cleaned) return '-'
-  const first = cleaned.split(',')[0]?.trim() || ''
-  const parts = first.split('.')
-  return parts[parts.length - 1] || '-'
-}
+const tooltipContext = (): SemanticTooltipContext => ({
+  tables: props.tables,
+  resolveColumnDict: (tableName, columnName) =>
+    getColumnDict(props.datasourceId, tableName || '', columnName || '')
+    || findColumnDict(props.tables, tableName, columnName),
+})
 
-const getTableDescription = (tableName?: string) => {
-  if (!tableName) return '-'
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.description || '-'
-}
-
-const getTableBusinessDesc = (tableName?: string) => {
-  if (!tableName) return ''
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.business_desc || ''
-}
-
-const buildTableBusinessDescLines = (tableName?: string) => {
-  const businessDesc = getTableBusinessDesc(tableName)
-  return businessDesc ? [`表业务说明：${businessDesc}`] : []
-}
-
-const getTableRoleLabel = (table?: string, alias?: string) => {
-  const tableName = String(table || '').trim()
-  const tableAlias = String(alias || tableName).trim()
-  if (!tableName) return tableAlias || '-'
-  if (!tableAlias || tableAlias === tableName) return tableName
-  return `${tableAlias}（${tableName}）`
-}
+const buildDimensionTooltip = (dim: SemanticDimension) => sharedBuildDimensionTooltip(dim, tooltipContext())
+const buildMetricTooltip = (metric: SemanticMetric) => sharedBuildMetricTooltip(metric, tooltipContext())
 
 const handleFillQuestion = (fieldName: string | undefined, fieldType: 'dimension' | 'metric') => {
   const normalizedName = String(fieldName || '').trim()
   if (!normalizedName) return
   emit('fillQuestion', { fieldName: normalizedName, fieldType })
-}
-
-const buildMetadataSupplementSection = (metadataSupplement?: string) => {
-  const content = String(metadataSupplement || '').trim()
-  if (!content) return null
-  return createTooltipSection('元数据补充', content
-    .split(/\n+/)
-    .map(item => item.trim())
-    .filter(Boolean))
-}
-
-const buildDimensionTooltip = (dim: SemanticDimension) => {
-  const expression = dim.expression || `\`${dim.column}\``
-  const fieldDict = getColumnDict(props.datasourceId, dim.table, dim.column)
-    || findColumnDict(props.tables, dim.table, dim.column)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(dim.table, dim.table_alias)}`,
-      `数据表备注：${getTableDescription(dim.table)}`,
-      ...buildTableBusinessDescLines(dim.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${dim.name || '-'}`,
-      `字段名称：${dim.column || '-'}`,
-      `表达式：${expression}`,
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(dim.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
-
-// 派生/复合指标为逻辑口径，不支持拖拽，仅可通过 → 按钮插入指标区
-const isLogicalMetric = (metric: SemanticConfigItem['metrics'][number]) =>
-  metric.metric_kind === 'derived' || metric.metric_kind === 'composite'
-
-// 派生指标口径文案：基础指标 · 周期 · 过滤条件
-const derivedMetricVerbalization = (metric: SemanticConfigItem['metrics'][number]) => {
-  const parts: string[] = [`指标[${metric.base_metric || '-'}]`]
-  const period = metric.period as { kind?: string; n?: number; start?: string; end?: string } | undefined
-  if (period?.kind) {
-    const kindLabels: Record<string, string> = {
-      today: '今日', yesterday: '昨日', this_week: '本周', this_month: '本月', last_n_days: `近${period.n || 7}天`, between: `${period.start || '?'}~${period.end || '?'}`,
-    }
-    parts.push(kindLabels[period.kind] || period.kind)
-  }
-  for (const f of (metric.filters as Array<{ dimension?: string; operator?: string; value?: string }> || [])) {
-    if (f.dimension) parts.push(`${f.dimension}${f.operator || '='}${f.value ?? ''}`)
-  }
-  return parts.join(' · ')
-}
-
-const buildMetricTooltip = (metric: SemanticConfigItem['metrics'][number]) => {
-  if (isLogicalMetric(metric)) {
-    const definition = metric.metric_kind === 'composite'
-      ? (metric.formula || '-')
-      : derivedMetricVerbalization(metric)
-    return [
-      createTooltipSection('扩展指标', [
-        `类型：${metric.metric_kind === 'composite' ? '复合指标' : '派生指标'}`,
-        `口径：${definition}`,
-        metric.description ? `备注：${metric.description}` : '',
-      ].filter(Boolean)),
-    ].filter(Boolean) as FieldTooltipSection[]
-  }
-  const expression = metric.expression || ''
-  const fieldName = extractMetricSourceFieldName(metric)
-  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
-    || findColumnDict(props.tables, metric.table, fieldName)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-      `数据表备注：${getTableDescription(metric.table)}`,
-      ...buildTableBusinessDescLines(metric.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${metric.name || '-'}`,
-      `字段名称：${fieldName || extractFieldName(expression)}`,
-      `表达式：${expression || '-'}`,
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(metric.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const filteredDimensions = computed(() => {
@@ -479,7 +372,7 @@ onUnmounted(() => {
             @dragstart="!isLogicalMetric(metric) && emit('dragMetric', metric, $event)"
             @dragend="emit('dragEnd')"
           >
-            <FieldTypeIcon type="number" class="text-[#165DFF] mr-1.5 shrink-0" />
+            <FieldTypeIcon type="number" :class="['mr-1.5 shrink-0', metricIconColorClass(metric)]" />
             <span class="min-w-0 flex-1 text-xs text-[#21252C] overflow-hidden text-ellipsis whitespace-nowrap">
               {{ metric.name }}
             </span>

@@ -1410,13 +1410,29 @@ onMounted(async () => {
             data-conversation-console-toggle="true"
             @click="toggleConversationConsole"
           >
-            <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板在右侧，
-                 展开时箭头朝左、收起时朝右，点击即在开/关之间切换。 -->
+            <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板近正方、细描边，
+                 箭头为线性 chevron（非实心三角），展开时朝左、收起时朝右。 -->
             <svg class="h-[18px] w-[18px]" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.55" y="2.65" width="12.9" height="10.7" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.3" />
-              <line x1="5.75" y1="2.65" x2="5.75" y2="13.35" stroke="currentColor" stroke-width="1.3" />
-              <path v-if="conversationConsoleVisible" d="M12.35 8 8.55 5.1v5.8L12.35 8Z" fill="currentColor" />
-              <path v-else d="M8.55 8 12.35 5.1v5.8L8.55 8Z" fill="currentColor" />
+              <rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+              <line x1="5.9" y1="1.75" x2="5.9" y2="14.25" stroke="currentColor" stroke-width="1.2" />
+              <path
+                v-if="conversationConsoleVisible"
+                d="M9.9 5.6 7.5 8l2.4 2.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                v-else
+                d="M7.5 5.6 9.9 8l-2.4 2.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
             </svg>
           </button>
         </div>

@@ -145,8 +145,12 @@ class UploadedFileService:
             if target and target.exists():
                 try:
                     target.unlink()
-                except OSError:
-                    logger.warning("删除上传文件失败: %s", target)
+                except OSError as exc:
+                    # 物理删除失败时保留记账记录并返回失败：账删了文件还在
+                    # 会产生孤儿文件，且接口返回"已删除"是误导；记录保留后
+                    # 用户重试即可（已删掉的文件 exists 跳过，重试安全）
+                    logger.warning("删除上传文件失败，保留上传记录待重试: %s error=%s", target, exc)
+                    return False
         await self.dao.delete_file(file_id, user_id=user_id)
         logger.info("文件删除成功: %s", file_id)
         return True

@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentState, AgentMiddleware, ToolErrorMiddleware
+from .tool_execution_fence import create_tool_execution_fence_middleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -147,9 +148,25 @@ def _extract_final_report(messages: list) -> str:
     return ""
 
 
-def _compile_subagent(spec: SubagentSpec) -> Any:
-    """把 spec 编译成独立 langgraph runnable。"""
+def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
+    """把 spec 编译成独立 langgraph runnable。
+
+    ``run_controls`` 完整时为子图挂上与主图相同的租约围栏：租约丢失/被接管后
+    内层工具（plan 的 file_write、explore 的查询等）同样拒绝产生新副作用，
+    而不是只靠心跳的协作式取消。
+    """
     tools = list(spec.tools or [])
+    middleware = [
+        create_tool_call_name_normalizer_middleware(tools),
+        create_tool_result_middleware(),
+        ToolErrorMiddleware(on_tool_error),
+    ]
+    if run_controls is not None and run_controls.is_complete():
+        middleware.append(create_tool_execution_fence_middleware(
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
+        ))
     return create_agent(
         spec.model,
         tools=tools,
@@ -167,11 +184,7 @@ def _compile_subagent(spec: SubagentSpec) -> Any:
         # 的默认 handler 只认 ToolInvocationError、其余异常原样上抛会炸掉
         # 整个子图；挂上后与主图口径一致，异常统一转 status="error" 的
         # ToolMessage，子智能体可读取错误详情自行纠正。
-        middleware=[
-            create_tool_call_name_normalizer_middleware(tools),
-            create_tool_result_middleware(),
-            ToolErrorMiddleware(on_tool_error),
-        ],
+        middleware=middleware,
     )
 
 
@@ -667,10 +680,10 @@ def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
     return trail
 
 
-def build_task_tool(specs: list[SubagentSpec]) -> StructuredTool:
+def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredTool:
     """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。"""
     validate_subagent_specs(specs)
-    compiled = {spec.name: _compile_subagent(spec) for spec in specs}
+    compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
     async def atask(description: str, subagent_type: str, runtime: ToolRuntime):
@@ -737,11 +750,11 @@ def build_task_tool(specs: list[SubagentSpec]) -> StructuredTool:
 class SubagentMiddleware(AgentMiddleware):
     """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
 
-    def __init__(self, specs: list[SubagentSpec], *, system_prompt: str | None = None):
+    def __init__(self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls=None):
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
-        self.tools = [build_task_tool(specs)]
+        self.tools = [build_task_tool(specs, run_controls=run_controls)]
         agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
         self.system_prompt = (system_prompt or _default_system_prompt()).format(
             available_agents=agents_desc,

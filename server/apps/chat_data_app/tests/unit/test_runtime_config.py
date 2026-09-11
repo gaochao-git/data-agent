@@ -43,16 +43,17 @@ def test_read_bool_env_handles_common_truthy_and_default(monkeypatch):
     assert runtime_config.read_bool_env("CHATDATA_TEST_BOOL", False) is False
 
 
-def test_read_bool_env_rejects_synonyms_and_invalid_with_warning(monkeypatch):
-    """1/0、yes/on 等变体与拼写错误不再静默生效：告警并回退默认值。"""
-    warnings = []
-    monkeypatch.setattr(runtime_config.logger, "warning", lambda message, *args: warnings.append(message % args if args else message))
-
-    for value in ["1", "0", "yes", "y", "on", "no", "off", "bad", "ture"]:
+def test_read_bool_env_rejects_synonyms_and_invalid_with_error(monkeypatch):
+    """1/0、yes/on 等变体与拼写错误不静默生效：安全语义的开关必须 fail-fast。"""
+    for value in ["1", "0", "yes", "on", "ture", ""]:
         monkeypatch.setenv("CHATDATA_TEST_BOOL", value)
-        assert runtime_config.read_bool_env("CHATDATA_TEST_BOOL", True) is True
-        assert runtime_config.read_bool_env("CHATDATA_TEST_BOOL", False) is False
-    assert any("不是合法布尔值" in message for message in warnings)
+        if value == "":
+            monkeypatch.delenv("CHATDATA_TEST_BOOL", raising=False)
+            assert runtime_config.read_bool_env("CHATDATA_TEST_BOOL", False) is False
+            continue
+        with pytest.raises(ValueError, match="不是合法布尔值"):
+            runtime_config.read_bool_env("CHATDATA_TEST_BOOL", False)
+
 
 
 def test_read_bounded_float_env_clamps_compression_ratio(monkeypatch):

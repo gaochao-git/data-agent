@@ -220,7 +220,7 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     )
     # 伪工具对象无法走真实 create_agent 编译，桩掉子图编译步骤
     monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
     )
     options = AgentRuntimeOptions(
         workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True
@@ -255,7 +255,7 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
         data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
     )
     monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
     )
     options = AgentRuntimeOptions(
         workspace_backend="local", bash_enabled=False, plan_subagent_enabled=True
@@ -288,7 +288,7 @@ def test_build_subagent_middleware_supports_both_specs(monkeypatch, tmp_path):
         data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
     )
     monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec: SimpleNamespace()
+        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
     )
     options = AgentRuntimeOptions(
         workspace_backend="local", bash_enabled=False,

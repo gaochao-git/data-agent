@@ -212,6 +212,7 @@ def build_subagent_middleware(
     tools: list,
     *,
     model,
+    run_controls: "AgentRunControls | None" = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -243,7 +244,7 @@ def build_subagent_middleware(
         ))
     if not specs:
         return None
-    return SubagentMiddleware(specs)
+    return SubagentMiddleware(specs, run_controls=run_controls)
 
 
 def create_data_agent(
@@ -301,7 +302,7 @@ def create_data_agent(
         stream_usage=True,
         llm_factory=get_chat_data_llm,
     )
-    subagent_middleware = build_subagent_middleware(options, tools, model=model)
+    subagent_middleware = build_subagent_middleware(options, tools, model=model, run_controls=run_controls)
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,

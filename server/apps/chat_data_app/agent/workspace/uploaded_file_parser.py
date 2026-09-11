@@ -69,11 +69,22 @@ def _resolve_markitdown_source(source_path: Path, suffix: str, tmp_dir: Path) ->
         return source_path
     if not merged_tables:
         return source_path
-    for table in merged_tables:
-        _rebuild_table_rectangular(document, table)
-    normalized_path = tmp_dir / f"{source_path.stem or 'docx'}.docx"
-    document.save(str(normalized_path))
-    return normalized_path
+    try:
+        for table in merged_tables:
+            _rebuild_table_rectangular(document, table)
+        normalized_path = tmp_dir / f"{source_path.stem or 'docx'}.docx"
+        document.save(str(normalized_path))
+        return normalized_path
+    except Exception as exc:
+        # 不规则网格（某行缺 tc）在 table.cell 读取时会 IndexError：矩形化
+        # 失败必须回退原文件交给 markitdown 原样解析（串列也比整份失败好），
+        # 不能让预处理异常冒泡成"文件解析失败"
+        logger.warning(
+            "docx 表格矩形化重建失败（回退原文件）: path=%s error=%s",
+            source_path.name,
+            exc,
+        )
+        return source_path
 
 
 def _table_has_merge(table) -> bool:

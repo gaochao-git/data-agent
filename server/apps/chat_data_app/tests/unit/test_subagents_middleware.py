@@ -79,7 +79,7 @@ async def test_task_tool_returns_final_report_as_tool_message(monkeypatch):
             captured["stream_mode"] = stream_mode
             yield "updates", {"model": {"messages": [AIMessage(content="近30天入金呈上升趋势")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -102,7 +102,7 @@ async def test_task_tool_falls_back_when_subagent_returns_empty_report(monkeypat
         async def astream(self, _state, _config, *, stream_mode):
             yield "updates", {"model": {"messages": []}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -132,7 +132,7 @@ async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch
             )]}}
             yield "updates", {"model": {"messages": [AIMessage(content="1 + 1 = 2")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -175,7 +175,7 @@ async def test_task_tool_survives_missing_stream_writer(monkeypatch):
         async def astream(self, _state, _config, *, stream_mode):
             yield "updates", {"model": {"messages": [AIMessage(content="结论")]}} 
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -326,7 +326,7 @@ async def test_task_tool_streams_text_and_thinking_deltas(monkeypatch):
             yield "messages", (AIMessageChunk(content="上升", id="m1"), {})
             yield "updates", {"model": {"messages": [AIMessage(content="结论是上升", id="m1")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -364,7 +364,7 @@ async def test_task_tool_delta_streaming_caps_cumulative_text(monkeypatch):
             yield "messages", (AIMessageChunk(content="不会外发", id="m1"), {})
             yield "updates", {"model": {"messages": [AIMessage(content="x" * cap + "yyyyyyyy", id="m1")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -440,7 +440,7 @@ async def test_task_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch):
             )
             yield "updates", {"model": {"messages": [AIMessage(content="我需要先读取配置文件", id="m1")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
@@ -472,7 +472,7 @@ async def test_task_tool_assigns_fallback_id_to_messages_without_id(monkeypatch)
             yield "updates", {"model": {"messages": [shared_message]}}
             yield "updates", {"tools": {"messages": [shared_message]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
@@ -594,7 +594,7 @@ async def test_task_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
             )]}}
             yield "updates", {"model": {"messages": [AIMessage(content="1 + 1 = 2", id="m-final")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -616,7 +616,7 @@ async def test_task_tool_omits_trail_when_no_inner_activity(monkeypatch):
         async def astream(self, _state, _config, *, stream_mode):
             yield "updates", {"model": {"messages": []}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -635,7 +635,7 @@ async def test_task_tool_trail_includes_final_message_like_live_stream(monkeypat
         async def astream(self, _state, _config, *, stream_mode):
             yield "updates", {"model": {"messages": [AIMessage(content="直接给出结论", id="m1")]}}
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -673,7 +673,7 @@ async def test_task_tool_stamps_trail_on_failure(monkeypatch):
             )]}}
             raise RuntimeError("Recursion limit of 40 reached without hitting a stop condition.")
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
@@ -699,7 +699,7 @@ async def test_task_tool_failure_without_inner_activity_omits_trail(monkeypatch)
             raise RuntimeError("模型连接失败")
             yield  # pragma: no cover
 
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec: FakeRunnable())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
