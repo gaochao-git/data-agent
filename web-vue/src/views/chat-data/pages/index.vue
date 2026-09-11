@@ -3,7 +3,7 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -260,10 +260,10 @@ const loadingDatasourceSchema = ref(false)
 
 // 侧边栏可见性
 const isSidebarVisible = ref(true)
-const sidebarBodyRef = ref<HTMLElement | null>(null)
-const sidebarCollapseTop = ref(15)
 
-// 侧边栏宽度拖拽调整（默认 320：会话项需容纳标题 + 时间 + 运行状态 + 收藏）
+// 侧边栏宽度拖拽调整（默认 320：会话项需容纳标题 + 时间 + 运行状态 + 收藏。
+// 竖排 Tab 轨道悬浮在侧栏右缘之外、侵入会话区 32px，因此不占用侧栏宽度，
+// 侧栏宽度即内容区宽度，与没有轨道时一致）
 const sidebarWidth = ref(320)
 const isResizingSidebar = ref(false)
 
@@ -310,6 +310,15 @@ const sidebarTabs = computed(() => {
 
 const availableSidebarTabKeys = computed(() => sidebarTabs.value.map((tab) => tab.key))
 
+// 竖排 Tab 轨道：贴侧栏右缘、悬浮侵入会话区 32px（会话区左侧留白本来空着，正好利用）；
+// 折叠态下整条侧栏就是这个窄条，两种状态 Tab 垂直位置一致
+const showVerticalTabRail = computed(() => viewMode.value === 'conversation' && sidebarTabs.value.length > 1)
+
+// 收起按钮水平锚点：统一回到侧栏右缘的拖拽条线上（原版位置 right-[-10px]，按钮中心
+// 压在分隔条上）；轨道虽悬浮在右缘外 32px，但按钮 z-30 压过轨道 z-20，视觉不被遮挡。
+// 若之后想让按钮跟随轨道外缘，可改回 right-[-42px]（轨道 32px + 按钮半宽 10px）
+const collapseButtonOffsetClass = computed(() => 'right-[-10px]')
+
 const activeSidebarTab = ref<string>(
   resolveSidebarTab(viewMode.value, availableSidebarTabKeys.value),
 )
@@ -325,42 +334,8 @@ watch(
   { flush: 'sync' },
 )
 
-// 计算侧边栏收起按钮垂直位置：跟随当前可见面板首个控件中心点
-const updateSidebarCollapseTop = async () => {
-  await nextTick()
-  const root = sidebarBodyRef.value
-  if (!root) return
-  const rootRect = root.getBoundingClientRect()
-  const btnHalfHeight = 10
-  const shellPaddingTop = 6
-  const baselineControlHeight = 28
-  const visibleShell = Array.from(root.querySelectorAll<HTMLElement>('.sidebar-unified-shell')).find((el) => {
-    if (!el.isConnected) return false
-    if (el.offsetParent === null) return false
-    const rect = el.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  }) || null
-  if (visibleShell) {
-    const shellRect = visibleShell.getBoundingClientRect()
-    const center = shellRect.top - rootRect.top + shellPaddingTop + baselineControlHeight / 2
-    sidebarCollapseTop.value = Math.max(6, Math.round(center - btnHalfHeight))
-    return
-  }
-  const candidates = Array.from(root.querySelectorAll<HTMLElement>('.sidebar-baseline-target'))
-  const target = candidates.find((el) => {
-    if (!el.isConnected) return false
-    if (el.offsetParent === null) return false
-    const rect = el.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  }) || null
-  if (!target) {
-    sidebarCollapseTop.value = 15
-    return
-  }
-  const targetRect = target.getBoundingClientRect()
-  const center = targetRect.top - rootRect.top + targetRect.height / 2
-  sidebarCollapseTop.value = Math.max(6, Math.round(center - btnHalfHeight))
-}
+// 收起/展开按钮位置已固定在竖排轨道顶部（见模板 top-1），
+// 原先「跟随面板首个控件」的动态对齐逻辑随顶部分段 Tab 一并废弃（git 历史可找回）。
 
 // 看板编辑器状态
 const activeDashboardId = ref<string | null>(null)
@@ -1139,6 +1114,17 @@ const canChangeDraftDatasource = computed(() => {
   return !isConversationContextMode.value || !currentConversationDatasourceId.value
 })
 
+// 数据源组下拉被禁用时的原因提示：禁用控件若不说明原因，用户会误以为是故障；
+// 两条禁用路径（仅一个数据源组 / 对话已绑定数据源）原因不同，分开给文案
+const datasourceSelectLockReason = computed(() => {
+  if (!showContextSelectorDialog.value) return ''
+  if (datasources.value.length <= 1) return '当前仅有一个数据源组，无可切换项'
+  if (isConversationContextMode.value && currentConversationDatasourceId.value) {
+    return '对话已绑定当前数据源组，会话内不支持切换；如需使用其他数据源组，请新建会话'
+  }
+  return ''
+})
+
 const openContextSelector = () => {
   draftSelectedDatasourceId.value = selectedDatasourceId.value || resolveDefaultDatasourceId(datasources.value)
   draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
@@ -1262,14 +1248,6 @@ watch(
   { immediate: true }
 )
 
-watch(
-  [viewMode, activeSidebarTab, isSidebarVisible, selectedDatasourceId, selectedSemanticConfigId, conversationSelectedSemanticConfigId],
-  () => {
-    updateSidebarCollapseTop()
-  },
-  { immediate: true }
-)
-
 // 表结构 schema (用于 SQL 编辑器自动补全)
 const tableSchema = computed(() => {
   if (!currentDatasource.value?.ds_tables) return {}
@@ -1375,12 +1353,6 @@ onMounted(async () => {
   await loadDatasources()
   void ensureConversationsLoaded()
   // 不立即创建会话，等发送第一条消息时才创建
-  window.addEventListener('resize', updateSidebarCollapseTop)
-  updateSidebarCollapseTop()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateSidebarCollapseTop)
 })
 </script>
 
@@ -1519,172 +1491,216 @@ onUnmounted(() => {
     <!-- 下方内容区（82px 头部 + 48px 工具栏 = 130px） -->
     <div v-if="!noMatchedDatasource" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
       <!-- 左侧：公用侧边栏 -->
-      <!-- 折叠态：窄条 -->
-      <div v-if="!isSidebarVisible" class="flex flex-col items-center gap-1 pt-3 pb-3 bg-white border-r border-slate-200 shrink-0 w-12">
+      <!-- 折叠态：窄条（32px）。与展开态右缘悬浮轨道同构：按钮悬挂在条外缘顶部（top-1），
+           Tab 从 pt-8 起——两种状态下 Tab 的垂直位置完全一致（横向跟随侧栏边界） -->
+      <div v-if="!isSidebarVisible" class="relative flex flex-col items-stretch gap-1 bg-white border-r border-slate-200 shrink-0 w-8 pt-8 pb-3">
+        <button
+          type="button"
+          class="absolute right-[-10px] top-1 z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 hover:text-gray-600 hover:border-slate-300"
+          title="展开侧边栏"
+          @click="isSidebarVisible = true"
+        >
+          <i class="fa-solid fa-chevron-right text-[10px]"></i>
+        </button>
         <div
           v-for="tab in sidebarTabs"
           :key="tab.key"
           :class="[
-            'writing-vertical text-xs py-3 px-1 rounded-md cursor-pointer transition-all duration-200 select-none',
+            'writing-vertical w-full text-xs py-3 px-1 cursor-pointer transition-all duration-200 select-none',
             activeSidebarTab === tab.key ? 'text-blue-500 font-medium bg-blue-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
           ]"
           @click="activeSidebarTab = tab.key; isSidebarVisible = true"
         >{{ tab.label }}</div>
       </div>
       <!-- 展开态 -->
-      <div v-show="isSidebarVisible" class="relative flex flex-col bg-slate-50 border-r border-slate-200 shrink-0" :style="{ width: `${sidebarWidth}px` }">
-        <!-- 侧边栏内容 -->
-        <div ref="sidebarBodyRef" class="flex-1 overflow-hidden flex flex-col bg-white min-h-0">
-          <!-- 收起侧边栏 -->
-          <button
-            class="absolute right-[-10px] z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 shrink-0 hover:text-gray-600 hover:border-slate-300"
-            :style="{ top: `${sidebarCollapseTop}px` }"
-            data-collapse-btn="true"
-            title="收起侧边栏"
-            @click="isSidebarVisible = false"
-          >
-            <i class="fa-solid fa-chevron-left text-[10px]"></i>
-          </button>
+      <!-- 布局与折叠态对应：竖排 Tab 轨道贴侧栏右缘、悬浮侵入会话区 32px（不占侧栏宽度，
+           会话区左侧留白正好利用）；收起/展开按钮悬挂在轨道外缘顶部（top-1），Tab 从 pt-8
+           起排——两种状态下 Tab 的垂直位置完全一致，横向跟随侧栏边界移动。
+           旧版顶部分段 Tab 按约定隐藏保留（见下方注释块），恢复方法见其注释。 -->
+      <div v-show="isSidebarVisible" class="relative flex bg-slate-50 border-r border-slate-200 shrink-0" :style="{ width: `${sidebarWidth}px` }">
+        <!-- 收起侧边栏（统一压在右缘拖拽条线上） -->
+        <button
+          type="button"
+          class="absolute top-1 z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 hover:text-gray-600 hover:border-slate-300"
+          :class="collapseButtonOffsetClass"
+          data-collapse-btn="true"
+          title="收起侧边栏"
+          @click="isSidebarVisible = false"
+        >
+          <i class="fa-solid fa-chevron-left text-[10px]"></i>
+        </button>
 
-          <!-- 左栏一级 Tab：仅智能问数模式有多个（对话历史 / 语义模型） -->
-          <div
-            v-if="viewMode === 'conversation' && sidebarTabs.length > 1"
-            class="shrink-0 border-b border-slate-200 bg-white px-3 py-2"
-          >
-            <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+        <!-- 左列：面板内容 + 底部上下文栏 -->
+        <div class="flex min-w-0 flex-1 flex-col">
+          <!-- 侧边栏内容 -->
+          <div class="flex-1 overflow-hidden flex flex-col bg-white min-h-0">
+
+            <!-- 旧版顶部分段 Tab（2026-09-12 起被右缘竖排轨道取代，按「只隐藏不删除」约定保留；
+                 恢复方法：删除「右缘竖排 Tab 轨道」块、把本内容列改回与底部栏平级的直接子节点、
+                 展开态容器改回 flex-col，再取消本注释块）：仅智能问数模式有多个 tab（对话历史 / 语义模型）
+            <div
+              v-if="viewMode === 'conversation' && sidebarTabs.length > 1"
+              class="shrink-0 border-b border-slate-200 bg-white px-3 py-2"
+            >
+              <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+                <button
+                  v-for="tab in sidebarTabs"
+                  :key="tab.key"
+                  type="button"
+                  class="flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[13px] transition-colors"
+                  :class="activeSidebarTab === tab.key
+                    ? 'bg-white font-medium text-[#165DFF] shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'"
+                  @click="activeSidebarTab = tab.key"
+                >
+                  <i :class="['fa-solid', tab.icon]" class="text-[11px]"></i>
+                  <span>{{ tab.label }}</span>
+                </button>
+              </div>
+            </div>
+            -->
+
+            <!-- 看板（懒挂载，避免首屏无关请求） -->
+            <div v-if="dashboardMounted" v-show="activeSidebarTab === 'dashboard'" class="sidebar-unified-shell h-full">
+              <DashboardPanel
+                :selected-dashboard-id="activeDashboardId"
+                :dashboards="dashboards"
+                :loading="loadingDefaultDashboard"
+                :current-user-id="currentUser.id"
+                @open-dashboard="handleOpenDashboard"
+                @dashboards-change="handleDashboardsChange"
+              />
+            </div>
+
+            <!-- 智能问数：对话 / 语义模型 -->
+            <template v-if="viewMode === 'conversation'">
+              <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
+                <ConversationSidebar
+                  active-tab="conversation"
+                  :grouped-conversations="groupedConversations"
+                  :current-conversation-id="currentConversationId"
+                  :is-loading="isLoadingConversations"
+                  :is-loading-more="isLoadingMoreConversations"
+                  :has-more="hasMoreConversations"
+                  :conversation-view-mode="conversationViewMode"
+                  :hide-management="!!parentComponentName"
+                  @select-conversation="handleHistoryConversationSelect"
+                  @new-conversation="handleNewConversation"
+                  @load-more-conversations="loadMoreConversations"
+                  @load-more-conversation-group="loadMoreConversationGroup"
+                  @update-conversation-title="handleUpdateConversationTitle"
+                  @toggle-conversation-favorite="handleToggleConversationFavorite"
+                  @toggle-conversation-view-mode="toggleConversationViewMode"
+                />
+              </div>
+              <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
+                <ConversationSidebar
+                  active-tab="metrics"
+                  :datasource-id="selectedDatasourceId"
+                  :semantic-configs="enabledSemanticConfigs"
+                  :loading-configs="loadingSemanticConfigs"
+                  :bootstrap-loading="conversationSidebarBootstrapLoading"
+                  :selected-dataset-id="conversationSemanticConfigId"
+                  :tables="currentDatasource?.ds_tables || []"
+                  :hide-management="!!parentComponentName"
+                  @select-dataset="handleConversationDatasetSelected"
+                  @refresh-semantic-configs="loadSemanticConfigs"
+                  @fill-question="handleFillSemanticQuestion"
+                />
+              </div>
+            </template>
+
+            <!-- 辅助查询：数据表 -->
+            <div v-show="viewMode === 'builder' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
+              <BuilderSidebar
+                :datasource="currentDatasource"
+                :semantic-config="currentSemanticConfig"
+                :semantic-configs="enabledSemanticConfigs"
+                :selected-dataset-id="selectedSemanticConfigId"
+                :tables="currentDatasource?.ds_tables || []"
+                :loading="loadingSemanticConfigs"
+                @drag-start="handleBuilderDragStart"
+                @drag-end="handleBuilderDragEnd"
+                @add-dimension="handleBuilderAddDimension"
+                @add-metric="handleBuilderAddMetric"
+                @dataset-change="handleBuilderSemanticConfigSelected"
+                @refresh-semantic-configs="loadSemanticConfigs"
+              />
+            </div>
+
+            <!-- SQL查询：数据表 -->
+            <div v-show="viewMode === 'editor' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
+              <EditorSidebar
+                :datasource="currentDatasource"
+                :loading="loadingDatasources"
+                @insert-table="handleInsertTable"
+                @insert-column="handleInsertColumn"
+              />
+            </div>
+          </div>
+
+          <!-- 底部：统一上下文选择 / 数据源组管理
+               两者并存时并成一体控件组（外框统一圆角/描边/阴影，中间 1px 分隔），
+               避免两个各自带边框的独立按钮并排产生割裂感 -->
+          <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
+            <div
+              class="flex items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+              :class="showSidebarContextBar ? 'min-w-0 flex-1' : 'ml-auto shrink-0'"
+            >
               <button
-                v-for="tab in sidebarTabs"
-                :key="tab.key"
-                type="button"
-                class="flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[13px] transition-colors"
-                :class="activeSidebarTab === tab.key
-                  ? 'bg-white font-medium text-[#165DFF] shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700'"
-                @click="activeSidebarTab = tab.key"
+                v-if="showSidebarContextBar"
+                class="flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-slate-50"
+                :title="currentContextSummary"
+                @click="openContextSelector"
               >
-                <i :class="['fa-solid', tab.icon]" class="text-[11px]"></i>
-                <span>{{ tab.label }}</span>
+                <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-800">{{ currentContextSummary }}</span>
+                <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0"></i>
+              </button>
+              <!-- 显式分隔线（不用 divide-x：此项目 Tailwind 下未生成边框宽度） -->
+              <span
+                v-if="showSidebarContextBar && canManageDatasource"
+                class="w-px shrink-0 bg-slate-200"
+              ></span>
+              <button
+                v-if="canManageDatasource"
+                class="flex h-9 w-9 shrink-0 items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                title="后台管理"
+                @click="openDatasourceManager"
+              >
+                <i class="fa-solid fa-cog text-xs"></i>
               </button>
             </div>
           </div>
-
-          <!-- 看板（懒挂载，避免首屏无关请求） -->
-          <div v-if="dashboardMounted" v-show="activeSidebarTab === 'dashboard'" class="sidebar-unified-shell h-full">
-            <DashboardPanel
-              :selected-dashboard-id="activeDashboardId"
-              :dashboards="dashboards"
-              :loading="loadingDefaultDashboard"
-              :current-user-id="currentUser.id"
-              @open-dashboard="handleOpenDashboard"
-              @dashboards-change="handleDashboardsChange"
-            />
-          </div>
-
-          <!-- 智能问数：对话 / 语义模型 -->
-          <template v-if="viewMode === 'conversation'">
-            <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
-              <ConversationSidebar
-                active-tab="conversation"
-                :grouped-conversations="groupedConversations"
-                :current-conversation-id="currentConversationId"
-                :is-loading="isLoadingConversations"
-                :is-loading-more="isLoadingMoreConversations"
-                :has-more="hasMoreConversations"
-                :conversation-view-mode="conversationViewMode"
-                :hide-management="!!parentComponentName"
-                @select-conversation="handleHistoryConversationSelect"
-                @new-conversation="handleNewConversation"
-                @load-more-conversations="loadMoreConversations"
-                @load-more-conversation-group="loadMoreConversationGroup"
-                @update-conversation-title="handleUpdateConversationTitle"
-                @toggle-conversation-favorite="handleToggleConversationFavorite"
-                @toggle-conversation-view-mode="toggleConversationViewMode"
-              />
-            </div>
-            <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
-              <ConversationSidebar
-                active-tab="metrics"
-                :datasource-id="selectedDatasourceId"
-                :semantic-configs="enabledSemanticConfigs"
-                :loading-configs="loadingSemanticConfigs"
-                :bootstrap-loading="conversationSidebarBootstrapLoading"
-                :selected-dataset-id="conversationSemanticConfigId"
-                :tables="currentDatasource?.ds_tables || []"
-                :hide-management="!!parentComponentName"
-                @select-dataset="handleConversationDatasetSelected"
-                @refresh-semantic-configs="loadSemanticConfigs"
-                @fill-question="handleFillSemanticQuestion"
-              />
-            </div>
-          </template>
-
-          <!-- 辅助查询：数据表 -->
-          <div v-show="viewMode === 'builder' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
-            <BuilderSidebar
-              :datasource="currentDatasource"
-              :semantic-config="currentSemanticConfig"
-              :semantic-configs="enabledSemanticConfigs"
-              :selected-dataset-id="selectedSemanticConfigId"
-              :tables="currentDatasource?.ds_tables || []"
-              :loading="loadingSemanticConfigs"
-              @drag-start="handleBuilderDragStart"
-              @drag-end="handleBuilderDragEnd"
-              @add-dimension="handleBuilderAddDimension"
-              @add-metric="handleBuilderAddMetric"
-              @dataset-change="handleBuilderSemanticConfigSelected"
-              @refresh-semantic-configs="loadSemanticConfigs"
-            />
-          </div>
-
-          <!-- SQL查询：数据表 -->
-          <div v-show="viewMode === 'editor' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
-            <EditorSidebar
-              :datasource="currentDatasource"
-              :loading="loadingDatasources"
-              @insert-table="handleInsertTable"
-              @insert-column="handleInsertColumn"
-            />
-          </div>
         </div>
 
-        <!-- 底部：统一上下文选择 / 数据源组管理
-             两者并存时并成一体控件组（外框统一圆角/描边/阴影，中间 1px 分隔），
-             避免两个各自带边框的独立按钮并排产生割裂感 -->
-        <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
+        <!-- 右缘竖排 Tab 轨道：悬浮在侧栏右缘之外、侵入会话区 32px，与折叠态窄条同构
+             （按钮下方 pt-8 起排，垂直位置一致）；仅智能问数模式有多个 tab。
+             容器完全透明、无边框无阴影——只是两个文字标签浮在会话区留白上，
+             hover/选中时才出现背景，避免读成一条白条。
+             容器 pointer-events-none + z-40：① Tab 块（pointer-events-auto）压过拖拽条 z-30，
+             最左 8px 与拖拽条重叠处点得中；② 轨道空白区不再拦截会话区点击（此前整条 32px
+             全高都在挡主区） -->
+        <div
+          v-if="showVerticalTabRail"
+          class="pointer-events-none absolute right-[-32px] top-0 z-40 flex h-full w-8 flex-col items-stretch gap-1 pt-8 pb-3"
+        >
           <div
-            class="flex items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
-            :class="showSidebarContextBar ? 'min-w-0 flex-1' : 'ml-auto shrink-0'"
-          >
-            <button
-              v-if="showSidebarContextBar"
-              class="flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-slate-50"
-              :title="currentContextSummary"
-              @click="openContextSelector"
-            >
-              <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-800">{{ currentContextSummary }}</span>
-              <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0"></i>
-            </button>
-            <!-- 显式分隔线（不用 divide-x：此项目 Tailwind 下未生成边框宽度） -->
-            <span
-              v-if="showSidebarContextBar && canManageDatasource"
-              class="w-px shrink-0 bg-slate-200"
-            ></span>
-            <button
-              v-if="canManageDatasource"
-              class="flex h-9 w-9 shrink-0 items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-              title="后台管理"
-              @click="openDatasourceManager"
-            >
-              <i class="fa-solid fa-cog text-xs"></i>
-            </button>
-          </div>
+            v-for="tab in sidebarTabs"
+            :key="tab.key"
+            :class="[
+              'writing-vertical w-full pointer-events-auto text-xs py-3 px-1 cursor-pointer transition-all duration-200 select-none',
+              activeSidebarTab === tab.key ? 'text-blue-500 font-medium bg-blue-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+            ]"
+            :title="tab.label"
+            @click="activeSidebarTab = tab.key"
+          >{{ tab.label }}</div>
         </div>
       </div>
 
-      <!-- 侧边栏拖动分隔条 -->
+      <!-- 侧边栏拖动分隔条（z-30 压过悬浮 Tab 轨道，保证右缘 8px 仍可拖拽调宽） -->
       <div
         v-show="isSidebarVisible"
-        class="w-2 cursor-col-resize flex items-center justify-center transition-colors duration-150 shrink-0 hover:bg-blue-50 group relative"
+        class="w-2 cursor-col-resize flex items-center justify-center transition-colors duration-150 shrink-0 hover:bg-blue-50 group relative z-30"
         :class="isResizingSidebar ? 'bg-blue-50' : ''"
         @mousedown="startSidebarResize"
       >
@@ -1823,6 +1839,13 @@ onUnmounted(() => {
               :label="ds.group_name || ds.id"
             />
           </el-select>
+          <div
+            v-if="datasourceSelectLockReason"
+            class="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500"
+          >
+            <i class="fa-solid fa-circle-info mt-0.5 shrink-0 text-[11px]"></i>
+            <span>{{ datasourceSelectLockReason }}</span>
+          </div>
         </div>
 
         <div>
