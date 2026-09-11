@@ -15,6 +15,9 @@ from utils.models import ChatDataConversationEvent, UserThread
 class ConversationEventDao:
     """维护会话事件的顺序追加和读取。"""
 
+    # 轮次闭包迭代上限：每轮至少吞并一个更早轮次，真实数据 2 轮内收敛，这里只作防御性停止条件。
+    _TURN_CLOSURE_MAX_ROUNDS = 16
+
     def __init__(self, session_context: Optional[Callable] = None):
         self._session_context = session_context or default_get_session
 
@@ -232,8 +235,16 @@ class ConversationEventDao:
         """读取可见历史事件窗口，返回 (按序号升序的事件, 是否还有更早)。
 
         limit 为空时返回全量且 has_more 恒为 False，与旧行为一致。
-        指定 limit 时按 sequence_no 倒序取尾部若干条，再把最早一条所属轮次的前半段
-        补齐——否则首屏可能从某一轮中间截断，渲染出没有提问的半截回答。
+        指定 limit 时先按 sequence_no 倒序取尾部 limit 条，再把窗口起点收敛到「轮次闭包」起点
+        （见 _expand_cutoff_to_turn_closure），返回 [cutoff, before_sequence) 内的全部事件。
+
+        窗口必须是一段连续的 sequence_no 区间，且页内不能有被切断的轮次。并发 run 会让同一
+        轮次的事件在序号上不连续：用户在上一条 run 收尾前又发消息时，提问先落库，回答要等 run
+        结束才以更大的序号追加，中间夹进其它轮次的事件。此时若只把「尾部 limit 条」与「最早
+        一条所属轮次的更早事件」两段并集返回，夹在两段之间、属于其它轮次的事件既不在本页、
+        又落在下一页游标之下，会被永久跳过（真实库最长会话 503 条事件中漏掉 48 条，含 2 条
+        提问）；若窗口起点只取「尾部最早一条所属轮次的起点」，则另有轮次的回答会落在该起点
+        之上、其提问却在其下（真实库 3/67 个会话首屏因此渲染出没有提问的回答）。
         """
         conditions = self._visible_event_filters(conversation_id=conversation_id, user_id=user_id)
         if before_sequence is not None:
@@ -245,45 +256,68 @@ class ConversationEventDao:
             )
             return list(result.scalars().all()), False
 
-        result = await session.execute(
+        tail_result = await session.execute(
             stmt.order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc())
             .limit(limit)
         )
-        rows = list(reversed(list(result.scalars().all())))
-        rows = await self._extend_leading_turn(session, rows, conditions=conditions)
-        if not rows:
+        tail = list(reversed(list(tail_result.scalars().all())))
+        if not tail:
             return [], False
+        cutoff = await self._expand_cutoff_to_turn_closure(
+            session,
+            conditions=conditions,
+            cutoff=int(tail[0].sequence_no),
+        )
+        window_result = await session.execute(
+            stmt.where(ChatDataConversationEvent.sequence_no >= cutoff).order_by(
+                ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc()
+            )
+        )
+        rows = list(window_result.scalars().all())
         has_more = await self._has_earlier_events_in_session(
             session,
             conditions=conditions,
-            earlier_than=int(rows[0].sequence_no),
+            earlier_than=cutoff,
         )
         return rows, has_more
 
-    async def _extend_leading_turn(
+    async def _expand_cutoff_to_turn_closure(
         self,
         session: AsyncSession,
-        rows: list[ChatDataConversationEvent],
         *,
         conditions: list[Any],
-    ) -> list[ChatDataConversationEvent]:
-        """补齐窗口最早一条所属轮次的更早事件，保证轮次不被切断。"""
-        if not rows:
-            return rows
-        leading_turn_id = str(rows[0].turn_id or "").strip()
-        if not leading_turn_id:
-            return rows
-        result = await session.execute(
-            select(ChatDataConversationEvent)
-            .where(
-                *conditions,
-                ChatDataConversationEvent.turn_id == leading_turn_id,
-                ChatDataConversationEvent.sequence_no < rows[0].sequence_no,
+        cutoff: int,
+    ) -> int:
+        """把窗口起点向下收敛到「轮次闭包」起点，保证页内没有被切断的轮次。
+
+        并发 run 会让同一轮次的事件在序号上不连续（提问先落库、回答等 run 收尾才追加），
+        因此仅取「尾部最早一条所属轮次的起点」并不够：另一个轮次的回答可能落在该起点之上，
+        而它的提问在起点之下，首屏就会渲染出没有提问的回答。这里反复把「有事件位于起点之上
+        的轮次」的起点并入起点，直到不动点——此时窗口内每个轮次的起点都在窗口内。
+
+        迭代次数由「每轮至少并入一个更早轮次、起点单调下降且有下界」保证收敛；真实数据 2 轮
+        内收敛，_TURN_CLOSURE_MAX_ROUNDS 只是防御性上限。万一触及上限（数据交织极端异常），
+        结果退化为「起点停在某个轮次起点」的弱保证：仍然是一段连续区间、不会漏事件，只是可能
+        还有孤立的回答留在首屏。
+        """
+        # 每个轮次在本窗口范围内的序号跨度；空 turn_id 的行不构成轮次，无法被并入，保持单行独立。
+        turn_spans = (
+            select(
+                func.min(ChatDataConversationEvent.sequence_no).label("min_seq"),
+                func.max(ChatDataConversationEvent.sequence_no).label("max_seq"),
             )
-            .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
+            .where(*conditions, ChatDataConversationEvent.turn_id != "")
+            .group_by(ChatDataConversationEvent.turn_id)
+            .subquery()
         )
-        leading = list(result.scalars().all())
-        return leading + rows if leading else rows
+        for _ in range(self._TURN_CLOSURE_MAX_ROUNDS):
+            earliest = await session.scalar(
+                select(func.min(turn_spans.c.min_seq)).where(turn_spans.c.max_seq >= cutoff)
+            )
+            if earliest is None or int(earliest) >= cutoff:
+                break
+            cutoff = int(earliest)
+        return cutoff
 
     @staticmethod
     async def _has_earlier_events_in_session(

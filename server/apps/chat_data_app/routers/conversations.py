@@ -405,7 +405,9 @@ async def get_conversation_detail(
         "data": {"id": "...", "title": "...", "messages": [...], "is_favorited": bool}
     }
 
-    limit 省略时返回全量历史（兼容旧行为）；指定后按轮次对齐返回尾部窗口，
+    limit 省略时返回全量历史（兼容旧行为）；指定后返回尾部窗口：以「轮次闭包」起点收尾的
+    连续 sequence_no 区间（并发 run 会让同一轮次的事件在序号上不连续，窗口起点会向下收敛，
+    保证页内不出现被切断的轮次，首屏不会渲染出没有提问的回答），
     并附带 has_more / earliest_sequence_no 供向上翻页。
     """
     try:

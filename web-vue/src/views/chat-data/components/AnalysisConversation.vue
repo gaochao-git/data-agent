@@ -34,6 +34,7 @@ import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../utils/analysisTodos'
+import { createTopReachTracker } from '../utils/scrollReach'
 
 interface Props {
   datasource?: DataSource | null
@@ -1899,10 +1900,27 @@ const NEAR_BOTTOM_THRESHOLD_PX = 100
 const isScrolledToBottom = (container: HTMLElement) =>
   container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
 
+// 滚到顶自动续页：只在「从阈值之外向上越过阈值」时放行一次（见 utils/scrollReach）
+const topReach = createTopReachTracker()
+
+// 滚到顶自动加载更早一页。顶部按钮保留为手动兜底：自动翻页被跳过的场景
+// （运行中、内容不足以滚动）用户仍可自行点击；失败后也不会自动重试，避免请求风暴。
+const maybeAutoLoadEarlier = () => {
+  const container = chatContainerRef.value
+  if (!container) return
+  // 内容不足以滚动时 scrollTop 恒为 0，若放行会在每个 scroll 事件上连环触发
+  if (container.scrollHeight <= container.clientHeight) return
+  if (!hasMoreHistory.value || isLoadingEarlierHistory.value || isLoadingHistory.value) return
+  // 运行中不自动翻页：流式内容会在用户阅读历史时继续增长，翻不翻页交给用户自己决定
+  if (runBusy.value) return
+  void handleLoadEarlier()
+}
+
 const handleScroll = () => {
   const container = chatContainerRef.value
   if (!container) return
   isNearBottom.value = isScrolledToBottom(container)
+  if (topReach.observe(container.scrollTop)) maybeAutoLoadEarlier()
 }
 
 // 用户上翻浏览历史后（isNearBottom=false）由「回到最新」按钮触发回到底部。
@@ -1939,15 +1957,29 @@ const scrollToLatest = () => {
   requestAnimationFrame(settle)
 }
 
-// 向上翻页时把视口锚定在原消息上：补入更早内容后 scrollHeight 变大，
+// 向上翻页时把视口锚定在原消息上：补入更早内容后现有内容整体下移，
 // 若不补偿 scrollTop，视图会跳到别处，用户会失去阅读位置。
+// 首选按「首条已渲染消息」的布局位移补偿：流式新增内容发生在列表下方，不会污染这个位移；
+// 拿不到锚点（列表为空、节点被重建）时退回 scrollHeight 差值。
 const handleLoadEarlier = async () => {
   const container = chatContainerRef.value
+  const anchor = container?.querySelector<HTMLElement>('.chat-message-list > div') ?? null
   const previousHeight = container?.scrollHeight ?? 0
   const previousTop = container?.scrollTop ?? 0
+  const previousAnchorTop = anchor?.offsetTop ?? null
   await loadEarlierHistory()
   await nextTick()
   if (!container) return
+  // 加载期间用户可能已经自己滚动（典型：等不及直接点了「回到最新」）。
+  // 此时视口已经离开原位，再按锚点补偿会把人拽回刚才的位置，所以直接放弃补偿。
+  if (container.scrollTop !== previousTop) return
+  if (anchor && previousAnchorTop !== null && anchor.isConnected) {
+    const shifted = anchor.offsetTop - previousAnchorTop
+    if (shifted > 0) {
+      container.scrollTop = previousTop + shifted
+      return
+    }
+  }
   const grew = container.scrollHeight - previousHeight
   if (grew > 0) container.scrollTop = previousTop + grew
 }
@@ -2092,8 +2124,10 @@ watch(
       activeAssistantMessageId.value = null
       resetTokenUsagePanel()
       resetHistory()
-      // 清空会话后视口回到顶部即底部，重置跟随状态，避免「回到最新」按钮残留
+      // 清空会话后视口回到顶部即底部，重置跟随状态，避免「回到最新」按钮残留；
+      // 自动翻页的越界观测值一并复位，避免带着上一个会话的位置误判「已越过顶部」
       isNearBottom.value = true
+      topReach.reset()
       focusInput()
     }
   }
@@ -2982,14 +3016,23 @@ const handleKeyDown = (event: KeyboardEvent) => {
         @scroll="handleScroll"
       >
         <div v-if="hasMoreHistory && !isLoadingHistory" class="mb-3 flex justify-center">
+          <!-- 滚到顶会自动翻页，这里主要负责反馈加载中状态；
+               自动翻页被跳过的场景（运行中、内容不足以滚动）仍可点按钮手动加载 -->
+          <div
+            v-if="isLoadingEarlierHistory"
+            class="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 text-[12px] text-slate-400 shadow-sm"
+          >
+            <i class="fa-solid fa-spinner fa-spin text-[10px]"></i>
+            <span>正在加载更早的消息...</span>
+          </div>
           <button
+            v-else
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 text-[12px] text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="isLoadingEarlierHistory"
+            class="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 text-[12px] text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-blue-600"
             @click="handleLoadEarlier"
           >
-            <i :class="['fa-solid text-[10px]', isLoadingEarlierHistory ? 'fa-spinner fa-spin' : 'fa-arrow-up']"></i>
-            <span>{{ isLoadingEarlierHistory ? '正在加载更早的消息...' : '加载更早的消息' }}</span>
+            <i class="fa-solid fa-arrow-up text-[10px]"></i>
+            <span>加载更早的消息</span>
           </button>
         </div>
         <div v-if="isLoadingHistory" class="h-full flex items-center justify-center text-sm text-slate-400">

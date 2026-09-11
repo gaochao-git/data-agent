@@ -639,7 +639,8 @@ export function useConversationHistory({
       historyEvents.value = [...olderEvents, ...historyEvents.value]
       // 前拼而不是整表重建：messages 里还有历史窗口之外的本会话实时消息
       // （已发送未落库的提问、流式进行中的回答），applyHistoryEvents 全量重建会把它们抹掉。
-      // 后端保证每页两端都是轮次边界，旧页单独构建与前拼的结果和全量重建一致。
+      // 后端保证每页是一段连续的 sequence_no 区间、且以轮次起点收尾，
+      // 所以「旧页单独构建 + 前拼」与「整段重建」等价，不会漏事件也不会切断轮次。
       messages.value = [...buildHistoryMessagesFromEvents(olderEvents), ...messages.value]
       isFirstMessage.value = messages.value.length === 0
     } catch (error) {

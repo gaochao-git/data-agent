@@ -813,6 +813,14 @@ async def test_history_window_pages_backwards_until_exhausted(conversation_event
     assert [event["event_type"] for event in merged] == ["user_message", "assistant_message"] * 3
     assert [event["sequence_no"] for event in merged] == sorted(event["sequence_no"] for event in merged)
 
+    # 游标落在最早事件之前（例如用户在翻页途中被清空历史）：空页且判定为没有更早
+    empty_page = await service.load_history_with_recovery(
+        conversation_id="conv-page", user_id="user-1", limit=2, before_sequence=1,
+    )
+    assert empty_page["history_events"] == []
+    assert empty_page["has_more"] is False
+    assert empty_page["earliest_sequence_no"] is None
+
 
 @pytest.mark.asyncio
 async def test_history_window_extends_leading_turn_boundary(conversation_event_service):
@@ -886,3 +894,156 @@ async def test_history_window_returns_full_history_when_shorter_than_limit(conve
     full = await service.load_history_with_recovery(conversation_id="conv-short", user_id="user-1")
     assert len(full["history_events"]) == 2
     assert full["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_history_window_stays_contiguous_across_interleaved_turns(conversation_event_service):
+    """并发 run 让同一轮次的事件在序号上不连续时，分页不得漏掉夹在中间的事件。
+
+    真实库里 turn-x 的提问会先落库（上一条 run 还没收尾），中间插进其它轮次的问答，
+    turn-x 的回答最后才以更大的序号追加。旧实现把「尾部 limit 条」与「最早一条所属轮次的
+    更早事件」两段并集返回，夹在两段之间的 turn-b / turn-c 事件既不在本页、又落在下一页
+    游标之下，会被永久跳过（首屏因此出现「没有提问的回答」）。
+    """
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-interleaved", "user-1")
+    await _persist_qa_turn(
+        service, conversation_id="conv-interleaved", turn_id="turn-a", question="问题A", answer="回答A",
+    )
+    await _persist_qa_turn(
+        service, conversation_id="conv-interleaved", turn_id="turn-b", question="问题B", answer="回答B",
+    )
+    # turn-x 的提问先落库，对应的 run 还没结束
+    await service.persist_user_message(
+        conversation_id="conv-interleaved",
+        user_id="user-1",
+        operator_name="用户一",
+        message=HumanMessage(content="问题X", id="turn-x"),
+    )
+    await _persist_qa_turn(
+        service, conversation_id="conv-interleaved", turn_id="turn-c", question="问题C", answer="回答C",
+    )
+    # turn-x 的回答等 run 收尾才追加，序号落在 turn-c 之后
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-interleaved",
+        turn_id="turn-x",
+        question="问题X",
+        answer="回答X1",
+        extra_answers=("回答X2",),
+    )
+
+    baseline = await service.load_history_with_recovery(conversation_id="conv-interleaved", user_id="user-1")
+    expected_sequences = [event["sequence_no"] for event in baseline["history_events"]]
+    assert len(expected_sequences) == 9
+
+    pages = []
+    cursor = None
+    for _ in range(10):
+        page = await service.load_history_with_recovery(
+            conversation_id="conv-interleaved", user_id="user-1", limit=2, before_sequence=cursor,
+        )
+        pages.append(page)
+        if not page["has_more"]:
+            break
+        cursor = page["earliest_sequence_no"]
+    else:
+        pytest.fail("分页未能在 10 页内取尽历史")
+
+    assert len(pages) == 3
+    for page in pages:
+        sequences = [event["sequence_no"] for event in page["history_events"]]
+        # 每页都是连续序号区间，不会在两段之间留下空洞
+        assert sequences == list(range(sequences[0], sequences[-1] + 1))
+        # 每页第一行都是提问（轮次起点）
+        assert page["history_events"][0]["event_type"] == "user_message"
+
+    merged = [event for page in reversed(pages) for event in page["history_events"]]
+    assert [event["sequence_no"] for event in merged] == expected_sequences
+    assert [event["payload"]["content"] for event in merged] == [
+        "问题A", "回答A", "问题B", "回答B", "问题X", "问题C", "回答C", "回答X1", "回答X2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_history_window_closure_keeps_answer_with_its_question(conversation_event_service):
+    """窗口起点必须收敛到轮次闭包起点，不能只取「尾部最早一条所属轮次的起点」。
+
+    否则会出现「回答在本页、提问在上一页」的孤儿：turn-x 的回答被追加在 turn-b 之后，
+    而尾部窗口最早一条属于 turn-b，起点停在 turn-b 的提问上，turn-x 的回答就被单拎到首屏。
+    真实库 3/67 个会话如此（最长会话 503 条事件，提问 seq 221、回答 seq 346，首屏从 345 开窗）。
+    """
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-orphan", "user-1")
+    await _persist_qa_turn(
+        service, conversation_id="conv-orphan", turn_id="turn-a", question="问题A", answer="回答A",
+    )
+    # turn-x 的提问先落库，对应的 run 还没结束
+    await service.persist_user_message(
+        conversation_id="conv-orphan",
+        user_id="user-1",
+        operator_name="用户一",
+        message=HumanMessage(content="问题X", id="turn-x"),
+    )
+    await _persist_qa_turn(
+        service, conversation_id="conv-orphan", turn_id="turn-b", question="问题B", answer="回答B",
+    )
+    # turn-x 的回答等 run 收尾才追加，序号落在 turn-b 之后
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-orphan",
+        turn_id="turn-x",
+        question="问题X",
+        answer="回答X1",
+        extra_answers=("回答X2",),
+    )
+
+    # 尾部 3 条从 turn-b 的回答开始；仅按 turn-b 提问收窗会把 turn-x 的回答孤立在首屏
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-orphan", user_id="user-1", limit=3,
+    )
+    assert [event["payload"]["content"] for event in page["history_events"]] == [
+        "问题X", "问题B", "回答B", "回答X1", "回答X2",
+    ]
+    assert page["history_events"][0]["event_type"] == "user_message"
+    assert page["has_more"] is True
+
+    older = await service.load_history_with_recovery(
+        conversation_id="conv-orphan", user_id="user-1", limit=3,
+        before_sequence=page["earliest_sequence_no"],
+    )
+    assert [event["payload"]["content"] for event in older["history_events"]] == ["问题A", "回答A"]
+    assert older["has_more"] is False
+
+
+class _StubScalarSession:
+    """只回应 session.scalar 的桩：按序吐出预设值，用尽后返回 None。"""
+
+    def __init__(self, values):
+        self._values = list(values)
+        self.calls = 0
+
+    async def scalar(self, _stmt):
+        self.calls += 1
+        return self._values.pop(0) if self._values else None
+
+
+@pytest.mark.asyncio
+async def test_window_cutoff_closure_stops_on_monotone_and_empty_results():
+    """兜底：没有更早轮次可并入（或没有轮次标记）时起点保持不变，不会把窗口反向撑大。"""
+    dao = ConversationEventDao()
+
+    # 无轮次标记 / 没有事件位于起点之上：查询返回 None，起点原样返回
+    session = _StubScalarSession([None])
+    assert await dao._expand_cutoff_to_turn_closure(session, conditions=[], cutoff=42) == 42
+    assert session.calls == 1
+
+    # 收敛过程：42 → 30（并入更早轮次）→ 40 不小于当前起点，立即停止，不再回弹
+    session = _StubScalarSession([30, 40])
+    assert await dao._expand_cutoff_to_turn_closure(session, conditions=[], cutoff=42) == 30
+    assert session.calls == 2
+
+    # 异常数据下起点一直下降：迭代次数被上限截断，不会无限查库
+    session = _StubScalarSession(range(41, 25, -1))
+    assert await dao._expand_cutoff_to_turn_closure(session, conditions=[], cutoff=42) == 26
+    assert session.calls == ConversationEventDao._TURN_CLOSURE_MAX_ROUNDS
