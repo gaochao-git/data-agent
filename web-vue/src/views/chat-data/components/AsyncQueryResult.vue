@@ -55,6 +55,11 @@ interface Props {
   metricsFirst?: boolean
   allowFullscreen?: boolean
   initialViewMode?: ViewMode
+  /**
+   * 图表撑满内容区高度（h-full 而非固定 h-80）。
+   * 仅全屏弹窗内的实例开启：普通消息卡里固定 320px，全屏里应随视口撑满。
+   */
+  fillChartHeight?: boolean
 }
 
 defineOptions({
@@ -70,7 +75,8 @@ const props = withDefaults(defineProps<Props>(), {
   showIndex: false,
   autoWrap: false,
   metricsFirst: false,
-  allowFullscreen: true
+  allowFullscreen: true,
+  fillChartHeight: false
 })
 const attrs = useAttrs()
 const rootClass = computed(() => [
@@ -447,6 +453,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           :x-field="visualization?.x_field"
           :y-field="visualization?.y_field"
           :numeric-columns="numericColumns"
+          :fill-height="fillChartHeight"
         />
       </div>
 
@@ -638,6 +645,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :auto-wrap="autoWrap"
         :metrics-first="metricsFirst"
         :allow-fullscreen="false"
+        :fill-chart-height="true"
         :initial-view-mode="viewMode"
       />
     </div>

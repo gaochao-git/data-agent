@@ -18,9 +18,16 @@ interface Props {
   xField?: string
   yField?: string
   numericColumns: string[]
+  /**
+   * 撑满父容器高度（h-full），替代默认的固定 h-80。
+   * 全屏弹窗里图表应随视口撑满；普通消息卡里固定 320px 更合适。
+   */
+  fillHeight?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  fillHeight: false,
+})
 
 const chartRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
@@ -103,17 +110,30 @@ const renderChart = () => {
   chartInstance.setOption(option, true)
 }
 
-// 响应窗口大小变化
+// 响应容器尺寸变化（ResizeObserver 而非 window.resize）：
+// 组件常在尺寸会滞后稳定的容器里渲染——典型是全屏 el-dialog，挂载发生在弹窗
+// 布局/动画未稳时，echarts.init 首测容器会得到极小尺寸（图表缩成左上角一小团）；
+// 只监听 window.resize 永远等不到修正时机（弹窗打开不触发窗口 resize）。
+// 容器任意尺寸变化（弹窗动画、面板拖宽、窗口缩放）都会触发 resize 自愈。
+let resizeObserver: ResizeObserver | null = null
+
 const handleResize = () => {
   chartInstance?.resize()
 }
 
 onMounted(() => {
   renderChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(handleResize)
+    resizeObserver.observe(chartRef.value)
+  } else {
+    window.addEventListener('resize', handleResize)
+  }
 })
 
 onUnmounted(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   window.removeEventListener('resize', handleResize)
   chartInstance?.dispose()
   chartInstance = null
@@ -130,7 +150,7 @@ watch(
 </script>
 
 <template>
-  <div class="relative w-full h-80 rounded-xl overflow-hidden bg-white">
+  <div :class="['relative w-full overflow-hidden bg-white rounded-xl', fillHeight ? 'h-full' : 'h-80']">
     <div ref="chartRef" class="w-full h-full"></div>
 
     <!-- 无法生成图表时的提示 -->
