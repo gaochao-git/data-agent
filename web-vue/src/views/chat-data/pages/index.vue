@@ -136,6 +136,10 @@ const handleOpenAgentSchedules = () => {
 const handleOpenSkillManager = () => {
   conversationRef.value?.openSkillManager()
 }
+const handleOpenScheduledConversation = (conversationId: string) => {
+  showAgentScheduleModal.value = false
+  void handleHistoryConversationSelect(conversationId)
+}
 const openDatasourceManager = () => {
   if (!canManageAdmin.value) return
   showAdminModal.value = true
@@ -1922,6 +1926,7 @@ onMounted(async () => {
       v-model="showAgentScheduleModal"
       :conversation-id="currentConversationId || ''"
       :datasource-id="selectedDatasourceId || ''"
+      @open-conversation="handleOpenScheduledConversation"
     />
     </el-config-provider>
   </div>

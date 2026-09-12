@@ -230,6 +230,57 @@ async def test_delete_job_soft_deletes(harness):
 
 
 @pytest.mark.asyncio
+async def test_create_new_each_run_mode_without_conversation(harness):
+    service, _create_conversation, create_payload, get_session = harness
+    job = await service.create_job(**_create_kwargs(create_payload(
+        conversation_id="", conversation_mode="new_each_run",
+    )))
+    assert job["conversation_mode"] == "new_each_run"
+    assert job["conversation_id"] == ""
+
+    # 指定会话模式缺会话仍需报错
+    with pytest.raises(AgentScheduleValidationError):
+        await service.create_job(**_create_kwargs(create_payload(conversation_id="")))
+
+
+@pytest.mark.asyncio
+async def test_update_switch_conversation_mode(harness):
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+
+    # fixed -> new_each_run：清空绑定会话
+    switched = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
+        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+        options=None, user_id="user-1", username="用户一",
+        conversation_mode="new_each_run",
+    )
+    assert switched["conversation_mode"] == "new_each_run"
+    assert switched["conversation_id"] == ""
+
+    # new_each_run -> fixed：不传会话应报错
+    with pytest.raises(AgentScheduleValidationError):
+        await service.update_job(
+            job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
+            plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+            options=None, user_id="user-1", username="用户一",
+            conversation_mode="fixed",
+        )
+
+    # new_each_run -> fixed：指定存在的会话成功
+    await create_conversation(conversation_id="conv-2")
+    back = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
+        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+        options=None, user_id="user-1", username="用户一",
+        conversation_mode="fixed", conversation_id="conv-2",
+    )
+    assert back["conversation_mode"] == "fixed"
+    assert back["conversation_id"] == "conv-2"
+
+
+@pytest.mark.asyncio
 async def test_disable_job_cancels_pending_triggers(harness):
     service, create_conversation, create_payload, get_session = harness
     await create_conversation()

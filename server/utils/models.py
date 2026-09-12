@@ -774,6 +774,8 @@ class ChatDataAgentSchedule(Base):
     job_id: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # fixed-绑定指定会话（conversation_id 生效）；new_each_run-每次执行新建会话（conversation_id 为空）
+    conversation_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="fixed", server_default="fixed")
     job_title: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     job_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     schedule_type: Mapped[str] = mapped_column(String(16), nullable=False, default="cron", server_default="cron")
@@ -805,6 +807,7 @@ class ChatDataAgentSchedule(Base):
             "user_id": self.user_id,
             "create_by_name": self.create_by_name,
             "conversation_id": self.conversation_id,
+            "conversation_mode": self.conversation_mode,
             "title": self.job_title,
             "prompt": self.job_prompt,
             "schedule_type": self.schedule_type,
@@ -815,6 +818,7 @@ class ChatDataAgentSchedule(Base):
             "next_trigger_time": self.next_trigger_time.isoformat() if self.next_trigger_time else None,
             "last_trigger_time": self.last_trigger_time.isoformat() if self.last_trigger_time else None,
             "datasource_id": self._options().get("datasource_id"),
+            "options": self._options(),
             "create_time": self.create_time.isoformat() if self.create_time else None,
             "update_time": self.update_time.isoformat() if self.update_time else None,
         }

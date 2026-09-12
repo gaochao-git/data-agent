@@ -24,8 +24,8 @@
 用户侧（归属校验：只能看到/操作自己的任务）：
 
 - `GET /api/chatdata/agent-schedules`：当前用户的任务列表
-- `POST /api/chatdata/agent-schedules`：创建（title/prompt/conversation_id/schedule_type/cron_expr|plan_time/effective_end_time/datasource_id/options）
-- `PUT /api/chatdata/agent-schedules/{job_id}`：更新；调度字段变更后按服务端时钟重算 `next_trigger_time`
+- `POST /api/chatdata/agent-schedules`：创建（title/prompt/conversation_mode/conversation_id/schedule_type/cron_expr|plan_time/effective_end_time/datasource_id/options）。`conversation_mode=fixed` 绑定指定历史会话（conversation_id 必填），`new_each_run` 每次执行新建独立会话（标题为「【定时】任务名」，不传 conversation_id）
+- `PUT /api/chatdata/agent-schedules/{job_id}`：更新（支持切换绑定方式）；调度字段变更后按服务端时钟重算 `next_trigger_time`
 - `DELETE /api/chatdata/agent-schedules/{job_id}`：软删除并停止调度
 - `POST /api/chatdata/agent-schedules/{job_id}/trigger-now`：立即执行（仅归属用户；创建 `manual` 触发实例并同步派发，会话正忙转后台队列自动重试，便于用户验证任务）
 - `GET /api/chatdata/agent-schedules/{job_id}/runs`：执行历史（附关联 Agent Run 状态）
@@ -84,6 +84,11 @@ pending --抢占(行锁)--> claimed --start_run成功--> dispatched --Run终态-
 ## 数据库写入约定
 
 时间字段遵循仓库标注用法：写入点用 DB 时钟（`agent_inbox_dao.now`，MySQL 取 `now()`、单测 SQLite 回退应用时钟）显式赋值 `create_time/update_time`。禁止依赖 `server_default` 回读——MySQL 下新 INSERT 行的 server_default 列 flush 后是过期态，同步读取会抛 MissingGreenlet（SQLite 有 RETURNING 掩盖，测试发现不了）；同理，ORM 属性读取必须留在 `get_session()` 事务块内，派发跨事务时先转字段快照（见 `AgentScheduleRuntime._load_job`）。
+
+## 会话绑定方式
+
+- `fixed`（默认）：任务绑定一个历史会话，到点后在该会话内执行；会话按 ID 关联，改名不影响执行，删除后触发实例标 `failed`。
+- `new_each_run`：每次执行由调度器新建独立会话（`conversation_dao.create_thread`，标题「【定时】任务名」），触发实例回填本次实际会话 ID，执行历史与后台列表可追溯到具体会话。
 
 ## 已知边界
 

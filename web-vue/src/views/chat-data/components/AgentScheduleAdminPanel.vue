@@ -139,6 +139,27 @@ const toggleJob = async (job: AgentScheduleItem, enabled: boolean) => {
   }
 }
 
+const copyConversationId = async (conversationId: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(conversationId)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = conversationId
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success('会话 ID 已复制')
+  } catch (err) {
+    console.error('复制会话 ID 失败:', err)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
 const openRuns = async (job: AgentScheduleItem) => {
   runsJobTitle.value = job.title
   runs.value = []
@@ -230,6 +251,16 @@ defineExpose({ ensureLoaded })
             <span class="text-sm font-medium text-slate-800">{{ row.title }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="绑定会话" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span
+              v-if="row.conversation_mode === 'new_each_run'"
+              class="text-xs text-slate-500"
+              title="每次执行新建会话"
+            >每次新建会话</span>
+            <span v-else class="text-xs text-slate-600" :title="`会话ID ${row.conversation_id}`">{{ row.conversation_title || '会话已删除' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="创建人" width="100" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="text-xs text-slate-500" :title="`用户ID ${row.user_id}`">{{ row.create_by_name || row.user_id }}</span>
@@ -293,7 +324,7 @@ defineExpose({ ensureLoaded })
       width="min(960px, 94vw)"
       :append-to-body="true"
     >
-      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" />
+      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
     </el-dialog>
   </div>
 </template>

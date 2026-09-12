@@ -399,6 +399,42 @@ async def test_paused_control_freezes_plan_and_dispatch(harness):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_new_each_run_creates_fresh_conversation(harness):
+    plan = datetime(2026, 9, 12, 8, 59)
+    await harness.seed_job(schedule_type="once", cron_expr=None, plan_time=plan, next_trigger_time=plan)
+    runtime = harness.make_runtime()
+
+    # 任务切到 new_each_run 模式
+    async with harness.session_factory() as session:
+        job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        job.conversation_mode = "new_each_run"
+        job.conversation_id = ""
+
+    created_threads = []
+    original_create = runtime_module.bound_conversation_dao.create_thread
+
+    async def fake_create_thread(**kwargs):
+        created_threads.append(kwargs)
+
+    runtime_module.bound_conversation_dao.create_thread = fake_create_thread
+    try:
+        await runtime.tick(now=datetime(2026, 9, 12, 9, 0))
+    finally:
+        runtime_module.bound_conversation_dao.create_thread = original_create
+
+    # 单次任务触发一次，即只新建一个会话，标题带任务名
+    assert len(created_threads) == 1
+    assert all(item["title"] == "【定时】定时任务" for item in created_threads)
+    assert all(item["user_id"] == USER_ID for item in created_threads)
+    # Run 在新建会话里执行，触发实例回填实际会话 ID
+    assert harness.started[0][0] == created_threads[0]["thread_id"]
+    assert harness.started[0][0] != CONVERSATION_ID
+    async with harness.session_factory() as session:
+        rows = list((await session.execute(select(ChatDataAgentScheduleRun))).scalars())
+    assert {row.conversation_id for row in rows} == {item["thread_id"] for item in created_threads}
+
+
+@pytest.mark.asyncio
 async def test_plan_long_downtime_fast_forwards_without_unbounded_loop(harness):
     # 每分钟任务停机一年（misfire 窗口 1h）：旧实现逐点空转 52 万次且持行锁；
     # 新实现迭代 500 次后直接跳变到窗口起点的下一个触发点，窗口内触发点由
@@ -524,3 +560,116 @@ async def test_disabled_runtime_start_is_noop():
     await runtime.start()
     assert runtime._poll_task is None
     await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_fixed_mode_dispatch_prefers_job_conversation_over_stale_snapshot(harness):
+    # 实例在 new_each_run 模式下排队（会话快照为空），任务随后切回 fixed 并绑定
+    # conv-1：派发必须以任务当前会话为准，否则 start_run 报「会话不存在」成批假失败
+    now = datetime(2026, 9, 12, 9, 0)
+    await harness.seed_job(next_trigger_time=now + timedelta(minutes=10))
+    runtime = harness.make_runtime()
+
+    async with harness.session_factory() as session:
+        session.add(ChatDataAgentScheduleRun(
+            job_id="job-1", user_id=USER_ID, conversation_id="",
+            plan_time=now - timedelta(minutes=1),
+            trigger_status="pending", delete_flag=0, create_time=now,
+        ))
+
+    await runtime.tick(now=now)
+
+    assert harness.started[0][0] == CONVERSATION_ID
+    async with harness.session_factory() as session:
+        row = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    assert row.trigger_status == "dispatched"
+    assert row.conversation_id == CONVERSATION_ID
+
+
+@pytest.mark.asyncio
+async def test_new_each_run_binds_job_datasource_to_fresh_conversation(harness):
+    # 每次新建会话模式下新会话没有数据源绑定，agent 查询拿不到执行对象：
+    # 派发时必须按任务选项把数据源写进新会话
+    now = datetime(2026, 9, 12, 9, 0)
+    await harness.seed_job(next_trigger_time=now + timedelta(minutes=10))
+    runtime = harness.make_runtime()
+
+    async with harness.session_factory() as session:
+        job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        job.conversation_mode = "new_each_run"
+        job.conversation_id = ""
+        job.options_json = '{"datasource_id": "ds-1"}'
+        session.add(ChatDataAgentScheduleRun(
+            job_id="job-1", user_id=USER_ID, conversation_id="",
+            plan_time=now - timedelta(minutes=1),
+            trigger_status="pending", delete_flag=0, create_time=now,
+        ))
+
+    created: list[dict] = []
+    bound: list[dict] = []
+    original_create = runtime_module.bound_conversation_dao.create_thread
+    original_bind = runtime_module.bound_conversation_dao.resolve_datasource_binding
+
+    async def fake_create_thread(**kwargs):
+        created.append(kwargs)
+
+    async def fake_bind(**kwargs):
+        bound.append(kwargs)
+
+    runtime_module.bound_conversation_dao.create_thread = fake_create_thread
+    runtime_module.bound_conversation_dao.resolve_datasource_binding = fake_bind
+    try:
+        await runtime.tick(now=now)
+    finally:
+        runtime_module.bound_conversation_dao.create_thread = original_create
+        runtime_module.bound_conversation_dao.resolve_datasource_binding = original_bind
+
+    assert len(created) == 1
+    new_conversation_id = created[0]["thread_id"]
+    assert new_conversation_id != CONVERSATION_ID
+    assert bound == [{
+        "conversation_id": new_conversation_id,
+        "user_id": USER_ID,
+        "requested_datasource_id": "ds-1",
+    }]
+    assert harness.started[0][0] == new_conversation_id
+    async with harness.session_factory() as session:
+        row = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    assert row.conversation_id == new_conversation_id
+
+
+@pytest.mark.asyncio
+async def test_conversation_provision_failure_releases_trigger_to_pending(harness):
+    # 建会话失败必须走统一的释放回 pending：异常若冒到派发循环，实例会悬挂在
+    # claimed 直到超时回收才重试
+    now = datetime(2026, 9, 12, 9, 0)
+    await harness.seed_job(next_trigger_time=now + timedelta(minutes=10))
+    runtime = harness.make_runtime()
+
+    async with harness.session_factory() as session:
+        job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        job.conversation_mode = "new_each_run"
+        job.conversation_id = ""
+        session.add(ChatDataAgentScheduleRun(
+            job_id="job-1", user_id=USER_ID, conversation_id="",
+            plan_time=now - timedelta(minutes=1),
+            trigger_status="pending", delete_flag=0, create_time=now,
+        ))
+
+    original_create = runtime_module.bound_conversation_dao.create_thread
+
+    async def failing_create_thread(**kwargs):
+        raise RuntimeError("建会话失败")
+
+    runtime_module.bound_conversation_dao.create_thread = failing_create_thread
+    try:
+        await runtime.tick(now=now)
+    finally:
+        runtime_module.bound_conversation_dao.create_thread = original_create
+
+    assert harness.started == []
+    async with harness.session_factory() as session:
+        row = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    assert row.trigger_status == "pending"
+    assert row.attempt_count == 1
+    assert row.run_id == ""

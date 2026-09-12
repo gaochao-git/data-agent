@@ -18,6 +18,8 @@ withDefaults(defineProps<{
   runs: () => [],
   loading: false
 })
+
+defineEmits<{ copyConversationId: [conversationId: string] }>()
 </script>
 
 <template>
@@ -36,6 +38,17 @@ withDefaults(defineProps<{
           class="inline-block rounded bg-violet-50 px-1.5 py-0.5 text-[11px] text-violet-600"
         >手动</span>
         <span v-else class="text-xs text-slate-500">计划</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="会话" min-width="120" show-overflow-tooltip>
+      <template #default="{ row }">
+        <span
+          v-if="row.conversation_id"
+          class="cursor-pointer font-mono text-xs text-slate-500"
+          :title="`${row.conversation_id}（点击复制）`"
+          @click="$emit('copyConversationId', row.conversation_id)"
+        >{{ row.conversation_id.slice(0, 8) }}…</span>
+        <span v-else class="text-xs text-slate-400">-</span>
       </template>
     </el-table-column>
     <el-table-column label="计划时间" width="160">

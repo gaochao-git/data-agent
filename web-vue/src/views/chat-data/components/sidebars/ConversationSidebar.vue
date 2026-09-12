@@ -5,6 +5,7 @@
  * 看板已提取为独立的 DashboardPanel 组件
  */
 import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { ElMessage } from 'element-plus'
 import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
 import type {
   ConversationGroupView,
@@ -49,6 +50,28 @@ const getConversationTimeText = (conv: ConversationItem): string => (
 const getConversationFullTimeText = (conv: ConversationItem): string => (
   formatDateTimeValue(conv.updated_at || conv.create_time)
 )
+
+// 复制会话 ID：排查定时任务绑定关系等场景用；非 https 环境降级 execCommand
+const copyConversationId = async (conversationId: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(conversationId)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = conversationId
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success('会话 ID 已复制')
+  } catch (err) {
+    console.error('复制会话 ID 失败:', err)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
 
 interface Props {
   activeTab: 'metrics' | 'conversation'
@@ -751,6 +774,14 @@ onUnmounted(() => {
                             @click.stop="toggleConversationFavoriteState(conv)"
                           >
                             <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded text-gray-400 transition-colors duration-150 hover:bg-blue-100 hover:text-blue-600"
+                            title="复制会话 ID"
+                            @click.stop="copyConversationId(conv.id)"
+                          >
+                            <i class="fa-regular fa-copy text-[10px]"></i>
                           </button>
                           <button
                             type="button"

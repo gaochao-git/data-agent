@@ -52,7 +52,8 @@ async def create_agent_schedule(payload: AgentScheduleCreateRequest, request: Re
         data = await agent_schedule_service.create_job(
             title=payload.title,
             prompt=payload.prompt,
-            conversation_id=payload.conversation_id,
+            conversation_id=payload.conversation_id or "",
+            conversation_mode=payload.conversation_mode,
             schedule_type=payload.schedule_type,
             cron_expr=payload.cron_expr,
             plan_time=payload.plan_time,
@@ -85,6 +86,8 @@ async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest
             job_id=job_id,
             title=payload.title,
             prompt=payload.prompt,
+            conversation_mode=payload.conversation_mode,
+            conversation_id=payload.conversation_id,
             schedule_type=payload.schedule_type,
             cron_expr=payload.cron_expr,
             plan_time=payload.plan_time,

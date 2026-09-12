@@ -817,6 +817,8 @@ export interface AgentScheduleItem {
   user_id: string
   create_by_name?: string
   conversation_id: string
+  conversation_mode: 'fixed' | 'new_each_run'
+  conversation_title?: string | null
   title: string
   prompt: string
   schedule_type: 'cron' | 'once'
@@ -827,6 +829,7 @@ export interface AgentScheduleItem {
   next_trigger_time: string | null
   last_trigger_time: string | null
   datasource_id?: string | null
+  options?: Record<string, unknown> | null
   create_time: string | null
   update_time: string | null
   // 后台列表附带的执行统计
@@ -875,7 +878,8 @@ export interface AgentScheduleOverview {
 export interface AgentSchedulePayload {
   title: string
   prompt: string
-  conversation_id: string
+  conversation_id?: string
+  conversation_mode?: 'fixed' | 'new_each_run'
   schedule_type: 'cron' | 'once'
   cron_expr?: string
   plan_time?: string | null

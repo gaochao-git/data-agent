@@ -282,6 +282,28 @@ def test_extra_body_forced_without_efforts_emits_nothing():
     assert _extra_body(cap, False) == {}
 
 
+def test_extra_body_optional_reasoning_effort_without_efforts_emits_nothing():
+    """reasoning_effort 方言未声明档位时：开启也不发思考键。
+
+    配置文件是唯一事实源：需要思考的模型必须在注册表声明
+    efforts/default_effort（见 conf/models.deepseek.json），代码不做兼容兜底。
+    历史教训：deepseek-v4-flash 曾缺档位声明，定时任务与手动聊天的
+    「开启思考」被静默吞掉。
+    """
+    cap = ThinkingCapability(mode="optional", dialect="reasoning_effort",
+                             default_on=False)
+    assert _extra_body(cap, True) == {}
+    # 未显式开启时跟随 default_on=False 裁决为关，发关闭形态键（正常行为）
+    assert _extra_body(cap, None) == {"reasoning_effort": "none"}
+    assert _extra_body(cap, False) == {"reasoning_effort": "none"}
+
+    # 声明了档位与默认档后，显式开启正确落到默认档
+    declared = ThinkingCapability(mode="optional", dialect="reasoning_effort",
+                                  efforts=("low", "medium", "high"), default_effort="low",
+                                  default_on=False)
+    assert _extra_body(declared, True) == {"reasoning_effort": "low"}
+
+
 def test_extra_body_forced_never_emits_disable_shape():
     """forced 在任何方言下都不产生"关"形态——ox-alpha 400 的根治断言。"""
     forced_or = ThinkingCapability(mode="forced", dialect="openrouter", default_effort="high")

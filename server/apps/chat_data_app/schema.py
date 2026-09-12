@@ -181,7 +181,8 @@ class AgentScheduleCreateRequest(BaseModel):
 
     title: str = Field(..., min_length=1, max_length=100, description="任务标题")
     prompt: str = Field(..., min_length=1, max_length=2000, description="任务指令（提示词）")
-    conversation_id: str = Field(..., min_length=1, max_length=64, description="绑定的会话ID")
+    conversation_id: Optional[str] = Field(default=None, max_length=64, description="绑定的会话ID；conversation_mode=fixed 时必填")
+    conversation_mode: Literal["fixed", "new_each_run"] = Field(default="fixed", description="会话绑定方式：fixed-指定会话，new_each_run-每次执行新建会话")
     schedule_type: Literal["cron", "once"] = Field(default="cron", description="调度类型：cron-周期，once-单次")
     cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式（分 时 日 月 周），周期任务必填")
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间，必须晚于当前时间")
@@ -196,6 +197,8 @@ class AgentScheduleUpdateRequest(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=100, description="任务标题")
     prompt: Optional[str] = Field(default=None, min_length=1, max_length=2000, description="任务指令（提示词）")
     schedule_type: Optional[Literal["cron", "once"]] = Field(default=None, description="调度类型")
+    conversation_mode: Optional[Literal["fixed", "new_each_run"]] = Field(default=None, description="会话绑定方式")
+    conversation_id: Optional[str] = Field(default=None, max_length=64, description="绑定的会话ID（切换为指定会话模式时必填）")
     cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式")
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间")
     effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")

@@ -31,6 +31,11 @@ from .trigger_time import (
 
 logger = get_logger(__name__)
 
+# 会话绑定方式：fixed-绑定指定会话；new_each_run-每次执行新建会话
+CONVERSATION_MODE_FIXED = "fixed"
+CONVERSATION_MODE_NEW_EACH_RUN = "new_each_run"
+CONVERSATION_MODES = (CONVERSATION_MODE_FIXED, CONVERSATION_MODE_NEW_EACH_RUN)
+
 # 单个用户可创建的定时任务上限，防止任务表被无界增长
 MAX_JOBS_PER_USER = read_positive_int_env("CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER", 20)
 
@@ -112,8 +117,9 @@ class AgentScheduleService:
         *,
         title: str,
         prompt: str,
-        conversation_id: str,
-        schedule_type: str | None,
+        conversation_id: str = "",
+        conversation_mode: str | None = None,
+        schedule_type: str | None = None,
         cron_expr: str | None,
         plan_time: datetime | None,
         effective_end_time: datetime | None,
@@ -124,9 +130,15 @@ class AgentScheduleService:
     ) -> dict:
         resolved_title = normalize_title(title)
         resolved_prompt = normalize_prompt(prompt)
+        resolved_mode = str(conversation_mode or CONVERSATION_MODE_FIXED).strip()
+        if resolved_mode not in CONVERSATION_MODES:
+            raise AgentScheduleValidationError(f"会话绑定方式必须是 {' 或 '.join(CONVERSATION_MODES)}")
         conversation_key = str(conversation_id or "").strip()
-        if not conversation_key:
-            raise AgentScheduleValidationError("必须绑定一个会话")
+        if resolved_mode == CONVERSATION_MODE_FIXED and not conversation_key:
+            raise AgentScheduleValidationError("指定会话模式必须选择一个会话")
+        if resolved_mode == CONVERSATION_MODE_NEW_EACH_RUN:
+            # 每次执行新建会话：不绑定具体会话，conversation_id 置空
+            conversation_key = ""
         options_json = _validate_options(options)
         if datasource_id:
             merged = json.loads(options_json) if options_json else {}
@@ -142,7 +154,9 @@ class AgentScheduleService:
                 effective_end_time=effective_end_time,
                 now=now,
             )
-            if not await self._dao.conversation_exists(session, conversation_key, user_id):
+            if resolved_mode == CONVERSATION_MODE_FIXED and not await self._dao.conversation_exists(
+                session, conversation_key, user_id
+            ):
                 raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
             # count 与 insert 非同一原子操作，并发创建存在小幅竞态（可能超出上限 1~2 个）；
             # 无用户级行可锁，引入分布式锁不值当，超限后果轻微（可被后台清理），接受该竞态
@@ -152,6 +166,7 @@ class AgentScheduleService:
                 job_id=uuid4().hex,
                 user_id=user_id,
                 conversation_id=conversation_key,
+                conversation_mode=resolved_mode,
                 job_title=resolved_title,
                 job_prompt=resolved_prompt,
                 schedule_type=resolved[0],
@@ -175,7 +190,13 @@ class AgentScheduleService:
     async def list_jobs(self, *, user_id: str) -> list[dict]:
         async with get_session() as session:
             jobs = await self._dao.list_jobs_by_user(session, user_id)
-            return [job.to_dict() for job in jobs]
+            titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job in jobs])
+            items = []
+            for job in jobs:
+                item = job.to_dict()
+                item["conversation_title"] = titles.get(job.conversation_id)
+                items.append(item)
+            return items
 
     async def update_job(
         self,
@@ -183,7 +204,9 @@ class AgentScheduleService:
         job_id: str,
         title: str | None,
         prompt: str | None,
-        schedule_type: str | None,
+        conversation_mode: str | None = None,
+        conversation_id: str | None = None,
+        schedule_type: str | None = None,
         cron_expr: str | None,
         plan_time: datetime | None,
         effective_end_time: datetime | None,
@@ -198,6 +221,20 @@ class AgentScheduleService:
             job = await self._dao.get_job_for_update(session, job_id)
             if job is None or job.user_id != user_id:
                 raise AgentScheduleNotFoundError("定时任务不存在")
+            resolved_mode = str(conversation_mode or job.conversation_mode).strip()
+            if resolved_mode not in CONVERSATION_MODES:
+                raise AgentScheduleValidationError(f"会话绑定方式必须是 {' 或 '.join(CONVERSATION_MODES)}")
+            if resolved_mode == CONVERSATION_MODE_FIXED:
+                # 指定会话模式：优先取新传入的会话，否则沿用任务已绑定的会话
+                conversation_key = str(conversation_id or "").strip() or job.conversation_id
+                if not conversation_key:
+                    raise AgentScheduleValidationError("指定会话模式必须选择一个会话")
+                if conversation_key != job.conversation_id and not await self._dao.conversation_exists(
+                    session, conversation_key, user_id
+                ):
+                    raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
+            else:
+                conversation_key = ""
             resolved_type = str(schedule_type or job.schedule_type).strip()
             resolved_cron = cron_expr if cron_expr is not None else job.cron_expr
             resolved_plan = plan_time if plan_time is not None else job.plan_time
@@ -220,6 +257,10 @@ class AgentScheduleService:
                 if datasource_id:
                     merged["datasource_id"] = str(datasource_id).strip()
                 job.options_json = json.dumps(merged, ensure_ascii=False)
+            mode_changed = resolved_mode != job.conversation_mode or conversation_key != job.conversation_id
+            if mode_changed:
+                job.conversation_mode = resolved_mode
+                job.conversation_id = conversation_key
             schedule_changed = (resolved[0], resolved[1], resolved[2], resolved[3]) != (
                 job.schedule_type,
                 job.cron_expr,
@@ -395,10 +436,12 @@ class AgentScheduleService:
         async with get_session() as session:
             rows = await self._dao.list_jobs_with_stats(session, limit, offset, (keyword or "").strip() or None)
             latest_runs = await self._dao.latest_runs_by_jobs(session, [job.job_id for job, _stats in rows])
+            titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job, _stats in rows])
             items = []
             for job, stats in rows:
                 item = job.to_dict()
                 item.update(stats)
+                item["conversation_title"] = titles.get(job.conversation_id)
                 # 聚合列 last_plan_time 是裸 datetime，必须显式转 ISO 才能进 JSON 响应
                 last_plan_time = item.get("last_plan_time")
                 item["last_plan_time"] = last_plan_time.isoformat() if last_plan_time else None

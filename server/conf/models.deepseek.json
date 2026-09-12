@@ -8,7 +8,13 @@
     "thinking": {
       "mode": "optional",
       "dialect": "reasoning_effort",
-      "default_on": false
+      "default_on": false,
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "low"
     }
   },
   {
@@ -20,7 +26,13 @@
     "thinking": {
       "mode": "optional",
       "dialect": "reasoning_effort",
-      "default_on": false
+      "default_on": false,
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default_effort": "low"
     }
   }
 ]

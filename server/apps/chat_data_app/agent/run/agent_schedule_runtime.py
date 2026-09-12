@@ -21,6 +21,7 @@ import os
 import socket
 from contextlib import suppress
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -32,6 +33,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
     agent_inbox_service,
 )
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime
+from apps.chat_data_app import AGENT_ID
 from apps.chat_data_app.daos.agent_schedule_dao import (
     RUN_STATUS_TO_TRIGGER_STATUS,
     TRIGGER_TYPE_SCHEDULE,
@@ -43,6 +45,7 @@ from apps.chat_data_app.daos.agent_schedule_dao import (
     AgentScheduleDao,
     agent_schedule_dao,
 )
+from apps.chat_data_app.services.conversation_service import conversation_dao as bound_conversation_dao
 from apps.chat_data_app.services.runtime_config import read_bool_env, read_positive_int_env
 from apps.chat_data_app.services.agent_schedule.trigger_time import SCHEDULE_TYPE_ONCE, compute_next_trigger
 
@@ -62,6 +65,8 @@ SCHEDULE_CLAIM_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_SCHEDULE_CLAIM
 # 单轮扫描的任务数与单任务单 tick 的触发计划推进上限，防异常表达式拖垮调度循环
 _PLAN_JOB_BATCH = 50
 _MAX_PLAN_FIRES_PER_TICK = 200
+# 每次新建会话模式：触发实例在派发前没有会话，占位符由派发时新建的会话覆盖
+_CONVERSATION_MODE_NEW_EACH_RUN = "new_each_run"
 # 单任务单 tick 的推进迭代上限（含窗口外快进迭代）：长停机后逐点推进会在
 # 事务 + 行锁内空转数十万次，超过上限直接跳变到 misfire 窗口起点的下一个触发点
 _MAX_PLAN_STEPS = 500
@@ -284,10 +289,14 @@ class AgentScheduleRuntime:
             await self._release(snapshot["id"], SCHEDULE_RUN_STATUS_SKIPPED, "任务已删除或停用")
             result["status"] = SCHEDULE_RUN_STATUS_SKIPPED
             return result
+        # 会话准备与派发同处一个 try：new_each_run 的建会话/绑数据源失败也要
+        # 走统一的释放回 pending，否则异常会冒到 _dispatch_pending 的派发循环
+        # （无 try），实例悬挂在 claimed 直到超时回收才重试。
         try:
+            conversation_id = await self._resolve_conversation_id(job, snapshot)
             runtime_context = self._build_runtime_context(job)
             run_id, _adopted = await self._inbox_service.start_run(
-                snapshot["conversation_id"],
+                conversation_id,
                 snapshot["user_id"],
                 job["create_by_name"] or snapshot["user_id"],
                 runtime_context,
@@ -307,12 +316,43 @@ class AgentScheduleRuntime:
                 snapshot["id"],
                 exc_info=True,
             )
+            # 已知边界：new_each_run 在此异常路径下可能留下一个空会话
+            # （create_thread 成功但 start_run 失败）。新会话无冲突场景，
+            # 频率极低，不做回滚；残留空会话可由用户手动清理。
             await self._release(snapshot["id"], SCHEDULE_RUN_STATUS_PENDING, "")
             return result
-        await self._mark_dispatched(snapshot["id"], run_id)
+        await self._mark_dispatched(snapshot["id"], run_id, conversation_id)
         result["status"] = SCHEDULE_RUN_STATUS_DISPATCHED
         result["run_id"] = run_id
         return result
+
+    async def _resolve_conversation_id(self, job: dict, snapshot: dict) -> str:
+        """确定本次执行落在哪个会话。
+
+        fixed 模式以任务当前绑定会话为准（而非触发实例快照）：用户可能在实例
+        排队期间把任务从 new_each_run 切回 fixed，快照里的空串会让 start_run
+        报「会话不存在」，排队实例成批假失败。new_each_run 模式则新建独立会话，
+        并按任务选项绑定数据源（与聊天链路的首次绑定同一入口），否则新会话
+        无绑定，agent 查询时拿不到任何执行对象。
+        """
+        if job["conversation_mode"] != _CONVERSATION_MODE_NEW_EACH_RUN:
+            return job["conversation_id"] or snapshot["conversation_id"]
+        conversation_id = uuid4().hex
+        await bound_conversation_dao.create_thread(
+            user_id=snapshot["user_id"],
+            thread_id=conversation_id,
+            agent_id=AGENT_ID,
+            title=f"【定时】{job['job_title']}",
+            now=datetime.now(),
+        )
+        job_datasource_id = str(job_options(job["options_json"]).get("datasource_id") or "").strip()
+        if job_datasource_id:
+            await bound_conversation_dao.resolve_datasource_binding(
+                conversation_id=conversation_id,
+                user_id=snapshot["user_id"],
+                requested_datasource_id=job_datasource_id,
+            )
+        return conversation_id
 
     async def _user_has_slot(self, user_id: str) -> bool:
         async with get_session() as session:
@@ -330,6 +370,9 @@ class AgentScheduleRuntime:
                 "job_prompt": job.job_prompt,
                 "options_json": job.options_json,
                 "create_by_name": job.create_by_name,
+                "conversation_mode": job.conversation_mode,
+                "conversation_id": job.conversation_id,
+                "job_title": job.job_title,
             }
 
     def _build_runtime_context(self, job: dict) -> dict:
@@ -354,13 +397,16 @@ class AgentScheduleRuntime:
             "file_ids": [],
         }
 
-    async def _mark_dispatched(self, trigger_id: int, run_id: str) -> None:
+    async def _mark_dispatched(self, trigger_id: int, run_id: str, conversation_id: str | None = None) -> None:
         async with get_session() as session:
             run = await self._dao.get_trigger_for_update(session, trigger_id)
             if run is None or run.trigger_status != SCHEDULE_RUN_STATUS_CLAIMED:
                 return
             run.trigger_status = SCHEDULE_RUN_STATUS_DISPATCHED
             run.run_id = run_id
+            if conversation_id:
+                # 每次新建会话模式：触发实例回填本次实际执行的会话
+                run.conversation_id = conversation_id
             run.dispatched_time = await self._dao.now(session)
         # 直启本进程执行加速；失败无碍，agent_run_runtime 的轮询会在数秒内接管
         with suppress(Exception):

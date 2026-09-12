@@ -11,11 +11,15 @@ import {
   deleteAgentSchedule,
   getAgentScheduleRuns,
   getAgentSchedules,
+  getChatDataConfig,
+  getConversations,
+  getDatasources,
   triggerAgentScheduleNow,
   updateAgentSchedule
 } from '../api'
-import type { AgentScheduleItem, AgentScheduleRunItem } from '../types'
+import type { AgentScheduleItem, AgentScheduleRunItem, ChatDataModelOption, ConversationItem, DataSource } from '../types'
 import { formatDateTimeValue } from '../utils'
+import AgentScheduleRunsTable from './AgentScheduleRunsTable.vue'
 import { WEEKLY_DAY_OPTIONS, scheduleText } from '../utils/agentSchedule'
 
 const props = defineProps({
@@ -26,7 +30,10 @@ const props = defineProps({
   datasourceId: { type: String, default: '' }
 })
 
-const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  openConversation: [conversationId: string]
+}>()
 
 const visible = computed({
   get: () => props.modelValue,
@@ -43,6 +50,10 @@ const savingJob = ref(false)
 const form = ref({
   title: '',
   prompt: '',
+  conversationMode: 'fixed' as 'fixed' | 'new_each_run',
+  conversationId: '',
+  modelId: '',
+  thinkingEffort: '',
   scheduleType: 'cron' as 'cron' | 'once',
   cronPreset: 'daily' as 'hourly' | 'daily' | 'weekly' | 'custom',
   hourlyMinute: 0,
@@ -61,7 +72,90 @@ const runs = ref<AgentScheduleRunItem[]>([])
 // 立即执行防连点：同一时刻只允许一个在途触发请求，避免堆积多个手动实例
 const triggeringJobId = ref('')
 
-const canCreate = computed(() => !!props.conversationId)
+// 数据源组下拉：创建时选定任务执行用的数据源（新会话模式会绑定到新建会话）
+const datasourceOptions = ref<DataSource[]>([])
+const selectedDatasourceId = ref(props.datasourceId || '')
+
+// 指定会话模式的下拉选项：首次打开编辑/新建时拉取最近会话
+const conversationOptions = ref<ConversationItem[]>([])
+const conversationsLoaded = ref(false)
+const loadConversationOptions = async (force = false) => {
+  if (conversationsLoaded.value && !force) return
+  try {
+    const res = await getConversations('chat_data', { page: 1, page_size: 50, view: 'flat' })
+    if (res.status === 'success') {
+      const payload = res.data
+      conversationOptions.value = Array.isArray(payload)
+        ? payload
+        : (payload.conversations || [])
+      conversationsLoaded.value = true
+    }
+  } catch (err) {
+    console.error('加载会话列表失败:', err)
+  }
+}
+
+const loadDatasourceOptions = async () => {
+  if (datasourceOptions.value.length) return
+  try {
+    const res = await getDatasources({ include_tables: false })
+    if (res.status === 'success') {
+      datasourceOptions.value = res.data.datasources || []
+    }
+  } catch (err) {
+    console.error('加载数据源列表失败:', err)
+  }
+}
+
+// 模型与推理等级选项：来自运行时配置的模型注册表（含思考能力声明）
+const modelOptions = ref<ChatDataModelOption[]>([])
+const loadModelOptions = async () => {
+  if (modelOptions.value.length) return
+  try {
+    const res = await getChatDataConfig()
+    if (res.status === 'success') {
+      modelOptions.value = (res.data.models || []) as ChatDataModelOption[]
+    }
+  } catch (err) {
+    console.error('加载模型列表失败:', err)
+  }
+}
+
+const selectedModelThinking = computed(() =>
+  modelOptions.value.find(option => option.id === form.value.modelId)?.thinking || null
+)
+
+// 推理等级选项：模型不支持推理时禁用；有声明档位用档位，否则给开关两档
+const thinkingEffortOptions = computed(() => {
+  const thinking = selectedModelThinking.value
+  if (!thinking || thinking.mode === 'none') return []
+  if (thinking.efforts?.length) return thinking.efforts
+  return ['on', 'off']
+})
+
+const shortConversationId = (conversationId: string): string =>
+  `${String(conversationId || '').slice(0, 8)}…`
+
+const copyConversationId = async (conversationId: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(conversationId)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = conversationId
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success('会话 ID 已复制')
+  } catch (err) {
+    console.error('复制会话 ID 失败:', err)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
 
 const loadJobs = async () => {
   loading.value = true
@@ -93,6 +187,10 @@ const resetForm = () => {
   form.value = {
     title: '',
     prompt: '',
+    conversationMode: props.conversationId ? 'fixed' : 'new_each_run',
+    conversationId: props.conversationId || '',
+    modelId: '',
+    thinkingEffort: '',
     scheduleType: 'cron',
     cronPreset: 'daily',
     hourlyMinute: 0,
@@ -105,12 +203,11 @@ const resetForm = () => {
 }
 
 const openCreate = () => {
-  if (!canCreate.value) {
-    ElMessage.warning('请先选择或新建一个会话，再创建定时任务')
-    return
-  }
   editingJobId.value = ''
   resetForm()
+  void loadConversationOptions()
+  void loadDatasourceOptions()
+  void loadModelOptions()
   editorVisible.value = true
 }
 
@@ -119,6 +216,10 @@ const openEdit = (job: AgentScheduleItem) => {
   form.value = {
     title: job.title,
     prompt: job.prompt,
+    conversationMode: job.conversation_mode || 'fixed',
+    conversationId: job.conversation_id || '',
+    modelId: '',
+    thinkingEffort: '',
     scheduleType: job.schedule_type,
     cronPreset: 'custom',
     hourlyMinute: 0,
@@ -128,6 +229,17 @@ const openEdit = (job: AgentScheduleItem) => {
     planTime: job.plan_time || '',
     effectiveEndTime: job.effective_end_time || ''
   }
+  selectedDatasourceId.value = job.datasource_id || ''
+  // 编辑回显：任务运行配置里的模型与推理等级
+  const jobOptions = (job.options || {}) as Record<string, unknown>
+  form.value.modelId = String(jobOptions.model_id || '')
+  form.value.thinkingEffort = String(
+    jobOptions.thinking_effort
+    ?? (jobOptions.enable_thinking === true ? 'on' : jobOptions.enable_thinking === false ? 'off' : ''),
+  )
+  void loadConversationOptions()
+  void loadDatasourceOptions()
+  void loadModelOptions()
   editorVisible.value = true
 }
 
@@ -175,16 +287,37 @@ const submitJob = async () => {
     ? {
         title,
         prompt,
-        schedule_type: form.value.scheduleType
+        conversation_mode: form.value.conversationMode
       }
     : {
         title,
         prompt,
-        conversation_id: props.conversationId,
+        conversation_mode: form.value.conversationMode,
         schedule_type: form.value.scheduleType,
-        datasource_id: props.datasourceId || undefined,
-        options: props.datasourceId ? { datasource_id: props.datasourceId } : undefined
+        datasource_id: selectedDatasourceId.value || undefined,
+        options: selectedDatasourceId.value ? { datasource_id: selectedDatasourceId.value } : undefined
       }
+  if (form.value.conversationMode === 'fixed') {
+    if (!form.value.conversationId) {
+      ElMessage.warning('请选择一个历史会话')
+      return
+    }
+    payload.conversation_id = form.value.conversationId
+  }
+  // 运行配置统一进 options（单一 JSON 扩展点）：数据源/模型/推理等级
+  const runtimeOptions: Record<string, unknown> = {}
+  if (selectedDatasourceId.value) runtimeOptions.datasource_id = selectedDatasourceId.value
+  if (form.value.modelId) runtimeOptions.model_id = form.value.modelId
+  if (thinkingEffortOptions.value.length && form.value.thinkingEffort) {
+    if (form.value.thinkingEffort === 'on' || form.value.thinkingEffort === 'off') {
+      runtimeOptions.enable_thinking = form.value.thinkingEffort === 'on'
+    } else {
+      runtimeOptions.thinking_effort = form.value.thinkingEffort
+      runtimeOptions.enable_thinking = true
+    }
+  }
+  payload.options = runtimeOptions
+  if (runtimeOptions.datasource_id) payload.datasource_id = runtimeOptions.datasource_id
   if (form.value.scheduleType === 'once') {
     const planTime = localDateTime(form.value.planTime)
     if (!planTime) {
@@ -308,41 +441,73 @@ defineExpose({ ensureLoaded })
   <el-dialog
     v-model="visible"
     title="定时任务"
-    width="min(680px, 92vw)"
+    width="min(920px, 94vw)"
     :append-to-body="true"
   >
-    <div class="flex items-center justify-between pb-3">
-      <p class="m-0 text-xs text-slate-500">到点后自动在绑定会话内执行一次智能问数，结果留在会话中。</p>
-      <el-button type="primary" size="small" round :disabled="!canCreate" @click="openCreate">
+    <div class="flex flex-col gap-1 pb-3">
+      <div class="flex items-center justify-between">
+        <p class="m-0 text-xs text-slate-500">到点后自动在绑定会话内执行一次智能问数，结果留在会话中。</p>
+      <el-button type="primary" size="small" round @click="openCreate">
         <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
         新建定时任务
       </el-button>
+      </div>
     </div>
 
-    <div v-if="loading" class="flex flex-col items-center gap-2 py-10 text-xs text-slate-400">
-      <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
-      <span>加载定时任务...</span>
-    </div>
-
-    <div v-else-if="jobs.length === 0" class="flex flex-col items-center gap-2 py-10 text-xs text-slate-400">
-      <i class="fa-regular fa-clock text-2xl opacity-50"></i>
-      <span>暂无定时任务</span>
-    </div>
-
-    <div v-else class="max-h-[52vh] overflow-y-auto pr-1">
-      <div
-        v-for="job in jobs"
-        :key="job.job_id"
-        class="mb-2 rounded-lg border border-slate-200 px-3 py-2.5 transition-colors hover:border-[#1f82d9]/40"
-      >
-        <div class="flex items-center gap-2">
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{{ job.title }}</span>
+    <el-table :data="jobs" v-loading="loading" size="small" style="width: 100%" empty-text="暂无定时任务">
+      <el-table-column label="任务名称" min-width="130" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="text-sm font-medium text-slate-800">{{ row.title }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="会话" min-width="130" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.conversation_mode === 'new_each_run'" class="text-xs text-slate-500">每次新建会话</span>
+          <button
+            v-else
+            type="button"
+            class="border-none bg-transparent p-0 text-left text-xs text-[#1f82d9] cursor-pointer transition-colors hover:text-[#1668b3]"
+            :title="row.conversation_title ? `点击打开会话` : '会话不存在'"
+            @click="emit('openConversation', row.conversation_id)"
+          >{{ row.conversation_title || '会话已删除' }}</button>
+        </template>
+      </el-table-column>
+      <el-table-column label="会话ID" width="100">
+        <template #default="{ row }">
+          <span
+            v-if="row.conversation_id"
+            class="cursor-pointer font-mono text-xs text-slate-500"
+            :title="`${row.conversation_id}（点击复制）`"
+            @click="copyConversationId(row.conversation_id)"
+          >{{ shortConversationId(row.conversation_id) }}</span>
+          <span v-else class="text-xs text-slate-400">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="调度" min-width="110" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="text-xs text-slate-600" :title="row.effective_end_time ? `有效期至 ${formatDateTimeValue(row.effective_end_time)}` : '长期有效'">
+            {{ scheduleText(row) }}
+          </span>
+        </template>
+      </el-table-column>
+      <el-table-column label="下次执行" width="155">
+        <template #default="{ row }">
+          <span v-if="row.next_trigger_time" class="text-xs text-[#1f82d9]">{{ formatDateTimeValue(row.next_trigger_time) }}</span>
+          <span v-else class="text-xs text-slate-400">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="65" align="center">
+        <template #default="{ row }">
           <el-switch
-            :model-value="job.enabled_flag === 1"
+            :model-value="row.enabled_flag === 1"
             size="small"
-            @change="(value: any) => toggleJob(job, !!value)"
+            @change="(value: any) => toggleJob(row, !!value)"
           />
-          <el-dropdown trigger="click" @command="(command: string) => command === 'edit' ? openEdit(job) : command === 'runs' ? openRuns(job) : command === 'trigger' ? triggerNow(job) : removeJob(job)">
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="90" fixed="right">
+        <template #default="{ row }">
+          <el-dropdown trigger="click" @command="(command: string) => command === 'edit' ? openEdit(row) : command === 'runs' ? openRuns(row) : command === 'trigger' ? triggerNow(row) : removeJob(row)">
             <el-button link size="small" class="!px-1 !text-slate-400 hover:!text-slate-600 focus-visible:!outline-none">
               <i class="fa-solid fa-ellipsis-vertical text-xs"></i>
             </el-button>
@@ -357,20 +522,9 @@ defineExpose({ ensureLoaded })
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-        </div>
-        <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-          <span class="inline-flex items-center gap-1">
-            <i class="fa-regular fa-clock text-[10px]"></i>{{ scheduleText(job) }}
-          </span>
-          <span v-if="job.next_trigger_time" class="text-[#1f82d9]">
-            下次 {{ formatDateTimeValue(job.next_trigger_time) }}
-          </span>
-          <span v-if="job.effective_end_time" class="text-slate-400">
-            有效期至 {{ formatDateTimeValue(job.effective_end_time) }}
-          </span>
-        </div>
-      </div>
-    </div>
+        </template>
+      </el-table-column>
+    </el-table>
 
     <!-- 新建 / 编辑 -->
     <el-dialog
@@ -381,8 +535,55 @@ defineExpose({ ensureLoaded })
     >
       <div class="flex flex-col gap-3">
         <div>
+          <label class="mb-1 block text-xs font-medium text-slate-600">运行会话<span class="ml-1 font-normal text-slate-400">（到点后在所选会话内执行）</span></label>
+          <el-radio-group v-model="form.conversationMode" size="small">
+            <el-radio-button value="new_each_run">每次新建会话</el-radio-button>
+            <el-radio-button value="fixed">指定历史会话</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-if="form.conversationMode === 'fixed'">
+          <el-select
+            v-model="form.conversationId"
+            filterable
+            placeholder="选择历史会话"
+            size="small"
+            class="!w-full"
+          >
+            <el-option
+              v-for="conv in conversationOptions"
+              :key="conv.id"
+              :label="conv.title"
+              :value="conv.id"
+            />
+            <el-option
+              v-if="form.conversationId && !conversationOptions.some(option => option.id === form.conversationId)"
+              :key="form.conversationId"
+              :label="runsJob?.conversation_title || form.conversationId"
+              :value="form.conversationId"
+            />
+          </el-select>
+        </div>
+        <div>
           <label class="mb-1 block text-xs font-medium text-slate-600">任务标题</label>
           <el-input v-model="form.title" maxlength="100" placeholder="例如：每日销售日报" />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-medium text-slate-600">数据源组<span class="ml-1 font-normal text-slate-400">（任务执行时查询数据所用；纯对话任务可清空）</span></label>
+          <el-select
+            v-model="selectedDatasourceId"
+            filterable
+            clearable
+            placeholder="选择数据源组"
+            size="small"
+            class="!w-full"
+          >
+            <el-option
+              v-for="ds in datasourceOptions"
+              :key="ds.id"
+              :label="ds.group_name"
+              :value="ds.id"
+            />
+          </el-select>
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-slate-600">指令</label>
@@ -394,6 +595,45 @@ defineExpose({ ensureLoaded })
             show-word-limit
             placeholder="例如：汇总昨日的销售额和订单量，生成简要分析"
           />
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <label class="mb-1 block text-xs font-medium text-slate-600">模型<span class="ml-1 font-normal text-slate-400">（留空使用系统默认）</span></label>
+            <el-select
+              v-model="form.modelId"
+              filterable
+              clearable
+              placeholder="系统默认"
+              size="small"
+              class="!w-full"
+              @change="form.thinkingEffort = ''"
+            >
+              <el-option
+                v-for="model in modelOptions"
+                :key="model.id"
+                :label="model.label"
+                :value="model.id"
+              />
+            </el-select>
+          </div>
+          <div class="min-w-0 flex-1">
+            <label class="mb-1 block text-xs font-medium text-slate-600">推理等级</label>
+            <el-select
+              v-model="form.thinkingEffort"
+              clearable
+              placeholder="跟随模型默认"
+              size="small"
+              class="!w-full"
+              :disabled="!thinkingEffortOptions.length"
+            >
+              <el-option
+                v-for="effort in thinkingEffortOptions"
+                :key="effort"
+                :label="effort === 'on' ? '开启' : effort === 'off' ? '关闭' : effort"
+                :value="effort"
+              />
+            </el-select>
+          </div>
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-slate-600">调度<span class="ml-1 font-normal text-slate-400">（按服务器时区执行）</span></label>
@@ -464,7 +704,7 @@ defineExpose({ ensureLoaded })
       width="min(860px, 94vw)"
       :append-to-body="true"
     >
-      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" />
+      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
     </el-dialog>
   </el-dialog>
 </template>

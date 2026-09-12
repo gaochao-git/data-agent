@@ -330,10 +330,13 @@ def _get_chat_data_extra_body(
         flag = decision == "on"
         extra_body["enable_thinking"] = flag
         extra_body["chat_template_kwargs"] = {"enable_thinking": flag}
+        return extra_body
     elif decision == "on" and level is None:
-        # forced 未配置等级：不发任何键，端点按自身默认强度思考
+        # 未声明档位：不发任何思考键。配置文件是唯一事实源——
+        # 需要思考能力的模型必须在注册表声明 efforts/default_effort，
+        # 代码不做配置缺失的兼容兜底。
         return {}
-    elif capability.dialect == THINKING_DIALECT_REASONING_EFFORT:
+    if capability.dialect == THINKING_DIALECT_REASONING_EFFORT:
         extra_body["reasoning_effort"] = level if decision == "on" else "none"
     elif capability.dialect == THINKING_DIALECT_OPENROUTER:
         extra_body["reasoning"] = (

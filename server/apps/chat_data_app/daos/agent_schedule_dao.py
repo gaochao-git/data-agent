@@ -109,6 +109,18 @@ class AgentScheduleDao:
         )
         return result.scalar_one_or_none() is not None
 
+    async def list_conversation_titles(self, session: AsyncSession, conversation_ids: list[str]) -> dict[str, str]:
+        """按会话 ID 批量取标题，供任务列表展示绑定会话（实时跟随改名）。"""
+        if not conversation_ids:
+            return {}
+        result = await session.execute(
+            select(UserThread.thread_id, UserThread.thread_title).where(
+                UserThread.thread_id.in_(conversation_ids),
+                UserThread.delete_flag == 0,
+            )
+        )
+        return {row[0]: row[1] for row in result.all() if row[0]}
+
     # ---- 触发实例 ----
 
     async def get_trigger(
