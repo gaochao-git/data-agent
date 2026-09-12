@@ -5,7 +5,7 @@
  * 看板已提取为独立的 DashboardPanel 组件
  */
 import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
-import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite, getAgentSchedules } from '../../api'
+import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
 import type {
   ConversationGroupView,
   ConversationItem,

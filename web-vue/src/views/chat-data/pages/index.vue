@@ -130,17 +130,12 @@ const canManageDatasource = canManageAdmin
 
 // 定时任务管理弹窗（用户侧，侧边栏入口）
 const showAgentScheduleModal = ref(false)
-const conversationSidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
 const handleOpenAgentSchedules = () => {
   showAgentScheduleModal.value = true
 }
 const handleOpenSkillManager = () => {
   conversationRef.value?.openSkillManager()
 }
-const handleAgentSchedulesClosed = () => {
-  conversationSidebarRef.value?.refreshAgentScheduleCount()
-}
-
 const openDatasourceManager = () => {
   if (!canManageAdmin.value) return
   showAdminModal.value = true
