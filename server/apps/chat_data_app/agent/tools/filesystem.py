@@ -129,6 +129,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
         修改前必须先用 file_read 获取最新内容。old_content 必须是文件中完整、非空且唯一的一段原文；
         找不到或匹配多处时会失败，不会修改文件。新建文件或整体覆盖请使用 file_write。
+        追加内容时同样用本工具：取文件末尾一段唯一原文作 old_content，new_content 为这段原文加换行再加新增内容。
 
         Args:
             file_path: 要修改的文件路径。
