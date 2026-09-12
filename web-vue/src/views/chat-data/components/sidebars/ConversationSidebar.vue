@@ -1063,7 +1063,9 @@ onUnmounted(() => {
 
 <style scoped>
 /* 会话 Tab 作为容器查询上下文：侧栏拖窄时按宽度分级降级，
-   优先级「保标题 > 保时间 > 保工具栏文字」 */
+   优先级「保标题 > 保时间」。
+   工具栏（新建任务 / 技能管理 / 定时任务 / 平铺·分组）文字始终显示：
+   侧栏最窄宽度也放得下，需要让位时由「搜索任务」输入框动态伸缩（flex-1 + min-w-0）。 */
 .conversation-tab-root {
   container-type: inline-size;
 }
@@ -1080,12 +1082,14 @@ onUnmounted(() => {
   }
 }
 
-/* 更窄（< 260px）：顶部「新建任务 / 分组」按钮只留图标 */
+/* 更窄（< 260px）时只留图标的历史降级已停用：按钮文字不再随宽度隐藏，
+   宽度压力全部交给搜索框。如需恢复「窄侧栏只留图标」，取消下面规则注释即可。
 @container (max-width: 259px) {
   .conversation-toolbar-btn-text {
     display: none;
   }
 }
+*/
 
 .semantic-config-list {
   container-type: inline-size;

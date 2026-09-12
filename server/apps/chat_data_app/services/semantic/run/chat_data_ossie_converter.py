@@ -111,6 +111,15 @@ def _metric_extension_data(item: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _metrics_by_name(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """指标名 → 配置：派生/复合指标解析成员时复用同一份索引。"""
+    return {
+        item.get("name"): item
+        for item in config.get("metrics") or []
+        if isinstance(item, dict) and item.get("name")
+    }
+
+
 def _extension(data: dict[str, Any]) -> list[dict[str, str]] | None:
     if not data:
         return None
@@ -409,28 +418,40 @@ class ChatDataToOssieConverter:
         return _datatype(dimension.get("logical_type"))
 
     def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:
-        metrics_map = {
-            item.get("name"): item
-            for item in config.get("metrics") or []
-            if isinstance(item, dict) and item.get("name")
-        }
+        metrics_map = _metrics_by_name(config)
         result = []
         for item in config.get("metrics") or []:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not _text(item.get("name")):
                 continue
-            name = _text(item.get("name"))
-            expression = self._metric_expression(item, metrics_map)
-            if not name or not expression:
-                continue
-            datatype = _datatype(item.get("data_type") or item.get("logical_type"))
-            result.append(metric_type(
-                name=name,
-                expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
-                description=_text(item.get("description") or item.get("metadata_supplement")) or None,
-                datatype=datatype_type(datatype) if datatype else None,
-                custom_extensions=[extension_type(**x) for x in (_extension(_metric_extension_data(item)) or [])],
-            ))
+            metric = self._build_metric(
+                item, metrics_map, metric_type, expression_type, dialect_type, extension_type, datatype_type,
+            )
+            if metric is not None:
+                result.append(metric)
         return result
+
+    def _build_metric(
+        self,
+        item: dict[str, Any],
+        metrics_map: dict[str, dict[str, Any]],
+        metric_type: Any,
+        expression_type: Any,
+        dialect_type: Any,
+        extension_type: Any,
+        datatype_type: Any,
+    ) -> Any:
+        """单个指标实体；表达式缺失（配置不完整）时返回 None 跳过导出。"""
+        expression = self._metric_expression(item, metrics_map)
+        if not expression:
+            return None
+        datatype = _datatype(item.get("data_type") or item.get("logical_type"))
+        return metric_type(
+            name=_text(item.get("name")),
+            expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
+            description=_text(item.get("description") or item.get("metadata_supplement")) or None,
+            datatype=datatype_type(datatype) if datatype else None,
+            custom_extensions=[extension_type(**x) for x in (_extension(_metric_extension_data(item)) or [])],
+        )
 
     @staticmethod
     def _metric_expression(item: dict[str, Any], metrics_map: dict[str, dict[str, Any]]) -> str:

@@ -235,93 +235,175 @@ class AgentScheduleService:
             job = await self._dao.get_job_for_update(session, job_id)
             if job is None or job.user_id != user_id:
                 raise AgentScheduleNotFoundError("定时任务不存在")
-            resolved_mode = str(conversation_mode or job.conversation_mode).strip()
-            if resolved_mode not in CONVERSATION_MODES:
-                raise AgentScheduleValidationError(f"会话绑定方式必须是 {' 或 '.join(CONVERSATION_MODES)}")
-            if resolved_mode == CONVERSATION_MODE_FIXED:
-                # 指定会话模式：优先取新传入的会话，否则沿用任务已绑定的会话
-                conversation_key = str(conversation_id or "").strip() or job.conversation_id
-                if not conversation_key:
-                    raise AgentScheduleValidationError("指定会话模式必须选择一个会话")
-                if conversation_key != job.conversation_id and not await self._dao.conversation_exists(
-                    session, conversation_key, user_id
-                ):
-                    raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
-            else:
-                conversation_key = ""
-            candidate_type = str(schedule_type or job.schedule_type).strip()
-            if candidate_type not in SCHEDULE_TYPES:
-                raise AgentScheduleValidationError(f"调度类型必须是 {' 或 '.join(SCHEDULE_TYPES)}")
-            candidate_cron = cron_expr if cron_expr is not None else job.cron_expr
-            candidate_plan = plan_time if plan_time is not None else job.plan_time
-            if clear_effective_end_time:
-                # 显式清除有效期（None 无法区分「未提供」与「清空」，由路由层判定）
-                candidate_end = None
-            else:
-                candidate_end = effective_end_time if effective_end_time is not None else job.effective_end_time
-            # 仅当调度字段真的变了才校验并重算 next_trigger_time：否则执行时间已过期的
-            # 单次任务会被「必须晚于当前时间」永久拦住，连改标题都报错。
-            schedule_changed = (candidate_type, candidate_cron, candidate_plan, candidate_end) != (
-                job.schedule_type,
-                job.cron_expr,
-                job.plan_time,
-                job.effective_end_time,
+            resolved_mode, conversation_key = await self._resolve_conversation_binding(
+                session, job, conversation_mode, conversation_id, user_id
             )
-            if schedule_changed:
-                resolved = _resolve_schedule_fields(
-                    schedule_type=candidate_type,
-                    cron_expr=candidate_cron,
-                    plan_time=candidate_plan,
-                    effective_end_time=candidate_end,
-                    now=now,
-                )
+            resolved, schedule_changed = self._resolve_schedule_update(
+                job,
+                schedule_type=schedule_type,
+                cron_expr=cron_expr,
+                plan_time=plan_time,
+                effective_end_time=effective_end_time,
+                clear_effective_end_time=clear_effective_end_time,
+                now=now,
+            )
             if title is not None:
                 job.job_title = normalize_title(title)
             if prompt is not None:
                 job.job_prompt = normalize_prompt(prompt)
-            if options is not None or datasource_id is not None:
-                # options 是补丁而非整份配置：未提交的键原样保留（semantic_config_id /
-                # skill_names 等不由编辑表单掌管），值为 null 表示清除该键、回退系统默认
-                merged = self._merge_options_patch(
-                    self._load_options(job),
-                    options if isinstance(options, dict) else {},
-                )
-                if datasource_id:
-                    merged["datasource_id"] = str(datasource_id).strip()
-                job.options_json = json.dumps(merged, ensure_ascii=False)
-            mode_changed = resolved_mode != job.conversation_mode or conversation_key != job.conversation_id
-            if mode_changed:
-                job.conversation_mode = resolved_mode
-                job.conversation_id = conversation_key
-            if schedule_changed:
-                # 调度字段变更一律以服务端时钟重新计算下一次触发时间
-                job.schedule_type = resolved[0]
-                job.cron_expr = resolved[1]
-                job.plan_time = resolved[2]
-                job.effective_end_time = resolved[3]
-                job.next_trigger_time = resolved[4]
-            if enabled_flag is not None and (1 if enabled_flag else 0) != job.enabled_flag:
-                job.enabled_flag = 1 if enabled_flag else 0
-                if enabled_flag:
-                    # 重新启用：仅在调度字段未变时按当前时钟重新武装，避免覆盖上面的重算结果
-                    if not schedule_changed:
-                        job.next_trigger_time = compute_next_trigger(
-                            schedule_type=job.schedule_type,
-                            cron_expr=job.cron_expr,
-                            plan_time=job.plan_time,
-                            effective_end_time=job.effective_end_time,
-                            after=now,
-                        )
-                else:
-                    job.next_trigger_time = None
-                    # 停用后 pending/claimed 实例永不会被派发，主动清退防僵尸
-                    await self._dao.cancel_unfinished_triggers(
-                        session, job.job_id, now, "任务已停用，未执行的触发已取消",
-                    )
+            self._apply_options_patch(
+                job,
+                options=options,
+                datasource_id=datasource_id,
+            )
+            self._apply_conversation_binding(job, resolved_mode, conversation_key)
+            self._apply_schedule_fields(job, resolved)
+            await self._apply_enabled_transition(session, job, enabled_flag, now, schedule_changed)
             job.update_time = now
             job.update_by = user_id
             job.update_by_name = username
             return job.to_dict()
+
+    # ---- update_job 的分段实现：只为把单函数复杂度压进阈值，语义与未拆分时完全一致 ----
+
+    async def _resolve_conversation_binding(
+        self,
+        session,
+        job: ChatDataAgentSchedule,
+        conversation_mode: str | None,
+        conversation_id: str | None,
+        user_id: str,
+    ) -> tuple[str, str]:
+        """校验会话绑定方式，返回 (绑定方式, 最终 conversation_id)。"""
+        resolved_mode = str(conversation_mode or job.conversation_mode).strip()
+        if resolved_mode not in CONVERSATION_MODES:
+            raise AgentScheduleValidationError(f"会话绑定方式必须是 {' 或 '.join(CONVERSATION_MODES)}")
+        if resolved_mode != CONVERSATION_MODE_FIXED:
+            # 每次执行新建会话：不绑定具体会话，conversation_id 置空
+            return resolved_mode, ""
+        # 指定会话模式：优先取新传入的会话，否则沿用任务已绑定的会话
+        conversation_key = str(conversation_id or "").strip() or job.conversation_id
+        if not conversation_key:
+            raise AgentScheduleValidationError("指定会话模式必须选择一个会话")
+        if conversation_key != job.conversation_id and not await self._dao.conversation_exists(
+            session, conversation_key, user_id
+        ):
+            raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
+        return resolved_mode, conversation_key
+
+    def _resolve_schedule_update(
+        self,
+        job: ChatDataAgentSchedule,
+        *,
+        schedule_type: str | None,
+        cron_expr: str | None,
+        plan_time: datetime | None,
+        effective_end_time: datetime | None,
+        clear_effective_end_time: bool,
+        now: datetime,
+    ) -> tuple[tuple[str, str, datetime | None, datetime | None, datetime | None] | None, bool]:
+        """解析调度字段变更，返回 (resolved 五元组, 是否变更)；未变更时 resolved 为 ``None``。
+
+        仅当调度字段真的变了才校验并重算 ``next_trigger_time``：否则执行时间已过期的
+        单次任务会被「必须晚于当前时间」永久拦住，连改标题都报错。
+        """
+        candidate_type = str(schedule_type or job.schedule_type).strip()
+        if candidate_type not in SCHEDULE_TYPES:
+            raise AgentScheduleValidationError(f"调度类型必须是 {' 或 '.join(SCHEDULE_TYPES)}")
+        candidate_cron = cron_expr if cron_expr is not None else job.cron_expr
+        candidate_plan = plan_time if plan_time is not None else job.plan_time
+        if clear_effective_end_time:
+            # 显式清除有效期（None 无法区分「未提供」与「清空」，由路由层判定）
+            candidate_end = None
+        else:
+            candidate_end = effective_end_time if effective_end_time is not None else job.effective_end_time
+        if (candidate_type, candidate_cron, candidate_plan, candidate_end) == (
+            job.schedule_type,
+            job.cron_expr,
+            job.plan_time,
+            job.effective_end_time,
+        ):
+            return None, False
+        resolved = _resolve_schedule_fields(
+            schedule_type=candidate_type,
+            cron_expr=candidate_cron,
+            plan_time=candidate_plan,
+            effective_end_time=candidate_end,
+            now=now,
+        )
+        return resolved, True
+
+    def _apply_options_patch(
+        self,
+        job: ChatDataAgentSchedule,
+        *,
+        options: dict[str, Any] | None,
+        datasource_id: str | None,
+    ) -> None:
+        """按补丁语义收敛运行选项：未提交的键原样保留、``null`` 表示清除该键。
+
+        ``options`` 是补丁而非整份配置，编辑表单掌管的键之外的配置
+        （semantic_config_id / skill_names 等）不由前端掌管，必须保留原值。
+        """
+        if options is None and datasource_id is None:
+            return
+        merged = self._merge_options_patch(
+            self._load_options(job),
+            options if isinstance(options, dict) else {},
+        )
+        if datasource_id:
+            merged["datasource_id"] = str(datasource_id).strip()
+        job.options_json = json.dumps(merged, ensure_ascii=False)
+
+    @staticmethod
+    def _apply_conversation_binding(job: ChatDataAgentSchedule, resolved_mode: str, conversation_key: str) -> None:
+        if resolved_mode != job.conversation_mode or conversation_key != job.conversation_id:
+            job.conversation_mode = resolved_mode
+            job.conversation_id = conversation_key
+
+    @staticmethod
+    def _apply_schedule_fields(
+        job: ChatDataAgentSchedule,
+        resolved: tuple[str, str, datetime | None, datetime | None, datetime | None] | None,
+    ) -> None:
+        """调度字段变更一律以服务端时钟重新计算下一次触发时间；未变更（``None``）时不动。"""
+        if resolved is None:
+            return
+        job.schedule_type = resolved[0]
+        job.cron_expr = resolved[1]
+        job.plan_time = resolved[2]
+        job.effective_end_time = resolved[3]
+        job.next_trigger_time = resolved[4]
+
+    async def _apply_enabled_transition(
+        self,
+        session,
+        job: ChatDataAgentSchedule,
+        enabled_flag: int | None,
+        now: datetime,
+        schedule_changed: bool,
+    ) -> None:
+        """启停切换：启用时重新武装游标，停用时清退未终态触发实例防僵尸。"""
+        if enabled_flag is None or (1 if enabled_flag else 0) == job.enabled_flag:
+            return
+        job.enabled_flag = 1 if enabled_flag else 0
+        if not enabled_flag:
+            job.next_trigger_time = None
+            # 停用后 pending/claimed 实例永不会被派发，主动清退防僵尸
+            await self._dao.cancel_unfinished_triggers(
+                session, job.job_id, now, "任务已停用，未执行的触发已取消",
+            )
+            return
+        if schedule_changed:
+            # 调度字段已重算，不要再覆盖上面的结果
+            return
+        job.next_trigger_time = compute_next_trigger(
+            schedule_type=job.schedule_type,
+            cron_expr=job.cron_expr,
+            plan_time=job.plan_time,
+            effective_end_time=job.effective_end_time,
+            after=now,
+        )
 
     async def delete_job(self, *, job_id: str, user_id: str, username: str) -> dict:
         async with get_session() as session:

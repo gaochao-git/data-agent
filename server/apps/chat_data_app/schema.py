@@ -495,34 +495,44 @@ class SemanticMetric(BaseModel):
     @model_validator(mode="after")
     def validate_metric_kind_scoped_fields(self) -> "SemanticMetric":
         """按 metric_kind 分型校验字段归属，避免各类指标口径字段混用。"""
-        kind = self.metric_kind
-        expression_text = str(self.expression or "").strip()
-        if kind == "derived":
-            if not str(self.base_metric or "").strip():
-                raise ValueError(f"派生指标 {self.name} 缺少 base_metric 基础指标")
-            if expression_text:
-                raise ValueError(f"派生指标 {self.name} 不能配置 expression，口径由基础指标 + 周期 + 过滤决定")
-        elif kind == "composite":
-            if not str(self.formula or "").strip():
-                raise ValueError(f"复合指标 {self.name} 缺少 formula 公式")
-            if expression_text:
-                raise ValueError(f"复合指标 {self.name} 不能配置 expression，口径由 formula 决定")
-            if str(self.base_metric or "").strip():
-                raise ValueError(f"复合指标 {self.name} 不能配置 base_metric，成员由公式引用决定")
+        if self.metric_kind == "derived":
+            self._validate_derived_metric_fields()
+        elif self.metric_kind == "composite":
+            self._validate_composite_metric_fields()
         else:
-            if not expression_text:
-                raise ValueError(f"指标 {self.name} 缺少 expression 聚合表达式")
-            if str(self.formula or "").strip():
-                raise ValueError(f"原子指标 {self.name} 不能配置 formula（仅复合指标使用）")
-            if self.period is not None or self.filters:
-                raise ValueError(f"原子指标 {self.name} 不能配置 period/filters（仅派生指标使用）")
-            # base_metric 双语义收敛：原子指标上仅允许同比/环比指标使用（旧口径兼容）
-            if str(self.base_metric or "").strip() and not (self.compare_type or self.compare_mode):
-                raise ValueError(
-                    f"原子指标 {self.name} 不允许配置 base_metric："
-                    "仅派生指标或预计算同比/环比指标（需同时配置 compare_type/compare_mode）使用"
-                )
+            self._validate_atomic_metric_fields()
         return self
+
+    def _validate_derived_metric_fields(self) -> None:
+        """派生指标：口径由基础指标 + 周期 + 过滤决定，不允许自带 expression。"""
+        if not str(self.base_metric or "").strip():
+            raise ValueError(f"派生指标 {self.name} 缺少 base_metric 基础指标")
+        if str(self.expression or "").strip():
+            raise ValueError(f"派生指标 {self.name} 不能配置 expression，口径由基础指标 + 周期 + 过滤决定")
+
+    def _validate_composite_metric_fields(self) -> None:
+        """复合指标：口径由 formula 引用的成员决定，不允许 expression / base_metric。"""
+        if not str(self.formula or "").strip():
+            raise ValueError(f"复合指标 {self.name} 缺少 formula 公式")
+        if str(self.expression or "").strip():
+            raise ValueError(f"复合指标 {self.name} 不能配置 expression，口径由 formula 决定")
+        if str(self.base_metric or "").strip():
+            raise ValueError(f"复合指标 {self.name} 不能配置 base_metric，成员由公式引用决定")
+
+    def _validate_atomic_metric_fields(self) -> None:
+        """原子指标：必须有 expression，且不得携带派生/复合指标专属字段。"""
+        if not str(self.expression or "").strip():
+            raise ValueError(f"指标 {self.name} 缺少 expression 聚合表达式")
+        if str(self.formula or "").strip():
+            raise ValueError(f"原子指标 {self.name} 不能配置 formula（仅复合指标使用）")
+        if self.period is not None or self.filters:
+            raise ValueError(f"原子指标 {self.name} 不能配置 period/filters（仅派生指标使用）")
+        # base_metric 双语义收敛：原子指标上仅允许同比/环比指标使用（旧口径兼容）
+        if str(self.base_metric or "").strip() and not (self.compare_type or self.compare_mode):
+            raise ValueError(
+                f"原子指标 {self.name} 不允许配置 base_metric："
+                "仅派生指标或预计算同比/环比指标（需同时配置 compare_type/compare_mode）使用"
+            )
 
 
 class SemanticDimension(BaseModel):

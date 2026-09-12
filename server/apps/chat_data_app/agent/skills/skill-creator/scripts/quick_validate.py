@@ -32,18 +32,14 @@ def _load_frontmatter(skill_md: Path) -> tuple[dict, str]:
 
 
 def validate_skill_dir(skill_dir: Path) -> list[str]:
-    errors: list[str] = []
     if not skill_dir.exists() or not skill_dir.is_dir():
         return [f"skill directory not found: {skill_dir}"]
 
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
-        errors.append("missing SKILL.md")
-        return errors
+        return ["missing SKILL.md"]
 
-    extra_items = {item.name for item in skill_dir.iterdir()} - ALLOWED_ROOT_ITEMS
-    if extra_items:
-        errors.append(f"unexpected root items: {', '.join(sorted(extra_items))}")
+    errors: list[str] = _validate_root_items(skill_dir)
 
     try:
         metadata, body = _load_frontmatter(skill_md)
@@ -51,6 +47,24 @@ def validate_skill_dir(skill_dir: Path) -> list[str]:
         errors.append(str(exc))
         return errors
 
+    errors.extend(_validate_frontmatter(metadata, skill_dir))
+    if not body.strip():
+        errors.append("SKILL.md body is empty")
+    errors.extend(_validate_subdirectories(skill_dir))
+    return errors
+
+
+def _validate_root_items(skill_dir: Path) -> list[str]:
+    """根目录只允许 SKILL.md / references / scripts / assets。"""
+    extra_items = {item.name for item in skill_dir.iterdir()} - ALLOWED_ROOT_ITEMS
+    if extra_items:
+        return [f"unexpected root items: {', '.join(sorted(extra_items))}"]
+    return []
+
+
+def _validate_frontmatter(metadata: dict, skill_dir: Path) -> list[str]:
+    """frontmatter 必填项与命名规范校验。"""
+    errors: list[str] = []
     name = str(metadata.get("name") or "").strip()
     title = str(metadata.get("title") or "").strip()
     description = str(metadata.get("description") or "").strip()
@@ -67,16 +81,17 @@ def validate_skill_dir(skill_dir: Path) -> list[str]:
         errors.append("description is required")
     if len(description) > 300:
         errors.append("description should be concise, max 300 characters")
-    if not body.strip():
-        errors.append("SKILL.md body is empty")
+    return errors
 
+
+def _validate_subdirectories(skill_dir: Path) -> list[str]:
+    errors: list[str] = []
     for dir_name in ("references", "scripts", "assets"):
         target = skill_dir / dir_name
         if not target.exists():
             errors.append(f"missing required directory: {dir_name}")
         elif not target.is_dir():
             errors.append(f"{dir_name} must be a directory")
-
     return errors
 
 

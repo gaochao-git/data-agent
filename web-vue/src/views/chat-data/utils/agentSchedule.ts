@@ -42,22 +42,20 @@ export const getScheduleRunStatusClass = (status: string | null | undefined): st
   SCHEDULE_RUN_STATUS_CLASS[status || ''] || 'bg-slate-100 text-slate-600'
 )
 
+/** 周几字段 → 中文标签（`1`=周一 … `0`=周日），无法识别时原样回退 */
+const weeklyDayLabel = (weekday: string): string =>
+  WEEKLY_DAY_OPTIONS.find(option => String(option.value) === weekday)?.label || `周${weekday}`
+
 /** 把五字段 cron 表达式转成可读文案，无法识别时原样返回 */
 export const cronToText = (expr: string): string => {
   const parts = (expr || '').trim().split(/\s+/)
   if (parts.length !== 5) return expr || '未配置'
   const [minute = '', hour = '', day = '', month = '', weekday = ''] = parts
-  const paddedMinute = minute.padStart(2, '0')
-  const paddedHour = hour.padStart(2, '0')
+  const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
   if (minute.startsWith('*/')) return `每小时第 ${minute.slice(2)} 分`
-  if (day === '*' && month === '*' && weekday === '*') {
-    return `每天 ${paddedHour}:${paddedMinute}`
-  }
-  if (day === '*' && month === '*' && weekday !== '*') {
-    const dayLabel = WEEKLY_DAY_OPTIONS.find(option => String(option.value) === weekday)?.label || `周${weekday}`
-    return `每${dayLabel} ${paddedHour}:${paddedMinute}`
-  }
-  return `自定义 · ${expr}`
+  if (day !== '*' || month !== '*') return `自定义 · ${expr}`
+  if (weekday === '*') return `每天 ${time}`
+  return `每${weeklyDayLabel(weekday)} ${time}`
 }
 
 /** 任务调度文案：单次显示执行时间，周期显示 cron 文案 */

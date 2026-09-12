@@ -125,12 +125,29 @@ def _validate_derived_period(
     kind = str(period.get("kind") or "").strip().lower()
     if kind not in DERIVED_PERIOD_KINDS:
         return f"{label}类型不支持: {kind or '(空)'}"
+    range_error = _validate_derived_period_range(label, kind, period)
+    if range_error:
+        return range_error
+    return _validate_period_time_dimension(label, period, dimensions_map)
+
+
+def _validate_derived_period_range(label: str, kind: str, period: Dict[str, Any]) -> Optional[str]:
+    """周期区间参数校验：last_n_days 需要正整数 n，between 需要起止值。"""
     if kind == "last_n_days":
         n = period.get("n")
         if not isinstance(n, int) or isinstance(n, bool) or n < 1:
             return f"{label}的 n 必须是正整数"
     if kind == "between" and (not period.get("start") or not period.get("end")):
         return f"{label}between 必须提供 start 和 end"
+    return None
+
+
+def _validate_period_time_dimension(
+    label: str,
+    period: Dict[str, Any],
+    dimensions_map: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    """周期的时间维度必须存在且为日期/时间型逻辑字段。"""
     time_dimension = str(period.get("time_dimension") or "").strip()
     dim_config = dimensions_map.get(time_dimension)
     if not dim_config:
@@ -175,19 +192,32 @@ def _validate_derived_filter_item(
     return _validate_derived_filter_value(label, operator, item.get("value"))
 
 
+def _is_blank_text(value: Any) -> bool:
+    """值缺失或仅空白：BETWEEN/IN 的每个元素都按该口径判断。"""
+    return not str(value or "").strip()
+
+
 def _validate_derived_filter_value(label: str, operator: str, value: Any) -> Optional[str]:
     if operator in _NO_VALUE_FILTER_OPERATORS:
         return None
-    if operator in {"BETWEEN"}:
-        if not isinstance(value, list) or len(value) != 2 or any(not str(part or "").strip() for part in value):
-            return f"{label}BETWEEN 需要完整的起止值"
-        return None
+    if operator == "BETWEEN":
+        return _validate_between_filter_value(label, value)
     if operator in {"IN", "NOT IN"}:
-        if not isinstance(value, list) or not value or any(not str(part or "").strip() for part in value):
-            return f"{label}IN 过滤需要至少一个有效值"
-        return None
+        return _validate_in_filter_value(label, value)
     if value is None or (isinstance(value, str) and not value.strip()):
         return f"{label}缺少筛选值"
+    return None
+
+
+def _validate_between_filter_value(label: str, value: Any) -> Optional[str]:
+    if not isinstance(value, list) or len(value) != 2 or any(_is_blank_text(part) for part in value):
+        return f"{label}BETWEEN 需要完整的起止值"
+    return None
+
+
+def _validate_in_filter_value(label: str, value: Any) -> Optional[str]:
+    if not isinstance(value, list) or not value or any(_is_blank_text(part) for part in value):
+        return f"{label}IN 过滤需要至少一个有效值"
     return None
 
 
@@ -223,21 +253,40 @@ def _validate_composite_metric_item(
         return f"复合指标 {name} 的公式包含不支持的字符，仅允许四则运算、括号和数字: {operator_text.strip()}"
     member_table = ""
     for ref in refs:
-        member_metric = metrics_map.get(ref)
-        if not member_metric:
-            return f"复合指标 {name} 引用的指标不存在: {ref}"
-        if is_composite_metric(member_metric):
-            return f"复合指标 {name} 不能引用其他复合指标: {ref}"
-        if is_derived_metric(member_metric):
-            return f"复合指标 {name} 的成员暂不支持派生指标: {ref}"
-        if not parse_aggregate_expression(str(member_metric.get("expression") or "")):
-            return f"复合指标 {name} 引用的指标不是聚合指标: {ref}"
-        ref_table = str(member_metric.get("table") or "").strip()
-        if not ref_table:
-            return f"复合指标 {name} 引用的指标缺少物理表: {ref}"
-        if member_table and ref_table != member_table:
-            return f"复合指标 {name} 的成员指标跨表（{member_table} / {ref_table}），暂不支持"
-        member_table = ref_table
+        error = _validate_composite_member(name, ref, metrics_map, member_table)
+        if error:
+            return error
+        if not member_table:
+            # 同表约束以首个成员的表名为基准
+            member_table = _metric_table(metrics_map.get(ref))
+    return None
+
+
+def _metric_table(metric: Optional[Dict[str, Any]]) -> str:
+    return str((metric or {}).get("table") or "").strip()
+
+
+def _validate_composite_member(
+    name: str,
+    ref: str,
+    metrics_map: Dict[str, Dict[str, Any]],
+    member_table: str,
+) -> Optional[str]:
+    """复合指标单个公式成员校验：存在性、类型、聚合性与同表约束。"""
+    member_metric = metrics_map.get(ref)
+    if not member_metric:
+        return f"复合指标 {name} 引用的指标不存在: {ref}"
+    if is_composite_metric(member_metric):
+        return f"复合指标 {name} 不能引用其他复合指标: {ref}"
+    if is_derived_metric(member_metric):
+        return f"复合指标 {name} 的成员暂不支持派生指标: {ref}"
+    if not parse_aggregate_expression(str(member_metric.get("expression") or "")):
+        return f"复合指标 {name} 引用的指标不是聚合指标: {ref}"
+    ref_table = _metric_table(member_metric)
+    if not ref_table:
+        return f"复合指标 {name} 引用的指标缺少物理表: {ref}"
+    if member_table and ref_table != member_table:
+        return f"复合指标 {name} 的成员指标跨表（{member_table} / {ref_table}），暂不支持"
     return None
 
 

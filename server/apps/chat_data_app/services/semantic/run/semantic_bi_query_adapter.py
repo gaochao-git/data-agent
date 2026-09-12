@@ -255,30 +255,35 @@ class SemanticBIQueryAdapter:
         }
 
     @staticmethod
+    def _aggregation_field_name(item: Dict[str, Any], metric: Dict[str, Any], fallback: Any) -> Any:
+        """聚合字段展示名：指标名 > 查询项别名/显示名 > 兜底（列名或物理表名）。"""
+        return metric.get("name") or item.get("alias") or item.get("displayName") or fallback
+
+    @staticmethod
     def _aggregation_fields_from_metric(item: Dict[str, Any], metric: Dict[str, Any]) -> tuple:
         """命中语义指标时，聚合字段优先取指标配置。"""
+        table = metric.get("table") or item.get("table")
+        alias = _semantic_alias(metric) or table
         if is_composite_metric(metric):
             # 复合指标：formula 已代入为完整聚合表达式，按 RAW 原样直出并绑定成员物理表
-            table = metric.get("table") or item.get("table")
             return (
                 "RAW",
                 table,
-                _semantic_alias(metric) or table,
+                alias,
                 "*",
                 metric.get("expression"),
-                metric.get("name") or item.get("alias") or item.get("displayName") or table,
+                SemanticBIQueryAdapter._aggregation_field_name(item, metric, table),
             )
         parsed = metric_func_column(normalize_text(metric.get("expression")))
         func = parsed[0] if parsed else normalize_text(item.get("func") or "RAW").upper()
         column = parsed[1] if parsed else (metric.get("column") or item.get("column") or "*")
-        table = metric.get("table") or item.get("table")
         return (
             func,
             table,
-            _semantic_alias(metric) or table,
+            alias,
             column,
             metric.get("expression") or item.get("expression"),
-            metric.get("name") or item.get("alias") or item.get("displayName") or column,
+            SemanticBIQueryAdapter._aggregation_field_name(item, metric, column),
         )
 
     def _aggregation_fields_from_dimension(self, item: Dict[str, Any]) -> tuple:

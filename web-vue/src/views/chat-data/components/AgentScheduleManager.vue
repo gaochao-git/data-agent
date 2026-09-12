@@ -239,9 +239,18 @@ const openCreate = () => {
   editorVisible.value = true
 }
 
-const openEdit = (job: AgentScheduleItem) => {
-  editingJobId.value = job.job_id
-  editingConversationTitle.value = job.conversation_title || ''
+/** 从任务运行配置还原推理等级：显式档位优先，其次开关语义，都没有则留空 */
+const resolveThinkingEffort = (jobOptions: Record<string, unknown>): string => {
+  if (jobOptions.thinking_effort !== undefined && jobOptions.thinking_effort !== null) {
+    return String(jobOptions.thinking_effort)
+  }
+  if (jobOptions.enable_thinking === true) return 'on'
+  if (jobOptions.enable_thinking === false) return 'off'
+  return ''
+}
+
+/** 编辑回显：任务字段 → 表单（模型与推理等级来自任务运行配置） */
+const applyJobToForm = (job: AgentScheduleItem) => {
   form.value = {
     title: job.title,
     prompt: job.prompt,
@@ -259,25 +268,29 @@ const openEdit = (job: AgentScheduleItem) => {
     effectiveEndTime: job.effective_end_time || ''
   }
   selectedDatasourceId.value = job.datasource_id || ''
-  // 编辑回显：任务运行配置里的模型与推理等级
   const jobOptions = (job.options || {}) as Record<string, unknown>
   form.value.modelId = String(jobOptions.model_id || '')
-  form.value.thinkingEffort = String(
-    jobOptions.thinking_effort
-    ?? (jobOptions.enable_thinking === true ? 'on' : jobOptions.enable_thinking === false ? 'off' : ''),
-  )
-  // 基线取「表单当前值的规范化结果」，保证未改动的键不会因格式差异被下发
-  editorBaseline.value = {
-    options: {
-      datasource_id: selectedDatasourceId.value || null,
-      model_id: form.value.modelId || null,
-      ...buildThinkingKeys(form.value.thinkingEffort)
-    },
-    scheduleType: job.schedule_type,
-    cronExpr: job.cron_expr || '',
-    planTime: localDateTime(job.plan_time) || '',
-    effectiveEndTime: localDateTime(job.effective_end_time) || ''
-  }
+  form.value.thinkingEffort = resolveThinkingEffort(jobOptions)
+}
+
+/** 编辑基线：取「表单当前值的规范化结果」，保证未改动的键不会因格式差异被下发 */
+const buildBaselineFromJob = (job: AgentScheduleItem): ScheduleFormBaseline => ({
+  options: {
+    datasource_id: selectedDatasourceId.value || null,
+    model_id: form.value.modelId || null,
+    ...buildThinkingKeys(form.value.thinkingEffort)
+  },
+  scheduleType: job.schedule_type,
+  cronExpr: job.cron_expr || '',
+  planTime: localDateTime(job.plan_time) || '',
+  effectiveEndTime: localDateTime(job.effective_end_time) || ''
+})
+
+const openEdit = (job: AgentScheduleItem) => {
+  editingJobId.value = job.job_id
+  editingConversationTitle.value = job.conversation_title || ''
+  applyJobToForm(job)
+  editorBaseline.value = buildBaselineFromJob(job)
   void loadConversationOptions(true)
   void loadDatasourceOptions(true)
   void loadModelOptions(true)
