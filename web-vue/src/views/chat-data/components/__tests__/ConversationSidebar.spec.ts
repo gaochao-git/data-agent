@@ -147,10 +147,12 @@ describe('ConversationSidebar conversation row role zone', () => {
 
     const times = wrapper.findAll('[data-testid="conversation-time"]')
     expect(times).toHaveLength(2)
-    expect(times[0]!.text()).toBe('5分钟前')
+    // 简短/完整两档时间分别渲染在各自 span，由容器查询按侧栏宽度切换显示
+    expect(times[0]!.find('[data-testid="conversation-time-short"]').text()).toBe('5分钟前')
+    expect(times[0]!.find('[data-testid="conversation-time-full"]').text()).toBe(updatedAt)
     expect(times[0]!.attributes('title')).toBe(updatedAt)
     // 超过 7 天回落 MM-DD（不显示年份）
-    expect(times[1]!.text()).toBe('01-05')
+    expect(times[1]!.find('[data-testid="conversation-time-short"]').text()).toBe('01-05')
 
     const actions = wrapper.findAll('[data-testid="conversation-actions"]')
     expect(actions).toHaveLength(2)
@@ -180,6 +182,28 @@ describe('ConversationSidebar conversation row role zone', () => {
     expect(actions.find('button[title="修改标题"]').exists()).toBe(true)
   })
 
+  it('switches time display in three tiers via container queries on the sidebar width', () => {
+    const wrapper = mountSidebar([{ id: 'conv-tier', title: '宽度档位会话', create_time: '2026-08-14 10:00:00' }])
+
+    // 容器上下文由组件 style 块的 .conversation-tab-root { container-type: inline-size } 声明，
+    // 侧栏拖拽范围 200-500px（index.vue），三档即时响应
+    expect(wrapper.find('.conversation-tab-root').exists()).toBe(true)
+
+    // 窄（<260px）：隐藏；中（260-379px）：相对时间；宽（≥380px）：完整时间
+    const shortTime = wrapper.find('[data-testid="conversation-time-short"]')
+    expect(shortTime.classes()).toContain('hidden')
+    expect(shortTime.classes()).toContain('@min-[260px]:block')
+    expect(shortTime.classes()).toContain('@min-[380px]:hidden')
+
+    const fullTime = wrapper.find('[data-testid="conversation-time-full"]')
+    expect(fullTime.classes()).toContain('hidden')
+    expect(fullTime.classes()).toContain('@min-[380px]:block')
+    expect(fullTime.text()).toBe('2026-08-14 10:00:00')
+
+    // 宽档角色区同步加宽（132px ≈ 19 字符完整时间），中窄档维持 52px 不挤标题
+    expect(wrapper.find('[data-testid="conversation-role-zone"]').classes()).toContain('@min-[380px]:w-[132px]')
+  })
+
   it('keeps pinned rows quiet by default and reveals the pinned state only on hover', () => {
     const updatedAt = fiveMinutesAgo()
     const wrapper = mountSidebar([
@@ -188,7 +212,7 @@ describe('ConversationSidebar conversation row role zone', () => {
 
     // 默认态仍是时间：置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知）
     const time = wrapper.find('[data-testid="conversation-time"]')
-    expect(time.text()).toBe('5分钟前')
+    expect(time.find('[data-testid="conversation-time-short"]').text()).toBe('5分钟前')
 
     const actions = wrapper.find('[data-testid="conversation-actions"]')
     expect(actions.classes()).toContain('opacity-0')

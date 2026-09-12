@@ -23,7 +23,7 @@ import {
   type SemanticTooltipContext,
 } from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
-import { formatRelativeConversationTime } from '../../utils'
+import { formatDateTimeValue, formatRelativeConversationTime } from '../../utils'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
@@ -43,6 +43,11 @@ const getRunStatusClass = (status: ConversationItem['run_status']): string => {
 
 const getConversationTimeText = (conv: ConversationItem): string => (
   formatRelativeConversationTime(conv.updated_at || conv.create_time)
+)
+
+// 宽侧栏（容器 ≥380px）显示完整时间，便于精确对比会话先后；解析失败返回空串由 CSS 档位自然隐藏
+const getConversationFullTimeText = (conv: ConversationItem): string => (
+  formatDateTimeValue(conv.updated_at || conv.create_time)
 )
 
 interface Props {
@@ -695,15 +700,19 @@ onUnmounted(() => {
                         <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
                       </span>
                       <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
-                      <!-- 右侧固定角色区：平时显示相对时间，hover 淡出时间、淡入置顶/编辑按钮。
-                           两态共用同一固定宽度容器（w-[52px] = 2×24px 按钮 + 4px 间距），互不挤占、不跳动。
+                      <!-- 右侧固定角色区：时间展示随侧栏宽度三档切换（容器查询，拖拽侧栏即时生效）——
+                           <260px 隐藏时间；260-379px 相对时间；≥380px 完整时间（角色区同步加宽容纳 19 字符）。
+                           hover 淡出时间、淡入置顶/编辑按钮，两态共用同一固定宽度容器，互不挤占、不跳动。
                            置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
-                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[52px] shrink-0">
+                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[52px] shrink-0 @min-[380px]:w-[132px]">
                         <span
                           data-testid="conversation-time"
                           class="conversation-time-text absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
                           :title="conv.updated_at || conv.create_time"
-                        >{{ getConversationTimeText(conv) }}</span>
+                        >
+                          <span data-testid="conversation-time-short" class="hidden @min-[260px]:block @min-[380px]:hidden">{{ getConversationTimeText(conv) }}</span>
+                          <span data-testid="conversation-time-full" class="hidden @min-[380px]:block">{{ getConversationFullTimeText(conv) }}</span>
+                        </span>
                         <div
                           data-testid="conversation-actions"
                           class="absolute inset-y-0 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
