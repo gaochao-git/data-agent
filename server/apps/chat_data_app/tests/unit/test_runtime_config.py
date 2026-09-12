@@ -119,6 +119,28 @@ def test_context_usage_system_prompt_visibility_flag(monkeypatch):
     assert runtime_config.is_context_usage_system_prompt_visible() is True
 
 
+def test_upload_and_image_size_limits_are_env_overridable(monkeypatch):
+    """上传/图片大小上限走 env（模块级求值，改完需重启）；reload 后须复原以免影响其它用例。"""
+    import importlib
+
+    from apps.chat_data_app.agent.workspace import uploaded_file_parser as parser
+    from apps.chat_data_app.services.agent_run import uploaded_file_service as service
+
+    monkeypatch.setenv("CHAT_DATA_MAX_UPLOAD_SIZE_MB", "2")
+    monkeypatch.setenv("CHAT_DATA_MAX_IMAGE_SIZE_MB", "3")
+    try:
+        assert importlib.reload(service).MAX_UPLOAD_SIZE == 2 * 1024 * 1024
+        assert importlib.reload(parser).MAX_IMAGE_SIZE == 3 * 1024 * 1024
+    finally:
+        monkeypatch.delenv("CHAT_DATA_MAX_UPLOAD_SIZE_MB", raising=False)
+        monkeypatch.delenv("CHAT_DATA_MAX_IMAGE_SIZE_MB", raising=False)
+        importlib.reload(service)
+        importlib.reload(parser)
+
+    assert service.MAX_UPLOAD_SIZE == 50 * 1024 * 1024
+    assert parser.MAX_IMAGE_SIZE == 5 * 1024 * 1024
+
+
 def test_normalize_row_limit_uses_default_and_rejects_invalid_or_too_large(monkeypatch):
     monkeypatch.setattr(runtime_config, "DEFAULT_ROW_LIMIT", 100)
 

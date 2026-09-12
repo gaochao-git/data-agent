@@ -15,11 +15,17 @@ from fastapi import UploadFile
 from utils.logger import get_logger
 
 from ...daos.uploaded_file_dao import UploadedFileDao
+from ..runtime_config import read_positive_int_env
 from .conversation_workspace import resolve_uploads_root
 
 logger = get_logger(__name__)
 
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+# 单文件上传上限：配置用 MB（CHAT_DATA_MAX_UPLOAD_SIZE_MB，正整数），字节值由它派生；
+# 模块级求值，改 env 后需重启进程。
+# 前端 AnalysisConversation.vue 另有一份 50MB 的**客户端预检**（MAX_FILE_SIZE），
+# 只用于提前给出提示、不代替本处校验；把上限调大时须同步前端，否则大文件会在前端被拦。
+MAX_UPLOAD_SIZE_MB = read_positive_int_env("CHAT_DATA_MAX_UPLOAD_SIZE_MB", 50)
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # 多模态图片附件限制：作为 content blocks 直接进入模型消息的准入条件
@@ -97,7 +103,7 @@ class UploadedFileService:
                 while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                     file_size += len(chunk)
                     if file_size > MAX_UPLOAD_SIZE:
-                        raise ValueError("文件大小不能超过50MB")
+                        raise ValueError(f"文件大小不能超过{MAX_UPLOAD_SIZE_MB}MB")
                     output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
