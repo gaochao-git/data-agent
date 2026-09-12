@@ -126,3 +126,50 @@ def test_compute_next_trigger_cron_respects_effective_end():
         effective_end_time=datetime(2026, 9, 12, 8, 45),
         after=_BASE,
     ) is None
+
+
+def test_parse_field_part_rejects_non_numeric_step():
+    """步进值必须能转成整数：`*/x` 走 int() 失败的专属错误分支。"""
+    with pytest.raises(CronExprError, match="步进非法"):
+        parse_cron_expr("*/x * * * *")
+    with pytest.raises(CronExprError, match="步进非法"):
+        parse_cron_expr("0 */1.5 * * *")
+
+
+def test_parse_field_part_rejects_step_without_body():
+    """只有步进没有取值范围（如 `/5`）属于取值非法，而不是步进非法。"""
+    with pytest.raises(CronExprError, match="取值范围非法"):
+        parse_cron_expr("/5 * * * *")
+
+
+def test_next_fire_rolls_to_next_hour_when_minutes_exhausted():
+    """当前小时内剩余分钟数不够用时，跳到今天下一个允许的小时（同日内续排）。"""
+    assert next_fire_time("0 9-17 * * *", datetime(2026, 9, 12, 9, 30)) == datetime(2026, 9, 12, 10, 0)
+    # 边界：当天最后一个允许小时之后，顺延到次日的首个允许小时
+    assert next_fire_time("0 9-17 * * *", datetime(2026, 9, 12, 17, 30)) == datetime(2026, 9, 13, 9, 0)
+
+
+def test_normalize_title_rejects_over_length():
+    """标题上限 100 字符：超长必须是可展示的校验错误。"""
+    assert len(normalize_title("x" * 100)) == 100
+    with pytest.raises(AgentScheduleValidationError):
+        normalize_title("x" * 101)
+
+
+def test_validate_cron_expr_rejects_blank():
+    """空白 cron 是「未提供」而非「表达式非法」，错误文案不同。"""
+    with pytest.raises(AgentScheduleValidationError, match="必须提供 cron 表达式"):
+        validate_cron_expr("")
+    with pytest.raises(AgentScheduleValidationError, match="必须提供 cron 表达式"):
+        validate_cron_expr("   ")
+
+
+def test_compute_next_trigger_returns_none_for_never_matching_cron():
+    """永远无法命中的表达式（2 月 30 日）在有效期内没有触发点，返回 None 由上层拦截。"""
+    assert compute_next_trigger(
+        schedule_type=SCHEDULE_TYPE_CRON,
+        cron_expr="0 0 30 2 *",
+        plan_time=None,
+        effective_end_time=None,
+        after=_BASE,
+    ) is None

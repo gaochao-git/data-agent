@@ -673,3 +673,260 @@ async def test_conversation_provision_failure_releases_trigger_to_pending(harnes
     assert row.trigger_status == "pending"
     assert row.attempt_count == 1
     assert row.run_id == ""
+
+
+# ---- 分支覆盖补测：启停摆动、派发兜底、终态收口竞态 ----
+# 说明：_MAX_PLAN_STEPS 快进分支里的 ONCE 子分支（runtime.py:219-220）不可达——
+# ONCE 的 compute_next_trigger 在 after==cursor 时必然返回 None，循环首轮即退出，
+# 步数永远到不了上限，属纵深防御代码，不造用例硬凑。
+
+async def _add_trigger(session_factory, *, plan_time, job_id="job-1", trigger_status="pending", **overrides):
+    """插入一条触发实例并返回自增 ID（默认字段与 _build_trigger_row 同口径）。"""
+    created = datetime(2026, 9, 12, 8, 0)
+    async with session_factory() as session:
+        row = ChatDataAgentScheduleRun(
+            job_id=job_id,
+            user_id=USER_ID,
+            conversation_id=CONVERSATION_ID,
+            plan_time=plan_time,
+            trigger_status=trigger_status,
+            trigger_type="schedule",
+            delete_flag=0,
+            create_time=created,
+            update_time=created,
+            **overrides,
+        )
+        session.add(row)
+        await session.flush()
+        return row.id
+
+
+def test_job_options_degrades_on_broken_json():
+    """options_json 损坏或非对象一律降级为空对象，不抛给调度循环。"""
+    assert runtime_module.job_options("{不是 JSON") == {}
+    assert runtime_module.job_options(None) == {}
+    assert runtime_module.job_options('["列表不是对象"]') == {}
+    assert runtime_module.job_options('{"model_id": "m1"}') == {"model_id": "m1"}
+
+
+def test_build_runtime_context_reuses_completion_options_parsing():
+    """派发上下文复用 chat 完成链路的 options 解析口径（数据源/模型/skill 归一化）。"""
+    runtime = AgentScheduleRuntime(
+        enabled=True,
+        dao=AgentScheduleDao(),
+        inbox_service=AgentInboxService(),
+        node_id="node-test",
+    )
+    context = runtime._build_runtime_context({
+        "job_prompt": "汇总昨日数据",
+        "options_json": '{"model_id": "m1", "datasource_id": "ds-1", "skill_names": "officecli"}',
+        "create_by_name": "用户一",
+    })
+    assert context["query"] == "汇总昨日数据"
+    assert context["model_id"] == "m1"
+    assert context["datasource_id"] == "ds-1"
+    # 单字符串形态的 skill_names 也要归一化成列表
+    assert context["skill_names"] == ["officecli"]
+    assert context["operator_name"] == "用户一"
+
+
+@pytest.mark.asyncio
+async def test_start_and_stop_manage_poll_task(harness, monkeypatch):
+    """启停：enabled 时建轮询任务、重复 start 不重复建、stop 取消并清空引用。"""
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_delay):
+        await real_sleep(0)
+
+    monkeypatch.setattr(runtime_module.asyncio, "sleep", fast_sleep)
+    runtime = harness.make_runtime()
+
+    assert runtime._poll_task is None
+    await runtime.start()
+    task = runtime._poll_task
+    assert task is not None
+
+    # 已在运行：第二次 start 不重复建任务
+    await runtime.start()
+    assert runtime._poll_task is task
+
+    await runtime.stop()
+    assert runtime._poll_task is None
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_logs_tick_failure_and_keeps_running(harness, monkeypatch):
+    """轮询循环：单轮 tick 抛异常只记日志并短暂退避，循环本身不退出。"""
+    real_sleep = asyncio.sleep
+    ticked = asyncio.Event()
+    calls = {"count": 0}
+
+    async def fast_sleep(_delay):
+        await real_sleep(0)
+
+    async def flaky_tick(now=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("tick boom")
+        ticked.set()
+
+    monkeypatch.setattr(runtime_module.asyncio, "sleep", fast_sleep)
+    runtime = harness.make_runtime()
+    monkeypatch.setattr(runtime, "tick", flaky_tick)
+
+    await runtime.start()
+    try:
+        await asyncio.wait_for(ticked.wait(), timeout=5)
+    finally:
+        await runtime.stop()
+    assert calls["count"] >= 2
+    assert runtime._poll_task is None
+
+
+@pytest.mark.asyncio
+async def test_plan_keeps_existing_trigger_untouched(harness):
+    """计划推进跳过已存在的触发实例：不重复插入、不改动既有行。"""
+    plan = datetime(2026, 9, 12, 8, 59)
+    await harness.seed_job(next_trigger_time=plan)
+    kept_id = await _add_trigger(
+        harness.session_factory, plan_time=plan, trigger_status="skipped", error_message="保留我",
+    )
+    runtime = harness.make_runtime()
+
+    await runtime.tick(now=datetime(2026, 9, 12, 9, 0))
+
+    async with harness.session_factory() as session:
+        rows = list((await session.execute(
+            select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.plan_time)
+        )).scalars())
+    assert [row.plan_time for row in rows] == [plan, datetime(2026, 9, 12, 9, 0)]
+    kept = next(row for row in rows if row.id == kept_id)
+    assert kept.trigger_status == "skipped"
+    assert kept.error_message == "保留我"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_trigger_when_job_soft_deleted(harness):
+    """任务在实例排队期间被删除：立即触发路径把实例判 skipped，而不是崩在派发循环。"""
+    await harness.seed_job(next_trigger_time=None)
+    trigger_id = await _add_trigger(harness.session_factory, plan_time=datetime(2026, 9, 12, 8, 59))
+    async with harness.session_factory() as session:
+        job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        job.delete_flag = 1
+        job.enabled_flag = 0
+    runtime = harness.make_runtime()
+
+    result = await runtime.dispatch_trigger(trigger_id)
+
+    assert result["status"] == "skipped"
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "skipped"
+    assert "已删除或停用" in row.error_message
+    assert harness.started == []
+
+
+@pytest.mark.asyncio
+async def test_mark_dispatched_ignores_trigger_not_claimed(harness):
+    """竞态兜底：实例已被取消/收口（非 claimed）时，派发回填必须整条跳过。"""
+    trigger_id = await _add_trigger(harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0))
+    runtime = harness.make_runtime()
+
+    await runtime._mark_dispatched(trigger_id, "run-x")
+
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "pending"
+    assert row.run_id == ""
+    assert harness.submitted == []
+
+
+@pytest.mark.asyncio
+async def test_mark_dispatched_backfills_actual_conversation(harness):
+    """new_each_run：派发成功后在实例上回填本次实际执行的会话，供历史追溯。"""
+    trigger_id = await _add_trigger(
+        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0), trigger_status="claimed",
+    )
+    runtime = harness.make_runtime()
+
+    await runtime._mark_dispatched(trigger_id, "run-x", "conv-new")
+
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "dispatched"
+    assert row.run_id == "run-x"
+    assert row.conversation_id == "conv-new"
+    assert row.dispatched_time is not None
+    assert harness.submitted == ["run-x"]
+
+
+@pytest.mark.asyncio
+async def test_release_ignores_trigger_not_claimed(harness):
+    """竞态兜底：非 claimed 实例不再迁移状态，避免覆盖别人刚写入的终态。"""
+    trigger_id = await _add_trigger(harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0))
+    runtime = harness.make_runtime()
+
+    await runtime._release(trigger_id, "pending", "")
+
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "pending"
+    assert row.error_message == ""
+    assert row.finished_time is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_skips_trigger_flipped_before_update(harness):
+    """终态收口竞态：扫描到 dispatched 快照后实例已被改判，更新前复查必须拦住。"""
+    trigger_id = await _add_trigger(
+        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0),
+        trigger_status="cancelled", run_id="run-1",
+    )
+    runtime = harness.make_runtime()
+
+    async def stale_dispatched(_session, _limit):
+        # 模拟「扫描快照落后于磁盘状态」：快照说 dispatched，实际行已被取消
+        return [types.SimpleNamespace(id=trigger_id, run_id="run-1")]
+
+    async def fake_run_statuses(_session, _run_ids):
+        return {"run-1": "finished"}
+
+    runtime._dao.list_dispatched_runs = stale_dispatched
+    runtime._dao.list_run_statuses = fake_run_statuses
+
+    await runtime._finalize_dispatched()
+
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "cancelled"
+    assert row.finished_time is None
+
+
+@pytest.mark.asyncio
+async def test_mark_dispatched_keeps_snapshot_conversation_without_override(harness):
+    """fixed 模式：不传实际会话（None）时保留触发实例快照里的会话，不被清空。"""
+    trigger_id = await _add_trigger(
+        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0), trigger_status="claimed",
+    )
+    runtime = harness.make_runtime()
+
+    await runtime._mark_dispatched(trigger_id, "run-y")
+
+    async with harness.session_factory() as session:
+        row = (await session.execute(
+            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
+        )).scalar_one()
+    assert row.trigger_status == "dispatched"
+    assert row.run_id == "run-y"
+    assert row.conversation_id == CONVERSATION_ID

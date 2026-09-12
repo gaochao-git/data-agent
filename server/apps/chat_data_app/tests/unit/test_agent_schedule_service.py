@@ -477,3 +477,190 @@ async def test_update_job_clears_effective_end_time(harness):
     async with _session() as session:
         row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
     assert row.effective_end_time is None
+
+
+# ---- 分支覆盖补测：校验失败出口、列表标题、补丁边界 ----
+
+
+def test_validate_options_normalizes_and_rejects_non_dict():
+    """options 序列化口径：None 直接透传、null 值剔除、非对象拒绝。"""
+    assert service_module._validate_options(None) is None
+    assert json.loads(service_module._validate_options({"model_id": "m1", "datasource_id": None})) == {
+        "model_id": "m1"
+    }
+    with pytest.raises(AgentScheduleValidationError):
+        service_module._validate_options("不是对象")
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_invalid_schedule_type_and_conversation_mode(harness):
+    """调度类型与会话绑定方式的白名单校验都要给出可展示的错误。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+
+    with pytest.raises(AgentScheduleValidationError):
+        await service.create_job(**_create_kwargs(create_payload(conversation_mode="bound")))
+    with pytest.raises(AgentScheduleValidationError):
+        await service.create_job(**_create_kwargs(create_payload(schedule_type="daily")))
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_cron_without_fire_before_effective_end(harness):
+    """有效期落在下一次命中之前：没有可触发时间点，创建即被拦下。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+
+    # 「每年 1 月 1 日」的下一次命中远在半年后，而有效期只到几分钟后
+    with pytest.raises(AgentScheduleValidationError, match="没有可触发的时间点"):
+        await service.create_job(**_create_kwargs(create_payload(
+            cron_expr="0 0 1 1 *",
+            effective_end_time=datetime.now() + timedelta(minutes=5),
+        )))
+
+
+@pytest.mark.asyncio
+async def test_create_once_job_rejects_plan_after_effective_end(harness):
+    """单次任务：执行时间晚于有效期结束时间必须被拒。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    plan = datetime.now() + timedelta(hours=3)
+
+    with pytest.raises(AgentScheduleValidationError, match="不能晚于有效期结束时间"):
+        await service.create_job(**_create_kwargs(create_payload(
+            schedule_type="once",
+            cron_expr=None,
+            plan_time=plan,
+            effective_end_time=plan - timedelta(hours=1),
+        )))
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_attaches_live_conversation_titles(harness):
+    """任务列表附上绑定会话的实时标题，供前端直接展示。"""
+    service, create_conversation, create_payload, get_session = harness
+    async with get_session() as session:
+        session.add(UserThread(
+            user_id="user-1",
+            thread_id="conv-1",
+            thread_title="昨日销售分析",
+            agent_id="chat_data",
+            delete_flag=0,
+            create_time=datetime.now(),
+            create_by="user-1",
+            create_by_name="用户一",
+            update_by="user-1",
+            update_by_name="用户一",
+        ))
+    await service.create_job(**_create_kwargs(create_payload()))
+
+    items = await service.list_jobs(user_id="user-1")
+
+    assert len(items) == 1
+    assert items[0]["conversation_title"] == "昨日销售分析"
+
+
+@pytest.mark.asyncio
+async def test_update_job_rejects_invalid_mode_and_schedule_type(harness):
+    """更新路径同样对会话绑定方式与调度类型做白名单校验。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+
+    with pytest.raises(AgentScheduleValidationError):
+        await service.update_job(
+            job_id=job["job_id"], title=None, prompt=None, conversation_mode="bound",
+            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
+            datasource_id=None, options=None, user_id="user-1", username="用户一",
+        )
+    with pytest.raises(AgentScheduleValidationError):
+        await service.update_job(
+            job_id=job["job_id"], title=None, prompt=None, schedule_type="daily",
+            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
+            datasource_id=None, options=None, user_id="user-1", username="用户一",
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_job_rejects_switching_to_foreign_conversation(harness):
+    """切到不属于当前用户（或不存在）的会话必须被拒，避免越权绑定。"""
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    async with get_session() as session:
+        session.add(UserThread(
+            user_id="user-2",
+            thread_id="conv-of-user-2",
+            agent_id="chat_data",
+            delete_flag=0,
+            create_time=datetime.now(),
+            create_by="user-2",
+            create_by_name="用户二",
+            update_by="user-2",
+            update_by_name="用户二",
+        ))
+    job = await service.create_job(**_create_kwargs(create_payload()))
+
+    with pytest.raises(AgentScheduleConversationInvalidError):
+        await service.update_job(
+            job_id=job["job_id"], title=None, prompt=None, conversation_id="conv-of-user-2",
+            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
+            datasource_id=None, options=None, user_id="user-1", username="用户一",
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_job_accepts_datasource_id_without_options_patch(harness):
+    """只传 datasource_id 时也要写进 options_json（表单数据源组字段）。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+
+    updated = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
+        effective_end_time=None, enabled_flag=None, datasource_id="ds-2", options=None,
+        user_id="user-1", username="用户一",
+    )
+
+    assert updated["datasource_id"] == "ds-2"
+    # 表单未掌管的键仍保留（补丁语义）
+    assert updated["options"]["model_id"] == "m1"
+
+
+@pytest.mark.asyncio
+async def test_update_job_degrades_on_corrupt_options_json(harness):
+    """既有 options_json 损坏时按空配置继续，不因脏数据阻断编辑。"""
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+    async with get_session() as session:
+        row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        row.options_json = "{坏掉的 JSON"
+
+    updated = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
+        effective_end_time=None, enabled_flag=None, datasource_id=None,
+        options={"model_id": "m2"}, user_id="user-1", username="用户一",
+    )
+
+    assert updated["options"] == {"model_id": "m2"}
+
+
+@pytest.mark.asyncio
+async def test_update_job_reenable_keeps_recomputed_cursor(harness):
+    """停用任务在「改调度 + 同时启用」时，游标用新调度的重算结果，不被重新武装覆盖。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+
+    await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
+        effective_end_time=None, enabled_flag=0, datasource_id=None, options=None,
+        user_id="user-1", username="用户一",
+    )
+    reenabled = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, cron_expr="0 10 * * *", plan_time=None,
+        effective_end_time=None, enabled_flag=1, datasource_id=None, options=None,
+        user_id="user-1", username="用户一",
+    )
+
+    assert reenabled["enabled_flag"] == 1
+    assert datetime.fromisoformat(reenabled["next_trigger_time"]).hour == 10
