@@ -80,6 +80,6 @@ describe('evictWorkspaceFileCache（删除文件后作废预览缓存）', () =>
     const result = evictWorkspaceFileCache(OLD, contents, blobs)
 
     expect(result.contents['uploads/其它.md']).toBe('留')
-    expect(result.blobs['uploads/其它.md'].url).toBe('blob:keep')
+    expect(result.blobs['uploads/其它.md']?.url).toBe('blob:keep')
   })
 })

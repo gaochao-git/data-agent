@@ -21,6 +21,10 @@ import type {
   DatasourceTableIndexItem,
   PendingUserQuestion,
   UserQuestionAnswer,
+  AgentScheduleItem,
+  AgentScheduleOverview,
+  AgentSchedulePayload,
+  AgentScheduleRunItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1470,5 +1474,102 @@ export function getConversationContext(conversationId: string): Promise<ApiRespo
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/context`,
     method: 'get',
+  })
+}
+
+// ============ 智能体定时任务 API ============
+
+/** 获取当前用户的定时任务列表 */
+export function getAgentSchedules(): Promise<ApiResponse<{ jobs: AgentScheduleItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules`,
+    method: 'get'
+  })
+}
+
+/** 创建定时任务 */
+export function createAgentSchedule(data: AgentSchedulePayload): Promise<ApiResponse<AgentScheduleItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules`,
+    method: 'post',
+    data
+  })
+}
+
+/** 更新定时任务（未传字段保持不变） */
+export function updateAgentSchedule(jobId: string, data: Partial<AgentSchedulePayload> & { enabled_flag?: number }): Promise<ApiResponse<AgentScheduleItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules/${jobId}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 删除定时任务（软删除并停止调度） */
+export function deleteAgentSchedule(jobId: string): Promise<ApiResponse<{ job_id: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules/${jobId}`,
+    method: 'delete'
+  })
+}
+
+/** 立即执行定时任务（手动触发一次，便于验证；会话正忙时转后台队列自动重试） */
+export function triggerAgentScheduleNow(jobId: string): Promise<ApiResponse<{ trigger_id: number; status: string; run_id: string | null }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules/${jobId}/trigger-now`,
+    method: 'post'
+  })
+}
+
+/** 获取定时任务执行历史 */
+export function getAgentScheduleRuns(jobId: string, limit = 50): Promise<ApiResponse<{ runs: AgentScheduleRunItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/agent-schedules/${jobId}/runs`,
+    method: 'get',
+    params: { limit }
+  })
+}
+
+/** 后台：定时任务全局概览统计 */
+export function getAgentScheduleAdminOverview(): Promise<ApiResponse<AgentScheduleOverview>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/overview`,
+    method: 'get'
+  })
+}
+
+/** 后台：全局一键暂停/恢复所有定时任务调度 */
+export function setAgentSchedulePaused(data: { paused: boolean; reason?: string }): Promise<ApiResponse<AgentScheduleOverview>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/pause`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：全量定时任务分页列表（跨用户，附执行统计） */
+export function getAdminAgentSchedules(params?: { keyword?: string; limit?: number; offset?: number }): Promise<ApiResponse<{ jobs: AgentScheduleItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/agent-schedules`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：强制启停单个定时任务 */
+export function setAdminAgentScheduleEnabled(jobId: string, enabledFlag: number): Promise<ApiResponse<AgentScheduleItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/${jobId}/enabled`,
+    method: 'put',
+    data: { enabled_flag: enabledFlag }
+  })
+}
+
+/** 后台：查看任意定时任务的执行历史 */
+export function getAdminAgentScheduleRuns(jobId: string, limit = 50): Promise<ApiResponse<{ runs: AgentScheduleRunItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/${jobId}/runs`,
+    method: 'get',
+    params: { limit }
   })
 }

@@ -808,3 +808,78 @@ export interface BuilderDragFieldData {
   // 逻辑口径指标（派生/复合）：无物理表字段，后端按 semanticName 解析
   metricKind?: 'derived' | 'composite'
 }
+
+// ============ 智能体定时任务 ============
+
+// 定时任务定义（用户侧 / 后台通用）
+export interface AgentScheduleItem {
+  job_id: string
+  user_id: string
+  create_by_name?: string
+  conversation_id: string
+  title: string
+  prompt: string
+  schedule_type: 'cron' | 'once'
+  cron_expr: string
+  plan_time: string | null
+  effective_end_time: string | null
+  enabled_flag: number
+  next_trigger_time: string | null
+  last_trigger_time: string | null
+  datasource_id?: string | null
+  create_time: string | null
+  update_time: string | null
+  // 后台列表附带的执行统计
+  total_count?: number
+  succeeded_count?: number
+  failed_count?: number
+  skipped_count?: number
+  last_plan_time?: string | null
+  last_run_status?: string | null
+  last_run_time?: string | null
+}
+
+// 定时任务执行历史条目
+export interface AgentScheduleRunItem {
+  job_id: string
+  user_id: string
+  conversation_id: string
+  plan_time: string | null
+  status: 'pending' | 'claimed' | 'dispatched' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+  trigger_type: 'schedule' | 'manual'
+  run_id: string
+  run_status: string | null
+  error_message: string
+  claimed_time: string | null
+  dispatched_time: string | null
+  finished_time: string | null
+  create_time: string | null
+}
+
+// 后台全局概览统计
+export interface AgentScheduleOverview {
+  paused_flag: number
+  pause_reason: string
+  control_update_time: string | null
+  total_jobs: number
+  enabled_jobs: number
+  total_runs: number
+  succeeded_runs: number
+  failed_runs: number
+  skipped_runs: number
+  running_runs: number
+  runs_last_24h: number
+}
+
+// 定时任务创建/编辑载荷
+export interface AgentSchedulePayload {
+  title: string
+  prompt: string
+  conversation_id: string
+  schedule_type: 'cron' | 'once'
+  cron_expr?: string
+  plan_time?: string | null
+  effective_end_time?: string | null
+  datasource_id?: string | null
+  options?: Record<string, unknown>
+}

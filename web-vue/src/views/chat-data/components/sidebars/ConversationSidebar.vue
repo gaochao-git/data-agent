@@ -4,8 +4,8 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
-import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite, getAgentSchedules } from '../../api'
 import type {
   ConversationGroupView,
   ConversationItem,
@@ -96,7 +96,32 @@ const emit = defineEmits<{
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
+  openAgentSchedules: []
+  openSkillManager: []
 }>()
+
+// 定时任务入口：懒加载一次任务数做角标，管理弹窗关闭后由父层调 refreshAgentScheduleCount 刷新
+const agentScheduleCount = ref(0)
+const loadAgentScheduleCount = async () => {
+  try {
+    const res = await getAgentSchedules()
+    if (res.status === 'success') {
+      agentScheduleCount.value = (res.data.jobs || []).length
+    }
+  } catch (err) {
+    console.error('获取定时任务数量失败:', err)
+  }
+}
+
+const refreshAgentScheduleCount = () => {
+  if (props.activeTab === 'conversation') void loadAgentScheduleCount()
+}
+
+onMounted(() => {
+  if (props.activeTab === 'conversation') void loadAgentScheduleCount()
+})
+
+defineExpose({ refreshAgentScheduleCount })
 
 // 每次打开历史弹窗时全部展开；稳定 key 仅用于本次打开期间的折叠状态。
 const collapsedGroups = ref<Set<string>>(new Set())
@@ -596,17 +621,42 @@ onUnmounted(() => {
   <div class="conversation-tab-root flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ==================== 会话 Tab ==================== -->
     <template v-if="activeTab === 'conversation'">
-      <!-- 会话工具栏：新建 + 视图切换（固定，不随列表滚动） -->
-      <div class="flex shrink-0 items-center gap-2 px-3 py-2">
+      <!-- 会话操作区：主流纵向按钮组（新建任务 / 技能管理 / 定时任务） -->
+      <div class="flex shrink-0 flex-col gap-0.5 px-3 pb-2 pt-2">
         <button
           v-if="showNewConversationButton"
           type="button"
-          class="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-[#1f82d9] px-2.5 text-xs font-medium text-white transition-colors hover:bg-[#1668b3]"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
           @click="emit('newConversation')"
         >
-          <i class="fa-solid fa-plus text-[10px]"></i>
-          <span class="conversation-toolbar-btn-text">新建任务</span>
+          <i class="fa-solid fa-plus w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">新建任务</span>
         </button>
+        <button
+          type="button"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
+          @click="emit('openSkillManager')"
+        >
+          <i class="fa-solid fa-wand-magic-sparkles w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">技能管理</span>
+        </button>
+        <button
+          type="button"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
+          @click="emit('openAgentSchedules')"
+        >
+          <i class="fa-regular fa-clock w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">定时任务</span>
+          <span
+            v-if="agentScheduleCount > 0"
+            class="shrink-0 rounded-full bg-slate-100 px-1.5 text-[10px] leading-4 text-slate-500"
+          >{{ agentScheduleCount > 99 ? '99+' : agentScheduleCount }}</span>
+        </button>
+      </div>
+      <div class="mx-3 shrink-0 border-t border-slate-100"></div>
+
+      <!-- 会话工具栏：搜索 + 视图切换 -->
+      <div class="flex shrink-0 items-center gap-2 px-3 py-2">
         <div class="relative min-w-0 flex-1">
           <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
           <input

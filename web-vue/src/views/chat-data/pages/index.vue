@@ -26,6 +26,7 @@ import EditorSidebar from '../components/sidebars/EditorSidebar.vue'
 import DashboardEditor from '../components/Dashboard/DashboardEditor.vue'
 import SemanticConfigPanel from '../components/SemanticConfigPanel.vue'
 import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
+import AgentScheduleManager from '../components/AgentScheduleManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
@@ -126,6 +127,19 @@ const canManageAdmin = computed(() => {
   return permissions.includes('*:*:*') || permissions.includes('agents:chatData:admin')
 })
 const canManageDatasource = canManageAdmin
+
+// 定时任务管理弹窗（用户侧，侧边栏入口）
+const showAgentScheduleModal = ref(false)
+const conversationSidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
+const handleOpenAgentSchedules = () => {
+  showAgentScheduleModal.value = true
+}
+const handleOpenSkillManager = () => {
+  conversationRef.value?.openSkillManager()
+}
+const handleAgentSchedulesClosed = () => {
+  conversationSidebarRef.value?.refreshAgentScheduleCount()
+}
 
 const openDatasourceManager = () => {
   if (!canManageAdmin.value) return
@@ -1592,6 +1606,7 @@ onMounted(async () => {
             <template v-if="viewMode === 'conversation'">
               <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
                 <ConversationSidebar
+                  ref="conversationSidebarRef"
                   active-tab="conversation"
                   :grouped-conversations="groupedConversations"
                   :current-conversation-id="currentConversationId"
@@ -1607,6 +1622,8 @@ onMounted(async () => {
                   @update-conversation-title="handleUpdateConversationTitle"
                   @toggle-conversation-favorite="handleToggleConversationFavorite"
                   @toggle-conversation-view-mode="toggleConversationViewMode"
+                  @open-agent-schedules="handleOpenAgentSchedules"
+                  @open-skill-manager="handleOpenSkillManager"
                 />
               </div>
               <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
@@ -1905,6 +1922,13 @@ onMounted(async () => {
       v-model="showAdminModal"
       @datasources-updated="handleAdminDatasourcesUpdated"
       @open-semantic-config="handleOpenSemanticConfig"
+    />
+
+    <AgentScheduleManager
+      v-model="showAgentScheduleModal"
+      :conversation-id="currentConversationId || ''"
+      :datasource-id="selectedDatasourceId || ''"
+      @update:model-value="(value: boolean) => { if (!value) handleAgentSchedulesClosed() }"
     />
     </el-config-provider>
   </div>

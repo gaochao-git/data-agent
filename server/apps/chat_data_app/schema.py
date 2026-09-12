@@ -3,6 +3,7 @@ ChatData API 数据模型定义
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
@@ -173,6 +174,48 @@ class QueryFavoriteUpdateRequest(BaseModel):
     query_text: Optional[str] = Field(default=None, min_length=1, description="原始查询内容（问题或SQL）")
     builder_config: Optional[dict] = Field(default=None, description="可视化查询配置（仅 builder 类型）")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
+
+
+class AgentScheduleCreateRequest(BaseModel):
+    """创建智能体定时任务请求"""
+
+    title: str = Field(..., min_length=1, max_length=100, description="任务标题")
+    prompt: str = Field(..., min_length=1, max_length=2000, description="任务指令（提示词）")
+    conversation_id: str = Field(..., min_length=1, max_length=64, description="绑定的会话ID")
+    schedule_type: Literal["cron", "once"] = Field(default="cron", description="调度类型：cron-周期，once-单次")
+    cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式（分 时 日 月 周），周期任务必填")
+    plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间，必须晚于当前时间")
+    effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")
+    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID")
+    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项（与智能问数 options 口径一致）")
+
+
+class AgentScheduleUpdateRequest(BaseModel):
+    """更新智能体定时任务请求（未传字段保持不变）"""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=100, description="任务标题")
+    prompt: Optional[str] = Field(default=None, min_length=1, max_length=2000, description="任务指令（提示词）")
+    schedule_type: Optional[Literal["cron", "once"]] = Field(default=None, description="调度类型")
+    cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式")
+    plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间")
+    effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")
+    enabled_flag: Optional[int] = Field(default=None, ge=0, le=1, description="启用状态：1-启用，0-停用")
+    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID")
+    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项")
+
+
+class AgentSchedulePauseRequest(BaseModel):
+    """后台全局暂停/恢复定时任务请求"""
+
+    paused: bool = Field(..., description="true-暂停所有调度，false-恢复")
+    reason: Optional[str] = Field(default=None, max_length=255, description="暂停原因（可选）")
+
+
+class AgentScheduleEnabledRequest(BaseModel):
+    """后台强制启停单个定时任务请求"""
+
+    enabled_flag: int = Field(..., ge=0, le=1, description="启用状态：1-启用，0-停用")
+
 
 # ============ 表管理相关模型 ============
 

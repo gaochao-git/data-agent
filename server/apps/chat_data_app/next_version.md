@@ -67,6 +67,79 @@ ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COM
 ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
 ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
 ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
+
+-- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
+CREATE TABLE `chat_data_agent_schedule` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `job_id` varchar(64) NOT NULL DEFAULT '' COMMENT '任务业务ID',
+  `user_id` varchar(100) NOT NULL DEFAULT '' COMMENT '业务归属用户ID',
+  `conversation_id` varchar(64) NOT NULL COMMENT '绑定的会话ID',
+  `job_title` varchar(100) NOT NULL DEFAULT '' COMMENT '任务标题',
+  `job_prompt` text NOT NULL COMMENT '任务指令（提示词）',
+  `schedule_type` varchar(16) NOT NULL DEFAULT 'cron' COMMENT '调度类型：cron-周期，once-单次',
+  `cron_expr` varchar(64) NOT NULL DEFAULT '' COMMENT '五字段 cron 表达式（分 时 日 月 周），schedule_type=cron 时有效',
+  `plan_time` datetime DEFAULT NULL COMMENT '单次任务执行时间，schedule_type=once 时有效',
+  `effective_end_time` datetime DEFAULT NULL COMMENT '有效期结束时间，NULL 表示长期有效',
+  `enabled_flag` smallint(6) NOT NULL DEFAULT '1' COMMENT '启用状态：1-启用，0-停用',
+  `next_trigger_time` datetime DEFAULT NULL COMMENT '下一次计划触发时间，NULL 表示无计划触发',
+  `last_trigger_time` datetime DEFAULT NULL COMMENT '最近一次计划触发的计划时间点',
+  `options_json` text COMMENT '运行选项 JSON（与智能问数 options 口径一致），服务端解析校验',
+  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_schedule_job_id` (`job_id`),
+  KEY `idx_schedule_user` (`user_id`, `delete_flag`),
+  KEY `idx_schedule_next_trigger` (`enabled_flag`, `delete_flag`, `next_trigger_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务定义表';
+
+CREATE TABLE `chat_data_agent_schedule_run` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `job_id` varchar(64) NOT NULL DEFAULT '' COMMENT '任务业务ID',
+  `user_id` varchar(100) NOT NULL DEFAULT '' COMMENT '业务归属用户ID',
+  `conversation_id` varchar(64) NOT NULL DEFAULT '' COMMENT '执行的会话ID',
+  `plan_time` datetime NOT NULL COMMENT '计划触发时间点',
+  `trigger_status` varchar(16) NOT NULL DEFAULT 'pending' COMMENT '状态：pending-待派发，claimed-已抢占，dispatched-已提交Run，succeeded/failed/cancelled-终态，skipped-跳过',
+  `trigger_type` varchar(16) NOT NULL DEFAULT 'schedule' COMMENT '触发来源：schedule-计划触发，manual-手动立即执行',
+  `attempt_count` int(11) NOT NULL DEFAULT '0' COMMENT '派发尝试次数',
+  `owner_node` varchar(128) NOT NULL DEFAULT '' COMMENT '抢占节点标识（hostname:pid），仅排查用',
+  `run_id` varchar(64) NOT NULL DEFAULT '' COMMENT '派发的 Agent Run ID（chat_data_agent_inbox.run_id）',
+  `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '失败/跳过原因',
+  `claimed_time` datetime DEFAULT NULL COMMENT '抢占时间',
+  `dispatched_time` datetime DEFAULT NULL COMMENT '提交 Agent Run 时间',
+  `finished_time` datetime DEFAULT NULL COMMENT '进入终态时间',
+  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_schedule_job_plan` (`job_id`, `plan_time`),
+  KEY `idx_schedule_run_scan` (`trigger_status`, `plan_time`),
+  KEY `idx_schedule_run_job` (`job_id`, `create_time`),
+  KEY `idx_schedule_run_user` (`user_id`, `trigger_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务触发实例表';
+
+-- 智能体定时任务全局控制表（固定单行，后台一键暂停入口；缺行时服务端会惰性补建）
+CREATE TABLE `chat_data_schedule_control` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID，固定为1',
+  `paused_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '全局暂停：0-正常，1-暂停所有调度',
+  `pause_reason` varchar(255) NOT NULL DEFAULT '' COMMENT '暂停原因',
+  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务全局控制表';
 ```
 
 ## 依赖变更

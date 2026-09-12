@@ -2081,6 +2081,9 @@ defineExpose({
   openConsolePanel,
   toggleConsolePanel,
   fillSemanticFieldQuestion,
+  openSkillManager: () => {
+    isSkillManagerOpen.value = true
+  },
 })
 
 const syncHistoryToolCalls = () => {
