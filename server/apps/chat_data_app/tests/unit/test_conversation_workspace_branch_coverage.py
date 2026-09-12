@@ -53,7 +53,13 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 @pytest.fixture(autouse=True)
 def _chat_data_home(tmp_path, monkeypatch):
     monkeypatch.setattr(cw_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(cw_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+
+
+async def _stub_created_date_none(_conversation_id, *, user_id):
+    """日期解析打桩：回退当前日期，避免单测触达真实数据库。"""
+    del user_id
+    return None
 
 
 def _runtime_root(tmp_path: Path) -> Path:
@@ -400,6 +406,8 @@ async def test_async_workspace_wrappers_delegate(tmp_path, monkeypatch):
     root = ensure_conversation_workspace("conv_async", "user_a")["root"]
     (Path(root) / "workspace" / "a.txt").write_text("hello", encoding="utf-8")
     (Path(root) / "workspace" / "b.pdf").write_bytes(b"%PDF-1.4")
+    # async wrapper 内部会解析会话创建月份，单测打桩避免触达真实 DB
+    monkeypatch.setattr(cw, "get_conversation_created_date", _stub_created_date_none)
 
     files = await list_conversation_workspace_files("conv_async", user_id="user_a")
     assert {item["name"] for item in files} == {"a.txt", "b.pdf"}
@@ -554,6 +562,7 @@ def test_render_local_office_html_success_and_truncation(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_render_conversation_workspace_office_preview_branches(tmp_path, monkeypatch):
     ensure_conversation_workspace("conv_preview", "user_a")
+    monkeypatch.setattr(cw, "get_conversation_created_date", _stub_created_date_none)
     monkeypatch.setattr(cw, "_validate_office_preview_source", lambda *_args: None)
 
     async def fake_render(_runtime, **_kwargs):
@@ -587,6 +596,7 @@ async def test_render_conversation_workspace_office_preview_branches(tmp_path, m
 @pytest.mark.asyncio
 async def test_read_conversation_query_result_delegates(monkeypatch):
     captured = {}
+    monkeypatch.setattr(cw, "get_conversation_created_date", _stub_created_date_none)
 
     class StubStore:
         def load_query_result_for_conversation(self, **kwargs):
@@ -598,7 +608,12 @@ async def test_read_conversation_query_result_delegates(monkeypatch):
         "conv_q", user_id="user_a", result_id="qr_1",
     )
     assert payload == {"result_id": "qr_1"}
-    assert captured == {"result_id": "qr_1", "conversation_id": "conv_q", "user_id": "user_a"}
+    assert captured == {
+        "result_id": "qr_1",
+        "conversation_id": "conv_q",
+        "user_id": "user_a",
+        "created_date": None,
+    }
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from ..services.agent_run.conversation_workspace import (
     can_access_conversation_workspace,
     delete_conversation_workspace_file as delete_workspace_file_for_conversation,
     ensure_conversation_workspace,
+    get_conversation_created_date,
     list_conversation_workspace_files as list_workspace_files_for_conversation,
     read_conversation_query_result,
     read_conversation_workspace_file as read_workspace_file_for_conversation,
@@ -246,9 +247,11 @@ async def import_conversation_workspace_skill(conversation_id: str, payload: Ski
     """把会话工作区生成的技能目录导入为用户技能草稿。"""
     try:
         current_user = _get_current_user(request)
-        if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
+        user_id = str(current_user.user_id)
+        if not await can_access_conversation_workspace(conversation_id, user_id):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        workspace_paths = ensure_conversation_workspace(conversation_id, str(current_user.user_id))
+        created_date = await get_conversation_created_date(conversation_id, user_id=user_id)
+        workspace_paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
         skill_dir = resolve_output_skill_directory(workspace_paths["root"], payload.skill_dir_path)
         skill = await skill_service.import_user_skill_from_directory_async(
             skill_dir,

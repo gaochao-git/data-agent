@@ -25,7 +25,7 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 def _init_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     return conversation_workspace.ensure_conversation_workspace("conv_a", "user_a")
 
 

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 
 from apps.chat_data_app.agent.workspace import runtime_skill_snapshot as snapshot_module
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
+from utils import storage_paths as storage_paths_module
 
 
 def _make_skill(root: Path, name: str) -> Path:
@@ -19,8 +21,14 @@ def _make_skill(root: Path, name: str) -> Path:
     return skill_dir
 
 
+def _conv_dir(tmp_path: Path, user_id: str = "u1", conversation_id: str = "c1") -> Path:
+    """与 conversation_thread_dir 布局一致的会话目录（threads/<uid>/<yyyy-MM-DD>/<cid>）。"""
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return tmp_path / "threads" / user_id / date_str / conversation_id
+
+
 def _patch_env(monkeypatch, tmp_path, sources):
-    monkeypatch.setattr(snapshot_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
 
     class FakeSkillService:
         async def list_runtime_skill_sources_async(self, user_id):
@@ -101,7 +109,7 @@ def test_build_snapshot_skips_symlinks(tmp_path, monkeypatch):
 
 def test_build_snapshot_sweeps_stale_temp_dirs(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
     stale_building = conv_dir / "runtime-skills.building-abc"
     stale_old = conv_dir / "runtime-skills.old-def"
@@ -120,7 +128,7 @@ def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
     with pytest.raises(Exception):
         asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
 
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir = _conv_dir(tmp_path)
     leftovers = [p for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")] if conv_dir.is_dir() else []
     assert leftovers == []
 
@@ -128,7 +136,7 @@ def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
 def test_build_snapshot_upgrades_legacy_snapshot_without_fingerprint(tmp_path, monkeypatch):
     """早期无指纹的存量快照：下次运行自动重建对齐（写入指纹、纳入当前可见技能）。"""
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir = _conv_dir(tmp_path)
     existing = conv_dir / "runtime-skills"
     existing.mkdir(parents=True)
     (existing / "skill-old").mkdir()  # 早期快照：非空但标记无指纹
@@ -144,7 +152,7 @@ def test_build_snapshot_upgrades_legacy_snapshot_without_fingerprint(tmp_path, m
 
 def test_build_snapshot_populates_precreated_empty_dir(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    conv_dir = _conv_dir(tmp_path)
     (conv_dir / "runtime-skills").mkdir(parents=True)  # ensure_conversation_workspace 预建空目录
 
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
@@ -276,8 +284,8 @@ def test_remove_tree_swallows_os_error(tmp_path, monkeypatch):
 
 def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
     """固定 uuid，验证构建前会清掉同名的残留 building 临时目录。"""
-    monkeypatch.setattr(snapshot_module, "THREADS_DIR", tmp_path / "threads")
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
 
     class FakeSkillService:
@@ -302,8 +310,8 @@ def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
 
 def test_build_snapshot_reuses_snapshot_completed_during_populate(tmp_path, monkeypatch):
     """填充期间并发请求先完成构建时：丢弃本次临时目录，复用已有快照。"""
-    monkeypatch.setattr(snapshot_module, "THREADS_DIR", tmp_path / "threads")
-    conv_dir = tmp_path / "threads" / "u1" / "c1"
+    monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
     target = conv_dir / "runtime-skills"
 

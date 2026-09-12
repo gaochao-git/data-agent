@@ -38,7 +38,7 @@ def _request(
 
 def _workspace_request(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = conversation_workspace.ensure_conversation_workspace("conv_a", "user_a")
     return _request(workspace_root=paths["root"]), paths
 

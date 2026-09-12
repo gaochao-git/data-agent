@@ -24,7 +24,7 @@ from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
 
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
-from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
+from utils.storage_paths import CHAT_DATA_HOME, conversation_thread_dir
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
 from .artifact_registry import parse_output_artifact
@@ -43,7 +43,6 @@ from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
 
 logger = get_logger(__name__)
 
-THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
 OFFICE_PREVIEW_MAX_CHARS = 12 * 1024 * 1024
 
@@ -212,10 +211,11 @@ class ConversationWorkspaceRuntime:
         snapshot_dir = self.runtime_skills_dir
         if is_runtime_skill_snapshot_ready(snapshot_dir):
             return
-        base = Path(self.workspace_root).resolve().parent  # .../<cid>
-        uid, cid = base.parent.name, base.name
+        # workspace_root 为 .../<uid>/<yyyy-MM-DD>/<cid>/user-data，cid 取其父目录名；
+        # 快照目录直接由工作区根推导（self.runtime_skills_dir），不从路径反推 uid。
+        cid = Path(self.workspace_root).resolve().parent.name
         try:
-            await build_runtime_skill_snapshot_async(uid, cid)
+            await build_runtime_skill_snapshot_async(self.user_id, cid, target_dir=snapshot_dir)
         except Exception as err:
             logger.warning("惰性构建技能快照失败，技能读取可能不可用: %s", err)
 
@@ -223,7 +223,7 @@ class ConversationWorkspaceRuntime:
         """将 /mnt/skills 路径解析到本会话快照真实文件系统。
 
         运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
-        ``threads/<uid>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
+        ``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
         快照内不存在即视为无权限。快照缺失时惰性构建。
         路径安全规则统一在 utils.skill_paths.resolve_skill_snapshot_path。
         """
@@ -398,24 +398,23 @@ def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> Conversatio
     )
 
 
-def _safe_segment(value: str) -> str:
-    """规整路径段，避免会话 ID 造成目录越界。"""
-    try:
-        return normalize_conversation_id(value)
-    except ValueError as exc:
-        raise ValueError("非法会话 ID") from exc
-
-
-def ensure_conversation_workspace(conversation_id: str, user_id: str = "system") -> dict[str, str]:
+def ensure_conversation_workspace(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, str]:
     """创建并返回 ChatData 会话目录结构。
 
-    布局：``threads/<uid>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
-    ``user-data`` 为模型可写运行域；``runtime-skills`` 为会话级技能快照（由
+    布局：``threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
+    ``created_date`` 为会话创建日期（``YYYY-MM-DD``，缺省当前日期）。``user-data`` 为模型可写
+    运行域；``runtime-skills`` 为会话级技能快照（由
     ``runtime_skill_snapshot.build_runtime_skill_snapshot_async`` 惰性填充）。
     """
-    thread_id = _safe_segment(conversation_id)
-    safe_user_id = normalize_user_id(user_id or "system")
-    base = (THREADS_DIR / safe_user_id / thread_id).resolve()
+    try:
+        base = conversation_thread_dir(user_id, conversation_id, created_date=created_date).resolve()
+    except ValueError as exc:
+        raise ValueError(f"会话工作区路径参数非法: {exc}") from exc
     root = (base / "user-data").resolve()
     root.mkdir(parents=True, exist_ok=True)
     (base / "runtime-skills").mkdir(parents=True, exist_ok=True)
@@ -428,13 +427,13 @@ def ensure_conversation_workspace(conversation_id: str, user_id: str = "system")
     return paths
 
 
-def resolve_uploads_root(user_id: str, thread_id: str) -> Path:
+def resolve_uploads_root(user_id: str, thread_id: str, *, created_date: str | None = None) -> Path:
     """返回当前会话工作区 uploads 目录（上传文件权威存储根）。
 
     不再回退到历史 ``server/uploads`` 目录；会话工作区未初始化时由
     ``ensure_conversation_workspace`` 直接抛错，由调用方处理。
     """
-    paths = ensure_conversation_workspace(thread_id, user_id)
+    paths = ensure_conversation_workspace(thread_id, user_id, created_date=created_date)
     return Path(paths["uploads"])
 
 

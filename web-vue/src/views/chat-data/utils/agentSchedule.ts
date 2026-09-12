@@ -87,3 +87,65 @@ export const scheduleRunDurationText = (run: {
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
+
+/**
+ * 编辑表单的基线快照：打开弹窗时表单/任务的值。
+ * 编辑提交按「与基线逐键比较」生成补丁，未改动的键不下发——既避免用表单默认值
+ * 覆盖任务里其它运行配置（如 semantic_config_id / skill_names），也避免已过期的
+ * 单次任务被重新提交去做「执行时间必须晚于当前时间」的校验。
+ */
+export interface ScheduleFormBaseline {
+  options: Record<string, unknown>
+  scheduleType: '' | 'cron' | 'once'
+  cronExpr: string
+  planTime: string
+  effectiveEndTime: string
+}
+
+export const createScheduleBaseline = (): ScheduleFormBaseline => ({
+  options: {},
+  scheduleType: '',
+  cronExpr: '',
+  planTime: '',
+  effectiveEndTime: ''
+})
+
+/** 推理等级 → 运行选项键：'' 清除、on/off 用开关、其余为档位 */
+export const buildThinkingKeys = (effort: string): Record<string, unknown> => {
+  if (!effort) return { enable_thinking: null, thinking_effort: null }
+  if (effort === 'on' || effort === 'off') return { enable_thinking: effort === 'on', thinking_effort: null }
+  return { enable_thinking: true, thinking_effort: effort }
+}
+
+/**
+ * 运行配置补丁：只下发与基线不同的键；值为 null 表示清除该键（回退系统默认）。
+ * 表单掌管数据源组/模型/推理等级三类键，其余键由后端保留原值。
+ */
+export const buildRuntimeOptionsPatch = (
+  current: Record<string, unknown>,
+  baseline: Record<string, unknown>
+): Record<string, unknown> => {
+  const patch: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(current)) {
+    if ((value ?? null) !== (baseline[key] ?? null)) patch[key] = value
+  }
+  return patch
+}
+
+/** 调度字段补丁：只下发与基线不同的字段；有效期清空用 null 表达 */
+export const buildSchedulePatch = (
+  current: Pick<ScheduleFormBaseline, 'scheduleType' | 'cronExpr' | 'planTime' | 'effectiveEndTime'>,
+  baseline: ScheduleFormBaseline
+): Record<string, unknown> => {
+  const patch: Record<string, unknown> = {}
+  if (current.scheduleType !== baseline.scheduleType) patch.schedule_type = current.scheduleType
+  if (current.scheduleType === 'once') {
+    if (current.planTime !== baseline.planTime) patch.plan_time = current.planTime
+  } else if (current.cronExpr !== baseline.cronExpr) {
+    patch.cron_expr = current.cronExpr
+  }
+  if (current.effectiveEndTime !== baseline.effectiveEndTime) {
+    patch.effective_end_time = current.effectiveEndTime || null
+  }
+  return patch
+}

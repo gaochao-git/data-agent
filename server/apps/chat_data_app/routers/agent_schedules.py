@@ -92,6 +92,11 @@ async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest
             cron_expr=payload.cron_expr,
             plan_time=payload.plan_time,
             effective_end_time=payload.effective_end_time,
+            # 更新请求里 None 既可能是「未提供」也可能是「显式清空」：只有字段真的
+            # 出现在请求体中且为 null 时才视为清除有效期（Pydantic 可区分二者）
+            clear_effective_end_time=(
+                "effective_end_time" in payload.model_fields_set and payload.effective_end_time is None
+            ),
             enabled_flag=payload.enabled_flag,
             datasource_id=payload.datasource_id,
             options=payload.options,

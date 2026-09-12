@@ -535,3 +535,22 @@ def _default_models_registry(monkeypatch, tmp_path):
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_db_workspace_date(monkeypatch):
+    """API 契约测试不连真实业务库：工作区日期解析打桩为回退当前日期。
+
+    与单元测试 conftest 同口径：仅覆盖 handlers / 路由 / 上传服务三个导入方，
+    会话归属等已有各自的 fake/monkeypatch 通道。
+    """
+    from apps.chat_data_app.routers import conversation_workspace as cw_routes
+    from apps.chat_data_app.services.agent_run import uploaded_file_service
+    import apps.chat_data_app.handlers as handlers_module
+
+    async def _stub_date(conversation_id, *, user_id):
+        return None
+
+    monkeypatch.setattr(handlers_module, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(cw_routes, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(uploaded_file_service, "get_conversation_created_date", _stub_date)

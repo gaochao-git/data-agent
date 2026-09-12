@@ -392,3 +392,88 @@ async def test_trigger_now_requires_enabled_and_owner(harness):
     )
     with pytest.raises(AgentScheduleValidationError):
         await service.trigger_now(job_id=job["job_id"], user_id="user-1", username="用户一")
+
+
+@pytest.mark.asyncio
+async def test_update_job_treats_options_as_patch(harness):
+    """编辑提交的 options 是补丁：未提交的键必须原样保留，null 表示清除该键。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload(
+        options={"model_id": "m1", "semantic_config_id": "sc-1", "skill_names": ["a"]},
+    )))
+
+    updated = await service.update_job(
+        job_id=job["job_id"], title="改标题", prompt=None, schedule_type=None, cron_expr=None,
+        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+        options={"model_id": "m2", "datasource_id": None},
+        user_id="user-1", username="用户一",
+    )
+
+    # 表单掌管的键以补丁为准；未被表单掌管的键不能被顺手清空
+    assert updated["options"]["model_id"] == "m2"
+    assert updated["options"]["semantic_config_id"] == "sc-1"
+    assert updated["options"]["skill_names"] == ["a"]
+    # 补丁里的 null 清除该键（回退系统默认）
+    assert "datasource_id" not in updated["options"]
+    assert updated["datasource_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_job_drops_null_options(harness):
+    """创建路径没有既有配置，null 视为未设置：不应在 options_json 里留下空键。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload(
+        datasource_id=None,
+        options={"model_id": None, "enable_thinking": False},
+    )))
+    assert job["options"] == {"enable_thinking": False}
+
+
+@pytest.mark.asyncio
+async def test_update_expired_once_job_allows_title_edit(harness):
+    """执行时间已过期的单次任务仍可改标题：调度未变就不重新校验。"""
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload(
+        schedule_type="once", cron_expr=None, plan_time=FUTURE,
+    )))
+    expired = datetime.now() - timedelta(hours=2)
+    async with get_session() as session:
+        row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+        row.plan_time = expired
+        row.next_trigger_time = None
+
+    updated = await service.update_job(
+        job_id=job["job_id"], title="改个标题", prompt=None, schedule_type=None, cron_expr=None,
+        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+        options=None, user_id="user-1", username="用户一",
+    )
+    assert updated["title"] == "改个标题"
+    assert datetime.fromisoformat(updated["plan_time"]) == expired
+    assert updated["next_trigger_time"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_job_clears_effective_end_time(harness):
+    """显式清空有效期：effective_end_time 字段真的出现在请求里且为 null。"""
+    service, create_conversation, create_payload, _session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload(
+        effective_end_time=FUTURE + timedelta(days=1),
+    )))
+    assert job["effective_end_time"] is not None
+
+    cleared = await service.update_job(
+        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
+        plan_time=None, effective_end_time=None, clear_effective_end_time=True,
+        enabled_flag=None, datasource_id=None, options=None,
+        user_id="user-1", username="用户一",
+    )
+    assert cleared["effective_end_time"] is None
+    assert cleared["next_trigger_time"] is not None
+
+    async with _session() as session:
+        row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
+    assert row.effective_end_time is None

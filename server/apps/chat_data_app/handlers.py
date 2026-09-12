@@ -49,7 +49,11 @@ from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
-from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
+from .services.agent_run.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    ensure_conversation_workspace,
+    get_conversation_created_date,
+)
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
     select_vision_attachments,
@@ -125,14 +129,26 @@ def _get_timestamp() -> str:
     return time.strftime('%Y-%m-%d %H:%M:%S')
 
 
-async def prepare_conversation_workspace(conversation_id: str, user_id: str = "system") -> dict[str, str]:
-    """异步准备 ChatData 会话工作目录。"""
-    return await asyncio.to_thread(_prepare_conversation_workspace_sync, conversation_id, user_id)
+async def prepare_conversation_workspace(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, str]:
+    """异步准备 ChatData 会话工作目录（``created_date`` 为会话创建日期 YYYY-MM-DD）。"""
+    return await asyncio.to_thread(
+        _prepare_conversation_workspace_sync, conversation_id, user_id, created_date=created_date
+    )
 
 
-def _prepare_conversation_workspace_sync(conversation_id: str, user_id: str = "system") -> dict[str, str]:
+def _prepare_conversation_workspace_sync(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, str]:
     """同步创建 ChatData 会话工作目录。"""
-    return ensure_conversation_workspace(conversation_id, user_id)
+    return ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
 
 
 def _format_sse(event: str, data: dict | str) -> str:
@@ -1481,10 +1497,13 @@ async def _prepare_agent_workspace_runtime(
 
     返回（workspace 路径表, workspace 运行时, 语义物化缺失说明）。
     """
-    workspace_paths = await prepare_conversation_workspace(thread_id, user_id or "system")
+    # 工作区按会话创建日期归档；先查 DB 权威解析，避免与 uploads/技能快照等入口分裂出多个日期目录。
+    user_id_str = user_id or "system"
+    created_date = await get_conversation_created_date(thread_id, user_id=user_id_str)
+    workspace_paths = await prepare_conversation_workspace(thread_id, user_id_str, created_date=created_date)
     workspace_runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_paths["root"],
-        user_id=user_id or "system",
+        user_id=user_id_str,
         backend=runtime_options.workspace_backend,
     )
     # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
@@ -1537,7 +1556,10 @@ async def _load_runtime_skills_xml(
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
     # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
     try:
-        snapshot_dir = await build_runtime_skill_snapshot_async(user_id, thread_id)
+        # 快照目录由工作区根推导，保证与实际工作区同一日期分层（不从 uid/cid 反推）。
+        snapshot_dir = await build_runtime_skill_snapshot_async(
+            user_id, thread_id, target_dir=workspace_runtime.runtime_skills_dir
+        )
         available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
         available_skills_xml = format_skills_prompt(available_skills)
     except Exception as err:

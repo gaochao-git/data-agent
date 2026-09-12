@@ -16,7 +16,7 @@ from utils.logger import get_logger
 
 from ...daos.uploaded_file_dao import UploadedFileDao
 from ..runtime_config import read_positive_int_env
-from .conversation_workspace import resolve_uploads_root
+from .conversation_workspace import get_conversation_created_date, resolve_uploads_root
 
 logger = get_logger(__name__)
 
@@ -93,7 +93,8 @@ class UploadedFileService:
         file_id = str(uuid.uuid4())
         original_filename = file.filename or "unknown"
         file_type = _get_file_extension(original_filename)
-        uploads_root = resolve_uploads_root(user_id, thread_id)
+        created_date = await get_conversation_created_date(thread_id, user_id=user_id)
+        uploads_root = resolve_uploads_root(user_id, thread_id, created_date=created_date)
         storage_name = _unique_storage_name(uploads_root, original_filename)
         full_path = uploads_root / storage_name
         temporary_path = uploads_root / f".{storage_name}.{uuid.uuid4().hex}.upload"
@@ -144,7 +145,9 @@ class UploadedFileService:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return False
-        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        target_thread_id = thread_id or info["thread_id"]
+        created_date = await get_conversation_created_date(target_thread_id, user_id=user_id)
+        uploads_root = resolve_uploads_root(user_id, target_thread_id, created_date=created_date)
         original_path = uploads_root / info["storage_dir"]
         parsed_path = uploads_root / info["parse_filename"] if info.get("parse_filename") else None
         for target in (original_path, parsed_path):
@@ -167,7 +170,9 @@ class UploadedFileService:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
-        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        target_thread_id = thread_id or info["thread_id"]
+        created_date = await get_conversation_created_date(target_thread_id, user_id=user_id)
+        uploads_root = resolve_uploads_root(user_id, target_thread_id, created_date=created_date)
         file_path = uploads_root / info["storage_dir"]
         return await asyncio.to_thread(file_path.read_bytes) if file_path.exists() else None
 
@@ -202,7 +207,9 @@ class UploadedFileService:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
-        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        target_thread_id = thread_id or info["thread_id"]
+        created_date = await get_conversation_created_date(target_thread_id, user_id=user_id)
+        uploads_root = resolve_uploads_root(user_id, target_thread_id, created_date=created_date)
         file_path = uploads_root / info["storage_dir"]
         return str(file_path) if file_path.exists() else None
 

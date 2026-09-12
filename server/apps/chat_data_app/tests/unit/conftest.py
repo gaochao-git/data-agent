@@ -49,3 +49,23 @@ def _default_models_registry(monkeypatch, tmp_path_factory):
     path.write_text(json.dumps(_DEFAULT_MODELS, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_db_workspace_date(monkeypatch):
+    """单元测试不连真实 DB：把工作区日期解析的消费方打桩为回退当前日期。
+
+    仅覆盖 handlers / 路由 / 上传服务三个导入方命名空间；定义模块
+    ``conversation_workspace`` 内部直调（如 async wrapper 委托测试）与
+    日期解析本身的专项测试不受影响，由各用例自行控制。
+    """
+    from apps.chat_data_app.routers import conversation_workspace as cw_routes
+    from apps.chat_data_app.services.agent_run import uploaded_file_service
+    import apps.chat_data_app.handlers as handlers_module
+
+    async def _stub_date(conversation_id, *, user_id):
+        return None
+
+    monkeypatch.setattr(handlers_module, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(cw_routes, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(uploaded_file_service, "get_conversation_created_date", _stub_date)

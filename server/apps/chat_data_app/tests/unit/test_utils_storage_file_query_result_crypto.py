@@ -1,5 +1,6 @@
 import base64
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -39,10 +40,11 @@ def test_storage_paths_chat_data_home_required_and_resolves_absolute(monkeypatch
 def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
     store = tool_result_store.ToolResultStore(tmp_path)
     record = store.save_query_result({"rows": [1]}, conversation_id="conv_a", user_id="u1")
+    date_str = datetime.now().strftime("%Y-%m-%d")
 
     assert record.virtual_path == f"/mnt/user-data/outputs/query_result/{record.result_id}.json"
     assert (
-        tmp_path / "threads" / "u1" / "conv_a" / "user-data" / "outputs" / "query_result" / f"{record.result_id}.json"
+        tmp_path / "threads" / "u1" / date_str / "conv_a" / "user-data" / "outputs" / "query_result" / f"{record.result_id}.json"
     ).is_file()
     assert store.load_query_result_for_conversation(
         result_id=record.result_id,
@@ -64,7 +66,8 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
 
 def test_tool_result_store_handles_corrupt_json(tmp_path):
     store = tool_result_store.ToolResultStore(tmp_path)
-    bad_path = tmp_path / "threads" / "u1" / "conv" / "user-data" / "outputs" / "query_result" / "bad.json"
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    bad_path = tmp_path / "threads" / "u1" / date_str / "conv" / "user-data" / "outputs" / "query_result" / "bad.json"
     bad_path.parent.mkdir(parents=True)
     bad_path.write_text("{bad", encoding="utf-8")
     assert store.load_query_result_for_conversation(

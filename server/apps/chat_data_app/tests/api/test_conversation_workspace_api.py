@@ -240,7 +240,7 @@ def test_conversation_workspace_imports_presented_output_skill(client, auth_head
     monkeypatch.setattr(
         workspace_routes,
         "ensure_conversation_workspace",
-        lambda _conversation_id, _user_id: {"root": str(tmp_path)},
+        lambda _conversation_id, _user_id, *, created_date=None: {"root": str(tmp_path)},
     )
 
     async def import_skill(path: Path, user_id: str, operator_name: str = ""):

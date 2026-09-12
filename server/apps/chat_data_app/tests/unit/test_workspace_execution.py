@@ -30,7 +30,8 @@ from apps.chat_data_app.agent.workspace.workspace_execution import (
 
 
 def _workspace_root(tmp_path: Path) -> Path:
-    # 新布局：threads/<uid>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}
+    # 新布局：threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}
+    # 本用例直接手工搭目录传 workspace_root，不经 ensure_conversation_workspace，日期层不参与。
     root = tmp_path / "chat-data" / "threads" / "user_a" / "conv_a" / "user-data"
     for name in ("workspace", "outputs", "uploads"):
         (root / name).mkdir(parents=True, exist_ok=True)

@@ -367,13 +367,13 @@ def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
 
     monkeypatch.setattr(
         "apps.chat_data_app.handlers.ensure_conversation_workspace",
-        lambda conversation_id, user_id: calls.setdefault(
-            "workspace", {"root": f"/tmp/{user_id}/{conversation_id}"}
+        lambda conversation_id, user_id, *, created_date=None: calls.setdefault(
+            "workspace", {"root": f"/tmp/{user_id}/{created_date}/{conversation_id}"}
         ),
     )
 
-    paths = _prepare_conversation_workspace_sync("conv_ws", "user_a")
-    assert paths["root"] == "/tmp/user_a/conv_ws"
+    paths = _prepare_conversation_workspace_sync("conv_ws", "user_a", created_date="2026-09-14")
+    assert paths["root"] == "/tmp/user_a/2026-09-14/conv_ws"
 
     async_paths = asyncio.run(prepare_conversation_workspace("conv_ws", "user_a"))
     assert async_paths == paths
@@ -572,7 +572,7 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
         workspace_root.mkdir(parents=True)
         return {"root": str(workspace_root)}
 
-    async def fake_build_snapshot(user_id, conversation_id):
+    async def fake_build_snapshot(user_id, conversation_id, *, target_dir=None):
         assert (user_id, conversation_id) == ("u1", "conv_snapshot")
         return snapshot_dir
 

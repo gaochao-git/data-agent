@@ -3,6 +3,7 @@ import sys
 import uuid
 import json
 import importlib
+from datetime import datetime
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -53,11 +54,13 @@ uploaded_file_service_module = importlib.import_module(
 )
 
 
-def _isolated_workspace(monkeypatch, tmp_path, conversation_id: str, user_id: str = "user_a"):
+def _isolated_workspace(
+    monkeypatch, tmp_path, conversation_id: str, user_id: str = "user_a", *, created_date: str | None = None
+):
     """把会话工作区建在 tmp_path 下，避免用例之间共享 CHAT_DATA_HOME。"""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
-    return ensure_conversation_workspace(conversation_id, user_id)
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    return ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
 
 
 def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
@@ -208,8 +211,9 @@ def _analysis_query_state(
 def test_ensure_conversation_workspace_creates_expected_dirs():
     paths = ensure_conversation_workspace("conv_workspace_test", "user_a")
 
+    date_str = datetime.now().strftime("%Y-%m-%d")
     assert Path(paths["root"]).exists()
-    assert Path(paths["root"]).as_posix().endswith("threads/user_a/conv_workspace_test/user-data")
+    assert Path(paths["root"]).as_posix().endswith(f"threads/user_a/{date_str}/conv_workspace_test/user-data")
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
@@ -217,6 +221,49 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     # 运行域技能快照目录随工作区一并创建（扁平 /mnt/skills/<name> 快照），但不进入 paths 字典
     assert (Path(paths["root"]).parent / "runtime-skills").is_dir()
     assert "runtime_skills" not in paths
+
+
+def test_ensure_conversation_workspace_date_layering(tmp_path, monkeypatch):
+    """工作区按会话创建日期归档：threads/<uid>/<yyyy-MM-DD>/<cid>，幂等且互不串目录。"""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+
+    paths = ensure_conversation_workspace("conv_date_a", "user_a", created_date="2026-08-14")
+    assert Path(paths["root"]).as_posix().endswith("threads/user_a/2026-08-14/conv_date_a/user-data")
+    # 同日期重复 ensure 幂等：返回同一 root
+    again = ensure_conversation_workspace("conv_date_a", "user_a", created_date="2026-08-14")
+    assert again["root"] == paths["root"]
+    # 不同日期不串目录
+    other = ensure_conversation_workspace("conv_date_b", "user_a", created_date="2026-09-01")
+    assert Path(other["root"]).as_posix().endswith("threads/user_a/2026-09-01/conv_date_b/user-data")
+
+
+def test_ensure_conversation_workspace_rejects_invalid_date():
+    for bad_date in ["2026-13-01", "2026-08-32", "2026-8-14", "20260901", "2026/09/01", "2026-09", "abc", ""]:
+        with pytest.raises(ValueError, match="created_date"):
+            ensure_conversation_workspace("conv_bad_date", "user_a", created_date=bad_date)
+
+
+def test_resolve_workspace_date_variants():
+    from apps.chat_data_app.services.agent_run.conversation_workspace import resolve_workspace_date
+
+    assert resolve_workspace_date(datetime(2026, 8, 14, 10, 0, 0)) == "2026-08-14"
+    assert resolve_workspace_date(None) == datetime.now().strftime("%Y-%m-%d")
+
+
+def test_get_conversation_created_date_resolves_from_thread(monkeypatch):
+    from apps.chat_data_app.services.agent_run.conversation_workspace import get_conversation_created_date
+
+    class FakeDao:
+        async def get_thread(self, conversation_id, user_id=None):
+            if conversation_id == "conv_hit":
+                return SimpleNamespace(create_time=datetime(2026, 8, 14, 10, 0, 0))
+            return None
+
+    monkeypatch.setattr(conversation_workspace_module, "conversation_dao", FakeDao())
+    import asyncio
+
+    assert asyncio.run(get_conversation_created_date("conv_hit", user_id="user_a")) == "2026-08-14"
+    assert asyncio.run(get_conversation_created_date("conv_miss", user_id="user_a")) is None
 
 
 def test_ensure_workspace_rejects_invalid_conversation_id():
@@ -264,7 +311,7 @@ def test_resolve_workspace_path_restricts_writes():
 @pytest.mark.asyncio
 async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
     semantic_root = Path(paths["workspace"]) / "semantic"
     semantic_root.mkdir()
@@ -285,7 +332,7 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
 @pytest.mark.asyncio
 async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
     paths = ensure_conversation_workspace("conv_private", "user_a")
     private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
@@ -309,7 +356,7 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
 @pytest.mark.asyncio
 async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_query_result", "user_a")
     result_file = Path(paths["outputs"]) / "query_result" / "result_1.json"
     result_file.parent.mkdir()
@@ -365,7 +412,7 @@ def test_resolve_workspace_path_rejects_non_canonical_forms():
 @pytest.mark.asyncio
 async def test_file_copy_copies_upload_into_workspace_and_keeps_source(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_file_copy", "user_a")
     source = Path(paths["uploads"]) / "原文件.docx"
     source.write_bytes(b"\x00\x01docx-bytes")
@@ -386,7 +433,7 @@ async def test_file_copy_copies_upload_into_workspace_and_keeps_source(monkeypat
 @pytest.mark.asyncio
 async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_file_copy_guard", "user_a")
     source = Path(paths["uploads"]) / "a.bin"
     source.write_bytes(b"a")
@@ -1744,7 +1791,7 @@ async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
 async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
     """file_grep on a single file must return matches, not silently drop them."""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_grep_file", "user_a")
     target = Path(paths["outputs"]) / "order.dashboard.json"
     target.write_text(
@@ -2025,7 +2072,7 @@ async def test_has_running_agent_run_blocks_only_running_statuses(monkeypatch):
 @pytest.mark.asyncio
 async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit_result(monkeypatch, tmp_path):
     conversation_id = f"conv_delete_outputs_{uuid.uuid4().hex}"
-    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id, created_date="2026-09-14")
     report = Path(paths["outputs"]) / "report.docx"
     report.write_bytes(b"docx")
     audit = Path(paths["outputs"]) / "query_result" / "result_1.json"
@@ -2036,6 +2083,11 @@ async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit
         return False
 
     monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", no_running_run)
+
+    async def fixed_date(*_args, **_kwargs):
+        return "2026-09-14"
+
+    monkeypatch.setattr(conversation_workspace_module, "get_conversation_created_date", fixed_date)
 
     payload = await conversation_workspace_module.delete_conversation_workspace_file(
         conversation_id, user_id="user_a", path="/mnt/user-data/outputs/report.docx",
@@ -2131,7 +2183,7 @@ async def test_delete_conversation_workspace_file_cleans_uploaded_file_record(mo
 async def test_delete_conversation_workspace_file_falls_back_when_upload_record_is_absent(monkeypatch, tmp_path):
     """uploads 里没有上传记录的条目（解析产物、子目录文件）走纯物理删除。"""
     conversation_id = f"conv_delete_uploads_fallback_{uuid.uuid4().hex}"
-    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id, created_date="2026-09-14")
     orphan = Path(paths["uploads"]) / "parse-cache.txt"
     orphan.write_text("cache", encoding="utf-8")
     nested_dir = Path(paths["uploads"]) / "2026"
@@ -2143,6 +2195,11 @@ async def test_delete_conversation_workspace_file_falls_back_when_upload_record_
         return False
 
     monkeypatch.setattr(conversation_workspace_module, "_has_running_agent_run", no_running_run)
+
+    async def fixed_date(*_args, **_kwargs):
+        return "2026-09-14"
+
+    monkeypatch.setattr(conversation_workspace_module, "get_conversation_created_date", fixed_date)
 
     class FakeUploadedFileService:
         async def get_files_by_thread(self, _thread_id, user_id="system"):

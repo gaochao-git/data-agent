@@ -757,7 +757,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
     from apps.chat_data_app.services.agent_run import conversation_workspace
 
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = conversation_workspace.ensure_conversation_workspace("conv_sub", "user_sub")
 
     class _ToolCallingFakeModel(FakeMessagesListChatModel):
@@ -828,7 +828,7 @@ async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
     from apps.chat_data_app.services.agent_run import conversation_workspace
 
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(workspace_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     conversation_workspace.ensure_conversation_workspace("conv_raise", "user_raise")
 
     class _ToolCallingFakeModel(FakeMessagesListChatModel):

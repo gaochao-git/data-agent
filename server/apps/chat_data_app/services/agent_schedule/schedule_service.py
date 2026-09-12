@@ -53,13 +53,19 @@ class AgentScheduleLimitExceededError(RuntimeError):
 
 
 def _validate_options(options: dict[str, Any] | None) -> str | None:
-    """校验并序列化运行选项；服务端不信任前端原样 JSON。"""
+    """校验并序列化运行选项；服务端不信任前端原样 JSON。
+
+    创建路径不存在既有配置，``null`` 与「未设置」等价，直接剔除，避免
+    ``options_json`` 里留下无意义的空键。更新路径的 ``null`` 另有含义
+    （清除该键），见 :meth:`AgentScheduleService._merge_options_patch`。
+    """
     if options is None:
         return None
     if not isinstance(options, dict):
         raise AgentScheduleValidationError("运行选项必须是对象")
+    cleaned = {key: value for key, value in options.items() if value is not None}
     try:
-        return json.dumps(options, ensure_ascii=False)
+        return json.dumps(cleaned, ensure_ascii=False)
     except (TypeError, ValueError) as exc:
         raise AgentScheduleValidationError("运行选项包含不可序列化的内容") from exc
 
@@ -210,12 +216,20 @@ class AgentScheduleService:
         cron_expr: str | None,
         plan_time: datetime | None,
         effective_end_time: datetime | None,
+        clear_effective_end_time: bool = False,
         enabled_flag: int | None,
         datasource_id: str | None,
         options: dict[str, Any] | None,
         user_id: str,
         username: str,
     ) -> dict:
+        """更新任务；未传的字段保持不变。
+
+        运行选项按补丁语义合并：只提交要改的键，值为 ``null`` 表示清除该键
+        （回退系统默认）；未提交的键（如 ``semantic_config_id`` / ``skill_names``）
+        原样保留，避免编辑标题时顺带清空其它运行配置。调度字段仅在真的变化时
+        才重新校验并重算 ``next_trigger_time``。
+        """
         async with get_session() as session:
             now = await self._dao.now(session)
             job = await self._dao.get_job_for_update(session, job_id)
@@ -235,25 +249,43 @@ class AgentScheduleService:
                     raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
             else:
                 conversation_key = ""
-            resolved_type = str(schedule_type or job.schedule_type).strip()
-            resolved_cron = cron_expr if cron_expr is not None else job.cron_expr
-            resolved_plan = plan_time if plan_time is not None else job.plan_time
-            if resolved_type == SCHEDULE_TYPE_ONCE and plan_time is None and job.schedule_type != SCHEDULE_TYPE_ONCE:
-                resolved_plan = None
-            resolved_end = effective_end_time if effective_end_time is not None else job.effective_end_time
-            resolved = _resolve_schedule_fields(
-                schedule_type=resolved_type,
-                cron_expr=resolved_cron,
-                plan_time=resolved_plan,
-                effective_end_time=resolved_end,
-                now=now,
+            candidate_type = str(schedule_type or job.schedule_type).strip()
+            if candidate_type not in SCHEDULE_TYPES:
+                raise AgentScheduleValidationError(f"调度类型必须是 {' 或 '.join(SCHEDULE_TYPES)}")
+            candidate_cron = cron_expr if cron_expr is not None else job.cron_expr
+            candidate_plan = plan_time if plan_time is not None else job.plan_time
+            if clear_effective_end_time:
+                # 显式清除有效期（None 无法区分「未提供」与「清空」，由路由层判定）
+                candidate_end = None
+            else:
+                candidate_end = effective_end_time if effective_end_time is not None else job.effective_end_time
+            # 仅当调度字段真的变了才校验并重算 next_trigger_time：否则执行时间已过期的
+            # 单次任务会被「必须晚于当前时间」永久拦住，连改标题都报错。
+            schedule_changed = (candidate_type, candidate_cron, candidate_plan, candidate_end) != (
+                job.schedule_type,
+                job.cron_expr,
+                job.plan_time,
+                job.effective_end_time,
             )
+            if schedule_changed:
+                resolved = _resolve_schedule_fields(
+                    schedule_type=candidate_type,
+                    cron_expr=candidate_cron,
+                    plan_time=candidate_plan,
+                    effective_end_time=candidate_end,
+                    now=now,
+                )
             if title is not None:
                 job.job_title = normalize_title(title)
             if prompt is not None:
                 job.job_prompt = normalize_prompt(prompt)
             if options is not None or datasource_id is not None:
-                merged = dict(options) if isinstance(options, dict) else self._load_options(job)
+                # options 是补丁而非整份配置：未提交的键原样保留（semantic_config_id /
+                # skill_names 等不由编辑表单掌管），值为 null 表示清除该键、回退系统默认
+                merged = self._merge_options_patch(
+                    self._load_options(job),
+                    options if isinstance(options, dict) else {},
+                )
                 if datasource_id:
                     merged["datasource_id"] = str(datasource_id).strip()
                 job.options_json = json.dumps(merged, ensure_ascii=False)
@@ -261,12 +293,6 @@ class AgentScheduleService:
             if mode_changed:
                 job.conversation_mode = resolved_mode
                 job.conversation_id = conversation_key
-            schedule_changed = (resolved[0], resolved[1], resolved[2], resolved[3]) != (
-                job.schedule_type,
-                job.cron_expr,
-                job.plan_time,
-                job.effective_end_time,
-            )
             if schedule_changed:
                 # 调度字段变更一律以服务端时钟重新计算下一次触发时间
                 job.schedule_type = resolved[0]
@@ -508,6 +534,17 @@ class AgentScheduleService:
         except (TypeError, ValueError, json.JSONDecodeError):
             return {}
         return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _merge_options_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        """把运行选项补丁合并到既有配置：``None`` 值表示清除该键。"""
+        merged = dict(current)
+        for key, value in patch.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+        return merged
 
 
 agent_schedule_service = AgentScheduleService()

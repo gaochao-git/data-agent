@@ -1,6 +1,6 @@
 """会话级 runtime-skills 快照：把当前用户在本会话「有权访问」的技能冻结为只读副本。
 
-管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``threads/<uid>/<cid>/runtime-skills/``）
+管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``）
 解耦：模型在运行期只看到 ``/mnt/skills/<name>/...``，读取的是本会话快照，不直接访问管理域，
 也不跨用户 / 跨历史会话越权。
 
@@ -26,19 +26,24 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from utils.logger import get_logger
-from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
+from utils.storage_paths import conversation_thread_dir
 
 logger = get_logger(__name__)
 
-THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 SNAPSHOT_READY_MARKER = ".snapshot-ready"
 
 
-def runtime_skills_snapshot_dir(user_id: str, conversation_id: str) -> Path:
-    """返回某会话的 runtime-skills 快照目录（``threads/<uid>/<cid>/runtime-skills``）。"""
-    safe_user = normalize_user_id(user_id or "system")
-    thread_id = normalize_conversation_id(conversation_id)
-    return THREADS_DIR / safe_user / thread_id / "runtime-skills"
+def runtime_skills_snapshot_dir(
+    user_id: str,
+    conversation_id: str,
+    *,
+    created_date: str | None = None,
+) -> Path:
+    """返回某会话的 runtime-skills 快照目录（``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills``）。
+
+    路径经由 ``storage_paths.conversation_thread_dir`` 唯一拼装点，与工作区目录保持同一日期分层。
+    """
+    return conversation_thread_dir(user_id, conversation_id, created_date=created_date) / "runtime-skills"
 
 
 def runtime_skills_snapshot_dir_from_workspace(workspace_root: str) -> Path:
@@ -217,16 +222,24 @@ def _sweep_stale_siblings(target: Path) -> None:
             _remove_tree(item)
 
 
-async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str) -> Path:
+async def build_runtime_skill_snapshot_async(
+    user_id: str,
+    conversation_id: str,
+    *,
+    target_dir: Path | None = None,
+) -> Path:
     """按管理域当前状态构建（指纹一致时复用）本会话的 runtime-skills 快照，返回快照目录。
 
     每次调用先取技能源并计算指纹：与快照标记中的指纹一致则直接复用；不一致
     （技能新增/移除/内容变更）或早期无指纹的存量快照则原子重建。重建发生在
     轮次开始前，单轮执行期间快照保持稳定。
+    ``target_dir`` 显式指定快照目录（从工作区根推导，见
+    ``ConversationWorkspaceRuntime.runtime_skills_dir``），保证与实际工作区同层；
+    缺省按 ``threads/<uid>/<yyyy-MM-DD>/<cid>`` 当前日期拼装，仅适用于会话刚创建的预热场景。
     注意：``ensure_conversation_workspace`` 会预先建出空的 runtime-skills 目录，
     空目录视为未构建，必须填充；无可见技能时通过带指纹的隐藏完成标记冻结空快照。
     """
-    target = runtime_skills_snapshot_dir(user_id, conversation_id)
+    target = Path(target_dir) if target_dir is not None else runtime_skills_snapshot_dir(user_id, conversation_id)
     was_ready = is_runtime_skill_snapshot_ready(target)
 
     from apps.chat_data_app.agent.skills.skill_service import skill_service
@@ -276,7 +289,6 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
 
 
 __all__ = [
-    "THREADS_DIR",
     "SNAPSHOT_READY_MARKER",
     "runtime_skills_snapshot_dir",
     "runtime_skills_snapshot_dir_from_workspace",

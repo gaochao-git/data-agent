@@ -34,7 +34,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 @pytest.fixture(autouse=True)
 def _chat_data_home(tmp_path, monkeypatch):
     monkeypatch.setattr(cw_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(cw_runtime_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
 
 
 def _runtime(tmp_path: Path) -> tuple[ConversationWorkspaceRuntime, Path]:

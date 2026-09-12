@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,22 +25,18 @@ from apps.chat_data_app.agent.workspace.runtime import (  # noqa: F401
     _absolute_command_path_tokens,
     _ensure_workspace_root_in_chat_data_home,
     _officecli_selector_token_indices,
-    _safe_segment,
     create_workspace_backend,
-    is_system_result_workspace_path,
-    resolve_output_skill_directory,
-    resolve_uploads_root,
-    WORKSPACE_DIR_NAMES,
-    ConversationWorkspaceRuntime,
-    WorkspacePathMapping,
-    _render_local_office_html,
-    ensure_conversation_workspace,
     is_managed_semantic_model_workspace_path,
     is_system_result_workspace_path,
+    resolve_output_skill_directory,
     resolve_uploads_root,
     resolve_workspace_path,
     to_visible_path,
     workspace_runtime_from_state,
+    ensure_conversation_workspace,
+    ConversationWorkspaceRuntime,
+    WorkspacePathMapping,
+    _render_local_office_html,
 )
 from apps.chat_data_app.agent.workspace.workspace_local_backend import (
     delete_local_workspace_file,
@@ -63,10 +60,34 @@ class WorkspaceFileDeleteConflictError(RuntimeError):
     """删除请求与正在执行的 Run 冲突。"""
 
 
+def resolve_workspace_date(create_time: datetime | None) -> str:
+    """解析会话创建日期（``YYYY-MM-DD``）作为工作区日期分层；``None`` 回退当前日期。
+
+    会话工作区按创建时间归档（``threads/<uid>/<yyyy-MM-DD>/<cid>/``），不随后续活跃时间变化。
+    """
+    if create_time:
+        return create_time.strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+async def get_conversation_created_date(conversation_id: str, *, user_id: str) -> str | None:
+    """返回当前用户会话的创建日期；会话不存在或无权访问时返回 ``None``。
+
+    这是各入口获取工作区日期分层的权威入口：先经 ``ensure_conversation_workspace``
+    落盘的路径必须与这里解析出的日期一致，避免同一会话分裂出多个日期目录。
+    """
+    thread = await conversation_dao.get_thread(conversation_id, user_id)
+    if thread is None:
+        return None
+    return resolve_workspace_date(thread.create_time)
+
+
 def delete_workspace_file(
     conversation_id: str,
     path: str,
     user_id: str = "system",
+    *,
+    created_date: str | None = None,
 ) -> dict[str, Any]:
     """删除会话工作区中的单个文件（同步实现，由 ``asyncio.to_thread`` 调用）。
 
@@ -77,7 +98,7 @@ def delete_workspace_file(
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
     if logical_path.is_system_result:
         raise ValueError("查询结果需要留存审计，不支持删除")
-    workspace = ensure_conversation_workspace(conversation_id, user_id)
+    workspace = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     return delete_local_workspace_file(workspace["root"], path, allow_uploads=True)
 
 
@@ -149,13 +170,24 @@ async def delete_conversation_workspace_file(
             "record_cleaned": True,
         }
 
-    result = await asyncio.to_thread(delete_workspace_file, conversation_id, path, user_id)
+    result = await asyncio.to_thread(
+        delete_workspace_file,
+        conversation_id,
+        path,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
     return {**result, "record_cleaned": False}
 
 
-def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[dict[str, Any]]:
+def list_workspace_files(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> list[dict[str, Any]]:
     """列出会话工作区中的可见文件，不跟随逃逸符号链接。"""
-    paths = ensure_conversation_workspace(conversation_id, user_id)
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
     for directory_name in WORKSPACE_DIR_NAMES:
@@ -190,9 +222,11 @@ def read_workspace_text_file(
     path: str,
     max_bytes: int = 1024 * 1024,
     user_id: str = "system",
+    *,
+    created_date: str | None = None,
 ) -> dict[str, Any]:
     """读取会话工作区中的文本文件。"""
-    paths = ensure_conversation_workspace(conversation_id, user_id)
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
     if is_system_result_workspace_path(root, target):
@@ -228,7 +262,12 @@ async def list_conversation_workspace_files(
     user_id: str,
 ) -> list[dict[str, Any]]:
     """读取当前用户会话的持久化工作区文件。"""
-    return await asyncio.to_thread(list_workspace_files, conversation_id, user_id)
+    return await asyncio.to_thread(
+        list_workspace_files,
+        conversation_id,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
 
 
 async def read_conversation_workspace_file(
@@ -239,7 +278,14 @@ async def read_conversation_workspace_file(
     max_bytes: int = 1024 * 1024,
 ) -> dict[str, Any]:
     """读取当前用户会话持久化工作区中的文本文件。"""
-    return await asyncio.to_thread(read_workspace_text_file, conversation_id, path, max_bytes, user_id)
+    return await asyncio.to_thread(
+        read_workspace_text_file,
+        conversation_id,
+        path,
+        max_bytes,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
 
 
 async def read_conversation_workspace_raw_file(
@@ -250,7 +296,14 @@ async def read_conversation_workspace_raw_file(
     max_bytes: int = 20 * 1024 * 1024,
 ) -> dict[str, Any]:
     """读取会话工作区中的原始字节文件（用于 PDF/Word 等二进制预览/下载）。"""
-    return await asyncio.to_thread(read_workspace_raw_file, conversation_id, path, max_bytes, user_id)
+    return await asyncio.to_thread(
+        read_workspace_raw_file,
+        conversation_id,
+        path,
+        max_bytes,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
 
 
 def _validate_office_preview_source(workspace_root: str, path: str) -> None:
@@ -274,7 +327,8 @@ async def render_conversation_workspace_office_preview(
     path: str,
 ) -> dict[str, Any]:
     """Render an owned Office file from the application-side authoritative copy."""
-    workspace = ensure_conversation_workspace(conversation_id, user_id)
+    created_date = await get_conversation_created_date(conversation_id, user_id=user_id)
+    workspace = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     workspace_root = workspace["root"]
     await asyncio.to_thread(
         _validate_office_preview_source,
@@ -308,9 +362,11 @@ def read_workspace_raw_file(
     path: str,
     max_bytes: int = 20 * 1024 * 1024,
     user_id: str = "system",
+    *,
+    created_date: str | None = None,
 ) -> dict[str, Any]:
     """读取会话工作区中的原始字节文件，返回 bytes 与 mime 类型。"""
-    paths = ensure_conversation_workspace(conversation_id, user_id)
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
     if is_system_result_workspace_path(root, target):
@@ -337,11 +393,13 @@ async def read_conversation_query_result(
     result_id: str,
 ) -> dict[str, Any] | None:
     """读取当前用户当前会话内被卸载的大查询结果。"""
+    created_date = await get_conversation_created_date(conversation_id, user_id=user_id)
     return await asyncio.to_thread(
         ToolResultStore().load_query_result_for_conversation,
         result_id=result_id,
         conversation_id=conversation_id,
         user_id=user_id,
+        created_date=created_date,
     )
 
 

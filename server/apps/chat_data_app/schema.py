@@ -187,8 +187,8 @@ class AgentScheduleCreateRequest(BaseModel):
     cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式（分 时 日 月 周），周期任务必填")
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间，必须晚于当前时间")
     effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")
-    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID")
-    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项（与智能问数 options 口径一致）")
+    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID（创建时的便捷字段，等价于 options.datasource_id）")
+    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项（与智能问数 options 口径一致）；值为 null 的键视为未设置")
 
 
 class AgentScheduleUpdateRequest(BaseModel):
@@ -201,10 +201,10 @@ class AgentScheduleUpdateRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, max_length=64, description="绑定的会话ID（切换为指定会话模式时必填）")
     cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式")
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间")
-    effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")
+    effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间；显式传 null 表示清除有效期，不传则保持不变")
     enabled_flag: Optional[int] = Field(default=None, ge=0, le=1, description="启用状态：1-启用，0-停用")
-    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID")
-    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项")
+    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID（便捷字段，等价于 options.datasource_id；清除请用 options 补丁传 null）")
+    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项补丁：只提交要改的键，值为 null 表示清除该键，未提交的键保持不变")
 
 
 class AgentSchedulePauseRequest(BaseModel):

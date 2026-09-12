@@ -117,7 +117,7 @@ class FakeUpload:
 def uploads_root(tmp_path, monkeypatch):
     root = tmp_path / "uploads"
     root.mkdir()
-    monkeypatch.setattr(ufs, "resolve_uploads_root", lambda user_id, thread_id: root)
+    monkeypatch.setattr(ufs, "resolve_uploads_root", lambda user_id, thread_id, *, created_date=None: root)
     return root
 
 

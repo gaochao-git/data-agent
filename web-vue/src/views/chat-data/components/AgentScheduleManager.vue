@@ -17,10 +17,18 @@ import {
   triggerAgentScheduleNow,
   updateAgentSchedule
 } from '../api'
-import type { AgentScheduleItem, AgentScheduleRunItem, ChatDataModelOption, ConversationItem, DataSource } from '../types'
+import type { AgentScheduleItem, AgentSchedulePayload, AgentScheduleRunItem, ChatDataModelOption, ConversationItem, DataSource } from '../types'
 import { formatDateTimeValue } from '../utils'
 import AgentScheduleRunsTable from './AgentScheduleRunsTable.vue'
-import { WEEKLY_DAY_OPTIONS, scheduleText } from '../utils/agentSchedule'
+import {
+  WEEKLY_DAY_OPTIONS,
+  buildRuntimeOptionsPatch,
+  buildSchedulePatch,
+  buildThinkingKeys,
+  createScheduleBaseline,
+  scheduleText
+} from '../utils/agentSchedule'
+import type { ScheduleFormBaseline } from '../utils/agentSchedule'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -69,6 +77,12 @@ const runsLoading = ref(false)
 const runsJob = ref<AgentScheduleItem | null>(null)
 const runs = ref<AgentScheduleRunItem[]>([])
 
+// 编辑基线：打开弹窗时的任务快照，提交时据它生成只含改动项的补丁（见 utils/agentSchedule）
+const editorBaseline = ref<ScheduleFormBaseline>(createScheduleBaseline())
+
+// 编辑中的任务所绑会话的标题：会话不在「最近 50 条」里时用于下拉回显
+const editingConversationTitle = ref('')
+
 // 立即执行防连点：同一时刻只允许一个在途触发请求，避免堆积多个手动实例
 const triggeringJobId = ref('')
 
@@ -95,8 +109,10 @@ const loadConversationOptions = async (force = false) => {
   }
 }
 
-const loadDatasourceOptions = async () => {
-  if (datasourceOptions.value.length) return
+// 数据源组下拉：任务执行时选定的数据源（新会话模式会绑定到新建会话）。
+// 打开弹窗时用 force 强制刷新，保证新加的数据源组能立即选到；缓存只服务于同一次弹窗
+const loadDatasourceOptions = async (force = false) => {
+  if (datasourceOptions.value.length && !force) return
   try {
     const res = await getDatasources({ include_tables: false })
     if (res.status === 'success') {
@@ -109,8 +125,8 @@ const loadDatasourceOptions = async () => {
 
 // 模型与推理等级选项：来自运行时配置的模型注册表（含思考能力声明）
 const modelOptions = ref<ChatDataModelOption[]>([])
-const loadModelOptions = async () => {
-  if (modelOptions.value.length) return
+const loadModelOptions = async (force = false) => {
+  if (modelOptions.value.length && !force) return
   try {
     const res = await getChatDataConfig()
     if (res.status === 'success') {
@@ -200,19 +216,32 @@ const resetForm = () => {
     planTime: '',
     effectiveEndTime: ''
   }
+  // 数据源默认取当前会话绑定的数据源：上次编辑残留的值不能带到新建表单
+  selectedDatasourceId.value = props.datasourceId || ''
 }
+
+// 表单掌管的运行配置键：空值用 null 表达「清除该键、回退系统默认」
+const currentRuntimeOptions = (): Record<string, unknown> => ({
+  datasource_id: selectedDatasourceId.value || null,
+  model_id: form.value.modelId || null,
+  ...buildThinkingKeys(form.value.thinkingEffort)
+})
 
 const openCreate = () => {
   editingJobId.value = ''
+  editingConversationTitle.value = ''
   resetForm()
-  void loadConversationOptions()
-  void loadDatasourceOptions()
-  void loadModelOptions()
+  // 新建没有基线：调度与运行配置全量下发
+  editorBaseline.value = createScheduleBaseline()
+  void loadConversationOptions(true)
+  void loadDatasourceOptions(true)
+  void loadModelOptions(true)
   editorVisible.value = true
 }
 
 const openEdit = (job: AgentScheduleItem) => {
   editingJobId.value = job.job_id
+  editingConversationTitle.value = job.conversation_title || ''
   form.value = {
     title: job.title,
     prompt: job.prompt,
@@ -237,9 +266,21 @@ const openEdit = (job: AgentScheduleItem) => {
     jobOptions.thinking_effort
     ?? (jobOptions.enable_thinking === true ? 'on' : jobOptions.enable_thinking === false ? 'off' : ''),
   )
-  void loadConversationOptions()
-  void loadDatasourceOptions()
-  void loadModelOptions()
+  // 基线取「表单当前值的规范化结果」，保证未改动的键不会因格式差异被下发
+  editorBaseline.value = {
+    options: {
+      datasource_id: selectedDatasourceId.value || null,
+      model_id: form.value.modelId || null,
+      ...buildThinkingKeys(form.value.thinkingEffort)
+    },
+    scheduleType: job.schedule_type,
+    cronExpr: job.cron_expr || '',
+    planTime: localDateTime(job.plan_time) || '',
+    effectiveEndTime: localDateTime(job.effective_end_time) || ''
+  }
+  void loadConversationOptions(true)
+  void loadDatasourceOptions(true)
+  void loadModelOptions(true)
   editorVisible.value = true
 }
 
@@ -257,7 +298,7 @@ const buildCronExpr = (): string => {
   return form.value.cronExpr.trim()
 }
 
-const localDateTime = (value: string | Date): string | null => {
+const localDateTime = (value: string | Date | null | undefined): string | null => {
   if (!value) return null
   // el-date-picker 交互后产出 Date：按本地时区转成后端期望的朴素时间字符串
   if (value instanceof Date) {
@@ -281,22 +322,14 @@ const submitJob = async () => {
     ElMessage.warning('请填写任务指令')
     return
   }
-  // 编辑时只提交表单可见字段：数据源/运行选项绑定创建时会话，编辑不再覆盖，
-  // 避免用户切换会话后编辑任务导致执行数据源被静默篡改
-  const payload: Record<string, unknown> = editingJobId.value
-    ? {
-        title,
-        prompt,
-        conversation_mode: form.value.conversationMode
-      }
-    : {
-        title,
-        prompt,
-        conversation_mode: form.value.conversationMode,
-        schedule_type: form.value.scheduleType,
-        datasource_id: selectedDatasourceId.value || undefined,
-        options: selectedDatasourceId.value ? { datasource_id: selectedDatasourceId.value } : undefined
-      }
+  // 新建与编辑共用一份 payload；编辑只下发与打开弹窗时基线不同的字段，
+  // 未改动的调度/运行配置不提交，避免用表单默认值覆盖任务里其它配置
+  const payload: Partial<AgentSchedulePayload> & Pick<AgentSchedulePayload, 'title' | 'prompt' | 'schedule_type'> = {
+    title,
+    prompt,
+    schedule_type: form.value.scheduleType,
+    conversation_mode: form.value.conversationMode
+  }
   if (form.value.conversationMode === 'fixed') {
     if (!form.value.conversationId) {
       ElMessage.warning('请选择一个历史会话')
@@ -304,38 +337,25 @@ const submitJob = async () => {
     }
     payload.conversation_id = form.value.conversationId
   }
-  // 运行配置统一进 options（单一 JSON 扩展点）：数据源/模型/推理等级
-  const runtimeOptions: Record<string, unknown> = {}
-  if (selectedDatasourceId.value) runtimeOptions.datasource_id = selectedDatasourceId.value
-  if (form.value.modelId) runtimeOptions.model_id = form.value.modelId
-  if (thinkingEffortOptions.value.length && form.value.thinkingEffort) {
-    if (form.value.thinkingEffort === 'on' || form.value.thinkingEffort === 'off') {
-      runtimeOptions.enable_thinking = form.value.thinkingEffort === 'on'
-    } else {
-      runtimeOptions.thinking_effort = form.value.thinkingEffort
-      runtimeOptions.enable_thinking = true
-    }
+  if (form.value.scheduleType === 'once' && !localDateTime(form.value.planTime)) {
+    ElMessage.warning('请选择单次执行时间')
+    return
   }
-  payload.options = runtimeOptions
-  if (runtimeOptions.datasource_id) payload.datasource_id = runtimeOptions.datasource_id
-  if (form.value.scheduleType === 'once') {
-    const planTime = localDateTime(form.value.planTime)
-    if (!planTime) {
-      ElMessage.warning('请选择单次执行时间')
-      return
-    }
-    payload.plan_time = planTime
-  } else {
-    payload.cron_expr = buildCronExpr()
-  }
-  const effectiveEnd = localDateTime(form.value.effectiveEndTime)
-  if (effectiveEnd) payload.effective_end_time = effectiveEnd
+  const schedulePatch = buildSchedulePatch({
+    scheduleType: form.value.scheduleType,
+    cronExpr: buildCronExpr(),
+    planTime: localDateTime(form.value.planTime) || '',
+    effectiveEndTime: localDateTime(form.value.effectiveEndTime) || ''
+  }, editorBaseline.value)
+  Object.assign(payload, schedulePatch)
+  const optionsPatch = buildRuntimeOptionsPatch(currentRuntimeOptions(), editorBaseline.value.options)
+  if (Object.keys(optionsPatch).length) payload.options = optionsPatch
 
   savingJob.value = true
   try {
     const res = editingJobId.value
       ? await updateAgentSchedule(editingJobId.value, payload)
-      : await createAgentSchedule(payload as any)
+      : await createAgentSchedule(payload)
     if (res.status === 'success') {
       ElMessage.success(editingJobId.value ? '任务已更新' : '任务已创建')
       editorVisible.value = false
@@ -558,7 +578,7 @@ defineExpose({ ensureLoaded })
             <el-option
               v-if="form.conversationId && !conversationOptions.some(option => option.id === form.conversationId)"
               :key="form.conversationId"
-              :label="runsJob?.conversation_title || form.conversationId"
+              :label="editingConversationTitle || form.conversationId"
               :value="form.conversationId"
             />
           </el-select>

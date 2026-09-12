@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
-from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
+from utils.storage_paths import (
+    CHAT_DATA_HOME,
+    normalize_conversation_id,
+    normalize_created_date,
+    normalize_user_id,
+)
 
 logger = get_logger(__name__)
 
@@ -117,7 +122,9 @@ class ToolResultStore:
         result_id: str,
         conversation_id: str,
         user_id: str,
+        created_date: str | None = None,
     ) -> dict[str, Any] | None:
+        """读取一个查询结果；``created_date`` 为会话创建日期（YYYY-MM-DD），须与写入侧一致。"""
         record = self._record(
             result_id=result_id,
             suffix=".json",
@@ -126,7 +133,7 @@ class ToolResultStore:
             directory_name=QUERY_RESULT_DIR_NAME,
         )
         try:
-            with self._path_for_record(record).open("r", encoding="utf-8") as handle:
+            with self._path_for_record(record, created_date=created_date).open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("加载查询结果文件失败: result_id=%s error=%s", result_id, exc)
@@ -154,7 +161,7 @@ class ToolResultStore:
             directory_name=directory_name,
         )
 
-    def _path_for_record(self, record: ToolResultRecord) -> Path:
+    def _path_for_record(self, record: ToolResultRecord, *, created_date: str | None = None) -> Path:
         if not record.user_id or not record.conversation_id:
             raise ValueError("保存工具结果必须提供 conversation_id 与 user_id")
         user_id = normalize_user_id(record.user_id)
@@ -163,6 +170,7 @@ class ToolResultStore:
             self.base_dir
             / "threads"
             / user_id
+            / normalize_created_date(created_date)
             / conversation_id
             / "user-data"
             / "outputs"

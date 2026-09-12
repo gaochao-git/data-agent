@@ -237,7 +237,7 @@ def test_import_skill_from_workspace_branches(fake_service, monkeypatch):
         imported.append((skill_dir, user_id, operator_name))
         return {"id": "skill_1"}
 
-    monkeypatch.setattr(cw_routes, "ensure_conversation_workspace", lambda conv, uid: {"root": "/tmp/ws"})
+    monkeypatch.setattr(cw_routes, "ensure_conversation_workspace", lambda conv, uid, *, created_date=None: {"root": "/tmp/ws"})
     monkeypatch.setattr(cw_routes, "resolve_output_skill_directory", lambda root, path: f"{root}/{path}")
     monkeypatch.setattr(cw_routes.skill_service, "import_user_skill_from_directory_async", fake_import)
 
