@@ -390,6 +390,7 @@ class AgentScheduleDao:
                 func.count().label("total_count"),
                 func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SUCCEEDED, 1), else_=0)).label("succeeded_count"),
                 func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_FAILED, 1), else_=0)).label("failed_count"),
+                func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_CANCELLED, 1), else_=0)).label("cancelled_count"),
                 func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SKIPPED, 1), else_=0)).label("skipped_count"),
                 func.max(ChatDataAgentScheduleRun.plan_time).label("last_plan_time"),
             )

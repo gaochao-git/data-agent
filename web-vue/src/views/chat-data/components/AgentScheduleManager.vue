@@ -447,13 +447,10 @@ const triggerNow = async (job: AgentScheduleItem) => {
   }
 }
 
-const openRuns = async (job: AgentScheduleItem) => {
-  runsJob.value = job
-  runs.value = []
-  runsVisible.value = true
+const loadRuns = async (jobId: string) => {
   runsLoading.value = true
   try {
-    const res = await getAgentScheduleRuns(job.job_id)
+    const res = await getAgentScheduleRuns(jobId)
     if (res.status === 'success') {
       runs.value = res.data.runs || []
     } else {
@@ -465,6 +462,13 @@ const openRuns = async (job: AgentScheduleItem) => {
   } finally {
     runsLoading.value = false
   }
+}
+
+const openRuns = async (job: AgentScheduleItem) => {
+  runsJob.value = job
+  runs.value = []
+  runsVisible.value = true
+  await loadRuns(job.job_id)
 }
 
 defineExpose({ ensureLoaded })
@@ -733,10 +737,23 @@ defineExpose({ ensureLoaded })
     <!-- 执行历史 -->
     <el-dialog
       v-model="runsVisible"
-      :title="`执行历史 · ${runsJob?.title || ''}`"
       width="min(860px, 94vw)"
       :append-to-body="true"
     >
+      <template #header>
+        <div class="flex items-center gap-2">
+          <span class="text-base font-medium text-slate-800">执行历史 · {{ runsJob?.title || '' }}</span>
+          <el-button
+            link
+            size="small"
+            :loading="runsLoading"
+            :disabled="!runsJob"
+            @click="runsJob && loadRuns(runsJob.job_id)"
+          >
+            <i v-if="!runsLoading" class="fa-solid fa-rotate-right text-[11px]" style="margin-right: 4px;"></i>刷新
+          </el-button>
+        </div>
+      </template>
       <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
     </el-dialog>
   </el-dialog>

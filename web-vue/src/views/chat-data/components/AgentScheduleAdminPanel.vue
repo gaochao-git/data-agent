@@ -30,6 +30,7 @@ const pageSize = ref(20)
 const runsVisible = ref(false)
 const runsLoading = ref(false)
 const runsJobTitle = ref('')
+const runsJobId = ref('')
 const runs = ref<AgentScheduleRunItem[]>([])
 
 const successRate = computed(() => {
@@ -43,7 +44,7 @@ const statCards = computed(() => {
   return [
     { label: '定时任务', value: data ? `${data.enabled_jobs}/${data.total_jobs}` : '-', hint: '启用中 / 总数' },
     { label: '累计执行', value: data ? String(data.total_runs) : '-', hint: `近24h ${data?.runs_last_24h ?? 0} 次` },
-    { label: '执行成功率', value: successRate.value, hint: `失败 ${data?.failed_runs ?? 0} · 跳过 ${data?.skipped_runs ?? 0}` },
+    { label: '执行成功率', value: successRate.value, hint: `失败 ${data?.failed_runs ?? 0} · 取消 ${data?.cancelled_runs ?? 0} · 跳过 ${data?.skipped_runs ?? 0}` },
     { label: '执行中', value: data ? String(data.running_runs) : '-', hint: '排队/领取/执行中' }
   ]
 })
@@ -179,13 +180,10 @@ const copyConversationId = async (conversationId: string) => {
   }
 }
 
-const openRuns = async (job: AgentScheduleItem) => {
-  runsJobTitle.value = job.title
-  runs.value = []
-  runsVisible.value = true
+const loadRuns = async (jobId: string) => {
   runsLoading.value = true
   try {
-    const res = await getAdminAgentScheduleRuns(job.job_id)
+    const res = await getAdminAgentScheduleRuns(jobId)
     if (res.status === 'success') {
       runs.value = res.data.runs || []
     } else {
@@ -197,6 +195,14 @@ const openRuns = async (job: AgentScheduleItem) => {
   } finally {
     runsLoading.value = false
   }
+}
+
+const openRuns = async (job: AgentScheduleItem) => {
+  runsJobTitle.value = job.title
+  runsJobId.value = job.job_id
+  runs.value = []
+  runsVisible.value = true
+  await loadRuns(job.job_id)
 }
 
 defineExpose({ ensureLoaded })
@@ -313,6 +319,11 @@ defineExpose({ ensureLoaded })
             <span :class="row.failed_count ? 'text-red-500 font-medium' : 'text-slate-400'">{{ row.failed_count || 0 }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="取消" width="65" align="right">
+          <template #default="{ row }">
+            <span :class="row.cancelled_count ? 'text-amber-500 font-medium' : 'text-slate-400'">{{ row.cancelled_count || 0 }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="最近执行" min-width="215">
           <template #default="{ row }">
             <div v-if="row.last_run_time" class="flex items-center gap-2 text-xs">
@@ -352,10 +363,23 @@ defineExpose({ ensureLoaded })
     <!-- 执行历史 -->
     <el-dialog
       v-model="runsVisible"
-      :title="`执行历史 · ${runsJobTitle}`"
       width="min(960px, 94vw)"
       :append-to-body="true"
     >
+      <template #header>
+        <div class="flex items-center gap-2">
+          <span class="text-base font-medium text-slate-800">执行历史 · {{ runsJobTitle }}</span>
+          <el-button
+            link
+            size="small"
+            :loading="runsLoading"
+            :disabled="!runsJobId"
+            @click="runsJobId && loadRuns(runsJobId)"
+          >
+            <i v-if="!runsLoading" class="fa-solid fa-rotate-right text-[11px]" style="margin-right: 4px;"></i>刷新
+          </el-button>
+        </div>
+      </template>
       <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
     </el-dialog>
   </div>

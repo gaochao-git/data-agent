@@ -836,6 +836,7 @@ export interface AgentScheduleItem {
   total_count?: number
   succeeded_count?: number
   failed_count?: number
+  cancelled_count?: number
   skipped_count?: number
   last_plan_time?: string | null
   last_run_status?: string | null
@@ -869,6 +870,7 @@ export interface AgentScheduleOverview {
   total_runs: number
   succeeded_runs: number
   failed_runs: number
+  cancelled_runs: number
   skipped_runs: number
   running_runs: number
   runs_last_24h: number

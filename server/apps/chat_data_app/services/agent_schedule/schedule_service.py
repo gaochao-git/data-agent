@@ -496,6 +496,7 @@ class AgentScheduleService:
                 "total_runs": sum(status_counts.values()),
                 "succeeded_runs": status_counts.get("succeeded", 0),
                 "failed_runs": status_counts.get("failed", 0),
+                "cancelled_runs": status_counts.get("cancelled", 0),
                 "skipped_runs": status_counts.get("skipped", 0),
                 "running_runs": status_counts.get("dispatched", 0) + status_counts.get("claimed", 0) + status_counts.get("pending", 0),
                 "runs_last_24h": runs_last_24h,
