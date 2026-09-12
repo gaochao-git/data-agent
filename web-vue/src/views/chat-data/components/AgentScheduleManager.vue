@@ -487,7 +487,7 @@ defineExpose({ ensureLoaded })
       </div>
     </div>
 
-    <el-table :data="jobs" v-loading="loading" size="small" style="width: 100%" empty-text="暂无定时任务">
+    <el-table :data="jobs" v-loading="loading" size="small" style="width: 100%" max-height="60vh" empty-text="暂无定时任务">
       <el-table-column label="任务名称" min-width="130" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="text-sm font-medium text-slate-800">{{ row.title }}</span>

@@ -361,6 +361,21 @@ class AgentScheduleDao:
         )
         return int(result.scalar() or 0)
 
+    async def count_jobs_filtered(self, session: AsyncSession, keyword: str | None) -> int:
+        """按关键词过滤后的任务总数（与 list_jobs_with_stats 同一口径，供分页 total）。"""
+        conditions = [ChatDataAgentSchedule.delete_flag == 0]
+        if keyword:
+            like = f"%{keyword}%"
+            conditions.append(
+                ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like)
+            )
+        result = await session.execute(
+            select(func.count())
+            .select_from(ChatDataAgentSchedule)
+            .where(*conditions)
+        )
+        return int(result.scalar() or 0)
+
     async def list_jobs_with_stats(
         self,
         session: AsyncSession,

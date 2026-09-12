@@ -23,6 +23,9 @@ const jobs = ref<AgentScheduleItem[]>([])
 const keyword = ref('')
 const hasLoaded = ref(false)
 const togglingPause = ref(false)
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
 
 const runsVisible = ref(false)
 const runsLoading = ref(false)
@@ -47,24 +50,31 @@ const statCards = computed(() => {
 
 const paused = computed(() => !!overview.value?.paused_flag)
 
+const loadJobs = async () => {
+  const res = await getAdminAgentSchedules({
+    keyword: keyword.value.trim() || undefined,
+    limit: pageSize.value,
+    offset: (currentPage.value - 1) * pageSize.value
+  })
+  if (res.status === 'success') {
+    jobs.value = res.data.jobs || []
+    total.value = res.data.total || 0
+    hasLoaded.value = true
+  } else {
+    ElMessage.error(res.msg || '获取任务列表失败')
+  }
+}
+
 const loadAll = async () => {
   loading.value = true
   try {
-    const [overviewRes, jobsRes] = await Promise.all([
-      getAgentScheduleAdminOverview(),
-      getAdminAgentSchedules({ keyword: keyword.value.trim() || undefined, limit: 100 })
-    ])
+    const overviewRes = await getAgentScheduleAdminOverview()
     if (overviewRes.status === 'success') {
       overview.value = overviewRes.data
     } else {
       ElMessage.error(overviewRes.msg || '获取概览失败')
     }
-    if (jobsRes.status === 'success') {
-      jobs.value = jobsRes.data.jobs || []
-      hasLoaded.value = true
-    } else {
-      ElMessage.error(jobsRes.msg || '获取任务列表失败')
-    }
+    await loadJobs()
   } catch (err) {
     console.error('获取定时任务后台数据失败:', err)
     ElMessage.error('获取定时任务数据失败，请稍后重试')
@@ -78,17 +88,26 @@ const ensureLoaded = async () => {
 }
 
 const searchJobs = async () => {
+  currentPage.value = 1
   loading.value = true
   try {
-    const res = await getAdminAgentSchedules({ keyword: keyword.value.trim() || undefined, limit: 100 })
-    if (res.status === 'success') {
-      jobs.value = res.data.jobs || []
-    } else {
-      ElMessage.error(res.msg || '获取任务列表失败')
-    }
+    await loadJobs()
   } catch (err) {
     console.error('搜索定时任务失败:', err)
     ElMessage.error('搜索失败，请稍后重试')
+  } finally {
+    loading.value = false
+  }
+}
+
+const handlePageChange = async (page: number) => {
+  currentPage.value = page
+  loading.value = true
+  try {
+    await loadJobs()
+  } catch (err) {
+    console.error('切换定时任务分页失败:', err)
+    ElMessage.error('获取任务列表失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -237,15 +256,16 @@ defineExpose({ ensureLoaded })
     </div>
 
     <!-- 任务列表：表格化，任务量增长后仍可扫读与扩展列 -->
-    <div class="min-h-0 flex-1 px-4 pb-4">
-      <el-table
-        :data="jobs"
-        v-loading="loading"
-        size="small"
-        height="100%"
-        style="width: 100%"
-        empty-text="暂无定时任务"
-      >
+    <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">
+      <div class="min-h-0 flex-1">
+        <el-table
+          :data="jobs"
+          v-loading="loading"
+          size="small"
+          height="100%"
+          style="width: 100%"
+          empty-text="暂无定时任务"
+        >
         <el-table-column label="任务标题" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="text-sm font-medium text-slate-800">{{ row.title }}</span>
@@ -314,7 +334,19 @@ defineExpose({ ensureLoaded })
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
+      <div class="flex shrink-0 justify-end pt-2">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next"
+          size="small"
+          background
+          @current-change="handlePageChange"
+        />
+      </div>
     </div>
 
     <!-- 执行历史 -->

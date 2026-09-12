@@ -542,7 +542,9 @@ class AgentScheduleService:
     async def list_all_jobs(self, *, keyword: str | None = None, limit: int = 50, offset: int = 0) -> dict:
         """全量任务分页列表，附执行统计与最近一次执行状态。"""
         async with get_session() as session:
-            rows = await self._dao.list_jobs_with_stats(session, limit, offset, (keyword or "").strip() or None)
+            normalized_keyword = (keyword or "").strip() or None
+            rows = await self._dao.list_jobs_with_stats(session, limit, offset, normalized_keyword)
+            total = await self._dao.count_jobs_filtered(session, normalized_keyword)
             latest_runs = await self._dao.latest_runs_by_jobs(session, [job.job_id for job, _stats in rows])
             titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job, _stats in rows])
             items = []
@@ -562,7 +564,7 @@ class AgentScheduleService:
                     item["last_run_status"] = None
                     item["last_run_time"] = None
                 items.append(item)
-            return {"jobs": items}
+            return {"jobs": items, "total": total}
 
     async def admin_set_job_enabled(self, *, job_id: str, enabled_flag: int, user_id: str, username: str) -> dict:
         """后台强制启停任意任务；重新启用时按服务端时钟重新武装。"""

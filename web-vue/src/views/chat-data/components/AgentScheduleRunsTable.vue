@@ -23,7 +23,7 @@ defineEmits<{ copyConversationId: [conversationId: string] }>()
 </script>
 
 <template>
-  <el-table :data="runs" v-loading="loading" size="small" style="width: 100%" empty-text="暂无执行记录">
+  <el-table :data="runs" v-loading="loading" size="small" style="width: 100%" max-height="60vh" empty-text="暂无执行记录">
     <el-table-column label="状态" width="80">
       <template #default="{ row }">
         <span :class="['inline-block rounded px-1.5 py-0.5 text-[11px]', getScheduleRunStatusClass(row.status)]">
