@@ -43,7 +43,7 @@ async def get_agent_schedule_overview(request: Request):
 
 @router.put("/admin/agent-schedules/pause")
 async def set_agent_schedule_paused(payload: AgentSchedulePauseRequest, request: Request):
-    """全局一键暂停/恢复所有定时任务的调度（不影响已派发 Run 的状态收口）。"""
+    """停止/恢复任务调度（全局开关，不改用户任务的启停状态）。"""
     try:
         current_user = _require_user(request)
         data = await agent_schedule_service.set_paused(
@@ -52,7 +52,7 @@ async def set_agent_schedule_paused(payload: AgentSchedulePauseRequest, request:
             user_id=str(current_user.user_id),
             username=str(current_user.username or ""),
         )
-        return business_response(data=data, msg="暂停成功" if payload.paused else "已恢复调度")
+        return business_response(data=data, msg="已停止任务调度" if payload.paused else "已恢复任务调度")
     except HTTPException:
         raise
     except Exception as e:

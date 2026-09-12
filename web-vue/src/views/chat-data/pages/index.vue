@@ -1606,7 +1606,6 @@ onMounted(async () => {
             <template v-if="viewMode === 'conversation'">
               <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
                 <ConversationSidebar
-                  ref="conversationSidebarRef"
                   active-tab="conversation"
                   :grouped-conversations="groupedConversations"
                   :current-conversation-id="currentConversationId"
@@ -1928,7 +1927,6 @@ onMounted(async () => {
       v-model="showAgentScheduleModal"
       :conversation-id="currentConversationId || ''"
       :datasource-id="selectedDatasourceId || ''"
-      @update:model-value="(value: boolean) => { if (!value) handleAgentSchedulesClosed() }"
     />
     </el-config-provider>
   </div>

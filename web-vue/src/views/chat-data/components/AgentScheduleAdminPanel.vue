@@ -98,9 +98,9 @@ const togglePause = async (value: boolean) => {
   if (value) {
     try {
       await ElMessageBox.confirm(
-        '暂停后所有用户的定时任务将不再触发新的执行（进行中的执行不受影响），恢复前请知悉。确定暂停？',
-        '全局暂停确认',
-        { type: 'warning', confirmButtonText: '暂停调度', cancelButtonText: '取消' }
+        '停止后所有定时任务将不再触发新的执行；进行中的执行与已排队的触发不受影响，恢复后继续。确定停止调度？',
+        '停止调度确认',
+        { type: 'warning', confirmButtonText: '停止调度', cancelButtonText: '取消' }
       )
     } catch {
       return
@@ -110,13 +110,13 @@ const togglePause = async (value: boolean) => {
   try {
     const res = await setAgentSchedulePaused({ paused: value })
     if (res.status === 'success') {
-      ElMessage.success(value ? '已暂停所有定时任务调度' : '已恢复定时任务调度')
+      ElMessage.success(value ? '已停止任务调度' : '已恢复任务调度')
       await loadAll()
     } else {
       ElMessage.error(res.msg || '操作失败')
     }
   } catch (err) {
-    console.error('切换全局暂停失败:', err)
+    console.error('切换任务调度开关失败:', err)
     ElMessage.error('操作失败，请稍后重试')
   } finally {
     togglingPause.value = false
@@ -175,13 +175,13 @@ defineExpose({ ensureLoaded })
             ]"
           >
             <i :class="['mr-1 text-[9px]', paused ? 'fa-solid fa-pause' : 'fa-solid fa-play']"></i>
-            {{ paused ? '调度已全局暂停' : '调度运行中' }}
+            {{ paused ? '任务调度已停止' : '调度运行中' }}
           </span>
           <span v-if="overview?.pause_reason" class="min-w-0 truncate text-xs text-slate-400">
             {{ overview.pause_reason }}
           </span>
         </div>
-        <span class="shrink-0 text-xs text-slate-500">一键暂停所有任务</span>
+        <span class="shrink-0 text-xs text-slate-500">停止任务调度</span>
         <el-switch
           :model-value="paused"
           :loading="togglingPause"

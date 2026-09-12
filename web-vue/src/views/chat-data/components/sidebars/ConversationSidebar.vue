@@ -4,7 +4,7 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite, getAgentSchedules } from '../../api'
 import type {
   ConversationGroupView,
@@ -99,29 +99,6 @@ const emit = defineEmits<{
   openAgentSchedules: []
   openSkillManager: []
 }>()
-
-// 定时任务入口：懒加载一次任务数做角标，管理弹窗关闭后由父层调 refreshAgentScheduleCount 刷新
-const agentScheduleCount = ref(0)
-const loadAgentScheduleCount = async () => {
-  try {
-    const res = await getAgentSchedules()
-    if (res.status === 'success') {
-      agentScheduleCount.value = (res.data.jobs || []).length
-    }
-  } catch (err) {
-    console.error('获取定时任务数量失败:', err)
-  }
-}
-
-const refreshAgentScheduleCount = () => {
-  if (props.activeTab === 'conversation') void loadAgentScheduleCount()
-}
-
-onMounted(() => {
-  if (props.activeTab === 'conversation') void loadAgentScheduleCount()
-})
-
-defineExpose({ refreshAgentScheduleCount })
 
 // 每次打开历史弹窗时全部展开；稳定 key 仅用于本次打开期间的折叠状态。
 const collapsedGroups = ref<Set<string>>(new Set())
@@ -647,10 +624,6 @@ onUnmounted(() => {
         >
           <i class="fa-regular fa-clock w-3.5 shrink-0 text-center text-[11px]"></i>
           <span class="conversation-toolbar-btn-text flex-1 text-left">定时任务</span>
-          <span
-            v-if="agentScheduleCount > 0"
-            class="shrink-0 rounded-full bg-slate-100 px-1.5 text-[10px] leading-4 text-slate-500"
-          >{{ agentScheduleCount > 99 ? '99+' : agentScheduleCount }}</span>
         </button>
       </div>
       <div class="mx-3 shrink-0 border-t border-slate-100"></div>

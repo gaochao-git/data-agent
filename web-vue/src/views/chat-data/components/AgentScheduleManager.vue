@@ -343,14 +343,14 @@ defineExpose({ ensureLoaded })
             @change="(value: any) => toggleJob(job, !!value)"
           />
           <el-dropdown trigger="click" @command="(command: string) => command === 'edit' ? openEdit(job) : command === 'runs' ? openRuns(job) : command === 'trigger' ? triggerNow(job) : removeJob(job)">
-            <button type="button" class="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+            <el-button link size="small" class="!px-1 !text-slate-400 hover:!text-slate-600 focus-visible:!outline-none">
               <i class="fa-solid fa-ellipsis-vertical text-xs"></i>
-            </button>
+            </el-button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="trigger">立即执行</el-dropdown-item>
-                <el-dropdown-item command="edit">编辑</el-dropdown-item>
                 <el-dropdown-item command="runs">执行历史</el-dropdown-item>
+                <el-dropdown-item command="edit">编辑</el-dropdown-item>
                 <el-dropdown-item command="delete" divided>
                   <span class="text-red-500">删除</span>
                 </el-dropdown-item>
