@@ -59,4 +59,21 @@ describe('buildSandboxHtmlDocument', () => {
     const result = buildSandboxHtmlDocument(html)
     expectCsp(result)
   })
+
+  it('wraps fragment containing a stray </head> so CSP stays in real head', () => {
+    // 片段正文里的字面 </head> 不能把 CSP meta 带进 body（body 内 meta CSP 不生效）。
+    const html = '<div>用法示例</head>更多内容</div>'
+    const result = buildSandboxHtmlDocument(html)
+    expect(result.startsWith('<!DOCTYPE html>')).toBe(true)
+    expectCsp(result)
+    expect(result.indexOf('Content-Security-Policy')).toBeLessThan(result.indexOf('<body>'))
+  })
+
+  it('injects into head for full document whose only </head> is stray body text', () => {
+    // 畸形文档：head 从未出现，</head> 只出现在正文里；补 head 而不是贴着正文注入。
+    const html = '<html><body><code></head></code><p>x</p></body></html>'
+    const result = buildSandboxHtmlDocument(html)
+    expectCsp(result)
+    expect(result.indexOf('Content-Security-Policy')).toBeLessThan(result.indexOf('<body>'))
+  })
 })
