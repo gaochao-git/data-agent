@@ -27,7 +27,6 @@ import SkillCommandMenu from './SkillCommandMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
-import HtmlArtifactCard from './HtmlArtifactCard.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
@@ -1135,16 +1134,12 @@ const PRESENTED_DELIVERY_ARTIFACT_TYPES = new Set<PresentedDeliveryArtifactType>
   'html',
 ])
 
-// HTML artifact 不进文件卡列表：由 HtmlArtifactCard 单独内联渲染，避免同一产物出现两张卡。
-function getPresentedDeliveryArtifacts(message: Message, options: { htmlOnly: true }): PresentedDeliveryArtifact[]
-function getPresentedDeliveryArtifacts(message: Message, options?: { htmlOnly?: false }): (Omit<PresentedDeliveryArtifact, 'artifactType'> & { artifactType: Exclude<PresentedDeliveryArtifactType, 'html'> })[]
-function getPresentedDeliveryArtifacts(message: Message, options: { htmlOnly?: boolean } = {}): PresentedDeliveryArtifact[] {
+const getPresentedDeliveryArtifacts = (message: Message): PresentedDeliveryArtifact[] => {
   const artifacts = new Map<string, PresentedDeliveryArtifact>()
   for (const tool of message.toolCalls || []) {
     for (const artifact of getPresentedArtifacts(tool)) {
       const artifactType = String(artifact.artifact_type || '').trim() as PresentedDeliveryArtifactType
       if (!PRESENTED_DELIVERY_ARTIFACT_TYPES.has(artifactType)) continue
-      if (options.htmlOnly !== (artifactType === 'html')) continue
       const path = normalizeVisiblePath(artifact.file_path)
       if (!path.startsWith('outputs/')) continue
       const name = path.split('/').pop() || ''
@@ -3364,14 +3359,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
           @open-attachment="handleOpenAttachment"
         >
           <template #assistant-extra="{ message: msg }">
-            <HtmlArtifactCard
-              v-for="htmlArtifact in getPresentedDeliveryArtifacts(msg, { htmlOnly: true })"
-              :key="htmlArtifact.path"
-              :conversation-id="localConversationId || ''"
-              :artifact="htmlArtifact"
-              @preview="handleOpenPresentedArtifact"
-              @download="handleDownloadPresentedArtifact"
-            />
             <PresentedFileArtifacts
               v-if="getPresentedDeliveryArtifacts(msg).length"
               :artifacts="getPresentedDeliveryArtifacts(msg)"

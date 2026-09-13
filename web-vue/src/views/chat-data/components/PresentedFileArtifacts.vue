@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PropType } from 'vue'
 
-type PresentedFileArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown'
+type PresentedFileArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown' | 'html'
 
 interface PresentedFileArtifact {
   path: string
@@ -30,23 +30,28 @@ const emit = defineEmits<{
 const displayMeta: Record<PresentedFileArtifactType, ArtifactDisplayMeta> = {
   document: {
     label: 'Word 文档',
-    icon: 'fa-file-word',
+    icon: 'fa-regular fa-file-word',
     iconClass: 'bg-blue-600 text-white',
   },
   spreadsheet: {
     label: 'Excel 工作簿',
-    icon: 'fa-file-excel',
+    icon: 'fa-regular fa-file-excel',
     iconClass: 'bg-emerald-600 text-white',
   },
   presentation: {
     label: 'PowerPoint 演示文稿',
-    icon: 'fa-file-powerpoint',
+    icon: 'fa-regular fa-file-powerpoint',
     iconClass: 'bg-orange-600 text-white',
   },
   markdown: {
     label: 'Markdown 文档',
-    icon: 'fa-file-lines',
+    icon: 'fa-regular fa-file-lines',
     iconClass: 'bg-slate-700 text-white',
+  },
+  html: {
+    label: '交互 HTML 页面',
+    icon: 'fa-brands fa-html5',
+    iconClass: 'bg-indigo-600 text-white',
   },
 }
 
@@ -65,7 +70,7 @@ const getDisplayMeta = (artifactType: PresentedFileArtifactType): ArtifactDispla
           class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
           :class="getDisplayMeta(artifact.artifactType).iconClass"
         >
-          <i class="fa-regular text-sm" :class="getDisplayMeta(artifact.artifactType).icon"></i>
+          <i class="text-sm" :class="getDisplayMeta(artifact.artifactType).icon"></i>
         </span>
         <div class="min-w-0">
           <div class="truncate text-sm font-semibold text-slate-800">{{ artifact.name }}</div>

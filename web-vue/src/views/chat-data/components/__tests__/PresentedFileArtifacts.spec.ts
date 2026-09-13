@@ -9,6 +9,7 @@ describe('PresentedFileArtifacts', () => {
       { path: 'outputs/data.xlsx', name: 'data.xlsx', artifactType: 'spreadsheet' as const },
       { path: 'outputs/deck.pptx', name: 'deck.pptx', artifactType: 'presentation' as const },
       { path: 'outputs/report.md', name: 'report.md', artifactType: 'markdown' as const },
+      { path: 'outputs/report.html', name: 'report.html', artifactType: 'html' as const },
     ]
     const wrapper = mount(PresentedFileArtifacts, { props: { artifacts } })
 
@@ -16,6 +17,7 @@ describe('PresentedFileArtifacts', () => {
     expect(wrapper.text()).toContain('Excel 工作簿')
     expect(wrapper.text()).toContain('PowerPoint 演示文稿')
     expect(wrapper.text()).toContain('Markdown 文档')
+    expect(wrapper.text()).toContain('交互 HTML 页面')
     expect(wrapper.text()).toContain('report.docx')
 
     const buttons = wrapper.findAll('button')
