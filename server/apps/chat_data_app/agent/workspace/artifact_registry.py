@@ -160,6 +160,8 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
     ArtifactDefinition("pdf", "pdf", _matches_suffixes(".pdf"), _generic_artifact),
     ArtifactDefinition("image", "image", _matches_suffixes(".png", ".jpg", ".jpeg", ".gif", ".webp"), _generic_artifact),
     ArtifactDefinition("markdown", "markdown", _matches_markdown, _generic_artifact),
+    # 自包含 HTML 页面（内联 CSS/JS/数据），前端以沙箱 iframe 渲染
+    ArtifactDefinition("html", "html", _matches_suffixes(".html", ".htm"), _generic_artifact),
     ArtifactDefinition("dashboard_spec", "dashboard", _matches_json, _dashboard_artifact),
     ArtifactDefinition("chart_spec", "chart", _matches_json, _chart_artifact),
 )

@@ -125,6 +125,25 @@ def test_output_artifact_registry_accepts_markdown_and_reserves_skill_file():
     ) == {}
 
 
+def test_output_artifact_registry_accepts_self_contained_html():
+    artifact = parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/销售月报-2026-09.html",
+        data=b"<!DOCTYPE html><html><body>report</body></html>",
+    )
+
+    assert artifact == {
+        "file_path": "/mnt/user-data/outputs/销售月报-2026-09.html",
+        "artifact_type": "html",
+        "renderer": "html",
+        "artifact_version": "v1",
+    }
+    # htm 后缀同样注册为 html 类型
+    assert parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/report.htm",
+        data=b"<html><body>x</body></html>",
+    )["artifact_type"] == "html"
+
+
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
     root = tmp_path
     output = root / "outputs" / "chart.json"

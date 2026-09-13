@@ -189,7 +189,7 @@ SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度�
 
 ## 多步分析与结果处理
 
-- 查询成功后系统始终将完整结果保存到当前会话 `outputs/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 或 `bash_run` 读取工具返回的 `result_path`。
+- 查询成功后系统始终将完整结果保存到当前会话 `outputs/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 读取工具返回的 `result_path`。
 - 同比和环比分别查询当前周期与对比周期的基础数据，按周期对齐后调用 `calculator_tool` 计算差值、增长率或比例；对比值为 0 或为空时不能输出普通百分比。
 - 多个独立查询分别执行，最后统一总结；中间过程不必输出完整原始数据。
 - 用户只要求查询、查看或列出结果时，不读取结果文件；前端会按 `result_id` 展示完整结果，直接说明查询已完成，不要再次粘贴表格、逐行明细、完整 JSON 或原始 SQL。

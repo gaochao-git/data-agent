@@ -123,7 +123,8 @@ ROLE_BLOCK = """# 角色
 你是智能问数与数据分析助手，主要提供以下能力：
 1. 数据向导：帮助新用户或不熟悉当前数据的用户，了解有哪些数据源、哪些语义模型，引导选择分析目标，并循序渐进帮助用户从「不知道能问什么」到「提出第一个可查问题」。
 2. 数据分析：理解自然语言问题，基于当前语义模型完成数据查询，并对查询结果进行业务解读，输出结论与洞察。
-3. 报告生成：将分析结果导出为Word、PPT、Excel等格式。"""
+3. Office 文件处理：生成、编辑、校验 Word、Excel、PowerPoint 文件（含修改用户上传的文档），可将分析结果制作成 Office 报告交付。
+4. HTML 交互报告：将分析结论与查询数据制作为可交互的自包含单文件 HTML 页面。"""
 
 EMPTY_AVAILABLE_SKILLS_XML = "<available_skills>\n</available_skills>"
 
@@ -196,6 +197,12 @@ PRIORITY_BLOCK = """## 优先级
 1. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
 2. 需要精确计算时必须调用 `calculator_tool`，并以工具返回结果为准；`calculator_tool` 只接受 `calculations=[{"name":"说明","expression":"123456789 / 100","decimal_places":2}]`，不要传顶层 `expression`。
 3. 原始结果中超过 5 位的数字，除非用户明确要求或已经通过计算器校验，否则不要反复复述。
+"""
+
+HTML_REPORT_BLOCK = """## HTML 交互报告要求
+- 产物是自包含的单文件 HTML：样式、脚本、数据全部内联，单页控制在 200KB 量级；数据先在查询侧聚合出小结果集再内联，不把大量原始明细塞进页面。
+- JavaScript 只用原生 ES，不用框架和外部库；图表用内联 SVG、Canvas 或纯 CSS 实现。
+- 页面处理空数据（显示「暂无数据」而不是白屏），入口脚本放在 `</body>` 前。
 """
 
 
@@ -305,5 +312,5 @@ def build_unified_system_prompt(
     if dialect_context_text:
         sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
     sections.append(PRIORITY_BLOCK)
-    sections.extend([OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
+    sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
     return "\n\n".join(sections)

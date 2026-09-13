@@ -308,6 +308,35 @@
 
 - 空名称创建被阻止；创建「点击测试模型_临时」成功并自动载入编辑器；删除有确认，删除后模型消失、模型列表恢复。测试数据已清理。
 
+### FILE-09 自包含 HTML 交互报告（第四轮 2026-09-13）— PASS
+
+> 执行环境：Vite dev（8089）+ 本地后端（5001），自动化视口 618×363（偏小，需滚动定位元素），会话「HTML报告验证」（uid=10001，产物 `outputs/2026年8月销售概况.html` 12.7KB）。
+
+| 步骤 | 实际结果 |
+| --- | --- |
+| 消息流卡片呈现 | HTML 产物以独立「交互 HTML 页面」卡片呈现（文件名+展开提示），未重复出现在通用文件卡列表；文件树 outputs 分组同一文件可定位 |
+| 展开卡片 | iframe 以 `srcdoc` 注入 12658 字符，`sandbox="allow-scripts"`，srcdoc 内含 CSP meta，正则扫描无 `src/href=https?://` 外链 |
+| 卡片操作 | 「预览」「下载」「重新加载」（图标+title）三个操作齐全 |
+| 右侧预览面板 | 渲染同一页面（第 2 个 iframe，同样带 CSP）；切换器默认「预览」态激活（HTML 与 Markdown 一致默认渲染视图，此前缺陷已修复） |
+| 渲染/源码切换 | 切「源码」后预览区 iframe 卸载、显示源码文本（含 `<!DOCTYPE`、`<html`，与文件 12.7KB 一致）；切回「预览」iframe 恢复 |
+| 下载 | 触发 `workspace-files/raw` 请求（网络时序 [99]），与原文件一致 |
+| 刷新恢复 | 刷新浏览器 → 重开会话 → 卡片保持 collapsed → 重新展开后 iframe 恢复渲染（sandbox+CSP+srcdoc 一致） |
+| 非 HTML 内容 `.html` 文件 | 人工在 outputs 放置纯文本 `.html`（207B）：预览面板按扩展名走渲染分支时纯文本被安全包裹进 srcdoc body（原文可见、不执行、不白屏，仍带 CSP+sandbox）；卡片侧「文件不是有效的 HTML 页面」+ 重试入口由单测覆盖（`HtmlArtifactCard.spec.ts` 5/5） |
+
+备注：自动化视口过小导致消息流底部元素被固定输入框遮挡，测试中通过滚动使元素进入可视窗口后点击，与真实用户滚动后点击路径等价，不影响结论。
+
+### FILE-09 自包含 HTML 交互报告（第五轮 2026-09-13，CSP 始终注入修复回归）— PASS
+
+> 修复内容：`sandboxHtml.ts` 原先「文档已有 CSP meta 则跳过注入」，因 `sandbox` 属性拦不住外网请求、CSP 是唯一强制外联防线，改为**始终注入**（多 CSP 并存浏览器取最严格交集）；同轮补 `present_artifacts` 工具 docstring 显式列出 HTML 产物类型。
+
+| 步骤 | 实际结果 |
+| --- | --- |
+| 展开卡片渲染 | iframe `srcdoc` 12658 字符，标题/指标卡/柱状图/明细表正常，非白屏 |
+| 预览面板 | 第 2 个 iframe 渲染一致（allow-scripts + 12658 字符） |
+| srcdoc CSP 检查 | `hasCsp=true`、`default-src 'none'` 存在（evaluate 断言） |
+| 重新加载 | 渲染恢复正常，sandbox+CSP 保持 |
+| 单测 | `sandboxHtml.spec.ts` 7/7（含新增「自带宽松 CSP 仍注入」「注释含 CSP 字样不误判」用例）、`HtmlArtifactCard.spec.ts` 5/5；后端 `test_data_analyze_artifact_tools.py` 14/14；`npm run build-only` 通过 |
+
 ## 4. 缺陷与观察项汇总
 
 > 2026-09-05 复核：原判 FAIL 的 DEF-01/DEF-02/DEF-03 经负责人确认均为预期行为，已全部改判 PASS（DEF-01 降级为偶发观察项 OBS-08），文档不保留 FAIL 项。
@@ -358,3 +387,7 @@
 核心链路全部可用且经多角度验证：会话创建与流式问答、DSL/SQL 双模式语义查询全链路（检索→编译→执行→落盘→回读→产物交付）、SQL 只读与安全拦截（写操作/高危函数/副作用构造/limit 超限）、多语句按语句展示、多成员 results[] 协议、AI 辅助生成 SQL、Builder 组合筛选/排序/limit 编译与执行、结果分析不改 SQL、图表渲染、看板批量刷新与面板生命周期、收藏增删改、技能草稿全流程（校验/创建/文件树/版本/删除）、消息队列完整语义（入队/策略/停止保留/单条执行/编辑移除）、停止与恢复、轮次导航、Token 统计、全局 SQL 历史审计、system prompt 防泄漏。安全类用例全部通过。
 
 遗留观察项 7 个（OBS-01~07）均为低级别，其中 OBS-06（Builder 配置跨页签清空）与 OBS-07（语义指标聚合切换预览异常）建议确认产品预期后决定是否修复。多角色隔离、失败注入、大结果卸载（需超限数据集）、上下文压缩、FILE 上传（IAB 自动化不支持文件选择器）等场景需多账号与 mock 环境支持，建议在下轮专项回归中覆盖。
+
+### 第四轮补记（2026-09-13）
+
+- **FILE-09 自包含 HTML 交互报告 — PASS**（明细见「3. 用例明细」末节）：html-report 技能 → present_artifacts → 内联卡片 → 沙箱 iframe（srcdoc+CSP+sandbox）→ 预览面板渲染/源码切换 → 下载 → 刷新恢复全链路浏览器点击验证通过；配套回归：前端 `HtmlArtifactCard.spec.ts` 5/5、后端 `test_data_analyze_artifact_tools.py` 14/14。（注：html-report 技能已于 2026-09-13 移除，渲染链路不依赖技能；见第五轮记录）

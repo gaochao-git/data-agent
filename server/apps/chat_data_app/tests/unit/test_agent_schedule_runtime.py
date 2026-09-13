@@ -399,6 +399,33 @@ async def test_paused_control_freezes_plan_and_dispatch(harness):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_fixed_mode_uses_job_current_conversation(harness):
+    """模式切换防假失败：fixed 派发以任务当前会话为准，不信任触发实例快照。
+
+    场景：new_each_run 期间计划出的 pending 实例 conversation_id 为空串，
+    用户切回 fixed 后实例派发若用快照会 start_run 报「会话不存在」成批假失败。
+    """
+    plan = datetime(2026, 9, 12, 8, 59)
+    await harness.seed_job(schedule_type="once", cron_expr=None, plan_time=plan, next_trigger_time=plan)
+
+    async with harness.session_factory() as session:
+        # 触发实例携带过期空串（new_each_run 时期计划出的）
+        session.add(ChatDataAgentScheduleRun(
+            job_id="job-1", user_id=USER_ID, conversation_id="",
+            plan_time=plan, trigger_status="pending", delete_flag=0, create_time=plan,
+        ))
+
+    runtime = harness.make_runtime()
+    await runtime.tick(now=datetime(2026, 9, 12, 9, 0))
+
+    async with harness.session_factory() as session:
+        trigger = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    # 任务当前是 fixed 且绑定 conv-1：派发用任务会话，而非快照空串
+    assert trigger.trigger_status == "dispatched"
+    assert harness.started[0][0] == CONVERSATION_ID
+
+
+@pytest.mark.asyncio
 async def test_dispatch_new_each_run_creates_fresh_conversation(harness):
     plan = datetime(2026, 9, 12, 8, 59)
     await harness.seed_job(schedule_type="once", cron_expr=None, plan_time=plan, next_trigger_time=plan)

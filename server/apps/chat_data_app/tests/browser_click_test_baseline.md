@@ -214,7 +214,7 @@ ChatData
 | `BI` 可视化查询 | 通过 Builder DSL 配置并执行语义查询 | 模型/主表、维度、指标、聚合、时间粒度、过滤、字段引用、`rightExpression`、派生/复合逻辑指标拖拽使用、排序、limit/offset、预览、执行、多成员、图表和结果分析 | `QueryBuilder/` | `BI-*` |
 | `SQL` SQL 查询 | 提供普通用户可控的只读 SQL 编辑和执行 | 编辑器、格式化、AI 辅助、多语句、多成员、limit、安全校验、异步任务、停止、错误、历史、结果和收藏 | `SqlEditor.vue`、查询结果组件 | `SQL-*` |
 | `DB` 数据看板 | 组织和持续刷新查询及图表 | 个人/公共看板、面板 CRUD、SQL/Builder 配置、图表、布局、单/批量刷新、停止、权限、Spec 导入 | `DashboardPanel.vue`、`DashboardEditor.vue`、`PanelCard.vue` | `DB-*` |
-| `FILE` 会话文件与产物 | 查看、下载和继续使用会话文件及查询结果 | 上传、目录隔离、文本/结构化文件、Office/PDF、预览、源码切换、重复点击刷新、OfficeCLI、行数统计、大文件分段读取、结果文件和产物交付 | 工作区文件树、`PresentedFileArtifacts.vue`、`MarkdownFilePreview.vue` | `FILE-*` |
+| `FILE` 会话文件与产物 | 查看、下载和继续使用会话文件及查询结果 | 上传、目录隔离、文本/结构化文件、Office/PDF、自包含 HTML 报告、预览、源码切换、重复点击刷新、OfficeCLI、行数统计、大文件分段读取、结果文件和产物交付 | 工作区文件树、`PresentedFileArtifacts.vue`、`HtmlArtifactCard.vue`、`HtmlPagePreview.vue`、`MarkdownFilePreview.vue` | `FILE-*` |
 | `FAV` SQL/Builder 收藏 | 保存和复用个人 SQL 及 Builder 配置 | 新增、标题校验、列表、可见性、搜索/空态、重新执行、编辑标题、复制、删除 | `QuickQueries.vue`、`QueryFavoriteModal.vue` | `FAV-*` |
 
 ### 1.4 测试用例的分解方式
@@ -850,6 +850,13 @@ ChatData
 - 前置：会话内已有 `uploads` 上传文件和 `workspace` 下 Agent 产物各至少一个。
 - 操作：在文件树删除一个 `uploads` 文件；再上传同名文件并点击预览；尝试删除 `outputs/query_result` 下结果文件；对正被其他程序占用的文件执行删除。
 - 预期：删除走人侧删除接口且校验会话归属；`uploads` 文件可删、删除后列表与预览缓存同步作废，重传同名文件预览显示新内容（不读回旧缓存）；`outputs/query_result` 审计目录拒绝删除；物理删除失败（文件被占用）时接口返回失败提示且上传记录保留，重试可删除；Agent 工具不受影响（模型工具仍无 uploads 写权限）。
+
+#### FILE-09 自包含 HTML 交互报告
+
+- 角色：`USER_A`
+- 前置：会话内 Agent 已生成自包含 HTML（写入 `outputs/`，样式/脚本/数据全内联、无外部 URL 引用）并调用 `present_artifacts` 呈现。
+- 操作：查看消息流内「交互 HTML 页面」卡片（文件名 + 展开提示）；点击卡片头部展开；在 iframe 中查看标题、指标卡与纯 CSS 图表；点击「预览」在右侧预览面板打开；切换「源码/渲染」视图；下载；刷新浏览器与切换历史会话后重新展开；另取一个非 HTML 内容的 `.html` 文件场景。
+- 预期：HTML 产物以内联卡片呈现且不重复出现在通用文件卡列表；展开后 iframe 带 `sandbox="allow-scripts"` 且通过 `srcdoc` 渲染，无外链资源加载（内网无外网也应正常显示）；预览面板渲染同一页面且支持渲染/源码切换；下载内容与原文件一致；历史会话恢复后卡片可重新展开渲染；非 HTML 内容不进入 iframe，显示「文件不是有效的 HTML 页面」与重试入口，不白屏。
 
 ### 4.7 上下文、消息和会话历史
 
