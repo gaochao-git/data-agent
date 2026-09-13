@@ -1508,7 +1508,6 @@ async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch)
     assert payload["payload"]["results"][0]["data"][0]["sales"] == 120
     assert payload["meta"] == {
         "query_mode": "dsl",
-        "confidence": 0.9,
     }
 
 

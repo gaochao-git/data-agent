@@ -13,7 +13,7 @@ import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryS
 
 /**
  * 组件解析的单成员查询结果 = 共享工具结果形状（types/query.ts 的
- * ToolQueryResult，含 agent 工具注入的 query_mode/confidence 等扩展字段）。
+ * ToolQueryResult，含 agent 工具注入的 query_mode 等扩展字段）。
  */
 type AsyncQueryResultData = ToolQueryResult
 
@@ -228,18 +228,16 @@ const formatExecutionSeconds = (value?: number | null): string => {
   return `${(ms / 1000).toFixed(2)}秒`
 }
 
-const confidenceText = computed(() => {
-  const value = activeResult.value?.confidence
-  if (value === null || value === undefined || value === '') return ''
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return String(value)
-  const percent = numeric <= 1 ? numeric * 100 : numeric
-  return `${Math.round(percent)}%`
+const queryModeBadge = computed(() => {
+  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
+  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL'
+  if (mode === 'sql' || mode === 'nl2sql') return 'SQL'
+  return ''
 })
 
 const queryModeTitle = computed(() => {
   const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
-  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL 模式'
+  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL 模式（语义层编译）'
   if (mode === 'sql' || mode === 'nl2sql') return 'SQL 模式'
   return ''
 })
@@ -492,11 +490,11 @@ const getDimensionKey = (dim: string | { name: string }): string => {
             {{ semanticConfigLabel }}
           </span>
           <span
-            v-if="confidenceText"
+            v-if="queryModeBadge"
             class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded"
             :title="queryModeTitle"
           >
-            置信度 {{ confidenceText }}
+            {{ queryModeBadge }}
           </span>
           <span v-if="isTruncated" class="shrink-0 whitespace-nowrap text-xs text-amber-600">
             已按前端上限展示前 {{ frontMaxRows }} 条

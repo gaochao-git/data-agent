@@ -48,7 +48,6 @@ def _query_tool_message(query_result: dict) -> ToolMessage:
         content=tool_results.build_internal_query_result(
             query_result,
             query_mode="dsl2sql",
-            confidence=0.9,
         ),
         name="semantic_query_tool",
         tool_call_id="call_query",
@@ -204,7 +203,6 @@ async def test_query_result_storage_failure_returns_structured_delivery_error(mo
         "error": "查询已执行，但结果保存失败，当前无法展示或继续分析",
         "meta": {
             "query_mode": "dsl2sql",
-            "confidence": 0.9,
             "result_persisted": False,
         },
     }

@@ -775,7 +775,6 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
                 "total_count": 1,
             },
             query_mode="dsl2sql",
-            confidence=0.9,
         )
 
     model = _ToolCallingFakeModel(responses=[

@@ -81,7 +81,6 @@ async def _finalize_query_result(
     status = query_result_status(query_result)
     public_meta = {
         "query_mode": str(meta.get("query_mode") or ""),
-        "confidence": meta.get("confidence"),
     }
     public_meta = {key: value for key, value in public_meta.items() if value is not None and value != ""}
     if not query_result_succeeded(query_result):

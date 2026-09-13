@@ -167,7 +167,6 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
         ...item,
         sql: item.sql || result.sql,
         query_mode: item.query_mode || result.query_mode,
-        confidence: item.confidence ?? result.confidence,
         semantic_config_id: item.semantic_config_id || result.semantic_config_id,
         semantic_config_name: item.semantic_config_name || result.semantic_config_name,
       }),

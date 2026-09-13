@@ -51,7 +51,6 @@ export type ToolQueryResult = Omit<MemberQueryResult, 'columns' | 'data' | 'tota
   data?: Record<string, unknown>[]
   total_count?: number
   query_mode?: string
-  confidence?: number | string
   semantic_config_id?: string
   semantic_config_name?: string
 }

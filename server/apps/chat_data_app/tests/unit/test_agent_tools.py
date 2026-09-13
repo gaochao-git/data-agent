@@ -565,7 +565,7 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     assert success_payload["success"] is True
     assert success_payload["data"] == [{"id": 1}]
     assert success_payload["sql"] == "select 1"
-    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl", "confidence": 0.9}
+    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl"}
     assert json_string_success_payload["success"] is True
     failed_payload = _internal_query_payload(failed)
     assert failed_payload["success"] is False
@@ -990,7 +990,6 @@ def test_semantic_query_tool_executes_top_level_sql_in_sql_mode(monkeypatch):
         "operator_name": "测试用户",
     }
     assert _query_result_payload(result)["meta"]["query_mode"] == "sql"
-    assert _query_result_payload(result)["meta"]["confidence"] == 0.6
     assert payload["sql"] == "with t as (select 1 as v) select * from t"
 
 

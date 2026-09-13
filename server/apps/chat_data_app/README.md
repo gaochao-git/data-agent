@@ -153,7 +153,6 @@ index.vue
   "error": null,
   "meta": {
     "query_mode": "dsl",
-    "confidence": 0.9,
     "result_id": null
   }
 }

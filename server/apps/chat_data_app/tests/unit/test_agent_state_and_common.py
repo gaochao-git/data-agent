@@ -20,7 +20,6 @@ def test_internal_query_result_protocol_is_not_public_envelope():
     content = tool_results.build_internal_query_result(
         {"status": "succeeded", "rows": []},
         query_mode="dsl2sql",
-        confidence=0.9,
     )
 
     payload = tool_results.parse_internal_tool_result(content)
@@ -29,7 +28,7 @@ def test_internal_query_result_protocol_is_not_public_envelope():
     assert payload["type"] == tool_results.INTERNAL_TOOL_RESULT_TYPE
     assert payload["kind"] == tool_results.QUERY_RESULT_TYPE
     assert payload["payload"] == {"status": "succeeded", "rows": []}
-    assert payload["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9}
+    assert payload["meta"] == {"query_mode": "dsl2sql"}
 
 
 def test_agent_runtime_helpers_build_shared_agent_bits():

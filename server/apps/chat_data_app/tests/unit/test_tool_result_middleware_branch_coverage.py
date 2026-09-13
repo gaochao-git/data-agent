@@ -52,7 +52,7 @@ def _workspace_request(monkeypatch, tmp_path):
 def _query_tool_message(query_result: dict) -> ToolMessage:
     return ToolMessage(
         content=tool_results.build_internal_query_result(
-            query_result, query_mode="dsl2sql", confidence=0.9
+            query_result, query_mode="dsl2sql"
         ),
         name="semantic_query_tool",
         tool_call_id="call_query",

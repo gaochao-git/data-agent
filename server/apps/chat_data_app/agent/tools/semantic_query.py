@@ -46,7 +46,6 @@ class _ResolvedToolContext:
 class _CompiledToolQuery:
     sql: str
     query_mode: str
-    confidence: float
 
 
 def _latest_human_query(messages: list[Any] | None) -> str:
@@ -185,7 +184,6 @@ async def _compile_tool_query(
     context: _ResolvedToolContext,
 ) -> _CompiledToolQuery:
     query_mode = "sql" if not request.has_dsl else "dsl"
-    confidence = 0.6 if not request.has_dsl else 0.9
     config = await _resolve_semantic_query_config(
         context.state,
         context.datasource_id,
@@ -194,7 +192,7 @@ async def _compile_tool_query(
     if not config:
         raise ValueError(f"未找到可用指标集 {context.semantic_config_id or '-'}")
     if not request.has_dsl:
-        return _CompiledToolQuery(sql=request.sql, query_mode=query_mode, confidence=confidence)
+        return _CompiledToolQuery(sql=request.sql, query_mode=query_mode)
 
     compile_result = compile_semantic_ai_dsl(
         config,
@@ -205,7 +203,7 @@ async def _compile_tool_query(
     sql = str(compile_result.get("sql") or "").strip()
     if not sql:
         raise ValueError("DSL2SQL 未生成 SQL")
-    return _CompiledToolQuery(sql=sql, query_mode=query_mode, confidence=confidence)
+    return _CompiledToolQuery(sql=sql, query_mode=query_mode)
 
 
 async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToolQuery) -> dict:
@@ -230,7 +228,6 @@ async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToo
 
     query_result["sql"] = query_result.get("sql") or query.sql
     query_result["query_mode"] = query.query_mode
-    query_result["confidence"] = query.confidence
     return query_result
 
 
@@ -288,7 +285,6 @@ async def _run_semantic_query_tool(
     return build_internal_query_result(
         query_result,
         query_mode=query.query_mode,
-        confidence=query.confidence,
     )
 
 
