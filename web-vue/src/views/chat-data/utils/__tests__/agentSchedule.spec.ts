@@ -3,7 +3,11 @@ import {
   buildRuntimeOptionsPatch,
   buildSchedulePatch,
   buildThinkingKeys,
-  createScheduleBaseline
+  createScheduleBaseline,
+  cronToText,
+  parseCronToPreset,
+  schedulePresetPreview,
+  weeklyDayShortLabel
 } from '../agentSchedule'
 
 describe('buildThinkingKeys', () => {
@@ -88,5 +92,109 @@ describe('buildSchedulePatch', () => {
     }, { ...baseline, effectiveEndTime: '2026-10-01 00:00:00' })).toEqual({
       effective_end_time: null
     })
+  })
+})
+
+describe('cronToText', () => {
+  it('每小时档（分 * * * *）不再误显示为每天，分钟补齐两位', () => {
+    expect(cronToText('30 * * * *')).toBe('每小时的第 30 分')
+    expect(cronToText('5 * * * *')).toBe('每小时的第 05 分')
+  })
+
+  it('每天与每月文案', () => {
+    expect(cronToText('0 9 * * *')).toBe('每天 09:00')
+    expect(cronToText('0 9 1 * *')).toBe('每月 1 号 09:00')
+  })
+
+  it('周几支持逗号多选列表', () => {
+    expect(cronToText('0 9 * * 1,3,5')).toBe('每周一、周三、周五 09:00')
+    expect(cronToText('0 9 * * 0')).toBe('每周日 09:00')
+  })
+
+  it('区间/步进等手工写法原样展示', () => {
+    expect(cronToText('*/10 * * * *')).toBe('每小时第 10 分')
+    expect(cronToText('0 9 * * 1-5')).toBe('每周1-5 09:00')
+  })
+})
+
+describe('parseCronToPreset', () => {
+  it('预设档位生成的 cron 能完整反解析回去（与 buildCronExpr 一一对应）', () => {
+    expect(parseCronToPreset('30 * * * *')).toEqual({
+      cronPreset: 'hourly', hourlyMinute: 30, dailyTime: '09:00', weeklyDays: [1], monthlyDay: 1
+    })
+    expect(parseCronToPreset('0 9 * * *')).toEqual({
+      cronPreset: 'daily', hourlyMinute: 0, dailyTime: '09:00', weeklyDays: [1], monthlyDay: 1
+    })
+    expect(parseCronToPreset('5 9 * * 1,3,5')).toEqual({
+      cronPreset: 'weekly', hourlyMinute: 0, dailyTime: '09:05', weeklyDays: [1, 3, 5], monthlyDay: 1
+    })
+    expect(parseCronToPreset('0 9 15 * *')).toEqual({
+      cronPreset: 'monthly', hourlyMinute: 0, dailyTime: '09:00', weeklyDays: [1], monthlyDay: 15
+    })
+  })
+
+  it('反解析往返无损：解析再重建得到同一 cron（编辑不改调度不产生补丁的前提）', () => {
+    for (const expr of ['30 * * * *', '0 9 * * *', '5 9 * * 1,3,5', '0 9 15 * *']) {
+      const parsed = parseCronToPreset(expr)
+      expect(parsed).not.toBeNull()
+      const { cronPreset, hourlyMinute, dailyTime, weeklyDays, monthlyDay } = parsed!
+      const [hour, minute] = dailyTime.split(':').map(Number)
+      const rebuilt = cronPreset === 'hourly'
+        ? `${hourlyMinute % 60} * * * *`
+        : cronPreset === 'daily'
+          ? `${minute} ${hour} * * *`
+          : cronPreset === 'weekly'
+            ? `${minute} ${hour} * * ${[...weeklyDays].sort((a, b) => a - b).join(',')}`
+            : `${minute} ${hour} ${monthlyDay} * *`
+      expect(rebuilt).toBe(expr)
+    }
+  })
+
+  it('区间/步进/越界等手工写法返回 null（回落自定义档位）', () => {
+    expect(parseCronToPreset('*/10 * * * *')).toBeNull()
+    expect(parseCronToPreset('0 9 * * 1-5')).toBeNull()
+    expect(parseCronToPreset('0 9 1 * 1')).toBeNull()
+    expect(parseCronToPreset('60 9 * * *')).toBeNull()
+    expect(parseCronToPreset('0 9 *')).toBeNull()
+    expect(parseCronToPreset('')).toBeNull()
+  })
+})
+
+describe('schedulePresetPreview', () => {
+  const base = {
+    hourlyMinute: 0,
+    dailyTime: '09:00',
+    weeklyDays: [1] as number[],
+    monthlyDay: 1,
+    cronExpr: '',
+    planTime: '' as string | Date
+  }
+
+  it('各档位输出自然语言预览', () => {
+    expect(schedulePresetPreview({ ...base, cronPreset: 'hourly', hourlyMinute: 30 })).toBe('每小时的第 30 分')
+    expect(schedulePresetPreview({ ...base, cronPreset: 'daily' })).toBe('每天 09:00')
+    expect(schedulePresetPreview({ ...base, cronPreset: 'weekly', weeklyDays: [5, 1, 3] })).toBe('每周一、周三、周五 09:00')
+    expect(schedulePresetPreview({ ...base, cronPreset: 'monthly', monthlyDay: 15 })).toBe('每月 15 号 09:00')
+    expect(schedulePresetPreview({ ...base, cronPreset: 'once', planTime: '2026-09-20 14:30' })).toBe('单次执行 · 2026-09-20 14:30')
+  })
+
+  it('每周未选执行日给出提示语', () => {
+    expect(schedulePresetPreview({ ...base, cronPreset: 'weekly', weeklyDays: [] })).toBe('请选择执行日')
+  })
+
+  it('自定义档位复用 cronToText；单次的 Date 值按本地时间格式化', () => {
+    expect(schedulePresetPreview({ ...base, cronPreset: 'custom', cronExpr: '0 9 * * 1-5' })).toBe('每周1-5 09:00')
+    expect(schedulePresetPreview({ ...base, cronPreset: 'once', planTime: new Date(2026, 8, 20, 9, 5) }))
+      .toBe('单次执行 · 2026-09-20 09:05')
+  })
+})
+
+describe('weeklyDayShortLabel', () => {
+  it('周几值映射为单字短标签，未知值原样回退', () => {
+    expect(weeklyDayShortLabel(1)).toBe('一')
+    expect(weeklyDayShortLabel(6)).toBe('六')
+    expect(weeklyDayShortLabel(0)).toBe('日')
+    expect(weeklyDayShortLabel('3')).toBe('三')
+    expect(weeklyDayShortLabel(9)).toBe('9')
   })
 })

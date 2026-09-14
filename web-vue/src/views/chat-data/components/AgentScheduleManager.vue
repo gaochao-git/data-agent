@@ -26,9 +26,12 @@ import {
   buildSchedulePatch,
   buildThinkingKeys,
   createScheduleBaseline,
-  scheduleText
+  parseCronToPreset,
+  schedulePresetPreview,
+  scheduleText,
+  weeklyDayShortLabel
 } from '../utils/agentSchedule'
-import type { ScheduleFormBaseline } from '../utils/agentSchedule'
+import type { ScheduleCronPreset, ScheduleFormBaseline } from '../utils/agentSchedule'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -62,13 +65,13 @@ const form = ref({
   conversationId: '',
   modelId: '',
   thinkingEffort: '',
-  scheduleType: 'cron' as 'cron' | 'once',
-  cronPreset: 'daily' as 'hourly' | 'daily' | 'weekly' | 'custom',
+  cronPreset: 'daily' as ScheduleCronPreset,
   hourlyMinute: 0,
   dailyTime: '09:00',
-  weeklyDay: 1,
+  weeklyDays: [1] as number[],
+  monthlyDay: 1,
   cronExpr: '0 9 * * *',
-  planTime: '',
+  planTime: '' as string | Date,
   effectiveEndTime: ''
 })
 
@@ -207,11 +210,11 @@ const resetForm = () => {
     conversationId: props.conversationId || '',
     modelId: '',
     thinkingEffort: '',
-    scheduleType: 'cron',
     cronPreset: 'daily',
     hourlyMinute: 0,
     dailyTime: '09:00',
-    weeklyDay: 1,
+    weeklyDays: [1],
+    monthlyDay: 1,
     cronExpr: '0 9 * * *',
     planTime: '',
     effectiveEndTime: ''
@@ -249,8 +252,9 @@ const resolveThinkingEffort = (jobOptions: Record<string, unknown>): string => {
   return ''
 }
 
-/** 编辑回显：任务字段 → 表单（模型与推理等级来自任务运行配置） */
+/** 编辑回显：任务字段 → 表单（cron 能反解析回预设档位时按结构化控件展示，否则回落自定义） */
 const applyJobToForm = (job: AgentScheduleItem) => {
+  const parsed = job.schedule_type === 'cron' ? parseCronToPreset(job.cron_expr || '') : null
   form.value = {
     title: job.title,
     prompt: job.prompt,
@@ -258,11 +262,11 @@ const applyJobToForm = (job: AgentScheduleItem) => {
     conversationId: job.conversation_id || '',
     modelId: '',
     thinkingEffort: '',
-    scheduleType: job.schedule_type,
-    cronPreset: 'custom',
-    hourlyMinute: 0,
-    dailyTime: '09:00',
-    weeklyDay: 1,
+    cronPreset: parsed?.cronPreset || (job.schedule_type === 'once' ? 'once' : 'custom'),
+    hourlyMinute: parsed?.hourlyMinute ?? 0,
+    dailyTime: parsed?.dailyTime || '09:00',
+    weeklyDays: parsed?.weeklyDays || [1],
+    monthlyDay: parsed?.monthlyDay ?? 1,
     cronExpr: job.cron_expr || '0 9 * * *',
     planTime: job.plan_time || '',
     effectiveEndTime: job.effective_end_time || ''
@@ -298,18 +302,27 @@ const openEdit = (job: AgentScheduleItem) => {
 }
 
 const buildCronExpr = (): string => {
-  if (form.value.cronPreset !== 'custom') {
-    if (form.value.cronPreset === 'hourly') {
-      return `${Number(form.value.hourlyMinute) % 60} * * * *`
-    }
+  if (form.value.cronPreset === 'hourly') {
+    return `${Number(form.value.hourlyMinute) % 60} * * * *`
+  }
+  if (form.value.cronPreset === 'weekly' || form.value.cronPreset === 'monthly') {
     const [hour = '', minute = ''] = form.value.dailyTime.split(':')
-    if (form.value.cronPreset === 'daily') {
-      return `${Number(minute)} ${Number(hour)} * * *`
+    if (form.value.cronPreset === 'weekly') {
+      // 周日(0)排末尾，与预览文案「周一→周日」顺序一致（cron 语义不受顺序影响）
+      const days = [...new Set(form.value.weeklyDays)].sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b))
+      return `${Number(minute)} ${Number(hour)} * * ${days.join(',')}`
     }
-    return `${Number(minute)} ${Number(hour)} * * ${form.value.weeklyDay}`
+    return `${Number(minute)} ${Number(hour)} ${Number(form.value.monthlyDay)} * *`
+  }
+  if (form.value.cronPreset === 'daily') {
+    const [hour = '', minute = ''] = form.value.dailyTime.split(':')
+    return `${Number(minute)} ${Number(hour)} * * *`
   }
   return form.value.cronExpr.trim()
 }
+
+// 行内预览：把当前调度选择翻译成自然语言，供用户确认语义
+const schedulePreviewText = computed(() => schedulePresetPreview(form.value))
 
 const localDateTime = (value: string | Date | null | undefined): string | null => {
   if (!value) return null
@@ -337,10 +350,11 @@ const submitJob = async () => {
   }
   // 新建与编辑共用一份 payload；编辑只下发与打开弹窗时基线不同的字段，
   // 未改动的调度/运行配置不提交，避免用表单默认值覆盖任务里其它配置
+  const scheduleType: 'cron' | 'once' = form.value.cronPreset === 'once' ? 'once' : 'cron'
   const payload: Partial<AgentSchedulePayload> & Pick<AgentSchedulePayload, 'title' | 'prompt' | 'schedule_type'> = {
     title,
     prompt,
-    schedule_type: form.value.scheduleType,
+    schedule_type: scheduleType,
     conversation_mode: form.value.conversationMode
   }
   if (form.value.conversationMode === 'fixed') {
@@ -350,12 +364,16 @@ const submitJob = async () => {
     }
     payload.conversation_id = form.value.conversationId
   }
-  if (form.value.scheduleType === 'once' && !localDateTime(form.value.planTime)) {
+  if (form.value.cronPreset === 'weekly' && !form.value.weeklyDays.length) {
+    ElMessage.warning('请至少选择一个执行日')
+    return
+  }
+  if (scheduleType === 'once' && !localDateTime(form.value.planTime)) {
     ElMessage.warning('请选择单次执行时间')
     return
   }
   const schedulePatch = buildSchedulePatch({
-    scheduleType: form.value.scheduleType,
+    scheduleType,
     cronExpr: buildCronExpr(),
     planTime: localDateTime(form.value.planTime) || '',
     effectiveEndTime: localDateTime(form.value.effectiveEndTime) || ''
@@ -567,7 +585,7 @@ defineExpose({ ensureLoaded })
     <el-dialog
       v-model="editorVisible"
       :title="editingJobId ? '编辑定时任务' : '新建定时任务'"
-      width="min(520px, 92vw)"
+      width="min(640px, 92vw)"
       :append-to-body="true"
     >
       <div class="flex flex-col gap-3">
@@ -673,48 +691,55 @@ defineExpose({ ensureLoaded })
           </div>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-slate-600">调度<span class="ml-1 font-normal text-slate-400">（按服务器时区执行）</span></label>
-          <el-radio-group v-model="form.scheduleType" size="small">
-            <el-radio-button value="cron">周期执行</el-radio-button>
-            <el-radio-button value="once">单次执行</el-radio-button>
-          </el-radio-group>
-        </div>
-        <template v-if="form.scheduleType === 'cron'">
+          <label class="mb-1 block text-xs font-medium text-slate-600">调度</label>
           <div class="flex flex-wrap items-center gap-2">
-            <el-select v-model="form.cronPreset" size="small" class="w-28">
+            <el-select v-model="form.cronPreset" size="small" class="!w-28">
               <el-option label="每小时" value="hourly" />
               <el-option label="每天" value="daily" />
               <el-option label="每周" value="weekly" />
+              <el-option label="每月" value="monthly" />
+              <el-option label="单次执行" value="once" />
               <el-option label="自定义" value="custom" />
             </el-select>
             <template v-if="form.cronPreset === 'hourly'">
-              <span class="text-xs text-slate-500">每小时的第</span>
-              <el-input-number v-model="form.hourlyMinute" :min="0" :max="59" size="small" controls-position="right" class="w-20" />
-              <span class="text-xs text-slate-500">分</span>
-            </template>
-            <template v-else-if="form.cronPreset === 'daily'">
-              <el-time-picker v-model="form.dailyTime" format="HH:mm" value-format="HH:mm" placeholder="时间" size="small" class="w-28" />
+              <span class="text-xs text-slate-500">第</span>
+              <el-select v-model="form.hourlyMinute" size="small" class="!w-20">
+                <el-option v-for="minute in 60" :key="minute" :label="String(minute - 1).padStart(2, '0')" :value="minute - 1" />
+              </el-select>
+              <span class="text-xs text-slate-500">分钟</span>
             </template>
             <template v-else-if="form.cronPreset === 'weekly'">
-              <el-select v-model="form.weeklyDay" size="small" class="w-24">
+              <el-select v-model="form.weeklyDays" multiple size="small" class="!w-96" placeholder="选择周几">
+                <template #label="{ value }">{{ weeklyDayShortLabel(value) }}</template>
                 <el-option v-for="option in WEEKLY_DAY_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
-              <el-time-picker v-model="form.dailyTime" format="HH:mm" value-format="HH:mm" placeholder="时间" size="small" class="w-28" />
+              <el-time-picker v-model="form.dailyTime" format="HH:mm" value-format="HH:mm" placeholder="时间" size="small" class="!w-24" />
+            </template>
+            <template v-else-if="form.cronPreset === 'monthly'">
+              <el-select v-model="form.monthlyDay" size="small" class="!w-24">
+                <el-option v-for="day in 31" :key="day" :label="`${day} 号`" :value="day" />
+              </el-select>
+              <el-time-picker v-model="form.dailyTime" format="HH:mm" value-format="HH:mm" placeholder="时间" size="small" class="!w-24" />
+            </template>
+            <template v-else-if="form.cronPreset === 'daily'">
+              <el-time-picker v-model="form.dailyTime" format="HH:mm" value-format="HH:mm" placeholder="时间" size="small" class="!w-28" />
+            </template>
+            <template v-else-if="form.cronPreset === 'once'">
+              <el-date-picker
+                v-model="form.planTime"
+                type="datetime"
+                format="YYYY-MM-DD HH:mm"
+                placeholder="选择执行时间"
+                size="small"
+                class="!w-56"
+              />
             </template>
             <template v-else>
-              <el-input v-model="form.cronExpr" size="small" class="w-48" placeholder="分 时 日 月 周，如 0 9 * * 1-5" />
+              <el-input v-model="form.cronExpr" size="small" class="!w-48" placeholder="分 时 日 月 周，如 0 9 * * 1-5" />
             </template>
+            <span v-if="schedulePreviewText" class="text-xs text-slate-400">{{ schedulePreviewText }}</span>
           </div>
-        </template>
-        <template v-else>
-          <el-date-picker
-            v-model="form.planTime"
-            type="datetime"
-            format="YYYY-MM-DD HH:mm"
-            placeholder="选择执行时间"
-            class="!w-full"
-          />
-        </template>
+        </div>
         <div>
           <label class="mb-1 block text-xs text-slate-500">有效期至（可选，留空表示长期有效）</label>
           <el-date-picker
