@@ -16,7 +16,11 @@ from apps.chat_data_app.daos.skill_dao import SkillDao
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
-SKILL_NAME_PATTERN = re.compile(r"^[a-z]+(?:-[a-z]+)+$")
+# 技能名口径对齐 Agent Skills 规范：仅小写字母、数字与连字符，不得以连字符开头/结尾，
+# 不得出现连续连字符，且必须与父目录名一致。规范**不要求**必须含连字符（`dashboard` 这类
+# 单词名合法），也**不禁止**数字（`pdf2x` 合法）——早前版本强制「至少一个中划线」并禁用数字，
+# 比规范更严且与前端校验不一致（前端放行 `sales`、后端拒绝），故改为 `*` 并放开 0-9。
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_FIXED_DIRS = ("references", "assets", "scripts")
 
 SKILL_ALIASES = {
@@ -308,7 +312,7 @@ def _validate_skill_payload(payload: Dict[str, Any]) -> None:
     skill_name = str(payload.get("skill_name") or payload.get("name") or "").strip()
     skill_title = str(payload.get("skill_title") or payload.get("title") or "").strip()
     if not SKILL_NAME_PATTERN.match(skill_name):
-        raise ValueError("技能名称必须使用小写字母和中划线，格式为 xxx-xxx，至少包含一个中划线，不支持数字、下划线、空格或中文")
+        raise ValueError("技能名称只允许小写字母、数字和中划线，不能以中划线开头或结尾，也不能出现连续中划线")
     if len(skill_name) < 3 or len(skill_name) > 64:
         raise ValueError("技能名称长度必须在 3-64 之间")
     if not skill_title:

@@ -179,22 +179,38 @@ def test_skill_service_rejects_missing_skill_name():
             "content": "# 示例技能",
         })
     except ValueError as exc:
-        assert str(exc) == "技能名称必须使用小写字母和中划线，格式为 xxx-xxx，至少包含一个中划线，不支持数字、下划线、空格或中文"
+        assert str(exc) == "技能名称只允许小写字母、数字和中划线，不能以中划线开头或结尾，也不能出现连续中划线"
     else:
         raise AssertionError("missing skill_name should be rejected")
 
 
-def test_skill_service_rejects_single_segment_skill_name():
-    try:
-        skill_service_module._validate_skill_payload({
-            "skill_name": "sales",
-            "skill_title": "销售分析",
-            "content": "# 销售分析",
-        })
-    except ValueError as exc:
-        assert str(exc) == "技能名称必须使用小写字母和中划线，格式为 xxx-xxx，至少包含一个中划线，不支持数字、下划线、空格或中文"
-    else:
-        raise AssertionError("single segment skill_name should be rejected")
+def test_skill_service_accepts_single_segment_skill_name():
+    """Agent Skills 规范不要求必须含中划线，单个单词是合法技能名（早前版本会误拒）。"""
+    skill_service_module._validate_skill_payload({
+        "skill_name": "dashboard",
+        "skill_title": "看板生成",
+        "content": "# 看板生成",
+    })
+
+
+def test_skill_service_accepts_digits_in_skill_name():
+    """规范允许 0-9（`a-z`、`0-9`、`-`），早前版本会误拒含数字的名字。"""
+    skill_service_module._validate_skill_payload({
+        "skill_name": "pdf2x",
+        "skill_title": "PDF 转换",
+        "content": "# PDF 转换",
+    })
+
+
+def test_skill_service_rejects_malformed_skill_name():
+    """放宽后仍须拒绝真正非法的名字：首尾中划线、连续中划线、下划线、空格、中文、大写。"""
+    for bad in ("-sales", "sales-", "sales--analysis", "sales_analysis", "sales analysis", "销售分析", "Sales"):
+        with pytest.raises(ValueError, match="技能名称"):
+            skill_service_module._validate_skill_payload({
+                "skill_name": bad,
+                "skill_title": "销售分析",
+                "content": "# 销售分析",
+            })
 
 
 def test_skill_service_accepts_hyphenated_letters_skill_name():
@@ -1265,8 +1281,11 @@ def test_skill_service_additional_helper_branches(tmp_path, monkeypatch):
     assert not cleanup_dir.exists()
 
     async def run_async_check():
+        # 覆盖「循环耗尽」分支，需要一个在正则下**仍非法**的源名：下划线不在允许字符集内，
+        # 702 次候选名（`sales_v2-copy`、`sales_v2-copy-a` …）会全部被拒。
+        # 早前这里传纯数字 "1"；放宽后数字已合法，那个输入不再触发该分支。
         with pytest.raises(ValueError, match="无法生成可用的复制技能名称"):
-            await service._next_copy_skill_name_async("1", "u1")
+            await service._next_copy_skill_name_async("sales_v2", "u1")
 
     asyncio.run(run_async_check())
 

@@ -491,8 +491,12 @@ const handleCreate = async () => {
     ElMessage.warning('请填写标题')
     return
   }
-  if (!editingSkillId.value && !/^[a-z][a-z-]{1,62}[a-z]$/.test(form.skill_name.trim())) {
-    ElMessage.warning('技能名称仅支持小写字母和中划线，需以字母开头和结尾')
+  if (!editingSkillId.value && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(form.skill_name.trim())) {
+    ElMessage.warning('技能名称仅支持小写字母、数字和中划线，不能以中划线开头、结尾或连续出现')
+    return
+  }
+  if (!editingSkillId.value && (form.skill_name.trim().length < 3 || form.skill_name.trim().length > 64)) {
+    ElMessage.warning('技能名称长度需在 3-64 之间')
     return
   }
   saving.value = true

@@ -15,7 +15,9 @@ except Exception:  # pragma: no cover
 
 
 ALLOWED_ROOT_ITEMS = {"SKILL.md", "references", "scripts", "assets"}
-SKILL_NAME_PATTERN = re.compile(r"^[a-z]+(?:-[a-z]+)+$")
+# 与 skill_service.SKILL_NAME_PATTERN 同一口径（Agent Skills 规范）：小写字母/数字/连字符，
+# 不以连字符开头或结尾、无连续连字符；不强制必须含连字符，也不禁用数字。
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def _load_frontmatter(skill_md: Path) -> tuple[dict, str]:
@@ -70,7 +72,10 @@ def _validate_frontmatter(metadata: dict, skill_dir: Path) -> list[str]:
     description = str(metadata.get("description") or "").strip()
 
     if not SKILL_NAME_PATTERN.match(name):
-        errors.append("name must be xxx-xxx style: lowercase letters separated by hyphens, at least one hyphen, no digits")
+        errors.append(
+            "name must use lowercase letters, digits and hyphens only, "
+            "without leading/trailing or consecutive hyphens"
+        )
     if len(name) < 3 or len(name) > 64:
         errors.append("name length must be 3-64")
     if name and name != skill_dir.name:

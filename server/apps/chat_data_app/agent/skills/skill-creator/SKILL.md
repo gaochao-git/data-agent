@@ -21,7 +21,7 @@ metadata:
 用户技能必须遵守固定目录结构：
 
 ```text
-xxx-xxx/
+<skill-name>/
 ├── SKILL.md
 ├── references/
 ├── scripts/
@@ -39,28 +39,32 @@ xxx-xxx/
 
 ## 命名规则
 
-- 技能英文名必须是 `xxx-xxx` 这种中划线分隔格式，至少包含一个中划线。
-- 每一段只能使用小写字母。
+- 技能英文名只允许小写字母、数字和中划线（对齐 Agent Skills 规范：`a-z`、`0-9`、`-`）。
+- 不以中划线开头或结尾，也不出现连续中划线。
 - 长度 3 到 64。
-- 不使用中文、数字、下划线、空格、首尾中划线或连续中划线。
+- **单个单词合法，不强制用中划线分隔**；多个单词时用中划线连接更易读。
+- 不使用中文、下划线、空格。
 - 技能名对应技能目录名。
 
 示例：
 
 ```text
+dashboard
 sales-analysis
 customer-profile
-risk-monitoring
+pdf2x
 ```
 
 非法示例：
 
 ```text
-sales
-sales1-analysis
+Sales
 sales_analysis
 销售分析
+-sales
+sales-
 sales--analysis
+sales analysis
 ```
 
 ## 初始化规则
@@ -169,7 +173,7 @@ metadata:
 
 - `SKILL.md` frontmatter 合法。
 - `name` 与目录名一致。
-- `name` 是 `xxx-xxx` 格式，至少包含一个中划线，每段只含小写字母。
+- `name` 只含小写字母、数字和中划线，不以中划线开头/结尾、无连续中划线（单词名合法）。
 - `references/`、`scripts/`、`assets/` 三个目录都存在。
 - `description` 能清楚说明触发场景。
 - 正文不包含无关长篇背景。
@@ -198,7 +202,7 @@ python /mnt/skills/skill-creator/scripts/quick_validate.py <skill-directory>
 
 - 禁止生成不受平台管理的任意目录结构。
 - 禁止只生成 `SKILL.md` 而不初始化固定目录结构。
-- 禁止生成单段技能名，例如 `sales`；必须使用 `xxx-xxx` 格式。
+- 禁止使用非法技能名：含大写、下划线、空格、中文，或以中划线开头/结尾、出现连续中划线。单词名（如 `sales`）合法。
 - 禁止绕过用户权限写系统技能目录。
 - 禁止把一次性分析结果伪装成技能。
 - 禁止在技能中硬编码真实密钥、账号、个人敏感信息或生产数据。
