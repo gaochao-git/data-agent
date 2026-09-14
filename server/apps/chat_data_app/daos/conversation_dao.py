@@ -212,37 +212,6 @@ class ConversationDao:
             )
             return list(result.scalars().all())
 
-    async def sync_thread(
-        self,
-        *,
-        user_id: str,
-        thread_id: str,
-        agent_id: str,
-        title: Optional[str],
-        is_new: bool,
-        now: datetime,
-    ) -> None:
-        async with self._session_context() as session:
-            if is_new:
-                result = await session.execute(select(UserThread).where(UserThread.thread_id == thread_id))
-                if result.scalar_one_or_none():
-                    return
-                session.add(UserThread(
-                    user_id=user_id or "system",
-                    thread_id=thread_id,
-                    thread_title=title or "新会话",
-                    agent_id=agent_id,
-                    delete_flag=0,
-                    create_time=now,
-                    update_time=now,
-                    create_by=user_id or "system",
-                ))
-                return
-            values = {"update_time": now, "update_by": user_id}
-            if title:
-                values["thread_title"] = title
-            await session.execute(sa_update(UserThread).where(UserThread.thread_id == thread_id).values(**values))
-
     async def update_title(self, *, conversation_id: str, title: str, user_id: Optional[str]) -> bool:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))

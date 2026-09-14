@@ -310,27 +310,6 @@ async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None
     return all_conversations[:limit]
 
 
-async def sync_thread_to_db(
-    user_id: str,
-    thread_id: str,
-    agent_id: str,
-    title: Optional[str] = None,
-    is_new: bool = False
-) -> None:
-    """异步同步会话到数据库"""
-    try:
-        await conversation_dao.sync_thread(
-            user_id=user_id,
-            thread_id=thread_id,
-            agent_id=agent_id,
-            title=title,
-            is_new=is_new,
-            now=datetime.now(),
-        )
-    except Exception as e:
-        logger.warning(f"同步会话到 user_threads 失败: {e}")
-
-
 async def get_datasource_id(conversation_id: str, user_id: str) -> Optional[str]:
     """从业务会话表读取绑定的数据源组。"""
     return await conversation_dao.get_datasource_id(

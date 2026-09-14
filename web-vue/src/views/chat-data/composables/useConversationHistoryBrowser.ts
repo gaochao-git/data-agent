@@ -100,9 +100,14 @@ export const useConversationHistoryBrowser = (options: {
     return [...new Map(allItems.map(item => [item.id, item])).values()]
   })
 
+  // isLoading：仅「首屏加载且无旧数据」为真（避免刷新时列表闪骨架屏）；
+  // isRefreshing：原始请求在途状态，供手动刷新按钮转圈/禁用使用。
   const isLoading = computed(() => options.viewMode.value === 'flat'
     ? isLoadingFlat.value && flatConversations.value.length === 0
     : isLoadingGrouped.value && groupPages.value.length === 0)
+  const isRefreshing = computed(() => options.viewMode.value === 'flat'
+    ? isLoadingFlat.value
+    : isLoadingGrouped.value)
   const isLoadingMoreFlat = computed(() => isLoadingFlat.value && (flatLoadingPage.value || 0) > 1)
 
   const loadFlatPage = async (page: number) => {
@@ -298,6 +303,7 @@ export const useConversationHistoryBrowser = (options: {
     conversations,
     groupedConversations,
     isLoadingConversations: isLoading,
+    isRefreshingConversations: isRefreshing,
     isLoadingMoreConversations: isLoadingMoreFlat,
     hasMoreConversations: flatHasMore,
     ensureConversationsLoaded: ensureLoaded,

@@ -13,6 +13,17 @@ from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 
 
+async def seed_conversation(conversation_id: str, *, title: str = None, user_id: str = "u1", agent_id: str = "agent_a") -> None:
+    """造数工具：走生产 create_thread 链路创建会话记录。"""
+    await conversation_module.conversation_dao.create_thread(
+        user_id=user_id or "system",
+        thread_id=conversation_id,
+        agent_id=agent_id,
+        title=title,
+        now=datetime.now(),
+    )
+
+
 @pytest.fixture()
 def conversation_db(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
@@ -112,11 +123,11 @@ async def test_grouped_conversations_return_every_group_first_page_without_count
         ("unclassified", ""),
         ("favorite", "ds_a"),
     ]:
-        await conversation_module.sync_thread_to_db("u1", conversation_id, "agent_a", title=conversation_id, is_new=True)
+        await seed_conversation(conversation_id, title=conversation_id)
         if datasource_id:
             await conversation_module.resolve_datasource_binding(conversation_id, "u1", datasource_id)
     await conversation_module.toggle_favorite("favorite", user_id="u1")
-    await conversation_module.sync_thread_to_db("u2", "other-user", "agent_a", title="other", is_new=True)
+    await seed_conversation("other-user", title="other", user_id="u2")
     await conversation_module.resolve_datasource_binding("other-user", "u2", "ds_private")
 
     result = await conversation_module.list_grouped("agent_a", "u1", page_size=1)
@@ -136,7 +147,7 @@ async def test_grouped_conversations_return_every_group_first_page_without_count
     assert "total" not in groups["datasource:ds_a"]
     assert all(item["id"] != "other-user" for group in groups.values() for item in group["conversations"])
 
-    await conversation_module.sync_thread_to_db("u1", "ds-a-latest", "agent_a", title="latest", is_new=True)
+    await seed_conversation("ds-a-latest", title="latest")
     await conversation_module.resolve_datasource_binding("ds-a-latest", "u1", "ds_a")
     next_page = await conversation_module.list_grouped(
         "agent_a",
@@ -163,9 +174,8 @@ async def test_grouped_conversations_return_every_group_first_page_without_count
 
 @pytest.mark.asyncio
 async def test_conversation_additional_db_branches(conversation_db, monkeypatch):
-    await conversation_module.sync_thread_to_db("u1", "conv_existing", "agent_a", title="原始标题", is_new=True)
-    await conversation_module.sync_thread_to_db("u1", "conv_existing", "agent_a", title="不会重复创建", is_new=True)
-    await conversation_module.sync_thread_to_db("", "conv_system", "agent_a", is_new=True)
+    await seed_conversation("conv_existing", title="原始标题")
+    await seed_conversation("conv_system", user_id="")
 
     listed_without_user = await conversation_module.list("agent_a", user_id=None, limit=10, offset=0)
     assert {item["id"] for item in listed_without_user} >= {"conv_existing", "conv_system"}
@@ -191,9 +201,8 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_conversation_sync_get_detail_and_generate_title(conversation_db, monkeypatch):
-    await conversation_module.sync_thread_to_db("u1", "conv_sync", "agent_a", title="同步标题", is_new=True)
-    await conversation_module.sync_thread_to_db("u1", "conv_sync", "agent_a", title="更新标题", is_new=False)
-    await conversation_module.sync_thread_to_db("u1", "conv_sync", "agent_a", is_new=False)
+    await seed_conversation("conv_sync", title="同步标题")
+    await conversation_module.update_title("conv_sync", "更新标题", user_id="u1")
 
     detail = await conversation_module.get_detail("conv_sync", "u1")
     assert detail["title"] == "更新标题"
@@ -216,7 +225,7 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
 
 @pytest.mark.asyncio
 async def test_conversation_get_detail_reads_event_store_without_checkpoint(conversation_db):
-    await conversation_module.sync_thread_to_db("u1", "conv_detail", "agent_a", title="详情标题", is_new=True)
+    await seed_conversation("conv_detail", title="详情标题")
     await conversation_module.resolve_datasource_binding("conv_detail", "u1", "ds_a")
     user_message = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "t1"})
     token_usage = {
@@ -252,7 +261,7 @@ async def test_conversation_get_detail_reads_event_store_without_checkpoint(conv
 
 @pytest.mark.asyncio
 async def test_conversation_get_detail_with_empty_event_history(conversation_db):
-    await conversation_module.sync_thread_to_db("u1", "conv_empty_graph", "agent_a", title="空状态", is_new=True)
+    await seed_conversation("conv_empty_graph", title="空状态")
     detail = await conversation_module.get_detail("conv_empty_graph", "u1")
 
     assert detail["title"] == "空状态"
@@ -264,7 +273,7 @@ async def test_conversation_get_detail_with_empty_event_history(conversation_db)
 
 @pytest.mark.asyncio
 async def test_conversation_generate_title_from_event_history(conversation_db, monkeypatch):
-    await conversation_module.sync_thread_to_db("u1", "conv_graph", "agent_a", is_new=True)
+    await seed_conversation("conv_graph")
     assert await conversation_module.generate_title("conv_graph", "u1") is None
     await conversation_module.conversation_event_service.persist_user_message(
         conversation_id="conv_graph",
@@ -383,7 +392,7 @@ def test_llm_model_id_helper_falls_back():
 @pytest.mark.asyncio
 async def test_conversation_title_failure_alarm_carries_model_id(conversation_db, monkeypatch):
     """标题生成连接失败时，告警 ext1 须带 model_id，与主链路告警字段对齐。"""
-    await conversation_module.sync_thread_to_db("u1", "conv_title_alarm", "agent_a", is_new=True)
+    await seed_conversation("conv_title_alarm")
     await conversation_module.conversation_event_service.persist_user_message(
         conversation_id="conv_title_alarm",
         user_id="u1",

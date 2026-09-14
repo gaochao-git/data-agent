@@ -250,10 +250,25 @@ describe('ConversationSidebar toolbar: refresh + view settings popover', () => {
     expect(wrapper.emitted('refreshConversations')).toHaveLength(1)
   })
 
-  it('disables the refresh button while loading', () => {
+  it('disables the refresh button and spins the rotate icon while loading', () => {
     const wrapper = mountToolbar({ isLoading: true })
 
-    expect(wrapper.find('[data-testid="conversation-refresh"]').attributes('disabled')).toBeDefined()
+    const refresh = wrapper.find('[data-testid="conversation-refresh"]')
+    expect(refresh.attributes('disabled')).toBeDefined()
+    // 图标保持 rotate-right 原样，仅加载时自转（fa-spin），不切换成别的图标。
+    const icon = refresh.find('i')
+    expect(icon.classes()).toContain('fa-rotate-right')
+    expect(icon.classes()).toContain('fa-spin')
+    expect(icon.classes()).not.toContain('fa-spinner')
+  })
+
+  it('spins while a manual refresh request is in flight (isRefreshing)', () => {
+    // 手动刷新时旧数据仍在，isLoading（首屏语义）为 false，靠 isRefreshing 驱动转圈。
+    const wrapper = mountToolbar({ isRefreshing: true })
+
+    const refresh = wrapper.find('[data-testid="conversation-refresh"]')
+    expect(refresh.attributes('disabled')).toBeDefined()
+    expect(refresh.find('i').classes()).toContain('fa-spin')
   })
 
   it('opens the settings popover, checks current grouping/sorting and emits changes', async () => {

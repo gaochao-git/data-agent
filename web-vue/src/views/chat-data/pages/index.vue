@@ -597,6 +597,7 @@ const {
   conversations,
   groupedConversations,
   isLoadingConversations,
+  isRefreshingConversations,
   isLoadingMoreConversations,
   hasMoreConversations,
   ensureConversationsLoaded,
@@ -1626,6 +1627,7 @@ onMounted(async () => {
                   :grouped-conversations="groupedConversations"
                   :current-conversation-id="currentConversationId"
                   :is-loading="isLoadingConversations"
+                  :is-refreshing="isRefreshingConversations"
                   :is-loading-more="isLoadingMoreConversations"
                   :has-more="hasMoreConversations"
                   :conversation-view-mode="conversationViewMode"

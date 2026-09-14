@@ -79,6 +79,7 @@ interface Props {
   groupedConversations?: ConversationGroupView[]
   currentConversationId?: string | null
   isLoading?: boolean
+  isRefreshing?: boolean
   isLoadingMore?: boolean
   hasMore?: boolean
   showNewConversationButton?: boolean
@@ -97,6 +98,7 @@ const props = withDefaults(defineProps<Props>(), {
   groupedConversations: () => [],
   currentConversationId: null,
   isLoading: false,
+  isRefreshing: false,
   isLoadingMore: false,
   hasMore: false,
   showNewConversationButton: true,
@@ -403,7 +405,7 @@ const handleConversationScroll = (event: Event) => {
   const target = event.currentTarget as HTMLElement
   if (shouldLoadMoreConversations({
     hasMore: props.hasMore,
-    isLoading: props.isLoading,
+    isLoading: props.isLoading || props.isRefreshing,
     isLoadingMore: props.isLoadingMore,
     scrollHeight: target.scrollHeight,
     scrollTop: target.scrollTop,
@@ -698,10 +700,10 @@ onUnmounted(() => {
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9] disabled:cursor-not-allowed disabled:opacity-60"
           title="刷新列表"
           data-testid="conversation-refresh"
-          :disabled="props.isLoading"
+          :disabled="props.isLoading || props.isRefreshing"
           @click="emit('refreshConversations')"
         >
-          <i :class="props.isLoading ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-rotate-right'" class="text-[10px]"></i>
+          <i class="fa-solid fa-rotate-right text-[10px]" :class="{ 'fa-spin': props.isLoading || props.isRefreshing }"></i>
         </button>
         <div class="relative shrink-0">
           <button
