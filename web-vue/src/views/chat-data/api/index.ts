@@ -1547,7 +1547,7 @@ export function setAgentSchedulePaused(data: { paused: boolean; reason?: string 
 }
 
 /** 后台：全量定时任务分页列表（跨用户，附执行统计） */
-export function getAdminAgentSchedules(params?: { keyword?: string; limit?: number; offset?: number }): Promise<ApiResponse<{ jobs: AgentScheduleItem[]; total: number }>> {
+export function getAdminAgentSchedules(params?: { keyword?: string; limit?: number; offset?: number; enabled?: boolean; expired?: boolean }): Promise<ApiResponse<{ jobs: AgentScheduleItem[]; total: number }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/agent-schedules`,
     method: 'get',

@@ -165,6 +165,30 @@ async def test_list_all_jobs_with_stats(harness):
 
 
 @pytest.mark.asyncio
+async def test_list_all_jobs_filters(harness):
+    """启停/是否过期两个过滤维度。"""
+    now = datetime.now()
+    await harness.seed_job("job-on-active", enabled_flag=1)  # 开启，长期有效
+    await harness.seed_job("job-off-expired", enabled_flag=0, effective_end_time=now - timedelta(days=1))
+    await harness.seed_job("job-on-expired", enabled_flag=1, effective_end_time=now - timedelta(days=2))
+    await harness.seed_job("job-on-future-end", enabled_flag=1, effective_end_time=now + timedelta(days=1))
+
+    by_enabled = await harness.service.list_all_jobs(enabled=False)
+    assert sorted(job["job_id"] for job in by_enabled["jobs"]) == ["job-off-expired"]
+    assert by_enabled["total"] == 1
+
+    expired = await harness.service.list_all_jobs(expired=True)
+    assert sorted(job["job_id"] for job in expired["jobs"]) == ["job-off-expired", "job-on-expired"]
+
+    active = await harness.service.list_all_jobs(expired=False)
+    assert sorted(job["job_id"] for job in active["jobs"]) == ["job-on-active", "job-on-future-end"]
+
+    # 组合过滤：开启 + 已过期 → 只剩 job-on-expired
+    combined = await harness.service.list_all_jobs(enabled=True, expired=True)
+    assert [job["job_id"] for job in combined["jobs"]] == ["job-on-expired"]
+
+
+@pytest.mark.asyncio
 async def test_admin_set_job_enabled(harness):
     await harness.seed_job("job-1", enabled_flag=0)
 

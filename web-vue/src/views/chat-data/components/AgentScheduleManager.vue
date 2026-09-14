@@ -540,9 +540,13 @@ defineExpose({ ensureLoaded })
       </el-table-column>
       <el-table-column label="调度" min-width="110" show-overflow-tooltip>
         <template #default="{ row }">
-          <span class="text-xs text-slate-600" :title="row.effective_end_time ? `有效期至 ${formatDateTimeValue(row.effective_end_time)}` : '长期有效'">
-            {{ scheduleText(row) }}
-          </span>
+          <span class="text-xs text-slate-600">{{ scheduleText(row) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="有效期" width="150">
+        <template #default="{ row }">
+          <span v-if="row.effective_end_time" class="text-xs text-slate-600">{{ formatDateTimeValue(row.effective_end_time) }}</span>
+          <span v-else class="text-xs text-slate-400">长期有效</span>
         </template>
       </el-table-column>
       <el-table-column label="下次执行" width="155">

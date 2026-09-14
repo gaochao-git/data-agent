@@ -540,12 +540,28 @@ class AgentScheduleService:
                     )
             return control.to_dict()
 
-    async def list_all_jobs(self, *, keyword: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+    async def list_all_jobs(
+        self,
+        *,
+        keyword: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        enabled: bool | None = None,
+        expired: bool | None = None,
+    ) -> dict:
         """全量任务分页列表，附执行统计与最近一次执行状态。"""
         async with get_session() as session:
             normalized_keyword = (keyword or "").strip() or None
-            rows = await self._dao.list_jobs_with_stats(session, limit, offset, normalized_keyword)
-            total = await self._dao.count_jobs_filtered(session, normalized_keyword)
+            enabled_flag = None if enabled is None else (1 if enabled else 0)
+            now = await self._dao.now(session) if expired is not None else None
+            rows = await self._dao.list_jobs_with_stats(
+                session, limit, offset, normalized_keyword,
+                enabled_flag=enabled_flag, expired=expired, now=now,
+            )
+            total = await self._dao.count_jobs_filtered(
+                session, normalized_keyword,
+                enabled_flag=enabled_flag, expired=expired, now=now,
+            )
             latest_runs = await self._dao.latest_runs_by_jobs(session, [job.job_id for job, _stats in rows])
             titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job, _stats in rows])
             items = []

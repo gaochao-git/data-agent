@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.logger import get_logger
@@ -361,14 +361,19 @@ class AgentScheduleDao:
         )
         return int(result.scalar() or 0)
 
-    async def count_jobs_filtered(self, session: AsyncSession, keyword: str | None) -> int:
-        """按关键词过滤后的任务总数（与 list_jobs_with_stats 同一口径，供分页 total）。"""
-        conditions = [ChatDataAgentSchedule.delete_flag == 0]
-        if keyword:
-            like = f"%{keyword}%"
-            conditions.append(
-                ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like)
-            )
+    async def count_jobs_filtered(
+        self,
+        session: AsyncSession,
+        keyword: str | None,
+        *,
+        enabled_flag: int | None = None,
+        expired: bool | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """按条件过滤后的任务总数（与 list_jobs_with_stats 同一口径，供分页 total）。"""
+        conditions = self._admin_list_conditions(
+            keyword, enabled_flag=enabled_flag, expired=expired, now=now,
+        )
         result = await session.execute(
             select(func.count())
             .select_from(ChatDataAgentSchedule)
@@ -376,12 +381,46 @@ class AgentScheduleDao:
         )
         return int(result.scalar() or 0)
 
+    def _admin_list_conditions(
+        self,
+        keyword: str | None,
+        *,
+        enabled_flag: int | None,
+        expired: bool | None,
+        now: datetime | None,
+    ) -> list:
+        """后台列表过滤条件：关键词、启停状态、是否过期。"""
+        conditions = [ChatDataAgentSchedule.delete_flag == 0]
+        if keyword:
+            like = f"%{keyword}%"
+            conditions.append(
+                ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like)
+            )
+        if enabled_flag is not None:
+            conditions.append(ChatDataAgentSchedule.enabled_flag == enabled_flag)
+        if expired is not None:
+            if now is None:
+                raise ValueError("expired 过滤需要提供 now（DB 时钟口径）")
+            if expired:
+                conditions.append(ChatDataAgentSchedule.effective_end_time.is_not(None))
+                conditions.append(ChatDataAgentSchedule.effective_end_time < now)
+            else:
+                conditions.append(or_(
+                    ChatDataAgentSchedule.effective_end_time.is_(None),
+                    ChatDataAgentSchedule.effective_end_time >= now,
+                ))
+        return conditions
+
     async def list_jobs_with_stats(
         self,
         session: AsyncSession,
         limit: int,
         offset: int,
         keyword: str | None,
+        *,
+        enabled_flag: int | None = None,
+        expired: bool | None = None,
+        now: datetime | None = None,
     ) -> list[tuple[ChatDataAgentSchedule, dict]]:
         """全量任务分页列表，附每个任务的执行统计（次数/成功/失败/最近执行）。"""
         stats = (
@@ -398,12 +437,9 @@ class AgentScheduleDao:
             .group_by(ChatDataAgentScheduleRun.job_id)
             .subquery()
         )
-        conditions = [ChatDataAgentSchedule.delete_flag == 0]
-        if keyword:
-            like = f"%{keyword}%"
-            conditions.append(
-                ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like)
-            )
+        conditions = self._admin_list_conditions(
+            keyword, enabled_flag=enabled_flag, expired=expired, now=now,
+        )
         result = await session.execute(
             select(
                 ChatDataAgentSchedule,

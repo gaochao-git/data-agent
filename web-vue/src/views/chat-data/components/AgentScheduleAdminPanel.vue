@@ -27,6 +27,10 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 
+// 列表过滤：启停状态 / 是否过期（空串=不过滤，服务端分页口径）
+const enabledFilter = ref<'' | 'on' | 'off'>('')
+const expiredFilter = ref<'' | 'active' | 'expired'>('')
+
 const runsVisible = ref(false)
 const runsLoading = ref(false)
 const runsJobTitle = ref('')
@@ -55,7 +59,9 @@ const loadJobs = async () => {
   const res = await getAdminAgentSchedules({
     keyword: keyword.value.trim() || undefined,
     limit: pageSize.value,
-    offset: (currentPage.value - 1) * pageSize.value
+    offset: (currentPage.value - 1) * pageSize.value,
+    enabled: enabledFilter.value === '' ? undefined : enabledFilter.value === 'on',
+    expired: expiredFilter.value === '' ? undefined : expiredFilter.value === 'expired'
   })
   if (res.status === 'success') {
     jobs.value = res.data.jobs || []
@@ -63,6 +69,16 @@ const loadJobs = async () => {
     hasLoaded.value = true
   } else {
     ElMessage.error(res.msg || '获取任务列表失败')
+  }
+}
+
+const handleFilterChange = async () => {
+  currentPage.value = 1
+  loading.value = true
+  try {
+    await loadJobs()
+  } finally {
+    loading.value = false
   }
 }
 
@@ -112,6 +128,12 @@ const handlePageChange = async (page: number) => {
   } finally {
     loading.value = false
   }
+}
+
+const handleSizeChange = async (size: number) => {
+  pageSize.value = size
+  currentPage.value = 1
+  await handlePageChange(1)
 }
 
 const togglePause = async (value: boolean) => {
@@ -255,6 +277,16 @@ defineExpose({ ensureLoaded })
         @keyup.enter="searchJobs"
         @clear="searchJobs"
       />
+      <el-select v-model="enabledFilter" size="small" class="!w-28" placeholder="开启状态" @change="handleFilterChange">
+        <el-option label="全部状态" value="" />
+        <el-option label="已开启" value="on" />
+        <el-option label="已停用" value="off" />
+      </el-select>
+      <el-select v-model="expiredFilter" size="small" class="!w-28" placeholder="是否过期" @change="handleFilterChange">
+        <el-option label="全部期限" value="" />
+        <el-option label="未过期" value="active" />
+        <el-option label="已过期" value="expired" />
+      </el-select>
       <el-button size="small" @click="searchJobs">搜索</el-button>
       <el-button size="small" :loading="loading" @click="loadAll">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
@@ -295,6 +327,12 @@ defineExpose({ ensureLoaded })
         <el-table-column label="调度" width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="text-xs text-slate-600">{{ scheduleText(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="有效期" width="150">
+          <template #default="{ row }">
+            <span v-if="row.effective_end_time" class="text-xs text-slate-600">{{ formatDateTimeValue(row.effective_end_time) }}</span>
+            <span v-else class="text-xs text-slate-400">长期有效</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="70" align="center">
@@ -351,11 +389,13 @@ defineExpose({ ensureLoaded })
         <el-pagination
           v-model:current-page="currentPage"
           :page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
           :total="total"
-          layout="total, prev, pager, next"
+          layout="total, sizes, prev, pager, next"
           size="small"
           background
           @current-change="handlePageChange"
+          @size-change="handleSizeChange"
         />
       </div>
     </div>

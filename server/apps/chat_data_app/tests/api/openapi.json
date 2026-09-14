@@ -3347,7 +3347,7 @@
   "paths": {
     "/api/chatdata/admin/agent-schedules": {
       "get": {
-        "description": "全量任务分页列表（跨用户），附执行统计。",
+        "description": "全量任务分页列表（跨用户），附执行统计；支持启停/是否过期过滤。",
         "operationId": "list_agent_schedules_admin_api_chatdata_admin_agent_schedules_get",
         "parameters": [
           {
@@ -3384,6 +3384,38 @@
               "default": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Enabled"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expired",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expired"
             }
           }
         ],

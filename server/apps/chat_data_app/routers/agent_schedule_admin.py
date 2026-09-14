@@ -66,14 +66,18 @@ async def list_agent_schedules_admin(
     keyword: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    enabled: bool | None = None,
+    expired: bool | None = None,
 ):
-    """全量任务分页列表（跨用户），附执行统计。"""
+    """全量任务分页列表（跨用户），附执行统计；支持启停/是否过期过滤。"""
     _ = request
     try:
         data = await agent_schedule_service.list_all_jobs(
             keyword=keyword,
             limit=max(1, min(limit, 200)),
             offset=max(0, offset),
+            enabled=enabled,
+            expired=expired,
         )
         return business_response(data=data, msg="获取成功")
     except HTTPException:
