@@ -185,6 +185,11 @@ async def test_datasource_column_dict_routes_return_permission_denied(monkeypatc
     batch = payload(await datasource_public_routes.get_datasource_table_column_dicts("ds-1", "t1", REQUEST))
     assert batch["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
 
+    # schema 端点同样必须先校验权限再读缓存；DeniedDatasourceManager 没有读方法，
+    # 若路由在校验前就取 schema，这里会以 AttributeError 暴露而不是通过。
+    schema = payload(await datasource_public_routes.get_schema("ds-1", None, REQUEST))
+    assert schema["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
+
 
 @pytest.mark.parametrize(
     "route,args",

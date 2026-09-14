@@ -3283,6 +3283,11 @@ def test_delete_datasource_error_branches(monkeypatch):
 
 def test_get_schema_and_db_tables_error_branches(monkeypatch):
     class SchemaManager:
+        async def can_access_datasource_async(self, datasource_id, *, user_id, username):
+            assert user_id == "u1"
+            assert username == "用户1"
+            return True
+
         async def get_cached_schema_async(self, datasource_id, table_names=None):
             if datasource_id == "value":
                 raise ValueError("bad datasource")

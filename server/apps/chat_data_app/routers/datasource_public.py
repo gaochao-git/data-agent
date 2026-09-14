@@ -116,8 +116,18 @@ async def get_schema(
 ):
     """获取数据源缓存表结构。实时物理元数据只允许管理接口主动拉取/同步。"""
     try:
-        _get_current_user(request)
+        current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
+        if not await ds_manager.can_access_datasource_async(
+            datasource_id,
+            user_id=str(current_user.user_id),
+            username=str(current_user.username or ""),
+        ):
+            return business_response(
+                msg="无权限查看该数据源表结构",
+                code=ErrorCode.CHATDATA_PERMISSION_DENIED,
+                status="error",
+            )
         table_names = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
         schema_tables = await ds_manager.get_cached_schema_async(
             datasource_id,
