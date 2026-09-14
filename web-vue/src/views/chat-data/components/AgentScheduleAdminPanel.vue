@@ -55,14 +55,24 @@ const statCards = computed(() => {
 
 const paused = computed(() => !!overview.value?.paused_flag)
 
-const loadJobs = async () => {
-  const res = await getAdminAgentSchedules({
-    keyword: keyword.value.trim() || undefined,
-    limit: pageSize.value,
-    offset: (currentPage.value - 1) * pageSize.value,
-    enabled: enabledFilter.value === '' ? undefined : enabledFilter.value === 'on',
-    expired: expiredFilter.value === '' ? undefined : expiredFilter.value === 'expired'
-  })
+const buildJobsParams = () => ({
+  keyword: keyword.value.trim() || undefined,
+  limit: pageSize.value,
+  offset: (currentPage.value - 1) * pageSize.value,
+  enabled: enabledFilter.value === '' ? undefined : enabledFilter.value === 'on',
+  expired: expiredFilter.value === '' ? undefined : expiredFilter.value === 'expired'
+})
+
+// 记录上次已发出的查询签名：size-change 与 current-change 可能因同一次
+// 分页器交互先后触发，参数相同则只发一次请求（force 场景不受限）
+let lastJobsQuery = ''
+
+const loadJobs = async (force = false) => {
+  const params = buildJobsParams()
+  const query = JSON.stringify(params)
+  if (!force && query === lastJobsQuery) return
+  lastJobsQuery = query
+  const res = await getAdminAgentSchedules(params)
   if (res.status === 'success') {
     jobs.value = res.data.jobs || []
     total.value = res.data.total || 0
@@ -91,7 +101,7 @@ const loadAll = async () => {
     } else {
       ElMessage.error(overviewRes.msg || '获取概览失败')
     }
-    await loadJobs()
+    await loadJobs(true)
   } catch (err) {
     console.error('获取定时任务后台数据失败:', err)
     ElMessage.error('获取定时任务数据失败，请稍后重试')
@@ -108,7 +118,8 @@ const searchJobs = async () => {
   currentPage.value = 1
   loading.value = true
   try {
-    await loadJobs()
+    // 搜索永远强制请求：同关键词重搜应拿到最新执行统计
+    await loadJobs(true)
   } catch (err) {
     console.error('搜索定时任务失败:', err)
     ElMessage.error('搜索失败，请稍后重试')

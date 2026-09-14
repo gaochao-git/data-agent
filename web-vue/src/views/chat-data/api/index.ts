@@ -52,7 +52,6 @@ const DATASOURCE_API_PREFIX = `${CHATDATA_API_PREFIX}/datasources`
 const ADMIN_DATASOURCE_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/datasources`
 
 type DatasourceListParams = { include_tables?: boolean }
-type DatasourceMetaUpdatePayload = { name?: string; description?: string }
 type SemanticConfigCreatePayload = Omit<
   Partial<SemanticConfigItem>,
   'id' | 'scope_type' | 'can_manage' | 'create_time' | 'update_time' | 'create_by' | 'update_by'
