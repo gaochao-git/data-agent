@@ -224,6 +224,333 @@
         "title": "AccuracyEvaluationRunRequest",
         "type": "object"
       },
+      "AgentScheduleCreateRequest": {
+        "description": "创建智能体定时任务请求",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "绑定的会话ID；conversation_mode=fixed 时必填",
+            "title": "Conversation Id"
+          },
+          "conversation_mode": {
+            "default": "fixed",
+            "description": "会话绑定方式：fixed-指定会话，new_each_run-每次执行新建会话",
+            "enum": [
+              "fixed",
+              "new_each_run"
+            ],
+            "title": "Conversation Mode",
+            "type": "string"
+          },
+          "cron_expr": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "五字段 cron 表达式（分 时 日 月 周），周期任务必填",
+            "title": "Cron Expr"
+          },
+          "datasource_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "执行数据源ID（创建时的便捷字段，等价于 options.datasource_id）",
+            "title": "Datasource Id"
+          },
+          "effective_end_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "有效期结束时间，空表示长期有效",
+            "title": "Effective End Time"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "运行选项（与智能问数 options 口径一致）；值为 null 的键视为未设置",
+            "title": "Options"
+          },
+          "plan_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "单次任务的执行时间，必须晚于当前时间",
+            "title": "Plan Time"
+          },
+          "prompt": {
+            "description": "任务指令（提示词）",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_type": {
+            "default": "cron",
+            "description": "调度类型：cron-周期，once-单次",
+            "enum": [
+              "cron",
+              "once"
+            ],
+            "title": "Schedule Type",
+            "type": "string"
+          },
+          "title": {
+            "description": "任务标题",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "prompt"
+        ],
+        "title": "AgentScheduleCreateRequest",
+        "type": "object"
+      },
+      "AgentScheduleEnabledRequest": {
+        "description": "后台强制启停单个定时任务请求",
+        "properties": {
+          "enabled_flag": {
+            "description": "启用状态：1-启用，0-停用",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Enabled Flag",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled_flag"
+        ],
+        "title": "AgentScheduleEnabledRequest",
+        "type": "object"
+      },
+      "AgentSchedulePauseRequest": {
+        "description": "后台全局暂停/恢复定时任务请求",
+        "properties": {
+          "paused": {
+            "description": "true-暂停所有调度，false-恢复",
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "暂停原因（可选）",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "paused"
+        ],
+        "title": "AgentSchedulePauseRequest",
+        "type": "object"
+      },
+      "AgentScheduleUpdateRequest": {
+        "description": "更新智能体定时任务请求（未传字段保持不变）",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "绑定的会话ID（切换为指定会话模式时必填）",
+            "title": "Conversation Id"
+          },
+          "conversation_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fixed",
+                  "new_each_run"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "会话绑定方式",
+            "title": "Conversation Mode"
+          },
+          "cron_expr": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "五字段 cron 表达式",
+            "title": "Cron Expr"
+          },
+          "datasource_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "执行数据源ID（便捷字段，等价于 options.datasource_id；清除请用 options 补丁传 null）",
+            "title": "Datasource Id"
+          },
+          "effective_end_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "有效期结束时间；显式传 null 表示清除有效期，不传则保持不变",
+            "title": "Effective End Time"
+          },
+          "enabled_flag": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "启用状态：1-启用，0-停用",
+            "title": "Enabled Flag"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "运行选项补丁：只提交要改的键，值为 null 表示清除该键，未提交的键保持不变",
+            "title": "Options"
+          },
+          "plan_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "单次任务的执行时间",
+            "title": "Plan Time"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "任务指令（提示词）",
+            "title": "Prompt"
+          },
+          "schedule_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cron",
+                  "once"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "调度类型",
+            "title": "Schedule Type"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "任务标题",
+            "title": "Title"
+          }
+        },
+        "title": "AgentScheduleUpdateRequest",
+        "type": "object"
+      },
       "ApiResponse": {
         "description": "ChatData JSON 接口统一响应包络。",
         "properties": {
@@ -2193,7 +2520,7 @@
                 "type": "null"
               }
             ],
-            "description": "预计算同比/环比指标对应的基础指标名称，如'销售额'",
+            "description": "基础指标名称；派生指标为必填（口径来源），预计算同比/环比指标（legacy）亦复用此字段，如'销售额'",
             "title": "Base Metric"
           },
           "compare_mode": {
@@ -3045,6 +3372,271 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/chatdata/admin/agent-schedules": {
+      "get": {
+        "description": "全量任务分页列表（跨用户），附执行统计。",
+        "operationId": "list_agent_schedules_admin_api_chatdata_admin_agent_schedules_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keyword"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Agent Schedules Admin",
+        "tags": [
+          "ChatData 智能体定时任务（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/agent-schedules/overview": {
+      "get": {
+        "description": "全局概览：暂停状态、任务总数、执行统计。",
+        "operationId": "get_agent_schedule_overview_api_chatdata_admin_agent_schedules_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Agent Schedule Overview",
+        "tags": [
+          "ChatData 智能体定时任务（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/agent-schedules/pause": {
+      "put": {
+        "description": "停止/恢复任务调度（全局开关，不改用户任务的启停状态）。",
+        "operationId": "set_agent_schedule_paused_api_chatdata_admin_agent_schedules_pause_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSchedulePauseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Set Agent Schedule Paused",
+        "tags": [
+          "ChatData 智能体定时任务（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/agent-schedules/{job_id}/enabled": {
+      "put": {
+        "description": "后台强制启停任意任务。",
+        "operationId": "set_agent_schedule_enabled_admin_api_chatdata_admin_agent_schedules__job_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleEnabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Set Agent Schedule Enabled Admin",
+        "tags": [
+          "ChatData 智能体定时任务（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/agent-schedules/{job_id}/runs": {
+      "get": {
+        "description": "查看任意任务的执行历史。",
+        "operationId": "list_agent_schedule_runs_admin_api_chatdata_admin_agent_schedules__job_id__runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Agent Schedule Runs Admin",
+        "tags": [
+          "ChatData 智能体定时任务（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/datasources": {
       "get": {
         "description": "获取后台配置页数据源列表，不按执行机构权限过滤。",
@@ -5390,6 +5982,288 @@
         ]
       }
     },
+    "/api/chatdata/agent-schedules": {
+      "get": {
+        "description": "获取当前用户的定时任务列表。",
+        "operationId": "list_agent_schedules_api_chatdata_agent_schedules_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Agent Schedules",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      },
+      "post": {
+        "description": "创建定时任务。",
+        "operationId": "create_agent_schedule_api_chatdata_agent_schedules_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Create Agent Schedule",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      }
+    },
+    "/api/chatdata/agent-schedules/{job_id}": {
+      "delete": {
+        "description": "删除定时任务（软删除，同时停止调度）。",
+        "operationId": "delete_agent_schedule_api_chatdata_agent_schedules__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Agent Schedule",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      },
+      "put": {
+        "description": "更新定时任务；调度字段变更后按服务端时钟重新计算下一次触发时间。",
+        "operationId": "update_agent_schedule_api_chatdata_agent_schedules__job_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Update Agent Schedule",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      }
+    },
+    "/api/chatdata/agent-schedules/{job_id}/runs": {
+      "get": {
+        "description": "获取定时任务的执行历史（含关联 Agent Run 状态）。",
+        "operationId": "list_agent_schedule_runs_api_chatdata_agent_schedules__job_id__runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Agent Schedule Runs",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      }
+    },
+    "/api/chatdata/agent-schedules/{job_id}/trigger-now": {
+      "post": {
+        "description": "立即执行：创建手动触发实例并同步尝试派发；会话正忙时转后台队列自动重试。",
+        "operationId": "trigger_agent_schedule_now_api_chatdata_agent_schedules__job_id__trigger_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Trigger Agent Schedule Now",
+        "tags": [
+          "ChatData 智能体定时任务"
+        ]
+      }
+    },
     "/api/chatdata/compile-semantic-builder-sql": {
       "post": {
         "description": "编译语义可视化 DSL 为 SQL（仅预览，不执行）。",
@@ -5637,7 +6511,7 @@
     },
     "/api/chatdata/conversations/{conversation_id}": {
       "get": {
-        "description": "获取会话详情\n\nGET /api/chatdata/conversations/{id}\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\", \"messages\": [...], \"is_favorited\": bool}\n}",
+        "description": "获取会话详情\n\nGET /api/chatdata/conversations/{id}\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\", \"messages\": [...], \"is_favorited\": bool}\n}\n\nlimit 省略时返回全量历史（兼容旧行为）；指定后返回尾部窗口：以「轮次闭包」起点收尾的\n连续 sequence_no 区间（并发 run 会让同一轮次的事件在序号上不连续，窗口起点会向下收敛，\n保证页内不出现被切断的轮次，首屏不会渲染出没有提问的回答），\n并附带 has_more / earliest_sequence_no 供向上翻页。",
         "operationId": "get_conversation_detail_api_chatdata_conversations__conversation_id__get",
         "parameters": [
           {
@@ -5661,6 +6535,45 @@
               ],
               "title": "View",
               "type": "string"
+            }
+          },
+          {
+            "description": "仅返回最近 limit 条历史事件，用于长会话分页",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 600,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "仅返回最近 limit 条历史事件，用于长会话分页",
+              "title": "Limit"
+            }
+          },
+          {
+            "description": "翻页游标：只返回 sequence_no 小于该值的历史事件",
+            "in": "query",
+            "name": "before_sequence",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "翻页游标：只返回 sequence_no 小于该值的历史事件",
+              "title": "Before Sequence"
             }
           }
         ],
@@ -6538,6 +7451,61 @@
       }
     },
     "/api/chatdata/conversations/{conversation_id}/workspace-files": {
+      "delete": {
+        "description": "删除会话工作区中的单个文件（SQL 查询结果需留存审计，不可删除）。",
+        "operationId": "delete_conversation_workspace_file_api_chatdata_conversations__conversation_id__workspace_files_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Conversation Workspace File",
+        "tags": [
+          "ChatData 会话工作区文件"
+        ]
+      },
       "get": {
         "description": "获取 ChatData 会话工作区文件列表。",
         "operationId": "list_conversation_workspace_files_api_chatdata_conversations__conversation_id__workspace_files_get",
