@@ -2119,33 +2119,6 @@
         "title": "QuickSqlRequest",
         "type": "object"
       },
-      "SemanticAutoPrefillRequest": {
-        "description": "语义字段自动预填请求",
-        "properties": {
-          "business_context": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "本次自动预填的业务补充上下文",
-            "title": "Business Context"
-          },
-          "selected_tables": {
-            "description": "当前指标集已选择的数据表",
-            "items": {
-              "type": "string"
-            },
-            "title": "Selected Tables",
-            "type": "array"
-          }
-        },
-        "title": "SemanticAutoPrefillRequest",
-        "type": "object"
-      },
       "SemanticConfigCreateRequest": {
         "description": "创建语义配置请求",
         "properties": {
@@ -4329,73 +4302,6 @@
           }
         ],
         "summary": "Update Admin Semantic Config",
-        "tags": [
-          "ChatData 语义模型"
-        ]
-      }
-    },
-    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill": {
-      "post": {
-        "description": "后台按公共指标集自动预填维度/指标/表达式。",
-        "operationId": "auto_prefill_admin_semantic_fields_api_chatdata_admin_datasources__datasource_id__semantic_configs__config_id__auto_prefill_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "datasource_id",
-            "required": true,
-            "schema": {
-              "title": "Datasource Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "config_id",
-            "required": true,
-            "schema": {
-              "title": "Config Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SemanticAutoPrefillRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "Auto Prefill Admin Semantic Fields",
         "tags": [
           "ChatData 语义模型"
         ]
@@ -8931,73 +8837,6 @@
           }
         ],
         "summary": "Update Semantic Config",
-        "tags": [
-          "ChatData 语义模型"
-        ]
-      }
-    },
-    "/api/chatdata/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill": {
-      "post": {
-        "description": "按个人指标集自动预填维度/指标/表达式。",
-        "operationId": "auto_prefill_semantic_fields_api_chatdata_datasources__datasource_id__semantic_configs__config_id__auto_prefill_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "datasource_id",
-            "required": true,
-            "schema": {
-              "title": "Datasource Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "config_id",
-            "required": true,
-            "schema": {
-              "title": "Config Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SemanticAutoPrefillRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "Auto Prefill Semantic Fields",
         "tags": [
           "ChatData 语义模型"
         ]

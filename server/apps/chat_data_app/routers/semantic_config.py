@@ -17,7 +17,6 @@ from utils.llm_json import parse_llm_json
 from utils.response import business_response
 from ..agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from ..schema import (
-    SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
@@ -456,20 +455,6 @@ async def _prefill_by_llm(
     return {"fields": _dedupe_prefill_display_names(fields + metric_fields)}
 
 
-def _resolve_prefill_tables(datasource: Dict, selected_tables: List[str]) -> List[Dict]:
-    """根据勾选的表名过滤待预填表结构。"""
-    selected = set(selected_tables or [])
-    target_tables = []
-    for table in datasource.get("ds_tables", []) or []:
-        table_name = table.get("table_name")
-        if not table_name:
-            continue
-        if selected and table_name not in selected:
-            continue
-        target_tables.append(table)
-    return target_tables
-
-
 @router.get("/datasources/{datasource_id}/semantic-configs")
 async def list_semantic_configs(datasource_id: str, request: Request):
     """获取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
@@ -621,56 +606,6 @@ async def generate_admin_basic_semantic_configs(datasource_id: str, request: Req
     except Exception as e:
         logger.error("批量生成基础语义模型失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg="生成失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
-async def _auto_prefill_semantic_fields_route(
-    datasource_id: str,
-    config_id: str,
-    payload: SemanticAutoPrefillRequest,
-    request: Request,
-    *,
-    admin_manage: bool = False,
-):
-    """按规则自动预填维度/指标/表达式。"""
-    try:
-        current_user = _get_current_user(request)
-        user_id = str(current_user.user_id)
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
-        if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
-        if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not can_mutate_semantic_config(config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
-        target_tables = _resolve_prefill_tables(datasource, payload.selected_tables)
-
-        prefill_result = await _prefill_by_llm(
-            target_tables,
-            payload.business_context or "",
-        )
-        if prefill_result is None:
-            return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-        fields = prefill_result.get("fields", [])
-
-        return business_response(data={"fields": fields, "total": len(fields)}, msg="自动预填完成")
-    except Exception as e:
-        logger.error(f"自动预填字段失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
-async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
-    """按个人指标集自动预填维度/指标/表达式。"""
-    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=False)
-
-
-@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
-async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
-    """后台按公共指标集自动预填维度/指标/表达式。"""
-    _get_current_user(request)
-    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
 async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):

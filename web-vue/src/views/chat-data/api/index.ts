@@ -532,7 +532,6 @@ export function unsetAdminDefaultDatasource(dsId: string): Promise<ApiResponse<n
   })
 }
 
-/** 更新数据源元信息 */
 /** 更新数据源映射模块 */
 export function updateAdminMappedModules(datasourceId: string, mappedModules: string[]): Promise<ApiResponse<null>> {
   return request({

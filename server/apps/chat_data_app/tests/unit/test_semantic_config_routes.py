@@ -18,7 +18,6 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from apps.chat_data_app.schema import (
-    SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
@@ -427,32 +426,6 @@ def test_prefill_helpers_use_business_context(monkeypatch):
     ]
     assert contextual_result["fields"][0]["role"] == "dimension"
     assert contextual_result["fields"][-1]["role"] == "metric"
-
-
-def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
-    class FakeManager:
-        async def get_datasource_async(self, datasource_id):
-            return {"id": datasource_id, "ds_tables": [{"table_name": "orders", "columns": [{"name": "id"}]}]}
-
-        async def get_config_async(self, datasource_id, config_id):
-            return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
-
-    manager = FakeManager()
-    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
-
-    response = asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "ds_a",
-        "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=["orders"]),
-        object(),
-    ))
-    payload = json.loads(response.body.decode("utf-8"))
-
-    assert payload["status"] == "success"
-    assert payload["data"]["fields"][0]["role"] == "dimension"
 
 
 def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch):
@@ -1077,10 +1050,6 @@ def test_prefill_parse_and_error_branches(monkeypatch):
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_incomplete)
     assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}])) == fallback_result
 
-    datasource = {"ds_tables": [{"table_name": ""}, {"table_name": "orders"}, {"table_name": "users"}]}
-    assert [item["table_name"] for item in semantic_config._resolve_prefill_tables(datasource, ["users"])] == ["users"]
-    assert [item["table_name"] for item in semantic_config._resolve_prefill_tables(datasource, [])] == ["orders", "users"]
-
 
 def test_prefill_prompt_includes_business_context(monkeypatch):
     captured = {}
@@ -1224,18 +1193,6 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
 
-    auto_missing_ds = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "missing",
-        "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=[]),
-        object(),
-    )))
-    auto_missing_config = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "ds_a",
-        "missing",
-        SemanticAutoPrefillRequest(selected_tables=[]),
-        object(),
-    )))
     short_missing_ds = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="missing",
         config_id="cfg_a",
@@ -1251,22 +1208,18 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
         config_id="cfg_a",
         tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
     ), object())))
-    public_denied = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "ds_a",
-        "cfg_public",
-        SemanticAutoPrefillRequest(selected_tables=[]),
-        object(),
-    )))
-    admin_public_success = _response_payload(asyncio.run(semantic_config.auto_prefill_admin_semantic_fields(
-        "ds_a",
-        "cfg_public",
-        SemanticAutoPrefillRequest(selected_tables=[]),
-        object(),
-    )))
+    public_denied = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
+        datasource_id="ds_a",
+        config_id="cfg_public",
+        tables=[],
+    ), object())))
+    admin_public_success = _response_payload(asyncio.run(semantic_config.admin_semantic_prefill(SemanticPrefillRequest(
+        datasource_id="ds_a",
+        config_id="cfg_public",
+        tables=[],
+    ), object())))
 
     assert manager.config["id"] == "cfg_a"
-    assert auto_missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert auto_missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert short_missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert short_missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert short_success["data"]["total"] == 1
@@ -1332,12 +1285,6 @@ def test_semantic_route_exception_branches(monkeypatch):
         SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
         object(),
     )))
-    prefill_error = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "ds_a",
-        "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=[]),
-        object(),
-    )))
     short_prefill_error = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="cfg_a",
@@ -1346,7 +1293,6 @@ def test_semantic_route_exception_branches(monkeypatch):
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
     assert list_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert create_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-    assert prefill_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert short_prefill_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert update_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
@@ -1730,13 +1676,12 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
 
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
-    auto_incomplete = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
-        "ds_a",
-        "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=["orders"]),
-        object(),
-    )))
-    assert auto_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    short_incomplete = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
+        datasource_id="ds_a",
+        config_id="cfg_a",
+        tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
+    ), object())))
+    assert short_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     assert manager.config["id"] == "cfg_a"
 

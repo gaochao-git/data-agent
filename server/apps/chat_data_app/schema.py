@@ -662,12 +662,6 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
     existing_questions: List[str] = Field(default_factory=list, description="已有问题，用于避免重复")
 
 
-class SemanticAutoPrefillRequest(BaseModel):
-    """语义字段自动预填请求"""
-    selected_tables: List[str] = Field(default_factory=list, description="当前指标集已选择的数据表")
-    business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
-
-
 class SemanticPrefillColumn(BaseModel):
     """语义预填列信息"""
     name: str = Field(..., description="字段名")
