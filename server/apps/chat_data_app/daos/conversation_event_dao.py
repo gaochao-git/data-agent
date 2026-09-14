@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Iterable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.database import get_session as default_get_session
@@ -106,6 +106,7 @@ class ConversationEventDao:
         operator_name: str,
         events: Iterable[dict[str, Any]],
         now: datetime,
+        touch_thread: bool = False,
     ) -> list[ChatDataConversationEvent]:
         """原子追加未持久化事件，并为同一会话分配严格递增序号。"""
         candidates = self._dedupe_event_candidates(events)
@@ -120,6 +121,7 @@ class ConversationEventDao:
                 operator_name=operator_name,
                 events=candidates,
                 now=now,
+                touch_thread=touch_thread,
             )
 
     async def append_events_in_session(
@@ -131,6 +133,7 @@ class ConversationEventDao:
         operator_name: str,
         events: Iterable[dict[str, Any]],
         now: datetime,
+        touch_thread: bool = False,
     ) -> list[ChatDataConversationEvent]:
         """在调用方事务内追加事件，供历史与 Run 水位原子提交。"""
         candidates = self._dedupe_event_candidates(events)
@@ -150,6 +153,15 @@ class ConversationEventDao:
         )
         if thread_id is None:
             raise LookupError(f"conversation not found: {conversation_id}")
+
+        if touch_thread:
+            # 用户提问视为会话活跃：在同一事务内刷新会话行 update_time（行已被 FOR UPDATE 锁住），
+            # 使侧栏「最近更新」排序与后端分组游标跟随真实活跃时间演进。
+            await session.execute(
+                sa_update(UserThread)
+                .where(UserThread.id == thread_id)
+                .values(update_time=now, update_by=user_id or "")
+            )
 
         existing_rows = list((await session.scalars(
             select(ChatDataConversationEvent).where(

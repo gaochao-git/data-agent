@@ -2,6 +2,9 @@ import type { ConversationGroupPage, ConversationGroupView, ConversationItem, Da
 
 export type ConversationViewMode = 'grouped' | 'flat'
 
+// 排序依据：updated 按最近更新（默认），created 按创建时间
+export type ConversationSortBy = 'updated' | 'created'
+
 export const PINNED_GROUP_KEY = 'system:pinned'
 export const FLAT_GROUP_KEY = 'system:flat'
 export const UNCLASSIFIED_GROUP_KEY = 'system:unclassified'
@@ -11,11 +14,18 @@ const getDatasourceGroupLabel = (datasourceName: string): string => (
   RESERVED_GROUP_LABELS.has(datasourceName) ? `${datasourceName}（数据源）` : datasourceName
 )
 
-const sortConversations = (conversations: ConversationItem[]): ConversationItem[] => (
+const sortConversations = (
+  conversations: ConversationItem[],
+  sortBy: ConversationSortBy = 'updated',
+): ConversationItem[] => (
   [...conversations].sort((a, b) => {
     const favoriteDiff = Number(Boolean(b.is_favorited)) - Number(Boolean(a.is_favorited))
     if (favoriteDiff !== 0) return favoriteDiff
-    return String(b.updated_at || b.create_time).localeCompare(String(a.updated_at || a.create_time))
+    // 缺失字段回退到另一侧时间，避免脏数据被排到两端
+    const keyOf = sortBy === 'created'
+      ? (item: ConversationItem) => String(item.create_time || item.updated_at || '')
+      : (item: ConversationItem) => String(item.updated_at || item.create_time || '')
+    return keyOf(b).localeCompare(keyOf(a))
   })
 )
 
@@ -23,8 +33,9 @@ export const buildConversationGroups = (
   conversations: ConversationItem[],
   datasources: Pick<DataSource, 'id' | 'group_name'>[],
   viewMode: ConversationViewMode,
+  sortBy: ConversationSortBy = 'updated',
 ): ConversationGroupView[] => {
-  const sorted = sortConversations(conversations)
+  const sorted = sortConversations(conversations, sortBy)
   if (sorted.length === 0) return []
   if (viewMode === 'flat') {
     return [{ key: FLAT_GROUP_KEY, label: '', items: sorted }]
@@ -71,6 +82,7 @@ export const buildConversationGroupViews = (
   groups: ConversationGroupPage[],
   datasources: Pick<DataSource, 'id' | 'group_name'>[],
   loadingGroupKeys: ReadonlySet<string> = new Set(),
+  sortBy: ConversationSortBy = 'updated',
 ): ConversationGroupView[] => {
   const datasourceNameMap = new Map(datasources.map(datasource => [datasource.id, datasource.group_name]))
   const views = groups.map((group): ConversationGroupView => {
@@ -87,7 +99,7 @@ export const buildConversationGroupViews = (
     return {
       key: group.key,
       label,
-      items: sortConversations(group.conversations),
+      items: sortConversations(group.conversations, sortBy),
       page: group.page,
       has_more: group.has_more,
       next_cursor: group.next_cursor,

@@ -26,6 +26,7 @@ import {
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import { formatDateTimeValue, formatRelativeConversationTime } from '../../utils'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
+import type { ConversationSortBy, ConversationViewMode } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
 const getRunStatusLabel = (status: ConversationItem['run_status']): string => {
@@ -82,6 +83,7 @@ interface Props {
   hasMore?: boolean
   showNewConversationButton?: boolean
   conversationViewMode?: 'grouped' | 'flat'
+  conversationSortBy?: ConversationSortBy
   datasourceId?: string
   semanticConfigs?: SemanticConfigItem[]
   tables?: TableInfo[]
@@ -99,6 +101,7 @@ const props = withDefaults(defineProps<Props>(), {
   hasMore: false,
   showNewConversationButton: true,
   conversationViewMode: 'grouped',
+  conversationSortBy: 'updated',
   datasourceId: '',
   semanticConfigs: undefined,
   tables: () => [],
@@ -115,7 +118,9 @@ const emit = defineEmits<{
   loadMoreConversationGroup: [groupKey: string]
   updateConversationTitle: [conversationId: string, title: string]
   toggleConversationFavorite: [conversationId: string, isFavorited: boolean]
-  toggleConversationViewMode: []
+  updateConversationViewMode: [mode: ConversationViewMode]
+  updateConversationSortBy: [sortBy: ConversationSortBy]
+  refreshConversations: []
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
@@ -153,6 +158,32 @@ const filteredConversationGroups = computed<ConversationGroupView[]>(() => {
     }))
     .filter(group => group.items.length > 0)
 })
+
+// 视图设置弹层：分组方式（按数据源分组 / 单列表）+ 排序方式（最近更新 / 创建时间）。
+// 选中即向父组件上抛并关闭弹层；持久化与列表重载由父组件负责。
+const viewSettingsVisible = ref(false)
+const toggleViewSettings = () => {
+  viewSettingsVisible.value = !viewSettingsVisible.value
+}
+const closeViewSettings = () => {
+  viewSettingsVisible.value = false
+}
+const groupingOptions: Array<{ value: ConversationViewMode; label: string }> = [
+  { value: 'grouped', label: '按数据源分组' },
+  { value: 'flat', label: '单列表' },
+]
+const sortOptions: Array<{ value: ConversationSortBy; label: string }> = [
+  { value: 'updated', label: '最近更新' },
+  { value: 'created', label: '创建时间' },
+]
+const selectGrouping = (mode: ConversationViewMode) => {
+  emit('updateConversationViewMode', mode)
+  closeViewSettings()
+}
+const selectSorting = (sortBy: ConversationSortBy) => {
+  emit('updateConversationSortBy', sortBy)
+  closeViewSettings()
+}
 
 // 指标集列表
 const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
@@ -651,7 +682,7 @@ onUnmounted(() => {
       </div>
       <div class="mx-3 shrink-0 border-t border-slate-100"></div>
 
-      <!-- 会话工具栏：搜索 + 视图切换 -->
+      <!-- 会话工具栏：搜索 + 刷新 + 视图设置 -->
       <div class="flex shrink-0 items-center gap-2 px-3 py-2">
         <div class="relative min-w-0 flex-1">
           <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
@@ -664,13 +695,58 @@ onUnmounted(() => {
         </div>
         <button
           type="button"
-          class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
-          :title="props.conversationViewMode === 'grouped' ? '切换为平铺列表' : '切换为按数据源分组'"
-          @click="emit('toggleConversationViewMode')"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9] disabled:cursor-not-allowed disabled:opacity-60"
+          title="刷新列表"
+          data-testid="conversation-refresh"
+          :disabled="props.isLoading"
+          @click="emit('refreshConversations')"
         >
-          <i :class="props.conversationViewMode === 'grouped' ? 'fa-solid fa-list' : 'fa-solid fa-layer-group'" class="text-[10px]"></i>
-          <span class="conversation-toolbar-btn-text">{{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}</span>
+          <i :class="props.isLoading ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-rotate-right'" class="text-[10px]"></i>
         </button>
+        <div class="relative shrink-0">
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+            :class="viewSettingsVisible ? 'border-[#1f82d9]/40 text-[#1f82d9]' : ''"
+            title="设置列表分组与排序"
+            aria-label="设置列表分组与排序"
+            data-testid="conversation-view-settings"
+            @click="toggleViewSettings"
+          >
+            <i class="fa-solid fa-sliders text-[10px]"></i>
+          </button>
+          <!-- 半透明遮罩兜底点击外部关闭；面板 absolute 挂在按钮容器下，右对齐不溢出侧栏 -->
+          <div v-if="viewSettingsVisible" class="fixed inset-0 z-30" @click="closeViewSettings"></div>
+          <div
+            v-if="viewSettingsVisible"
+            data-testid="conversation-view-settings-panel"
+            class="absolute right-0 top-full z-40 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1.5 shadow-lg"
+          >
+            <div class="px-3 pb-1 pt-1.5 text-[11px] text-slate-400">分组方式</div>
+            <button
+              v-for="option in groupingOptions"
+              :key="option.value"
+              type="button"
+              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 transition-colors hover:bg-slate-50"
+              @click="selectGrouping(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <i v-if="props.conversationViewMode === option.value" class="fa-solid fa-check text-[11px] text-[#1f82d9]"></i>
+            </button>
+            <div class="mx-3 my-1 border-t border-slate-100"></div>
+            <div class="px-3 pb-1 pt-1.5 text-[11px] text-slate-400">排序方式</div>
+            <button
+              v-for="option in sortOptions"
+              :key="option.value"
+              type="button"
+              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 transition-colors hover:bg-slate-50"
+              @click="selectSorting(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <i v-if="props.conversationSortBy === option.value" class="fa-solid fa-check text-[11px] text-[#1f82d9]"></i>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 会话列表 -->
@@ -1064,7 +1140,7 @@ onUnmounted(() => {
 <style scoped>
 /* 会话 Tab 作为容器查询上下文：侧栏拖窄时按宽度分级降级，
    优先级「保标题 > 保时间」。
-   工具栏（新建任务 / 技能管理 / 定时任务 / 平铺·分组）文字始终显示：
+   工具栏（新建任务 / 技能管理 / 定时任务）文字始终显示；刷新与视图设置为纯图标按钮：
    侧栏最窄宽度也放得下，需要让位时由「搜索任务」输入框动态伸缩（flex-1 + min-w-0）。 */
 .conversation-tab-root {
   container-type: inline-size;

@@ -75,6 +75,7 @@ class ConversationEventService:
                 event_type=EVENT_USER_MESSAGE,
                 payload=_serialize_human_message(message),
             )],
+            touch_thread=True,
         )
 
     async def persist_turn(
@@ -348,6 +349,7 @@ class ConversationEventService:
         user_id: str,
         operator_name: str,
         events: list[dict[str, Any]],
+        touch_thread: bool = False,
     ) -> None:
         for attempt in range(1, EVENT_APPEND_MAX_ATTEMPTS + 1):
             try:
@@ -357,6 +359,7 @@ class ConversationEventService:
                     operator_name=operator_name,
                     events=events,
                     now=datetime.now(),
+                    touch_thread=touch_thread,
                 )
                 return
             except Exception as exc:

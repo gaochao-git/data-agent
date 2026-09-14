@@ -163,4 +163,39 @@ describe('useConversationHistoryBrowser', () => {
     expect(history.groupedConversations.value.map(group => group.key)).toEqual(['datasource:ds_a'])
     expect(history.groupedConversations.value[0]?.items[0]?.id).toBe('new-1')
   })
+
+  it('keeps the raw create_time and re-sorts by creation time when sort-by changes', async () => {
+    // 服务端返回 update_time 晚于 create_time 的旧会话：normalize 不得用 update_time 污染 create_time
+    apiMocks.getConversations.mockResolvedValue({
+      status: 'success',
+      data: {
+        conversations: [
+          { id: 'old-updated', title: '老会话刚更新', create_time: '2026-08-01 10:00:00', update_time: '2026-08-14 10:00:00' },
+          { id: 'new-created', title: '新会话', create_time: '2026-08-13 10:00:00', update_time: '2026-08-13 10:00:00' },
+        ],
+        has_more: false,
+      },
+    })
+
+    const sortBy = ref<'updated' | 'created'>('updated')
+    const history = useConversationHistoryBrowser({
+      agentId: 'chat_data',
+      pageSize: 20,
+      viewMode: ref('flat'),
+      datasources: ref([]),
+      sortBy,
+    })
+    await history.ensureConversationsLoaded()
+
+    // 默认按最近更新：老会话刚更新排前；create_time 保持原始创建时间
+    expect(history.groupedConversations.value[0]?.items.map(item => item.id)).toEqual(['old-updated', 'new-created'])
+    expect(history.conversations.value.find(item => item.id === 'old-updated')?.create_time).toBe('2026-08-01 10:00:00')
+
+    sortBy.value = 'created'
+    await Promise.resolve()
+
+    // 切到创建时间排序：computed 依赖 sortBy 自动重排，无需重新请求
+    expect(history.groupedConversations.value[0]?.items.map(item => item.id)).toEqual(['new-created', 'old-updated'])
+    expect(apiMocks.getConversations).toHaveBeenCalledTimes(1)
+  })
 })

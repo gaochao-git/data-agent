@@ -224,3 +224,80 @@ describe('ConversationSidebar conversation row role zone', () => {
     expect(pin.classes()).not.toContain('opacity-100')
   })
 })
+
+describe('ConversationSidebar toolbar: refresh + view settings popover', () => {
+  const mountToolbar = (props: Record<string, unknown> = {}) => mount(ConversationSidebar, {
+    props: {
+      activeTab: 'conversation',
+      semanticConfigs: [],
+      groupedConversations: [{
+        key: 'datasource:ds_a',
+        label: '业务数据',
+        items: [{ id: 'conv-a', title: '查询销售额', create_time: '2026-08-14 10:00:00' }],
+      }],
+      ...props,
+    },
+  })
+
+  it('emits refreshConversations from the manual refresh button', async () => {
+    const wrapper = mountToolbar()
+
+    const refresh = wrapper.find('[data-testid="conversation-refresh"]')
+    expect(refresh.exists()).toBe(true)
+    expect(wrapper.emitted('refreshConversations')).toBeUndefined()
+    await refresh.trigger('click')
+
+    expect(wrapper.emitted('refreshConversations')).toHaveLength(1)
+  })
+
+  it('disables the refresh button while loading', () => {
+    const wrapper = mountToolbar({ isLoading: true })
+
+    expect(wrapper.find('[data-testid="conversation-refresh"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('opens the settings popover, checks current grouping/sorting and emits changes', async () => {
+    const wrapper = mountToolbar({ conversationViewMode: 'grouped', conversationSortBy: 'updated' })
+
+    // 初始不渲染弹层
+    expect(wrapper.find('[data-testid="conversation-view-settings-panel"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="conversation-view-settings"]').trigger('click')
+    const panel = wrapper.find('[data-testid="conversation-view-settings-panel"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('分组方式')
+    expect(panel.text()).toContain('排序方式')
+
+    // 当前选中项带勾
+    const checkRows = panel.findAll('button').filter(button => button.find('.fa-check').exists())
+    expect(checkRows.map(row => row.text().trim())).toEqual(['按数据源分组', '最近更新'])
+
+    // 切到单列表 → 上抛 updateConversationViewMode 并关闭弹层
+    const flatRow = panel.findAll('button').find(button => button.text().trim() === '单列表')
+    await flatRow!.trigger('click')
+    expect(wrapper.emitted('updateConversationViewMode')).toEqual([['flat']])
+    expect(wrapper.find('[data-testid="conversation-view-settings-panel"]').exists()).toBe(false)
+
+    // 再开弹层切排序 → 上抛 updateConversationSortBy
+    await wrapper.find('[data-testid="conversation-view-settings"]').trigger('click')
+    const createdRow = wrapper
+      .find('[data-testid="conversation-view-settings-panel"]')
+      .findAll('button')
+      .find(button => button.text().trim() === '创建时间')
+    await createdRow!.trigger('click')
+    expect(wrapper.emitted('updateConversationSortBy')).toEqual([['created']])
+  })
+
+  it('closes the popover when clicking outside', async () => {
+    const wrapper = mountToolbar({ conversationViewMode: 'flat' })
+
+    await wrapper.find('[data-testid="conversation-view-settings"]').trigger('click')
+    expect(wrapper.find('[data-testid="conversation-view-settings-panel"]').exists()).toBe(true)
+
+    // 半透明遮罩点击即关闭
+    const overlay = wrapper.find('.fixed.inset-0')
+    expect(overlay.exists()).toBe(true)
+    await overlay.trigger('click')
+    expect(wrapper.find('[data-testid="conversation-view-settings-panel"]').exists()).toBe(false)
+  })
+})

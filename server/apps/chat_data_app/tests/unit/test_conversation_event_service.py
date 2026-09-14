@@ -147,6 +147,60 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
 
 
 @pytest.mark.asyncio
+async def test_persist_user_message_touches_thread_update_time_but_turn_does_not(conversation_event_service):
+    """用户提问刷新会话行 update_time（侧栏「最近更新」排序依据），助手轮次不刷新。"""
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-touch", "user-1")
+
+    async def read_thread():
+        async with get_session() as session:
+            row = (await session.scalars(
+                select(UserThread).where(UserThread.thread_id == "conv-touch")
+            )).one()
+            return row.update_time, row.update_by
+
+    initial_time, _ = await read_thread()
+    assert initial_time is not None  # server_default=func.now()，创建时已有值
+
+    user = HumanMessage(content="第一问", id="turn-touch-1")
+    await service.persist_user_message(
+        conversation_id="conv-touch",
+        user_id="user-1",
+        operator_name="用户一",
+        message=user,
+    )
+    touched_time, touched_by = await read_thread()
+    assert touched_time is not None
+    assert touched_time > initial_time
+    assert touched_by == "user-1"
+
+    before_turn = touched_time
+    await service.persist_turn(
+        conversation_id="conv-touch",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-touch-1",
+        messages=[user, AIMessage(content="回答", id="assistant-touch-1")],
+        reasoning_segments=[],
+    )
+    turn_time, turn_by = await read_thread()
+    assert turn_time == before_turn
+    assert turn_by == "user-1"
+
+    # 再次提问继续推进 update_time（严格递增，用睡眠保证时间戳不同）。
+    await asyncio.sleep(0.01)
+    second = HumanMessage(content="第二问", id="turn-touch-2")
+    await service.persist_user_message(
+        conversation_id="conv-touch",
+        user_id="user-1",
+        operator_name="用户一",
+        message=second,
+    )
+    again_time, _ = await read_thread()
+    assert again_time > before_turn
+
+
+@pytest.mark.asyncio
 async def test_token_usage_is_single_upserted_row_per_conversation(conversation_event_service):
     service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-usage", "user-1")

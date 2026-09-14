@@ -63,6 +63,17 @@ describe('conversationHistory', () => {
     expect(groups[0]?.items.map(item => item.id)).toEqual(['favorite', 'new', 'old'])
   })
 
+  it('sorts by creation time when requested, still keeping favorites first', () => {
+    // 更新序与创建序相反：old 会话最近被更新，但创建最早
+    const groups = buildConversationGroups([
+      conversation('updated-old', 'ds_a', { create_time: '2026-08-01 10:00:00', updated_at: '2026-08-14 10:00:00' }),
+      conversation('favorite', 'ds_a', { is_favorited: true, create_time: '2026-07-01 10:00:00', updated_at: '2026-08-10 10:00:00' }),
+      conversation('recent-created', 'ds_a', { create_time: '2026-08-14 09:00:00' }),
+    ], [], 'flat', 'created')
+
+    expect(groups[0]?.items.map(item => item.id)).toEqual(['favorite', 'recent-created', 'updated-old'])
+  })
+
   it('builds every backend group first page without requiring totals', () => {
     const groups = buildConversationGroupViews([
       { key: 'datasource:ds_a', datasource_id: 'ds_a', conversations: [conversation('a', 'ds_a')], page: 1, page_size: 20, has_more: true },

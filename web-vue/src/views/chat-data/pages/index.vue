@@ -38,7 +38,7 @@ import {
   writeLocalStorage,
 } from '../utils'
 import { buildExecutionTargets, isSameStringArray } from '../utils/executionTargets'
-import type { ConversationViewMode } from '../utils/conversationHistory'
+import type { ConversationSortBy, ConversationViewMode } from '../utils/conversationHistory'
 import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
 
 // 模式图标组件映射（经典样式使用）
@@ -582,11 +582,15 @@ const ensureConversationId = async (): Promise<string | null> => {
   return null
 }
 
-// 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺
+// 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺；排序：updated 最近更新（默认），created 创建时间
 const CONVERSATION_VIEW_MODE_KEY = 'chatdata:view-mode'
+const CONVERSATION_SORT_BY_KEY = 'chatdata:sort-by'
 
 const conversationViewMode = ref<ConversationViewMode>(
   readLocalStorage(CONVERSATION_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'grouped',
+)
+const conversationSortBy = ref<ConversationSortBy>(
+  readLocalStorage(CONVERSATION_SORT_BY_KEY) === 'created' ? 'created' : 'updated',
 )
 
 const {
@@ -608,12 +612,25 @@ const {
   pageSize: conversationPageSize,
   viewMode: conversationViewMode,
   datasources: allDatasources,
+  sortBy: conversationSortBy,
 })
 
-const toggleConversationViewMode = () => {
-  conversationViewMode.value = conversationViewMode.value === 'grouped' ? 'flat' : 'grouped'
-  writeLocalStorage(CONVERSATION_VIEW_MODE_KEY, conversationViewMode.value)
+const setConversationViewMode = (mode: ConversationViewMode) => {
+  if (conversationViewMode.value === mode) return
+  conversationViewMode.value = mode
+  writeLocalStorage(CONVERSATION_VIEW_MODE_KEY, mode)
   void ensureConversationsLoaded()
+}
+
+const setConversationSortBy = (sortBy: ConversationSortBy) => {
+  if (conversationSortBy.value === sortBy) return
+  conversationSortBy.value = sortBy
+  writeLocalStorage(CONVERSATION_SORT_BY_KEY, sortBy)
+}
+
+// 手动刷新：强制重载当前视图首屏（ensureConversationsLoaded 内部保留旧数据展示，刷新期间不闪空态）
+const handleRefreshConversations = () => {
+  void ensureConversationsLoaded(true)
 }
 
 // 切换模式
@@ -1612,6 +1629,7 @@ onMounted(async () => {
                   :is-loading-more="isLoadingMoreConversations"
                   :has-more="hasMoreConversations"
                   :conversation-view-mode="conversationViewMode"
+                  :conversation-sort-by="conversationSortBy"
                   :hide-management="!!parentComponentName"
                   @select-conversation="handleHistoryConversationSelect"
                   @new-conversation="handleNewConversation"
@@ -1619,7 +1637,9 @@ onMounted(async () => {
                   @load-more-conversation-group="loadMoreConversationGroup"
                   @update-conversation-title="handleUpdateConversationTitle"
                   @toggle-conversation-favorite="handleToggleConversationFavorite"
-                  @toggle-conversation-view-mode="toggleConversationViewMode"
+                  @update-conversation-view-mode="setConversationViewMode"
+                  @update-conversation-sort-by="setConversationSortBy"
+                  @refresh-conversations="handleRefreshConversations"
                   @open-agent-schedules="handleOpenAgentSchedules"
                   @open-skill-manager="handleOpenSkillManager"
                 />

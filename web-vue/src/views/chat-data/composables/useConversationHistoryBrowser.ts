@@ -5,6 +5,7 @@ import type { ConversationGroupPage, ConversationItem, DataSource } from '../typ
 import {
   buildConversationGroups,
   buildConversationGroupViews,
+  type ConversationSortBy,
   type ConversationViewMode,
 } from '../utils/conversationHistory'
 
@@ -14,10 +15,16 @@ interface ConversationListPayload {
   has_more?: boolean
 }
 
-const sortConversations = (items: ConversationItem[]) => [...items].sort((a, b) => {
+const sortConversations = (
+  items: ConversationItem[],
+  sortBy: ConversationSortBy = 'updated',
+) => [...items].sort((a, b) => {
   const favoriteDiff = Number(Boolean(b.is_favorited)) - Number(Boolean(a.is_favorited))
   if (favoriteDiff !== 0) return favoriteDiff
-  return String(b.updated_at || b.create_time).localeCompare(String(a.updated_at || a.create_time))
+  const keyOf = sortBy === 'created'
+    ? (item: ConversationItem) => String(item.create_time || item.updated_at || '')
+    : (item: ConversationItem) => String(item.updated_at || item.create_time || '')
+  return keyOf(b).localeCompare(keyOf(a))
 })
 
 const normalizeConversation = (raw: unknown, fallbackAgentId: string): ConversationItem => {
@@ -25,7 +32,8 @@ const normalizeConversation = (raw: unknown, fallbackAgentId: string): Conversat
   return {
     id: String(conversation.id || conversation.conversation_id || ''),
     title: String(conversation.title || conversation.first_message_preview || '未命名会话'),
-    create_time: String(conversation.update_time || conversation.create_time || conversation.created_at || ''),
+    // create_time 必须用原始创建时间：排序「按创建时间」与展示兜底都依赖它，不能用 update_time 顶替
+    create_time: String(conversation.create_time || conversation.created_at || ''),
     updated_at: String(conversation.update_time || conversation.updated_at || conversation.create_time || conversation.created_at || ''),
     agent_id: String(conversation.agent_id || fallbackAgentId),
     datasource_id: typeof conversation.datasource_id === 'string' ? conversation.datasource_id : '',
@@ -40,10 +48,14 @@ const normalizeConversations = (rows: unknown[], agentId: string) => rows
   .map(row => normalizeConversation(row, agentId))
   .filter(conversation => Boolean(conversation.id))
 
-const mergeConversations = (current: ConversationItem[], incoming: ConversationItem[]) => {
+const mergeConversations = (
+  current: ConversationItem[],
+  incoming: ConversationItem[],
+  sortBy: ConversationSortBy = 'updated',
+) => {
   const merged = new Map(current.map(item => [item.id, item]))
   incoming.forEach(item => merged.set(item.id, item))
-  return sortConversations([...merged.values()])
+  return sortConversations([...merged.values()], sortBy)
 }
 
 type ConversationUpsert = Pick<ConversationItem, 'id'> & Partial<Omit<ConversationItem, 'id'>>
@@ -53,7 +65,13 @@ export const useConversationHistoryBrowser = (options: {
   pageSize: number
   viewMode: Ref<ConversationViewMode>
   datasources: Ref<DataSource[]>
+  sortBy?: Ref<ConversationSortBy>
 }) => {
+  // 未显式传入时保持历史行为：按最近更新排序
+  const sortBy = options.sortBy ?? ref<ConversationSortBy>('updated')
+  const sortItems = (items: ConversationItem[]) => sortConversations(items, sortBy.value)
+  const mergeItems = (current: ConversationItem[], incoming: ConversationItem[]) =>
+    mergeConversations(current, incoming, sortBy.value)
   const flatConversations = ref<ConversationItem[]>([])
   const groupPages = ref<ConversationGroupPage[]>([])
   const flatPage = ref(1)
@@ -67,9 +85,12 @@ export const useConversationHistoryBrowser = (options: {
   let flatLoadSequence = 0
   let groupedLoadSequence = 0
 
-  const groupedConversations = computed(() => options.viewMode.value === 'flat'
-    ? buildConversationGroups(flatConversations.value, options.datasources.value, 'flat')
-    : buildConversationGroupViews(groupPages.value, options.datasources.value, loadingGroupKeys.value))
+  const groupedConversations = computed(() => {
+    if (options.viewMode.value === 'flat') {
+      return buildConversationGroups(flatConversations.value, options.datasources.value, 'flat', sortBy.value)
+    }
+    return buildConversationGroupViews(groupPages.value, options.datasources.value, loadingGroupKeys.value, sortBy.value)
+  })
 
   const conversations = computed(() => {
     const allItems = [
@@ -99,8 +120,8 @@ export const useConversationHistoryBrowser = (options: {
       const payload = response.data as ConversationListPayload
       const incoming = normalizeConversations(payload.conversations || [], options.agentId)
       flatConversations.value = page === 1
-        ? sortConversations(incoming)
-        : mergeConversations(flatConversations.value, incoming)
+        ? sortItems(incoming)
+        : mergeItems(flatConversations.value, incoming)
       flatPage.value = page
       flatHasMore.value = Boolean(payload.has_more)
       flatLoaded.value = true
@@ -169,7 +190,7 @@ export const useConversationHistoryBrowser = (options: {
       const payload = response.data as ConversationListPayload
       const nextGroup = payload.groups?.[0]
       if (!nextGroup || nextGroup.key !== groupKey) return
-      group.conversations = mergeConversations(
+      group.conversations = mergeItems(
         group.conversations,
         normalizeConversations(nextGroup.conversations || [], options.agentId),
       )
@@ -227,7 +248,7 @@ export const useConversationHistoryBrowser = (options: {
     }
 
     upsert(flatConversations.value)
-    flatConversations.value = sortConversations(flatConversations.value)
+    flatConversations.value = sortItems(flatConversations.value)
 
     const groupKey = mergedConversation.is_favorited
       ? 'system:pinned'
@@ -245,7 +266,7 @@ export const useConversationHistoryBrowser = (options: {
     ))
     if (existingGroup) {
       upsert(existingGroup.conversations)
-      existingGroup.conversations = sortConversations(existingGroup.conversations)
+      existingGroup.conversations = sortItems(existingGroup.conversations)
       return
     }
     groupPages.value.push({
@@ -263,7 +284,7 @@ export const useConversationHistoryBrowser = (options: {
     flatConversations.value.filter(item => item.id === conversationId).forEach(item => {
       item.is_favorited = isFavorited
     })
-    flatConversations.value = sortConversations(flatConversations.value)
+    flatConversations.value = sortItems(flatConversations.value)
     groupedLoaded.value = false
     await loadGroupedFirstPages()
   }
