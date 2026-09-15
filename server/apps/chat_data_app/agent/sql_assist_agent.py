@@ -27,10 +27,18 @@ def create_sql_assist_agent(
     *,
     sql_dialect: str = "MySQL",
     tables_ddl_info: str = "",
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
 ):
     """创建只生成 SQL 的轻量 create_agent。"""
     return create_agent(
-        model=get_chat_data_llm(streaming=True),
+        model=get_chat_data_llm(
+            model=model,
+            streaming=True,
+            enable_thinking=enable_thinking,
+            thinking_effort=thinking_effort,
+        ),
         tools=[],
         system_prompt=build_sql_assist_system_prompt(
             sql_dialect=sql_dialect,

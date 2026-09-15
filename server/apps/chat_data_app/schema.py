@@ -94,6 +94,9 @@ class QuickSqlRequest(BaseModel):
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
     conversation_id: Optional[str] = Field(default=None, description="SQL 辅助会话ID")
+    model_id: Optional[str] = Field(default=None, description="指定生成模型；缺省用系统默认模型")
+    enable_thinking: Optional[bool] = Field(default=None, description="用户显式开关深度思考；None 跟随模型默认")
+    thinking_effort: Optional[str] = Field(default=None, description="思考档位；None 跟随模型默认")
 
 
 class ExecuteSqlRequest(BaseModel):

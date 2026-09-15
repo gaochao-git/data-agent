@@ -1229,7 +1229,11 @@ def test_sql_assist_agent_uses_create_agent(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(name="sql_agent")
 
-    monkeypatch.setattr(sql_assist_agent, "get_chat_data_llm", lambda streaming=True: FakeChatModel())
+    monkeypatch.setattr(
+        sql_assist_agent,
+        "get_chat_data_llm",
+        lambda streaming=True, **_kwargs: FakeChatModel(),
+    )
     monkeypatch.setattr(sql_assist_agent, "create_agent", fake_create_agent)
 
     system_prompt = sql_assist_agent.build_sql_assist_system_prompt(

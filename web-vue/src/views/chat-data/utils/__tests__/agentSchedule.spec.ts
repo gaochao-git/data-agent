@@ -11,17 +11,21 @@ import {
 } from '../agentSchedule'
 
 describe('buildThinkingKeys', () => {
-  it('推理等级留空时用 null 表达清除', () => {
-    expect(buildThinkingKeys('')).toEqual({ enable_thinking: null, thinking_effort: null })
+  it('开关/档位均未触碰时用 null 表达清除（跟随模型默认）', () => {
+    expect(buildThinkingKeys(null, null)).toEqual({ enable_thinking: null, thinking_effort: null })
   })
 
-  it('开关档位写成布尔值', () => {
-    expect(buildThinkingKeys('on')).toEqual({ enable_thinking: true, thinking_effort: null })
-    expect(buildThinkingKeys('off')).toEqual({ enable_thinking: false, thinking_effort: null })
+  it('开关关闭时档位不生效', () => {
+    expect(buildThinkingKeys(false, 'low')).toEqual({ enable_thinking: false, thinking_effort: null })
   })
 
-  it('具体档位写入 thinking_effort 并开启思考', () => {
-    expect(buildThinkingKeys('high')).toEqual({ enable_thinking: true, thinking_effort: 'high' })
+  it('开关开启时写入档位，未选档位则为 null', () => {
+    expect(buildThinkingKeys(true, 'low')).toEqual({ enable_thinking: true, thinking_effort: 'low' })
+    expect(buildThinkingKeys(true, null)).toEqual({ enable_thinking: true, thinking_effort: null })
+  })
+
+  it('开关未触碰但选了档位：保持跟随默认开关语义', () => {
+    expect(buildThinkingKeys(null, 'high')).toEqual({ enable_thinking: null, thinking_effort: 'high' })
   })
 })
 

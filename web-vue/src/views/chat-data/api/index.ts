@@ -1443,6 +1443,12 @@ export function streamQuickSql(data: {
   semantic_config_id?: string
   session_id?: string
   conversation_id?: string
+  /** 指定生成模型；缺省用系统默认模型 */
+  model_id?: string
+  /** 用户显式开关深度思考；缺省跟随模型默认 */
+  enable_thinking?: boolean
+  /** 思考档位；缺省跟随模型默认 */
+  thinking_effort?: string
 }, signal?: AbortSignal): Promise<Response> {
   return requestStream({
     url: '/agents/api/chatdata/nl2sql',

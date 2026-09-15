@@ -11,15 +11,17 @@ import {
   deleteAgentSchedule,
   getAgentScheduleRuns,
   getAgentSchedules,
-  getChatDataConfig,
   getConversations,
   getDatasources,
   triggerAgentScheduleNow,
   updateAgentSchedule
 } from '../api'
-import type { AgentScheduleItem, AgentSchedulePayload, AgentScheduleRunItem, ChatDataModelOption, ConversationItem, DataSource } from '../types'
+import { useModelOptions } from '../composables'
+import type { AgentScheduleItem, AgentSchedulePayload, AgentScheduleRunItem, ConversationItem, DataSource } from '../types'
 import { formatDateTimeValue } from '../utils'
 import AgentScheduleRunsTable from './AgentScheduleRunsTable.vue'
+import ChatInputBox from './ChatInputBox.vue'
+import ModelPicker from './ModelPicker.vue'
 import {
   WEEKLY_DAY_OPTIONS,
   buildRuntimeOptionsPatch,
@@ -64,7 +66,10 @@ const form = ref({
   conversationMode: 'fixed' as 'fixed' | 'new_each_run',
   conversationId: '',
   modelId: '',
-  thinkingEffort: '',
+  /** 三态：true/false 用户显式选择；null 未触碰（跟随模型默认） */
+  enableThinking: null as boolean | null,
+  /** 思考档位；null 未选择（跟随模型默认） */
+  thinkingEffort: null as string | null,
   cronPreset: 'daily' as ScheduleCronPreset,
   hourlyMinute: 0,
   dailyTime: '09:00',
@@ -126,31 +131,14 @@ const loadDatasourceOptions = async (force = false) => {
   }
 }
 
-// 模型与推理等级选项：来自运行时配置的模型注册表（含思考能力声明）
-const modelOptions = ref<ChatDataModelOption[]>([])
-const loadModelOptions = async (force = false) => {
-  if (modelOptions.value.length && !force) return
-  try {
-    const res = await getChatDataConfig()
-    if (res.status === 'success') {
-      modelOptions.value = (res.data.models || []) as ChatDataModelOption[]
-    }
-  } catch (err) {
-    console.error('加载模型列表失败:', err)
-  }
+// 模型选项：与主对话共用同一份加载逻辑（含思考能力声明）
+const { modelOptions, load: loadModelOptions } = useModelOptions()
+
+// 切换模型后原思考档位可能不被新模型支持，重置回「跟随模型默认」
+const onModelChange = (modelId: string) => {
+  form.value.modelId = modelId
+  form.value.thinkingEffort = null
 }
-
-const selectedModelThinking = computed(() =>
-  modelOptions.value.find(option => option.id === form.value.modelId)?.thinking || null
-)
-
-// 推理等级选项：模型不支持推理时禁用；有声明档位用档位，否则给开关两档
-const thinkingEffortOptions = computed(() => {
-  const thinking = selectedModelThinking.value
-  if (!thinking || thinking.mode === 'none') return []
-  if (thinking.efforts?.length) return thinking.efforts
-  return ['on', 'off']
-})
 
 const shortConversationId = (conversationId: string): string =>
   `${String(conversationId || '').slice(0, 8)}…`
@@ -209,7 +197,8 @@ const resetForm = () => {
     conversationMode: props.conversationId ? 'fixed' : 'new_each_run',
     conversationId: props.conversationId || '',
     modelId: '',
-    thinkingEffort: '',
+    enableThinking: null,
+    thinkingEffort: null,
     cronPreset: 'daily',
     hourlyMinute: 0,
     dailyTime: '09:00',
@@ -227,7 +216,7 @@ const resetForm = () => {
 const currentRuntimeOptions = (): Record<string, unknown> => ({
   datasource_id: selectedDatasourceId.value || null,
   model_id: form.value.modelId || null,
-  ...buildThinkingKeys(form.value.thinkingEffort)
+  ...buildThinkingKeys(form.value.enableThinking, form.value.thinkingEffort)
 })
 
 const openCreate = () => {
@@ -242,14 +231,21 @@ const openCreate = () => {
   editorVisible.value = true
 }
 
-/** 从任务运行配置还原推理等级：显式档位优先，其次开关语义，都没有则留空 */
-const resolveThinkingEffort = (jobOptions: Record<string, unknown>): string => {
-  if (jobOptions.thinking_effort !== undefined && jobOptions.thinking_effort !== null) {
-    return String(jobOptions.thinking_effort)
+/** 编辑回显：任务运行配置 → 开关/档位三态（兼容旧数据仅存 effort 字符串的形态） */
+const resolveThinkingState = (
+  jobOptions: Record<string, unknown>
+): { enableThinking: boolean | null; thinkingEffort: string | null } => {
+  const rawEffort = typeof jobOptions.thinking_effort === 'string' ? jobOptions.thinking_effort.trim() : ''
+  const rawEnable = jobOptions.enable_thinking
+  if (rawEnable === true || rawEnable === false) {
+    // 开关已显式时，on/off 只是旧编码的开关语义，不作为档位回显
+    const effort = rawEffort === 'on' || rawEffort === 'off' ? '' : rawEffort
+    return { enableThinking: rawEnable, thinkingEffort: effort || null }
   }
-  if (jobOptions.enable_thinking === true) return 'on'
-  if (jobOptions.enable_thinking === false) return 'off'
-  return ''
+  if (rawEffort === 'on') return { enableThinking: true, thinkingEffort: null }
+  if (rawEffort === 'off') return { enableThinking: false, thinkingEffort: null }
+  if (rawEffort) return { enableThinking: true, thinkingEffort: rawEffort }
+  return { enableThinking: null, thinkingEffort: null }
 }
 
 /** 编辑回显：任务字段 → 表单（cron 能反解析回预设档位时按结构化控件展示，否则回落自定义） */
@@ -261,7 +257,8 @@ const applyJobToForm = (job: AgentScheduleItem) => {
     conversationMode: job.conversation_mode || 'fixed',
     conversationId: job.conversation_id || '',
     modelId: '',
-    thinkingEffort: '',
+    enableThinking: null,
+    thinkingEffort: null,
     cronPreset: parsed?.cronPreset || (job.schedule_type === 'once' ? 'once' : 'custom'),
     hourlyMinute: parsed?.hourlyMinute ?? 0,
     dailyTime: parsed?.dailyTime || '09:00',
@@ -273,8 +270,10 @@ const applyJobToForm = (job: AgentScheduleItem) => {
   }
   selectedDatasourceId.value = job.datasource_id || ''
   const jobOptions = (job.options || {}) as Record<string, unknown>
+  const thinkingState = resolveThinkingState(jobOptions)
   form.value.modelId = String(jobOptions.model_id || '')
-  form.value.thinkingEffort = resolveThinkingEffort(jobOptions)
+  form.value.enableThinking = thinkingState.enableThinking
+  form.value.thinkingEffort = thinkingState.thinkingEffort
 }
 
 /** 编辑基线：取「表单当前值的规范化结果」，保证未改动的键不会因格式差异被下发 */
@@ -282,7 +281,7 @@ const buildBaselineFromJob = (job: AgentScheduleItem): ScheduleFormBaseline => (
   options: {
     datasource_id: selectedDatasourceId.value || null,
     model_id: form.value.modelId || null,
-    ...buildThinkingKeys(form.value.thinkingEffort)
+    ...buildThinkingKeys(form.value.enableThinking, form.value.thinkingEffort)
   },
   scheduleType: job.schedule_type,
   cronExpr: job.cron_expr || '',
@@ -646,53 +645,28 @@ defineExpose({ ensureLoaded })
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-slate-600">指令</label>
-          <el-input
-            v-model="form.prompt"
-            type="textarea"
-            :rows="3"
-            maxlength="2000"
-            show-word-limit
+          <ChatInputBox
+            v-model:input="form.prompt"
             placeholder="例如：汇总昨日的销售额和订单量，生成简要分析"
-          />
-        </div>
-        <div class="flex flex-wrap items-center gap-3">
-          <div class="min-w-0 flex-1">
-            <label class="mb-1 block text-xs font-medium text-slate-600">模型<span class="ml-1 font-normal text-slate-400">（留空使用系统默认）</span></label>
-            <el-select
-              v-model="form.modelId"
-              filterable
-              clearable
-              placeholder="系统默认"
-              size="small"
-              class="!w-full"
-              @change="form.thinkingEffort = ''"
-            >
-              <el-option
-                v-for="model in modelOptions"
-                :key="model.id"
-                :label="model.label"
-                :value="model.id"
+            :show-submit="false"
+            :submit-on-enter="false"
+            :min-rows="3"
+            :max-height="160"
+            :maxlength="2000"
+          >
+            <template #actions>
+              <ModelPicker
+                :selected-model="form.modelId"
+                :model-options="modelOptions"
+                :enable-deep-thinking="form.enableThinking"
+                :thinking-effort="form.thinkingEffort"
+                :allow-empty="true"
+                @update:selected-model="onModelChange"
+                @update:enable-deep-thinking="form.enableThinking = $event"
+                @update:thinking-effort="form.thinkingEffort = $event"
               />
-            </el-select>
-          </div>
-          <div class="min-w-0 flex-1">
-            <label class="mb-1 block text-xs font-medium text-slate-600">推理等级</label>
-            <el-select
-              v-model="form.thinkingEffort"
-              clearable
-              placeholder="跟随模型默认"
-              size="small"
-              class="!w-full"
-              :disabled="!thinkingEffortOptions.length"
-            >
-              <el-option
-                v-for="effort in thinkingEffortOptions"
-                :key="effort"
-                :label="effort === 'on' ? '开启' : effort === 'off' ? '关闭' : effort"
-                :value="effort"
-              />
-            </el-select>
-          </div>
+            </template>
+          </ChatInputBox>
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-slate-600">调度</label>

@@ -5,13 +5,14 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../types'
 import { useSqlGenerator, type RunDoneStatus } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
+import { useModelOptions } from '../composables/useModelOptions'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteConversationWorkspaceFile, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteConversationWorkspaceFile, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -79,7 +80,12 @@ const { generateSqlStream, stopGeneration } = useSqlGenerator()
 const userOverridable = ref(false)
 const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
 const selectedRuntimeOptions = ref({ ...defaultRuntimeOptions.value })
-const modelOptions = ref<ChatDataModelOption[]>([])
+// 模型列表与运行时配置：与其他入口共用同一份加载逻辑
+const {
+  modelOptions,
+  config: chatDataConfig,
+  load: loadModelOptions,
+} = useModelOptions()
 const selectedModel = computed({
   get: () => props.selectedModelId || '',
   set: (value: string) => emit('update:selectedModelId', value),
@@ -2299,27 +2305,24 @@ const handleSkillSelect = (skill: SkillInfo) => {
   inputBarRef.value?.focus()
 }
 
-const loadModelOptions = async () => {
-  try {
-    const response = await getChatDataConfig()
-    const models = response.data?.models || []
-    const cfg = response.data?.runtime_options
-    defaultRuntimeOptions.value = {
-      workspace_backend: cfg?.workspace_backend === 'sandbox' ? 'sandbox' : 'local',
-      bash_enabled: !!cfg?.bash_enabled,
-    }
-    userOverridable.value = !!response.data?.user_overridable
-    selectedRuntimeOptions.value = { ...defaultRuntimeOptions.value }
-    modelOptions.value = models
-    const defaultModel = models.find(item => item.is_default)?.id || models[0]?.id || ''
-    if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
-      selectedModel.value = defaultModel
-    }
-  } catch (err) {
-    modelOptions.value = []
-    console.error('加载模型列表失败:', err)
+watch(chatDataConfig, (data) => {
+  if (!data) return
+  const cfg = data.runtime_options
+  defaultRuntimeOptions.value = {
+    workspace_backend: cfg?.workspace_backend === 'sandbox' ? 'sandbox' : 'local',
+    bash_enabled: !!cfg?.bash_enabled,
   }
-}
+  userOverridable.value = !!data.user_overridable
+  selectedRuntimeOptions.value = { ...defaultRuntimeOptions.value }
+})
+
+// 当前选中模型不在注册表中时回填默认模型（如配置变更后）
+watch(modelOptions, (models) => {
+  const defaultModel = models.find(item => item.is_default)?.id || models[0]?.id || ''
+  if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
+    selectedModel.value = defaultModel
+  }
+})
 
 onMounted(() => {
   loadModelOptions()

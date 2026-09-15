@@ -8,6 +8,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
+import { useModelOptions } from '../composables/useModelOptions'
 import { useQueryTask } from '../composables/useQueryTask'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
@@ -17,6 +18,8 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
+import ChatInputBox from './ChatInputBox.vue'
+import ModelPicker from './ModelPicker.vue'
 import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded, renderMarkdown } from '../utils'
 import useUserStore from '@/store/modules/user'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
@@ -900,7 +903,18 @@ const showAiPanel = ref(false)
 const aiQuery = ref('')
 const isAiGenerating = ref(false)
 const aiMessages = ref<AiChatMessage[]>([])
-const aiInputRef = ref<HTMLInputElement | null>(null)
+const aiInputRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
+// AI 生成模型选择：与主对话口径一致，模型必选并回填默认模型
+const aiModelId = ref('')
+const aiEnableDeepThinking = ref<boolean | null>(null)
+const aiThinkingEffort = ref<string | null>(null)
+const { modelOptions, defaultModelId, load: loadModelOptions } = useModelOptions()
+// 模型加载完成后回填默认模型；选中模型失效（配置变更）时同样回退
+watch(defaultModelId, (id) => {
+  if (id && !modelOptions.value.some(model => model.id === aiModelId.value)) {
+    aiModelId.value = id
+  }
+})
 const aiOutputRef = ref<HTMLDivElement | null>(null)
 const isAiOutputNearBottom = ref(true)
 let abortController: AbortController | null = null
@@ -1740,6 +1754,9 @@ const handleAiGenerate = async () => {
       member_datasource_ids: selectedMemberDatasourceIds.value,
       session_id: aiSessionId.value,
       conversation_id: conversationId,
+      model_id: aiModelId.value || undefined,
+      enable_thinking: aiEnableDeepThinking.value ?? undefined,
+      thinking_effort: aiThinkingEffort.value ?? undefined,
     }, abortController.signal)
 
     if (aiGenerationSeq.value !== generationSeq) return
@@ -1966,6 +1983,7 @@ watch(showAiPanel, (show) => {
 
 onMounted(() => {
   loadRuntimeConfig()
+  loadModelOptions()
   document.addEventListener('click', handleDocumentClick)
   document.addEventListener('mousemove', onMouseMove)
   document.addEventListener('mouseup', onMouseUp)
@@ -2329,40 +2347,33 @@ defineExpose({
             </template>
           </div>
 
-          <!-- AI 输入区域 -->
+          <!-- AI 输入区域：与主对话共用输入壳与模型选择 -->
           <div class="p-3 bg-[#FAFAFA] border-t border-black/[0.06]">
-            <div class="flex items-center gap-2 px-3 py-2 rounded-[20px] bg-white border border-black/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-              <input
-                ref="aiInputRef"
-                v-model="aiQuery"
-                type="text"
-                placeholder="描述你想查询的数据..."
-                class="flex-1 border-none bg-transparent text-[13px] outline-none text-gray-900 placeholder:text-gray-400"
-                @keydown.enter.prevent="!isAiGenerating && handleAiGenerate()"
-              />
-              <button
-                v-if="isAiGenerating"
-                type="button"
-                class="relative w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200 animate-breathe hover:scale-105 active:scale-95"
-                title="停止生成"
-                @click="handleStopGenerate"
-              >
-                <i class="fa-solid fa-stop"></i>
-                <span class="absolute inset-0 rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] opacity-40 animate-ping"></span>
-              </button>
-              <button
-                v-else
-                type="button"
-                :class="[
-                  'w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200',
-                  !aiQuery.trim() ? 'bg-gray-200 shadow-none cursor-not-allowed text-gray-400' : 'hover:scale-105 active:scale-95'
-                ]"
-                :disabled="!aiQuery.trim()"
-                @click="handleAiGenerate"
-              >
-                <i class="fa-solid fa-arrow-up"></i>
-              </button>
-            </div>
+            <ChatInputBox
+              ref="aiInputRef"
+              v-model:input="aiQuery"
+              placeholder="描述你想查询的数据..."
+              :is-generating="isAiGenerating"
+              :can-submit="!!aiQuery.trim()"
+              submit-title="生成 SQL (Enter)"
+              :max-height="120"
+              :maxlength="4000"
+              @submit="!isAiGenerating && handleAiGenerate()"
+              @stop="handleStopGenerate"
+            >
+              <template #actions>
+                <ModelPicker
+                  :selected-model="aiModelId"
+                  :model-options="modelOptions"
+                  :enable-deep-thinking="aiEnableDeepThinking"
+                  :thinking-effort="aiThinkingEffort"
+                  :is-generating="isAiGenerating"
+                  @update:selected-model="aiModelId = $event"
+                  @update:enable-deep-thinking="aiEnableDeepThinking = $event"
+                  @update:thinking-effort="aiThinkingEffort = $event"
+                />
+              </template>
+            </ChatInputBox>
           </div>
         </div>
 	      </div>

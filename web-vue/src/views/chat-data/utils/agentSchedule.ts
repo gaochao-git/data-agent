@@ -216,11 +216,13 @@ export const createScheduleBaseline = (): ScheduleFormBaseline => ({
   effectiveEndTime: ''
 })
 
-/** 推理等级 → 运行选项键：'' 清除、on/off 用开关、其余为档位 */
-export const buildThinkingKeys = (effort: string): Record<string, unknown> => {
-  if (!effort) return { enable_thinking: null, thinking_effort: null }
-  if (effort === 'on' || effort === 'off') return { enable_thinking: effort === 'on', thinking_effort: null }
-  return { enable_thinking: true, thinking_effort: effort }
+/** 思考开关/档位 → 运行选项键：开关 null 表示跟随模型默认；关闭时档位不生效 */
+export const buildThinkingKeys = (
+  enableThinking: boolean | null,
+  effort: string | null
+): Record<string, unknown> => {
+  if (enableThinking === false) return { enable_thinking: false, thinking_effort: null }
+  return { enable_thinking: enableThinking, thinking_effort: effort || null }
 }
 
 /**

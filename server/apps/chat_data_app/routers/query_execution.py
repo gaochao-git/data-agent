@@ -163,6 +163,9 @@ async def _stream_sql_assist_chunks(
     *,
     source_type: str,
     tables_ddl_info: str,
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
 ):
     config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
     async with agent_module.get_checkpointer() as checkpointer:
@@ -170,6 +173,9 @@ async def _stream_sql_assist_chunks(
             checkpointer,
             sql_dialect=source_type,
             tables_ddl_info=tables_ddl_info,
+            model=model,
+            enable_thinking=enable_thinking,
+            thinking_effort=thinking_effort,
         )
         async for chunk, metadata in agent.astream(
             {"messages": [user_message]},
@@ -220,6 +226,9 @@ async def _generate_quick_sql_stream(
                 user_message=user_message,
                 source_type=source_type or "",
                 tables_ddl_info=tables_ddl_info or "",
+                model=payload.model_id,
+                enable_thinking=payload.enable_thinking,
+                thinking_effort=payload.thinking_effort,
             ):
                 full_content += content
                 yield _sse_event({"type": "chunk", "content": content})
