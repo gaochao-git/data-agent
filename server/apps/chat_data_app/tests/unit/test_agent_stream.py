@@ -21,7 +21,7 @@ from apps.chat_data_app.agent_run_support import (
     _prepare_conversation_workspace_sync,
     prepare_conversation_workspace,
 )
-from apps.chat_data_app.handlers import (
+from apps.chat_data_app.agent_stream import (
     _coerce_tool_args,
     _extract_reasoning_content,
     _format_reasoning_for_display,
@@ -110,15 +110,15 @@ def _stub_semantic_conversation_context(monkeypatch):
         return requested_datasource_id
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.conversation.resolve_datasource_binding",
+        "apps.chat_data_app.agent_stream.conversation.resolve_datasource_binding",
         resolve_datasource_binding,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.conversation_event_service.persist_user_message",
+        "apps.chat_data_app.agent_stream.conversation_event_service.persist_user_message",
         noop_event_write,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.conversation_event_service.persist_turn",
+        "apps.chat_data_app.agent_stream.conversation_event_service.persist_turn",
         noop_event_write,
     )
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”，
@@ -457,13 +457,13 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
         events=[(_FakeMessageChunk(content="5+5=10"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)
         return fake_graph
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
     _override_semantic_context(monkeypatch)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
@@ -497,8 +497,8 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
             state=SimpleNamespace(tasks=[], values={}),
         )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
     async def partial_prematerialize(**_kwargs):
         return {"total": 2, "failed_ids": ["sc_broken"]}
@@ -534,8 +534,8 @@ def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(mon
         agent_calls["count"] += 1
         return _FakeGraph(events=[], state=SimpleNamespace(tasks=[], values={}))
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
     async def failing_prematerialize(**_kwargs):
         raise RuntimeError("workspace 写盘失败")
@@ -582,7 +582,7 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
         events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.build_runtime_skill_snapshot_async", fake_build_snapshot)
 
@@ -590,7 +590,7 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
         captured_agent_kwargs.update(kwargs)
         return fake_graph
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_snapshot",
@@ -631,8 +631,8 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_select_tool_event",
@@ -669,8 +669,8 @@ def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection
         "user_selected": True,
     }
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_user_selected_semantic",
@@ -700,8 +700,8 @@ def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_skill_names",
@@ -735,8 +735,8 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_multiple_semantic_search_event",
@@ -774,8 +774,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_retrieval_tool_event",
@@ -811,8 +811,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_cross_config_retrieval",
@@ -836,8 +836,8 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_selected_semantic_no_precheck",
@@ -860,8 +860,8 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_keep_semantic",
@@ -884,8 +884,8 @@ def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(m
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_selected_ambiguous_semantic",
@@ -907,8 +907,8 @@ def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_no_preblock_semantic",
@@ -941,8 +941,8 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_multiple_semantic",
@@ -977,8 +977,8 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_cross_semantic_retrieval",
@@ -1008,8 +1008,8 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
         state=SimpleNamespace(tasks=[], values={"token_usage": {"total_tokens": 12}}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_a",
@@ -1041,13 +1041,13 @@ def test_generate_chat_data_stream_projects_visible_members_from_shared_context(
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)
         return fake_graph
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
     asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_members",
@@ -1075,13 +1075,13 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)
         return fake_graph
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
     _override_semantic_context(
         monkeypatch,
         datasource_group_context="当前数据源组按执行对象数据源分库",
@@ -1111,13 +1111,13 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)
         return fake_graph
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
     asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_member_selected",
@@ -1138,8 +1138,8 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True))
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True))
 
     events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_error",
@@ -1164,8 +1164,8 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
             raise ContextInputLimitExceededError("当前输入内容过长，请拆分问题后重试。")
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
 
     events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_context_limit",
@@ -1211,8 +1211,8 @@ def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypa
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_disconnect",
@@ -1236,8 +1236,8 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
         (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "model"}),
         (_FakeMessageChunk(content="完成"), {"langgraph_node": "model"}),
     ])
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
         thread_id="conv_state_fail",
@@ -1275,13 +1275,13 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
             "payload": _format_sse("done", "[DONE]"),
         }
 
-    monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", fake_get_or_create)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.conversation.get_or_create_conversation", fake_get_or_create)
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.agent_inbox_service.start_run",
+        "apps.chat_data_app.agent_stream.agent_inbox_service.start_run",
         fake_start_run,
     )
-    monkeypatch.setattr("apps.chat_data_app.handlers.agent_run_runtime.submit", fake_submit)
-    monkeypatch.setattr("apps.chat_data_app.handlers.agent_run_event_service.stream", fake_event_stream)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.agent_run_runtime.submit", fake_submit)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.agent_run_event_service.stream", fake_event_stream)
 
     response = asyncio.run(sql_completion_handler(
         conversation_id="conv_sql",

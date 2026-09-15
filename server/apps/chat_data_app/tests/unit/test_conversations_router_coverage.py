@@ -378,7 +378,7 @@ async def test_resume_question_full_flow_and_errors(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", wait_done)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", latest_event_id)
 
-    import apps.chat_data_app.handlers as handlers_mod
+    import apps.chat_data_app.agent_stream as handlers_mod
     monkeypatch.setattr(handlers_mod, "resume_chat_data_question_handler", resume_handler)
 
     result = await conversation_router._resume_question(

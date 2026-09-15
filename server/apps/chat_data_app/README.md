@@ -121,7 +121,7 @@ index.vue
   -> api/index.ts: streamCompletion()
   -> POST /agents/api/chatdata/conversations/{conversation_id}/completion
   -> routers/conversations.py: completion()
-  -> handlers.py: sql_completion_handler()
+  -> agent_stream.py: sql_completion_handler()
   -> agent/data_agent.py
   -> dsl2sql_tool / semantic_query_tool
   -> services/semantic/run/semantic_query_service.py
@@ -486,7 +486,7 @@ chat_data_app/
 ├── tests/
 │   ├── unit/                          # 默认单元测试
 │   └── api/                           # 开发阶段手动执行的 API 契约测试
-└── handlers.py                        # SSE 流式响应
+└── agent_stream.py                    # SSE 流式响应
 ```
 
 ### 关键组件说明

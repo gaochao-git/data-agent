@@ -1,8 +1,8 @@
-"""SQL completion 链路的运行参数解析（从 handlers.py 归位到 agent/run）。
+"""SQL completion 链路的运行参数解析（自 HTTP 入口层归位到 agent/run）。
 
 供 sql_completion_handler 与 agent_schedule_runtime 派发链路共用，
 保证两条入口的 options 字段解析口径一致；模块仅依赖标准库，
-避免派发链路反向依赖 handlers 的重装配。
+避免派发链路反向依赖入口层的重装配。
 """
 
 from dataclasses import dataclass

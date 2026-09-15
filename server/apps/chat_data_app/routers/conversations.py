@@ -773,8 +773,8 @@ async def _resume_question(
         question_id,
         answer,
     )
-    # 延迟导入用于打破 handlers -> routers 注册链的循环依赖。
-    from ..handlers import resume_chat_data_question_handler
+    # 延迟导入用于打破 agent_stream -> routers 注册链的循环依赖。
+    from ..agent_stream import resume_chat_data_question_handler
     return await resume_chat_data_question_handler(
         conversation_id=conversation_id,
         user_id=user_id,

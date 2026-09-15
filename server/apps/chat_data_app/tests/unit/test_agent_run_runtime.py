@@ -278,7 +278,7 @@ async def test_done_is_published_after_failed_run_is_closed(monkeypatch):
 async def test_handler_stream_failure_exception_closes_run_as_failed(monkeypatch):
     """真实链路契约：Handler 生成器产出 error 事实后抛 AgentRunStreamFailedError，
     Runtime 必须走 finish_run("failed") 收口，绝不能落入 complete_run 误标 finished。"""
-    from apps.chat_data_app.handlers import AgentRunStreamFailedError
+    from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
 
     order = []
     published_done = []

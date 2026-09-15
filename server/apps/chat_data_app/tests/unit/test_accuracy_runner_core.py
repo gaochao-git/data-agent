@@ -262,9 +262,9 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
 
         return StreamingResponse(body(), media_type="text/event-stream")
 
-    import apps.chat_data_app.handlers as handlers
+    import apps.chat_data_app.agent_stream as agent_stream
 
-    monkeypatch.setattr(handlers, "sql_completion_handler", fake_sql_handler)
+    monkeypatch.setattr(agent_stream, "sql_completion_handler", fake_sql_handler)
 
     traces, error = await runner.consume_internal_completion(
         conversation_id="conv_1",

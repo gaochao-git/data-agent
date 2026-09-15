@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, HumanMessageChunk, ToolMessage, ToolMessageChunk
 
-from apps.chat_data_app import agent_run_support, handlers
+from apps.chat_data_app import agent_run_support, agent_stream
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 
 
@@ -16,9 +16,9 @@ def _stub_datasource_binding(monkeypatch):
     async def resolve_binding(_conversation_id, _user_id, requested_datasource_id):
         return requested_datasource_id
 
-    monkeypatch.setattr(handlers.conversation, "resolve_datasource_binding", resolve_binding)
-    monkeypatch.setattr(handlers.conversation_event_service, "persist_user_message", noop_event_write)
-    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", noop_event_write)
+    monkeypatch.setattr(agent_stream.conversation, "resolve_datasource_binding", resolve_binding)
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_user_message", noop_event_write)
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_turn", noop_event_write)
 
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
     async def noop_prematerialize(**_kwargs):
@@ -99,7 +99,7 @@ async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monk
     events = []
 
     with pytest.raises(RuntimeError, match="semantic context failed"):
-        async for event in handlers._generate_chat_data_stream(
+        async for event in agent_stream._generate_chat_data_stream(
             thread_id="conv-1",
             user_query="查询订单",
         ):
@@ -122,13 +122,13 @@ async def _collect_stream_until_failure(generator):
     try:
         async for chunk in generator:
             chunks.append(chunk)
-    except handlers.AgentRunStreamFailedError as exc:
+    except agent_stream.AgentRunStreamFailedError as exc:
         return chunks, exc
     return chunks, None
 
 
 def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     started = state.handle_tool_calls([
         {"id": "call-1", "name": "semantic_query_tool", "args": {"dsl": {}}},
@@ -183,7 +183,7 @@ async def test_agent_sse_stream_adapter_forwards_valid_tool_progress_only():
             }
             yield "custom", {"type": "tool_progress", "tool_call_id": "call-2"}
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=Agent(),
         initial_state={},
         config={},
@@ -201,8 +201,8 @@ async def test_agent_sse_stream_adapter_emits_queued_and_custom_steer_events():
         async def astream(self, *_args, **_kwargs):
             yield "custom", {"type": "inbox_admitted", "message_ids": ["message-2"]}
 
-    adapter = handlers._AgentSseStreamAdapter(agent=Agent(), initial_state={}, config={})
-    adapter.queue_event(handlers._format_sse("inbox_admitted", {"message_ids": ["message-1"]}))
+    adapter = agent_stream._AgentSseStreamAdapter(agent=Agent(), initial_state={}, config={})
+    adapter.queue_event(agent_stream._format_sse("inbox_admitted", {"message_ids": ["message-1"]}))
 
     events = await collect_stream(adapter.stream_events())
 
@@ -239,7 +239,7 @@ async def test_stream_agent_turn_emits_question_and_skips_message_end():
 
     events = [event async for event in stream_agent_turn(
         stream_adapter=InterruptAdapter(),
-        format_sse=handlers._format_sse,
+        format_sse=agent_stream._format_sse,
         persist_user_message=noop,
         persist_turn_history=noop,
         persist_partial_history=noop,
@@ -299,49 +299,49 @@ class FakeCheckpointer:
 
 
 def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
-    assert handlers._resolve_active_tool_call_id(None, "active", []) == "active"
-    assert handlers._resolve_active_tool_call_id(None, None, ["older", "latest"]) == "latest"
-    assert handlers._resolve_active_tool_call_id(None, None, []) is None
+    assert agent_stream._resolve_active_tool_call_id(None, "active", []) == "active"
+    assert agent_stream._resolve_active_tool_call_id(None, None, ["older", "latest"]) == "latest"
+    assert agent_stream._resolve_active_tool_call_id(None, None, []) is None
 
     running = ["a", "b"]
-    assert handlers._finish_running_tool(running, "b", "b") == "a"
+    assert agent_stream._finish_running_tool(running, "b", "b") == "a"
     assert running == ["a"]
-    assert handlers._finish_running_tool(running, "a", "missing") == "a"
+    assert agent_stream._finish_running_tool(running, "a", "missing") == "a"
 
-    assert handlers._parse_tool_args_buffer("", {"x": 1}) == {"x": 1}
-    assert handlers._parse_tool_args_buffer("[bad", {"x": 1}) == {"x": 1}
-    assert handlers._parse_tool_args_buffer("[1]", {"x": 1}) == {"x": 1}
-    assert handlers._parse_tool_args_buffer('{"x": 2}', {"x": 1}) == {"x": 2}
+    assert agent_stream._parse_tool_args_buffer("", {"x": 1}) == {"x": 1}
+    assert agent_stream._parse_tool_args_buffer("[bad", {"x": 1}) == {"x": 1}
+    assert agent_stream._parse_tool_args_buffer("[1]", {"x": 1}) == {"x": 1}
+    assert agent_stream._parse_tool_args_buffer('{"x": 2}', {"x": 1}) == {"x": 2}
 
-    assert handlers._is_tool_result_error("") is False
-    assert handlers._is_tool_result_error("[dashboard_write] bad json") is False
-    assert handlers._is_tool_result_error('[dashboard_write] {"success": false}') is False
+    assert agent_stream._is_tool_result_error("") is False
+    assert agent_stream._is_tool_result_error("[dashboard_write] bad json") is False
+    assert agent_stream._is_tool_result_error('[dashboard_write] {"success": false}') is False
     # 成败只认显式协议位（native status / query_result envelope），任何文本模式都不再判定
-    assert handlers._is_tool_result_error("error: bad") is False
-    assert handlers._is_tool_result_error("执行失败") is False
-    assert handlers._is_tool_result_error("正文中间提到执行失败也不算") is False
-    assert handlers._is_tool_result_error("bash_run 执行失败: exit 1") is False
-    assert handlers._is_tool_result_error("file_read 工具错误: 文件不存在") is False
-    assert handlers._is_tool_result_error('{"type":"query_result","status":"failed"}') is True
-    assert handlers._is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
+    assert agent_stream._is_tool_result_error("error: bad") is False
+    assert agent_stream._is_tool_result_error("执行失败") is False
+    assert agent_stream._is_tool_result_error("正文中间提到执行失败也不算") is False
+    assert agent_stream._is_tool_result_error("bash_run 执行失败: exit 1") is False
+    assert agent_stream._is_tool_result_error("file_read 工具错误: 文件不存在") is False
+    assert agent_stream._is_tool_result_error('{"type":"query_result","status":"failed"}') is True
+    assert agent_stream._is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
 
-    assert handlers._visible_tool_count({}) == 0
-    assert handlers._visible_tool_count({
+    assert agent_stream._visible_tool_count({}) == 0
+    assert agent_stream._visible_tool_count({
         "hidden": "load_skill_tool",
         "sql": "semantic_query_tool",
         "dsl": "dsl2sql_tool",
     }) == 3
 
     reasoning_segments = []
-    handlers._append_reasoning_segment(reasoning_segments, "工具前", 0)
-    handlers._append_reasoning_segment(reasoning_segments, "继续", 0)
-    handlers._append_reasoning_segment(reasoning_segments, "工具后", 2)
+    agent_stream._append_reasoning_segment(reasoning_segments, "工具前", 0)
+    agent_stream._append_reasoning_segment(reasoning_segments, "继续", 0)
+    agent_stream._append_reasoning_segment(reasoning_segments, "工具后", 2)
     assert reasoning_segments == [
         {"id": "reasoning-0", "content": "工具前继续", "tool_call_count": 0},
         {"id": "reasoning-1", "content": "工具后", "tool_call_count": 2},
     ]
 
-    handlers._append_reasoning_segment(reasoning_segments, "下一轮", 0, "turn-2")
+    agent_stream._append_reasoning_segment(reasoning_segments, "下一轮", 0, "turn-2")
     assert reasoning_segments[-1] == {
         "id": "reasoning-turn-2-2",
         "content": "下一轮",
@@ -375,11 +375,11 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
             return self.state
 
     agent = Agent()
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=agent,
         initial_state={"messages": []},
         config={"thread_id": "t"},
-        visible_message_filter=handlers._is_chat_data_visible_stream_message,
+        visible_message_filter=agent_stream._is_chat_data_visible_stream_message,
         reasoning_turn_id="turn-1",
     )
 
@@ -405,11 +405,11 @@ async def test_agent_sse_stream_adapter_does_not_emit_steer_human_message():
             yield "messages", (FakeChunk(content="追加要求", msg_type="human"), {"langgraph_node": "model"})
             yield "messages", (FakeChunk(content="已按要求处理", msg_type="ai"), {"langgraph_node": "model"})
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=Agent(),
         initial_state={"messages": []},
         config={"thread_id": "t"},
-        visible_message_filter=handlers._is_chat_data_visible_stream_message,
+        visible_message_filter=agent_stream._is_chat_data_visible_stream_message,
     )
 
     text = "".join(await collect_stream(adapter.stream_events()))
@@ -439,11 +439,11 @@ async def test_agent_sse_stream_adapter_supports_langchain_chunk_message_types()
                 {"langgraph_node": "tools"},
             )
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=Agent(),
         initial_state={"messages": []},
         config={"thread_id": "t"},
-        visible_message_filter=handlers._is_chat_data_visible_stream_message,
+        visible_message_filter=agent_stream._is_chat_data_visible_stream_message,
     )
 
     text = "".join(await collect_stream(adapter.stream_events()))
@@ -456,17 +456,17 @@ async def test_agent_sse_stream_adapter_supports_langchain_chunk_message_types()
 
 def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):
     alarms = []
-    monkeypatch.setattr(handlers, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
-    monkeypatch.setattr(handlers, "emit_llm_first_token_timeout_alarm", lambda **kwargs: alarms.append(kwargs))
+    monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(agent_stream, "emit_llm_first_token_timeout_alarm", lambda **kwargs: alarms.append(kwargs))
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=SimpleNamespace(),
         initial_state={"messages": []},
         config={"configurable": {"thread_id": "conv_alarm", "checkpoint_ns": ""}},
     )
 
-    adapter._emit_first_token_timeout_if_needed(handlers.time.perf_counter() - 61)
-    adapter._emit_first_token_timeout_if_needed(handlers.time.perf_counter() - 62)
+    adapter._emit_first_token_timeout_if_needed(agent_stream.time.perf_counter() - 61)
+    adapter._emit_first_token_timeout_if_needed(agent_stream.time.perf_counter() - 62)
 
     assert len(alarms) == 1
     assert alarms[0]["threshold_seconds"] == 60
@@ -482,9 +482,9 @@ async def test_agent_sse_stream_adapter_llm_connection_alarm(monkeypatch):
             raise RuntimeError("API connection error")
             yield  # pragma: no cover
 
-    monkeypatch.setattr(handlers, "emit_llm_connection_alarm_if_needed", lambda *args, **kwargs: alarms.append((args, kwargs)) or True)
+    monkeypatch.setattr(agent_stream, "emit_llm_connection_alarm_if_needed", lambda *args, **kwargs: alarms.append((args, kwargs)) or True)
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=Agent(),
         initial_state={"messages": []},
         config={"configurable": {"thread_id": "conv_conn", "checkpoint_ns": ""}},
@@ -516,7 +516,7 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
     async def persist_turn(**kwargs):
         persisted.append(kwargs)
 
-    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_turn", persist_turn)
 
     await agent_run_support._persist_partial_agent_turn_history(
         adapter,
@@ -532,7 +532,7 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
     async def persist_turn_error(**_kwargs):
         raise RuntimeError("event store unavailable")
 
-    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn_error)
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_turn", persist_turn_error)
     await agent_run_support._persist_partial_agent_turn_history(
         adapter,
         conversation_id="conv-partial",
@@ -544,8 +544,8 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
 
 @pytest.mark.asyncio
 async def test_latest_model_snapshot_writer_coalesces_pending_snapshots():
-    started = handlers.asyncio.Event()
-    release = handlers.asyncio.Event()
+    started = agent_stream.asyncio.Event()
+    release = agent_stream.asyncio.Event()
     written_versions = []
 
     async def write_snapshot(state):
@@ -554,7 +554,7 @@ async def test_latest_model_snapshot_writer_coalesces_pending_snapshots():
             started.set()
             await release.wait()
 
-    writer = handlers._LatestModelSnapshotWriter(write_snapshot, task_name="snapshot-test")
+    writer = agent_stream._LatestModelSnapshotWriter(write_snapshot, task_name="snapshot-test")
     writer.submit({"version": 1, "messages": []})
     await started.wait()
     writer.submit({"version": 2, "messages": []})
@@ -611,7 +611,7 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
     async def persist_turn(**kwargs):
         persisted.append(kwargs)
 
-    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_turn", persist_turn)
 
     await agent_run_support._persist_agent_turn_history(
         adapter,
@@ -649,7 +649,7 @@ def test_message_end_payload_prefers_persisted_ai_timestamp():
         "total_tokens": 7,
         "breakdown": [{"key": "system_prompt", "content": "SECRET_SYSTEM_PROMPT"}],
     }
-    payload = handlers._message_end_payload_from_state(state, raw_usage)
+    payload = agent_stream._message_end_payload_from_state(state, raw_usage)
 
     assert payload["timestamp"] == "2026-06-21 07:14:44"
     assert payload["usage"]["total_tokens"] == 7
@@ -666,7 +666,7 @@ def test_message_end_payload_ignores_empty_latest_ai_timestamp():
         AIMessage(content="最新", id="ai_2", additional_kwargs={}),
     ]})
 
-    assert handlers._latest_assistant_timestamp(state) == ""
+    assert agent_stream._latest_assistant_timestamp(state) == ""
 
 
 @pytest.mark.asyncio
@@ -686,7 +686,7 @@ async def test_persist_latest_ai_message_timestamp_uses_langchain_agent_model_no
             return self.state
 
     agent = Agent()
-    state = await handlers._persist_latest_ai_message_timestamp(agent, {"thread_id": "t"}, agent.state)
+    state = await agent_stream._persist_latest_ai_message_timestamp(agent, {"thread_id": "t"}, agent.state)
 
     assert agent.updated[0][2] == "model"
     assert state.values["messages"][0].additional_kwargs["timestamp"]
@@ -714,10 +714,10 @@ async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeyp
             ), {"langgraph_node": "tools"}
             yield FakeChunk(content="answer", msg_type="ai"), {"langgraph_node": "model"}
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查销售额",
         datasource_id="ds",
@@ -748,10 +748,10 @@ async def test_generate_chat_data_stream_emits_thinking_event(monkeypatch):
             ), {"langgraph_node": "model"}
             yield FakeChunk(content="你好", msg_type="ai"), {"langgraph_node": "model"}
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="你好",
         datasource_id="ds",
@@ -771,7 +771,7 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
         semantic_config=None,
         semantic_config_error="未找到可用指标集: missing",
     )
-    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream(
+    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查销售额",
         datasource_id="ds",
@@ -788,10 +788,10 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
             return False
 
     _override_semantic_context(monkeypatch)
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: BadCheckpointer())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: BadCheckpointer())
     # checkpointer 失败发生在图执行守卫段内：补发 error 后按流失败契约抛
     # AgentRunStreamFailedError，由 Runtime 收口为 failed。
-    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream("conv", "hello"))
+    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream("conv", "hello"))
     assert "智能问数执行失败，请稍后重试。" in "".join(chunks)
     assert "checkpoint down" not in "".join(chunks)
     assert failure is not None
@@ -816,10 +816,10 @@ async def test_generate_chat_data_stream_disconnect_uses_clean_query_state(monke
 
     graph = Graph()
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
@@ -851,11 +851,11 @@ async def test_resume_disconnect_before_graph_restores_pending_question(monkeypa
 
     graph = Graph()
     _override_semantic_context(monkeypatch)
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
-    monkeypatch.setattr(handlers.agent_inbox_service, "restore_question_answer", restore)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "restore_question_answer", restore)
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查订单",
         user_id="u1",
@@ -889,11 +889,11 @@ async def test_heartbeat_cancels_owner_when_run_is_stopping(monkeypatch):
         return "cancelling"
 
     owner = OwnerTask()
-    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
-    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", lambda *_args: None)
+    monkeypatch.setattr(agent_stream.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", lambda *_args: None)
 
-    await handlers._heartbeat_agent_run("run-1", owner)
+    await agent_stream._heartbeat_agent_run("run-1", owner)
 
     assert owner.cancelled is True
 
@@ -916,11 +916,11 @@ async def test_heartbeat_does_not_cancel_owner_after_normal_inactive_transition(
         return "inactive"
 
     owner = OwnerTask()
-    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
-    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", lambda *_args: None)
+    monkeypatch.setattr(agent_stream.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", lambda *_args: None)
 
-    await handlers._heartbeat_agent_run("run-1", owner)
+    await agent_stream._heartbeat_agent_run("run-1", owner)
 
     assert owner.cancelled is False
 
@@ -949,11 +949,11 @@ async def test_heartbeat_renews_mysql_and_redis_owner(monkeypatch):
         calls.append(("redis", run_id, owner_token))
 
     owner = OwnerTask()
-    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
-    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", renew)
+    monkeypatch.setattr(agent_stream.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", renew)
 
-    await handlers._heartbeat_agent_run("run-1", owner, "2:owner")
+    await agent_stream._heartbeat_agent_run("run-1", owner, "2:owner")
 
     assert calls[:2] == [
         ("mysql", "run-1", "2:owner"),
@@ -977,10 +977,10 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
 
     graph = Graph()
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
@@ -1014,11 +1014,11 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
             yield FakeChunk(content="继续回答", msg_type="ai"), {"langgraph_node": "model"}
 
     graph = Graph()
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
     adopted = [HumanMessage(content="遗留排队消息", id="adopted-1")]
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="",
         datasource_id="ds_a",
@@ -1060,12 +1060,12 @@ async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monke
         return None
 
     graph = Graph()
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: Checkpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
-    monkeypatch.setattr(handlers.agent_inbox_service, "reconcile_recovered_messages", reconcile)
-    monkeypatch.setattr(handlers.agent_inbox_service, "complete_run", complete)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: Checkpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "reconcile_recovered_messages", reconcile)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="当前问题",
         datasource_id="ds_a",
@@ -1104,11 +1104,11 @@ async def test_recovery_rebuilds_input_when_checkpoint_is_from_previous_turn(mon
     async def complete(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: Checkpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
-    monkeypatch.setattr(handlers.agent_inbox_service, "complete_run", complete)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: Checkpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
 
-    await collect_stream(handlers._generate_chat_data_stream(
+    await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="新问题",
         datasource_id="ds_a",
@@ -1134,10 +1134,10 @@ async def test_generate_chat_data_stream_tool_chunk_missing_id_and_bad_json(monk
             yield FakeChunk(tool_call_chunks=[{"id": None, "name": "", "args": "{bad"}]), {"langgraph_node": "model"}
             yield FakeChunk(content="tool done", msg_type="tool", tool_call_id="tc_bad", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1168,10 +1168,10 @@ async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_n
         semantic_config=None,
         semantic_config_error="未找到可用指标集: missing",
     )
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks, failure = await _collect_stream_until_failure(handlers._generate_chat_data_stream(
+    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1198,10 +1198,10 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
             yield FakeChunk(tool_call_chunks=[{"id": "tc_fresh", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "model"}
             yield FakeChunk(content="fresh done", msg_type="tool", tool_call_id="tc_fresh", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1219,7 +1219,7 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
 
 @pytest.mark.asyncio
 async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selection(monkeypatch):
-    original_resolver = handlers._resolve_active_tool_call_id
+    original_resolver = agent_stream._resolve_active_tool_call_id
 
     class Graph:
         async def aget_state(self, _config):
@@ -1235,11 +1235,11 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
                 tool_call_id="tc_select",
             ), {"langgraph_node": "tools"}
 
-    monkeypatch.setattr(handlers, "_resolve_active_tool_call_id", lambda *_args: "forced")
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "_resolve_active_tool_call_id", lambda *_args: "forced")
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1272,10 +1272,10 @@ async def test_generate_chat_data_stream_thinking_with_content_and_untracked_too
                 tool_call_id="tc_select_bad",
             ), {"langgraph_node": "tools"}
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1301,10 +1301,10 @@ async def test_generate_chat_data_stream_message_end_without_token_usage(monkeyp
                 tasks=[],
             )
 
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: Graph())
+    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._generate_chat_data_stream(
+    chunks = await collect_stream(agent_stream._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -1329,11 +1329,11 @@ async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
         raise asyncio.CancelledError("agent_run_lease_lost")
         yield 'event: message\ndata: {}\n\n'  # pragma: no cover -- 使其成为异步生成器
 
-    monkeypatch.setattr(handlers, "_run_chat_data_agent_stream", fake_inner)
+    monkeypatch.setattr(agent_stream, "_run_chat_data_agent_stream", fake_inner)
 
     events = []
     with pytest.raises(asyncio.CancelledError):
-        async for event in handlers._generate_chat_data_stream(thread_id="conv", user_query="查"):
+        async for event in agent_stream._generate_chat_data_stream(thread_id="conv", user_query="查"):
             events.append(event)
 
     assert events == []

@@ -1,4 +1,4 @@
-"""handlers.py 覆盖率补充测试。
+"""agent_stream.py 覆盖率补充测试。
 
 聚焦 SSE 适配器与流式入口尚未触达的分支：消息去重键、interrupt 结构校验、
 断连标记、custom 事件各类型、首 token 超时看门狗、断线续传 handler，以及
@@ -20,12 +20,12 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app import agent_run_support, handlers
-from apps.chat_data_app.handlers import AgentRunStreamFailedError
+from apps.chat_data_app import agent_run_support, agent_stream
+from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
 
 
 def _adapter(**kwargs):
-    return handlers._AgentSseStreamAdapter(
+    return agent_stream._AgentSseStreamAdapter(
         agent=kwargs.pop("agent", SimpleNamespace()),
         initial_state=kwargs.pop("initial_state", {}),
         config=kwargs.pop("config", {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}),
@@ -59,7 +59,7 @@ def test_merge_message_snapshots_dedupes_by_key():
         AIMessage(content="a", id="id-a"),
         AIMessage(content="b", id="id-b"),
     ]
-    merged = handlers._merge_message_snapshots([], incoming)
+    merged = agent_stream._merge_message_snapshots([], incoming)
     assert [message.id for message in merged] == ["id-a", "id-b"]
 
 
@@ -137,7 +137,7 @@ def test_handle_custom_payload_branches():
 
     assert adapter._handle_custom_payload({"type": "inbox_admitted", "message_ids": []}) == []
     assert adapter._handle_custom_payload({"type": "inbox_admitted", "message_ids": ["", "m-2"]}) == [
-        handlers._format_sse("inbox_admitted", {"message_ids": ["m-2"]})
+        agent_stream._format_sse("inbox_admitted", {"message_ids": ["m-2"]})
     ]
 
     # tool_progress 缺字段一律忽略
@@ -156,7 +156,7 @@ def test_handle_custom_payload_branches():
 
 @pytest.mark.asyncio
 async def test_first_token_timeout_watchdog_disabled_returns_early(monkeypatch):
-    monkeypatch.setattr(handlers, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 0)
     adapter = _adapter()
     called = []
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ async def test_first_token_timeout_watchdog_disabled_returns_early(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_first_token_timeout_watchdog_fires_when_no_payload(monkeypatch):
-    monkeypatch.setattr(handlers, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
     adapter = _adapter()
     fired = []
     monkeypatch.setattr(
@@ -195,10 +195,10 @@ async def test_first_token_timeout_watchdog_fires_when_no_payload(monkeypatch):
 def test_emit_first_token_timeout_alarm_once(monkeypatch):
     import time as time_module
 
-    monkeypatch.setattr(handlers, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
     alarms = []
     monkeypatch.setattr(
-        handlers, "emit_llm_first_token_timeout_alarm",
+        agent_stream, "emit_llm_first_token_timeout_alarm",
         lambda **kwargs: alarms.append(kwargs),
     )
     adapter = _adapter(debug_label="AI Content from model")
@@ -222,7 +222,7 @@ def test_emit_first_token_timeout_alarm_once(monkeypatch):
 async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
     submitted = []
     monkeypatch.setattr(
-        handlers.agent_run_runtime, "submit",
+        agent_stream.agent_run_runtime, "submit",
         lambda **kwargs: submitted.append(kwargs),
     )
 
@@ -231,9 +231,9 @@ async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
         yield {"stream_id": "3-1", "payload": "data: chunk-a\n\n"}
         yield {"stream_id": "3-2", "payload": "data: chunk-b\n\n"}
 
-    monkeypatch.setattr(handlers.agent_run_event_service, "stream", fake_stream)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "stream", fake_stream)
 
-    response = await handlers.resume_chat_data_question_handler(
+    response = await agent_stream.resume_chat_data_question_handler(
         conversation_id="conv-1", user_id="u1", username="张三", run_id="run-9",
         runtime_context={}, answer={"a": 1}, turn_id="turn-1",
         last_event_id="3-0", request=None,
@@ -281,10 +281,10 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
     # 运行准备逻辑已下沉 agent_run_support：相关桩打在消费方命名空间。
     monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fake_prepare_semantic)
     monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_workspace)
-    monkeypatch.setattr(handlers, "build_conversation_prompt_context", fake_build_prompt_context)
+    monkeypatch.setattr(agent_stream, "build_conversation_prompt_context", fake_build_prompt_context)
     monkeypatch.setattr(agent_run_support, "build_agent_prompt_context", lambda _ctx: {})
     monkeypatch.setattr(
-        handlers, "resolve_agent_runtime_options",
+        agent_stream, "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
     )
     monkeypatch.setattr(agent_run_support, "build_runtime_skill_snapshot_async", fake_snapshot)
@@ -330,7 +330,7 @@ async def test_stream_fails_fast_on_semantic_config_error(monkeypatch):
         workspace_root="/tmp/unused",
     )
     events = await _drain_until_checkpointer_failure(
-        handlers._run_chat_data_agent_stream(
+        agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="今天销量", datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
             request=None, model_id=None, semantic_config_selection=None,
@@ -354,11 +354,11 @@ async def test_stream_rejects_datasource_binding_conflict(monkeypatch, tmp_path)
         return "ds-1"  # 会话已绑定另一个数据源组
 
     checkpointer = _ExplodingCheckpointer("绑定冲突时应提前退出")
-    monkeypatch.setattr(handlers.conversation, "resolve_datasource_binding", fake_binding)
-    monkeypatch.setattr(handlers, "get_checkpointer", checkpointer)
+    monkeypatch.setattr(agent_stream.conversation, "resolve_datasource_binding", fake_binding)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
 
     events = await _drain_until_checkpointer_failure(
-        handlers._run_chat_data_agent_stream(
+        agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="今天销量", datasource_id="ds-2", user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
             request=None, model_id=None, semantic_config_selection=None,
@@ -406,11 +406,11 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
 
     checkpointer = _ExplodingCheckpointer("附件解析完成后无需继续")
     monkeypatch.setattr(agent_run_support, "get_file_info", fake_get_file_info)
-    monkeypatch.setattr(handlers, "get_checkpointer", checkpointer)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
 
-    long_query = "销" * (handlers.USER_INPUT_OFFLOAD_THRESHOLD + 10)
+    long_query = "销" * (agent_stream.USER_INPUT_OFFLOAD_THRESHOLD + 10)
     events = await _drain_until_checkpointer_failure(
-        handlers._run_chat_data_agent_stream(
+        agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query=long_query, datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
             request=None, model_id=None, semantic_config_selection=None,
@@ -448,9 +448,9 @@ async def test_stream_without_attachments_skips_offload(monkeypatch, tmp_path):
     )
 
     checkpointer = _ExplodingCheckpointer("短输入不应写文件")
-    monkeypatch.setattr(handlers, "get_checkpointer", checkpointer)
+    monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
     await _drain_until_checkpointer_failure(
-        handlers._run_chat_data_agent_stream(
+        agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="短问题", datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
             request=None, model_id=None, semantic_config_selection=None,
@@ -499,11 +499,11 @@ def _run_heartbeat(monkeypatch, statuses, *, owner_token="tok-1"):
     async def no_sleep(_seconds):
         return None
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", fake_heartbeat)
-    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", fake_renew)
-    monkeypatch.setattr(handlers.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", fake_heartbeat)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", fake_renew)
+    monkeypatch.setattr(agent_stream.asyncio, "sleep", no_sleep)
     task = _FakeOwnerTask()
-    asyncio.run(handlers._heartbeat_agent_run("run-hb", task, owner_token))
+    asyncio.run(agent_stream._heartbeat_agent_run("run-hb", task, owner_token))
     return task, renewals
 
 

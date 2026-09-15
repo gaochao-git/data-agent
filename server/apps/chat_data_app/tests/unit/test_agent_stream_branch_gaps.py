@@ -1,4 +1,4 @@
-"""handlers.py 分支缺口补测。
+"""agent_stream.py 分支缺口补测。
 
 聚焦 `_generate_chat_data_stream` 闭包之外（无需驱动整条 SSE 流）就能触达的分支：
 - 纯归一化函数（思考档位、工具事件格式化）
@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, ToolMessageChunk
 
-from apps.chat_data_app import agent_run_support, handlers
+from apps.chat_data_app import agent_run_support, agent_stream
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
 from apps.chat_data_app.agent.run.completion_options import normalize_thinking_effort
 
@@ -74,7 +74,7 @@ async def test_persist_timestamp_returns_state_when_no_ai_message():
     """消息里没有 AIMessage 时直接原样返回，不触碰 agent（305->304、308->309）。"""
     state = _state_with([HumanMessage(content="用户问题"), ToolMessage(content="工具结果", tool_call_id="c1")])
 
-    result = await handlers._persist_latest_ai_message_timestamp(
+    result = await agent_stream._persist_latest_ai_message_timestamp(
         _FakeTimestampAgent(), {"configurable": {}}, state
     )
 
@@ -84,13 +84,13 @@ async def test_persist_timestamp_returns_state_when_no_ai_message():
 @pytest.mark.asyncio
 async def test_persist_timestamp_handles_none_state_and_empty_messages():
     state = None
-    assert await handlers._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, state) is None
+    assert await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, state) is None
 
     empty = _state_with([])
-    assert await handlers._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, empty) is empty
+    assert await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, empty) is empty
 
     non_dict = SimpleNamespace(values=None)
-    assert await handlers._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, non_dict) is non_dict
+    assert await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {}, non_dict) is non_dict
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_persist_timestamp_skips_when_timestamp_already_present():
         AIMessage(content="答案", additional_kwargs={"timestamp": "2026-08-30 00:00:00"}),
     ])
 
-    result = await handlers._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
     assert agent.aupdate_calls == []
@@ -113,7 +113,7 @@ async def test_persist_timestamp_skips_when_agent_cannot_update_state():
     """agent 没有 aupdate_state 时直接放弃，不抛错（311->312）。"""
     state = _state_with([AIMessage(content="答案")])
 
-    result = await handlers._persist_latest_ai_message_timestamp(object(), {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(object(), {"configurable": {}}, state)
 
     assert result is state
 
@@ -124,7 +124,7 @@ async def test_persist_timestamp_writes_timestamp_and_returns_fresh_state():
     agent = _FakeTimestampAgent()
     state = _state_with([HumanMessage(content="问题"), AIMessage(content="答案")])
 
-    result = await handlers._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is not state
     assert result.values["source"] == "aget_state"
@@ -142,7 +142,7 @@ async def test_persist_timestamp_falls_back_to_state_when_agent_has_no_aget_stat
     agent = _FakeTimestampAgent(with_aget_state=False)
     state = _state_with([AIMessage(content="答案")])
 
-    result = await handlers._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
     assert len(agent.aupdate_calls) == 1
@@ -154,7 +154,7 @@ async def test_persist_timestamp_swallows_agent_update_failure():
     agent = _FakeTimestampAgent(aupdate_error=RuntimeError("checkpointer unavailable"))
     state = _state_with([AIMessage(content="答案")])
 
-    result = await handlers._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
 
@@ -204,7 +204,7 @@ async def test_snapshot_writer_submit_copies_only_list_fields():
     async def write(snapshot):
         writes.append(snapshot)
 
-    writer = handlers._LatestModelSnapshotWriter(write, task_name="t")
+    writer = agent_stream._LatestModelSnapshotWriter(write, task_name="t")
     marker = object()
     state = {
         "messages": [HumanMessage(content="a")],
@@ -231,7 +231,7 @@ async def test_snapshot_writer_submit_tolerates_none_and_non_list_fields():
     async def write(snapshot):
         writes.append(snapshot)
 
-    writer = handlers._LatestModelSnapshotWriter(write, task_name="t")
+    writer = agent_stream._LatestModelSnapshotWriter(write, task_name="t")
     writer.submit(None)
     await writer.flush()
     assert writes == [{}]
@@ -248,7 +248,7 @@ async def test_snapshot_writer_swallows_write_failure():
     async def write(_snapshot):
         raise RuntimeError("db down")
 
-    writer = handlers._LatestModelSnapshotWriter(write, task_name="t")
+    writer = agent_stream._LatestModelSnapshotWriter(write, task_name="t")
     writer.submit({"n": 1})
     await writer.flush()
     assert writer._pending is None
@@ -271,7 +271,7 @@ async def test_snapshot_writer_flush_rechecks_when_newer_task_appears():
         if snapshot.get("n") == 1:
             await gate.wait()
 
-    writer = handlers._LatestModelSnapshotWriter(write, task_name="t")
+    writer = agent_stream._LatestModelSnapshotWriter(write, task_name="t")
     writer.submit({"n": 1})
     await asyncio.sleep(0)  # runner 取走 pending，阻塞在 gate
 
@@ -304,7 +304,7 @@ def test_merge_message_snapshots_keeps_messages_without_dedup_key():
     no_key_a = ToolMessage(content="结果A", tool_call_id="")
     no_key_b = ToolMessage(content="结果B", tool_call_id="")
 
-    merged = handlers._merge_message_snapshots(existing, [no_key_a, no_key_b])
+    merged = agent_stream._merge_message_snapshots(existing, [no_key_a, no_key_b])
 
     assert merged == [existing[0], no_key_a, no_key_b]
 
@@ -313,7 +313,7 @@ def test_merge_message_snapshots_dedups_by_key():
     tool_a = ToolMessage(content="结果A", tool_call_id="call-1")
     tool_a_dup = ToolMessage(content="结果A(重复)", tool_call_id="call-1")
 
-    merged = handlers._merge_message_snapshots([tool_a], [tool_a_dup])
+    merged = agent_stream._merge_message_snapshots([tool_a], [tool_a_dup])
 
     assert merged == [tool_a]
 
@@ -325,7 +325,7 @@ def test_merge_message_snapshots_dedups_by_key():
 
 def test_format_tool_event_includes_args_and_message():
     """args / message 非空时挂到事件体上（590->592、595->596）。"""
-    event = handlers._format_tool_event(
+    event = agent_stream._format_tool_event(
         "file_read",
         "call-1",
         "completed",
@@ -341,7 +341,7 @@ def test_format_tool_event_includes_args_and_message():
 
 
 def test_format_tool_event_omits_optional_fields():
-    event = handlers._format_tool_event("file_read", None, "running")
+    event = agent_stream._format_tool_event("file_read", None, "running")
 
     assert '"args"' not in event
     assert '"message"' not in event
@@ -355,7 +355,7 @@ def test_format_tool_event_omits_optional_fields():
 
 def test_handle_tool_calls_skips_non_dict_entries():
     """非 dict 元素直接跳过（713->714）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_calls(["not-a-dict", None, 42])
 
@@ -366,7 +366,7 @@ def test_handle_tool_calls_skips_non_dict_entries():
 
 def test_handle_tool_calls_records_index_and_args_fallback():
     """带 index 的调用登记到下标记映射，dict args 存入兜底表（722->723）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     state.handle_tool_calls([
         {"id": "call-1", "name": "file_read", "index": 0, "args": {"path": "/a"}},
@@ -384,7 +384,7 @@ def test_handle_tool_calls_records_index_and_args_fallback():
 
 def test_handle_tool_calls_accepts_json_string_args():
     """内网 Qwen3.6 经 vLLM 返回的 args 是 JSON 字符串（非 dict），直播侧不得丢弃。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_calls([
         {"id": "call-1", "name": "calculator_tool", "args": '{"calculations": [{"expression": "1 + 1"}]}'},
@@ -399,8 +399,8 @@ def test_handle_tool_calls_accepts_json_string_args():
 
 def test_handle_tool_calls_accepts_double_encoded_json_args():
     """双层编码字符串也应剥出 dict 兜底，原始文本进 buffer 由完成时统一解析。"""
-    state = handlers._ToolStreamState()
-    double_encoded = handlers.json.dumps(handlers.json.dumps({"a": 1}))
+    state = agent_stream._ToolStreamState()
+    double_encoded = agent_stream.json.dumps(agent_stream.json.dumps({"a": 1}))
 
     state.handle_tool_calls([{"id": "call-1", "name": "file_read", "args": double_encoded}])
 
@@ -410,7 +410,7 @@ def test_handle_tool_calls_accepts_double_encoded_json_args():
 
 def test_build_completion_event_carries_args_for_frontend():
     """tool_completed/tool_failed 生命周期事件须带 args 字段（前端 onToolLifecycle 只读 args）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
     payload = state.build_tool_message_payload(
         ToolMessageChunk(content="2", tool_call_id="call-1", name="calculator_tool")
     )
@@ -423,7 +423,7 @@ def test_build_completion_event_carries_args_for_frontend():
 
 def test_handle_tool_call_chunks_skips_non_dict_entries():
     """非 dict 分片跳过（733->734）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     assert state.handle_tool_call_chunks([None, "junk", 7]) == []
     assert state.tool_names == {}
@@ -431,7 +431,7 @@ def test_handle_tool_call_chunks_skips_non_dict_entries():
 
 def test_handle_tool_call_chunks_without_name_keeps_id_only():
     """有 id 没 name 时不写入工具名，也因拿不到工具名而不发 running 事件（740->742、747->750）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_call_chunks([{"id": "call-9", "args": "{}"}])
 
@@ -442,7 +442,7 @@ def test_handle_tool_call_chunks_without_name_keeps_id_only():
 
 def test_handle_tool_call_chunks_records_index_and_emits_running():
     """带 index 且能解析出工具名时登记下标并补发 running（743->744）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_call_chunks([
         {"id": "call-x", "name": "file_read", "index": 3, "args": '{"pa'},
@@ -458,7 +458,7 @@ def test_handle_tool_call_chunks_records_index_and_emits_running():
 
 def test_handle_tool_call_chunks_resolves_id_from_index_map():
     """分片只有 index 没有 id 时从下标记映射反查（覆盖 750-753 的三段兜底）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
     state.index_map[5] = "call-known"
 
     state.handle_tool_call_chunks([{"index": 5, "args": "th"}])
@@ -468,7 +468,7 @@ def test_handle_tool_call_chunks_resolves_id_from_index_map():
 
 def test_build_tool_message_payload_attaches_accumulated_args():
     """tool_call_id 非空时把累积参数挂上并清理缓冲（770->777）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
     state.args_buffer["call-1"] = '{"path": "/a"}'
     state.args_fallback["call-1"] = {"path": "/fallback"}
     state.tool_names["call-1"] = "file_read"
@@ -486,7 +486,7 @@ def test_build_tool_message_payload_attaches_accumulated_args():
 
 
 def test_build_tool_message_payload_marks_error_and_timing():
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
 
     # 成败只认显式协议位：ToolMessage 原生 status="error" 才判失败
     chunk = ToolMessageChunk(
@@ -505,7 +505,7 @@ def test_build_tool_message_payload_marks_error_and_timing():
 
 def test_build_tool_message_payload_skips_args_without_tool_call_id():
     """没有 tool_call_id 时不挂累积参数，工具名回落到消息自带的 name（770->777）。"""
-    state = handlers._ToolStreamState()
+    state = agent_stream._ToolStreamState()
     state.args_buffer[""] = "ignored"
 
     payload = state.build_tool_message_payload(ToolMessageChunk(content="结果", tool_call_id=""))
@@ -520,8 +520,8 @@ def test_build_tool_message_payload_skips_args_without_tool_call_id():
 # --------------------------------------------------------------------------- #
 
 
-def _adapter_with(**kwargs) -> handlers._AgentSseStreamAdapter:
-    adapter = handlers._AgentSseStreamAdapter(
+def _adapter_with(**kwargs) -> agent_stream._AgentSseStreamAdapter:
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=SimpleNamespace(), initial_state={}, config={}
     )
     for key, value in kwargs.items():
@@ -568,8 +568,8 @@ def test_parse_stream_event_marks_unknown_shape():
     """既不是二元组也不是已知 stream_mode 时归为 unknown（1062->1070）。"""
     sentinel = object()
 
-    assert handlers._AgentSseStreamAdapter._parse_stream_event(sentinel) == ("unknown", sentinel)
-    assert handlers._AgentSseStreamAdapter._parse_stream_event(("a", "b", "c")) == (
+    assert agent_stream._AgentSseStreamAdapter._parse_stream_event(sentinel) == ("unknown", sentinel)
+    assert agent_stream._AgentSseStreamAdapter._parse_stream_event(("a", "b", "c")) == (
         "unknown",
         ("a", "b", "c"),
     )
@@ -588,7 +588,7 @@ def _fast_heartbeat(monkeypatch):
     async def fast_sleep(_delay):
         await real_sleep(0)
 
-    monkeypatch.setattr(handlers.asyncio, "sleep", fast_sleep)
+    monkeypatch.setattr(agent_stream.asyncio, "sleep", fast_sleep)
 
 
 async def _pending_forever():
@@ -602,9 +602,9 @@ async def test_heartbeat_lease_lost_without_owner_task_returns_quietly(_fast_hea
     async def heartbeat_run(run_id, owner_token):
         raise AgentRunLeaseLostError("taken over")
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
 
-    await handlers._heartbeat_agent_run("run-1", None, "tok")
+    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
 
 
 @pytest.mark.asyncio
@@ -614,10 +614,10 @@ async def test_heartbeat_lease_lost_cancels_owner_task(_fast_heartbeat, monkeypa
     async def heartbeat_run(run_id, owner_token):
         raise AgentRunLeaseLostError("taken over")
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
 
     owner = asyncio.create_task(_pending_forever())
-    await handlers._heartbeat_agent_run("run-1", owner, "tok")
+    await agent_stream._heartbeat_agent_run("run-1", owner, "tok")
 
     assert owner.cancelling()
     with pytest.raises(asyncio.CancelledError):
@@ -631,9 +631,9 @@ async def test_heartbeat_cancelling_status_without_owner_task_returns(_fast_hear
     async def heartbeat_run(run_id, owner_token):
         return "cancelling"
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
 
-    await handlers._heartbeat_agent_run("run-1", None, "tok")
+    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
 
 
 @pytest.mark.asyncio
@@ -643,10 +643,10 @@ async def test_heartbeat_cancelling_status_cancels_owner_task(_fast_heartbeat, m
     async def heartbeat_run(run_id, owner_token):
         return "cancelling"
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
 
     owner = asyncio.create_task(_pending_forever())
-    await handlers._heartbeat_agent_run("run-1", owner, "tok")
+    await agent_stream._heartbeat_agent_run("run-1", owner, "tok")
 
     assert owner.cancelling()
     with pytest.raises(asyncio.CancelledError):
@@ -666,11 +666,11 @@ async def test_heartbeat_renews_owner_lease_while_active(_fast_heartbeat, monkey
     async def renew_owner(run_id, owner_token):
         renewed.append((run_id, owner_token))
 
-    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat_run)
-    monkeypatch.setattr(handlers.agent_run_event_service, "renew_owner", renew_owner)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", renew_owner)
 
     owner = asyncio.create_task(_pending_forever())
-    task = asyncio.create_task(handlers._heartbeat_agent_run("run-1", owner, "tok"))
+    task = asyncio.create_task(agent_stream._heartbeat_agent_run("run-1", owner, "tok"))
     for _ in range(5):
         await asyncio.sleep(0)
     task.cancel()
@@ -704,7 +704,7 @@ async def test_persist_turn_history_uses_checkpoint_writer_when_run_id_present(m
         captured.update(kwargs)
 
     monkeypatch.setattr(
-        handlers.conversation_event_service,
+        agent_stream.conversation_event_service,
         "persist_turn_with_checkpoint",
         persist_turn_with_checkpoint,
     )
@@ -737,7 +737,7 @@ async def test_persist_turn_history_prefers_snapshot_stream_id(monkeypatch):
         captured.update(kwargs)
 
     monkeypatch.setattr(
-        handlers.conversation_event_service,
+        agent_stream.conversation_event_service,
         "persist_turn_with_checkpoint",
         persist_turn_with_checkpoint,
     )
@@ -792,7 +792,7 @@ async def test_stream_events_invokes_on_stream_started_once():
         calls.append(1)
 
     usage_event = ("custom", {"type": "token_usage", "usage": {"total_tokens": 1}})
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([usage_event, usage_event]),
         initial_state={},
         config={},
@@ -809,7 +809,7 @@ async def test_stream_events_invokes_on_stream_started_once():
 @pytest.mark.asyncio
 async def test_stream_events_stops_immediately_when_client_disconnected():
     """客户端断开后收到首个事件就收流，标记 disconnected（871->872）。"""
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([("custom", {"type": "tool_progress", "tool_call_id": "c1"})]),
         initial_state={},
         config={},
@@ -824,7 +824,7 @@ async def test_stream_events_stops_immediately_when_client_disconnected():
 
 def test_handle_custom_payload_translates_subagent_tool_events():
     """subagent_tool custom 事件翻译成带 parent_tool_call_id 的生命周期 SSE。"""
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([]),
         initial_state={},
         config={},
@@ -860,7 +860,7 @@ def test_handle_custom_payload_translates_subagent_tool_events():
 
 def test_handle_custom_payload_translates_subagent_message_events():
     """subagent_message 走独立 SSE 事件；空白文本不产生帧。"""
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([]),
         initial_state={},
         config={},
@@ -890,7 +890,7 @@ def test_handle_custom_payload_translates_subagent_message_events():
 @pytest.mark.asyncio
 async def test_stream_events_skips_unknown_event_kind():
     """既不是 custom 也不是 messages 的事件直接跳过（879->880）。"""
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent(["不是二元组", ("updates", {"node": "model"})]),
         initial_state={},
         config={},
@@ -907,12 +907,12 @@ async def test_stream_events_emits_alarm_and_reraises_on_stream_failure(monkeypa
     """流抛错且还没见到任何可见内容时发告警，再把异常原样抛给 Runtime（891->893）。"""
     alarms: list[dict] = []
     monkeypatch.setattr(
-        handlers,
+        agent_stream,
         "emit_llm_connection_alarm_if_needed",
         lambda exc, **kwargs: alarms.append({"exc": exc, **kwargs}),
     )
 
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([], raise_exc=RuntimeError("model unavailable")),
         initial_state={},
         config={},
@@ -932,7 +932,7 @@ async def test_stream_events_yields_events_from_tool_call_chunks():
         content="",
         tool_call_chunks=[{"id": "call-1", "name": "file_read", "index": 0, "args": '{"pa'}],
     )
-    adapter = handlers._AgentSseStreamAdapter(
+    adapter = agent_stream._AgentSseStreamAdapter(
         agent=_ScriptedAgent([("messages", (chunk, {"langgraph_node": "model"}))]),
         initial_state={},
         config={},
@@ -949,7 +949,7 @@ async def test_finish_persists_latest_ai_message_timestamp_when_requested():
     """finish(persist_latest_ai_timestamp=True) 会把回填后的最新状态返回（907->908）。"""
     agent = _FakeTimestampAgent()
     agent.initial_state = {}
-    adapter = handlers._AgentSseStreamAdapter(agent=agent, initial_state={}, config={})
+    adapter = agent_stream._AgentSseStreamAdapter(agent=agent, initial_state={}, config={})
 
     payload = await adapter.finish(persist_latest_ai_timestamp=True)
 
@@ -960,7 +960,7 @@ async def test_finish_persists_latest_ai_message_timestamp_when_requested():
 @pytest.mark.asyncio
 async def test_finish_without_timestamp_persist_keeps_agent_state():
     agent = _FakeTimestampAgent()
-    adapter = handlers._AgentSseStreamAdapter(agent=agent, initial_state={}, config={})
+    adapter = agent_stream._AgentSseStreamAdapter(agent=agent, initial_state={}, config={})
 
     await adapter.finish()
 
@@ -991,10 +991,10 @@ def _stub_completion_runtime(monkeypatch):
         if False:  # pragma: no cover - 保持生成器语义
             yield {}
 
-    monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", fake_get_or_create)
-    monkeypatch.setattr(handlers.agent_inbox_service, "start_run", fake_start_run)
-    monkeypatch.setattr(handlers.agent_run_runtime, "submit", fake_submit)
-    monkeypatch.setattr(handlers.agent_run_event_service, "stream", fake_event_stream)
+    monkeypatch.setattr(agent_stream.conversation, "get_or_create_conversation", fake_get_or_create)
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "start_run", fake_start_run)
+    monkeypatch.setattr(agent_stream.agent_run_runtime, "submit", fake_submit)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "stream", fake_event_stream)
     return captured
 
 
@@ -1011,7 +1011,7 @@ def _stub_completion_runtime(monkeypatch):
     ],
 )
 async def test_sql_completion_handler_normalizes_skill_names(_stub_completion_runtime, raw, expected):
-    await handlers.sql_completion_handler(
+    await agent_stream.sql_completion_handler(
         conversation_id="conv-1",
         query="查订单",
         options={"datasource_id": "ds_a", "skill_names": raw},

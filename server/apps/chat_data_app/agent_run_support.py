@@ -1,4 +1,4 @@
-"""Agent 运行支撑层：从 handlers.py 拆出的运行准备与历史持久化。
+"""Agent 运行支撑层：从 agent_stream.py（原 handlers.py）拆出的运行准备与历史持久化。
 
 - 运行准备：语义会话上下文、会话工作区、技能快照、附件解析、超长输入转文件、checkpoint 恢复对齐与初始状态解析
 - 历史持久化：轮次历史落盘、模型快照串行写入器、checkpoint 消息对齐工具
@@ -47,7 +47,7 @@ from .services.semantic.run.semantic_conversation_context import (
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
 
 if TYPE_CHECKING:
-    from .handlers import _AgentSseStreamAdapter
+    from .agent_stream import _AgentSseStreamAdapter
 
 logger = get_logger(__name__)
 

@@ -737,7 +737,7 @@ async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fai
     monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", lambda _run_id: _async_value("old-tail-0"))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "restore_question_answer", restore)
-    monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", fail_resume)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.resume_chat_data_question_handler", fail_resume)
 
     with pytest.raises(RuntimeError, match="stream creation failed"):
         await conversation_router._resume_question("conv-1", "q1", {"answers": []}, FakeRequest())
@@ -769,7 +769,7 @@ async def test_resume_question_subscribes_after_existing_question_events(router_
     monkeypatch.setattr(conversation_router.agent_run_event_service, "wait_for_done", lambda _run_id: _async_value(True))
     monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", lambda _run_id: _async_value("old-tail-0"))
     monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
-    monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", resume)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.resume_chat_data_question_handler", resume)
 
     result = await conversation_router._resume_question(
         "conv-1",

@@ -19,7 +19,7 @@ def _init_app() -> None:
         from .routes import router as app_router
         from .agent import get_data_agent_graph
         from .agent.sql_assist_agent import create_sql_assist_agent
-        from .handlers import sql_completion_handler
+        from .agent_stream import sql_completion_handler
         from .routers.conversations import (
             register_agent,
             register_completion_handler,
