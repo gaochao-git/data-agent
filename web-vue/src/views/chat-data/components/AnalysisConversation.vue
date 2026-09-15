@@ -450,6 +450,9 @@ const isNearBottom = ref(true)
 // ---- 文件上传 ----
 const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.xlsx', '.pptx', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
 const MAX_FILE_SIZE = 50 * 1024 * 1024
+// 文本预览渲染上限：后端文本预览源上限为 5MB，但超大文本全量进 DOM（JSON 还要 parse+stringify）会卡死页面，
+// 超限只渲染前 1MB 并提示下载查看（对齐 Office 预览「源 50MB / 渲染 12MB」的双层设计）。
+const CONSOLE_TEXT_RENDER_MAX_CHARS = 1 * 1024 * 1024
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
 const MAX_INPUT_CHARS = 4000
 interface PendingFile {
@@ -1479,6 +1482,12 @@ type WorkspaceFileLoadOptions = {
   forceReload?: boolean
 }
 
+// 超过渲染上限的文本只保留前 CONSOLE_TEXT_RENDER_MAX_CHARS 字符并附提示（下载路径不受影响）。
+const capWorkspaceTextPreview = (content: string) => {
+  if (content.length <= CONSOLE_TEXT_RENDER_MAX_CHARS) return content
+  return `${content.slice(0, CONSOLE_TEXT_RENDER_MAX_CHARS)}\n\n...（文件过大，仅显示前 1MB，完整内容请下载查看）...`
+}
+
 const loadWorkspaceFileContent = async (
   conversationId: string | null | undefined,
   path: string | null,
@@ -1522,7 +1531,7 @@ const loadWorkspaceFileContent = async (
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     workspaceFileContents.value = {
       ...workspaceFileContents.value,
-      [path]: response.data?.content || '',
+      [path]: capWorkspaceTextPreview(response.data?.content || ''),
     }
   } catch (err) {
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return

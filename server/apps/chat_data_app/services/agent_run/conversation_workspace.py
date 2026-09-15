@@ -45,11 +45,30 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import (
     USER_DATA_VIRTUAL_ROOT,
     WORKSPACE_PATH_POLICY,
 )
+from apps.chat_data_app.services.runtime_config import (
+    OFFICE_PREVIEW_SOURCE_MAX_MB,
+    TEXT_PREVIEW_MAX_MB,
+)
 
 logger = get_logger(__name__)
 
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 agent_inbox_dao = AgentInboxDao()
+
+# 文本预览源文件上限（默认 5MB）与 Office 预览源文件上限（默认 50MB），MB 值在
+# runtime_config 集中读取（CHAT_DATA_TEXT_PREVIEW_MAX_MB / CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB），
+# 此处只做 MB→字节派生。注意与 OFFICE_PREVIEW_MAX_CHARS（Office 转出 HTML 的字符上限，12MB）是两回事。
+# 模块级求值：改 env 后必须重启进程才生效。
+WORKSPACE_TEXT_PREVIEW_MAX_BYTES = TEXT_PREVIEW_MAX_MB * 1024 * 1024
+WORKSPACE_OFFICE_SOURCE_MAX_BYTES = OFFICE_PREVIEW_SOURCE_MAX_MB * 1024 * 1024
+
+
+def _format_size_limit(max_bytes: int) -> str:
+    """把字节上限格式化成用户可读文案（>=1MB 显示 MB，否则显示字节）。"""
+    if max_bytes >= 1024 * 1024:
+        mb = max_bytes / (1024 * 1024)
+        return f"{mb:g}MB"
+    return f"{max_bytes} 字节"
 
 # 这些状态下的 Run 正在写工作区，此时删除会让沙箱回写被判成「应用侧已变更」而使该 Run 落盘失败。
 # 「waiting_user」是挂起等待用户输入，Run 自身不在写盘，且前端 runBusy 已为 false，故放行。
@@ -220,7 +239,7 @@ def list_workspace_files(
 def read_workspace_text_file(
     conversation_id: str,
     path: str,
-    max_bytes: int = 1024 * 1024,
+    max_bytes: int = WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
     user_id: str = "system",
     *,
     created_date: str | None = None,
@@ -235,7 +254,7 @@ def read_workspace_text_file(
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size
     if size > max_bytes:
-        raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
+        raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
     content = target.read_text(encoding="utf-8", errors="replace")
     return {
         "path": to_visible_path(root, target),
@@ -275,7 +294,7 @@ async def read_conversation_workspace_file(
     *,
     user_id: str,
     path: str,
-    max_bytes: int = 1024 * 1024,
+    max_bytes: int = WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
 ) -> dict[str, Any]:
     """读取当前用户会话持久化工作区中的文本文件。"""
     return await asyncio.to_thread(
@@ -314,7 +333,7 @@ def _validate_office_preview_source(workspace_root: str, path: str) -> None:
         raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
     if not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
-    if target.stat().st_size > 50 * 1024 * 1024:
+    if target.stat().st_size > WORKSPACE_OFFICE_SOURCE_MAX_BYTES:
         raise ValueError("文件过大，暂不支持预览超过 50MB 的 Office 文件")
 
 

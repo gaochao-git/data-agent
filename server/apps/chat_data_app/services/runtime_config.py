@@ -71,6 +71,11 @@ AGENT_RECURSION_LIMIT = read_positive_int_env("CHAT_DATA_AGENT_RECURSION_LIMIT",
 FILE_READ_MAX_CHARS = max(4096, read_positive_int_env("CHAT_DATA_FILE_READ_MAX_CHARS", 25000))
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
+# 会话工作区文件预览源文件上限（MB）：文本预览与 Office 预览各一档，消费者为
+# conversation_workspace（字节值在彼处由 MB 派生）。注意与 OFFICE_PREVIEW_MAX_CHARS
+# （Office 转出 HTML 的字符上限，12MB，独立配置）是两回事。
+TEXT_PREVIEW_MAX_MB = read_positive_int_env("CHAT_DATA_TEXT_PREVIEW_MAX_MB", 5)
+OFFICE_PREVIEW_SOURCE_MAX_MB = read_positive_int_env("CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB", 50)
 DEFAULT_CONTEXT_WINDOW = 128000
 
 # ---- 单一 ChatData Agent 运行配置 ----
