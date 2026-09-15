@@ -16,6 +16,11 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking
+from apps.chat_data_app.agent_run_support import (
+    _prepare_conversation_workspace_sync,
+    prepare_conversation_workspace,
+)
 from apps.chat_data_app.handlers import (
     _coerce_tool_args,
     _extract_reasoning_content,
@@ -24,17 +29,14 @@ from apps.chat_data_app.handlers import (
     _format_thinking_event,
     _format_tool_event,
     _is_tool_result_error,
-    _normalize_enable_thinking,
     _normalize_semantic_selection_payload,
     _append_reasoning_segment,
     _parse_tool_args_buffer,
-    _prepare_conversation_workspace_sync,
     _generate_chat_data_stream,
     _finish_running_tool,
     _model_failure_user_message,
     _register_running_tool,
     _resolve_active_tool_call_id,
-    prepare_conversation_workspace,
     sql_completion_handler,
     AgentRunStreamFailedError,
 )
@@ -86,7 +88,7 @@ def _override_semantic_context(monkeypatch, **overrides):
         return replace(context, **values)
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.prepare_semantic_conversation_context",
+        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
         prepare_context,
     )
 
@@ -100,7 +102,7 @@ def _stub_semantic_conversation_context(monkeypatch):
         return _semantic_context_from_request(**kwargs)
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.prepare_semantic_conversation_context",
+        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
         prepare_context,
     )
 
@@ -125,7 +127,7 @@ def _stub_semantic_conversation_context(monkeypatch):
         return {"total": 0, "failed_ids": []}
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        "apps.chat_data_app.agent_run_support.prematerialize_enabled_semantic_models",
         noop_prematerialize,
     )
 
@@ -237,17 +239,17 @@ def test_reasoning_and_thinking_helper_branches():
 
 
 def test_normalize_enable_thinking_branches():
-    assert _normalize_enable_thinking(None) is None
-    assert _normalize_enable_thinking(True) is True
-    assert _normalize_enable_thinking(False) is False
-    assert _normalize_enable_thinking(1) is True
-    assert _normalize_enable_thinking(0) is False
-    assert _normalize_enable_thinking(" true ") is True
-    assert _normalize_enable_thinking("YES") is True
-    assert _normalize_enable_thinking("off") is False
-    assert _normalize_enable_thinking("no") is False
-    assert _normalize_enable_thinking("unknown") is None
-    assert _normalize_enable_thinking(object()) is None
+    assert normalize_enable_thinking(None) is None
+    assert normalize_enable_thinking(True) is True
+    assert normalize_enable_thinking(False) is False
+    assert normalize_enable_thinking(1) is True
+    assert normalize_enable_thinking(0) is False
+    assert normalize_enable_thinking(" true ") is True
+    assert normalize_enable_thinking("YES") is True
+    assert normalize_enable_thinking("off") is False
+    assert normalize_enable_thinking("no") is False
+    assert normalize_enable_thinking("unknown") is None
+    assert normalize_enable_thinking(object()) is None
 
 
 def test_normalize_semantic_selection_payload_branches():
@@ -366,7 +368,7 @@ def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
     calls = {}
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.ensure_conversation_workspace",
+        "apps.chat_data_app.agent_run_support.ensure_conversation_workspace",
         lambda conversation_id, user_id, *, created_date=None: calls.setdefault(
             "workspace", {"root": f"/tmp/{user_id}/{created_date}/{conversation_id}"}
         ),
@@ -502,7 +504,7 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
         return {"total": 2, "failed_ids": ["sc_broken"]}
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        "apps.chat_data_app.agent_run_support.prematerialize_enabled_semantic_models",
         partial_prematerialize,
     )
     _override_semantic_context(monkeypatch)
@@ -539,7 +541,7 @@ def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(mon
         raise RuntimeError("workspace 写盘失败")
 
     monkeypatch.setattr(
-        "apps.chat_data_app.handlers.prematerialize_enabled_semantic_models",
+        "apps.chat_data_app.agent_run_support.prematerialize_enabled_semantic_models",
         failing_prematerialize,
     )
 
@@ -581,8 +583,8 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
         state=SimpleNamespace(tasks=[], values={}),
     )
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_conversation_workspace", fake_prepare_workspace)
-    monkeypatch.setattr("apps.chat_data_app.handlers.build_runtime_skill_snapshot_async", fake_build_snapshot)
+    monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
+    monkeypatch.setattr("apps.chat_data_app.agent_run_support.build_runtime_skill_snapshot_async", fake_build_snapshot)
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)

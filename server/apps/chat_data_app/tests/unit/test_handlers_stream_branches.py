@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, HumanMessageChunk, ToolMessage, ToolMessageChunk
 
-from apps.chat_data_app import handlers
+from apps.chat_data_app import agent_run_support, handlers
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 
 
@@ -24,7 +24,7 @@ def _stub_datasource_binding(monkeypatch):
     async def noop_prematerialize(**_kwargs):
         return {"total": 0, "failed_ids": []}
 
-    monkeypatch.setattr(handlers, "prematerialize_enabled_semantic_models", noop_prematerialize)
+    monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", noop_prematerialize)
 
 
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
@@ -61,7 +61,7 @@ def _override_semantic_context(monkeypatch, **overrides):
         }
         return context.__class__(**{**context.__dict__, **values})
 
-    monkeypatch.setattr(handlers, "prepare_semantic_conversation_context", prepare_context)
+    monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", prepare_context)
 
 
 def tool_event_contents(events: list[str]) -> list[str]:
@@ -83,11 +83,11 @@ def sse_event_name(event: str) -> str:
 
 
 def test_checkpoint_resume_status_uses_pending_interrupts():
-    assert handlers._checkpoint_resume_status(SimpleNamespace(
+    assert agent_run_support._checkpoint_resume_status(SimpleNamespace(
         pending_writes=[("task-1", "__interrupt__", [])],
     )) is False
-    assert handlers._checkpoint_resume_status(SimpleNamespace(pending_writes=[])) is True
-    assert handlers._checkpoint_resume_status(SimpleNamespace()) is None
+    assert agent_run_support._checkpoint_resume_status(SimpleNamespace(pending_writes=[])) is True
+    assert agent_run_support._checkpoint_resume_status(SimpleNamespace()) is None
 
 
 @pytest.mark.asyncio
@@ -95,7 +95,7 @@ async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monk
     async def fail_prepare(**_kwargs):
         raise RuntimeError("semantic context failed")
 
-    monkeypatch.setattr(handlers, "prepare_semantic_conversation_context", fail_prepare)
+    monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fail_prepare)
     events = []
 
     with pytest.raises(RuntimeError, match="semantic context failed"):
@@ -518,7 +518,7 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
 
     monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
 
-    await handlers._persist_partial_agent_turn_history(
+    await agent_run_support._persist_partial_agent_turn_history(
         adapter,
         conversation_id="conv-partial",
         user_id="user-1",
@@ -533,7 +533,7 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
         raise RuntimeError("event store unavailable")
 
     monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn_error)
-    await handlers._persist_partial_agent_turn_history(
+    await agent_run_support._persist_partial_agent_turn_history(
         adapter,
         conversation_id="conv-partial",
         user_id="user-1",
@@ -613,7 +613,7 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
 
     monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
 
-    await handlers._persist_agent_turn_history(
+    await agent_run_support._persist_agent_turn_history(
         adapter,
         conversation_id="conv-archive",
         user_id="user-1",

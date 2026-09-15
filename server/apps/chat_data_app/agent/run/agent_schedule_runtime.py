@@ -33,6 +33,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
     agent_inbox_service,
 )
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime
+from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options
 from apps.chat_data_app import AGENT_ID
 from apps.chat_data_app.daos.agent_schedule_dao import (
     RUN_STATUS_TO_TRIGGER_STATUS,
@@ -376,12 +377,9 @@ class AgentScheduleRuntime:
             }
 
     def _build_runtime_context(self, job: dict) -> dict:
-        # 复用 chat 完成链路的 options 解析，保证运行参数字段口径一致；
-        # handlers 装配链较重，延迟到真正派发时导入，避免单测全量拉起。
-        from apps.chat_data_app.handlers import _parse_completion_run_options
-
+        # 复用 chat 完成链路的 options 解析，保证运行参数字段口径一致。
         options = job_options(job.get("options_json"))
-        run_options = _parse_completion_run_options(options)
+        run_options = parse_completion_run_options(options)
         return {
             "query": job["job_prompt"],
             "datasource_id": run_options.datasource_id,

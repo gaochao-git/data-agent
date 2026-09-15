@@ -20,7 +20,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app import handlers
+from apps.chat_data_app import agent_run_support, handlers
 from apps.chat_data_app.handlers import AgentRunStreamFailedError
 
 
@@ -39,16 +39,16 @@ def _adapter(**kwargs):
 
 
 def test_stream_message_key_branches():
-    assert handlers._stream_message_key(HumanMessage(content="hi", id="m-1"), 0) == ("id", "m-1")
+    assert agent_run_support._stream_message_key(HumanMessage(content="hi", id="m-1"), 0) == ("id", "m-1")
     # 无 tool_call_id 的 ToolMessage 不参与去重
-    assert handlers._stream_message_key(ToolMessage(content="r", tool_call_id=""), 1) is None
-    assert handlers._stream_message_key(ToolMessage(content="r", tool_call_id="c-1"), 2) == ("tool", "c-1")
+    assert agent_run_support._stream_message_key(ToolMessage(content="r", tool_call_id=""), 1) is None
+    assert agent_run_support._stream_message_key(ToolMessage(content="r", tool_call_id="c-1"), 2) == ("tool", "c-1")
     ai_with_tools = AIMessage(content="", tool_calls=[{"name": "f", "args": {}, "id": "c-2"}])
-    assert handlers._stream_message_key(ai_with_tools, 3) == ("ai_tools", "c-2")
-    assert handlers._stream_message_key(HumanMessage(content="问题"), 4) == ("human", "问题")
-    assert handlers._stream_message_key(AIMessage(content="回答"), 5) == ("ai", "回答")
+    assert agent_run_support._stream_message_key(ai_with_tools, 3) == ("ai_tools", "c-2")
+    assert agent_run_support._stream_message_key(HumanMessage(content="问题"), 4) == ("human", "问题")
+    assert agent_run_support._stream_message_key(AIMessage(content="回答"), 5) == ("ai", "回答")
     # 其它消息类型退化为 (类型, 内容, 序号)
-    assert handlers._stream_message_key(SystemMessage(content="sys"), 6) == (
+    assert agent_run_support._stream_message_key(SystemMessage(content="sys"), 6) == (
         "SystemMessage", "sys", 6,
     )
 
@@ -278,18 +278,19 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
     async def fake_snapshot(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(handlers, "prepare_semantic_conversation_context", fake_prepare_semantic)
-    monkeypatch.setattr(handlers, "prepare_conversation_workspace", fake_workspace)
+    # 运行准备逻辑已下沉 agent_run_support：相关桩打在消费方命名空间。
+    monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fake_prepare_semantic)
+    monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_workspace)
     monkeypatch.setattr(handlers, "build_conversation_prompt_context", fake_build_prompt_context)
-    monkeypatch.setattr(handlers, "build_agent_prompt_context", lambda _ctx: {})
+    monkeypatch.setattr(agent_run_support, "build_agent_prompt_context", lambda _ctx: {})
     monkeypatch.setattr(
         handlers, "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
     )
-    monkeypatch.setattr(handlers, "build_runtime_skill_snapshot_async", fake_snapshot)
-    monkeypatch.setattr(handlers, "list_snapshot_skill_metadata", lambda _dir: [])
+    monkeypatch.setattr(agent_run_support, "build_runtime_skill_snapshot_async", fake_snapshot)
+    monkeypatch.setattr(agent_run_support, "list_snapshot_skill_metadata", lambda _dir: [])
     monkeypatch.setattr(
-        handlers, "ConversationWorkspaceRuntime",
+        agent_run_support, "ConversationWorkspaceRuntime",
         runtime_cls or SimpleNamespace,
     )
 
@@ -404,7 +405,7 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
         return files.get(file_id)
 
     checkpointer = _ExplodingCheckpointer("附件解析完成后无需继续")
-    monkeypatch.setattr(handlers, "get_file_info", fake_get_file_info)
+    monkeypatch.setattr(agent_run_support, "get_file_info", fake_get_file_info)
     monkeypatch.setattr(handlers, "get_checkpointer", checkpointer)
 
     long_query = "销" * (handlers.USER_INPUT_OFFLOAD_THRESHOLD + 10)

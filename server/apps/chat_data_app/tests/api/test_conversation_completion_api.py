@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
+from apps.chat_data_app import agent_run_support
 from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
@@ -32,7 +33,7 @@ def _stub_conversation_event_writes(monkeypatch):
     async def noop_prematerialize(**_kwargs):
         return {"total": 0, "failed_ids": []}
 
-    monkeypatch.setattr(handler_module, "prematerialize_enabled_semantic_models", noop_prematerialize)
+    monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", noop_prematerialize)
 
     async def start_run(*_args, **_kwargs):
         runtime_context = _args[3] if len(_args) > 3 else _kwargs.get("runtime_context") or {}

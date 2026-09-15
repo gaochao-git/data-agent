@@ -16,8 +16,9 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, ToolMessageChunk
 
-from apps.chat_data_app import handlers
+from apps.chat_data_app import agent_run_support, handlers
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
+from apps.chat_data_app.agent.run.completion_options import normalize_thinking_effort
 
 
 # --------------------------------------------------------------------------- #
@@ -38,7 +39,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostEr
     ],
 )
 def test_normalize_thinking_effort(raw, expected):
-    assert handlers._normalize_thinking_effort(raw) == expected
+    assert normalize_thinking_effort(raw) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -172,7 +173,7 @@ async def test_persist_agent_turn_history_uses_state_override_without_touching_a
         def state(self):
             raise AssertionError("不应读取 adapter.state")
 
-    await handlers._persist_agent_turn_history(
+    await agent_run_support._persist_agent_turn_history(
         _ExplodingAdapter(),
         conversation_id="conv-1",
         user_id="u1",
@@ -185,7 +186,7 @@ async def test_persist_agent_turn_history_uses_state_override_without_touching_a
 @pytest.mark.asyncio
 async def test_persist_partial_agent_turn_history_noop_without_adapter():
     """adapter 为 None 时静默返回，不抛异常（543->544）。"""
-    await handlers._persist_partial_agent_turn_history(
+    await agent_run_support._persist_partial_agent_turn_history(
         None, conversation_id="conv-1", user_id="u1", username=None, turn_id="turn-1"
     )
 
@@ -708,7 +709,7 @@ async def test_persist_turn_history_uses_checkpoint_writer_when_run_id_present(m
         persist_turn_with_checkpoint,
     )
 
-    await handlers._persist_agent_turn_history(
+    await agent_run_support._persist_agent_turn_history(
         _turn_history_adapter(),
         conversation_id="conv-1",
         user_id="u1",
@@ -741,7 +742,7 @@ async def test_persist_turn_history_prefers_snapshot_stream_id(monkeypatch):
         persist_turn_with_checkpoint,
     )
 
-    await handlers._persist_agent_turn_history(
+    await agent_run_support._persist_agent_turn_history(
         _turn_history_adapter(),
         conversation_id="conv-1",
         user_id="u1",
