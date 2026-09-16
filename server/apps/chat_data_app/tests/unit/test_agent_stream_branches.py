@@ -473,6 +473,30 @@ def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):
     assert alarms[0]["ext1"]["thread_id"] == "conv_alarm"
 
 
+def test_agent_sse_stream_adapter_alarm_context_carries_user_id(monkeypatch):
+    """_alarm_context 需携带 user_id，使 LLM 类告警能定位到人而不止到会话。"""
+    alarms = []
+    monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(agent_stream, "emit_llm_first_token_timeout_alarm", lambda **kwargs: alarms.append(kwargs))
+
+    adapter = agent_stream._AgentSseStreamAdapter(
+        agent=SimpleNamespace(),
+        initial_state={"messages": []},
+        config={"configurable": {"thread_id": "conv_user", "checkpoint_ns": ""}},
+        debug_label="AI Content from model",
+        user_id="10001",
+    )
+
+    adapter._emit_first_token_timeout_if_needed(agent_stream.time.perf_counter() - 61)
+
+    assert len(alarms) == 1
+    assert alarms[0]["ext1"]["user_id"] == "10001"
+    assert alarms[0]["ext1"]["thread_id"] == "conv_user"
+    # 未传 user_id 的既有路径保持空串，不改变告警结构
+    bare = agent_stream._AgentSseStreamAdapter(agent=SimpleNamespace(), initial_state={}, config={})
+    assert bare._alarm_context()["user_id"] == ""
+
+
 @pytest.mark.asyncio
 async def test_agent_sse_stream_adapter_llm_connection_alarm(monkeypatch):
     alarms = []

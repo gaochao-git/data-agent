@@ -632,6 +632,7 @@ class _AgentSseStreamAdapter:
         on_first_message=None,
         on_stream_started=None,
         debug_label: str | None = None,
+        user_id: str | None = None,
         reasoning_turn_id: str | None = None,
     ):
         self.agent = agent
@@ -645,6 +646,7 @@ class _AgentSseStreamAdapter:
         self.on_first_message = on_first_message
         self.on_stream_started = on_stream_started
         self.debug_label = debug_label
+        self.user_id = user_id
         self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
@@ -818,6 +820,7 @@ class _AgentSseStreamAdapter:
             "thread_id": (configurable or {}).get("thread_id") or "",
             "checkpoint_ns": (configurable or {}).get("checkpoint_ns") or "",
             "debug_label": self.debug_label or "",
+            "user_id": self.user_id or "",
         }
 
     def _has_visible_payload(self, message_chunk: Any) -> bool:
@@ -1092,6 +1095,7 @@ def _create_agent_stream_adapter(
         visible_message_filter=_is_chat_data_visible_stream_message,
         disconnect_log_id=callbacks.thread_id,
         debug_label="AI Content from model",
+        user_id=callbacks.user_id,
         include_empty_tool_messages=True,
         on_first_message=partial(callbacks.log_phase, "first_model_chunk"),
         on_stream_started=on_stream_started,
