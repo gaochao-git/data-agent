@@ -311,7 +311,7 @@ const windowStyle = computed(() => ({
 /* === 悬浮按钮 === */
 .chatdata-fab {
   position: fixed;
-  z-index: 1501;
+  z-index: var(--z-chatdata-fab);
   width: 52px;
   height: 52px;
   border-radius: 50%;
@@ -332,7 +332,7 @@ const windowStyle = computed(() => ({
 /* === 悬浮窗口 === */
 .chatdata-float-window {
   position: fixed;
-  z-index: 3000;
+  z-index: var(--z-chatdata-float-window);
   display: flex;
   flex-direction: column;
   background: #fff;

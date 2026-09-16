@@ -10,6 +10,8 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 // 会话 markdown 渲染样式（.conversation-markdown）：主对话与子智能体 trail 共用，
 // 全局注入但随本模块走，便于整个 chat-data 目录迁移到其它主项目。
 import '../styles/markdown.css'
+// z-index 层级变量（:root CSS 变量，本模块层级唯一事实来源，定义见文件头注释）
+import '../styles/z-index.css'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
@@ -1863,7 +1865,7 @@ onMounted(async () => {
     </div>
 
     <!-- 语义配置页面（整页） -->
-    <div v-if="isSemanticConfigPanelOpen" class="absolute inset-0 z-[2050] bg-[#F5F7FA]">
+    <div v-if="isSemanticConfigPanelOpen" class="absolute inset-0 z-[var(--z-page-overlay)] bg-[#F5F7FA]">
       <SemanticConfigPanel
         :datasource-id="semanticConfigDatasourceId"
         :datasource-name="semanticConfigDatasource?.group_name || ''"
@@ -2064,23 +2066,23 @@ body.is-resizing {
 }
 
 .chatdata-message-box-overlay {
-  z-index: 20000 !important;
+  z-index: var(--z-messagebox-legacy-overlay) !important;
 }
 
 .chatdata-message-box {
-  z-index: 20001 !important;
+  z-index: var(--z-messagebox-legacy-box) !important;
 }
 
 /*
  * Element Plus MessageBox 全局层级修复（本文件 style 非 scoped，规则随 chat-data 目录走）。
- * 根因：语义配置等整页容器 z-index 高达 2050（本文件 z-[2050]），而 MessageBox 默认
- * z-index 从 ~2001 起动态分配，整层弹窗（含遮罩）会被压在整页容器之下，表现为
- * "点了删除不弹窗"。这里对 MessageBox 遮罩层（.el-overlay.is-message-box，EP 专属类，
+ * 根因：语义配置等整页容器 z-index 高达 2050（var(--z-page-overlay)，见 styles/z-index.css），
+ * 而 MessageBox 默认 z-index 从 ~2001 起动态分配，整层弹窗（含遮罩）会被压在整页容器之下，
+ * 表现为"点了删除不弹窗"。这里对 MessageBox 遮罩层（.el-overlay.is-message-box，EP 专属类，
  * 不影响 dialog/drawer）统一提到 20010，高于全部业务层级；各调用点无需再逐个传
  * customClass: 'chatdata-message-box'。
  */
 .el-overlay.is-message-box {
-  z-index: 20010 !important;
+  z-index: var(--z-messagebox-overlay) !important;
 }
 
 </style>

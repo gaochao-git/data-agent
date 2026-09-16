@@ -408,7 +408,7 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
     <Teleport to="body">
       <div
         v-if="tooltipState.visible"
-        class="fixed max-w-[420px] px-3 py-2 bg-[#373839] rounded text-white text-[12px] z-[10000] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_4px_10px_rgba(0,0,0,0.15)] overflow-visible select-text cursor-text"
+        class="fixed max-w-[420px] px-3 py-2 bg-[#373839] rounded text-white text-[12px] z-[var(--z-floating-tip)] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_4px_10px_rgba(0,0,0,0.15)] overflow-visible select-text cursor-text"
         :style="{ left: tooltipState.x + 'px', top: tooltipState.y + 'px' }"
         @mouseenter="keepTooltipVisible"
         @mouseleave="hideTooltipNow"

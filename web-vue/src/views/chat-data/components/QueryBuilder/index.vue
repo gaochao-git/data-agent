@@ -3996,7 +3996,7 @@ defineExpose({
   <Teleport to="body">
     <div
       v-if="atState.dropdownVisible && atInputRef"
-      class="fixed z-[10000] w-[220px] max-h-[260px] bg-white border border-[#e3e5eb] rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] overflow-hidden"
+      class="fixed z-[var(--z-floating-tip)] w-[220px] max-h-[260px] bg-white border border-[#e3e5eb] rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] overflow-hidden"
       :style="{
         left: (atInputRef.getBoundingClientRect().left) + 'px',
         top: (atInputRef.getBoundingClientRect().bottom + 4) + 'px'

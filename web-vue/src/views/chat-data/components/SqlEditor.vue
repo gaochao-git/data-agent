@@ -2862,7 +2862,7 @@ defineExpose({
 
 .sql-context-menu {
   position: fixed;
-  z-index: 4600;
+  z-index: var(--z-context-menu);
   width: 260px;
   max-height: 360px;
   overflow-y: auto;

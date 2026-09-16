@@ -3,6 +3,7 @@ import { computed, toRef, watch } from 'vue'
 import { useSemanticEvaluation, type EvaluationCaseRunRow } from '../../composables/useSemanticEvaluation'
 import type { AccuracyEvaluationRunCaseHistoryItem, AccuracyEvaluationRunHistoryItem } from '../../api'
 import type { SemanticConfigItem } from '../../types'
+import { Z_INDEX } from '../../utils/zIndex'
 
 const props = defineProps<{
   datasourceId: string
@@ -96,7 +97,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
 </script>
 
 <template>
-  <el-drawer v-model="visible" class="chatdata-evaluation-drawer" direction="ltr" size="82%" :with-header="false" append-to-body :z-index="4200">
+  <el-drawer v-model="visible" class="chatdata-evaluation-drawer" direction="ltr" size="82%" :with-header="false" append-to-body :z-index="Z_INDEX.DRAWER">
     <div class="h-full min-h-0 bg-[#f5f7fb] flex flex-col">
       <div class="h-12 px-4 border-b border-gray-200 bg-white flex items-center justify-between shrink-0">
         <div class="min-w-0">
@@ -576,7 +577,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
     </div>
   </el-drawer>
 
-  <el-dialog v-model="showCaseEditorDialog" width="720px" title="编辑评测用例" append-to-body :z-index="4300">
+  <el-dialog v-model="showCaseEditorDialog" width="720px" title="编辑评测用例" append-to-body :z-index="Z_INDEX.DIALOG_NESTED">
     <el-form label-position="top" size="small">
       <div class="grid grid-cols-2 gap-3">
         <el-form-item label="用例 ID">

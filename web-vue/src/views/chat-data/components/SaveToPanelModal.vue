@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import { listDashboards, addPanel, createDashboard, generatePanelName, type Dashboard } from '../api/dashboard'
 import { CHART_TYPES, CHART_TYPE_HELP_TEXT, normalizeChartType, type ChartType } from '../chartTypes'
 import type { ExecutionTargetOption } from '../types'
+import { Z_INDEX } from '../utils/zIndex'
 
 interface Props {
   visible: boolean
@@ -227,7 +228,7 @@ const handleClose = () => {
 </script>
 
 <template>
-  <el-dialog :model-value="visible" title="保存到看板" width="720px" append-to-body :z-index="4000" @close="handleClose">
+  <el-dialog :model-value="visible" title="保存到看板" width="720px" append-to-body :z-index="Z_INDEX.DIALOG" @close="handleClose">
     <!-- 选择看板 -->
     <div class="mb-4 last:mb-0">
       <label class="block text-sm font-medium text-gray-700 mb-2">目标看板</label>

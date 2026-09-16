@@ -10,6 +10,7 @@ import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
 import type { ToolQueryResult } from '../types/query'
 import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryStatus, stripAnsiErrorText } from '../utils'
+import { Z_INDEX } from '../utils/zIndex'
 
 /**
  * 组件解析的单成员查询结果 = 共享工具结果形状（types/query.ts 的
@@ -555,7 +556,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
             <!-- 下拉菜单（使用 Teleport 避免被裁剪） -->
             <Teleport to="body">
-              <div v-if="showChartMenu" class="fixed inset-0 z-[9999] pointer-events-none">
+              <div v-if="showChartMenu" class="fixed inset-0 z-[var(--z-fullscreen-layer)] pointer-events-none">
                 <div class="fixed inset-0 pointer-events-auto" @click="showChartMenu = false"></div>
                 <div
                   ref="chartMenuRef"
@@ -603,7 +604,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
     width="calc(100vw - 48px)"
     top="24px"
     append-to-body
-    :z-index="3900"
+    :z-index="Z_INDEX.DIALOG_FULLSCREEN"
     :show-close="false"
     :close-on-click-modal="true"
     class="query-result-fullscreen-dialog"

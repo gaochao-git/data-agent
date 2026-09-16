@@ -86,6 +86,12 @@
 - 新代码中 routers 和 daos 不主动 `commit()`；普通事务由 services 编排，database 的 `get_session()` 负责提交/回滚机制。确需分阶段提交时，只能在 service 中显式处理并说明原因。
 - 新增或调整功能必须保持清晰分层，外部系统访问放 adapter/client；涉及智能问数、可视化查询、SQL 查询、看板等共享链路时，必须同步检查所有消费侧和必要测试，避免只修一个入口导致口径漂移。
 
+### 4.5 前端层级（z-index）规范
+
+- 跨组件层级的 z-index 一律引用 `web-vue/src/views/chat-data/styles/z-index.css` 中的 `--z-*` CSS 变量（模块内唯一事实来源，随 chat-data 目录拷贝）：样式表写 `z-index: var(--z-*)`，Tailwind 类写 `z-[var(--z-*)]`；EP 组件的 `:z-index` prop 只接受 number，使用 `web-vue/src/views/chat-data/utils/zIndex.ts` 的 `Z_INDEX` 常量镜像，改值必须与 z-index.css 两处同步。
+- 2000~2999 是 Element Plus PopupManager 的动态分配区（首个弹层 2001 起递增）：业务整页容器若落在该区间之上，必须同步把依赖的 EP 弹层显式抬高，否则弹窗（含遮罩）会被压在容器之下（参考 `pages/index.vue` 的 MessageBox 修复注释与 `.el-overlay.is-message-box` 规则）。
+- 组件内部相对排序的小层级（1~320，如 sticky 表头、局部浮层）不纳入变量管理，直接写数字；新增跨组件层级时必须先在 z-index.css 归位到对应分层再引用，禁止直接写魔法数字。
+
 ## 5. 目录与文件约定
 
 ### 5.1 不要随意改动

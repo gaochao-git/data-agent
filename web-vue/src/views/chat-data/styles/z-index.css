@@ -1,0 +1,37 @@
+/**
+ * ChatData z-index 层级变量（模块内唯一事实来源，随 chat-data 目录拷贝，无需主项目接线）。
+ *
+ * 分层规则：
+ * - 2000~2999 是 Element Plus PopupManager 的动态分配区（首个弹层 2001 起），业务整页容器
+ *   若落在该区间之上，必须同步把依赖的 EP 弹层显式抬高，否则弹窗会被压住（详见
+ *   pages/index.vue 的 MessageBox 修复注释）。
+ * - 本文件只管理「跨组件语义」的层级；组件内部相对排序的小值（1~320，如 sticky 表头、
+ *   局部浮层）不在此管理，直接写数字即可。
+ * - EP 组件的 :z-index prop 只接受 number，用不了 CSS 变量，对应数字常量镜像在
+ *   utils/zIndex.ts（改值必须两处同步）。
+ */
+:root {
+  /* —— 模块挂件层（ChatDataFloat）—— */
+  --z-chatdata-fab: 1501;          /* 悬浮球按钮 */
+  --z-chatdata-float-window: 3000; /* 悬浮窗口（内部承载整页 ChatDataPage） */
+
+  /* —— 整页容器层 —— */
+  --z-page-overlay: 2050;          /* 语义配置等整页容器（刻意高于 EP 首个弹层 2001） */
+  --z-page-overlay-popper: 2060;   /* 整页容器之上的 select popper */
+
+  /* —— EP 弹层显式基线带（append-to-body 组件的 :z-index prop，须高于悬浮窗 3000）—— */
+  --z-dialog-fullscreen: 3900;     /* 查询结果全屏 dialog */
+  --z-dialog: 4000;                /* 普通 dialog（保存到看板等） */
+  --z-drawer: 4200;                /* 评测 drawer */
+  --z-dialog-nested: 4300;         /* drawer 内二级 dialog */
+  --z-context-menu: 4600;          /* SQL 编辑器右键菜单（须盖过全部 EP 弹层） */
+
+  /* —— 手写 fixed 浮层（非 EP 组件：图表全屏、自定义 tooltip / 右键菜单）—— */
+  --z-fullscreen-layer: 9999;      /* 图表全屏遮罩、fixed 菜单层 */
+  --z-floating-tip: 10000;         /* 自定义 tooltip、右键菜单（手写浮层顶端） */
+
+  /* —— MessageBox 修复层（高于 EP 动态区与全部业务层级）—— */
+  --z-messagebox-legacy-overlay: 20000; /* 既有 customClass 变通（chatdata-message-box-overlay） */
+  --z-messagebox-legacy-box: 20001;     /* 既有 customClass 变通（chatdata-message-box） */
+  --z-messagebox-overlay: 20010;        /* MessageBox 遮罩统一修复（.el-overlay.is-message-box） */
+}

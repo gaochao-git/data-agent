@@ -256,7 +256,7 @@ watch(chartRef, () => {
 </script>
 
 <template>
-  <div :class="isFullscreen ? 'fixed inset-0 z-[9999] bg-slate-950/55 p-4' : ''">
+  <div :class="isFullscreen ? 'fixed inset-0 z-[var(--z-fullscreen-layer)] bg-slate-950/55 p-4' : ''">
     <div
       class="overflow-hidden rounded-lg border border-slate-200 bg-white"
       :class="isFullscreen ? 'mx-auto flex h-full w-full max-w-[1440px] flex-col rounded-xl shadow-2xl' : ''"

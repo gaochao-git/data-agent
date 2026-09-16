@@ -3427,7 +3427,7 @@ textarea::placeholder {
 
 
 :global(.chatdata-semantic-config-select-popper) {
-  z-index: 2060 !important;
+  z-index: var(--z-page-overlay-popper) !important;
 }
 
 :global(.chatdata-semantic-config-select-popper .el-select-dropdown__item) {

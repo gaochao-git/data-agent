@@ -45,7 +45,7 @@ ChatData（智能问数）是一个 Vue 3 功能模块，提供面向语义模�
 │       ├── assets/
 │       ├── components/
 │       ├── composables/
-│       ├── styles/          # 含 markdown.css（会话 markdown 渲染样式，pages/index.vue 内引入，无需主项目接线）
+│       ├── styles/          # 含 markdown.css（会话 markdown 渲染样式）与 z-index.css（模块层级变量，均由 pages/index.vue 内引入，无需主项目接线）
 │       ├── types/
 │       ├── utils/          # 包含 auth.js、mapRegistry.ts、parseContent.ts、sqlFormatter.ts
 │       └── views/
