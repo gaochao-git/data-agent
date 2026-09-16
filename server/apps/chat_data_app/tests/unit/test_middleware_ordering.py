@@ -1,7 +1,7 @@
 """中间件组装顺序守卫。
 
 ``agent_runtime.MIDDLEWARE_CANONICAL_ORDER`` 是唯一权威顺序表；本测试枚举
-全部可选中间件的启用/禁用组合（2^10 = 1024 种），断言实际组装结果与
+全部可选中间件的启用/禁用组合（2^11 = 2048 种），断言实际组装结果与
 "规范顺序表过滤后"逐一致。任何新增中间件插错位置、或顺序表与组装逻辑
 脱节，都会在这里失败——顺序约束不靠 review 肉眼保证。
 """
@@ -28,7 +28,12 @@ _OPTIONAL_SLOTS = {
 }
 
 # 无条件必备项（组装点内部创建）
-_MANDATORY_NAMES = ["ToolTimingMiddleware", "TodoListMiddleware", "ToolErrorMiddleware"]
+_MANDATORY_NAMES = [
+    "ToolTimingMiddleware",
+    "ToolCallRateAlertMiddleware",
+    "TodoListMiddleware",
+    "ToolErrorMiddleware",
+]
 
 # include_* 开关 -> 对应中间件注册名
 _FLAG_SLOTS = {

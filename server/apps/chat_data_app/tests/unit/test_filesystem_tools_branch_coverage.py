@@ -330,3 +330,18 @@ async def test_file_edit_tool_rejects_blank_old_content_before_runtime():
             "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "", "new_content": "new",
         })
     assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_tool_rejects_identical_content_before_runtime():
+    runtime = StubRuntime()
+    with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
+        await _invoke(runtime, "file_edit", {
+            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "same", "new_content": "same",
+        })
+    # new_content 为非字符串时按序列化结果比较，同样拦截
+    with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
+        await _invoke(runtime, "file_edit", {
+            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "123", "new_content": 123,
+        })
+    assert runtime.calls == []

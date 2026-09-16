@@ -777,6 +777,7 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
             timeout,
             user_id,
             username=None,
+            datasource_id=None,
             remote_task_callback=None,
             db_connection_callback=None,
         ):
@@ -946,6 +947,7 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
             timeout,
             user_id,
             username=None,
+            datasource_id=None,
             remote_task_callback=None,
             db_connection_callback=None,
         ):
@@ -1036,7 +1038,7 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
     target = {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"}
 
     class FakeExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
             return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
         async def close(self):
@@ -1122,7 +1124,7 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     final_updates = []
 
     class FailingExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
             raise RuntimeError("executor failed")
 
         async def close(self):
@@ -1575,7 +1577,7 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
     final_updates = []
 
     class CallbackExecutor:
-        async def execute(self, sql, limit, timeout, user_id, remote_task_callback=None, db_connection_callback=None):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
             execute_calls.append(sql)
             await remote_task_callback({"remote_task_id": "remote_no_targets"})
             await db_connection_callback({"db_connection_id": "conn_no_exec"})
@@ -1617,7 +1619,11 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
 
 def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
     class FakeExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        def __init__(self):
+            self.received_datasource_ids = []
+
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
+            self.received_datasource_ids.append(datasource_id)
             return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
         async def close(self):
@@ -1636,7 +1642,8 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
 
     monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", cache_enabled)
     monkeypatch.setattr(query_cache, "get_sql_result_cache", cache_miss)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
+    executor_instance = FakeExecutor()
+    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: executor_instance)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
 
     result = asyncio.run(query_runtime.execute_sql_for_member(
@@ -1644,10 +1651,13 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
         sql="select 1",
         limit=10,
         timeout=None,
+        datasource_id="ds_group_1",
+        user_id="u_1",
     ))
 
     assert result["status"] == "succeeded"
     assert "success" not in result
+    assert executor_instance.received_datasource_ids == ["ds_group_1"]
 
 
 def test_run_sql_query_task_cancel_after_running(monkeypatch):

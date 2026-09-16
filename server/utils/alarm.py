@@ -327,3 +327,41 @@ def emit_llm_first_token_timeout_alarm(*, elapsed_ms: int, threshold_seconds: in
         ext1=ext1,
         ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
     )
+
+
+# 单会话工具调用频率超限的细分原因码（写入报警日志 error_code 字段）。
+# 注意：alarm_id="TOOL_CALL_RATE_EXCEEDED" 对应 OMS 告警配置中的告警名称，
+# 属于平台契约，不可随意改名；窗口/阈值等参数只落在 ext1，便于按会话检索。
+TOOL_RATE_CONVERSATION_EXCEEDED = "CONVERSATION_TOOL_CALL_RATE_EXCEEDED"
+
+
+def emit_tool_call_rate_alarm(
+    *,
+    conversation_id: str,
+    count: int,
+    threshold: int,
+    window_seconds: int,
+    tool_name: str | None = None,
+    user_id: str | None = None,
+    ext1: Any = None,
+) -> None:
+    """单会话工具调用频率超限告警（合规要求：按会话在时间窗口内聚合计数）。
+
+    ``count`` 为触发时的窗口内调用数（含当次），``threshold`` 为配置上限；
+    两者一并入 ext1，便于告警侧判断超限倍数。
+    """
+    emit_alarm(
+        "单会话工具调用频率超限",
+        # OMS 契约字段：与告警配置中的告警名称一致，勿改。
+        alarm_id="TOOL_CALL_RATE_EXCEEDED",
+        request_type="TOOL",
+        error_code=TOOL_RATE_CONVERSATION_EXCEEDED,
+        ext1=ext1
+        or {
+            "conversation_id": conversation_id,
+            "count": count,
+            "threshold": threshold,
+            "window_seconds": window_seconds,
+        },
+        ext2={"last_tool_name": tool_name or "", "user_id": user_id or ""},
+    )

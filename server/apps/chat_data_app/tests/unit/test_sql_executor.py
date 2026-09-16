@@ -514,13 +514,15 @@ def test_hive_http_executor_rejects_disallowed_sql_before_submit(monkeypatch):
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
     monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
 
-    result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("delete from orders"))
+    result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
 
     assert result["status"] != "succeeded"
     assert "只允许执行以下类型" in result["error"]
     assert captured["called"] is False
     assert alarms[0][0][0] == "delete from orders"
     assert alarms[0][1]["execution_scope"] == "http_executor"
+    assert alarms[0][1]["datasource_id"] == "ds_7"
+    assert alarms[0][1]["user_id"] == "u_9"
 
 
 def test_hive_http_executor_rejects_multiple_sql_before_submit(monkeypatch):
@@ -1083,10 +1085,12 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
     monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
-    invalid_sql = asyncio.run(executor.execute("delete from orders"))
+    invalid_sql = asyncio.run(executor.execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
     assert invalid_sql["status"] != "succeeded"
     assert "只允许执行以下类型" in invalid_sql["error"]
     assert dangerous_alarms[0][1]["execution_scope"] == "mysql_executor"
+    assert dangerous_alarms[0][1]["datasource_id"] == "ds_7"
+    assert dangerous_alarms[0][1]["user_id"] == "u_9"
 
     class TimeoutCursor(_FakeMySQLCursor):
         async def execute(self, sql):
@@ -1126,12 +1130,14 @@ def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
     monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(ConnectionErrorCursor())))
 
-    failed = asyncio.run(executor.execute("select 1"))
+    failed = asyncio.run(executor.execute("select 1", user_id="u_9", datasource_id="ds_7"))
 
     assert failed["status"] != "succeeded"
     assert db_alarms[0][0][0] == "查询数据源连接异常"
     assert db_alarms[0][1]["reason_code"] == alarm_module.DB_FAIL_DATASOURCE
     assert db_alarms[0][1]["ext1"]["source_type"] == "mysql"
+    assert db_alarms[0][1]["ext1"]["datasource_id"] == "ds_7"
+    assert db_alarms[0][1]["ext1"]["user_id"] == "u_9"
 
 
 def test_mysql_executor_get_pool_lazy_initialization(monkeypatch):
@@ -1161,10 +1167,12 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
     monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
     monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
-    invalid_sql = asyncio.run(executor.execute("delete from orders"))
+    invalid_sql = asyncio.run(executor.execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
     assert invalid_sql["status"] != "succeeded"
     assert "只允许执行以下类型" in invalid_sql["error"]
     assert dangerous_alarms[0][1]["execution_scope"] == "hive_executor"
+    assert dangerous_alarms[0][1]["datasource_id"] == "ds_7"
+    assert dangerous_alarms[0][1]["user_id"] == "u_9"
 
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *_args, **_kwargs: 0.001)
     monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"status": "succeeded"})
@@ -1421,8 +1429,8 @@ def test_get_executor_fills_direct_credentials(monkeypatch):
 
 def test_abstract_executor_and_mysql_error_branches(monkeypatch):
     class BareExecutor(sql_executor.SQLExecutor):
-        async def execute(self, sql, limit=100, timeout=None, user_id=None, remote_task_callback=None, db_connection_callback=None):
-            return await super().execute(sql, limit, timeout, user_id, remote_task_callback, db_connection_callback)
+        async def execute(self, sql, limit=100, timeout=None, user_id=None, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
+            return await super().execute(sql, limit, timeout, user_id, datasource_id, remote_task_callback, db_connection_callback)
 
         async def test_connection(self):
             return await super().test_connection()

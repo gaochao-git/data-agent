@@ -117,17 +117,18 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 10
+    assert len(captured["middleware"]) == 11
     assert captured["middleware"][0].name == "ImageInjectionMiddleware"
     assert captured["middleware"][1].name == "ToolTimingMiddleware"
-    assert captured["middleware"][2].name == "ToolCallHistoryRepairMiddleware"
-    assert captured["middleware"][3].name == "TodoListMiddleware"
-    assert captured["middleware"][4].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][5] == {"context_model": "primary-model"}
-    assert captured["middleware"][6].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][7].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][8].name == "ToolResultMiddleware"
-    assert captured["middleware"][9].name == "ToolErrorMiddleware"
+    assert captured["middleware"][2].name == "ToolCallRateAlertMiddleware"
+    assert captured["middleware"][3].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][4].name == "TodoListMiddleware"
+    assert captured["middleware"][5].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][6] == {"context_model": "primary-model"}
+    assert captured["middleware"][7].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][8].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][9].name == "ToolResultMiddleware"
+    assert captured["middleware"][10].name == "ToolErrorMiddleware"
     assert context_kwargs["tools"] == []
     assert context_kwargs["state_schema"] is ChatDataAgentState
     assert bound == [(agent, {"context_model": "primary-model"})]
@@ -160,6 +161,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
     assert [middleware.name for middleware in captured["middleware"]] == [
         "ImageInjectionMiddleware",
         "ToolTimingMiddleware",
+        "ToolCallRateAlertMiddleware",
         "ToolCallHistoryRepairMiddleware",
         "TodoListMiddleware",
         "AfterModelHistoryMiddleware",

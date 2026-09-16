@@ -1257,7 +1257,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     closed = []
 
     class CallbackExecutor:
-        async def execute(self, sql, limit=100, timeout=None, user_id=None, username=None, remote_task_callback=None, db_connection_callback=None):
+        async def execute(self, sql, limit=100, timeout=None, user_id=None, username=None, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
             assert username == "测试用户"
             assert user_id == "u1"
             await remote_task_callback({"remote_task_id": "remote_1", "source_type": "Hive"})

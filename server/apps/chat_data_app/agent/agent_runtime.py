@@ -12,6 +12,7 @@ from .middleware.tool_call_normalizer import (
     create_tool_call_name_normalizer_middleware,
     normalize_response_tool_call_names,  # noqa: F401  向后兼容 re-export，原定义已下沉至 middleware
 )
+from .middleware.tool_call_rate_alert import create_tool_call_rate_alert_middleware
 from .middleware.tool_timing import create_tool_timing_middleware
 from ..services.llm_config import get_chat_data_llm
 
@@ -118,6 +119,7 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",     # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
     "ImageInjectionMiddleware",         # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
     "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
+    "ToolCallRateAlertMiddleware",      # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
     "SteeringMiddleware",               # 在压缩之前注入插话，避免被摘要吞掉
     "SubagentMiddleware",               # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
@@ -164,6 +166,7 @@ def build_standard_agent_middleware(
         "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
         "ImageInjectionMiddleware": image_injection_middleware,
         "ToolTimingMiddleware": create_tool_timing_middleware(),
+        "ToolCallRateAlertMiddleware": create_tool_call_rate_alert_middleware(),
         "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,
         "SteeringMiddleware": steering_middleware,
         "SubagentMiddleware": subagent_middleware,

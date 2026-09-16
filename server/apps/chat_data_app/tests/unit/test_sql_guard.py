@@ -138,16 +138,20 @@ def test_build_effective_sql_dash_comment_limit_lands_on_new_line():
 def test_build_effective_sql_internal_gate_failure_alarms(monkeypatch):
     alarms = []
 
-    def fake_alarm(sql, reason, *, source_type=None, execution_scope=None):
-        alarms.append((sql, reason, execution_scope))
+    def fake_alarm(sql, reason, *, source_type=None, execution_scope=None, datasource_id="", user_id=""):
+        alarms.append((sql, reason, execution_scope, datasource_id, user_id))
 
     monkeypatch.setattr(sql_executor, "_emit_sql_execution_validation_alarm", fake_alarm)
     # 模拟补全逻辑缺陷：append 未写入 LIMIT → 终检按内部缺陷拒绝并报警
     monkeypatch.setattr(sql_executor, "_append_limit", lambda sql, limit: sql)
     with pytest.raises(ValueError, match="行数上限校验失败"):
-        sql_executor.build_effective_sql("SELECT * FROM t", 100, source_type="mysql")
+        sql_executor.build_effective_sql(
+            "SELECT * FROM t", 100, source_type="mysql", datasource_id="ds_7", user_id="u_9"
+        )
     assert len(alarms) == 1
     assert alarms[0][2] == "limit_gate"
+    assert alarms[0][3] == "ds_7"
+    assert alarms[0][4] == "u_9"
 
 
 def test_violation_messages_round_trip_through_alarm_inference():

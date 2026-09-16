@@ -422,7 +422,14 @@ def _add_limit_if_needed(sql: str, limit: int, source_type: Optional[str] = None
     return _append_limit(sql, normalized_limit) if _should_auto_add_limit(sql, source_type=source_type) else sql
 
 
-def build_effective_sql(sql: str, limit: int = DEFAULT_ROW_LIMIT, source_type: Optional[str] = None) -> str:
+def build_effective_sql(
+    sql: str,
+    limit: int = DEFAULT_ROW_LIMIT,
+    source_type: Optional[str] = None,
+    *,
+    datasource_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> str:
     """生成真实执行 SQL：仅按需追加 LIMIT，出口终检强制行数上限。
 
     终检门是"进入数据库的 SELECT 必须带合法 LIMIT"的硬保证：补全阶段的任何
@@ -439,7 +446,14 @@ def build_effective_sql(sql: str, limit: int = DEFAULT_ROW_LIMIT, source_type: O
     if has_line_comment_marker(last_line):
         raise ValueError("SQL 末尾的注释导致系统无法安全追加行数上限，请将注释移至 LIMIT 之前或删除注释后重试")
     logger.error("LIMIT 终检失败（系统内部缺陷信号）: sql_tail=%r", effective_sql[-120:])
-    _emit_sql_execution_validation_alarm(sql, gate.message, source_type=source_type or "", execution_scope="limit_gate")
+    _emit_sql_execution_validation_alarm(
+        sql,
+        gate.message,
+        source_type=source_type or "",
+        execution_scope="limit_gate",
+        datasource_id=datasource_id or "",
+        user_id=user_id or "",
+    )
     raise ValueError(gate.message)
 
 
@@ -448,13 +462,23 @@ def _log_sql_execution_summary(source_type: str, database: str, execution_time_m
     logger.info("[%s] SQL 执行完成: database=%s elapsed_ms=%s rows=%s", source_type, database, execution_time_ms, row_count)
 
 
-def _emit_sql_execution_validation_alarm(sql: str, error_msg: str, *, source_type: str, execution_scope: str) -> None:
+def _emit_sql_execution_validation_alarm(
+    sql: str,
+    error_msg: str,
+    *,
+    source_type: str,
+    execution_scope: str,
+    datasource_id: str = "",
+    user_id: str = "",
+) -> None:
     """记录执行边界拦截的高危 SQL。"""
     emit_dangerous_sql_alarm(
         sql,
         error_msg,
         source_type=source_type,
         execution_scope=execution_scope,
+        datasource_id=datasource_id or None,
+        user_id=user_id or None,
     )
 
 
@@ -465,6 +489,8 @@ def _emit_query_database_connection_alarm(
     *,
     host: str | None = None,
     port: int | None = None,
+    datasource_id: str = "",
+    user_id: str = "",
 ) -> None:
     """记录查询数据源连接类异常。"""
     normalized_source_type = str(source_type or "").strip().lower()
@@ -480,6 +506,8 @@ def _emit_query_database_connection_alarm(
             "host": host or "",
             "port": port or "",
             "database": database or "",
+            "datasource_id": datasource_id or "",
+            "user_id": user_id or "",
         },
         ext2={"error_type": err.__class__.__name__, "error": str(err)},
     )
@@ -519,6 +547,7 @@ class SQLExecutor(ABC):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: Optional[int] = None,
         user_id: Optional[str] = None,
+        datasource_id: Optional[str] = None,
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
@@ -529,6 +558,8 @@ class SQLExecutor(ABC):
             sql: SQL 查询语句
             limit: 结果行数限制
             timeout: 查询超时时间（秒）
+            user_id: 发起用户 ID（告警定位用）
+            datasource_id: 所属数据源组 ID（告警定位用）
 
         Returns:
             {
@@ -588,6 +619,7 @@ class MySQLExecutor(SQLExecutor):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: Optional[int] = None,
         user_id: Optional[str] = None,
+        datasource_id: Optional[str] = None,
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
@@ -596,7 +628,14 @@ class MySQLExecutor(SQLExecutor):
         # SQL 安全验证
         is_valid, error_msg = validate_sql(sql, source_type="mysql")
         if not is_valid:
-            _emit_sql_execution_validation_alarm(sql, error_msg, source_type="mysql", execution_scope="mysql_executor")
+            _emit_sql_execution_validation_alarm(
+                sql,
+                error_msg,
+                source_type="mysql",
+                execution_scope="mysql_executor",
+                datasource_id=datasource_id or "",
+                user_id=user_id or "",
+            )
             return {"status": "failed", "error": error_msg, "columns": [], "data": [], "total_count": 0}
 
         try:
@@ -613,7 +652,9 @@ class MySQLExecutor(SQLExecutor):
                         if inspect.isawaitable(callback_result):
                             await callback_result
 
-                    sql_with_limit = build_effective_sql(sql, limit, source_type="mysql")
+                    sql_with_limit = build_effective_sql(
+                        sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id
+                    )
                     logger.debug(f"[MySQL] 执行 SQL: {sql_with_limit[:200]}...")
                     # 添加超时控制：execute 与 fetchall 都必须在保护区内，
                     # 否则查询在超时边界完成后 fetchall 仍可能无限挂起
@@ -651,7 +692,10 @@ class MySQLExecutor(SQLExecutor):
             logger.warning("[MySQL] SQL 执行参数非法: %s", e)
             return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
         except Exception as e:
-            _emit_query_database_connection_alarm("mysql", self.database, e, host=self.host, port=self.port)
+            _emit_query_database_connection_alarm(
+                "mysql", self.database, e, host=self.host, port=self.port,
+                datasource_id=datasource_id or "", user_id=user_id or "",
+            )
             logger.error(f"[MySQL] 执行 SQL 失败: {e}")
             return {"status": "failed", "error": _friendly_sql_error("MySQL", e), "columns": [], "data": [], "total_count": 0}
 
@@ -734,6 +778,7 @@ class HiveExecutor(SQLExecutor):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: Optional[int] = None,
         user_id: Optional[str] = None,
+        datasource_id: Optional[str] = None,
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
@@ -741,28 +786,44 @@ class HiveExecutor(SQLExecutor):
         # SQL 安全验证
         is_valid, error_msg = validate_sql(sql, source_type="hive")
         if not is_valid:
-            _emit_sql_execution_validation_alarm(sql, error_msg, source_type="hive", execution_scope="hive_executor")
+            _emit_sql_execution_validation_alarm(
+                sql,
+                error_msg,
+                source_type="hive",
+                execution_scope="hive_executor",
+                datasource_id=datasource_id or "",
+                user_id=user_id or "",
+            )
             return {"status": "failed", "error": error_msg, "columns": [], "data": [], "total_count": 0}
 
         # 使用专用线程池执行同步操作（Hive 查询通常较慢，默认60秒超时）
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(
-                loop.run_in_executor(_HIVE_EXECUTOR_THREAD_POOL, self._execute_sync, sql, limit),
+                loop.run_in_executor(
+                    _HIVE_EXECUTOR_THREAD_POOL,
+                    self._execute_sync,
+                    sql,
+                    limit,
+                    datasource_id or "",
+                    user_id or "",
+                ),
                 timeout=resolved_timeout
             )
         except asyncio.TimeoutError:
             logger.error(f"[Hive] 执行 SQL 超时（{resolved_timeout}s）")
             return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
 
-    def _execute_sync(self, sql: str, limit: int) -> Dict[str, Any]:
+    def _execute_sync(self, sql: str, limit: int, datasource_id: str = "", user_id: str = "") -> Dict[str, Any]:
         """同步执行 SQL（在线程池中运行）"""
         import time
         conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            sql_with_limit = build_effective_sql(sql, limit, source_type="hive")
+            sql_with_limit = build_effective_sql(
+                sql, limit, source_type="hive", datasource_id=datasource_id, user_id=user_id
+            )
             logger.debug(f"[Hive] 执行 SQL: {sql_with_limit[:200]}...")
             start_time = time.time()
             cursor.execute(sql_with_limit)
@@ -782,7 +843,10 @@ class HiveExecutor(SQLExecutor):
             if isinstance(e, ValueError):
                 logger.warning("[Hive] SQL 执行参数非法: %s", e)
                 return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
-            _emit_query_database_connection_alarm("hive", self.database, e, host=self.host, port=self.port)
+            _emit_query_database_connection_alarm(
+                "hive", self.database, e, host=self.host, port=self.port,
+                datasource_id=datasource_id, user_id=user_id,
+            )
             logger.error(f"[Hive] 执行 SQL 失败: {e}")
             return {"status": "failed", "error": _friendly_sql_error("Hive", e), "columns": [], "data": [], "total_count": 0}
         finally:
@@ -941,12 +1005,13 @@ class HiveHttpExecutor(SQLExecutor):
         timeout: Optional[int] = None,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
+        datasource_id: Optional[str] = None,
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         resolved_timeout = resolve_query_timeout(self.source_type, timeout)
         # 前置检查保持在 try 之外：异常直接向上传播，不落入兜底 except 转成错误结果（与拆分前行为一致）
-        validation_error = self._http_validation_error(sql)
+        validation_error = self._http_validation_error(sql, datasource_id=datasource_id, user_id=user_id)
         if validation_error:
             return validation_error
         if not self.namespace:
@@ -955,7 +1020,9 @@ class HiveHttpExecutor(SQLExecutor):
         if config_error:
             return config_error
         try:
-            submit_error, task_id = await self._submit_http_query(sql, limit, user_id, username, remote_task_callback)
+            submit_error, task_id = await self._submit_http_query(
+                sql, limit, user_id, username, remote_task_callback, datasource_id=datasource_id
+            )
             if submit_error:
                 return submit_error
             return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
@@ -970,7 +1037,13 @@ class HiveHttpExecutor(SQLExecutor):
             engine_name = "MySQL" if self.source_type == "mysql" else "Hive"
             return _http_error_result(_friendly_sql_error(engine_name, e))
 
-    def _http_validation_error(self, sql: str) -> Optional[Dict[str, Any]]:
+    def _http_validation_error(
+        self,
+        sql: str,
+        *,
+        datasource_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """SQL 校验失败时告警并返回错误结果；合法返回 None。"""
         is_valid, error_msg = validate_sql(sql, source_type=self.source_type)
         if is_valid:
@@ -980,6 +1053,8 @@ class HiveHttpExecutor(SQLExecutor):
             error_msg,
             source_type=self.source_type,
             execution_scope="http_executor",
+            datasource_id=datasource_id or "",
+            user_id=user_id or "",
         )
         return _http_error_result(error_msg)
 
@@ -997,9 +1072,12 @@ class HiveHttpExecutor(SQLExecutor):
         user_id: Optional[str],
         username: Optional[str],
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]],
+        datasource_id: Optional[str] = None,
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         """提交查询并认领远端任务；返回 (错误结果, None) 或 (None, task_id)。"""
-        sql_with_limit = build_effective_sql(sql, limit, source_type=self.source_type)
+        sql_with_limit = build_effective_sql(
+            sql, limit, source_type=self.source_type, datasource_id=datasource_id, user_id=user_id
+        )
         submit_payload = await self._request_json(
             "POST",
             HTTP_SUBMIT_URL,

@@ -160,6 +160,13 @@ def read_compression_trigger_ratio_env() -> float:
 
 CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHAT_DATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
 LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
+# 单会话工具调用频率告警（合规要求）：同一个会话在统计窗口内的工具调用数超过阈值
+# 即写一条 alarm 日志，不阻断工具执行。阈值默认 100 次、窗口默认 60 秒，即「每分钟 100 次」。
+# 注意：计数在**单个 worker 进程内**按会话聚合（GUNICORN_WORKERS 默认 4），同一会话的
+# 单次运行（一次 SSE 长连接由同一 worker 处理）计数是精确的；若同一会话在多进程间
+# 并发运行，计数会被拆分而只可能低估（漏报，不会误报）。
+TOOL_CALL_RATE_ALERT_THRESHOLD = read_positive_int_env("CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD", 100)
+TOOL_CALL_RATE_ALERT_WINDOW_SECONDS = read_positive_int_env("CHAT_DATA_TOOL_CALL_RATE_ALERT_WINDOW_SECONDS", 60)
 
 
 def get_context_window(model_id: str | None) -> int:

@@ -450,6 +450,7 @@ async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, us
             "limit": 1,
             "timeout": min(resolve_query_timeout(execution_target.get("source_type")), 30),
             "user_id": user_id,
+            "datasource_id": datasource_id,
         }
         if "username" in inspect.signature(executor.execute).parameters:
             execute_kwargs["username"] = username

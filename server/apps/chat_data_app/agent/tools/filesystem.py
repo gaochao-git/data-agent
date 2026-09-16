@@ -128,7 +128,8 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         精确修改 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 下已有文本文件的一处内容。
 
         修改前必须先用 file_read 获取最新内容。old_content 必须是文件中完整、非空且唯一的一段原文；
-        找不到或匹配多处时会失败，不会修改文件。新建文件或整体覆盖请使用 file_write。
+        找不到或匹配多处时会失败，不会修改文件。new_content 与 old_content 相同时同样会失败。
+        新建文件或整体覆盖请使用 file_write。
         追加内容时同样用本工具：取文件末尾一段唯一原文作 old_content，new_content 为这段原文加换行再加新增内容。
 
         Args:
@@ -140,6 +141,8 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         if not isinstance(old_content, str) or not old_content:
             raise ValueError("old_content 必须是非空字符串；请先用 file_read 读取文件后传入待替换的完整原文")
         text = new_content if isinstance(new_content, str) else json_dumps(new_content)
+        if text == old_content:
+            raise ValueError("old_content 与 new_content 相同，不会产生任何修改；请检查 new_content 是否为期望的新内容")
         payload = await workspace_runtime.replace_text_file(
             file_path=file_path,
             old_content=old_content,

@@ -606,11 +606,14 @@ async def execute_sql_for_member(
         "limit": limit,
         "timeout": timeout,
         "user_id": user_id,
+        "datasource_id": datasource_id,
     }
 
     executor = None
     try:
-        effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
+        effective_sql = build_effective_sql(
+            sql, limit, source_type=execution_target.get("source_type"), datasource_id=datasource_id, user_id=user_id
+        )
         cache_identity = query_cache.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
         if execution_id and await _guard_running_execution(execution_id):
             return _cancelled_member_result(member_datasource_id, member_name, effective_sql)

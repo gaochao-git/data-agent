@@ -682,6 +682,23 @@ async def test_file_edit_requires_unique_existing_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_file_edit_rejects_identical_content(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_identical_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+    target = Path(paths["workspace"]) / "report.txt"
+    target.write_text("title=old\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
+        await tools["file_edit"].ainvoke({
+            "file_path": "/mnt/user-data/workspace/report.txt",
+            "old_content": "title=old",
+            "new_content": "title=old",
+        })
+
+    assert target.read_text(encoding="utf-8") == "title=old\n"
+
+
+@pytest.mark.asyncio
 async def test_file_write_and_edit_reject_uploads(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_write_uploads_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)

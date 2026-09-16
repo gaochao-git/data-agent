@@ -576,7 +576,7 @@ class _FakeExecutor:
     def __init__(self, datasource: dict):
         self.datasource = datasource
 
-    async def execute(self, sql: str, limit: int = 100, timeout: int = 30, user_id: str | None = None):
+    async def execute(self, sql: str, limit: int = 100, timeout: int = 30, user_id: str | None = None, datasource_id: str | None = None):
         member_name = self.datasource.get("member_name") or self.datasource.get("member_datasource_id")
         if self.datasource.get("member_datasource_id") == "phy_error":
             return {

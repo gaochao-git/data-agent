@@ -817,7 +817,7 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
             self.target = target
             self.closed = False
 
-        async def execute(self, sql, limit, timeout, user_id, username=None):
+        async def execute(self, sql, limit, timeout, user_id, username=None, datasource_id=None):
             assert username == "测试用户"
             if self.target["mode"] == "fail":
                 return {"success": False, "error": "表不存在"}
