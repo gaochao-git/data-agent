@@ -406,14 +406,17 @@ export function getSkillVersion(skillId: string, versionNo: number): Promise<Api
   })
 }
 
-export function getSkillVersionFiles(skillId: string, versionNo: number): Promise<ApiResponse<{ references: string[]; scripts: string[]; assets: string[] }>> {
+// 平台技能固定目录只有 references 与 assets；scripts（可执行脚本）因安全顾虑已整体移除
+export type SkillFileDirName = 'references' | 'assets'
+
+export function getSkillVersionFiles(skillId: string, versionNo: number): Promise<ApiResponse<{ references: string[]; assets: string[] }>> {
   return request({
     url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files`,
     method: 'get'
   })
 }
 
-export function getSkillVersionFile(skillId: string, versionNo: number, params: { dir_name: 'references' | 'assets' | 'scripts'; file_path: string }): Promise<ApiResponse<{ dir_name: string; file_path: string; content: string }>> {
+export function getSkillVersionFile(skillId: string, versionNo: number, params: { dir_name: SkillFileDirName; file_path: string }): Promise<ApiResponse<{ dir_name: string; file_path: string; content: string }>> {
   return request({
     url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files/content`,
     method: 'get',
@@ -421,7 +424,7 @@ export function getSkillVersionFile(skillId: string, versionNo: number, params: 
   })
 }
 
-export function saveSkillVersionFile(skillId: string, versionNo: number, data: { dir_name: 'references' | 'assets' | 'scripts'; file_path: string; content: string }): Promise<ApiResponse<{ saved: boolean; skill_version_no?: number }>> {
+export function saveSkillVersionFile(skillId: string, versionNo: number, data: { dir_name: SkillFileDirName; file_path: string; content: string }): Promise<ApiResponse<{ saved: boolean; skill_version_no?: number }>> {
   return request({
     url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files`,
     method: 'put',
@@ -429,10 +432,49 @@ export function saveSkillVersionFile(skillId: string, versionNo: number, data: {
   })
 }
 
-export function deleteSkillVersionFile(skillId: string, versionNo: number, params: { dir_name: 'references' | 'assets' | 'scripts'; file_path: string }): Promise<ApiResponse<{ deleted: boolean; skill_version_no?: number }>> {
+export function deleteSkillVersionFile(skillId: string, versionNo: number, params: { dir_name: SkillFileDirName; file_path: string }): Promise<ApiResponse<{ deleted: boolean; skill_version_no?: number }>> {
   return request({
     url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files`,
     method: 'delete',
+    params
+  })
+}
+
+export function uploadSkillVersionFile(skillId: string, versionNo: number, data: { dir_name: SkillFileDirName; file: File }): Promise<ApiResponse<{ dir_name: string; file_path: string; skill_version_no?: number; uploaded: boolean }>> {
+  const formData = new FormData()
+  formData.append('dir_name', data.dir_name)
+  formData.append('file', data.file)
+  return request({
+    url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files/upload`,
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/** 读取技能版本原始字节文件（图片/PDF 等二进制预览，返回 Blob）。 */
+export function getSkillVersionRawFile(skillId: string, versionNo: number, params: { dir_name: SkillFileDirName; file_path: string }): Promise<Blob> {
+  return request({
+    url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files/raw`,
+    method: 'get',
+    params,
+    responseType: 'blob'
+  }) as unknown as Promise<Blob>
+}
+
+export interface SkillOfficeHtmlPreview {
+  available: boolean
+  reason?: string
+  renderer?: 'officecli-html'
+  html?: string
+  truncated?: boolean
+}
+
+/** 获取技能版本 Office 文件的服务端 HTML 预览（复用主对话 OfficeCLI 引擎）。 */
+export function getSkillVersionOfficeHtmlPreview(skillId: string, versionNo: number, params: { dir_name: SkillFileDirName; file_path: string }): Promise<ApiResponse<SkillOfficeHtmlPreview>> {
+  return request({
+    url: `/agents/api/chatdata/skills/${skillId}/versions/${versionNo}/files/office-preview`,
+    method: 'get',
     params
   })
 }
@@ -459,7 +501,7 @@ export function unfavoriteSkill(skillId: string): Promise<ApiResponse<{ skill_id
 }
 
 /** 获取专家技能详情 */
-export function getSkill(skillName: string): Promise<ApiResponse<SkillInfo & { content?: string; references?: string[]; scripts?: string[] }>> {
+export function getSkill(skillName: string): Promise<ApiResponse<SkillInfo & { content?: string; references?: string[] }>> {
   return request({
     url: `/agents/api/chatdata/skills/${skillName}`,
     method: 'get'

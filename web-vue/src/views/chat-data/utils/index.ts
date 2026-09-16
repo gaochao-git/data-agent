@@ -17,6 +17,16 @@ export { hideSemanticConfigSelectionPayloads, normalizeMarkdownFences, renderMar
 export { parseStructuredContent } from './parseContent'
 export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export { getSkillCreatorLabel, getSkillCreatorShortLabel } from './skill'
+export {
+  BINARY_PREVIEW_EXTENSIONS,
+  IMAGE_PREVIEW_EXTENSIONS,
+  IMAGE_PREVIEW_MIME,
+  OFFICE_HTML_PREVIEW_EXTENSIONS,
+  PDF_PREVIEW_EXTENSIONS,
+  getPreviewFileKind,
+  isBinaryPreviewPath,
+} from './filePreview'
+export type { PreviewFileKind } from './filePreview'
 export { getToolDisplayName } from './toolDisplay'
 export { getSafeNumericColumns, isNumericValue, isSafeNumericValue, toSafeNumber } from './numeric'
 export {

@@ -29,7 +29,7 @@ import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
+import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, hideSemanticConfigSelectionPayloads, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, isBinaryPreviewPath, OFFICE_HTML_PREVIEW_EXTENSIONS } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -1469,22 +1469,7 @@ const refreshWorkspaceFiles = () => {
   void loadWorkspaceFiles(localConversationId.value)
 }
 
-const OFFICE_HTML_PREVIEW_EXTENSIONS = new Set(['docx', 'xlsx', 'pptx'])
-const IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
-const IMAGE_PREVIEW_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
-}
-const BINARY_PREVIEW_EXTENSIONS = new Set(['pdf', ...OFFICE_HTML_PREVIEW_EXTENSIONS, ...IMAGE_PREVIEW_EXTENSIONS])
-const isBinaryPreviewPath = (path: string) => {
-  const ext = path.split('.').pop()?.toLowerCase() || ''
-  return BINARY_PREVIEW_EXTENSIONS.has(ext)
-}
+// 预览类型常量与 isBinaryPreviewPath 已提取到 utils/filePreview.ts（与技能管理预览共用，唯一来源）。
 
 type WorkspaceFileLoadOptions = {
   forceReload?: boolean

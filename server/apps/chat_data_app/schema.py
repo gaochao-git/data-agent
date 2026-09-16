@@ -369,7 +369,7 @@ class SkillUpdateRequest(BaseModel):
 
 class SkillFileUpsertRequest(BaseModel):
     """用户技能版本文件保存请求"""
-    dir_name: Literal["references", "assets", "scripts"] = Field(..., description="技能固定目录")
+    dir_name: Literal["references", "assets"] = Field(..., description="技能固定目录")
     file_path: str = Field(..., min_length=1, max_length=500, description="目录内相对路径")
     content: str = Field(default="", description="文件内容")
 

@@ -128,7 +128,6 @@ export interface SkillInfo {
   create_time?: string
   update_time?: string
   references?: string[]
-  scripts?: string[]
   assets?: string[]
 }
 

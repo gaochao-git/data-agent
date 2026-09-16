@@ -12,6 +12,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..services.agent_run.uploaded_file_service import (
+    ALLOWED_FILE_EXTENSIONS,
     upload_file,
     get_file_info,
     delete_file,
@@ -26,9 +27,8 @@ from . import BINARY_RESPONSES, JSON_API_RESPONSES
 
 router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], responses=JSON_API_RESPONSES)
 
-# 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）。
-# 图片类型（png/jpg/jpeg/webp/gif）不进入文档解析，作为 vision 输入直接使用。
-ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf", "png", "jpg", "jpeg", "webp", "gif"}
+# 允许上传的文件类型白名单已下沉到 services/agent_run/uploaded_file_service.py（唯一来源），
+# 此处 re-export 供既有引用与测试使用。
 
 
 @router.post("/upload", operation_id="upload_chatdata_file")

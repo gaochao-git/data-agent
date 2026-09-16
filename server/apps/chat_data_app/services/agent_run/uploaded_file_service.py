@@ -35,6 +35,11 @@ from apps.chat_data_app.agent.workspace.uploaded_file_parser import (  # noqa: F
 )
 MAX_IMAGES_PER_MESSAGE = 4
 
+# 允许上传的文件类型白名单（唯一来源；与前端 AnalysisConversation.vue 的 ACCEPTED_FILE_TYPES
+# 保持一致）。图片类型（png/jpg/jpeg/webp/gif）不进入文档解析，作为 vision 输入直接使用。
+# 主对话上传（routers/uploaded_files.py）与技能文件上传（agent/skills/skill_service.py）共用本口径。
+ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf", "png", "jpg", "jpeg", "webp", "gif"}
+
 
 def _unique_storage_name(uploads_root: Path, original_filename: str) -> str:
     """生成 uploads 根目录下不重名的存储文件名（保留原始文件名，重名加 -N 后缀）。"""

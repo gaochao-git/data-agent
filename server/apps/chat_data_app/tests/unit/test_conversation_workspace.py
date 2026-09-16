@@ -537,10 +537,10 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
     skill_dir = workspace_root.parent / "runtime-skills" / "skill-creator"
-    script_path = skill_dir / "scripts" / "quick_validate.py"
-    script_path.parent.mkdir(parents=True)
+    doc_path = skill_dir / "references" / "guide.md"
+    doc_path.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: skill-creator\n---\n# Skill Creator", encoding="utf-8")
-    script_path.write_text("print('ok')\n", encoding="utf-8")
+    doc_path.write_text("# Guide\n", encoding="utf-8")
 
     runtime = ConversationWorkspaceRuntime(
         workspace_root=str(workspace_root),
@@ -551,20 +551,20 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
     assert (runtime.runtime_skills_dir / "skill-creator").is_dir()
 
     target, visible_path = await runtime.resolve_readonly_skill_path_async(
-        "/mnt/skills/skill-creator/scripts/quick_validate.py"
+        "/mnt/skills/skill-creator/references/guide.md"
     )
 
-    assert target == script_path
-    assert visible_path == "/mnt/skills/skill-creator/scripts/quick_validate.py"
+    assert target == doc_path
+    assert visible_path == "/mnt/skills/skill-creator/references/guide.md"
 
     # 快照中不存在的技能名 → 无权限/不存在；隐藏名 → 路径无效
     with pytest.raises(ValueError, match="技能不存在或无权限访问"):
         await runtime.resolve_readonly_skill_path_async(
-            "/mnt/skills/unknown/scripts/quick_validate.py"
+            "/mnt/skills/unknown/references/guide.md"
         )
     with pytest.raises(ValueError, match="技能路径无效"):
         await runtime.resolve_readonly_skill_path_async(
-            "/mnt/skills/.evil/scripts/quick_validate.py"
+            "/mnt/skills/.evil/references/guide.md"
         )
 
 

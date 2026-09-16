@@ -79,8 +79,8 @@ def test_skill_service_get_skill_returns_content_and_files():
     assert skill["name"] == "dashboard-generation"
     assert "看板生成技能" in skill["content"]
     assert isinstance(skill["references"], list)
-    assert isinstance(skill["scripts"], list)
-    assert "dashboard-generation-guide" in skill["references"]
+    assert "scripts" not in skill
+    assert "dashboard-generation-guide.md" in skill["references"]
     assert "examples/comprehensive-dashboard.json" in skill["assets"]
 
 
@@ -90,7 +90,7 @@ def test_officecli_system_skill_includes_standard_report_template():
     skill = asyncio.run(skill_service.get_skill_async("officecli"))
 
     assert skill is not None
-    assert "standard-report" in skill["references"]
+    assert "standard-report.md" in skill["references"]
     assert "standard-report-template.docx" in skill["assets"]
 
 
@@ -103,9 +103,9 @@ def test_skill_service_gets_skill_creator_system_skill():
     assert skill["name"] == "skill-creator"
     assert skill["title"] == "技能生成技能"
     assert skill["category"] == "skill_creation"
-    assert "output-patterns" in skill["references"]
-    assert "workflows" in skill["references"]
-    assert "quick_validate.py" in skill["scripts"]
+    assert "output-patterns.md" in skill["references"]
+    assert "workflows.md" in skill["references"]
+    assert "scripts" not in skill
 
 
 def test_skill_service_get_skill_metadata_does_not_return_content():
@@ -127,14 +127,14 @@ def test_skill_service_reads_system_skill_file():
     file_data = asyncio.run(skill_service.read_skill_version_file_async(
         "skill-creator",
         1,
-        "scripts",
-        "quick_validate.py",
+        "references",
+        "workflows",
         "test-user",
     ))
 
-    assert file_data["dir_name"] == "scripts"
-    assert file_data["file_path"] == "scripts/quick_validate.py"
-    assert "def " in file_data["content"]
+    assert file_data["dir_name"] == "references"
+    assert file_data["file_path"] == "references/workflows.md"
+    assert "工作流程" in file_data["content"]
 
 
 def test_skill_service_rejects_system_skill_file_write():
@@ -144,8 +144,8 @@ def test_skill_service_rejects_system_skill_file_write():
         asyncio.run(skill_service.save_skill_version_file_async(
             "skill-creator",
             1,
-            "scripts",
-            "quick_validate.py",
+            "references",
+            "workflows.md",
             "# changed",
             "test-user",
         ))
@@ -169,7 +169,7 @@ def test_skill_service_creates_fixed_skill_dirs(tmp_path):
 
     assert (version_dir / "references").is_dir()
     assert (version_dir / "assets").is_dir()
-    assert (version_dir / "scripts").is_dir()
+    assert not (version_dir / "scripts").is_dir()
 
 
 def test_skill_service_rejects_missing_skill_name():
@@ -226,19 +226,16 @@ def test_skill_service_helper_branches_copy_and_frontmatter(tmp_path, monkeypatc
     source = tmp_path / "source"
     version = tmp_path / "version"
     (source / "references" / "nested").mkdir(parents=True)
-    (source / "scripts").mkdir()
     (source / "assets").mkdir()
     (source / "references" / "nested" / "guide.md").write_text("# Guide", encoding="utf-8")
-    (source / "scripts" / "run.py").write_text("print('x')", encoding="utf-8")
     (source / "assets" / "logo.txt").write_text("asset", encoding="utf-8")
 
     skill_service_module._safe_copy_skill_dir(source, version)
     assert (version / "references" / "nested" / "guide.md").exists()
-    assert (version / "scripts" / "run.py").exists()
     assert (version / "assets" / "logo.txt").exists()
+    assert not (version / "scripts").exists()
     assert skill_service_module._list_skill_files(str(version / "SKILL.md")) == {
-        "references": ["nested/guide"],
-        "scripts": ["run.py"],
+        "references": ["nested/guide.md"],
         "assets": ["logo.txt"],
     }
     assert skill_service_module._strip_frontmatter("---\nname: a\n---\n# 正文") == "# 正文"
@@ -441,7 +438,8 @@ def test_skill_service_remaining_private_helper_edges(tmp_path, monkeypatch):
     assert asyncio.run(service._get_readable_version_dir_async("system-skill", 1, "u1")) == system_dir
 
     service._resolve_file_under_version_dir(tmp_path, "references", "guide")
-    with pytest.raises(ValueError, match="文件路径无效"):
+    # scripts 目录已整体移除，按非法目录拒绝
+    with pytest.raises(ValueError, match="只支持"):
         service._resolve_file_under_version_dir(tmp_path, "scripts", "../bad.py")
 
     archived = {}
@@ -527,7 +525,7 @@ def test_save_skill_file_reuses_existing_draft_version(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     draft_dir = tmp_path / "u1" / "demo-skill" / "versions" / "v2"
-    (draft_dir / "scripts").mkdir(parents=True)
+    (draft_dir / "assets").mkdir(parents=True)
 
     class FakeStore:
         async def get_skill_async(self, skill_id, user_id=""):
@@ -543,10 +541,79 @@ def test_save_skill_file_reuses_existing_draft_version(tmp_path, monkeypatch):
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "scripts", "demo.py", "print('draft')\n", "u1"))
+    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "assets", "demo.txt", "print('draft')\n", "u1"))
 
     assert result["skill_version_no"] == 2
-    assert (draft_dir / "scripts" / "demo.py").read_text(encoding="utf-8") == "print('draft')\n"
+    assert (draft_dir / "assets" / "demo.txt").read_text(encoding="utf-8") == "print('draft')\n"
+
+
+def test_upload_skill_file_writes_bytes_and_validates(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+    draft_dir = tmp_path / "u1" / "demo-skill" / "versions" / "v2"
+    (draft_dir / "assets").mkdir(parents=True)
+
+    class FakeUploadStream:
+        """模拟 FastAPI UploadFile 的 async read(n) 分块读取接口。"""
+
+        def __init__(self, data: bytes):
+            self._data = data
+            self._offset = 0
+
+        async def read(self, size: int) -> bytes:
+            chunk = self._data[self._offset:self._offset + size]
+            self._offset += len(chunk)
+            return chunk
+
+    class FakeStore:
+        async def get_skill_async(self, skill_id, user_id=""):
+            return {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+            }
+
+        async def get_latest_draft_version_async(self, skill_id):
+            return {"skill_id": skill_id, "skill_version_no": 2}
+
+    monkeypatch.setattr(service, "_dao", FakeStore())
+
+    # assets 目录允许二进制素材；路径穿越部分被 basename 剥离
+    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "assets", "../logo.png", FakeUploadStream(b"\x89PNG\r\n"), "u1"))
+    assert result["uploaded"] is True
+    assert result["file_path"] == "assets/logo.png"
+    assert (draft_dir / "assets" / "logo.png").read_bytes() == b"\x89PNG\r\n"
+
+    # references 不再限定 .md：与主对话上传同一份类型白名单
+    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "references", "notes.txt", FakeUploadStream(b"hello"), "u1"))
+    assert result["uploaded"] is True
+    assert result["file_path"] == "references/notes.txt"
+    assert (draft_dir / "references" / "notes.txt").read_bytes() == b"hello"
+
+    # 同名文件按保存语义原子覆盖
+    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "assets", "logo.png", FakeUploadStream(b"\x89PNG-overwrite"), "u1"))
+    assert result["uploaded"] is True
+    assert (draft_dir / "assets" / "logo.png").read_bytes() == b"\x89PNG-overwrite"
+
+    async def run_invalid():
+        with pytest.raises(ValueError, match="文件名无效"):
+            await service.upload_skill_version_file_async("skill-1", 1, "assets", "", FakeUploadStream(b"x"), "u1")
+        # 不在主对话上传白名单内的类型拒绝（两个目录同口径）
+        with pytest.raises(ValueError, match="不支持的文件类型"):
+            await service.upload_skill_version_file_async("skill-1", 1, "assets", "tool.exe", FakeUploadStream(b"x"), "u1")
+        with pytest.raises(ValueError, match="不支持的文件类型"):
+            await service.upload_skill_version_file_async("skill-1", 1, "references", "tool.exe", FakeUploadStream(b"x"), "u1")
+        # 大小上限复用主对话 CHAT_DATA_MAX_UPLOAD_SIZE_MB 口径（monkeypatch 调小以便验证）
+        monkeypatch.setattr(skill_service_module, "MAX_UPLOAD_SIZE", 4)
+        monkeypatch.setattr(skill_service_module, "MAX_UPLOAD_SIZE_MB", 1)
+        with pytest.raises(ValueError, match="文件大小不能超过1MB"):
+            await service.upload_skill_version_file_async("skill-1", 1, "assets", "big.pdf", FakeUploadStream(b"x" * 5), "u1")
+        # 超限失败后不残留临时文件、不落目标文件（流式写盘的清理语义）
+        assert (draft_dir / "assets" / "big.pdf").exists() is False
+        assert list(draft_dir.rglob(".*.upload")) == []
+
+    asyncio.run(run_invalid())
 
 
 def test_save_skill_file_async_creates_draft_from_published_version(tmp_path, monkeypatch):
@@ -554,8 +621,8 @@ def test_save_skill_file_async_creates_draft_from_published_version(tmp_path, mo
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     root_dir = tmp_path / "u1" / "demo-skill"
     published_dir = root_dir / "versions" / "v1"
-    (published_dir / "scripts").mkdir(parents=True)
-    (published_dir / "scripts" / "old.py").write_text("print('old')\n", encoding="utf-8")
+    (published_dir / "assets").mkdir(parents=True)
+    (published_dir / "assets" / "old.txt").write_text("print('old')\n", encoding="utf-8")
     inserted = {}
 
     class FakeStore:
@@ -585,7 +652,7 @@ def test_save_skill_file_async_creates_draft_from_published_version(tmp_path, mo
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "scripts", "new.py", "print('new')\n", "u1", operator_name="测试用户"))
+    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "assets", "new.txt", "print('new')\n", "u1", operator_name="测试用户"))
     draft_dir = root_dir / "versions" / "v2"
 
     assert result["skill_version_no"] == 2
@@ -594,16 +661,16 @@ def test_save_skill_file_async_creates_draft_from_published_version(tmp_path, mo
     assert inserted["create_by_name"] == "测试用户"
     assert inserted["update_by"] == "u1"
     assert inserted["update_by_name"] == "测试用户"
-    assert (draft_dir / "scripts" / "old.py").read_text(encoding="utf-8") == "print('old')\n"
-    assert (draft_dir / "scripts" / "new.py").read_text(encoding="utf-8") == "print('new')\n"
+    assert (draft_dir / "assets" / "old.txt").read_text(encoding="utf-8") == "print('old')\n"
+    assert (draft_dir / "assets" / "new.txt").read_text(encoding="utf-8") == "print('new')\n"
 
 
 def test_delete_skill_file_creates_draft_from_published_version(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     root_dir = tmp_path / "skill"
     published_dir = root_dir / "versions" / "v1"
-    (published_dir / "scripts").mkdir(parents=True)
-    (published_dir / "scripts" / "old.py").write_text("print('old')\n", encoding="utf-8")
+    (published_dir / "assets").mkdir(parents=True)
+    (published_dir / "assets" / "old.txt").write_text("print('old')\n", encoding="utf-8")
     inserted = {}
 
     class FakeStore:
@@ -633,7 +700,7 @@ def test_delete_skill_file_creates_draft_from_published_version(tmp_path, monkey
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.delete_skill_version_file_async("skill-1", 1, "scripts", "old.py", "u1", operator_name="测试用户"))
+    result = asyncio.run(service.delete_skill_version_file_async("skill-1", 1, "assets", "old.txt", "u1", operator_name="测试用户"))
     draft_dir = root_dir / "versions" / "v2"
 
     assert result["skill_version_no"] == 2
@@ -642,8 +709,8 @@ def test_delete_skill_file_creates_draft_from_published_version(tmp_path, monkey
     assert inserted["create_by_name"] == "测试用户"
     assert inserted["update_by"] == "u1"
     assert inserted["update_by_name"] == "测试用户"
-    assert (published_dir / "scripts" / "old.py").exists()
-    assert not (draft_dir / "scripts" / "old.py").exists()
+    assert (published_dir / "assets" / "old.txt").exists()
+    assert not (draft_dir / "assets" / "old.txt").exists()
 
 
 def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(tmp_path, monkeypatch):
@@ -747,18 +814,15 @@ def test_skill_service_file_path_validation_and_listing(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     version_dir = tmp_path / "skill" / "versions" / "v1"
     (version_dir / "references" / "nested").mkdir(parents=True)
-    (version_dir / "scripts").mkdir()
     (version_dir / "assets").mkdir()
     (version_dir / "references" / "nested" / "guide.md").write_text("guide", encoding="utf-8")
-    (version_dir / "scripts" / "run.py").write_text("print('ok')\n", encoding="utf-8")
     (version_dir / "assets" / "demo.txt").write_text("asset", encoding="utf-8")
 
     target = service._resolve_file_under_version_dir(version_dir, "references", "nested/guide")
 
     assert target.name == "guide.md"
     assert skill_service_module._list_skill_files(str(version_dir / "SKILL.md")) == {
-        "references": ["nested/guide"],
-        "scripts": ["run.py"],
+        "references": ["nested/guide.md"],
         "assets": ["demo.txt"],
     }
     for dir_name, file_path, message in [
@@ -1060,7 +1124,6 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
     service = skill_service_module.SkillService()
     source_dir = tmp_path / "source-skill"
     (source_dir / "references").mkdir(parents=True)
-    (source_dir / "scripts").mkdir()
     (source_dir / "assets").mkdir()
     (source_dir / "SKILL.md").write_text(
         "---\nname: async-skill\ntitle: 异步技能\ndescription: 异步导入\nmetadata:\n  category: custom\n---\n\n# 异步技能\n",
@@ -1204,21 +1267,113 @@ def test_read_list_delete_skill_files_async_and_error_branches(tmp_path, monkeyp
         monkeypatch.setattr(service, "_get_readable_version_dir_async", fake_readable)
         listed = await service.list_skill_version_files_async("skill-1", 1, "u1")
         read = await service.read_skill_version_file_async("skill-1", 1, "references", "guide", "u1")
-        assert listed["references"] == ["guide"]
+        assert listed["references"] == ["guide.md"]
         assert read["content"] == "guide"
         with pytest.raises(ValueError, match="文件不存在"):
             await service.read_skill_version_file_async("skill-1", 1, "references", "missing", "u1")
 
         monkeypatch.setattr(service, "_dao", MissingStore())
         with pytest.raises(ValueError, match="技能不存在"):
-            await service.save_skill_version_file_async("skill-1", 1, "scripts", "a.py", "", "u1")
+            await service.save_skill_version_file_async("skill-1", 1, "assets", "a.txt", "", "u1")
         with pytest.raises(ValueError, match="技能不存在"):
-            await service.delete_skill_version_file_async("skill-1", 1, "scripts", "a.py", "u1")
+            await service.delete_skill_version_file_async("skill-1", 1, "assets", "a.txt", "u1")
 
     asyncio.run(run_checks())
 
 
-def test_version_dir_resolution_for_filesystem_system_skill_and_user_permissions(tmp_path, monkeypatch):
+def test_read_raw_and_office_preview_skill_files_async(tmp_path, monkeypatch):
+    """raw 读取返回原始字节与 mime；office 预览复用工作区 OfficeCLI 渲染引擎。
+
+    哨兵自检：captured 记录 fake 渲染引擎的入参，若 service 未真正复用引擎
+    （workspace_root / file_path / max_chars 传错）本用例必然失败。
+    """
+    service = skill_service_module.SkillService()
+    version_dir = tmp_path / "skill" / "versions" / "v1"
+    (version_dir / "assets").mkdir(parents=True)
+    (version_dir / "assets" / "logo.png").write_bytes(b"\x89PNG\r\n")
+    (version_dir / "references").mkdir(parents=True)
+    (version_dir / "references" / "report.docx").write_bytes(b"PK\x03\x04")
+    (version_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
+
+    async def fake_readable(*_args, **_kwargs):
+        return version_dir
+
+    monkeypatch.setattr(service, "_get_readable_version_dir_async", fake_readable)
+
+    captured = {}
+
+    class FakePreviewService:
+        _result: dict = {}
+
+        async def render_html(self, runtime, *, file_path, max_chars):
+            captured["workspace_root"] = runtime.workspace_root
+            captured["user_id"] = runtime.user_id
+            captured["backend"] = runtime.backend_name
+            captured["file_path"] = file_path
+            captured["max_chars"] = max_chars
+            # 暂存文件在 TemporaryDirectory 退出后即清理，存在性只能在调用时点断言
+            captured["staged_exists"] = (Path(runtime.workspace_root) / "workspace" / Path(file_path).name).is_file()
+            return dict(self._result)
+
+    def patch_office(result):
+        fake_service = FakePreviewService()
+        fake_service._result = result
+        monkeypatch.setattr(
+            "apps.chat_data_app.agent.workspace.workspace_special_services.workspace_office_preview_service",
+            fake_service,
+        )
+        monkeypatch.setattr("apps.chat_data_app.agent.workspace.runtime.OFFICE_PREVIEW_MAX_CHARS", 12345)
+
+    async def run_checks():
+        raw, content_type = await service.read_skill_version_file_raw_async("skill-1", 1, "assets", "logo.png", "u1")
+        assert raw == b"\x89PNG\r\n"
+        assert content_type == "image/png"
+        with pytest.raises(ValueError, match="文件不存在"):
+            await service.read_skill_version_file_raw_async("skill-1", 1, "assets", "missing.png", "u1")
+
+        # 正常渲染：复用引擎，源文件暂存到临时 workspace/ 结构、以标准虚拟路径渲染
+        patch_office({"renderer": "officecli-html", "html": "<html>ok</html>", "truncated": False})
+        preview = await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
+        assert preview == {"available": True, "renderer": "officecli-html", "html": "<html>ok</html>", "truncated": False}
+        assert captured["staged_exists"] is True
+        assert captured["user_id"] == "u1"
+        assert captured["backend"] == "local"
+        assert captured["file_path"] == "/mnt/user-data/workspace/report.docx"
+        assert captured["max_chars"] == 12345
+
+        # 截断：转换为与主对话一致的 available=False / preview_too_large
+        patch_office({"renderer": "officecli-html", "html": "", "truncated": True})
+        preview = await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
+        assert preview == {"available": False, "reason": "preview_too_large"}
+
+        # 引擎返回空 HTML：视为失败
+        patch_office({"renderer": "officecli-html", "html": "", "truncated": False})
+        with pytest.raises(RuntimeError, match="OfficeCLI"):
+            await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
+
+        # 非 Office 后缀：提前拦截
+        with pytest.raises(ValueError, match="Office 预览仅支持"):
+            await service.render_skill_office_preview_async("skill-1", 1, "assets", "logo.png", "u1")
+
+        with pytest.raises(ValueError, match="文件不存在"):
+            await service.render_skill_office_preview_async("skill-1", 1, "references", "missing.docx", "u1")
+
+        # 预览上限与主对话工作区端点同源：文本 5MB / raw 20MB / Office 源 50MB
+        # （文本/raw 的上限是默认参数、def 时求值，测试显式传参验证；
+        #   Office 源上限在函数体内取模块常量，monkeypatch 生效）
+        with pytest.raises(ValueError, match="文件过大"):
+            await service.read_skill_version_file_async("skill-1", 1, "references", "guide.md", "u1", max_bytes=4)
+        text = await service.read_skill_version_file_async("skill-1", 1, "references", "guide.md", "u1")
+        assert text["content"] == "guide"
+
+        with pytest.raises(ValueError, match="文件过大"):
+            await service.read_skill_version_file_raw_async("skill-1", 1, "assets", "logo.png", "u1", max_bytes=4)
+
+        monkeypatch.setattr(skill_service_module, "WORKSPACE_OFFICE_SOURCE_MAX_BYTES", 3)
+        with pytest.raises(ValueError, match="Office 文件"):
+            await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
+
+    asyncio.run(run_checks())
     service = skill_service_module.SkillService()
     system_dir = tmp_path / "system"
     system_dir.mkdir()
@@ -1272,7 +1427,7 @@ def test_skill_service_additional_helper_branches(tmp_path, monkeypatch):
     skill_service_module._copy_version_dir(tmp_path / "missing-source", target_dir)
     assert (target_dir / "references").is_dir()
     assert (target_dir / "assets").is_dir()
-    assert (target_dir / "scripts").is_dir()
+    assert not (target_dir / "scripts").is_dir()
 
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     cleanup_dir = tmp_path / "cleanup-skill"
@@ -1625,9 +1780,9 @@ def test_file_save_delete_async_permission_and_dao_exception_branches(monkeypatc
     async def run_checks():
         monkeypatch.setattr(service, "_dao", SystemStore())
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.save_skill_version_file_async("sys", 1, "scripts", "a.py", "", "u1")
+            await service.save_skill_version_file_async("sys", 1, "assets", "a.txt", "", "u1")
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.delete_skill_version_file_async("sys", 1, "scripts", "a.py", "u1")
+            await service.delete_skill_version_file_async("sys", 1, "assets", "a.txt", "u1")
 
         class RaisingStore:
             async def get_skill_async(self, skill_id, user_id=""):
@@ -1636,13 +1791,13 @@ def test_file_save_delete_async_permission_and_dao_exception_branches(monkeypatc
         monkeypatch.setattr(service, "_dao", RaisingStore())
         monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.save_skill_version_file_async("system", 1, "scripts", "a.py", "", "u1")
+            await service.save_skill_version_file_async("system", 1, "assets", "a.txt", "", "u1")
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.delete_skill_version_file_async("system", 1, "scripts", "a.py", "u1")
+            await service.delete_skill_version_file_async("system", 1, "assets", "a.txt", "u1")
         with pytest.raises(RuntimeError, match="db down"):
-            await service.save_skill_version_file_async("user", 1, "scripts", "a.py", "", "u1")
+            await service.save_skill_version_file_async("user", 1, "assets", "a.txt", "", "u1")
         with pytest.raises(RuntimeError, match="db down"):
-            await service.delete_skill_version_file_async("user", 1, "scripts", "a.py", "u1")
+            await service.delete_skill_version_file_async("user", 1, "assets", "a.txt", "u1")
 
     asyncio.run(run_checks())
 
@@ -1786,7 +1941,7 @@ def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, mon
 def test_skill_service_remaining_file_and_archive_branches(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     draft_dir = tmp_path / "skill" / "versions" / "v2"
-    (draft_dir / "scripts").mkdir(parents=True)
+    (draft_dir / "assets").mkdir(parents=True)
 
     class DraftStore:
         async def get_skill_async(self, skill_id, user_id=""):
@@ -1802,9 +1957,9 @@ def test_skill_service_remaining_file_and_archive_branches(tmp_path, monkeypatch
 
     async def run_delete_missing():
         monkeypatch.setattr(service, "_dao", DraftStore())
-        result = await service.delete_skill_version_file_async("skill-1", 1, "scripts", "missing.py", "u1")
+        result = await service.delete_skill_version_file_async("skill-1", 1, "assets", "missing.txt", "u1")
         assert result["deleted"] is True
-        assert result["file_path"] == "scripts/missing.py"
+        assert result["file_path"] == "assets/missing.txt"
 
     asyncio.run(run_delete_missing())
 

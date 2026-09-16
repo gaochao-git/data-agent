@@ -1,9 +1,12 @@
 """ChatData 技能管理服务。"""
 
+import mimetypes
+import os
 import re
 import shutil
 import asyncio
 import uuid
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +16,18 @@ from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
 from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 from apps.chat_data_app.daos.skill_dao import SkillDao
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
+    WORKSPACE_OFFICE_SOURCE_MAX_BYTES,
+    WORKSPACE_RAW_PREVIEW_MAX_BYTES,
+    WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
+    _format_size_limit,
+)
+from apps.chat_data_app.services.agent_run.uploaded_file_service import (
+    ALLOWED_FILE_EXTENSIONS,
+    MAX_UPLOAD_SIZE,
+    MAX_UPLOAD_SIZE_MB,
+    UPLOAD_CHUNK_SIZE,
+)
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
@@ -21,7 +36,19 @@ USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
 # 单词名合法），也**不禁止**数字（`pdf2x` 合法）——早前版本强制「至少一个中划线」并禁用数字，
 # 比规范更严且与前端校验不一致（前端放行 `sales`、后端拒绝），故改为 `*` 并放开 0-9。
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-SKILL_FIXED_DIRS = ("references", "assets", "scripts")
+# 技能固定目录只保留 references 与 assets。历史上还有 scripts（可复用脚本），
+# 因一直未实际使用且脚本类内容存在安全顾虑，已于 2026-09-16 整体移除：
+# 不再创建、不再列出、不再允许读写该目录。
+SKILL_FIXED_DIRS = ("references", "assets")
+
+# 技能文件上传大小上限：直接复用主对话上传口径（CHAT_DATA_MAX_UPLOAD_SIZE_MB，
+# 见 services/agent_run/uploaded_file_service.py），与主对话上传体验保持一致。
+# 预览各项上限（文本/原始字节/Office 源文件）同样复用主对话工作区预览端点的常量，
+# env 单一来源在 services/runtime_config.py，此处不重复定义。
+
+# 技能文件上传类型白名单：直接复用主对话上传口径（ALLOWED_FILE_EXTENSIONS，见
+# services/agent_run/uploaded_file_service.py），两处体验保持一致。
+_SKILL_UPLOAD_ALLOWED_SUFFIXES = {f".{ext}" for ext in ALLOWED_FILE_EXTENSIONS}
 
 SKILL_ALIASES = {
     "risk-analysis": "dashboard-generation",
@@ -84,21 +111,15 @@ def resolve_skill_name(name: str) -> str:
 
 
 def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
-    """列出技能参考文档、脚本和素材。"""
+    """列出技能参考文档和素材（含后缀的真实文件名，references 不限文档格式）。"""
     root = Path(skill_path).parent
     references_root = root / "references"
-    scripts_root = root / "scripts"
     assets_root = root / "assets"
     references = [
-        str(item.relative_to(references_root).with_suffix(""))
-        for item in references_root.rglob("*.md")
-        if not item.is_symlink()
+        str(item.relative_to(references_root))
+        for item in references_root.rglob("*")
+        if item.is_file() and not item.is_symlink()
     ] if references_root.exists() and not references_root.is_symlink() else []
-    scripts = [
-        str(item.relative_to(scripts_root))
-        for item in scripts_root.rglob("*.py")
-        if not item.is_symlink()
-    ] if scripts_root.exists() and not scripts_root.is_symlink() else []
     assets = [
         str(item.relative_to(assets_root))
         for item in assets_root.rglob("*")
@@ -106,7 +127,6 @@ def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
     ] if assets_root.exists() and not assets_root.is_symlink() else []
     return {
         "references": sorted(references),
-        "scripts": sorted(scripts),
         "assets": sorted(assets),
     }
 
@@ -782,20 +802,110 @@ class SkillService:
         version_dir = await self._get_readable_version_dir_async(skill_id, skill_version_no, user_id)
         return await asyncio.to_thread(_list_skill_files, str(version_dir / "SKILL.md"))
 
-    async def read_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str) -> Dict[str, Any]:
-        """异步读取用户技能版本目录文件。"""
+    async def read_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, max_bytes: int = WORKSPACE_TEXT_PREVIEW_MAX_BYTES) -> Dict[str, Any]:
+        """异步读取用户技能版本目录文件。
+
+        上限语义与主对话工作区文本预览（read_workspace_text_file）对齐：
+        超过 max_bytes 直接拒绝预览，不做截断。
+        """
         target = await self._resolve_readable_skill_file_path_async(skill_id, skill_version_no, dir_name, file_path, user_id)
         if not target.exists() or not target.is_file():
             raise ValueError("文件不存在")
-        content = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
+        if target.stat().st_size > max_bytes:
+            raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
+        raw = await asyncio.to_thread(target.read_bytes)
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as err:
+            # 上传通道允许二进制素材；可预览的类型（图片/PDF/Word）走 raw 端点，其余类型不提供在线查看
+            raise ValueError("该文件类型不支持在线预览") from err
         return {
             "dir_name": dir_name,
             "file_path": str(target.relative_to(target.parents[1])),
             "content": content,
         }
 
-    async def save_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, content: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
-        """异步保存用户技能版本目录文件。"""
+    async def read_skill_version_file_raw_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, max_bytes: int = WORKSPACE_RAW_PREVIEW_MAX_BYTES) -> tuple:
+        """异步读取用户技能版本目录文件的原始字节，用于在线预览（图片/PDF）。
+
+        上限与默认值同主对话工作区原始字节预览（read_workspace_raw_file 共用
+        WORKSPACE_RAW_PREVIEW_MAX_BYTES 单一来源）；返回 (原始字节, content_type)，
+        鉴权与路径校验同 read_skill_version_file_async。
+        """
+        target = await self._resolve_readable_skill_file_path_async(skill_id, skill_version_no, dir_name, file_path, user_id)
+        if not target.exists() or not target.is_file():
+            raise ValueError("文件不存在")
+        size = target.stat().st_size
+        if size > max_bytes:
+            raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
+        content_type, _ = mimetypes.guess_type(target.name)
+        if not content_type:
+            content_type = "application/octet-stream"
+        raw = await asyncio.to_thread(target.read_bytes)
+        return raw, content_type
+
+    async def render_skill_office_preview_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str) -> Dict[str, Any]:
+        """渲染技能版本目录 Office 文件的 HTML 预览。
+
+        复用主对话工作区的 OfficeCLI 渲染引擎（WorkspaceOfficePreviewService）。
+        引擎的路径策略要求虚拟路径以 /mnt/user-data/ 开头且位于 workspace/outputs/uploads
+        之下（resolve_workspace_path），技能版本目录不在该空间内，因此把源文件暂存到
+        临时目录的 workspace/ 结构（硬链接优先、跨设备退回复制），以标准虚拟路径渲染；
+        鉴权与路径校验同 read_skill_version_file_async。
+        返回形状与 render_conversation_workspace_office_preview 一致：
+        {"available": bool, "reason"?: str, "renderer"?: "officecli-html", "html"?: str}。
+        """
+        target = await self._resolve_readable_skill_file_path_async(skill_id, skill_version_no, dir_name, file_path, user_id)
+        if not target.exists() or not target.is_file():
+            raise ValueError("文件不存在")
+        if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+            raise ValueError("Office 预览仅支持 .docx、.xlsx、.pptx 文件")
+        if target.stat().st_size > WORKSPACE_OFFICE_SOURCE_MAX_BYTES:
+            # 源文件上限与主对话 Office 预览校验（_validate_office_preview_source）同源
+            raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(WORKSPACE_OFFICE_SOURCE_MAX_BYTES)} 的 Office 文件")
+        # 局部导入：agent.workspace 链路较重，且避免 agent/skills 与 agent/workspace 潜在循环导入
+        from apps.chat_data_app.agent.workspace.runtime import OFFICE_PREVIEW_MAX_CHARS, ConversationWorkspaceRuntime
+        from apps.chat_data_app.agent.workspace.workspace_special_services import workspace_office_preview_service
+
+        with tempfile.TemporaryDirectory(prefix="skill-office-preview-") as stage_root:
+            stage_dir = Path(stage_root) / "workspace"
+            stage_dir.mkdir()
+            staged = stage_dir / target.name
+            try:
+                # 同盘硬链接零拷贝；跨设备等失败时退回复制
+                os.link(target, staged)
+            except OSError:
+                await asyncio.to_thread(shutil.copyfile, target, staged)
+            runtime = ConversationWorkspaceRuntime(
+                workspace_root=stage_root,
+                user_id=user_id,
+                backend="local",
+            )
+            preview = await workspace_office_preview_service.render_html(
+                runtime,
+                file_path=f"/mnt/user-data/workspace/{target.name}",
+                max_chars=OFFICE_PREVIEW_MAX_CHARS,
+            )
+        if bool(preview.get("truncated")):
+            return {"available": False, "reason": "preview_too_large"}
+        html = str(preview.get("html") or "")
+        if not html:
+            raise RuntimeError("OfficeCLI 未返回 HTML 预览内容")
+        return {
+            "available": True,
+            "renderer": "officecli-html",
+            "html": html,
+            "truncated": False,
+        }
+
+    async def _resolve_writable_draft_file_async(self, skill_id: str, dir_name: str, file_path: str, user_id: str, operator_name: str = "") -> tuple:
+        """校验归属与权限后，解析可写的用户技能草稿文件目标路径。
+
+        save / upload / delete 三条文件写链路共用的前置逻辑：系统技能只读、
+        仅属主可写、写操作一律落到草稿版本目录（与调用方传入的 version_no 无关，
+        该参数仅是路由 API 形状，不参与本解析，故不接收）。
+        返回 ``(draft, target_path)``。
+        """
         try:
             skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
@@ -808,6 +918,11 @@ class SkillService:
             raise PermissionError("无权管理该技能文件")
         draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
         target = self._resolve_user_file_under_version_dir(draft.get("skill_version_dir"), dir_name, file_path)
+        return draft, target
+
+    async def save_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, content: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
+        """异步保存用户技能版本目录文件。"""
+        draft, target = await self._resolve_writable_draft_file_async(skill_id, dir_name, file_path, user_id, operator_name=operator_name)
         target.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(target.write_text, str(content or ""), encoding="utf-8")
         clear_metadata_cache()
@@ -818,20 +933,47 @@ class SkillService:
             "saved": True,
         }
 
+    async def upload_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, filename: str, file_stream: Any, user_id: str, operator_name: str = "") -> Dict[str, Any]:
+        """异步上传二进制/文本文件到用户技能草稿版本固定目录。
+
+        file_stream 为带 ``async read(n)`` 的文件对象（FastAPI UploadFile）：流式落盘
+        并边写边限长（与主对话 uploaded_file_service.upload_file 同模式），不在内存整读。
+        仅取原始文件名的 basename 落盘（防路径穿越）；同名文件按保存语义原子覆盖。
+        """
+        raw_name = Path(str(filename or "").replace("\\", "/")).name.strip()
+        if not raw_name or raw_name in {".", ".."}:
+            raise ValueError("文件名无效")
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in _SKILL_UPLOAD_ALLOWED_SUFFIXES:
+            # 与主对话上传同一份类型白名单（含 references/assets 两个目录），防止绕过前端校验
+            raise ValueError(f"不支持的文件类型: {suffix or '(无后缀)'}，仅支持 {', '.join(sorted(ALLOWED_FILE_EXTENSIONS))}")
+        draft, target = await self._resolve_writable_draft_file_async(skill_id, dir_name, raw_name, user_id, operator_name=operator_name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = target.parent / f".{target.name}.{uuid.uuid4().hex}.upload"
+        file_size = 0
+        try:
+            with temporary_path.open("xb") as output:
+                while chunk := await file_stream.read(UPLOAD_CHUNK_SIZE):
+                    file_size += len(chunk)
+                    if file_size > MAX_UPLOAD_SIZE:
+                        raise ValueError(f"文件大小不能超过{MAX_UPLOAD_SIZE_MB}MB")
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, target)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        clear_metadata_cache()
+        return {
+            "dir_name": dir_name,
+            "file_path": str(target.relative_to(target.parents[1])),
+            "skill_version_no": int(draft.get("skill_version_no") or 0),
+            "uploaded": True,
+        }
+
     async def delete_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步删除用户技能草稿版本目录文件。"""
-        try:
-            skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
-        except Exception:
-            if await self._get_system_skill_metadata_async(skill_id):
-                raise PermissionError("无权管理该技能文件")
-            raise
-        if not skill:
-            raise ValueError("技能不存在")
-        if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
-            raise PermissionError("无权管理该技能文件")
-        draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
-        target = self._resolve_user_file_under_version_dir(draft.get("skill_version_dir"), dir_name, file_path)
+        draft, target = await self._resolve_writable_draft_file_async(skill_id, dir_name, file_path, user_id, operator_name=operator_name)
         if target.exists() and target.is_file():
             target.unlink()
         clear_metadata_cache()
@@ -939,7 +1081,6 @@ class SkillService:
         "output_type": "text",
         "input_schema": None,  # 特殊：空 dict
         "references": None,  # 特殊：空 list
-        "scripts": None,  # 特殊：空 list
         "assets": None,  # 特殊：空 list
         "source": "user",
         "visibility_type": "private",
@@ -1161,7 +1302,7 @@ class SkillService:
         safe_version_dir = Path(version_dir).expanduser().resolve()
         normalized_dir = str(dir_name or "").strip()
         if normalized_dir not in SKILL_FIXED_DIRS:
-            raise ValueError("只支持 references、assets、scripts 目录")
+            raise ValueError("只支持 references、assets 目录")
         normalized_file = str(file_path or "").strip().replace("\\", "/")
         if not normalized_file or normalized_file.startswith("/") or ".." in Path(normalized_file).parts:
             raise ValueError("文件路径无效")

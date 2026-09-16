@@ -21,7 +21,7 @@ metadata:
 
 ## 必读资料
 
-列出需要按需读取的 references、scripts 或 assets。
+列出需要按需读取的 references 或 assets。
 
 ## 工作流程
 
@@ -74,38 +74,15 @@ metadata:
 ```
 ```
 
-## scripts 脚本要求
+## assets 素材要求
 
-脚本应满足：
+平台技能不支持 `scripts/` 目录（可执行脚本存在安全风险，已整体移除）。
+稳定的计算、转换、校验逻辑写成清晰的步骤说明放进 `SKILL.md` 或 `references/`。
 
-- 优先使用 Python 标准库。
-- 输入参数清晰，可通过命令行传入。
-- 输出 JSON 或明确的文件路径。
-- 错误时返回非 0 退出码并打印清楚原因。
-- 不读取固定私有路径，不写入权限外目录。
+素材（模板、样例文件、配置）应满足：
 
-脚本头部示例：
-
-```python
-#!/usr/bin/env python3
-"""简短说明脚本用途。"""
-
-from __future__ import annotations
-
-import argparse
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="...")
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-```
+- 放在 `assets/` 下并按用途命名。
+- 不读取固定私有路径，不包含权限外目录的引用。
 
 ## 最终回复模板
 
@@ -115,7 +92,7 @@ if __name__ == "__main__":
 - 技能名：sales-analysis
 - 中文名：中文技能名
 - 用途：...
-- 文件：SKILL.md、references/xxx.md、scripts/xxx.py
+- 文件：SKILL.md、references/xxx.md、assets/xxx
 
 下一步可以在技能管理中保存草稿并发布。
 ```

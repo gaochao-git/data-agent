@@ -10,6 +10,8 @@ import {
   getSkill,
   getSkillVersionFile,
   getSkillVersionFiles,
+  getSkillVersionOfficeHtmlPreview,
+  getSkillVersionRawFile,
   getSkills,
   getSkillVersion,
   getSkillVersions,
@@ -17,12 +19,14 @@ import {
   rollbackSkillVersion,
   saveSkillVersionFile,
   unfavoriteSkill,
-  updateSkill
+  updateSkill,
+  uploadSkillVersionFile
 } from '../api'
 import type { SkillInfo, SkillVersionInfo } from '../types'
-import { getSkillCreatorLabel, renderMarkdown } from '../utils'
+import { getPreviewFileKind, getSkillCreatorLabel, IMAGE_PREVIEW_MIME, renderMarkdown } from '../utils'
 
-type SkillFileDir = 'references' | 'assets' | 'scripts'
+// 平台技能固定目录只有 references 与 assets；scripts（可执行脚本）因安全顾虑已整体移除
+type SkillFileDir = 'references' | 'assets'
 type SkillFileForm = {
   dir_name: SkillFileDir
   file_path: string
@@ -52,7 +56,7 @@ const skills = ref<SkillInfo[]>([])
 const selectedSkill = ref<(SkillInfo & { content?: string }) | null>(null)
 const skillVersions = ref<SkillVersionInfo[]>([])
 const selectedVersion = ref<SkillVersionInfo | null>(null)
-const skillFiles = ref<Record<SkillFileDir, string[]>>({ references: [], assets: [], scripts: [] })
+const skillFiles = ref<Record<SkillFileDir, string[]>>({ references: [], assets: [] })
 const loading = ref(false)
 const versionLoading = ref(false)
 const fileLoading = ref(false)
@@ -110,6 +114,88 @@ const selectedFileTitle = computed(() => selectedFileNode.value?.file_path || 'S
 const selectedFileContent = computed(() => selectedFileNode.value ? fileForm.content : displayedContent.value)
 const displayedContentHtml = computed(() => renderMarkdown(selectedFileContent.value || '暂无内容'))
 const canEditSelectedFile = computed(() => Boolean(canManageFiles.value && selectedFileNode.value && selectedFileEditing.value))
+
+// ---- 二进制 / Office 文件预览（与主对话工作区预览同一套类型判定与渲染方式）----
+// 预览类型常量来自 utils/filePreview.ts（与 AnalysisConversation 共用，唯一来源）。
+// 图片/PDF 走 raw 端点拿 blob；docx/xlsx/pptx 走 office-preview 端点拿服务端 OfficeCLI 渲染的 HTML。
+const selectedFileKind = computed(() => (selectedFileNode.value?.type === 'file' && selectedFileNode.value.file_path
+  ? getPreviewFileKind(selectedFileNode.value.file_path)
+  : 'text'))
+const selectedFileIsBinary = computed(() => selectedFileKind.value !== 'text')
+const binaryPreviewLoading = ref(false)
+const binaryPreview = ref<{ kind: 'image' | 'pdf'; url: string } | null>(null)
+const officePreviewHtml = ref<string | null>(null)
+const officePreviewReason = ref<string | null>(null)
+
+const clearBinaryPreview = () => {
+  if (binaryPreview.value) {
+    URL.revokeObjectURL(binaryPreview.value.url)
+    binaryPreview.value = null
+  }
+  officePreviewHtml.value = null
+  officePreviewReason.value = null
+  binaryPreviewLoading.value = false
+}
+
+// 选中文件被清空（关闭/删除/切版本）时回收 blob URL；文件间切换的清理在 openFileContent 内做
+watch(selectedFileNode, (node) => {
+  if (!node) clearBinaryPreview()
+})
+
+// 请求序号：快速连续点击不同二进制文件时，只让最后一次请求的结果生效，
+// 避免慢请求后到覆盖新文件预览（与主对话工作区预览的 requestSequence 同思路）
+let binaryPreviewRequestSeq = 0
+
+const loadBinaryPreview = async (skillId: string, versionNo: number, dirName: SkillFileDir, filePath: string) => {
+  const kind = getPreviewFileKind(filePath)
+  const requestSeq = ++binaryPreviewRequestSeq
+  binaryPreviewLoading.value = true
+  officePreviewHtml.value = null
+  officePreviewReason.value = null
+  binaryPreview.value = null
+  try {
+    if (kind === 'image' || kind === 'pdf') {
+      const blob = await getSkillVersionRawFile(skillId, versionNo, { dir_name: dirName, file_path: filePath })
+      if (requestSeq !== binaryPreviewRequestSeq) return
+      // raw 端点业务错误也走 HTTP 200 + JSON 体（blob 拦截器不检查业务码），
+      // 不识别的话 JSON 会被当作图片字节渲染成裂图
+      if (blob.type.includes('application/json')) {
+        const text = await blob.text()
+        let msg = ''
+        try {
+          msg = JSON.parse(text)?.msg || ''
+        } catch {
+          msg = ''
+        }
+        throw new Error(msg || '文件预览失败')
+      }
+      const ext = filePath.split('.').pop()?.toLowerCase() || ''
+      const mime = IMAGE_PREVIEW_MIME[ext]
+      const url = URL.createObjectURL(mime ? new Blob([blob], { type: mime }) : blob)
+      binaryPreview.value = { kind, url }
+    } else if (kind === 'office') {
+      const response = await getSkillVersionOfficeHtmlPreview(skillId, versionNo, { dir_name: dirName, file_path: filePath })
+      if (requestSeq !== binaryPreviewRequestSeq) return
+      const preview = response.data
+      if (preview?.available && preview.html) {
+        officePreviewHtml.value = preview.html
+      } else {
+        officePreviewReason.value = preview?.reason || 'preview_failed'
+      }
+    }
+  } catch (err) {
+    if (requestSeq !== binaryPreviewRequestSeq) return
+    const errObj = err as { response?: { data?: { msg?: string } }; message?: string }
+    const detail = errObj?.response?.data?.msg || (errObj?.message && errObj.message !== 'error' ? errObj.message : '')
+    // 拦截器对业务错误码已弹过 ElNotification（reject 的 message 是通用 'error'），此时不重复提示
+    if (detail) ElMessage.error(detail)
+    officePreviewReason.value = 'preview_failed'
+  } finally {
+    if (requestSeq === binaryPreviewRequestSeq) {
+      binaryPreviewLoading.value = false
+    }
+  }
+}
 const canDeleteSkill = (skill?: SkillInfo | null) => Boolean(
   canManageSkill(skill)
 )
@@ -120,12 +206,11 @@ const getSkillDirectoryName = computed(() => selectedSkill.value?.name || select
 const skillDirDescriptions: Record<SkillFileDir, string> = {
   references: '参考文档、说明和知识材料',
   assets: '图片、示例数据、配置等素材',
-  scripts: '可复用脚本和工具代码',
 }
 const getSkillDirDescription = (dirName?: SkillFileDir) => (dirName ? skillDirDescriptions[dirName] || '' : '')
 const canCreateFileInDir = (dirName?: SkillFileDir) => Boolean(dirName)
 const canAccessFileDir = (dirName?: SkillFileDir) => Boolean(dirName)
-const availableFileDirs: SkillFileDir[] = ['references', 'assets', 'scripts']
+const availableFileDirs: SkillFileDir[] = ['references', 'assets']
 const buildFixedDirNode = (dirName: SkillFileDir, files: string[]): SkillFileTreeNode => {
   const root: SkillFileTreeNode = {
     key: dirName,
@@ -176,7 +261,6 @@ const fileTree = computed<SkillFileTreeNode[]>(() => [{
     { key: 'skill-root:SKILL.md', label: 'SKILL.md', path: 'SKILL.md', type: 'skill', children: [] },
     buildFixedDirNode('references', skillFiles.value.references || selectedSkill.value?.references || []),
     buildFixedDirNode('assets', skillFiles.value.assets || selectedSkill.value?.assets || []),
-    buildFixedDirNode('scripts', skillFiles.value.scripts || selectedSkill.value?.scripts || []),
   ],
 }])
 const getSkillStatusLabel = (skill?: SkillInfo | null) => {
@@ -300,7 +384,6 @@ const loadSkillFiles = async () => {
     skillFiles.value = {
       references: selectedSkill.value?.references || [],
       assets: selectedSkill.value?.assets || [],
-      scripts: selectedSkill.value?.scripts || [],
     }
     return
   }
@@ -310,11 +393,10 @@ const loadSkillFiles = async () => {
     skillFiles.value = {
       references: response.data?.references || [],
       assets: response.data?.assets || [],
-      scripts: response.data?.scripts || [],
     }
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.msg || '加载技能文件失败')
-    skillFiles.value = { references: [], assets: [], scripts: [] }
+    skillFiles.value = { references: [], assets: [] }
   } finally {
     fileLoading.value = false
   }
@@ -370,7 +452,6 @@ const resetFileForm = () => {
 }
 
 const getDefaultFileName = (dirName: SkillFileDir) => {
-  if (dirName === 'scripts') return 'new_script.py'
   if (dirName === 'assets') return 'new_file.txt'
   return 'new_doc.md'
 }
@@ -384,6 +465,50 @@ const openCreateFilePanel = (dirName: SkillFileDir, parentPath = '') => {
   selectedFileNode.value = { type: 'file', dir_name: dirName, file_path: fileForm.file_path }
   selectedFileEditing.value = true
   contentViewMode.value = 'text'
+}
+
+// ---- 文件上传（references / assets 目录）----
+const fileUploadInputRef = ref<HTMLInputElement | null>(null)
+const uploadTargetDir = ref<SkillFileDir | null>(null)
+const fileUploading = ref(false)
+
+const triggerUploadFile = (dirName: SkillFileDir) => {
+  if (!canManageFiles.value) return
+  uploadTargetDir.value = dirName
+  fileUploadInputRef.value?.click()
+}
+
+const handleFileSelected = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 重置以便同一文件可重复选择
+  const dirName = uploadTargetDir.value
+  if (!file || !dirName) return
+  const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
+  const versionNo = editableVersionNo.value
+  if (!skillId || !versionNo) {
+    ElMessage.warning('请先选择技能版本')
+    uploadTargetDir.value = null
+    return
+  }
+  fileUploading.value = true
+  try {
+    await uploadSkillVersionFile(skillId, versionNo, { dir_name: dirName, file })
+    ElMessage.success(`已上传 ${file.name}`)
+    // 上传可能在服务端新建了草稿版本，刷新技能与版本后重新拉取文件列表
+    const skillResponse = await getSkill(skillId)
+    if (skillResponse.data) {
+      selectedSkill.value = { ...selectedSkill.value, ...skillResponse.data }
+      await loadSkillVersions(selectedSkill.value)
+      await selectDraftVersion()
+    }
+    await loadSkillFiles()
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.msg || '上传文件失败')
+  } finally {
+    fileUploading.value = false
+    uploadTargetDir.value = null
+  }
 }
 
 const selectSkillContentFile = (editing = false) => {
@@ -400,7 +525,23 @@ const openFileContent = async (dirName: SkillFileDir, filePath: string, editing 
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
   const versionNo = editing ? editableVersionNo.value : currentVersionNo.value
   if (!skillId || !versionNo) return
+  const kind = getPreviewFileKind(filePath)
+  if (kind !== 'text' && editing) {
+    ElMessage.warning('二进制文件不支持在线编辑')
+    return
+  }
+  clearBinaryPreview()
   try {
+    if (kind !== 'text') {
+      // 图片/PDF/Office：走 raw / office-preview 预览链路，不读文本内容
+      fileForm.dir_name = dirName
+      fileForm.file_path = filePath
+      fileForm.content = ''
+      selectedFileNode.value = { type: 'file', dir_name: dirName, file_path: filePath }
+      selectedFileEditing.value = false
+      void loadBinaryPreview(skillId, versionNo, dirName, filePath)
+      return
+    }
     const response = await getSkillVersionFile(skillId, versionNo, { dir_name: dirName, file_path: filePath })
     fileForm.dir_name = dirName
     fileForm.file_path = filePath
@@ -623,7 +764,7 @@ const handleDeleteSkill = async (skill?: SkillInfo | null, event?: MouseEvent) =
       selectedSkill.value = null
       selectedVersion.value = null
       skillVersions.value = []
-      skillFiles.value = { references: [], assets: [], scripts: [] }
+      skillFiles.value = { references: [], assets: [] }
       selectedFileNode.value = null
       selectedFileEditing.value = false
       resetFileForm()
@@ -904,6 +1045,14 @@ watch(() => props.initialSkillId, (skillId) => {
                     新增
                   </button>
                   <button
+                    v-if="canManageFiles && data.type === 'dir' && data.path === '' && data.dirName"
+                    type="button"
+                    class="h-6 rounded border border-slate-200 bg-white px-2 text-xs text-slate-600"
+                    @click="triggerUploadFile(data.dirName)"
+                  >
+                    上传
+                  </button>
+                  <button
                     v-if="canManageFiles && data.type === 'skill'"
                     type="button"
                     class="shrink-0 border-none bg-transparent text-slate-400 hover:text-blue-600"
@@ -912,7 +1061,7 @@ watch(() => props.initialSkillId, (skillId) => {
                     编辑
                   </button>
                   <button
-                    v-if="canManageFiles && data.type === 'file' && data.dirName"
+                    v-if="canManageFiles && data.type === 'file' && data.dirName && getPreviewFileKind(data.path) === 'text'"
                     type="button"
                     class="shrink-0 border-none bg-transparent text-slate-400 hover:text-blue-600"
                     @click.stop="openFileContent(data.dirName, data.path, true)"
@@ -931,10 +1080,17 @@ watch(() => props.initialSkillId, (skillId) => {
               </template>
             </el-tree>
           </div>
+          <!-- 上传走原生 input：点击目录节点「上传」触发，选择后调 uploadSkillVersionFile -->
+          <input
+            ref="fileUploadInputRef"
+            type="file"
+            class="hidden"
+            @change="handleFileSelected"
+          >
         </div>
         <div class="mb-2 flex items-center justify-between gap-2">
           <div class="min-w-0 truncate font-mono text-xs text-slate-500">{{ selectedFileNode ? selectedFileTitle : 'SKILL.md' }}</div>
-          <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <div v-if="!selectedFileIsBinary" class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
             <button
               type="button"
               :class="[
@@ -957,8 +1113,30 @@ watch(() => props.initialSkillId, (skillId) => {
             </button>
           </div>
         </div>
+        <!-- 二进制 / Office 预览：渲染方式与主对话工作区预览一致（blob img/iframe、office srcdoc sandbox） -->
+        <div v-if="selectedFileIsBinary" class="min-h-[420px] overflow-auto rounded-lg border border-slate-200 bg-white">
+          <div v-if="binaryPreviewLoading" class="flex h-[420px] items-center justify-center text-xs text-slate-400">文件加载中...</div>
+          <div v-else-if="selectedFileKind === 'image' && binaryPreview?.url" class="flex h-[420px] items-center justify-center overflow-auto p-2">
+            <img :src="binaryPreview.url" :alt="selectedFileTitle" class="max-h-full max-w-full object-contain" />
+          </div>
+          <iframe
+            v-else-if="selectedFileKind === 'pdf' && binaryPreview?.url"
+            :src="binaryPreview.url"
+            class="m-0 h-[420px] min-w-0 w-full rounded-md border-0 bg-white"
+            title="PDF 预览"
+          ></iframe>
+          <iframe
+            v-else-if="selectedFileKind === 'office' && officePreviewHtml"
+            :srcdoc="officePreviewHtml"
+            sandbox="allow-scripts"
+            class="h-[420px] min-w-0 w-full border-0 bg-white"
+            title="Office 文件预览"
+          ></iframe>
+          <div v-else-if="officePreviewReason === 'preview_too_large'" class="flex h-[420px] items-center justify-center text-xs text-slate-400">文件过大，暂不支持预览。</div>
+          <div v-else class="flex h-[420px] items-center justify-center text-xs text-slate-400">当前环境不能预览该文件。</div>
+        </div>
         <div
-          v-if="contentViewMode === 'markdown'"
+          v-else-if="contentViewMode === 'markdown'"
           class="skill-markdown min-h-[420px] rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-700"
           v-html="displayedContentHtml"
         ></div>

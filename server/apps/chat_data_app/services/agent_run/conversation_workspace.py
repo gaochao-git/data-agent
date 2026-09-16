@@ -62,6 +62,9 @@ agent_inbox_dao = AgentInboxDao()
 WORKSPACE_TEXT_PREVIEW_MAX_BYTES = TEXT_PREVIEW_MAX_MB * 1024 * 1024
 WORKSPACE_OFFICE_SOURCE_MAX_BYTES = OFFICE_PREVIEW_SOURCE_MAX_MB * 1024 * 1024
 
+# raw（原始字节）预览上限：目前无对应 env，主对话与技能管理预览共用本常量（单一来源）。
+WORKSPACE_RAW_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
+
 
 def _format_size_limit(max_bytes: int) -> str:
     """把字节上限格式化成用户可读文案（>=1MB 显示 MB，否则显示字节）。"""
@@ -312,7 +315,7 @@ async def read_conversation_workspace_raw_file(
     *,
     user_id: str,
     path: str,
-    max_bytes: int = 20 * 1024 * 1024,
+    max_bytes: int = WORKSPACE_RAW_PREVIEW_MAX_BYTES,
 ) -> dict[str, Any]:
     """读取会话工作区中的原始字节文件（用于 PDF/Word 等二进制预览/下载）。"""
     return await asyncio.to_thread(
@@ -379,7 +382,7 @@ async def render_conversation_workspace_office_preview(
 def read_workspace_raw_file(
     conversation_id: str,
     path: str,
-    max_bytes: int = 20 * 1024 * 1024,
+    max_bytes: int = WORKSPACE_RAW_PREVIEW_MAX_BYTES,
     user_id: str = "system",
     *,
     created_date: str | None = None,

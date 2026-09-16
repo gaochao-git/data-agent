@@ -607,6 +607,25 @@
         "title": "Body_upload_chatdata_file",
         "type": "object"
       },
+      "Body_upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post": {
+        "properties": {
+          "dir_name": {
+            "title": "Dir Name",
+            "type": "string"
+          },
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "dir_name"
+        ],
+        "title": "Body_upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post",
+        "type": "object"
+      },
       "CompileSemanticBuilderSqlRequest": {
         "description": "编译语义可视化 DSL 请求（仅生成 SQL，不执行）。",
         "properties": {
@@ -2096,6 +2115,18 @@
             "title": "Datasource Id",
             "type": "string"
           },
+          "enable_thinking": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "用户显式开关深度思考；None 跟随模型默认",
+            "title": "Enable Thinking"
+          },
           "member_datasource_ids": {
             "description": "选中的成员数据源ID列表",
             "items": {
@@ -2104,12 +2135,36 @@
             "title": "Member Datasource Ids",
             "type": "array"
           },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "指定生成模型；缺省用系统默认模型",
+            "title": "Model Id"
+          },
           "query": {
             "description": "自然语言查询",
             "maxLength": 4000,
             "minLength": 1,
             "title": "Query",
             "type": "string"
+          },
+          "thinking_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "思考档位；None 跟随模型默认",
+            "title": "Thinking Effort"
           }
         },
         "required": [
@@ -3096,8 +3151,7 @@
             "description": "技能固定目录",
             "enum": [
               "references",
-              "assets",
-              "scripts"
+              "assets"
             ],
             "title": "Dir Name",
             "type": "string"
@@ -11154,6 +11208,227 @@
           }
         ],
         "summary": "Read Skill Version File",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/skills/{skill_id}/versions/{version_no}/files/office-preview": {
+      "get": {
+        "description": "渲染技能版本目录 Office 文件 HTML 预览（复用主对话工作区 OfficeCLI 引擎）。",
+        "operationId": "render_skill_office_preview_api_chatdata_skills__skill_id__versions__version_no__files_office_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_no",
+            "required": true,
+            "schema": {
+              "title": "Version No",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Render Skill Office Preview",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/skills/{skill_id}/versions/{version_no}/files/raw": {
+      "get": {
+        "description": "读取技能版本文件的原始字节（图片/PDF 等二进制预览，前端以 blob 方式消费）。",
+        "operationId": "read_skill_version_file_raw_api_chatdata_skills__skill_id__versions__version_no__files_raw_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_no",
+            "required": true,
+            "schema": {
+              "title": "Version No",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Skill Version File Raw",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/skills/{skill_id}/versions/{version_no}/files/upload": {
+      "post": {
+        "description": "上传文件到用户技能草稿版本固定目录（references / assets）。",
+        "operationId": "upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_no",
+            "required": true,
+            "schema": {
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upload Skill Version File",
         "tags": [
           "ChatData 技能"
         ]

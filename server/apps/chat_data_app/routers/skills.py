@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -14,7 +15,7 @@ from ..agent.skills.skill_service import skill_service
 from .dependencies import _current_user_names, _get_current_user
 
 logger = get_logger(__name__)
-from . import JSON_API_RESPONSES
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
 
 router = APIRouter(tags=["ChatData 技能"], responses=JSON_API_RESPONSES)
 
@@ -196,6 +197,44 @@ async def read_skill_version_file(skill_id: str, version_no: int, dir_name: str,
         return business_response(msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error")
 
 
+@router.get("/skills/{skill_id}/versions/{version_no}/files/raw", responses=BINARY_RESPONSES)
+async def read_skill_version_file_raw(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+    """读取技能版本文件的原始字节（图片/PDF 等二进制预览，前端以 blob 方式消费）。"""
+    try:
+        user = _get_current_user(request)
+        content, content_type = await skill_service.read_skill_version_file_raw_async(skill_id, version_no, dir_name, file_path, str(user.user_id))
+        return Response(content=content, media_type=content_type)
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        logger.error("读取技能版本原始文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error")
+
+
+@router.get("/skills/{skill_id}/versions/{version_no}/files/office-preview")
+async def render_skill_office_preview(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+    """渲染技能版本目录 Office 文件 HTML 预览（复用主对话工作区 OfficeCLI 引擎）。"""
+    try:
+        user = _get_current_user(request)
+        preview = await skill_service.render_skill_office_preview_async(skill_id, version_no, dir_name, file_path, str(user.user_id))
+        return business_response(data=preview, msg="获取成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        # OfficeCLI 未安装 / 转换失败统一降级：前端展示「当前环境不能预览 Office 文件」兜底文案，
+        # reason 形状与主对话 render_conversation_workspace_office_preview_api 一致。
+        logger.error("技能 Office 预览失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(data={"available": False, "reason": "preview_failed"}, msg="Office 预览暂不可用")
+
+
 @router.put("/skills/{skill_id}/versions/{version_no}/files")
 async def save_skill_version_file(skill_id: str, version_no: int, payload: SkillFileUpsertRequest, request: Request):
     """保存用户技能版本固定目录文件。"""
@@ -212,6 +251,25 @@ async def save_skill_version_file(skill_id: str, version_no: int, payload: Skill
     except Exception as e:
         logger.error("保存技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
         return business_response(msg="保存技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED, status="error")
+
+
+@router.post("/skills/{skill_id}/versions/{version_no}/files/upload")
+async def upload_skill_version_file(skill_id: str, version_no: int, request: Request, file: UploadFile = File(...), dir_name: str = Form(...)):
+    """上传文件到用户技能草稿版本固定目录（references / assets）。"""
+    try:
+        user = _get_current_user(request)
+        # 直接传 UploadFile 流式落盘（service 内分块读 + 边写边限长），不在内存整读
+        file_data = await skill_service.upload_skill_version_file_async(skill_id, version_no, dir_name, getattr(file, "filename", "") or "", file, str(user.user_id), operator_name=str(user.username or ""))
+        return business_response(data=file_data, msg="上传成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_INVALID, status="error")
+    except Exception as e:
+        logger.error("上传技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(msg="上传技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED, status="error")
 
 
 @router.delete("/skills/{skill_id}/versions/{version_no}/files")
