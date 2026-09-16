@@ -726,10 +726,12 @@ const buildSkillRequestText = (text: string, skillName: string) => {
 const {
   selectedSkill,
   selectedSkillTitle,
+  commandSkills,
   displayedCommandSkills,
   isCommandSkillLoading,
   highlightedSkillIndex,
   showSkillCommand,
+  loadCommandSkills,
   refreshCommandSkills,
   selectCommandSkill: selectCommandSkillBase,
   clearSelectedSkill: clearSelectedSkillBase,
@@ -2302,6 +2304,19 @@ const getRenderableMessageToolCall = (message: Message, toolCallId: string) => {
 
 const handleSkillSelect = (skill: SkillInfo) => {
   selectedSkill.value = skill
+  inputBarRef.value?.focus()
+}
+
+// 技能管理「新建」→ 对话式创建：关闭弹窗，挂上 skill-creator 技能并预填引导语，
+// 用户补全「」中的目标后发送，由技能生成技能引导完成创建（对齐 WorkBuddy 体验）。
+const SKILL_CREATOR_NAME = 'skill-creator'
+const SKILL_CREATE_PROMPT = '请帮我创建一个可以实现「……」的技能'
+const startSkillCreation = async () => {
+  isSkillManagerOpen.value = false
+  if (!commandSkills.value.length) await loadCommandSkills()
+  const creator = commandSkills.value.find(skill => skill.name === SKILL_CREATOR_NAME) || null
+  if (creator) selectedSkill.value = creator
+  input.value = SKILL_CREATE_PROMPT
   inputBarRef.value?.focus()
 }
 
@@ -4089,7 +4104,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[640px] overflow-hidden">
-        <SkillManager :initial-skill-id="importedSkillIdForManager" />
+        <SkillManager :initial-skill-id="importedSkillIdForManager" @create-with-assistant="startSkillCreation" />
       </div>
     </el-dialog>
 

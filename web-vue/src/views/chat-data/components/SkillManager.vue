@@ -41,6 +41,13 @@ const props = defineProps<{
   initialSkillId?: string | null
 }>()
 
+// 新建技能改为对话式创建：把事件抛给宿主（AnalysisConversation），由它关闭弹窗、
+// 挂上 skill-creator 技能并预填输入框（对齐 WorkBuddy 的 skill-creator 体验）。
+// 手写表单仅保留给「编辑」场景。
+const emit = defineEmits<{
+  (e: 'createWithAssistant'): void
+}>()
+
 const skills = ref<SkillInfo[]>([])
 const selectedSkill = ref<(SkillInfo & { content?: string }) | null>(null)
 const skillVersions = ref<SkillVersionInfo[]>([])
@@ -225,11 +232,14 @@ const resetForm = () => {
   form.content = ''
 }
 
-const openCreatePanel = () => {
-  editingSkillId.value = null
-  resetForm()
-  showCreatePanel.value = true
-}
+// 旧「手写新建」入口已下线（新建改走对话式，见 emit('createWithAssistant')）。
+// 表单本体保留给「编辑」；如需恢复手写新建，取消注释并把模板新建按钮的
+// @click 改回 openCreatePanel 即可。
+// const openCreatePanel = () => {
+//   editingSkillId.value = null
+//   resetForm()
+//   showCreatePanel.value = true
+// }
 
 const openEditPanel = () => {
   const skill = selectedSkill.value
@@ -677,7 +687,7 @@ watch(() => props.initialSkillId, (skillId) => {
             <h3 class="m-0 text-sm font-semibold text-slate-800">技能管理</h3>
             <p class="m-0 mt-1 text-xs text-slate-400">系统技能、用户技能和收藏</p>
           </div>
-          <button type="button" class="h-8 px-3 rounded-lg border-none bg-[#1677FF] text-xs text-white" @click="openCreatePanel">新建</button>
+          <button type="button" class="h-8 px-3 rounded-lg border-none bg-[#1677FF] text-xs text-white" @click="emit('createWithAssistant')">新建</button>
         </div>
         <div class="mt-3 flex items-center gap-1 rounded-lg bg-slate-100 p-1">
           <button
