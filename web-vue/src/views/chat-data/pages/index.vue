@@ -2071,4 +2071,16 @@ body.is-resizing {
   z-index: 20001 !important;
 }
 
+/*
+ * Element Plus MessageBox 全局层级修复（本文件 style 非 scoped，规则随 chat-data 目录走）。
+ * 根因：语义配置等整页容器 z-index 高达 2050（本文件 z-[2050]），而 MessageBox 默认
+ * z-index 从 ~2001 起动态分配，整层弹窗（含遮罩）会被压在整页容器之下，表现为
+ * "点了删除不弹窗"。这里对 MessageBox 遮罩层（.el-overlay.is-message-box，EP 专属类，
+ * 不影响 dialog/drawer）统一提到 20010，高于全部业务层级；各调用点无需再逐个传
+ * customClass: 'chatdata-message-box'。
+ */
+.el-overlay.is-message-box {
+  z-index: 20010 !important;
+}
+
 </style>
