@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from hashlib import sha1
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -701,3 +701,30 @@ def get_semantic_config_service() -> SemanticConfigService:
         from ...datasource.manager import get_datasource_manager
         _semantic_config_service = SemanticConfigService(get_datasource_manager())
     return _semantic_config_service
+
+
+async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) -> Optional[Set[Tuple[str, str]]]:
+    """加载数据源物理列清单 {(table, column)}（get_cached_schema_async 的全量表结构）。
+
+    导入预览 / 质量检查 / semantic_yaml_check 工具共用，保证物理清单口径一致。
+    注意不能用 get_column_dicts_async——那是只含枚举/单位注释的稀疏字段字典，
+    当作物理清单会把正常列全部误判为 EXE_UNKNOWN_COLUMN。
+    失败时返回 None（调用方质量检查跳过依赖清单的检查项）。
+    """
+    try:
+        tables = await ds_manager.get_cached_schema_async(datasource_id)
+    except Exception as e:
+        logger.warning("加载物理表结构失败，质量检查跳过清单类检查项: datasource_id=%s error=%s", datasource_id, e)
+        return None
+    columns: Set[Tuple[str, str]] = set()
+    for table in tables or []:
+        if not isinstance(table, dict):
+            continue
+        table_name = str(table.get("table_name") or "").strip()
+        for column in table.get("columns") or []:
+            if not isinstance(column, dict):
+                continue
+            column_name = str(column.get("name") or "").strip()
+            if table_name and column_name:
+                columns.add((table_name, column_name))
+    return columns

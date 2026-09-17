@@ -19,6 +19,7 @@ from apps.chat_data_app.agent.tools.present_artifacts import create_present_arti
 from apps.chat_data_app.agent.tools.read_image import create_read_image_tool
 from apps.chat_data_app.agent.tools.semantic_query import semantic_query_tool
 from apps.chat_data_app.agent.tools.semantic_search import create_semantic_search
+from apps.chat_data_app.agent.tools.semantic_yaml_check import create_semantic_yaml_check_tool
 
 
 def _collect_model_visible_tools() -> list:
@@ -31,6 +32,7 @@ def _collect_model_visible_tools() -> list:
         get_current_time_tool,
         create_semantic_search(),
         create_dsl2sql_tool(),
+        create_semantic_yaml_check_tool(),
         semantic_query_tool,
         calculator_tool,
         ask_user_question_tool,
@@ -41,7 +43,7 @@ def _collect_model_visible_tools() -> list:
 
 def test_every_model_visible_tool_declares_intent_metadata():
     tools = _collect_model_visible_tools()
-    assert len(tools) == 22
+    assert len(tools) == 23
     missing = sorted(
         tool.name for tool in tools if "intent" not in (tool.args or {})
     )

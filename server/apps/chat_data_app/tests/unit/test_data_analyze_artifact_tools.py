@@ -144,6 +144,25 @@ def test_output_artifact_registry_accepts_self_contained_html():
     )["artifact_type"] == "html"
 
 
+def test_output_artifact_registry_accepts_yaml_output():
+    artifact = parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/chat_data_query_execution基础模型.yaml",
+        data=b"version: 0.2.0.dev0\nname: demo\ndatasets: []\n",
+    )
+
+    assert artifact == {
+        "file_path": "/mnt/user-data/outputs/chat_data_query_execution基础模型.yaml",
+        "artifact_type": "yaml",
+        "renderer": "yaml",
+        "artifact_version": "v1",
+    }
+    # .yml 后缀同样注册为 yaml 类型
+    assert parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/model.yml",
+        data=b"version: 1.0\n",
+    )["artifact_type"] == "yaml"
+
+
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
     root = tmp_path
     output = root / "outputs" / "chart.json"

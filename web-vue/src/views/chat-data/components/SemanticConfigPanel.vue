@@ -17,7 +17,6 @@ import {
   deleteSemanticConfig,
   toggleAdminSemanticConfig,
   toggleSemanticConfig,
-  autoPrefillSemanticFields,
   getDatasourceTableColumnDicts,
   getAdminDatasourceTableColumnDicts,
 } from '../api'
@@ -28,7 +27,6 @@ import {
   formatSemanticConfigOptionLabel,
   getRelationshipConditions,
   normalizeSemanticRelationship,
-  isQuerySucceeded,
   syncRelationshipColumnsFromConditions,
 } from '../utils'
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
@@ -36,12 +34,12 @@ import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
 import BusinessNotesDialog from './semantic/BusinessNotesDialog.vue'
 import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
-import AutoPrefillDialog from './semantic/AutoPrefillDialog.vue'
 import TablePreviewDialog from './semantic/TablePreviewDialog.vue'
 import MetricExpandDialog from './semantic/MetricExpandDialog.vue'
 import AddFieldDialog from './semantic/AddFieldDialog.vue'
 import ExpressionEditorDialog from './semantic/ExpressionEditorDialog.vue'
 import RelationshipEditorDialog from './semantic/RelationshipEditorDialog.vue'
+import OssieImportDialog from './semantic/OssieImportDialog.vue'
 import type {
   SemanticConfigItem,
   SemanticMetric,
@@ -83,6 +81,7 @@ const savingId = ref<string | null>(null)
 const togglingEnabledId = ref<string | null>(null)
 const creatingConfig = ref(false)
 const generatingBasicConfigs = ref(false)
+const ossieImportVisible = ref(false)
 const savedConfigSignatures = ref<Record<string, string>>({})
 
 interface TableScopeEntry {
@@ -91,7 +90,6 @@ interface TableScopeEntry {
 }
 
 const tableScopes = ref<Record<string, TableScopeEntry[]>>({})
-const defaultDimensionScopeAliases = ref<Record<string, string[]>>({})
 const draggingTableName = ref('')
 const tableSearchKeyword = ref('')
 const tableLabelMode = ref<'name' | 'description'>('name')
@@ -273,17 +271,6 @@ const syncTableScopes = () => {
     next[config.id] = existed.length > 0 ? existed : deriveScopeFromConfig(config)
   })
   tableScopes.value = next
-  const nextDefaultAliases: Record<string, string[]> = {}
-  Object.entries(defaultDimensionScopeAliases.value).forEach(([configId, aliases]) => {
-    const scopeEntries = next[configId]
-    if (!scopeEntries) return
-    const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
-    const keptAliases = aliases.filter(alias => scopeAliasSet.has(alias))
-    if (keptAliases.length > 0) {
-      nextDefaultAliases[configId] = keptAliases
-    }
-  })
-  defaultDimensionScopeAliases.value = nextDefaultAliases
 }
 
 const applyDefaultModelConfigCollapse = (configId?: string | null) => {
@@ -302,37 +289,6 @@ const getScopeTables = (configId: string) => {
 
 const getScopeEntries = (configId: string) => {
   return normalizeScopeEntries((tableScopes.value[configId] || []) as Array<TableScopeEntry | string>)
-}
-
-const getDefaultDimensionAliasSet = (configId: string) => {
-  return new Set(defaultDimensionScopeAliases.value[configId] || [])
-}
-
-const markDefaultDimensionScopeAlias = (configId: string, alias: string) => {
-  if (!configId || !alias) return
-  const current = getDefaultDimensionAliasSet(configId)
-  if (current.has(alias)) return
-  defaultDimensionScopeAliases.value = {
-    ...defaultDimensionScopeAliases.value,
-    [configId]: [...current, alias],
-  }
-}
-
-const clearDefaultDimensionScopeAliases = (configId: string, aliases?: string[]) => {
-  if (!configId) return
-  const current = getDefaultDimensionAliasSet(configId)
-  const nextMap = { ...defaultDimensionScopeAliases.value }
-  if (!aliases) {
-    delete nextMap[configId]
-  } else {
-    aliases.forEach(alias => current.delete(alias))
-    if (current.size > 0) {
-      nextMap[configId] = [...current]
-    } else {
-      delete nextMap[configId]
-    }
-  }
-  defaultDimensionScopeAliases.value = nextMap
 }
 
 const getScopeEntryByAlias = (configId: string, alias?: string) => {
@@ -417,7 +373,6 @@ const handleTableDragEnd = () => {
 const addScopeTable = (configId: string, tableName: string) => {
   const entries = getScopeEntries(configId)
   const alias = generateScopeAlias(tableName, entries)
-  markDefaultDimensionScopeAlias(configId, alias)
   toggleScopeEntry(configId, { table: tableName, alias }, true)
 }
 
@@ -425,7 +380,6 @@ const addScopeTable = (configId: string, tableName: string) => {
 const removeScopeTable = (configId: string, alias: string) => {
   const entry = getScopeEntryByAlias(configId, alias)
   if (!entry) return
-  clearDefaultDimensionScopeAliases(configId, [entry.alias])
   toggleScopeEntry(configId, entry, false)
 }
 
@@ -625,7 +579,6 @@ const handleDeleteConfig = async (configId: string, configName: string) => {
     const nextSignatures = { ...savedConfigSignatures.value }
     delete nextSignatures[configId]
     savedConfigSignatures.value = nextSignatures
-    clearDefaultDimensionScopeAliases(configId)
     const currentSelectedId = props.selectedConfigId || expandedId.value
     const nextSelectedId = currentSelectedId === configId
       ? newConfigs[0]?.id || null
@@ -723,14 +676,11 @@ interface FieldConfigRow {
   column: string
   sourceColumn?: string
   columnType: string
-  isDimension: boolean
-  isMetric: boolean
   displayName: string
   columnComment?: string
   description?: string
   metadataSupplement?: string
   logicalType: SemanticLogicalType
-  metricAggFunc: string
   expression: string
   isCustom?: boolean
   isMissingPhysical?: boolean
@@ -742,11 +692,10 @@ const fieldRowsConfigId = ref<string | null>(null)
 const showFieldPhysicalDetails = ref(false)
 
 const showAddFieldDialog = ref(false)
-// 弹窗作用域：field=字段配置（原子/维度），metric=指标扩展（派生/复合）
+// 弹窗作用域：field=字段配置（维度变体），metric=指标（原子/派生/复合）
 const addFieldScope = ref<'field' | 'metric'>('field')
+const dimensionSectionCollapsed = ref(false)
 const metricSectionCollapsed = ref(false)
-const autoPrefillLoading = ref(false)
-const showAutoPrefillModeDialog = ref(false)
 const previewingTableName = ref('')
 const showTablePreviewDialog = ref(false)
 const tablePreviewTarget = ref('')
@@ -760,7 +709,7 @@ const addFieldDefaultDisplayName = ref('')
 const showExpressionEditorDialog = ref(false)
 const editingExpressionRowKey = ref('')
 const showMetricExpandDialog = ref(false)
-const metricExpandSourceRowKey = ref('')
+const metricExpandSourceIndex = ref(-1)
 const metricExpandOptions = ref<MetricExpandOption[]>([])
 const showBusinessNotesDialog = ref(false)
 const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
@@ -777,13 +726,10 @@ const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(r
   tableAlias: row.tableAlias,
   column: row.column,
   sourceColumn: row.sourceColumn,
-  isDimension: row.isDimension,
-  isMetric: row.isMetric,
   displayName: row.displayName,
   description: row.description,
   metadataSupplement: row.metadataSupplement,
   logicalType: row.logicalType,
-  metricAggFunc: row.metricAggFunc,
   expression: row.expression,
   isCustom: row.isCustom,
 })))
@@ -796,12 +742,13 @@ const getFieldRowEffectiveDisplayName = (row: FieldConfigRow) => {
 
 const duplicateFieldDisplayNameSet = computed(() => {
   const nameCounts = new Map<string, number>()
-  fieldRows.value.forEach(row => {
-    if (!row.isDimension && !row.isMetric) return
-    const displayName = getFieldRowEffectiveDisplayName(row)
-    if (!displayName) return
-    nameCounts.set(displayName, (nameCounts.get(displayName) || 0) + 1)
-  })
+  const countName = (value?: string) => {
+    const name = (value || '').trim()
+    if (!name) return
+    nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
+  }
+  fieldRows.value.forEach(row => countName(getFieldRowEffectiveDisplayName(row)))
+  ;(activeConfig.value?.metrics || []).forEach(metric => countName(metric.name))
   return new Set(
     Array.from(nameCounts.entries())
       .filter(([, count]) => count > 1)
@@ -810,7 +757,6 @@ const duplicateFieldDisplayNameSet = computed(() => {
 })
 
 const getFieldRowDisplayNameError = (row: FieldConfigRow) => {
-  if (!row.isDimension && !row.isMetric) return ''
   const displayName = getFieldRowEffectiveDisplayName(row)
   if (!displayName) return '显示名称不能为空'
   return duplicateFieldDisplayNameSet.value.has(displayName) ? `显示名称重复：${displayName}` : ''
@@ -838,7 +784,7 @@ const normalizeExpressionColumn = (value: string) => {
   const cleaned = (value || '').trim().replace(/`/g, '')
   if (!cleaned) return ''
   const parts = cleaned.split('.')
-  return parts[parts.length - 1]
+  return parts[parts.length - 1] || ''
 }
 
 const isCountAllExpression = (expression: string) => {
@@ -879,7 +825,6 @@ const isRawColumnExpression = (expression: string | undefined, column: string) =
 const validateFieldRowsBeforeApply = () => {
   const usedNames = new Set<string>()
   for (const row of fieldRows.value) {
-    if (!row.isDimension && !row.isMetric) continue
     const sourceColumn = row.sourceColumn || row.column
     if (!row.table || !sourceColumn) {
       return `字段 ${row.key} 缺少表或字段信息`
@@ -898,7 +843,7 @@ const validateFieldRowsBeforeApply = () => {
     if (!expressionUsesColumn(row.expression, sourceColumn)) {
       return `字段 ${row.table}.${row.column} 的表达式必须基于该物理字段`
     }
-    if (row.isDimension && row.logicalType === 'enum' && !columnDictEnumVisibleMap.value[getFieldColumnDictKey(row)]) {
+    if (row.logicalType === 'enum' && !columnDictEnumVisibleMap.value[getFieldColumnDictKey(row)]) {
       return `字段 ${row.table}.${sourceColumn} 选择了枚举逻辑类型，请先维护字段字典枚举值`
     }
   }
@@ -919,13 +864,15 @@ const editingDerivedMetricIndex = ref(-1)
 
 const derivedMetricConfig = computed(() => configs.value.find(c => c.id === activeConfig.value?.id) || null)
 
-const metricKindLabel = (metric: SemanticMetric) => (metric.metric_kind === 'composite' ? '复合指标' : '派生指标')
+const metricKindLabel = (metric: SemanticMetric) =>
+  metric.metric_kind === 'composite' ? '复合指标' : metric.metric_kind === 'derived' ? '派生指标' : '原子指标'
 
-const derivedMetricEntries = computed(() => {
+const isAtomicMetric = (metric: SemanticMetric) => !metric.metric_kind
+
+// 统一指标管理：原子/派生/复合全部列出
+const metricEntries = computed(() => {
   const metrics = derivedMetricConfig.value?.metrics || []
-  return metrics
-    .map((metric, index) => ({ metric, index }))
-    .filter(entry => entry.metric.metric_kind === 'derived' || entry.metric.metric_kind === 'composite')
+  return metrics.map((metric, index) => ({ metric, index }))
 })
 
 const aggregateMetricCandidates = computed(() => {
@@ -978,20 +925,92 @@ const openEditDerivedMetric = (metric: SemanticMetric, index: number) => {
   showAddFieldDialog.value = true
 }
 
-// 指标扩展段入口：派生/复合指标基于原子指标口径，前置校验聚合指标
-const openAddExtensionDialog = () => {
-  if (aggregateMetricCandidates.value.length === 0) {
-    ElMessage.warning('请先在字段配置中创建至少一个原子指标（聚合表达式），再创建扩展指标')
-    return
-  }
+// ============ 原子指标编辑（走 AddFieldDialog 的 metric 模式，直写 config.metrics） ============
+const editingAtomicMetric = ref<SemanticMetric | null>(null)
+const editingAtomicMetricIndex = ref(-1)
+
+const resetEditingAtomicState = () => {
+  editingAtomicMetric.value = null
+  editingAtomicMetricIndex.value = -1
+}
+
+const openEditAtomicMetric = (metric: SemanticMetric, index: number) => {
+  editingAtomicMetric.value = metric
+  editingAtomicMetricIndex.value = index
   addFieldScope.value = 'metric'
+  addFieldForm.value.mode = 'metric'
+  addFieldForm.value.tableAlias = getFieldTableAlias(metric)
+  addFieldForm.value.column = atomicMetricColumn(metric)
+  addFieldForm.value.fieldName = normalizeFieldName(metric.field_name || '')
+  addFieldForm.value.expression = metric.expression || ''
+  addFieldForm.value.displayName = metric.name || ''
   resetEditingDerivedState()
-  addFieldForm.value.mode = 'derived'
-  addFieldForm.value.displayName = ''
   showAddFieldDialog.value = true
 }
 
-const deleteDerivedMetric = async (index: number) => {
+const confirmAtomicMetric = () => {
+  const config = derivedMetricConfig.value
+  if (!config) return
+  const entry = addFieldTables.value.find(item => item.alias === addFieldForm.value.tableAlias)
+  const columnName = addFieldForm.value.column
+  const fieldName = normalizeFieldName(addFieldForm.value.fieldName)
+  const expression = (addFieldForm.value.expression || '').trim()
+  if (!entry || !columnName) {
+    ElMessage.warning('请选择表和字段')
+    return
+  }
+  if (!expression) {
+    ElMessage.warning('请填写表达式')
+    return
+  }
+  const previousName = editingAtomicMetricIndex.value >= 0 ? editingAtomicMetric.value?.name || '' : ''
+  const displayName = (addFieldForm.value.displayName || '').trim()
+  if (!displayName) {
+    ElMessage.warning('请填写指标名称')
+    return
+  }
+  if (isDisplayNameTaken(displayName, previousName)) {
+    ElMessage.warning(`指标名称重复：${displayName}`)
+    return
+  }
+  const table = getScopeTableInfo(entry)
+  const columnInfo = table?.columns?.find(c => c.name === columnName)
+  const columnType = columnInfo?.mysql_type || columnInfo?.type || ''
+  const metric: SemanticMetric = editingAtomicMetricIndex.value >= 0
+    ? {
+        ...editingAtomicMetric.value,
+        name: displayName,
+        field_name: fieldName,
+        table: entry.table,
+        table_alias: entry.alias,
+        expression,
+        data_type: getMetricDataType(columnType),
+      }
+    : {
+        name: displayName,
+        field_name: fieldName,
+        table: entry.table,
+        table_alias: entry.alias,
+        expression,
+        data_type: getMetricDataType(columnType),
+        filter: '',
+        description: '',
+        metadata_supplement: '',
+      }
+  const isEdit = editingAtomicMetricIndex.value >= 0
+  const newMetrics = [...config.metrics]
+  if (isEdit) {
+    newMetrics[editingAtomicMetricIndex.value] = metric
+  } else {
+    newMetrics.push(metric)
+  }
+  updateConfig(config.id, { metrics: newMetrics })
+  resetEditingAtomicState()
+  showAddFieldDialog.value = false
+  ElMessage.success(isEdit ? '原子指标已更新' : '原子指标已创建，保存后生效')
+}
+
+const deleteMetric = async (index: number) => {
   const config = derivedMetricConfig.value
   if (!config) return
   const metric = config.metrics[index]
@@ -1009,7 +1028,7 @@ const confirmDerivedField = (metric: SemanticMetric) => {
   const conflictingNames = [...config.metrics.map(m => m.name), ...config.dimensions.map(d => d.name)]
     .filter(n => n && n !== previousName)
   if (conflictingNames.includes(metric.name)) {
-    ElMessage.warning(`显示名称重复：${metric.name}`)
+    ElMessage.warning(`指标名称重复：${metric.name}`)
     return
   }
   const newMetrics = [...config.metrics]
@@ -1472,22 +1491,6 @@ const buildFieldRowDefaultDisplayName = (row: Pick<FieldConfigRow, 'table' | 'ta
   return buildAliasAwareDefaultDisplayName({ table: row.table, alias: getFieldRowAlias(row) }, sourceColumn, row.columnComment || getTableColumnComment(row.table, sourceColumn))
 }
 
-const isGeneratedFieldDisplayName = (row: FieldConfigRow) => {
-  const current = (row.displayName || '').trim()
-  if (!current) return true
-  const sourceColumn = row.sourceColumn || row.column
-  const columnComment = row.columnComment || getTableColumnComment(row.table, sourceColumn)
-  const baseName = (columnComment || sourceColumn || '').trim()
-  const generatedNames = new Set([
-    sourceColumn,
-    baseName,
-    buildAliasAwareDefaultDisplayName({ table: row.table, alias: getFieldRowAlias(row) }, sourceColumn, columnComment),
-    buildTablePrefixedDisplayName(row.table, baseName),
-    buildTablePrefixedDisplayName(getFieldRowAlias(row), baseName),
-  ].filter(Boolean))
-  return generatedNames.has(current)
-}
-
 const normalizeFieldName = (value: string) => (value || '').trim()
 
 const buildDimensionPreserveKey = (dimension: Pick<SemanticDimension, 'table' | 'table_alias' | 'column' | 'field_name'>) => {
@@ -1522,6 +1525,39 @@ const getUniqueCustomFieldName = (tableAlias: string, baseColumn: string) => {
   return candidate
 }
 
+// 指标域唯一性辅助：字段名以 config.metrics（原子指标）为准，显示名称覆盖维度+指标全域
+const isMetricFieldNameTaken = (tableAlias: string, fieldName: string) => {
+  const normalized = normalizeFieldName(fieldName)
+  if (!normalized) return false
+  return (derivedMetricConfig.value?.metrics || []).some(metric => {
+    if (metric.metric_kind || getFieldTableAlias(metric) !== tableAlias) return false
+    return normalizeFieldName(metric.field_name || '') === normalized
+  })
+}
+
+const getUniqueMetricFieldName = (tableAlias: string, baseColumn: string) => {
+  const base = normalizeFieldName(baseColumn) || 'metric'
+  if (!isMetricFieldNameTaken(tableAlias, base)) return base
+  let index = 1
+  let candidate = `${base}_${index}`
+  while (isMetricFieldNameTaken(tableAlias, candidate)) {
+    index += 1
+    candidate = `${base}_${index}`
+  }
+  return candidate
+}
+
+const isDisplayNameTaken = (displayName: string, exceptName = '') => {
+  const name = displayName.trim()
+  if (!name || name === exceptName) return false
+  const config = derivedMetricConfig.value
+  if (config) {
+    if (config.metrics.some(metric => metric.name === name)) return true
+    if (config.dimensions.some(dimension => dimension.name === name)) return true
+  }
+  return fieldRows.value.some(row => ((row.displayName || '').trim() || row.column) === name)
+}
+
 const addFieldTables = computed(() => {
   const configId = activeConfig.value?.id
   if (!configId) return []
@@ -1545,7 +1581,7 @@ const addFieldColumns = computed(() => {
   return entry?.columns || []
 })
 
-const openAddFieldDialog = () => {
+const openAddDimensionDialog = () => {
   if (addFieldTables.value.length === 0) {
     ElMessage.warning('请先在左侧选择数据表')
     return
@@ -1559,15 +1595,50 @@ const openAddFieldDialog = () => {
   const firstCol = addFieldColumns.value[0]
   addFieldDefaultDisplayName.value = firstCol ? buildAliasAwareDefaultDisplayName(firstEntry, firstCol.name, firstCol.description) : ''
   addFieldForm.value.displayName = addFieldDefaultDisplayName.value
-  addFieldForm.value.mode = 'metric'
+  addFieldForm.value.mode = 'dimension'
   resetEditingDerivedState()
+  resetEditingAtomicState()
   showAddFieldDialog.value = true
 }
+
+const openAddMetricDialog = () => {
+  if (addFieldTables.value.length === 0) {
+    ElMessage.warning('请先在左侧选择数据表')
+    return
+  }
+  const firstEntry = addFieldTables.value[0]
+  if (!firstEntry) return
+  addFieldScope.value = 'metric'
+  addFieldForm.value.tableAlias = firstEntry.alias
+  addFieldForm.value.column = addFieldColumns.value[0]?.name || ''
+  addFieldForm.value.fieldName = getUniqueMetricFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
+  addFieldForm.value.expression = addFieldForm.value.column
+    ? defaultMetricExpression(firstEntry.table, addFieldForm.value.column)
+    : ''
+  const firstCol = addFieldColumns.value[0]
+  addFieldDefaultDisplayName.value = firstCol ? buildAliasAwareDefaultDisplayName(firstEntry, firstCol.name, firstCol.description) : ''
+  addFieldForm.value.displayName = ''
+  addFieldForm.value.mode = 'metric'
+  resetEditingDerivedState()
+  resetEditingAtomicState()
+  showAddFieldDialog.value = true
+}
+
+// 原子指标默认表达式：数字列 SUM、其余 COUNT
+const defaultMetricExpression = (tableName: string, columnName: string) =>
+  buildMetricExpression(isNumericColumnType(getTableColumnType(tableName, columnName)) ? 'SUM' : 'COUNT', columnName)
 
 const handleAddFieldTableChange = () => {
   const entry = addFieldTables.value.find(item => item.alias === addFieldForm.value.tableAlias)
   addFieldForm.value.column = addFieldColumns.value[0]?.name || ''
-  addFieldForm.value.fieldName = getUniqueCustomFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
+  addFieldForm.value.fieldName = addFieldScope.value === 'metric'
+    ? getUniqueMetricFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
+    : getUniqueCustomFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
+  if (addFieldScope.value === 'metric') {
+    addFieldForm.value.expression = entry && addFieldForm.value.column
+      ? defaultMetricExpression(entry.table, addFieldForm.value.column)
+      : ''
+  }
   const firstCol = addFieldColumns.value[0]
   addFieldDefaultDisplayName.value = entry && firstCol ? buildAliasAwareDefaultDisplayName(entry, firstCol.name, firstCol.description) : ''
   addFieldForm.value.displayName = addFieldDefaultDisplayName.value
@@ -1579,7 +1650,12 @@ const handleAddFieldColumnChange = () => {
   if (!entry || !col) return
   const currentDisplayName = addFieldForm.value.displayName.trim()
   const nextDefaultDisplayName = buildAliasAwareDefaultDisplayName(entry, col.name, col.description)
-  addFieldForm.value.fieldName = getUniqueCustomFieldName(addFieldForm.value.tableAlias, col.name)
+  addFieldForm.value.fieldName = addFieldScope.value === 'metric'
+    ? getUniqueMetricFieldName(addFieldForm.value.tableAlias, col.name)
+    : getUniqueCustomFieldName(addFieldForm.value.tableAlias, col.name)
+  if (addFieldScope.value === 'metric') {
+    addFieldForm.value.expression = defaultMetricExpression(entry.table, col.name)
+  }
   // 仅当为空或仍是系统默认名时，跟随字段自动同步；人工改过的显示名不覆盖。
   if (!currentDisplayName || currentDisplayName === addFieldDefaultDisplayName.value) {
     addFieldForm.value.displayName = nextDefaultDisplayName
@@ -1588,6 +1664,16 @@ const handleAddFieldColumnChange = () => {
 }
 
 const confirmAddField = () => {
+  if (addFieldScope.value === 'metric') {
+    if (addFieldForm.value.mode === 'metric') {
+      confirmAtomicMetric()
+    }
+    return
+  }
+  confirmAddDimension()
+}
+
+const confirmAddDimension = () => {
   const entry = addFieldTables.value.find(item => item.alias === addFieldForm.value.tableAlias)
   const columnName = addFieldForm.value.column
   const fieldName = normalizeFieldName(addFieldForm.value.fieldName)
@@ -1604,9 +1690,6 @@ const confirmAddField = () => {
   const table = getScopeTableInfo(entry)
   const columnInfo = table?.columns?.find(c => c.name === columnName)
   const columnType = columnInfo?.mysql_type || columnInfo?.type || ''
-  const isMetric = addFieldForm.value.mode === 'metric'
-  const metricAggFunc = isMetric ? (isNumericColumnType(columnType) ? 'SUM' : 'COUNT') : 'COUNT'
-  const expression = isMetric ? buildMetricExpression(metricAggFunc, columnName) : quoteIdentifier(columnName)
   const columnComment = (columnInfo?.description || '').trim()
   const displayName = (addFieldForm.value.displayName || '').trim() || buildAliasAwareDefaultDisplayName(entry, columnName, columnComment)
   if (!displayName) {
@@ -1618,13 +1701,7 @@ const confirmAddField = () => {
     ElMessage.warning(`字段名重复：${tableName}.${fieldName}`)
     return
   }
-  const duplicated = fieldRows.value.some(row => ((row.displayName || '').trim() || row.column) === displayName)
-  if (duplicated) {
-    ElMessage.warning(`显示名称重复：${displayName}`)
-    return
-  }
-  const duplicatedDerived = derivedMetricEntries.value.some(entry => (entry.metric.name || '') === displayName)
-  if (duplicatedDerived) {
+  if (isDisplayNameTaken(displayName)) {
     ElMessage.warning(`显示名称重复：${displayName}`)
     return
   }
@@ -1636,15 +1713,12 @@ const confirmAddField = () => {
     column: fieldName,
     sourceColumn: columnName,
     columnType,
-    isDimension: !isMetric,
-    isMetric,
     displayName,
     columnComment,
     description: '',
     metadataSupplement: '',
     logicalType: inferLogicalType(columnType),
-    metricAggFunc,
-    expression,
+    expression: quoteIdentifier(columnName),
     isCustom: true,
   })
   void refreshFieldColumnDictVisibleMap()
@@ -1654,17 +1728,23 @@ const confirmAddField = () => {
   addFieldDefaultDisplayName.value = ''
 }
 
-const canExpandMetricRow = (row: FieldConfigRow) => {
-  if (row.isMissingPhysical || !row.isMetric || !isNumericColumnType(row.columnType)) return false
-  const parsed = parseSimpleMetricExpression(row.expression)
+// 原子指标的物理列从表达式解析（AGG(col) / AGG(DISTINCT col)），复杂表达式返回空
+const atomicMetricColumn = (metric: SemanticMetric) => {
+  const parsed = parseSimpleMetricExpression(metric.expression || '')
+  return normalizeExpressionColumn(parsed?.column || metric.expression || '')
+}
+
+const canExpandMetricEntry = (metric: SemanticMetric) => {
+  if (metric.metric_kind) return false
+  const parsed = parseSimpleMetricExpression(metric.expression || '')
   if (!parsed || !EXPANDABLE_AGG_FUNCS.includes(parsed.aggFunc)) return false
-  return normalizeExpressionColumn(parsed.column) === normalizeExpressionColumn(row.sourceColumn || row.column)
+  return isNumericColumnType(getTableColumnType(metric.table, normalizeExpressionColumn(parsed.column)))
 }
 
 const metricAggExists = (tableAlias: string, sourceColumn: string, aggFunc: string) => {
-  return fieldRows.value.some(row => {
-    if (!row.isMetric || getFieldRowAlias(row) !== tableAlias) return false
-    const parsed = parseSimpleMetricExpression(row.expression)
+  return (derivedMetricConfig.value?.metrics || []).some(metric => {
+    if (metric.metric_kind || getFieldTableAlias(metric) !== tableAlias) return false
+    const parsed = parseSimpleMetricExpression(metric.expression || '')
     if (!parsed) return false
     return parsed.aggFunc === aggFunc && normalizeExpressionColumn(parsed.column) === normalizeExpressionColumn(sourceColumn)
   })
@@ -1678,36 +1758,37 @@ const buildMetricExpandDisplayName = (baseName: string, aggFunc: string) => {
   return `${normalizedBase}${suffix}`
 }
 
-const openMetricExpandDialog = (row: FieldConfigRow) => {
-  if (!canExpandMetricRow(row)) {
+const openMetricExpandDialog = (metric: SemanticMetric, index: number) => {
+  if (!canExpandMetricEntry(metric)) {
     ElMessage.warning('仅支持数字字段的 SUM/AVG/MAX/MIN 简单指标扩展')
     return
   }
-  const parsed = parseSimpleMetricExpression(row.expression)
-  const sourceColumn = parsed?.column || row.sourceColumn || row.column
-  const baseDisplayName = (row.displayName || getTableColumnDisplayName(row.table, sourceColumn) || sourceColumn).trim()
-  const rowAlias = getFieldRowAlias(row)
+  const parsed = parseSimpleMetricExpression(metric.expression || '')
+  const sourceColumn = normalizeExpressionColumn(parsed?.column || '')
+  const baseDisplayName = (metric.name || getTableColumnDisplayName(metric.table, sourceColumn) || sourceColumn).trim()
+  const metricAlias = getFieldTableAlias(metric)
   metricExpandOptions.value = EXPANDABLE_AGG_FUNCS
     .filter(aggFunc => aggFunc !== parsed?.aggFunc)
     .map(aggFunc => {
-      const exists = metricAggExists(rowAlias, sourceColumn, aggFunc)
+      const exists = metricAggExists(metricAlias, sourceColumn, aggFunc)
       return {
         aggFunc,
         label: `${aggFunc}(${sourceColumn})`,
-        fieldName: getUniqueCustomFieldName(rowAlias, `${sourceColumn}_${aggFunc.toLowerCase()}`),
+        fieldName: getUniqueMetricFieldName(metricAlias, `${sourceColumn}_${aggFunc.toLowerCase()}`),
         displayName: buildMetricExpandDisplayName(baseDisplayName, aggFunc),
         expression: buildMetricExpression(aggFunc, sourceColumn),
         exists,
         selected: !exists,
       }
     })
-  metricExpandSourceRowKey.value = row.key
+  metricExpandSourceIndex.value = index
   showMetricExpandDialog.value = true
 }
 
 const confirmMetricExpand = () => {
-  const sourceRow = fieldRows.value.find(row => row.key === metricExpandSourceRowKey.value)
-  if (!sourceRow) {
+  const config = derivedMetricConfig.value
+  const sourceMetric = config?.metrics[metricExpandSourceIndex.value]
+  if (!config || !sourceMetric) {
     showMetricExpandDialog.value = false
     return
   }
@@ -1724,20 +1805,21 @@ const confirmMetricExpand = () => {
       return
     }
     if (!option.displayName) {
-      ElMessage.warning('请填写显示名称')
+      ElMessage.warning('请填写指标名称')
       return
     }
   }
-  const selectedFieldNames = new Set<string>()
-  const sourceAlias = getFieldRowAlias(sourceRow)
+  const sourceAlias = getFieldTableAlias(sourceMetric)
+  const sourceColumn = atomicMetricColumn(sourceMetric)
+  const usedFieldNames = new Set<string>()
   for (const option of selectedOptions) {
     const fieldKey = `${sourceAlias}.${option.fieldName}`
-    if (selectedFieldNames.has(fieldKey)) {
+    if (usedFieldNames.has(fieldKey)) {
       ElMessage.warning(`字段名重复：${fieldKey}`)
       return
     }
-    selectedFieldNames.add(fieldKey)
-    if (fieldRows.value.some(row => getFieldRowAlias(row) === sourceAlias && normalizeFieldName(row.column) === option.fieldName)) {
+    usedFieldNames.add(fieldKey)
+    if (isMetricFieldNameTaken(sourceAlias, option.fieldName)) {
       ElMessage.warning(`字段名重复：${fieldKey}`)
       return
     }
@@ -1745,195 +1827,37 @@ const confirmMetricExpand = () => {
   const selectedDisplayNames = new Set<string>()
   for (const option of selectedOptions) {
     if (selectedDisplayNames.has(option.displayName)) {
-      ElMessage.warning(`显示名称重复：${option.displayName}`)
+      ElMessage.warning(`指标名称重复：${option.displayName}`)
       return
     }
     selectedDisplayNames.add(option.displayName)
   }
-  const duplicatedName = selectedOptions.find(option =>
-    fieldRows.value.some(row => ((row.displayName || '').trim() || row.column) === option.displayName)
-  )
+  const duplicatedName = selectedOptions.find(option => isDisplayNameTaken(option.displayName))
   if (duplicatedName) {
-    ElMessage.warning(`显示名称重复：${duplicatedName.displayName}`)
+    ElMessage.warning(`指标名称重复：${duplicatedName.displayName}`)
     return
   }
-  const sourceColumn = sourceRow.sourceColumn || sourceRow.column
+  const columnType = getTableColumnType(sourceMetric.table, sourceColumn)
+  const newMetrics = [...config.metrics]
   selectedOptions.forEach(option => {
-    fieldRows.value.push({
-      key: buildFieldRowKey(sourceAlias, option.fieldName, `#expand_${Date.now()}_${option.aggFunc}`),
-      table: sourceRow.table,
-      tableAlias: sourceAlias,
-      column: option.fieldName,
-      sourceColumn,
-      columnType: sourceRow.columnType,
-      isDimension: false,
-      isMetric: true,
-      displayName: option.displayName,
-      columnComment: sourceRow.columnComment || getTableColumnComment(sourceRow.table, sourceColumn),
-      description: '',
-      metadataSupplement: sourceRow.metadataSupplement || '',
-      logicalType: sourceRow.logicalType,
-      metricAggFunc: option.aggFunc,
+    newMetrics.push({
+      name: option.displayName,
+      field_name: option.fieldName,
+      table: sourceMetric.table,
+      table_alias: sourceAlias,
       expression: option.expression,
-      isCustom: true,
+      data_type: getMetricDataType(columnType),
+      filter: '',
+      description: '',
+      metadata_supplement: '',
     })
   })
+  updateConfig(config.id, { metrics: newMetrics })
   void refreshFieldColumnDictVisibleMap()
   showMetricExpandDialog.value = false
-  metricExpandSourceRowKey.value = ''
+  metricExpandSourceIndex.value = -1
   metricExpandOptions.value = []
-  ElMessage.success(`已扩展 ${selectedOptions.length} 个指标，保存后生效`)
-}
-
-const buildAutoPrefillMetricFieldName = (tableAlias: string, sourceColumn: string, aggFunc: string, fieldName?: string) => {
-  const normalized = normalizeFieldName(fieldName || `${sourceColumn}_${aggFunc.toLowerCase()}`)
-  return getUniqueCustomFieldName(tableAlias, normalized)
-}
-
-const buildAutoPrefillMetricDisplayName = (entry: TableScopeEntry, sourceColumn: string, aggFunc: string, name?: string) => {
-  const used = new Set(fieldRows.value.map(row => ((row.displayName || '').trim() || row.column)).filter(Boolean))
-  const columnComment = getTableColumnComment(entry.table, sourceColumn)
-  const columnDisplayName = buildAliasAwareDefaultDisplayName(entry, sourceColumn, columnComment) || sourceColumn
-  const baseName = (name || buildMetricExpandDisplayName(columnDisplayName, aggFunc)).trim()
-  if (!used.has(baseName)) return baseName
-  const suffixedName = buildMetricExpandDisplayName(baseName, aggFunc)
-  if (!used.has(suffixedName)) return suffixedName
-  let index = 1
-  let candidate = `${suffixedName}_${index}`
-  while (used.has(candidate)) {
-    index += 1
-    candidate = `${suffixedName}_${index}`
-  }
-  return candidate
-}
-
-const addAutoPrefillMetricRow = (item: { table: string; column: string; source_column?: string; expression?: string; name?: string; field_name?: string; agg?: string }, entry: TableScopeEntry) => {
-  const tableName = (item.table || '').trim()
-  const tableAlias = entry.alias
-  const sourceColumn = normalizeExpressionColumn(item.source_column || item.column || '')
-  if (!tableName || !tableAlias || !sourceColumn || !hasPhysicalColumn(tableName, sourceColumn)) return false
-  const aggFunc = (item.agg || parseAggFuncFromExpression(item.expression || '') || 'SUM').toUpperCase()
-  const expression = (item.expression || buildMetricExpression(aggFunc, sourceColumn)).trim()
-  if (metricAggExists(tableAlias, sourceColumn, aggFunc)) return false
-  const displayName = buildAutoPrefillMetricDisplayName(entry, sourceColumn, aggFunc, item.name)
-  const columnType = getTableColumnType(tableName, sourceColumn)
-  const columnComment = getTableColumnComment(tableName, sourceColumn)
-  const fieldName = buildAutoPrefillMetricFieldName(tableAlias, sourceColumn, aggFunc, item.field_name)
-  fieldRows.value.push({
-    key: buildFieldRowKey(tableAlias, fieldName, `#prefill_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-    table: tableName,
-    tableAlias,
-    column: fieldName,
-    sourceColumn,
-    columnType,
-    isDimension: false,
-    isMetric: true,
-    displayName,
-    columnComment,
-    description: '',
-    metadataSupplement: '',
-    logicalType: inferLogicalType(columnType),
-    metricAggFunc: aggFunc,
-    expression,
-    isCustom: true,
-  })
-  return true
-}
-
-const openAutoPrefillModeDialog = () => {
-  if (!activeConfig.value) return
-  const selectedTables = getScopeEntries(activeConfig.value.id)
-  if (selectedTables.length === 0) {
-    ElMessage.warning('请先在左侧选择数据表')
-    return
-  }
-  showAutoPrefillModeDialog.value = true
-}
-
-const handleAutoPrefillFields = async (businessContext: string) => {
-  if (!activeConfig.value) return
-  const selectedTables = getScopeEntries(activeConfig.value.id)
-  if (selectedTables.length === 0) {
-    ElMessage.warning('请先在左侧选择数据表')
-    return
-  }
-  showAutoPrefillModeDialog.value = false
-  autoPrefillLoading.value = true
-  try {
-    const targetTables = selectedTables
-      .map(entry => {
-        const table = props.tables.find(item => item.table_name === entry.table)
-        if (!table) return null
-        return {
-          table_name: table.table_name,
-          table_alias: entry.alias,
-          description: table.description,
-          columns: (table.columns || []).map(column => ({
-            name: column.name,
-            type: column.type,
-            mysql_type: column.mysql_type,
-            hive_type: column.hive_type,
-            description: column.description,
-          }))
-        }
-      })
-      .filter(Boolean) as Array<{
-        table_name: string
-        table_alias: string
-        description?: string
-        columns: Array<{ name: string; type: string; mysql_type?: string; hive_type?: string; description?: string }>
-      }>
-    const res = await autoPrefillSemanticFields({
-      datasource_id: props.datasourceId,
-      config_id: activeConfig.value.id,
-      business_context: businessContext,
-      tables: targetTables,
-    }, { adminMode: props.adminMode })
-    if (res.status !== 'success') {
-      ElMessage.error(res.msg || '自动预填失败')
-      return
-    }
-    const fields = res.data?.fields || []
-    const dimensionNameMap = new Map(
-      fields
-        .filter(item => item.role === 'dimension' && item.name)
-        .map(item => [buildFieldRowKey(item.table_alias || item.table, item.source_column || item.column), item.name as string])
-    )
-    const selectedAliasSet = new Set(selectedTables.map(entry => entry.alias))
-    const selectedColumnCounts = new Map<string, number>()
-    selectedTables.forEach(entry => {
-      const table = props.tables.find(item => item.table_name === entry.table)
-      ;(table?.columns || []).forEach(column => {
-        selectedColumnCounts.set(column.name, (selectedColumnCounts.get(column.name) || 0) + 1)
-      })
-    })
-    fieldRows.value.forEach(row => {
-      if (row.isCustom) return
-      if (!selectedAliasSet.has(getFieldRowAlias(row))) return
-      if (row.isMetric) return
-      row.isDimension = true
-      row.isMetric = false
-      row.expression = quoteIdentifier(row.sourceColumn || row.column)
-      const prefilledName = dimensionNameMap.get(buildFieldRowKey(getFieldRowAlias(row), row.sourceColumn || row.column))
-      if (prefilledName && isGeneratedFieldDisplayName(row)) {
-        row.displayName = prefilledName
-      } else if ((selectedColumnCounts.get(row.sourceColumn || row.column) || 0) > 1 && isGeneratedFieldDisplayName(row)) {
-        row.displayName = buildFieldRowDefaultDisplayName(row)
-      }
-    })
-    const metricCount = fields.filter(item => item.role === 'metric').reduce((count, item) => {
-      const matchedEntries = selectedTables.filter(entry => entry.table === item.table && (!item.table_alias || entry.alias === item.table_alias))
-      return count + matchedEntries.reduce((innerCount, entry) => innerCount + (addAutoPrefillMetricRow(item, entry) ? 1 : 0), 0)
-    }, 0)
-    if (metricCount > 0) {
-      void refreshFieldColumnDictVisibleMap()
-    }
-    ElMessage.success(`已预填物理字段为维度${metricCount > 0 ? `，并推荐 ${metricCount} 个指标` : ''}`)
-  } catch (err) {
-    ElMessage.error('自动预填失败')
-  } finally {
-    autoPrefillLoading.value = false
-  }
+  ElMessage.success(`已扩展 ${selectedOptions.length} 个原子指标，保存后生效`)
 }
 
 const openHistoryLearningDialog = () => {
@@ -1971,31 +1895,30 @@ const acceptHistoryMetric = (suggestion: SemanticHistoryLearningSuggestion) => {
     ElMessage.warning('候选指标所属表不在当前模型配置中')
     return
   }
-  if (fieldRows.value.some(row => ((row.displayName || '').trim() || row.column) === displayName)) {
-    ElMessage.warning(`显示名称重复：${displayName}`)
+  if (isDisplayNameTaken(displayName)) {
+    ElMessage.warning(`指标名称重复：${displayName}`)
+    return
+  }
+  const config = derivedMetricConfig.value
+  if (!config) {
+    ElMessage.warning('未找到当前模型配置')
     return
   }
   const columnType = getTableColumnType(tableName, sourceColumn)
-  fieldRows.value.push({
-    key: buildHistoryFieldKey(entry, suggestion, 'metric'),
+  const metric: SemanticMetric = {
+    name: displayName,
+    field_name: getUniqueMetricFieldName(entry.alias, fieldName),
     table: tableName,
-    tableAlias: entry.alias,
-    column: getUniqueCustomFieldName(entry.alias, fieldName),
-    sourceColumn,
-    columnType,
-    isDimension: false,
-    isMetric: true,
-    displayName,
-    columnComment: getTableColumnComment(tableName, sourceColumn),
-    description: '',
-    metadataSupplement: '',
-    logicalType: inferLogicalType(columnType),
-    metricAggFunc: parseAggFuncFromExpression(suggestion.expression || 'COUNT(*)'),
+    table_alias: entry.alias,
     expression: expression || buildMetricExpression(isNumericColumnType(columnType) ? 'SUM' : 'COUNT', sourceColumn),
-    isCustom: true,
-  })
+    data_type: getMetricDataType(columnType),
+    filter: '',
+    description: '',
+    metadata_supplement: '',
+  }
+  updateConfig(config.id, { metrics: [...config.metrics, metric] })
   void refreshFieldColumnDictVisibleMap()
-  ElMessage.success('已采纳到字段配置草稿，保存后生效')
+  ElMessage.success('已采纳到指标列表，保存后生效')
 }
 
 const acceptHistoryDimension = (suggestion: SemanticHistoryLearningSuggestion) => {
@@ -2027,14 +1950,11 @@ const acceptHistoryDimension = (suggestion: SemanticHistoryLearningSuggestion) =
     column: getUniqueCustomFieldName(entry.alias, columnName),
     sourceColumn: columnName,
     columnType,
-    isDimension: true,
-    isMetric: false,
     displayName,
     columnComment: getTableColumnComment(tableName, columnName),
     description: '',
     metadataSupplement: '',
     logicalType: suggestion.logical_type || inferLogicalType(columnType),
-    metricAggFunc: 'COUNT',
     expression: (suggestion.expression || quoteIdentifier(columnName)).trim(),
     isCustom: true,
   })
@@ -2149,16 +2069,15 @@ const handleColumnDictSaved = async () => {
   await refreshFieldColumnDictVisibleMap()
 }
 
-const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
+// 字段配置 = 纯维度清单：作用域内每个物理列恒为一个维度行（一行=一列），
+// 维度可改名/改逻辑类型/改表达式；指标不再回挂到字段行，统一在「指标」区管理。
+const buildFieldRows = (configId: string) => {
   const config = configs.value.find(c => c.id === configId)
   if (!config) return []
   const scopeEntries = getScopeEntries(configId)
   const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
-  const defaultDimensionAliasSet = applyDefaultDimensions ? getDefaultDimensionAliasSet(configId) : new Set<string>()
 
-  const dimensionSet = new Set<string>()
   const dimensionByColumnMap = new Map<string, SemanticDimension>()
-  const metricByColumnMap = new Map<string, { agg: string; expression: string; name: string; fieldName?: string; description?: string; metadataSupplement?: string }>()
   const customRowsMap = new Map<string, FieldConfigRow>()
   const configuredKeys = new Set<string>()
 
@@ -2179,61 +2098,18 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
         column: fieldName,
         sourceColumn: d.column,
         columnType: existed?.columnType || '',
-        isDimension: true,
-        isMetric: existed?.isMetric || false,
         displayName: existed?.displayName || d.name || fieldName,
         columnComment: getTableColumnComment(d.table, d.column),
         description: existed?.description || d.description || '',
         metadataSupplement: existed?.metadataSupplement || d.metadata_supplement || '',
         logicalType: existed?.logicalType || d.logical_type || inferLogicalType(existed?.columnType || getTableColumnType(d.table, d.column)),
-        metricAggFunc: existed?.metricAggFunc || 'COUNT',
         expression: existed?.expression || expression,
         isCustom: true,
       })
       return
     }
-    dimensionSet.add(physicalKey)
     if (!dimensionByColumnMap.has(physicalKey)) {
       dimensionByColumnMap.set(physicalKey, d)
-    }
-  })
-
-  config.metrics.forEach(m => {
-    const tableAlias = getFieldTableAlias(m)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const match = m.expression.match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-    const expression = (m.expression || '').trim()
-    const exprColumn = normalizeExpressionColumn(match?.[3]?.trim() || expression)
-    const agg = match ? (match?.[2] ? 'COUNT_DISTINCT' : (match?.[1] || 'COUNT').toUpperCase()) : 'COUNT'
-    if (!exprColumn || isCountAllExpression(expression)) return
-    const fieldName = (m.field_name || exprColumn || '').trim()
-    configuredKeys.add(`${tableAlias}.${exprColumn}`)
-    if (fieldName && exprColumn && fieldName !== exprColumn) {
-      const customKey = buildFieldRowKey(tableAlias, fieldName)
-      const existed = customRowsMap.get(customKey)
-      customRowsMap.set(customKey, {
-        key: customKey,
-        table: m.table,
-        tableAlias,
-        column: fieldName,
-        sourceColumn: exprColumn,
-        columnType: existed?.columnType || '',
-        isDimension: existed?.isDimension || false,
-        isMetric: true,
-        displayName: m.name || fieldName,
-        columnComment: getTableColumnComment(m.table, exprColumn),
-        description: m.description || existed?.description || '',
-        metadataSupplement: m.metadata_supplement || existed?.metadataSupplement || '',
-        logicalType: existed?.logicalType || inferLogicalType(existed?.columnType || getTableColumnType(m.table, exprColumn)),
-        metricAggFunc: agg,
-        expression: expression || existed?.expression || quoteIdentifier(exprColumn),
-        isCustom: true,
-      })
-      return
-    }
-    const physicalKey = `${tableAlias}.${exprColumn}`
-    if (!metricByColumnMap.has(physicalKey)) {
-      metricByColumnMap.set(physicalKey, { agg, expression, name: m.name, fieldName: m.field_name, description: m.description, metadataSupplement: m.metadata_supplement })
     }
   })
 
@@ -2244,13 +2120,9 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
     table.columns?.forEach(col => {
       const key = buildFieldRowKey(entry.alias, col.name)
       const dimInfo = dimensionByColumnMap.get(key)
-      const metricInfo = metricByColumnMap.get(key)
-      const metricAggFunc = metricInfo?.agg || 'COUNT'
-      const expression = metricInfo?.expression || dimInfo?.expression || quoteIdentifier(col.name)
+      const expression = dimInfo?.expression || quoteIdentifier(col.name)
       const columnComment = (col.description || '').trim()
-      const displayName = metricInfo?.name || dimInfo?.name || buildAliasAwareDefaultDisplayName(entry, col.name, columnComment)
-      const description = metricInfo?.description || dimInfo?.description || ''
-      const metadataSupplement = metricInfo?.metadataSupplement || dimInfo?.metadata_supplement || ''
+      const displayName = dimInfo?.name || buildAliasAwareDefaultDisplayName(entry, col.name, columnComment)
       const columnType = col.mysql_type || col.hive_type || col.type || ''
       rows.push({
         key,
@@ -2259,14 +2131,11 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
         column: col.name,
         sourceColumn: col.name,
         columnType,
-        isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
-        isMetric: !!metricInfo,
         displayName,
         columnComment,
-        description,
-        metadataSupplement,
+        description: dimInfo?.description || '',
+        metadataSupplement: dimInfo?.metadata_supplement || '',
         logicalType: dimInfo?.logical_type || inferLogicalType(columnType),
-        metricAggFunc,
         expression,
       })
     })
@@ -2295,44 +2164,12 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
       column: d.field_name || d.column,
       sourceColumn: d.column,
       columnType: '',
-      isDimension: true,
-      isMetric: false,
       displayName: d.name || d.field_name || d.column,
       columnComment: getTableColumnComment(d.table, d.column),
       description: d.description || '',
       metadataSupplement: d.metadata_supplement || '',
       logicalType: d.logical_type || inferLogicalType(getTableColumnType(d.table, d.column)),
-      metricAggFunc: 'COUNT',
       expression: d.expression || quoteIdentifier(d.column),
-      isMissingPhysical: true,
-    })
-  })
-  config.metrics.forEach(m => {
-    const tableAlias = getFieldTableAlias(m)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const match = m.expression.match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-    const expression = (m.expression || '').trim()
-    const exprColumn = normalizeExpressionColumn(match?.[3]?.trim() || expression)
-    if (!exprColumn || isCountAllExpression(expression)) return
-    const key = `${tableAlias}.${exprColumn}`
-    if (!configuredKeys.has(key) || rows.some(row => getFieldRowAlias(row) === tableAlias && (row.sourceColumn || row.column) === exprColumn)) return
-    const agg = match ? (match?.[2] ? 'COUNT_DISTINCT' : (match?.[1] || 'COUNT').toUpperCase()) : 'COUNT'
-    rows.push({
-      key,
-      table: m.table,
-      tableAlias,
-      column: m.field_name || exprColumn,
-      sourceColumn: exprColumn,
-      columnType: '',
-      isDimension: false,
-      isMetric: true,
-      displayName: m.name || m.field_name || exprColumn,
-      columnComment: getTableColumnComment(m.table, exprColumn),
-      description: m.description || '',
-      metadataSupplement: m.metadata_supplement || '',
-      logicalType: inferLogicalType(getTableColumnType(m.table, exprColumn)),
-      metricAggFunc: agg,
-      expression,
       isMissingPhysical: true,
     })
   })
@@ -2348,13 +2185,10 @@ const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
     if (!draft) return row
     return {
       ...row,
-      isDimension: draft.isDimension,
-      isMetric: draft.isMetric,
       displayName: draft.displayName,
       description: draft.description ?? row.description,
       metadataSupplement: draft.metadataSupplement,
       logicalType: draft.logicalType,
-      metricAggFunc: draft.metricAggFunc,
       expression: draft.expression,
     }
   })
@@ -2369,10 +2203,11 @@ const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
 const loadFieldRows = (configId: string) => {
   fieldRows.value = buildFieldRows(configId)
   fieldRowsConfigId.value = configId
-  fieldRowsSnapshot.value = buildFieldRowsEditSignature(buildFieldRows(configId, false))
+  fieldRowsSnapshot.value = buildFieldRowsEditSignature(buildFieldRows(configId))
   void refreshFieldColumnDictVisibleMap()
 }
 
+// 应用字段设置：fieldRows 只表达维度（全部行），指标由「指标」区即时维护，此处不触碰 metrics
 const applyFieldSetting = (showToast = true) => {
   const configId = activeConfig.value?.id
   if (!configId) return false
@@ -2385,16 +2220,8 @@ const applyFieldSetting = (showToast = true) => {
     return false
   }
 
-  // 兜底互斥：维度/指标只能二选一
-  fieldRows.value.forEach(row => {
-    if (row.isDimension && row.isMetric) {
-      row.isMetric = false
-    }
-  })
-
   const existingDimensionMap = new Map(config.dimensions.map(item => [buildDimensionPreserveKey(item), item]))
   const nextDimensions: SemanticDimension[] = fieldRows.value
-    .filter(r => r.isDimension)
     .map(r => {
       const dimension: SemanticDimension = {
         name: ((r.displayName || '').trim() || r.column),
@@ -2402,7 +2229,7 @@ const applyFieldSetting = (showToast = true) => {
         table: r.table,
         table_alias: getFieldRowAlias(r),
         column: r.sourceColumn || r.column,
-        expression: (r.isMetric ? quoteIdentifier(r.sourceColumn || r.column) : (r.expression || quoteIdentifier(r.sourceColumn || r.column))).trim(),
+        expression: (r.expression || quoteIdentifier(r.sourceColumn || r.column)).trim(),
         logical_type: r.logicalType || 'text',
         description: r.description || '',
         metadata_supplement: (r.metadataSupplement || '').trim(),
@@ -2410,27 +2237,7 @@ const applyFieldSetting = (showToast = true) => {
       return copyDimensionRuntimeConfig(dimension, existingDimensionMap.get(buildDimensionPreserveKey(dimension)))
     })
 
-  const nextMetrics: SemanticMetric[] = fieldRows.value
-    .filter(r => r.isMetric)
-    .map(r => ({
-      name: ((r.displayName || '').trim() || r.column),
-      field_name: r.column,
-      table: r.table,
-      table_alias: getFieldRowAlias(r),
-      expression: (r.expression || quoteIdentifier(r.sourceColumn || r.column)).trim(),
-      data_type: getMetricDataType(r.columnType),
-      filter: '',
-      description: r.description || '',
-      metadata_supplement: (r.metadataSupplement || '').trim(),
-    }))
-  // 派生/复合指标不在 fieldRows 中表达，应用字段设置时原样保留
-  const logicalMetrics = config.metrics.filter(m => m.metric_kind === 'derived' || m.metric_kind === 'composite')
-
-  updateConfig(configId, {
-    dimensions: nextDimensions,
-    metrics: [...nextMetrics, ...logicalMetrics]
-  })
-  clearDefaultDimensionScopeAliases(configId)
+  updateConfig(configId, { dimensions: nextDimensions })
   fieldRowsSnapshot.value = buildFieldRowsEditSignature(fieldRows.value)
   if (showToast) {
     ElMessage.success('字段设置已应用')
@@ -2515,40 +2322,12 @@ watch(
   { immediate: true }
 )
 
-const handleDimensionToggle = (row: FieldConfigRow, checked: boolean) => {
-  const wasMetric = row.isMetric
-  row.isDimension = checked
-    if (checked) {
-      row.isMetric = false
-      if (wasMetric || !row.expression) {
-      row.expression = quoteIdentifier(row.sourceColumn || row.column)
-      }
-    }
-}
-
-const handleMetricToggle = (row: FieldConfigRow, checked: boolean) => {
-  row.isMetric = checked
-  if (checked) {
-    row.isDimension = false
-    if (!row.metricAggFunc) row.metricAggFunc = 'COUNT'
-    if (!row.expression) {
-      row.expression = quoteIdentifier(row.sourceColumn || row.column)
-    }
-  }
-}
-
-const handleAggFuncChange = (row: FieldConfigRow, aggFunc: string) => {
-  row.metricAggFunc = aggFunc
-  row.expression = buildMetricExpression(aggFunc, row.sourceColumn || row.column)
-}
-
 const handleExpressionInput = (row: FieldConfigRow, expression: string) => {
   row.expression = expression
-  row.metricAggFunc = parseAggFuncFromExpression(expression)
 }
 
 const openExpressionEditorDialog = (row: FieldConfigRow) => {
-  if (row.isMissingPhysical || (!row.isMetric && !row.isDimension)) return
+  if (row.isMissingPhysical) return
   editingExpressionRowKey.value = row.key
   showExpressionEditorDialog.value = true
 }
@@ -2638,6 +2417,15 @@ const saveBusinessNotes = (businessNotes: string) => {
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
           <span>生成基础模型</span>
+        </button>
+        <button
+          v-if="props.adminMode"
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+          title="导入 Ossie 语义模型 YAML，生成待人工确认的草稿配置"
+          @click="ossieImportVisible = true"
+        >
+          <i class="fa-solid fa-file-import"></i>
+          <span>导入</span>
         </button>
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -3040,10 +2828,17 @@ const saveBusinessNotes = (businessNotes: string) => {
                   </div>
                 </div>
 
-                <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-3 flex flex-col flex-1 min-h-0">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="text-xs font-medium text-gray-600">字段配置</div>
-                    <div class="flex items-center gap-2">
+                <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-3 flex flex-col" :class="dimensionSectionCollapsed ? 'shrink-0' : 'flex-1 min-h-0'">
+                  <div class="flex items-center justify-between gap-3" :class="dimensionSectionCollapsed ? '' : 'mb-2'">
+                    <div
+                      class="flex items-center gap-2 min-w-0 cursor-pointer select-none"
+                      :title="dimensionSectionCollapsed ? '展开维度配置' : '折叠维度配置'"
+                      @click="dimensionSectionCollapsed = !dimensionSectionCollapsed"
+                    >
+                      <div class="text-xs font-medium text-gray-600 shrink-0">维度配置</div>
+                      <div class="text-[11px] text-gray-400 truncate">一行 = 一个物理字段，默认全量为维度 · {{ fieldRows.length }} 个</div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
                       <button
                         :class="[
                           'h-7 px-2.5 rounded border bg-white text-[11px] transition-all duration-150',
@@ -3052,15 +2847,6 @@ const saveBusinessNotes = (businessNotes: string) => {
                         @click="showFieldPhysicalDetails = !showFieldPhysicalDetails"
                       >
                         <i class="fa-regular fa-eye mr-1"></i>字段详情
-                      </button>
-                      <button
-                        class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                        :disabled="autoPrefillLoading || fieldRows.length === 0"
-                        @click="openAutoPrefillModeDialog"
-                      >
-                        <i v-if="autoPrefillLoading" class="fa-solid fa-spinner fa-spin mr-1"></i>
-                        <i v-else class="fa-solid fa-wand-magic-sparkles mr-1"></i>
-                        自动预填
                       </button>
                       <button
                         :class="[
@@ -3073,12 +2859,20 @@ const saveBusinessNotes = (businessNotes: string) => {
                       </button>
                       <button
                         class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                        @click="openAddFieldDialog"
+                        @click="openAddDimensionDialog"
                       >
-                        <i class="fa-solid fa-plus mr-1"></i>新增字段
+                        <i class="fa-solid fa-plus mr-1"></i>新增维度
+                      </button>
+                      <button
+                        class="w-6 h-6 border border-gray-200 rounded bg-white text-gray-400 text-[11px] cursor-pointer hover:text-gray-600 hover:border-gray-300"
+                        :title="dimensionSectionCollapsed ? '展开维度配置' : '折叠维度配置'"
+                        @click.stop="dimensionSectionCollapsed = !dimensionSectionCollapsed"
+                      >
+                        <i :class="dimensionSectionCollapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up'"></i>
                       </button>
                     </div>
                   </div>
+                  <template v-if="!dimensionSectionCollapsed">
                   <div v-if="fieldRows.length === 0" class="flex-1 border border-dashed border-gray-300 rounded-md bg-white flex flex-col items-center justify-center text-gray-400 text-xs">
                     <i class="fa-regular fa-table-cells-large mb-2"></i>
                     请先在左侧选择数据表
@@ -3091,8 +2885,6 @@ const saveBusinessNotes = (businessNotes: string) => {
                           <th class="text-left px-3 py-2 border border-gray-200">字段</th>
                           <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">类型</th>
                           <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">列备注</th>
-                          <th class="text-center px-3 py-2 border border-gray-200">维度</th>
-                          <th class="text-center px-3 py-2 border border-gray-200">指标</th>
                           <th class="text-left px-3 py-2 border border-gray-200 w-[118px]">逻辑类型</th>
                           <th class="text-left px-3 py-2 border border-gray-200">表达式</th>
                           <th class="text-left px-3 py-2 border border-gray-200">显示名称</th>
@@ -3119,17 +2911,11 @@ const saveBusinessNotes = (businessNotes: string) => {
                           <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">
                             <div class="max-w-[220px] truncate" :title="row.columnComment || '-'">{{ row.columnComment || '-' }}</div>
                           </td>
-                          <td class="px-3 py-2 border border-gray-200 text-center">
-                            <input :checked="row.isDimension" :disabled="row.isMissingPhysical" type="checkbox" @change="handleDimensionToggle(row, ($event.target as HTMLInputElement).checked)" />
-                          </td>
-                          <td class="px-3 py-2 border border-gray-200 text-center">
-                            <input :checked="row.isMetric" :disabled="row.isMissingPhysical" type="checkbox" @change="handleMetricToggle(row, ($event.target as HTMLInputElement).checked)" />
-                          </td>
                           <td class="px-3 py-2 border border-gray-200">
                             <select
                               v-model="row.logicalType"
                               class="w-full px-2 py-1 border border-gray-200 rounded text-[12px] bg-white disabled:bg-gray-50 disabled:text-gray-400"
-                              :disabled="row.isMissingPhysical || !row.isDimension"
+                              :disabled="row.isMissingPhysical"
                             >
                               <option v-for="option in LOGICAL_TYPE_OPTIONS" :key="option.value" :value="option.value">
                                 {{ option.label }}
@@ -3142,24 +2928,16 @@ const saveBusinessNotes = (businessNotes: string) => {
                                 :value="row.expression"
                                 type="text"
                                 class="flex-1 px-2 py-1 border border-gray-200 rounded text-[12px] font-mono disabled:bg-gray-50 disabled:text-gray-400"
-                                :disabled="row.isMissingPhysical || (!row.isMetric && !row.isDimension)"
+                                :disabled="row.isMissingPhysical"
                                 @input="handleExpressionInput(row, ($event.target as HTMLInputElement).value)"
                               />
                               <button
                                 class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"
-                                :disabled="row.isMissingPhysical || (!row.isMetric && !row.isDimension)"
+                                :disabled="row.isMissingPhysical"
                                 title="弹窗编辑表达式"
                                 @click="openExpressionEditorDialog(row)"
                               >
                                 <i class="fa-solid fa-pen"></i>
-                              </button>
-                              <button
-                                v-if="canExpandMetricRow(row)"
-                                class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"
-                                title="扩展聚合指标"
-                                @click="openMetricExpandDialog(row)"
-                              >
-                                <i class="fa-solid fa-layer-group"></i>
                               </button>
                             </div>
                           </td>
@@ -3208,40 +2986,44 @@ const saveBusinessNotes = (businessNotes: string) => {
                             <span v-else class="text-gray-300">-</span>
                           </td>
                           <td class="px-3 py-2 border border-gray-200 text-center">
+                            <!-- 默认物理列行不可删：buildFieldRows 会按物理列无条件重建，删除无持久效果 -->
                             <button
+                              v-if="row.isCustom || row.isMissingPhysical"
                               class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-400 hover:text-red-500 hover:border-red-200"
                               @click="removeFieldRow(row)"
-                              title="删除字段配置"
+                              :title="row.isCustom ? '删除自定义维度配置（该列还原为默认维度）' : '删除该维度配置'"
                             >
                               <i class="fa-solid fa-trash text-[11px]"></i>
                             </button>
+                            <span v-else class="text-gray-300">-</span>
                           </td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
+                  </template>
                 </div>
 
                 <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-2.5 flex flex-col shrink-0">
                   <div class="flex items-center justify-between gap-3" :class="metricSectionCollapsed ? '' : 'mb-1.5'">
                     <div
                       class="flex items-center gap-2 min-w-0 cursor-pointer select-none"
-                      :title="metricSectionCollapsed ? '展开指标扩展' : '折叠指标扩展'"
+                      :title="metricSectionCollapsed ? '展开指标管理' : '折叠指标管理'"
                       @click="metricSectionCollapsed = !metricSectionCollapsed"
                     >
-                      <div class="text-xs font-medium text-gray-600 shrink-0">指标扩展</div>
-                      <div class="text-[11px] text-gray-400 truncate">基于原子指标的逻辑口径，查询时自动展开 · {{ derivedMetricEntries.length }} 个</div>
+                      <div class="text-xs font-medium text-gray-600 shrink-0">指标管理</div>
+                      <div class="text-[11px] text-gray-400 truncate">原子 / 派生 / 复合指标统一管理 · {{ metricEntries.length }} 个</div>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
                       <button
                         class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                        @click="openAddExtensionDialog"
+                        @click="openAddMetricDialog"
                       >
-                        <i class="fa-solid fa-plus mr-1"></i>新建扩展指标
+                        <i class="fa-solid fa-plus mr-1"></i>新建指标
                       </button>
                       <button
                         class="w-6 h-6 border border-gray-200 rounded bg-white text-gray-400 text-[11px] cursor-pointer hover:text-gray-600 hover:border-gray-300"
-                        :title="metricSectionCollapsed ? '展开指标扩展' : '折叠指标扩展'"
+                        :title="metricSectionCollapsed ? '展开指标管理' : '折叠指标管理'"
                         @click.stop="metricSectionCollapsed = !metricSectionCollapsed"
                       >
                         <i :class="metricSectionCollapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up'"></i>
@@ -3249,9 +3031,9 @@ const saveBusinessNotes = (businessNotes: string) => {
                     </div>
                   </div>
                   <div v-if="!metricSectionCollapsed">
-                    <div v-if="derivedMetricEntries.length === 0" class="rounded-md border border-dashed border-gray-200 bg-white py-4 flex flex-col items-center justify-center text-gray-400 text-xs">
+                    <div v-if="metricEntries.length === 0" class="rounded-md border border-dashed border-gray-200 bg-white py-4 flex flex-col items-center justify-center text-gray-400 text-xs">
                       <i class="fa-regular fa-square-plus mb-1.5"></i>
-                      暂无扩展指标，点击「新建扩展指标」创建派生 / 复合指标
+                      暂无指标，点击「新建指标」创建原子 / 派生 / 复合指标
                     </div>
                     <div v-else class="overflow-auto rounded-md border border-gray-200 bg-white max-h-64">
                       <table class="w-full border-collapse text-[12px]">
@@ -3260,24 +3042,35 @@ const saveBusinessNotes = (businessNotes: string) => {
                             <th class="text-left px-3 py-2 border border-gray-200">显示名称</th>
                             <th class="text-left px-3 py-2 border border-gray-200">口径定义</th>
                             <th class="text-left px-3 py-2 border border-gray-200">字段备注</th>
-                            <th class="text-center px-3 py-2 border border-gray-200 w-[72px]">操作</th>
+                            <th class="text-center px-3 py-2 border border-gray-200 w-[104px]">操作</th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr v-for="entry in derivedMetricEntries" :key="`extension_${entry.index}`" class="hover:bg-blue-50/40">
+                          <tr v-for="entry in metricEntries" :key="`metric_${entry.index}`" class="hover:bg-blue-50/40">
                             <td class="px-3 py-2 border border-gray-200">
                               <div class="flex items-center gap-1.5">
                                 <span class="text-gray-700">{{ entry.metric.name }}</span>
                                 <span
                                   class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
-                                  :class="entry.metric.metric_kind === 'composite' ? 'bg-violet-100 text-violet-600' : 'bg-blue-100 text-blue-600'"
-                                >{{ entry.metric.metric_kind === 'composite' ? '复合' : '派生' }}</span>
+                                  :class="entry.metric.metric_kind === 'composite'
+                                    ? 'bg-violet-100 text-violet-600'
+                                    : entry.metric.metric_kind === 'derived'
+                                      ? 'bg-blue-100 text-blue-600'
+                                      : 'bg-teal-100 text-teal-600'"
+                                >{{ entry.metric.metric_kind === 'composite' ? '复合' : entry.metric.metric_kind === 'derived' ? '派生' : '原子' }}</span>
                               </div>
                             </td>
                             <td class="px-3 py-2 border border-gray-200">
-                              <span class="text-gray-600 max-w-[520px] truncate block" :title="derivedMetricDefinition(entry.metric)">
-                                {{ derivedMetricDefinition(entry.metric) || '-' }}
-                              </span>
+                              <span
+                                v-if="isAtomicMetric(entry.metric)"
+                                class="text-gray-600 max-w-[520px] truncate block font-mono"
+                                :title="entry.metric.expression"
+                              >{{ entry.metric.expression || '-' }}</span>
+                              <span
+                                v-else
+                                class="text-gray-600 max-w-[520px] truncate block"
+                                :title="derivedMetricDefinition(entry.metric)"
+                              >{{ derivedMetricDefinition(entry.metric) || '-' }}</span>
                             </td>
                             <td class="px-3 py-2 border border-gray-200">
                               <span class="text-gray-600 max-w-[200px] truncate block" :title="entry.metric.description || ''">{{ entry.metric.description || '-' }}</span>
@@ -3285,16 +3078,26 @@ const saveBusinessNotes = (businessNotes: string) => {
                             <td class="px-3 py-2 border border-gray-200 text-center">
                               <div class="flex items-center justify-center gap-1">
                                 <button
+                                  v-if="canExpandMetricEntry(entry.metric)"
+                                  class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300"
+                                  title="扩展聚合指标"
+                                  @click="openMetricExpandDialog(entry.metric, entry.index)"
+                                >
+                                  <i class="fa-solid fa-layer-group text-[11px]"></i>
+                                </button>
+                                <button
                                   class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300"
                                   :title="`编辑${metricKindLabel(entry.metric)}`"
-                                  @click="openEditDerivedMetric(entry.metric, entry.index)"
+                                  @click="isAtomicMetric(entry.metric)
+                                    ? openEditAtomicMetric(entry.metric, entry.index)
+                                    : openEditDerivedMetric(entry.metric, entry.index)"
                                 >
                                   <i class="fa-solid fa-pen text-[11px]"></i>
                                 </button>
                                 <button
                                   class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-400 hover:text-red-500 hover:border-red-200"
                                   :title="`删除${metricKindLabel(entry.metric)}`"
-                                  @click="deleteDerivedMetric(entry.index)"
+                                  @click="deleteMetric(entry.index)"
                                 >
                                   <i class="fa-solid fa-trash text-[11px]"></i>
                                 </button>
@@ -3335,6 +3138,7 @@ const saveBusinessNotes = (businessNotes: string) => {
       v-model:visible="showExpressionEditorDialog"
       :row="editingExpressionRow"
       :datasource-type="props.datasourceType"
+      scope="dimension"
       @save="saveExpressionEditor"
     />
 
@@ -3363,6 +3167,7 @@ const saveBusinessNotes = (businessNotes: string) => {
       :time-dimensions="timeDimensionCandidates"
       :filter-dimensions="filterDimensionCandidates"
       :editing-derived="editingDerivedMetric"
+      :editing-atomic="editingAtomicMetric"
       @table-change="handleAddFieldTableChange"
       @column-change="handleAddFieldColumnChange"
       @confirm="confirmAddField"
@@ -3373,12 +3178,6 @@ const saveBusinessNotes = (businessNotes: string) => {
       v-model:visible="showMetricExpandDialog"
       v-model:options="metricExpandOptions"
       @confirm="confirmMetricExpand"
-    />
-
-    <AutoPrefillDialog
-      v-model:visible="showAutoPrefillModeDialog"
-      :loading="autoPrefillLoading"
-      @submit="handleAutoPrefillFields"
     />
 
     <TablePreviewDialog
@@ -3395,6 +3194,12 @@ const saveBusinessNotes = (businessNotes: string) => {
       :column-name="columnDictTarget.columnName"
       :admin-mode="props.adminMode"
       @saved="handleColumnDictSaved"
+    />
+
+    <OssieImportDialog
+      v-model:visible="ossieImportVisible"
+      :datasource-id="props.datasourceId"
+      @imported="fetchConfigs"
     />
 
   </div>

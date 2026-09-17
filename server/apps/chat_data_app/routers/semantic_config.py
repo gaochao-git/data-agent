@@ -20,6 +20,7 @@ from ..schema import (
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
+    SemanticOssieImportRequest,
     SemanticPrefillRequest,
 )
 from ..services.datasource.manager import get_datasource_manager
@@ -31,11 +32,14 @@ from ..services.semantic.run.semantic_history_learning_service import (
     _load_history_conversation_context,
     build_semantic_history_learning_service,
 )
+from ..services.semantic.run.chat_data_ossie_importer import OssieToChatDataImporter, build_model_checklist
+from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
 from ..services.semantic.run.semantic_config_service import (
     can_mutate_semantic_config,
     get_semantic_config_service,
     is_private_semantic_config_owner,
     is_public_semantic_config,
+    load_semantic_physical_columns as _load_physical_columns,
     validate_semantic_config_for_save,
 )
 from ..services.sql_run.parser import extract_physical_tables
@@ -606,6 +610,281 @@ async def generate_admin_basic_semantic_configs(datasource_id: str, request: Req
     except Exception as e:
         logger.error("批量生成基础语义模型失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg="生成失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+async def _prepare_ossie_import(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """Ossie 导入公共前置：鉴权、数据源校验、YAML 解析、逐模型保存校验与同名冲突标记。
+
+    返回 (imports, None) 或 (None, error_response)；解析失败统一收敛为
+    CHATDATA_VALIDATION_FAILED，逐模型物理校验错误写入 item.errors，
+    同名活跃配置摘要写入 item.existing_config（不影响 importable，由导入动作决定替换/跳过）。
+    同名冲突只对 admin_manage 口径下可操作的配置（公共配置）建表：
+    他人私有配置等不可操作的同名配置标记 item.conflict_locked，导入时强制跳过。
+    """
+    current_user = _get_current_user(request)
+    user_id = str(current_user.user_id)
+    ds_manager = get_datasource_manager()
+    datasource = await ds_manager.get_datasource_async(datasource_id)
+    if not datasource:
+        return None, business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    try:
+        imports = OssieToChatDataImporter().import_yaml(payload.yaml_content)
+    except ValueError as e:
+        logger.warning("Ossie 文档解析失败: datasource_id=%s error=%s", datasource_id, e)
+        return None, business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    # 请求内同名模型会让「全有或全无」的落库顺序互相踩踏，提前整体拒绝
+    importable_names = [item.name for item in imports if item.importable]
+    if len(set(importable_names)) != len(importable_names):
+        duplicated = sorted({name for name in importable_names if importable_names.count(name) > 1})
+        return None, business_response(
+            msg=f"文件内存在重名模型: {'、'.join(duplicated)}，请修正后重试",
+            code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+            status="error",
+        )
+    # 同名冲突检测：同组内模型名全局唯一（不区分 scope/create_by）。冲突表只收录
+    # admin_manage 口径下可操作的配置（即公共配置）；他人私有配置等不可操作的同名
+    # 配置不进入冲突表（不允许 replace，也不泄露其元信息），改为标记强制跳过。
+    semantic_service = get_semantic_config_service()
+    existing_configs = await semantic_service.get_configs_async(datasource_id)
+    configs_by_name: Dict[str, Dict[str, Any]] = {}
+    locked_conflict_names: Set[str] = set()
+    for config in existing_configs or []:
+        config_name = str(config.get("name") or "").strip()
+        config_id = str(config.get("id") or "").strip()
+        if not config_name or not config_id:
+            continue
+        if config_name in configs_by_name:
+            continue
+        if can_mutate_semantic_config(config, user_id, admin_manage=True):
+            configs_by_name[config_name] = {
+                "config_id": config_id,
+                "name": config_name,
+                "enabled": bool(config.get("enabled")),
+            }
+        else:
+            locked_conflict_names.add(config_name)
+    for item in imports:
+        if not item.importable:
+            continue
+        item.bump("physical_checked")
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            item.metrics,
+            item.dimensions,
+            item.relationships,
+        )
+        if validation_error:
+            item.errors.append(validation_error)
+            item.validation_error = validation_error
+        item.existing_config = configs_by_name.get(item.name)
+        item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+    return imports, None
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import/preview")
+async def preview_admin_ossie_semantic_import(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """解析 Ossie 语义模型 YAML 并预览导入结果：逐模型返回映射草稿、警告与阻断问题，不落库。
+
+    可导入的模型同时附带质量检查报告（quality 字段），导入前即可看到优化空间。
+    """
+    try:
+        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
+        if error is not None:
+            return error
+        physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
+        checker = get_semantic_quality_checker()
+        models = []
+        for item in imports:
+            model = item.to_preview_payload()
+            findings = None
+            if item.importable:
+                report = checker.check_config(item.to_config_payload(), physical_columns=physical_columns)
+                # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
+                findings = report.to_payload()["findings"]
+                model["quality"] = {"findings": findings}
+            model["checklist"] = build_model_checklist(
+                item,
+                validation_error=item.validation_error,
+                quality_findings=findings,
+                inventory_available=physical_columns is not None,
+            )
+            models.append(model)
+        importable_count = sum(1 for item in imports if item.importable)
+        return business_response(
+            data={"models": models, "total": len(models), "importable": importable_count},
+            msg="解析完成",
+        )
+    except Exception as e:
+        logger.error(f"Ossie 导入预览失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.get("/admin/datasources/{datasource_id}/semantic-configs/quality-check")
+async def check_admin_semantic_config_quality(
+    datasource_id: str,
+    request: Request,
+):
+    """对数据源下公共语义配置执行质量检查：逐配置返回评分与问题清单，并给出数据源级汇总。
+
+    与后台维护页口径一致，只检公共配置（is_public_semantic_config），
+    不触碰、不透出任何用户私有配置的元信息。
+    """
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        datasource = await ds_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        service = get_semantic_config_service()
+        configs = [
+            config
+            for config in (await service.get_configs_async(datasource_id) or [])
+            if is_public_semantic_config(config)
+        ]
+        physical_columns = await _load_physical_columns(ds_manager, datasource_id)
+        checker = get_semantic_quality_checker()
+        reports = [checker.check_config(config, physical_columns=physical_columns).to_payload() for config in configs]
+
+        modeled_tables: set = set()
+        for config in configs:
+            for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+                if isinstance(item, dict) and item.get("table"):
+                    modeled_tables.add(str(item["table"]).strip())
+            for relationship in config.get("relationships") or []:
+                if isinstance(relationship, dict):
+                    for key in ("left_table", "right_table"):
+                        value = str(relationship.get(key) or "").strip()
+                        if value:
+                            modeled_tables.add(value)
+        inventory_tables = {table for table, _column in physical_columns} if physical_columns is not None else set()
+        unmodeled_tables = sorted(inventory_tables - modeled_tables)
+        avg_score = round(sum(report["score"] for report in reports) / len(reports)) if reports else 100
+        overall = {
+            "config_count": len(reports),
+            "avg_score": avg_score,
+            "grade": grade_for_score(avg_score),
+            "table_total": len(inventory_tables),
+            "table_modeled": len(inventory_tables & modeled_tables),
+            "unmodeled_tables": unmodeled_tables[:10],
+            "unmodeled_table_count": len(unmodeled_tables),
+            "inventory_available": physical_columns is not None,
+        }
+        return business_response(data={"configs": reports, "overall": overall}, msg="质量检查完成")
+    except Exception as e:
+        logger.error(f"语义质量检查失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="语义质量检查失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import")
+async def import_admin_ossie_semantic_configs(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """导入 Ossie 语义模型 YAML 为禁用状态的公共语义配置草稿；任一模型存在阻断问题时整体不创建。
+
+    同名冲突由 conflict_actions 决定：replace=覆盖同名公共配置内容（保留 config_id，
+    强制禁用）；skip=跳过该模型；缺省按 skip 处理。同名但不可操作的配置
+    （如他人私有配置）一律强制跳过，不允许 replace。
+    """
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        conflict_actions = {
+            str(name).strip(): str(action).strip().lower()
+            for name, action in (payload.conflict_actions or {}).items()
+        }
+        invalid_actions = sorted({action for action in conflict_actions.values() if action not in {"replace", "skip"}})
+        if invalid_actions:
+            return business_response(
+                msg=f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}",
+                code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+                status="error",
+            )
+        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
+        if error is not None:
+            return error
+        if any(not item.importable for item in imports):
+            return business_response(
+                msg="存在无法导入的模型，请根据各模型的 errors 清单修复后重试",
+                code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+                data={"models": [item.to_preview_payload() for item in imports]},
+                status="error",
+            )
+        semantic_service = get_semantic_config_service()
+        created, replaced, skipped = [], [], []
+        for item in imports:
+            if item.conflict_locked:
+                # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+                # 也不透出其 config_id 等元信息
+                skipped.append({
+                    "name": item.name,
+                    "reason": "存在同名配置且无操作权限，已跳过",
+                })
+                continue
+            if item.existing_config:
+                existing_config_id = str(item.existing_config["config_id"])
+                if conflict_actions.get(item.name, "skip") != "replace":
+                    skipped.append({
+                        "name": item.name,
+                        "config_id": existing_config_id,
+                        "reason": "同名配置已存在，未导入",
+                    })
+                    continue
+                # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
+                # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+                config = await semantic_service.update_async(
+                    datasource_id,
+                    existing_config_id,
+                    description=item.description or "",
+                    business_notes=item.business_notes or "",
+                    metrics=item.metrics,
+                    dimensions=item.dimensions,
+                    relationships=item.relationships,
+                    enabled=False,
+                    update_by=user_id,
+                    update_by_name=username,
+                )
+                if not config:
+                    return business_response(msg=f"更新草稿失败: {item.name}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+                replaced.append({"config_id": config.get("id"), "name": config.get("name")})
+                continue
+            config = await semantic_service.create_async(
+                datasource_id=datasource_id,
+                enabled=False,
+                scope_type="public",
+                create_by=user_id,
+                create_by_name=username,
+                **item.to_config_payload(),
+            )
+            if not config:
+                return business_response(msg=f"创建草稿失败: {item.name}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+            created.append({"config_id": config.get("id"), "name": config.get("name")})
+        logger.info(
+            "Ossie 导入草稿: datasource_id=%s created=%s replaced=%s skipped=%s",
+            datasource_id,
+            [item["config_id"] for item in created],
+            [item["config_id"] for item in replaced],
+            [item["name"] for item in skipped],
+        )
+        return business_response(
+            data={"created": created, "replaced": replaced, "skipped": skipped},
+            msg="导入成功，配置为禁用状态，请人工确认后启用",
+        )
+    except Exception as e:
+        logger.error(f"Ossie 导入失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="Ossie 导入失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):

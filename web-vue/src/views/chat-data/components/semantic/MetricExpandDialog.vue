@@ -26,7 +26,7 @@ const handleConfirm = () => {
               <th class="w-[52px] border border-gray-200 px-3 py-2 text-center">选择</th>
               <th class="border border-gray-200 px-3 py-2 text-left">表达式</th>
               <th class="border border-gray-200 px-3 py-2 text-left">字段名</th>
-              <th class="border border-gray-200 px-3 py-2 text-left">显示名称</th>
+              <th class="border border-gray-200 px-3 py-2 text-left">指标名称</th>
             </tr>
           </thead>
           <tbody>

@@ -607,6 +607,14 @@ class SemanticConfigCreateRequest(BaseModel):
     relationships: List[SemanticRelationship] = Field(default_factory=list, description="表关系列表")
 
 
+class SemanticOssieImportRequest(BaseModel):
+    """Ossie 语义模型导入请求（YAML 全文）"""
+    yaml_content: str = Field(..., min_length=1, max_length=2_000_000, description="Ossie YAML 文档全文")
+    # 同名冲突处理动作：模型名 → replace（覆盖同名配置内容，强制禁用）/ skip（跳过该模型）。
+    # 冲突模型缺省动作时按 skip 处理（保守：不破坏已有配置）；非法值在路由层整体拒绝。
+    conflict_actions: Dict[str, str] = Field(default_factory=dict, description="同名冲突处理动作: replace/skip")
+
+
 class SemanticConfigUpdateRequest(BaseModel):
     """更新语义配置请求"""
     name: Optional[str] = Field(default=None, description="配置名称")

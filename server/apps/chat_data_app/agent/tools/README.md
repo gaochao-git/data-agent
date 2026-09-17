@@ -15,6 +15,7 @@
 | `present_artifacts` | `present_artifacts.py` | 展示 outputs 最终产物 |
 | `semantic_query`/`semantic_search` | `semantic_*.py` | 语义模型查询/检索 |
 | `dsl2sql` | `dsl2sql.py` | DSL 校验与编译 |
+| `semantic_yaml_check` | `semantic_yaml_check.py` | Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读） |
 | `ask_user_question` | `ask_user_question.py` | 向用户追问 |
 | `calculator`/`current_time` | 同名模块 | 基础工具 |
 

@@ -162,6 +162,8 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
     ArtifactDefinition("markdown", "markdown", _matches_markdown, _generic_artifact),
     # 自包含 HTML 页面（内联 CSS/JS/数据），前端以沙箱 iframe 渲染
     ArtifactDefinition("html", "html", _matches_suffixes(".html", ".htm"), _generic_artifact),
+    # YAML 产物（如回导用的语义模型快照），前端以纯文本预览
+    ArtifactDefinition("yaml", "yaml", _matches_suffixes(".yaml", ".yml"), _generic_artifact),
     ArtifactDefinition("dashboard_spec", "dashboard", _matches_json, _dashboard_artifact),
     ArtifactDefinition("chart_spec", "chart", _matches_json, _chart_artifact),
 )

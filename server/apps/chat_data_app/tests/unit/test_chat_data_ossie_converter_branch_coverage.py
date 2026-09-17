@@ -16,8 +16,13 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import (
 def test_datatype_map_prefix_and_opaque_fallback():
     assert _datatype("varchar(255)") == "String"
     assert _datatype("BIGINT") == "Integer"
-    # 遍历完整张映射表仍无匹配 → Opaque（65->68）
-    assert _datatype("json") == "Opaque"
+    # TEXT 家族变体与 JSON 映射 String，不落 Opaque
+    assert _datatype("longtext") == "String"
+    assert _datatype("mediumtext") == "String"
+    assert _datatype("tinytext") == "String"
+    assert _datatype("json") == "String"
+    # 遍历完整张映射表仍无匹配 → Opaque（兜底分支）
+    assert _datatype("blob") == "Opaque"
     assert _datatype("") is None
 
 

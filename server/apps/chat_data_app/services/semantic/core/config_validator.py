@@ -60,6 +60,23 @@ def _validate_dimensions_against_tables(dimensions: List[Dict], table_columns_ma
     return None
 
 
+_FUNCTION_CALL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\(")
+_IDENTIFIER_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _is_constant_aggregate_expression(expression: str) -> bool:
+    """COUNT(1)/COUNT(*) 等不引用任何标识符的常量聚合。
+
+    这类表达式物理上必然合法（逐行常量聚合，锚定在所属表上），
+    不可能引用错列，豁免物理字段校验；引用了标识符的一律走原校验。
+    """
+    cleaned = str(expression or "").replace("`", "")
+    if not parse_aggregate_expression(cleaned):
+        return False
+    without_functions = _FUNCTION_CALL_NAME_PATTERN.sub(" ", cleaned)
+    return not _IDENTIFIER_TOKEN_PATTERN.search(without_functions)
+
+
 def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dict[str, Set[str]]) -> Optional[str]:
     for metric in metrics or []:
         if is_derived_metric(metric) or is_composite_metric(metric):
@@ -68,6 +85,8 @@ def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dic
         expression = str(metric.get("expression") or "").strip()
         if not table_name or table_name not in table_columns_map:
             return f"指标 {metric.get('name', '')} 所属表不存在: {table_name}"
+        if _is_constant_aggregate_expression(expression):
+            continue
         if not expression_uses_physical_column(expression, table_columns_map[table_name]):
             return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
     return None

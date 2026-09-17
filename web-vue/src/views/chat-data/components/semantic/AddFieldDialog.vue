@@ -3,9 +3,10 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { AddFieldForm, AddFieldTableOption, DerivedMetricFilter, SemanticMetric } from '../../types'
+import { buildMetricExpression } from '../../utils/sqlFunctionCatalog'
 
 const props = defineProps({
-  // 弹窗作用域：field=字段配置（原子指标/维度），metric=指标扩展（派生/复合指标）
+  // 弹窗作用域：field=维度配置（物理字段维度），metric=指标管理（原子/派生/复合指标）
   scope: { type: String as PropType<'field' | 'metric'>, default: 'field' },
   tables: { type: Array as PropType<AddFieldTableOption[]>, default: () => [] },
   // 原子指标候选：派生指标的基础指标 / 复合指标的公式成员（expression 用于展开预览）
@@ -14,6 +15,8 @@ const props = defineProps({
   filterDimensions: { type: Array as PropType<Array<{ name: string }>>, default: () => [] },
   // 编辑中的派生/复合指标；null 表示新增
   editingDerived: { type: Object as PropType<SemanticMetric | null>, default: null },
+  // 编辑中的原子指标；null 表示新增（仅用于标题文案）
+  editingAtomic: { type: Object as PropType<SemanticMetric | null>, default: null },
 })
 
 const emit = defineEmits<{
@@ -45,9 +48,9 @@ const addFieldLabelMode = ref<'name' | 'description'>('name')
 const addFieldTableKeyword = ref('')
 const addFieldColumnKeyword = ref('')
 
-// 作用域决定可选类型：字段配置只建物理字段，指标扩展只建口径指标
+// 作用域决定可选类型：维度配置只建物理字段维度，指标管理建三类指标
 const availableModes = computed<Array<AddFieldForm['mode']>>(() =>
-  props.scope === 'metric' ? ['derived', 'composite'] : ['metric', 'dimension']
+  props.scope === 'metric' ? ['metric', 'derived', 'composite'] : ['dimension']
 )
 
 const isDerivedMode = computed(() => form.value.mode === 'derived')
@@ -56,8 +59,8 @@ const isSpecialMode = computed(() => isDerivedMode.value || isCompositeMode.valu
 const modeHint = computed(() => MODE_HINTS[form.value.mode] || '')
 // 标题与宽度固定，类型差异由左上角类型切换表达，避免切换类型时产生"换弹窗"的观感
 const dialogTitle = computed(() => {
-  const prefix = props.editingDerived ? '编辑' : '新增'
-  return props.scope === 'metric' ? `${prefix}扩展指标` : `${prefix}字段`
+  const prefix = (props.editingDerived || props.editingAtomic) ? '编辑' : '新增'
+  return props.scope === 'metric' ? `${prefix}指标` : `${prefix}维度`
 })
 
 // ============ 派生/复合指标公共状态 ============
@@ -233,7 +236,7 @@ const handleConfirmDerived = () => {
   }
   const name = form.value.displayName.trim()
   if (!name) {
-    ElMessage.warning('请填写显示名称')
+    ElMessage.warning('请填写指标名称')
     return
   }
   if (!derivedBaseMetric.value) {
@@ -422,7 +425,7 @@ const handleConfirmComposite = () => {
   }
   const name = form.value.displayName.trim()
   if (!name) {
-    ElMessage.warning('请填写显示名称')
+    ElMessage.warning('请填写指标名称')
     return
   }
   const formula = compositeFormula.value.trim()
@@ -515,6 +518,22 @@ const handleTableChange = () => {
   addFieldColumnKeyword.value = ''
   emit('tableChange')
 }
+
+// 原子指标快捷表达式：基于当前选中字段生成常见聚合，中文标签点击回填
+const QUICK_AGG_OPTIONS = [
+  { label: '计数', agg: 'COUNT' },
+  { label: '去重计数', agg: 'COUNT_DISTINCT' },
+  { label: '求和', agg: 'SUM' },
+  { label: '平均', agg: 'AVG' },
+  { label: '最大', agg: 'MAX' },
+  { label: '最小', agg: 'MIN' },
+] as const
+const quickExpressions = computed(() => {
+  if (props.scope !== 'metric') return []
+  const col = form.value.column
+  if (!col) return []
+  return QUICK_AGG_OPTIONS.map(({ label, agg }) => ({ label, expression: buildMetricExpression(agg, col) }))
+})
 </script>
 
 <template>
@@ -570,8 +589,24 @@ const handleTableChange = () => {
           </div>
         </div>
         <div>
-          <div class="text-xs text-gray-600 mb-1">字段名</div>
-          <el-input v-model="form.fieldName" placeholder="请输入逻辑字段名（同表内唯一）" />
+          <template v-if="props.scope === 'metric'">
+            <div class="text-xs text-gray-600 mb-1">表达式</div>
+            <el-input v-model="form.expression" placeholder="请输入聚合表达式，如 SUM(`amount`)" />
+            <div v-if="quickExpressions.length" class="flex flex-wrap gap-1.5 mt-1.5">
+              <button
+                v-for="item in quickExpressions"
+                :key="item.expression"
+                type="button"
+                class="h-6 px-2 rounded border border-gray-200 bg-white text-[11px] text-gray-600 cursor-pointer hover:border-blue-300 hover:text-blue-600"
+                :title="item.expression"
+                @click="form.expression = item.expression"
+              >{{ item.label }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="text-xs text-gray-600 mb-1">字段名</div>
+            <el-input v-model="form.fieldName" placeholder="请输入逻辑字段名（同表内唯一）" />
+          </template>
         </div>
       </template>
       <template v-else-if="isDerivedMode">
@@ -714,8 +749,8 @@ const handleTableChange = () => {
       </template>
       <!-- ③ 通用信息（归底） -->
       <div>
-        <div class="text-xs text-gray-600 mb-1">显示名称</div>
-        <el-input v-model="form.displayName" placeholder="请输入显示名称（同语义模型内唯一）" />
+        <div class="text-xs text-gray-600 mb-1">{{ props.scope === 'metric' ? '指标名称' : '显示名称' }}</div>
+        <el-input v-model="form.displayName" :placeholder="props.scope === 'metric' ? '请输入指标名称（同语义模型内唯一）' : '请输入显示名称（同语义模型内唯一）'" />
       </div>
       <div v-if="isDerivedMode || isCompositeMode">
         <div class="text-xs text-gray-600 mb-1">字段备注</div>

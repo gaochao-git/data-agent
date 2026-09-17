@@ -60,6 +60,15 @@ def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
     assert "file_read" in _skill_text("skill-creator")
 
 
+def test_semantic_quality_check_skill_requires_tool_self_check():
+    """语义质量检查技能必须以 semantic_yaml_check_tool 为执行臂，禁止纯口算质量报告。"""
+    text = _skill_text("semantic-quality-check")
+
+    assert "semantic_yaml_check_tool" in text
+    assert "all_importable" in text
+    assert "禁止跳过自检直接交付" in text
+
+
 def test_semantic_query_skill_contains_complete_query_contract():
     semantic_query = _skill_text("semantic-query")
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from ..core.common import normalize_relationship_type
+from ..core.common import normalize_logical_type, normalize_relationship_type
 from ..core.query_plan import is_derived_metric as _is_derived_metric
 from ..core.query_plan import is_composite_metric as _is_composite_metric
 from ..core.query_plan import parse_formula_refs
@@ -27,6 +27,11 @@ _DATATYPE_MAP = {
     "varchar": "String",
     "char": "String",
     "text": "String",
+    # MySQL TEXT 家族变体与 JSON：不映射会把物理列导出成 Opaque，导入侧无法还原 logical_type
+    "longtext": "String",
+    "mediumtext": "String",
+    "tinytext": "String",
+    "json": "String",
     "int": "Integer",
     "integer": "Integer",
     "bigint": "Integer",
@@ -81,19 +86,73 @@ def _physical_column_name(item: dict[str, Any]) -> str:
 
 
 def _source_reference(item: dict[str, Any]) -> dict[str, str]:
+    """物理来源引用：写入 CHAT_DATA 扩展，供导入侧无损还原。
+
+    field_name / table_alias 仅在与默认值（物理列 / 所属表）不同时写入：
+    等于默认值时是冗余信息（table_alias 缺省即等于所属表名），写入只会产生噪音。
+    """
+    column = _physical_column_name(item)
+    table = _table_name(item)
+    field_name = _text(item.get("field_name"))
+    table_alias = _text(item.get("table_alias"))
     return {
         key: value
         for key, value in {
-            "table": _table_name(item),
-            "column": _physical_column_name(item),
+            "table": table,
+            "column": column,
+            "field_name": field_name if field_name and field_name != column else "",
+            "table_alias": table_alias if table_alias and table_alias != table else "",
         }.items()
         if value
     }
 
 
-def _metric_extension_data(item: dict[str, Any]) -> dict[str, Any]:
-    """指标扩展描述：物理来源引用；派生/复合指标附加结构化口径定义供 Ossie 侧识别。"""
+# OSSI datatype → 存储侧类型的导入还原值（与 importer 的还原表保持一致）。
+# 存储值不在还原结果内时写入扩展，由导入侧优先读取，保证导出 → 导入往返无损。
+_OSSI_DATATYPE_TO_LOGICAL_TYPE = {
+    "String": "text",
+    "Integer": "number",
+    "Decimal": "number",
+    "Float": "number",
+    "Date": "date",
+    "Time": "datetime",
+    "DateTime": "datetime",
+}
+
+_OSSI_DATATYPE_TO_DATA_TYPE = {
+    "String": "string",
+    "Integer": "int",
+    "Decimal": "decimal",
+    "Float": "float",
+    "Boolean": "boolean",
+    "Date": "date",
+    "Time": "time",
+    "DateTime": "timestamp",
+}
+
+
+def _dimension_extension_data(item: dict[str, Any], datatype: str | None) -> dict[str, Any]:
+    """维度扩展描述：物理来源引用 + datatype 通道无法无损还原的 logical_type。
+
+    logical_type 的合法值里只有 enum（及 datatype 缺失等边界）不能从 OSSI datatype
+    还原（String→text 等其余映射是确定的），此时写入扩展，避免导入替换后静默丢失。
+    """
     data: dict[str, Any] = dict(_source_reference(item))
+    logical_type = normalize_logical_type(item.get("logical_type"))
+    if logical_type and _OSSI_DATATYPE_TO_LOGICAL_TYPE.get(datatype or "") != logical_type:
+        data["logical_type"] = logical_type
+    return data
+
+
+def _metric_extension_data(item: dict[str, Any], datatype: str | None) -> dict[str, Any]:
+    """指标扩展描述：物理来源引用 + datatype 通道无法无损还原的 data_type；
+    派生/复合指标附加结构化口径定义供 Ossie 侧识别。"""
+    data: dict[str, Any] = dict(_source_reference(item))
+    # data_type 是自由文本（如 decimal(10,2)），datatype 只能还原 int/timestamp 等基础形态，
+    # 不一致时写入扩展，导入侧优先读取，避免精度/形态丢失
+    data_type = _text(item.get("data_type"))
+    if data_type and _OSSI_DATATYPE_TO_DATA_TYPE.get(datatype or "") != data_type:
+        data["data_type"] = data_type
     if _is_derived_metric(item):
         data.update({
             "metric_kind": "derived",
@@ -335,7 +394,7 @@ class ChatDataToOssieConverter:
                 label=_text(item.get("label")) or None,
                 description=_text(item.get("description") or item.get("metadata_supplement")) or None,
                 datatype=datatype_type(datatype) if datatype else None,
-                custom_extensions=[extension_type(**x) for x in (_extension(_source_reference(item)) or [])],
+                custom_extensions=[extension_type(**x) for x in (_extension(_dimension_extension_data(item, datatype)) or [])],
             ))
         return fields
 
@@ -450,7 +509,7 @@ class ChatDataToOssieConverter:
             expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
             description=_text(item.get("description") or item.get("metadata_supplement")) or None,
             datatype=datatype_type(datatype) if datatype else None,
-            custom_extensions=[extension_type(**x) for x in (_extension(_metric_extension_data(item)) or [])],
+            custom_extensions=[extension_type(**x) for x in (_extension(_metric_extension_data(item, datatype)) or [])],
         )
 
     @staticmethod

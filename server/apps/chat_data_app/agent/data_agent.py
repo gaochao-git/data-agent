@@ -43,6 +43,7 @@ from .tools.bash_run import create_bash_run_tool
 from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.semantic_search import create_semantic_search
+from .tools.semantic_yaml_check import create_semantic_yaml_check_tool
 from .tools.ask_user_question import ask_user_question_tool
 
 
@@ -135,6 +136,7 @@ def assemble_tools(
             user_id=user_id,
             operator_name=identity.operator_name,
         ),
+        create_semantic_yaml_check_tool(datasource.datasource_id),
         semantic_query_tool,
         calculator_tool,
         ask_user_question_tool,

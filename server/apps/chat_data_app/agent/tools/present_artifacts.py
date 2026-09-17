@@ -32,6 +32,8 @@ def _artifact_mime_type(file_path: str, artifact_type: str) -> str:
         return "application/json"
     if artifact_type in {"skill", "markdown"}:
         return "text/markdown"
+    if artifact_type == "yaml":
+        return "application/yaml"
     guessed, _ = mimetypes.guess_type(str(file_path or ""))
     return guessed or "application/octet-stream"
 

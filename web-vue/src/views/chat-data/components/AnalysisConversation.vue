@@ -1129,7 +1129,7 @@ const getPresentedArtifactTools = (message: Message, artifactType: string): Tool
   return tools
 }
 
-type PresentedDeliveryArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown' | 'html'
+type PresentedDeliveryArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown' | 'html' | 'yaml'
 
 interface PresentedDeliveryArtifact {
   path: string
@@ -1143,6 +1143,7 @@ const PRESENTED_DELIVERY_ARTIFACT_TYPES = new Set<PresentedDeliveryArtifactType>
   'presentation',
   'markdown',
   'html',
+  'yaml',
 ])
 
 const getPresentedDeliveryArtifacts = (message: Message): PresentedDeliveryArtifact[] => {

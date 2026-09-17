@@ -780,6 +780,8 @@ export interface AddFieldForm {
   tableAlias: string
   column: string
   fieldName: string
+  // 原子指标模式：聚合表达式（如 SUM(`amount`)）；字段名由系统自动生成
+  expression?: string
   displayName: string
   mode: 'dimension' | 'metric' | 'derived' | 'composite'
 }

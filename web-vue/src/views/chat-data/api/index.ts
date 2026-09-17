@@ -13,6 +13,9 @@ import type {
   ConversationItem,
   ConversationGroupPage,
   SemanticConfigItem,
+  SemanticMetric,
+  SemanticDimension,
+  SemanticRelationship,
   ChatDataModelOption,
   SkillInfo,
   SkillVersionInfo,
@@ -1054,6 +1057,151 @@ export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise
   })
 }
 
+// ============ Ossie 语义模型导入 API（仅管理端） ============
+
+/** 校验清单单行：{group, name, status, message}，由后端从既有判定结果确定性映射 */
+export interface OssieChecklistRow {
+  /** 检查分组：schema（OSSI 校验）/ mapping（结构映射）/ physical（物理校验）/ quality（质量规则） */
+  group: 'schema' | 'mapping' | 'physical' | 'quality'
+  name: string
+  /** pass=通过 warn=警告（不阻断） fail=未通过（阻断导入） skip=跳过（未执行） */
+  status: 'pass' | 'warn' | 'fail' | 'skip'
+  message: string
+}
+
+/** 导入预览的质量检查结果：只透出触发的 findings，不输出评分 */
+export interface OssieImportQualitySummary {
+  findings: OssieQualityFinding[]
+}
+
+/** Ossie 导入预览：单个语义模型的映射草稿与问题清单 */
+export interface OssieImportModelPreview {
+  name: string
+  description?: string
+  business_notes?: string
+  metrics: SemanticMetric[]
+  dimensions: SemanticDimension[]
+  relationships: SemanticRelationship[]
+  /** 源文件的 CHAT_DATA 扩展里记录的配置 ID（round-trip 提示用，不用于更新） */
+  source_config_id?: string
+  /** 阻断性问题：存在任一条则该模型不可导入 */
+  errors: string[]
+  /** 非阻断提示：推断、快照角色等，人工确认时参考 */
+  warnings: string[]
+  importable: boolean
+  /** 校验清单：四组检查项逐行状态（schema / mapping / physical / quality） */
+  checklist?: OssieChecklistRow[]
+  /** 质量检查触发的规则明细：仅可导入的模型附带 */
+  quality?: OssieImportQualitySummary
+  /** 数据源组内同名活跃配置摘要：存在时导入需选择 replace/skip */
+  existing_config?: OssieExistingConfig | null
+}
+
+/** 同名冲突的已有配置摘要 */
+export interface OssieExistingConfig {
+  config_id: string
+  name: string
+  enabled: boolean
+}
+
+/** 语义质量检查：单条聚合问题 */
+export interface OssieQualityFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  category: string
+  message: string
+  targets: string[]
+}
+
+/** 语义质量检查：单配置报告（与后端 semantic_quality_checker 同口径） */
+export interface OssieQualityReport {
+  score: number
+  grade: string
+  stats: Record<string, number>
+  findings: OssieQualityFinding[]
+}
+
+export interface OssieImportPreviewData {
+  models: OssieImportModelPreview[]
+}
+
+export interface OssieImportCreatedItem {
+  config_id: string
+  name: string
+}
+
+export interface OssieImportData {
+  created: OssieImportCreatedItem[]
+  /** 替换的同名配置：保留原 config_id 全量覆盖内容并强制禁用 */
+  replaced?: OssieImportCreatedItem[]
+  /** 因同名冲突被跳过的模型 */
+  skipped?: Array<{ name: string; config_id: string; reason: string }>
+  models?: OssieImportModelPreview[]
+}
+
+/** 解析 Ossie 语义模型 YAML，预览导入草稿与问题清单（不落库） */
+export function previewAdminOssieSemanticImport(
+  datasourceId: string,
+  yamlContent: string
+): Promise<ApiResponse<OssieImportPreviewData>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/ossie-import/preview`,
+    method: 'post',
+    data: { yaml_content: yamlContent }
+  })
+}
+
+/**
+ * 导入 Ossie 语义模型：逐模型创建禁用的公共草稿配置（全有或全无）。
+ * conflictActions：模型名 → replace（覆盖同名配置内容，强制禁用）/ skip（跳过）；
+ * 同名冲突缺省按 skip 处理。
+ */
+export function importAdminOssieSemanticConfigs(
+  datasourceId: string,
+  yamlContent: string,
+  conflictActions: Record<string, 'replace' | 'skip'> = {}
+): Promise<ApiResponse<OssieImportData>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/ossie-import`,
+    method: 'post',
+    data: { yaml_content: yamlContent, conflict_actions: conflictActions }
+  })
+}
+
+// ============ 语义质量检查 API（仅管理端） ============
+
+/** 语义质量检查：数据源级汇总 */
+export interface SemanticQualityOverall {
+  config_count: number
+  avg_score: number
+  grade: string
+  table_total: number
+  table_modeled: number
+  unmodeled_tables: string[]
+  unmodeled_table_count: number
+  inventory_available: boolean
+}
+
+/** 语义质量检查：单配置报告（含配置标识） */
+export interface SemanticQualityConfigReport extends OssieQualityReport {
+  config_id: string
+  config_name: string
+  enabled: boolean
+}
+
+export interface SemanticQualityCheckData {
+  configs: SemanticQualityConfigReport[]
+  overall: SemanticQualityOverall
+}
+
+/** 对数据源下全部语义配置执行质量检查（评分 + 问题清单 + 汇总） */
+export function checkAdminSemanticConfigQuality(datasourceId: string): Promise<ApiResponse<SemanticQualityCheckData>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/quality-check`,
+    method: 'get'
+  })
+}
+
 /** 更新语义配置 */
 export function updateSemanticConfig(datasourceId: string, configId: string, data: Partial<SemanticConfigItem>): Promise<ApiResponse<SemanticConfigItem>> {
   return request({
@@ -1103,47 +1251,6 @@ export function toggleAdminSemanticConfig(datasourceId: string, configId: string
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}/toggle`,
     method: 'patch',
     params: { enabled }
-  })
-}
-
-/** 优化语义字段显示名称并推荐原子指标 */
-export function autoPrefillSemanticFields(
-  data: {
-    datasource_id: string
-    config_id: string
-    business_context?: string
-    tables: Array<{
-      table_name: string
-      table_alias?: string
-      description?: string
-      columns: Array<{
-        name: string
-        type: string
-        mysql_type?: string
-        hive_type?: string
-        description?: string
-      }>
-    }>
-  },
-  options?: AdminModeApiOptions
-): Promise<ApiResponse<{
-  fields: Array<{
-    table: string
-    table_alias?: string
-    column: string
-    source_column?: string
-    role: 'metric' | 'dimension'
-    expression: string
-    name?: string
-    field_name?: string
-    agg?: string
-  }>
-  total: number
-}>> {
-  return request({
-    url: options?.adminMode ? `/agents/api/chatdata/admin/semantic/prefill` : `/agents/api/chatdata/semantic/prefill`,
-    method: 'post',
-    data
   })
 }
 

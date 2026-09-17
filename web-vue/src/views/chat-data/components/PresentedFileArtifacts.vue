@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PropType } from 'vue'
 
-type PresentedFileArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown' | 'html'
+type PresentedFileArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown' | 'html' | 'yaml'
 
 interface PresentedFileArtifact {
   path: string
@@ -52,6 +52,11 @@ const displayMeta: Record<PresentedFileArtifactType, ArtifactDisplayMeta> = {
     label: '交互 HTML 页面',
     icon: 'fa-brands fa-html5',
     iconClass: 'bg-indigo-600 text-white',
+  },
+  yaml: {
+    label: 'YAML 文件',
+    icon: 'fa-solid fa-file-code',
+    iconClass: 'bg-cyan-600 text-white',
   },
 }
 

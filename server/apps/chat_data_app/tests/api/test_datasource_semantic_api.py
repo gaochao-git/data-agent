@@ -257,3 +257,49 @@ def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, 
     assert allowed.json()["status"] == "success"
     assert allowed.json()["data"]["config_id"] == "cfg_a"
     assert semantic_service.deleted_config_id == "cfg_a"
+
+
+def test_admin_semantic_quality_check_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
+
+    response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-configs/quality-check", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    data = payload["data"]
+    # 后台质量检查只面向公共配置：私有 cfg_a 不参与（不泄露其元信息），空配置 cfg_public 触发 COV 类 finding
+    assert [item["config_id"] for item in data["configs"]] == ["cfg_public"]
+    assert data["overall"]["config_count"] == 1
+    assert data["overall"]["inventory_available"] is True
+    assert data["overall"]["table_total"] == 1
+    assert data["overall"]["table_modeled"] == 0
+    assert 90 <= data["overall"]["avg_score"] <= 100
+    cfg_public = data["configs"][0]
+    assert cfg_public["score"] >= 90
+    assert all(finding["severity"] != "error" for finding in cfg_public["findings"])
+    assert cfg_public["stats"]["metric_count"] == 0
+    assert cfg_public["stats"]["dimension_count"] == 0
+    # 空配置不触发 COV_NO_METRICS/COV_NO_DIMENSIONS（前提是存在另一侧字段），只有文档完备性提示
+    codes = {finding["code"] for finding in cfg_public["findings"]}
+    assert "DOC_NO_BUSINESS_NOTES" in codes
+
+
+def test_admin_semantic_quality_check_unknown_datasource(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
+
+    response = client.get("/api/chatdata/admin/datasources/ds_unknown/semantic-configs/quality-check", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+def test_admin_semantic_quality_check_requires_auth(client, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
+
+    response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-configs/quality-check")
+
+    assert response.status_code == 401
+    assert response.json()["status"] == "error"

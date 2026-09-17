@@ -70,6 +70,28 @@ def test_expression_uses_physical_column():
 
 
 # ---------------------------------------------------------------------------
+# 常量聚合豁免（COUNT(1)/COUNT(*) 不引用标识符，不可能引用错列）
+# ---------------------------------------------------------------------------
+
+
+def test_constant_aggregate_expression_passes_metric_validation():
+    """COUNT(1) 是合法口径，不应被「必须引用物理字段」误杀。"""
+    metrics = [{"name": "查询执行次数", "table": "orders", "expression": "COUNT(1)"}]
+    assert cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS) is None
+    assert cv._is_constant_aggregate_expression("COUNT(*)") is True
+    assert cv._is_constant_aggregate_expression("count( 1 )") is True
+
+
+def test_constant_aggregate_exemption_does_not_leak_to_column_refs():
+    """引用了标识符（哪怕全错）不豁免；函数名剥离只对后跟 '(' 的 token 生效。"""
+    assert cv._is_constant_aggregate_expression("SUM(typo_col)") is False
+    assert cv._is_constant_aggregate_expression("SUM(amount)") is False  # 合法引用走原校验，不豁免
+    metrics = [{"name": "错误引用", "table": "orders", "expression": "SUM(typo_col)"}]
+    error = cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS)
+    assert error is not None and "必须引用表 orders 的物理字段" in error
+
+
+# ---------------------------------------------------------------------------
 # _validate_allowed_operators（78->79：非数组）
 # ---------------------------------------------------------------------------
 

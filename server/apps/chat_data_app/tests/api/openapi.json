@@ -2842,6 +2842,31 @@
         "title": "SemanticMetricPeriod",
         "type": "object"
       },
+      "SemanticOssieImportRequest": {
+        "description": "Ossie 语义模型导入请求（YAML 全文）",
+        "properties": {
+          "conflict_actions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "同名冲突处理动作: replace/skip",
+            "title": "Conflict Actions",
+            "type": "object"
+          },
+          "yaml_content": {
+            "description": "Ossie YAML 文档全文",
+            "maxLength": 2000000,
+            "minLength": 1,
+            "title": "Yaml Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "yaml_content"
+        ],
+        "title": "SemanticOssieImportRequest",
+        "type": "object"
+      },
       "SemanticPrefillColumn": {
         "description": "语义预填列信息",
         "properties": {
@@ -4266,6 +4291,170 @@
           }
         ],
         "summary": "Generate Admin Basic Semantic Configs",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/ossie-import": {
+      "post": {
+        "description": "导入 Ossie 语义模型 YAML 为禁用状态的公共语义配置草稿；任一模型存在阻断问题时整体不创建。\n\n同名冲突由 conflict_actions 决定：replace=覆盖同名公共配置内容（保留 config_id，\n强制禁用）；skip=跳过该模型；缺省按 skip 处理。同名但不可操作的配置\n（如他人私有配置）一律强制跳过，不允许 replace。",
+        "operationId": "import_admin_ossie_semantic_configs_api_chatdata_admin_datasources__datasource_id__semantic_configs_ossie_import_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticOssieImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Import Admin Ossie Semantic Configs",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/ossie-import/preview": {
+      "post": {
+        "description": "解析 Ossie 语义模型 YAML 并预览导入结果：逐模型返回映射草稿、警告与阻断问题，不落库。\n\n可导入的模型同时附带质量检查报告（quality 字段），导入前即可看到优化空间。",
+        "operationId": "preview_admin_ossie_semantic_import_api_chatdata_admin_datasources__datasource_id__semantic_configs_ossie_import_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticOssieImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Preview Admin Ossie Semantic Import",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/quality-check": {
+      "get": {
+        "description": "对数据源下公共语义配置执行质量检查：逐配置返回评分与问题清单，并给出数据源级汇总。\n\n与后台维护页口径一致，只检公共配置（is_public_semantic_config），\n不触碰、不透出任何用户私有配置的元信息。",
+        "operationId": "check_admin_semantic_config_quality_api_chatdata_admin_datasources__datasource_id__semantic_configs_quality_check_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Check Admin Semantic Config Quality",
         "tags": [
           "ChatData 语义模型"
         ]
