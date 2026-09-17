@@ -120,6 +120,10 @@ def _model_failure_user_message(exc: Exception) -> str:
         return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
     if isinstance(exc, openai.APIConnectionError):
         return "模型服务连接中断，请点击继续重试。"
+    if isinstance(exc, TimeoutError):
+        # 含 langchain-openai StreamChunkTimeoutError（其为内置 TimeoutError 子类）：
+        # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
+        return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
     return "智能问数执行失败，请稍后重试。"
 
 

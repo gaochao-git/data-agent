@@ -359,6 +359,12 @@ def test_model_failure_user_message_maps_friendly_text():
     # 读超时是 APIConnectionError 子类，须优先命中超时文案
     timeout_error = openai.APITimeoutError("Request timed out")
     assert "超时" in _model_failure_user_message(timeout_error)
+    # 流式分块超时（TCP 连接存活但长时间无内容，langchain-openai 看门狗中断）：
+    # StreamChunkTimeoutError 是内置 TimeoutError 子类，须命中专用文案而非通用兜底
+    from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+
+    stream_chunk_timeout_error = StreamChunkTimeoutError(120.0, model_name="stealth/union-alpha", chunks_received=0)
+    assert "长时间未返回内容" in _model_failure_user_message(stream_chunk_timeout_error)
     # 其他异常一律兜底通用文案，不透出原始错误
     assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
 
