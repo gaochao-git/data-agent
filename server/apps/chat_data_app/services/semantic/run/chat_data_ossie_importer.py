@@ -259,8 +259,8 @@ class OssieToChatDataImporter:
 
         model_extension = _extension_data(model.custom_extensions, result.warnings, label)
         result.source_config_id = str(model_extension.get("semantic_config_id") or "").strip() or None
-        # snapshot_role=model_reference_only 不再产生 warning：来源配置提示
-        # （source_config_id + "将创建新草稿，不更新原配置"）已覆盖同一信息
+        # snapshot_role=model_reference_only 不产生 warning：来源配置提示（source_config_id）按产品口径
+        # 不在导入预览里展示，字段本身保留，供调用方与后续追溯使用。
 
         dataset_names = [str(dataset.name or "").strip() for dataset in model.datasets or []]
         if len(set(dataset_names)) != len(dataset_names):
@@ -578,7 +578,7 @@ def build_model_checklist(
             "status": "warn",
             "message": (
                 f"已存在同名配置（config_id={item.existing_config.get('config_id')}，{state}），"
-                "导入时可选择替换原配置或跳过该模型"
+                "导入时可选择替换原配置或忽略该模型"
             ),
         })
     elif item.conflict_locked:
@@ -587,7 +587,7 @@ def build_model_checklist(
             "group": "mapping",
             "name": "模型名冲突",
             "status": "warn",
-            "message": "已存在同名配置但无操作权限，导入时将跳过该模型",
+            "message": "已存在同名配置但无操作权限，导入时将忽略该模型",
         })
 
     # ③ 物理校验：validate_semantic_config_for_save 的整体结论（表/列存在性 + 关系连通性）

@@ -466,6 +466,8 @@ semantic_model:
 
 # ============ 路由层 ============
 
+from contextlib import asynccontextmanager
+
 from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.schema import SemanticOssieImportRequest
 
@@ -485,6 +487,20 @@ _DATASOURCE = {"id": "ds1", "ds_tables": [
     ]},
     {"table_name": "users", "columns": [{"name": "id"}, {"name": "nickname"}, {"name": "tenant_id"}]},
 ]}
+
+
+@pytest.fixture(autouse=True)
+def _passthrough_import_transaction(monkeypatch):
+    """导入路由用 transaction_scope 包裹整批落库；单测不连数据库，这里退化为直接执行。
+
+    回滚行为单独由 test_import_route_rolls_back_all_models_on_write_failure 用记录型桩验证。
+    """
+
+    @asynccontextmanager
+    async def _passthrough():
+        yield None
+
+    monkeypatch.setattr(semantic_config, "transaction_scope", _passthrough)
 
 
 class FakeManager:
@@ -845,6 +861,139 @@ def test_import_route_rejects_duplicate_model_names_in_request(monkeypatch):
     assert response["status"] == "error"
     assert "重名" in response["msg"]
     assert manager.created_kwargs == []
+
+
+def _locked_conflict_manager():
+    """同组内同名配置属于他人私有：admin 口径下不可操作，只能强制跳过。"""
+    return FakeManager(configs=[
+        {"id": "sc_p1", "name": "商品模型", "enabled": True, "scope_type": "private", "create_by": "user_b"},
+    ])
+
+
+def test_preview_route_locks_conflict_with_others_private_config(monkeypatch):
+    """他人同名私有配置：标记 conflict_locked，且不向调用方泄露其 config_id 等元信息。"""
+    manager = _locked_conflict_manager()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
+
+    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
+        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
+    )))
+    assert response["code"] == ErrorCode.SUCCESS
+    model = response["data"]["models"][0]
+    # 不可操作的同名配置不进冲突表（existing_config 保持 None），改由 conflict_locked 标记
+    assert model["importable"] is True
+    assert model["existing_config"] is None
+    assert model["conflict_locked"] is True
+    assert "sc_p1" not in json.dumps(model, ensure_ascii=False)
+    checklist = _checklist_by_name(model["checklist"])
+    assert checklist["模型名冲突"]["status"] == "warn"
+    assert "无操作权限" in checklist["模型名冲突"]["message"]
+    assert "sc_p1" not in json.dumps(model["checklist"], ensure_ascii=False)
+
+
+def test_import_route_skips_locked_conflict_even_with_replace_action(monkeypatch):
+    """他人同名私有配置：即便显式要求 replace 也强制跳过，不新建、不覆盖他人配置。"""
+    manager = _locked_conflict_manager()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+
+    payload = SemanticOssieImportRequest(
+        yaml_content=_single_dataset_yaml(),
+        conflict_actions={"商品模型": "replace"},
+    )
+    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs("ds1", payload, _request())))
+    assert response["code"] == ErrorCode.SUCCESS
+    assert response["data"]["created"] == []
+    assert response["data"]["replaced"] == []
+    assert response["data"]["skipped"] == [{"name": "商品模型", "reason": "存在同名配置且无操作权限，已忽略"}]
+    assert manager.created_kwargs == []
+    assert manager.updated_kwargs == {}
+    assert "sc_p1" not in json.dumps(response["data"], ensure_ascii=False)
+
+
+def _two_model_yaml() -> str:
+    return """
+version: "1.0"
+semantic_model:
+  - name: 商品模型
+    datasets:
+      - name: orders
+        source: orders
+        fields:
+          - name: 销售额
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '`amount`'
+            datatype: Decimal
+    metrics: []
+  - name: 用户模型
+    datasets:
+      - name: users
+        source: users
+        fields:
+          - name: 昵称
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '`nickname`'
+            datatype: String
+    metrics: []
+"""
+
+
+class _FailingCreateManager(FakeManager):
+    """第 fail_at 次创建返回 None，用于验证整批写入失败时的回滚。"""
+
+    def __init__(self, fail_at: int):
+        super().__init__()
+        self._fail_at = fail_at
+
+    async def create_async(self, **kwargs):
+        self.created_kwargs.append(kwargs)
+        if len(self.created_kwargs) >= self._fail_at:
+            return None
+        return {"id": f"sc_{len(self.created_kwargs)}", "name": kwargs.get("name")}
+
+
+class _RecordingTransaction:
+    """记录提交/回滚的事务桩：替换路由的 transaction_scope 以观察外层行为。"""
+
+    def __init__(self):
+        self.committed = False
+        self.rolled_back = False
+
+    @asynccontextmanager
+    async def __call__(self):
+        try:
+            yield None
+        except Exception:
+            self.rolled_back = True
+            raise
+        self.committed = True
+
+
+def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
+    """任一个模型写入失败即整批回滚（异常必须穿透事务边界），不留半批草稿。"""
+    manager = _FailingCreateManager(fail_at=2)
+    transaction = _RecordingTransaction()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
+    monkeypatch.setattr(semantic_config, "transaction_scope", transaction)
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
+
+    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
+        "ds1", SemanticOssieImportRequest(yaml_content=_two_model_yaml()), _request(),
+    )))
+    assert response["status"] == "error"
+    assert "已回滚" in response["msg"]
+    assert "用户模型" in response["msg"]
+    assert transaction.rolled_back is True
+    assert transaction.committed is False
+    assert len(manager.created_kwargs) == 2
 
 
 def test_checklist_conflict_row_from_existing_config():

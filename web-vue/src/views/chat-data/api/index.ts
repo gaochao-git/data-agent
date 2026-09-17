@@ -1095,6 +1095,9 @@ export interface OssieImportModelPreview {
   quality?: OssieImportQualitySummary
   /** 数据源组内同名活跃配置摘要：存在时导入需选择 replace/skip */
   existing_config?: OssieExistingConfig | null
+  /** 存在同名但当前不可操作的配置（如他人私有配置）：不允许 replace，导入时强制跳过；
+   *  该配置的元信息（config_id 等）不返回，故不提供替换/跳过选择 */
+  conflict_locked?: boolean
 }
 
 /** 同名冲突的已有配置摘要 */
@@ -1134,8 +1137,8 @@ export interface OssieImportData {
   created: OssieImportCreatedItem[]
   /** 替换的同名配置：保留原 config_id 全量覆盖内容并强制禁用 */
   replaced?: OssieImportCreatedItem[]
-  /** 因同名冲突被跳过的模型 */
-  skipped?: Array<{ name: string; config_id: string; reason: string }>
+  /** 因同名冲突被跳过的模型：无操作权限的同名配置（他人私有）不带 config_id，故为可选 */
+  skipped?: Array<{ name: string; config_id?: string; reason: string }>
   models?: OssieImportModelPreview[]
 }
 

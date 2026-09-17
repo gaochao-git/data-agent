@@ -165,16 +165,28 @@ watch(isSpecialMode, value => {
   if (value && visible.value) initSpecialForm()
 })
 
-// 弹窗打开时切换类型：清空各模式专属脏状态，显示名称在物理字段与口径指标间不串用
-watch(
-  () => form.value.mode,
-  (mode, prev) => {
-    if (!visible.value || mode === prev) return
-    resetDerivedForm()
-    resetCompositeForm()
-    form.value.displayName = ''
+/**
+ * 用户手动切换类型：清空各模式专属脏状态，显示名称在物理字段与口径指标间不串用。
+ * 必须挂在用户事件上而不是 mode 的 watcher 上——父组件打开「编辑指标」时会以编程方式
+ * 设置 mode（例如上次会话停在复合 tab），watcher 会在父组件预填 displayName 之后触发，
+ * 把「指标名称」清空（编辑原子指标时名称回填丢失）。
+ */
+const handleModeChange = () => {
+  resetDerivedForm()
+  resetCompositeForm()
+  form.value.displayName = ''
+  // 切回正在编辑的类型时按被编辑指标回填名称，避免来回切 tab 丢名称
+  if (form.value.mode === 'metric' && props.editingAtomic) {
+    form.value.displayName = props.editingAtomic.name || ''
   }
-)
+  if (form.value.mode === 'derived' && props.editingDerived && props.editingDerived.metric_kind !== 'composite') {
+    form.value.displayName = props.editingDerived.name || ''
+  }
+  if (form.value.mode === 'composite' && props.editingDerived?.metric_kind === 'composite') {
+    form.value.displayName = props.editingDerived.name || ''
+  }
+  if (isSpecialMode.value) initSpecialForm()
+}
 
 const isPeriodKindWithN = computed(() => derivedPeriodKind.value === 'last_n_days')
 const isPeriodKindBetween = computed(() => derivedPeriodKind.value === 'between')
@@ -541,7 +553,7 @@ const quickExpressions = computed(() => {
     <div class="space-y-3">
       <!-- ① 首行：左侧类型切换（按作用域过滤）+ 右侧中英文切换（仅物理字段模式需要） -->
       <div class="flex items-center justify-between">
-        <el-radio-group v-model="form.mode" size="small">
+        <el-radio-group v-model="form.mode" size="small" @change="handleModeChange">
           <el-radio-button v-for="mode in availableModes" :key="mode" :value="mode">{{ MODE_LABELS[mode] }}</el-radio-button>
         </el-radio-group>
         <el-radio-group v-if="!isSpecialMode" v-model="addFieldLabelMode" size="small">

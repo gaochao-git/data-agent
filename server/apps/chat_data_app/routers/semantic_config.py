@@ -23,6 +23,7 @@ from ..schema import (
     SemanticOssieImportRequest,
     SemanticPrefillRequest,
 )
+from ..daos.dao_session import transaction_scope
 from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic.run.semantic_history_learning_service import (
@@ -53,6 +54,10 @@ router = APIRouter(tags=["ChatData 语义模型"], responses=JSON_API_RESPONSES)
 PREFILL_MAX_RECOMMENDED_METRICS = 10
 PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
 PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
+
+
+class _OssieImportWriteError(Exception):
+    """Ossie 导入落库失败：用于触发整批回滚，并携带面向用户的具体原因。"""
 
 
 def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
@@ -796,6 +801,7 @@ async def import_admin_ossie_semantic_configs(
     同名冲突由 conflict_actions 决定：replace=覆盖同名公共配置内容（保留 config_id，
     强制禁用）；skip=跳过该模型；缺省按 skip 处理。同名但不可操作的配置
     （如他人私有配置）一律强制跳过，不允许 replace。
+    整批落库在同一事务内完成：任一模型写入失败即整体回滚，不留半批草稿。
     """
     try:
         current_user = _get_current_user(request)
@@ -824,53 +830,63 @@ async def import_admin_ossie_semantic_configs(
             )
         semantic_service = get_semantic_config_service()
         created, replaced, skipped = [], [], []
-        for item in imports:
-            if item.conflict_locked:
-                # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
-                # 也不透出其 config_id 等元信息
-                skipped.append({
-                    "name": item.name,
-                    "reason": "存在同名配置且无操作权限，已跳过",
-                })
-                continue
-            if item.existing_config:
-                existing_config_id = str(item.existing_config["config_id"])
-                if conflict_actions.get(item.name, "skip") != "replace":
-                    skipped.append({
-                        "name": item.name,
-                        "config_id": existing_config_id,
-                        "reason": "同名配置已存在，未导入",
-                    })
-                    continue
-                # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
-                # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
-                config = await semantic_service.update_async(
-                    datasource_id,
-                    existing_config_id,
-                    description=item.description or "",
-                    business_notes=item.business_notes or "",
-                    metrics=item.metrics,
-                    dimensions=item.dimensions,
-                    relationships=item.relationships,
-                    enabled=False,
-                    update_by=user_id,
-                    update_by_name=username,
-                )
-                if not config:
-                    return business_response(msg=f"更新草稿失败: {item.name}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-                replaced.append({"config_id": config.get("id"), "name": config.get("name")})
-                continue
-            config = await semantic_service.create_async(
-                datasource_id=datasource_id,
-                enabled=False,
-                scope_type="public",
-                create_by=user_id,
-                create_by_name=username,
-                **item.to_config_payload(),
-            )
-            if not config:
-                return business_response(msg=f"创建草稿失败: {item.name}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-            created.append({"config_id": config.get("id"), "name": config.get("name")})
+        # 整批落库放进同一事务：任一模型写入失败即整体回滚，避免留下半批草稿
+        # （接口对外语义是「全有或全无」）。
+        try:
+            async with transaction_scope():
+                for item in imports:
+                    if item.conflict_locked:
+                        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+                        # 也不透出其 config_id 等元信息
+                        skipped.append({
+                            "name": item.name,
+                            "reason": "存在同名配置且无操作权限，已忽略",
+                        })
+                        continue
+                    if item.existing_config:
+                        existing_config_id = str(item.existing_config["config_id"])
+                        if conflict_actions.get(item.name, "skip") != "replace":
+                            skipped.append({
+                                "name": item.name,
+                                "config_id": existing_config_id,
+                                "reason": "同名配置已存在，未导入",
+                            })
+                            continue
+                        # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
+                        # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+                        config = await semantic_service.update_async(
+                            datasource_id,
+                            existing_config_id,
+                            description=item.description or "",
+                            business_notes=item.business_notes or "",
+                            metrics=item.metrics,
+                            dimensions=item.dimensions,
+                            relationships=item.relationships,
+                            enabled=False,
+                            update_by=user_id,
+                            update_by_name=username,
+                        )
+                        if not config:
+                            raise _OssieImportWriteError(f"更新草稿失败: {item.name}")
+                        replaced.append({"config_id": config.get("id"), "name": config.get("name")})
+                        continue
+                    config = await semantic_service.create_async(
+                        datasource_id=datasource_id,
+                        enabled=False,
+                        scope_type="public",
+                        create_by=user_id,
+                        create_by_name=username,
+                        **item.to_config_payload(),
+                    )
+                    if not config:
+                        raise _OssieImportWriteError(f"创建草稿失败: {item.name}")
+                    created.append({"config_id": config.get("id"), "name": config.get("name")})
+        except _OssieImportWriteError as e:
+            logger.error("Ossie 导入写入失败，已回滚: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        except ValueError as e:
+            logger.warning("Ossie 导入内容校验失败，已回滚: datasource_id=%s error=%s", datasource_id, e)
+            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
         logger.info(
             "Ossie 导入草稿: datasource_id=%s created=%s replaced=%s skipped=%s",
             datasource_id,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   previewAdminOssieSemanticImport,
   importAdminOssieSemanticConfigs,
@@ -44,6 +44,12 @@ const fileChecked = ref<Record<number, boolean>>({})
 const detailOpen = ref<Record<number, boolean>>({})
 const previewing = ref(false)
 const importing = ref(false)
+/** 正在单独导入的文件 id（收起行「导入」按钮的 loading 态） */
+const importingFileId = ref<number | null>(null)
+/** 本轮校验已覆盖到的文件 id：区分「尚未校验」与「校验通过但文件内没有模型」，前者必须拦住导入 */
+const previewedFileIds = ref<Record<number, boolean>>({})
+/** 文件级校验失败原因：非空即该文件本轮校验请求失败，行内状态按错误展示并给出原因 */
+const filePreviewError = ref<Record<number, string>>({})
 const models = ref<DialogModel[]>([])
 /** 冲突模型的处理动作：模型 muid → replace/skip，默认替换（迭代闭环的常见路径） */
 const conflictActions = ref<Record<string, 'replace' | 'skip'>>({})
@@ -59,6 +65,9 @@ const resetState = () => {
   detailOpen.value = {}
   previewing.value = false
   importing.value = false
+  importingFileId.value = null
+  previewedFileIds.value = {}
+  filePreviewError.value = {}
   models.value = []
   conflictActions.value = {}
   existingConfigsCache.value = null
@@ -73,15 +82,47 @@ watch(visible, value => {
 })
 
 // 后端导入是「全有或全无」：任一模型存在阻断问题即整体拒绝，按钮须与该语义一致。
-// 同名冲突不阻断（可替换/跳过）；未勾选文件的模型不参与判定。
+// 同名冲突不阻断（可替换/忽略）；未勾选文件的模型不参与判定。
 const allImportable = computed(() => activeModels.value.length > 0 && activeModels.value.every(model => model.importable))
-const confirmDisabled = computed(() => !allImportable.value || importing.value)
+/** 有导入请求在途（单文件或批量）：期间冻结一切会改动预览数据的操作，避免请求与状态互相踩踏 */
+const busy = computed(() => importing.value || importingFileId.value !== null)
+/** 勾选但没拿到校验结果的文件数（含校验失败的）：这些文件会被导入循环跳过，必须拦在按钮上 */
+const unvalidatedCount = computed(() =>
+  activeFiles.value.filter(file => !previewedFileIds.value[file.id]).length)
+const failedFileCount = computed(() =>
+  activeFiles.value.filter(file => filePreviewError.value[file.id]).length)
+const confirmDisabled = computed(() => !allImportable.value || busy.value || unvalidatedCount.value > 0)
 const importableCount = computed(() => activeModels.value.filter(model => model.importable).length)
 const replaceCount = computed(() =>
   activeModels.value.filter(model => model.existing_config && conflictActions.value[model.muid] !== 'skip').length)
+// 同名但无操作权限的配置（他人私有）后端强制忽略，不参与 replace/skip 选择
+const lockedCount = computed(() =>
+  activeModels.value.filter(model => model.importable && model.conflict_locked).length)
 const skipCount = computed(() =>
-  activeModels.value.filter(model => model.existing_config && conflictActions.value[model.muid] === 'skip').length)
-const newCount = computed(() => activeModels.value.filter(model => model.importable && !model.existing_config).length)
+  lockedCount.value + activeModels.value.filter(model => model.existing_config && conflictActions.value[model.muid] === 'skip').length)
+const newCount = computed(() =>
+  activeModels.value.filter(model => model.importable && !model.existing_config && !model.conflict_locked).length)
+
+type FooterTone = 'text-green-600' | 'text-amber-600' | 'text-red-500'
+
+/**
+ * 底部状态：门禁不通过时必须说清原因（按钮变灰又没有任何解释，是这套流程最容易卡住用户的地方）。
+ * 返回 null 表示门禁通过，此时底部改为展示「将新建 / 替换 / 忽略」计数。
+ */
+const footerHint = computed((): { text: string; tone: FooterTone } | null => {
+  if (!files.value.length) return null
+  if (!activeFiles.value.length) return { text: '请勾选要导入的文件', tone: 'text-amber-600' }
+  // 校验失败的判定要排在「还没校验过」之前：请求失败时 models 同样为空，先判后者会把失败说成没点过
+  if (failedFileCount.value) {
+    return { text: `${failedFileCount.value} 个文件校验失败，请查看文件行提示`, tone: 'text-red-500' }
+  }
+  if (!models.value.length) return { text: '请先点「模型校验」查看校验结果', tone: 'text-amber-600' }
+  if (unvalidatedCount.value) {
+    return { text: `${unvalidatedCount.value} 个文件尚未校验，请点「模型校验」`, tone: 'text-amber-600' }
+  }
+  if (!allImportable.value) return { text: '存在阻断问题，修正后重新校验', tone: 'text-red-500' }
+  return null
+})
 
 const severityTextClass = (severity: string) =>
   severity === 'error' ? 'text-red-500' : severity === 'warning' ? 'text-amber-500' : 'text-gray-500'
@@ -184,6 +225,8 @@ const activeModels = computed(() => {
 type FileCheckStatus = 'pass' | 'warn' | 'fail' | 'none'
 
 const fileCheckStatus = (fileId: number): FileCheckStatus => {
+  // 校验请求失败：状态按错误展示（原因见行内状态徽标的 title），不再伪装成「未校验」
+  if (filePreviewError.value[fileId]) return 'fail'
   const fileModels = models.value.filter(model => model.source_file_id === fileId)
   if (!fileModels.length) return 'none'
   if (fileModels.some(model => !model.importable)) return 'fail'
@@ -205,6 +248,67 @@ const fileStatusChipClass = (status: FileCheckStatus) =>
 const fileStatusLabel = (status: FileCheckStatus) =>
   status === 'pass' ? '通过' : status === 'warn' ? '警告' : status === 'fail' ? '错误' : '未校验'
 
+// ============ 收起行（文件表）里的同名冲突处置 ============
+// 产品口径：收起行即完成「导入勾选 / 替换 / 忽略 / 单文件导入」的处置，展开区只看详情
+// （校验清单、差异对比）。冲突动作按**文件**统一处置，与后端「以文件为粒度整体落库」一致。
+
+/** 归属于某个文件的预览模型 */
+const modelsOfFile = (fileId: number) => models.value.filter(model => model.source_file_id === fileId)
+
+/**
+ * 可替换/忽略的同名冲突模型。
+ * - 他人私有（conflict_locked）不在其中：后端强制忽略，不给选择；
+ * - 已被阻断（!importable）的冲突模型也不在其中：该文件本来就导不了，行内只靠「导入」按钮的
+ *   title 与底部提示承载，等修好重新校验后再出现处置控件。
+ */
+const fileConflictModels = (fileId: number) =>
+  modelsOfFile(fileId).filter(model => model.importable && model.existing_config)
+
+const fileHasConflict = (fileId: number) => fileConflictModels(fileId).length > 0
+
+/** 行内冲突动作：文件内冲突模型全部选「忽略」才显示忽略，否则显示替换（默认替换） */
+const fileAction = (fileId: number): 'replace' | 'skip' => {
+  const list = fileConflictModels(fileId)
+  return list.length > 0 && list.every(model => conflictActions.value[model.muid] === 'skip') ? 'skip' : 'replace'
+}
+
+const setFileAction = (fileId: number, action: 'replace' | 'skip') => {
+  const next = { ...conflictActions.value }
+  fileConflictModels(fileId).forEach(model => {
+    next[model.muid] = action
+  })
+  conflictActions.value = next
+}
+
+/** 行内冲突提示的 title：单模型给启用态，多模型给数量（完整说明在展开后的「模型名冲突」清单行） */
+const fileConflictTitle = (fileId: number) => {
+  const list = fileConflictModels(fileId)
+  const first = list[0]
+  if (list.length === 1 && first?.existing_config) {
+    return `已存在同名配置（${first.existing_config.enabled ? '启用中' : '禁用中'}）`
+  }
+  return list.length ? `${list.length} 个模型与现有配置同名` : ''
+}
+
+/** 无操作权限的同名冲突数量（不提供替换/忽略，导入时后端强制忽略） */
+const fileLockedCount = (fileId: number) =>
+  modelsOfFile(fileId).filter(model => model.importable && model.conflict_locked).length
+
+/** 单文件导入的门禁与底部批量导入同一口径：需已校验，且该文件内模型无阻断问题 */
+const fileRowImportable = (fileId: number) => {
+  const list = modelsOfFile(fileId)
+  return previewedFileIds.value[fileId] === true && list.length > 0 && list.every(model => model.importable)
+}
+
+const fileRowImportTitle = (fileId: number) => {
+  if (filePreviewError.value[fileId]) return `该文件校验失败：${filePreviewError.value[fileId]}`
+  if (!previewedFileIds.value[fileId]) return '请先点击「模型校验」'
+  const list = modelsOfFile(fileId)
+  if (!list.length) return '该文件中没有可导入的语义模型'
+  if (!list.every(model => model.importable)) return '该文件存在阻断问题，修正后再导入'
+  return '只导入该文件'
+}
+
 const toggleFile = (fileId: number, event: Event) => {
   fileChecked.value = { ...fileChecked.value, [fileId]: (event.target as HTMLInputElement).checked }
 }
@@ -215,6 +319,12 @@ const removeFile = (fileId: number) => {
   const checked = { ...fileChecked.value }
   delete checked[fileId]
   fileChecked.value = checked
+  const previewed = { ...previewedFileIds.value }
+  delete previewed[fileId]
+  previewedFileIds.value = previewed
+  const previewError = { ...filePreviewError.value }
+  delete previewError[fileId]
+  filePreviewError.value = previewError
   const detail = { ...detailOpen.value }
   delete detail[fileId]
   detailOpen.value = detail
@@ -265,16 +375,25 @@ const handlePreview = async () => {
   existingConfigsCache.value = null
   diffOpen.value = {}
   diffExisting.value = {}
+  // 校验结果按「当前勾选的文件」整体重建：未勾选文件的旧结果随之作废，
+  // 因此这里同步重置「已校验」标记与失败原因，避免残留旧口径放行本次导入
+  previewedFileIds.value = {}
+  filePreviewError.value = {}
   try {
     const merged: DialogModel[] = []
-    // 逐文件请求：单个文件解析失败不影响其他文件的校验结果
+    const previewed: Record<number, boolean> = {}
+    const failed: Record<number, string> = {}
+    // 逐文件请求：单个文件失败不影响其他文件；失败文件单独记账，导入时会被门禁拦住
     for (const file of activeFiles.value) {
       try {
         const res = await previewAdminOssieSemanticImport(props.datasourceId, file.content)
         if (res.status !== 'success') {
-          ElMessage.error(`${file.name}：${res.msg || '解析失败，请检查 YAML 内容'}`)
+          const reason = res.msg || '解析失败，请检查 YAML 内容'
+          failed[file.id] = reason
+          ElMessage.error(`${file.name}：${reason}`)
           continue
         }
+        previewed[file.id] = true
         const fileModels = res.data?.models || []
         if (!fileModels.length) {
           ElMessage.warning(`${file.name}：没有可导入的语义模型（semantic_model 为空）`)
@@ -287,14 +406,18 @@ const handlePreview = async () => {
             muid: `${file.id}-${modelIndex}`,
           }))
       } catch (err) {
+        const reason = '解析失败，请稍后重试'
+        failed[file.id] = reason
         console.error('Ossie 导入预览失败:', err)
-        ElMessage.error(`${file.name}：解析失败，请稍后重试`)
+        ElMessage.error(`${file.name}：${reason}`)
       }
     }
     models.value = merged
+    previewedFileIds.value = previewed
+    filePreviewError.value = failed
     detailOpen.value = {}
     // 详情默认收起：文件表只显示聚合检查结果，点击「查看详情」展开模型卡片
-    // 冲突模型默认选「替换」：迭代闭环里重新导入优化版模型是常见路径
+    // 冲突模型默认选「替换」：迭代闭环里重新导入优化版模型是常见路径（覆盖前有二次确认）
     merged.forEach(model => {
       if (model.existing_config) conflictActions.value[model.muid] = 'replace'
     })
@@ -303,78 +426,150 @@ const handlePreview = async () => {
   }
 }
 
-const handleImport = async () => {
-  if (!files.value.length || !models.value.length) return
-  if (!activeFiles.value.length) {
-    ElMessage.warning('请至少勾选一个文件')
-    return
+interface FileImportResult {
+  created: number
+  replaced: number
+  skipped: number
+}
+
+/**
+ * 以文件为粒度调用导入接口（后端「全有或全无」也以文件为粒度）。
+ * 失败时同步该文件的最新问题清单并提示，返回 null；调用方需保证该文件已有预览模型。
+ */
+const importSingleFile = async (file: LoadedYamlFile): Promise<FileImportResult | null> => {
+  const fileModels = modelsOfFile(file.id)
+  if (!fileModels.length) return null
+  const actions: Record<string, 'replace' | 'skip'> = {}
+  fileModels.forEach(model => {
+    if (model.existing_config) {
+      actions[model.name] = conflictActions.value[model.muid] === 'skip' ? 'skip' : 'replace'
+    }
+  })
+  const res = await importAdminOssieSemanticConfigs(props.datasourceId, file.content, actions)
+  if (res.status !== 'success') {
+    if (res.data?.models?.length) {
+      // 失败时以文件为粒度刷新模型清单，沿用用户已选的冲突动作
+      const previousActions: Record<string, 'replace' | 'skip'> = {}
+      fileModels
+        .filter(model => model.existing_config)
+        .forEach(model => {
+          previousActions[model.name] = conflictActions.value[model.muid] ?? 'replace'
+        })
+      const refreshed = res.data.models.map((model, modelIndex) => ({
+        ...model,
+        source_file: file.name,
+        source_file_id: file.id,
+        muid: `${file.id}-${modelIndex}`,
+      }))
+      models.value = models.value
+        .filter(model => model.source_file_id !== file.id)
+        .concat(refreshed)
+      refreshed.forEach(model => {
+        if (model.existing_config) {
+          conflictActions.value[model.muid] = previousActions[model.name] ?? 'replace'
+        } else {
+          delete conflictActions.value[model.muid]
+        }
+      })
+    }
+    ElMessage.error(`${file.name}：${res.msg || '导入失败，请根据问题清单修正后重试'}`)
+    return null
   }
+  return {
+    created: res.data?.created?.length || 0,
+    replaced: res.data?.replaced?.length || 0,
+    skipped: res.data?.skipped?.length || 0,
+  }
+}
+
+/** 导入结果提示：新建 / 替换 / 忽略三段（口径与底部汇总一致）；无新建无替换但有忽略时单独提示 */
+const reportImportResult = ({ created, replaced, skipped }: FileImportResult) => {
+  const parts = [
+    created ? `新建 ${created}` : '',
+    replaced ? `替换 ${replaced}` : '',
+    skipped ? `忽略 ${skipped}` : '',
+  ].filter(Boolean)
+  if (created + replaced > 0) {
+    ElMessage.success(`导入完成（${parts.join(' · ')}），配置为默认禁用，请人工复核后启用`)
+  } else if (skipped > 0) {
+    ElMessage.info('全部模型因同名冲突被忽略，未做任何变更')
+  }
+}
+
+const handleImport = async () => {
+  const targets = activeFiles.value.filter(file => modelsOfFile(file.id).length > 0)
+  if (!targets.length) return
   importing.value = true
   try {
     let created = 0
     let replaced = 0
     let skipped = 0
-    // 按文件逐个请求：后端「全有或全无」以文件为粒度，失败时同步该文件的最新问题清单
-    for (const file of activeFiles.value) {
-      const fileModels = models.value.filter(model => model.source_file_id === file.id)
-      if (!fileModels.length) continue
-      const actions: Record<string, 'replace' | 'skip'> = {}
-      fileModels.forEach(model => {
-        if (model.existing_config) {
-          actions[model.name] = conflictActions.value[model.muid] === 'skip' ? 'skip' : 'replace'
+    let doneFiles = 0
+    // 按文件逐个请求：后端「全有或全无」以文件为粒度，任一文件失败即中止（该文件的问题清单已同步）。
+    // 成功的文件立即从列表移除，中止后重试不会把它们再导一遍（与原「全部留在列表里」的差异所在）。
+    for (const file of targets) {
+      const result = await importSingleFile(file)
+      if (!result) {
+        if (doneFiles) {
+          emit('imported', created + replaced)
+          reportImportResult({ created, replaced, skipped })
+          ElMessage.warning(`已导入 ${doneFiles} 个文件，剩余文件未导入`)
         }
-      })
-      const res = await importAdminOssieSemanticConfigs(props.datasourceId, file.content, actions)
-      if (res.status !== 'success') {
-        if (res.data?.models?.length) {
-          // 失败时以文件为粒度刷新模型清单，沿用用户已选的冲突动作
-          const previousActions: Record<string, 'replace' | 'skip'> = {}
-          models.value
-            .filter(model => model.source_file_id === file.id && model.existing_config)
-            .forEach(model => {
-              previousActions[model.name] = conflictActions.value[model.muid] ?? 'replace'
-            })
-          const refreshed = res.data.models.map((model, modelIndex) => ({
-            ...model,
-            source_file: file.name,
-            source_file_id: file.id,
-            muid: `${file.id}-${modelIndex}`,
-          }))
-          models.value = models.value
-            .filter(model => model.source_file_id !== file.id)
-            .concat(refreshed)
-          refreshed.forEach(model => {
-            if (model.existing_config) {
-              conflictActions.value[model.muid] = previousActions[model.name] ?? 'replace'
-            } else {
-              delete conflictActions.value[model.muid]
-            }
-          })
-        }
-        ElMessage.error(`${file.name}：${res.msg || '导入失败，请根据问题清单修正后重试'}`)
         return
       }
-      created += res.data?.created?.length || 0
-      replaced += res.data?.replaced?.length || 0
-      skipped += res.data?.skipped?.length || 0
-    }
-    if (created + replaced > 0) {
-      const parts = [
-        created ? `新建 ${created}` : '',
-        replaced ? `替换 ${replaced}` : '',
-        skipped ? `跳过 ${skipped}` : '',
-      ].filter(Boolean)
-      ElMessage.success(`导入完成（${parts.join(' · ')}），配置为默认禁用，请人工复核后启用`)
-    } else if (skipped > 0) {
-      ElMessage.info('全部模型因同名冲突被跳过，未做任何变更')
+      created += result.created
+      replaced += result.replaced
+      skipped += result.skipped
+      doneFiles += 1
+      removeFile(file.id)
     }
     emit('imported', created + replaced)
+    reportImportResult({ created, replaced, skipped })
     visible.value = false
   } catch (err) {
     console.error('Ossie 导入失败:', err)
     ElMessage.error('导入失败，请稍后重试')
   } finally {
     importing.value = false
+  }
+}
+
+/**
+ * 批量导入入口：命中「替换」时先二次确认。
+ * 后端 replace 是「保留 config_id、全量覆盖内容并强制 enabled=False」（见导入接口），
+ * 等于就地改掉一个可能正在被使用的配置，属不可逆动作，不能一次点击就落地；
+ * 没有替换项时直接导入，不给迭代路径加多余摩擦。
+ */
+const confirmImport = () => {
+  if (!replaceCount.value) {
+    handleImport()
+    return
+  }
+  ElMessageBox.confirm(
+    `将覆盖 ${replaceCount.value} 个同名现有配置的内容，并强制为禁用状态（保留配置 ID）。确认继续导入？`,
+    '确认替换现有配置',
+    { type: 'warning', confirmButtonText: '继续导入', cancelButtonText: '取消' },
+  ).then(() => handleImport()).catch(() => {})
+}
+
+/** 收起行「导入」：只导入该文件，成功后移除该文件并保留弹窗，便于继续处理其余文件 */
+const handleImportFile = async (file: LoadedYamlFile) => {
+  if (importing.value || importingFileId.value !== null) return
+  importingFileId.value = file.id
+  try {
+    const result = await importSingleFile(file)
+    if (result) {
+      reportImportResult(result)
+      emit('imported', result.created + result.replaced)
+      removeFile(file.id)
+      // 全部处理完才关闭，否则留在弹窗里继续导入剩余文件
+      if (!files.value.length) visible.value = false
+    }
+  } catch (err) {
+    console.error('Ossie 导入失败:', err)
+    ElMessage.error('导入失败，请稍后重试')
+  } finally {
+    importingFileId.value = null
   }
 }
 
@@ -425,7 +620,7 @@ const diffExistingFor = (muid: string) => {
 <template>
   <el-dialog
     v-model="visible"
-    width="720px"
+    width="800px"
     title="导入 Ossie 语义模型"
     :close-on-click-modal="false"
   >
@@ -437,7 +632,10 @@ const diffExistingFor = (muid: string) => {
       </div>
 
       <div class="flex items-center gap-2">
-        <label class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 cursor-pointer transition-colors hover:bg-gray-50">
+        <label
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors"
+          :class="busy ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-gray-50'"
+        >
           <i class="fa-solid fa-file-import"></i>
           {{ files.length ? '追加 YAML 文件' : '选择 YAML 文件' }}
           <input type="file" accept=".yaml,.yml,.txt" multiple class="hidden" @change="handleFileChange" />
@@ -446,7 +644,8 @@ const diffExistingFor = (muid: string) => {
           {{ singleFileName || `已选择 ${files.length} 个文件` }}
         </span>
         <span v-else class="min-w-0 flex-1 truncate text-[12px] text-gray-400">支持 .yaml / .yml，可由 AI 生成或从其他平台导出</span>
-        <el-button size="small" class="shrink-0" :loading="previewing" :disabled="!files.length" @click="handlePreview">
+        <!-- 导入在途时禁止重新校验：重建 models 会让正在跑的导入循环丢掉剩余文件 -->
+        <el-button size="small" class="shrink-0" :loading="previewing" :disabled="!files.length || busy" @click="handlePreview">
           模型校验
         </el-button>
       </div>
@@ -459,6 +658,7 @@ const diffExistingFor = (muid: string) => {
                 type="checkbox"
                 title="全选 / 全不选"
                 :checked="files.length > 0 && files.every(file => isFileChecked(file.id))"
+                :disabled="busy"
                 @change="toggleFileAll"
               />
             </td>
@@ -470,16 +670,81 @@ const diffExistingFor = (muid: string) => {
         <tbody>
           <tr v-for="file in files" :key="file.id" class="border-t border-gray-100">
             <td class="px-2 py-1.5 text-center">
-              <input type="checkbox" :checked="isFileChecked(file.id)" @change="toggleFile(file.id, $event)" />
+              <input
+                type="checkbox"
+                :checked="isFileChecked(file.id)"
+                :disabled="busy"
+                @change="toggleFile(file.id, $event)"
+              />
             </td>
             <td class="px-2 py-1.5 text-gray-600">
-              <span class="flex items-center gap-1.5" :title="file.name">
-                <i class="fa-solid fa-file-lines shrink-0 text-gray-300"></i>
-                <span class="truncate">{{ file.name }}</span>
-              </span>
+              <div class="flex items-center gap-2">
+                <span class="flex min-w-0 flex-1 items-center gap-1.5" :title="file.name">
+                  <i class="fa-solid fa-file-lines shrink-0 text-gray-300"></i>
+                  <span class="truncate">{{ file.name }}</span>
+                </span>
+                <!-- 收起行即完成处置：新增靠左侧勾选，同名冲突在此选「替换 / 忽略」 -->
+                <span
+                  v-if="fileHasConflict(file.id)"
+                  class="flex shrink-0 items-center gap-1.5 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px]"
+                  :title="fileConflictTitle(file.id)"
+                >
+                  <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                  <label class="flex items-center gap-1 text-gray-600" :class="busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
+                    <input
+                      type="radio"
+                      :name="`file-conflict-${file.id}`"
+                      value="replace"
+                      :checked="fileAction(file.id) === 'replace'"
+                      :disabled="busy"
+                      @change="setFileAction(file.id, 'replace')"
+                    />
+                    替换
+                  </label>
+                  <label class="flex items-center gap-1 text-gray-600" :class="busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
+                    <input
+                      type="radio"
+                      :name="`file-conflict-${file.id}`"
+                      value="skip"
+                      :checked="fileAction(file.id) === 'skip'"
+                      :disabled="busy"
+                      @change="setFileAction(file.id, 'skip')"
+                    />
+                    忽略
+                  </label>
+                </span>
+                <!-- 同名但无操作权限（他人私有）：不提供选择，导入时后端强制忽略 -->
+                <span
+                  v-else-if="fileLockedCount(file.id)"
+                  class="shrink-0 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px] text-amber-600"
+                  title="已存在同名配置但无操作权限，导入时将忽略该模型"
+                >
+                  <i class="fa-solid fa-triangle-exclamation"></i>
+                  同名无权限 · 忽略
+                </span>
+                <!-- 单文件导入：与底部批量导入同一门禁口径（未校验、校验失败或存在阻断问题时禁用） -->
+                <button
+                  type="button"
+                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition-colors"
+                  :class="fileRowImportable(file.id) && !busy
+                    ? 'cursor-pointer border-blue-200 text-blue-600 hover:bg-blue-50'
+                    : 'cursor-not-allowed border-gray-200 text-gray-300'"
+                  :disabled="!fileRowImportable(file.id) || busy"
+                  :title="fileRowImportTitle(file.id)"
+                  @click="handleImportFile(file)"
+                >
+                  <i v-if="importingFileId === file.id" class="fa-solid fa-spinner fa-spin"></i>
+                  <template v-else>导入</template>
+                </button>
+              </div>
             </td>
             <td class="px-2 py-1.5">
-              <span class="rounded px-1.5 py-0.5 text-[10px]" :class="fileStatusChipClass(fileCheckStatus(file.id))">
+              <!-- 校验失败时把后端原因挂在徽标 title 上，行内不额外占位 -->
+              <span
+                class="rounded px-1.5 py-0.5 text-[10px]"
+                :class="fileStatusChipClass(fileCheckStatus(file.id))"
+                :title="filePreviewError[file.id]"
+              >
                 {{ fileStatusLabel(fileCheckStatus(file.id)) }}
               </span>
             </td>
@@ -495,7 +760,9 @@ const diffExistingFor = (muid: string) => {
                 </button>
                 <button
                   type="button"
-                  class="text-gray-300 transition-colors hover:text-red-500"
+                  class="transition-colors"
+                  :class="busy ? 'cursor-not-allowed text-gray-200' : 'text-gray-300 hover:text-red-500'"
+                  :disabled="busy"
                   title="移除该文件"
                   @click="removeFile(file.id)"
                 >
@@ -523,6 +790,8 @@ const diffExistingFor = (muid: string) => {
               class="rounded-md border px-3 py-2.5"
               :class="model.importable ? 'border-gray-200' : 'border-red-200 bg-red-50/40'"
             >
+              <!-- 名称行：模型标识 + 状态 + 详情入口。同名冲突的「替换/忽略」在收起态的文件行处置，
+                   此处只承载详情：差异对比入口（完整冲突说明在下方「模型名冲突」清单行，含 config_id 与启用态）。 -->
               <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-gray-700 truncate">{{ model.name || '未命名模型' }}</span>
                 <span
@@ -531,56 +800,34 @@ const diffExistingFor = (muid: string) => {
                 >
                   {{ model.importable ? '可导入' : '存在问题' }}
                 </span>
-              <span class="ml-auto shrink-0 text-[11px] text-gray-400">{{ modelSummary(model) }}</span>
-            </div>
-            <div v-if="(files.length > 1 && model.source_file) || model.source_config_id" class="mt-1 text-[11px] text-gray-400">
-              <span v-if="files.length > 1 && model.source_file">来源文件：{{ model.source_file }}</span>
-              <span v-if="files.length > 1 && model.source_file && model.source_config_id"> · </span>
-              <span v-if="model.source_config_id">来源配置：{{ model.source_config_id }}（将创建新草稿，不更新原配置）</span>
-            </div>
-            <div
-              v-if="model.existing_config"
-              class="mt-1.5 rounded border border-amber-200 bg-amber-50/60 px-2 py-1.5"
-            >
-              <div class="flex items-center gap-3 text-[11px]">
-                <span class="text-amber-600">
-                  <i class="fa-solid fa-triangle-exclamation"></i>
-                  已存在同名配置（{{ model.existing_config.enabled ? '启用中' : '禁用中' }}）
-                </span>
-                <label class="ml-auto flex cursor-pointer items-center gap-1 text-gray-600">
-                  <input
-                    type="radio"
-                    :name="`conflict-${model.muid}`"
-                    value="replace"
-                    :checked="conflictActions[model.muid] !== 'skip'"
-                    @change="conflictActions[model.muid] = 'replace'"
-                  />
-                  替换原配置
-                </label>
-                <label class="flex cursor-pointer items-center gap-1 text-gray-600">
-                  <input
-                    type="radio"
-                    :name="`conflict-${model.muid}`"
-                    value="skip"
-                    :checked="conflictActions[model.muid] === 'skip'"
-                    @change="conflictActions[model.muid] = 'skip'"
-                  />
-                  跳过该模型
-                </label>
+                <div class="ml-auto flex shrink-0 items-center gap-2">
+                  <button
+                    v-if="model.existing_config"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1 rounded border border-blue-200 px-1.5 py-0.5 text-[11px] text-blue-600 transition-colors hover:bg-blue-50"
+                    @click="toggleDiff(model.muid)"
+                  >
+                    {{ diffOpen[model.muid] ? '收起差异' : '查看与现有配置的差异' }}
+                    <i v-if="diffLoading[model.muid]" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
+                  </button>
+                  <!-- 同名但无操作权限（他人私有）：不提供替换/忽略，导入时后端强制忽略 -->
+                  <span
+                    v-else-if="model.conflict_locked"
+                    class="rounded border border-amber-200 bg-amber-50/60 px-2 py-0.5 text-[11px] text-amber-600"
+                  >
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    已存在同名配置但无操作权限，导入时将忽略该模型
+                  </span>
+                  <span class="shrink-0 text-[11px] text-gray-400">{{ modelSummary(model) }}</span>
+                </div>
               </div>
-              <div class="mt-1 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  class="text-[11px] text-gray-500 transition-colors hover:text-gray-700"
-                  @click="toggleDiff(model.muid)"
-                >
-                  {{ diffOpen[model.muid] ? '收起差异' : '查看与现有配置的差异' }}
-                </button>
-                <i v-if="diffLoading[model.muid]" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
+              <div v-if="files.length > 1 && model.source_file" class="mt-1 text-[11px] text-gray-400">
+                来源文件：{{ model.source_file }}
               </div>
+              <!-- 差异对比是双栏面板，仍需整行宽度，保留在名称行下方 -->
               <div
                 v-if="diffOpen[model.muid] && diffExistingFor(model.muid)"
-                class="mt-1"
+                class="mt-1.5"
               >
                 <OssieMergeDiff
                   :existing="diffExistingFor(model.muid)!"
@@ -589,11 +836,10 @@ const diffExistingFor = (muid: string) => {
               </div>
               <div
                 v-else-if="diffOpen[model.muid] && diffExisting[model.muid] === 'missing'"
-                class="mt-1 text-[11px] text-gray-400"
+                class="mt-1.5 text-[11px] text-gray-400"
               >
                 未找到现有配置详情，无法对比
               </div>
-            </div>
               <table v-if="model.checklist?.length" class="mt-2 w-full table-fixed border-collapse text-[11px] leading-4">
                 <tbody>
                   <template v-for="(entry, i) in checklistRowsWithGroups(model.checklist)" :key="`cl-${model.muid}-${i}`">
@@ -646,15 +892,17 @@ const diffExistingFor = (muid: string) => {
 
     <template #footer>
       <div class="flex items-center gap-2">
-        <span v-if="models.length" class="text-[11px]" :class="allImportable ? 'text-green-600' : 'text-red-500'">
-          <template v-if="allImportable">
-            将新建 {{ newCount }}<template v-if="replaceCount"> · 替换 {{ replaceCount }}</template><template v-if="skipCount"> · 跳过 {{ skipCount }}</template>
-          </template>
-          <template v-else>存在阻断问题，修正后重新校验</template>
+        <!-- 门禁不通过时先说清原因：按钮变灰却没有解释，是这条流程最容易卡住用户的地方 -->
+        <span v-if="footerHint" class="text-[11px]" :class="footerHint.tone">{{ footerHint.text }}</span>
+        <span v-else-if="models.length" class="text-[11px] text-green-600">
+          将新建 {{ newCount }}<template v-if="replaceCount"> · 替换 {{ replaceCount }}<span
+            class="text-amber-600"
+            title="替换会覆盖同名现有配置的内容并强制禁用（保留配置 ID），提交前会再确认一次"
+          >（覆盖现有配置）</span></template><template v-if="skipCount"> · 忽略 {{ skipCount }}</template>
         </span>
         <div class="ml-auto flex gap-2">
-          <el-button @click="visible = false">取消</el-button>
-          <el-button type="primary" :loading="importing" :disabled="confirmDisabled" @click="handleImport">
+          <el-button :disabled="busy" @click="visible = false">取消</el-button>
+          <el-button type="primary" :loading="importing" :disabled="confirmDisabled" @click="confirmImport">
             确认导入
           </el-button>
         </div>
