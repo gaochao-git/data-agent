@@ -62,6 +62,40 @@ def _validate_dimensions_against_tables(dimensions: List[Dict], table_columns_ma
 
 _FUNCTION_CALL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _IDENTIFIER_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_TABLE_PREFIX_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.")
+_SQL_KEYWORD_TOKENS: Set[str] = {
+    "select", "from", "where", "group", "by", "having", "order", "case",
+    "when", "then", "else", "end", "and", "or", "not", "in", "is", "null",
+    "as", "between", "like", "distinct", "interval", "asc", "desc", "cast",
+    "union", "all", "exists", "join", "on", "over", "partition", "div",
+}
+
+
+def _strip_expression_literals(expression: str) -> str:
+    """剥离字符串字面量内容；反引号是标识符引用壳，剥壳保留标识符本身。"""
+    without_single = re.sub(r"'(?:[^']|'')*'", " ", expression)
+    without_double = re.sub(r'"(?:[^"]|"")*"', " ", without_single)
+    return without_double.replace("`", "")
+
+
+def _find_unknown_expression_columns(expression: str, table_columns: Set[str]) -> List[str]:
+    """找出表达式中引用了不存在物理列的标识符。
+
+    锚定校验（expression_uses_physical_column）只保证表达式至少命中一个物理列，
+    多标识符表达式里写错的其余列无人检查。这里做全量校验：剥离字符串字面量、
+    函数名与表前缀后，剩余标识符必须全部命中所属表列集合（忽略大小写，与锚定口径一致）。
+    """
+    cleaned = _strip_expression_literals(str(expression or ""))
+    without_functions = _FUNCTION_CALL_NAME_PATTERN.sub(" ", cleaned)
+    without_prefixes = _TABLE_PREFIX_PATTERN.sub(" ", without_functions)
+    lowered_columns = {column.lower() for column in table_columns}
+    unknown: List[str] = []
+    for token in _IDENTIFIER_TOKEN_PATTERN.findall(without_prefixes):
+        if token.lower() in _SQL_KEYWORD_TOKENS or token.lower() in lowered_columns:
+            continue
+        if token not in unknown:
+            unknown.append(token)
+    return unknown
 
 
 def _is_constant_aggregate_expression(expression: str) -> bool:
@@ -89,6 +123,9 @@ def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dic
             continue
         if not expression_uses_physical_column(expression, table_columns_map[table_name]):
             return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
+        unknown_columns = _find_unknown_expression_columns(expression, table_columns_map[table_name])
+        if unknown_columns:
+            return f"指标 {metric.get('name', '')} 表达式引用了表 {table_name} 不存在的字段: {', '.join(unknown_columns)}"
     return None
 
 
