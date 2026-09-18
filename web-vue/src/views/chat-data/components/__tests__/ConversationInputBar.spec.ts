@@ -28,6 +28,15 @@ describe('ConversationInputBar actions', () => {
     expect(wrapper.find('[title="停止生成"]').exists()).toBe(false)
     expect(wrapper.find('button[type="submit"]').exists()).toBe(true)
   })
+
+  it('forwards paste-files from the inner textarea', async () => {
+    const wrapper = mountInput(false)
+    const file = new File(['img'], 'image.png', { type: 'image/png' })
+
+    await wrapper.find('textarea').trigger('paste', { clipboardData: { files: [file] } })
+
+    expect(wrapper.emitted('pasteFiles')?.[0]).toEqual([[file]])
+  })
 })
 
 describe('ConversationInputBar deep thinking switch', () => {

@@ -1080,6 +1080,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "file_delete",
         "file_glob",
         "file_grep",
+        "file_diff",
         "dir_create",
         "dir_list",
         "dir_delete",

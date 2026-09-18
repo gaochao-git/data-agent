@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractWrittenFilePathCandidates, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../toolDisplay'
+import { extractWrittenFilePathCandidates, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -142,6 +142,44 @@ describe('toolDisplay', () => {
       'batch /mnt/user-data/workspace/月报.docx'
     )
     expect(getToolTechnicalDescription('unknown_tool', { intent: 'x' })).toBe('')
+  })
+})
+
+describe('splitFileDiffLines', () => {
+  it('classifies header, hunk, add, del and context lines', () => {
+    const lines = splitFileDiffLines([
+      '--- /a.txt',
+      '+++ /b.txt',
+      '@@ -1,2 +1,3 @@',
+      ' context',
+      '+added',
+      '-removed',
+    ].join('\n'))
+    expect(lines.map(l => l.type)).toEqual(['meta', 'meta', 'hunk', 'context', 'add', 'del'])
+  })
+
+  it('treats ---/+++ lines inside hunk body as del/add, not header', () => {
+    const lines = splitFileDiffLines([
+      '--- /a.txt',
+      '+++ /b.txt',
+      '@@ -1,3 +1,3 @@',
+      '---正文里以减号开头的删除行',
+      '+++正文里以加号开头的新增行',
+      '@@ -5,1 +6,1 @@',
+      ' context',
+    ].join('\n'))
+    expect(lines[3]).toEqual({ type: 'del', content: '---正文里以减号开头的删除行' })
+    expect(lines[4]).toEqual({ type: 'add', content: '+++正文里以加号开头的新增行' })
+    expect(lines[5]).toEqual({ type: 'hunk', content: '@@ -5,1 +6,1 @@' })
+  })
+})
+
+describe('isFileDiffOffloaded', () => {
+  it('detects offloaded file_diff results only', () => {
+    expect(isFileDiffOffloaded('file_diff', 'completed', '[tool_result_offloaded]\nsource_tool=file_diff')).toBe(true)
+    expect(isFileDiffOffloaded('file_diff', 'completed', '[file_diff]\n{"status":"changed"}')).toBe(false)
+    expect(isFileDiffOffloaded('file_read', 'completed', '[tool_result_offloaded]')).toBe(false)
+    expect(isFileDiffOffloaded('file_diff', 'running', '[tool_result_offloaded]')).toBe(false)
   })
 })
 

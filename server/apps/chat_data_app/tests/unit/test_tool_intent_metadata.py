@@ -37,7 +37,7 @@ def _collect_model_visible_tools() -> list:
 
 def test_every_model_visible_tool_declares_intent_metadata():
     tools = _collect_model_visible_tools()
-    assert len(tools) == 20
+    assert len(tools) == 21
     missing = sorted(
         tool.name for tool in tools if "intent" not in (tool.args or {})
     )

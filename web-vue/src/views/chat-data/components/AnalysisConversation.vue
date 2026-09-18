@@ -485,20 +485,32 @@ const handleUploadFile = () => {
   fileInputRef.value?.click()
 }
 
-const handleFileSelected = async (event: Event) => {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  input.value = ''
+/** 剪贴板图片可能没有扩展名（部分平台给 image/png），按 MIME 补一个名字。 */
+const normalizeClipboardFilename = (file: File): File => {
+  const hasExt = /\.[a-z0-9]+$/i.test(file.name)
+  if (hasExt) return file
+  const mimeExt: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  }
+  const ext = mimeExt[file.type]
+  if (!ext) return file
+  const timestamp = Date.now()
+  return new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type })
+}
 
+/** 校验（格式/大小）并上传单个文件，成功后进入 pendingFiles。 */
+const uploadValidatedFile = async (file: File): Promise<boolean> => {
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
   if (!ACCEPTED_FILE_TYPES.includes(ext)) {
     ElMessage.warning(`仅支持 ${ACCEPTED_FILE_TYPES.join('、')} 格式`)
-    return
+    return false
   }
   if (file.size > MAX_FILE_SIZE) {
     ElMessage.warning('文件大小不能超过 50MB')
-    return
+    return false
   }
 
   try {
@@ -507,7 +519,7 @@ const handleFileSelected = async (event: Event) => {
       convId = (await props.ensureConversationId?.()) ?? null
       if (!convId) {
         ElMessage.error('创建会话失败，请稍后重试')
-        return
+        return false
       }
       localConversationId.value = convId
       // 刚创建的新会话无历史，标记已加载，避免触发历史加载导致 isLoadingHistory 闪烁
@@ -516,7 +528,7 @@ const handleFileSelected = async (event: Event) => {
     const res = await uploadFile(convId, file)
     if (res.status !== 'success') {
       ElMessage.error(res.msg || '上传失败')
-      return
+      return false
     }
     const pending: PendingFile = {
       file_id: res.data.file_id,
@@ -529,8 +541,25 @@ const handleFileSelected = async (event: Event) => {
     pendingFiles.value.push(pending)
     scheduleWorkspaceFilesRefresh()
     // 上传即登记：不再预解析/链接到工作区，agent 在需要时通过 parse_document 工具按需解析
+    return true
   } catch {
     ElMessage.error('文件上传失败')
+    return false
+  }
+}
+
+const handleFileSelected = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+  await uploadValidatedFile(file)
+}
+
+/** 输入框粘贴截图/图片：走与手动上传相同的校验与上传链路。 */
+const handlePasteFiles = async (files: File[]) => {
+  for (const raw of files) {
+    await uploadValidatedFile(normalizeClipboardFilename(raw))
   }
 }
 
@@ -3708,6 +3737,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
             @upload-file="handleUploadFile"
+            @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
             @update:runtime-options="onRuntimeOptionsChange"
             @keydown="handleKeyDown"
@@ -4135,6 +4165,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
         <template v-else>
           <ToolCallDetailPanel
             :tool-call="activeToolCall"
+            :conversation-id="localConversationId"
             :format-text="replaceVisiblePathsForDisplay"
           />
         </template>

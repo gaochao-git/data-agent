@@ -60,7 +60,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     )]
 
     assert tool_names == [
-        "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete", "file_glob", "file_grep", "dir_create", "dir_list", "dir_delete", "parse_document", "read_image", "present_artifacts", "get_current_time",
+        "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete", "file_glob", "file_grep", "file_diff", "dir_create", "dir_list", "dir_delete", "parse_document", "read_image", "present_artifacts", "get_current_time",
         "data_analyzing_tool", "calculator_tool", "ask_user_question", "officecli_run",
     ]
     assert bash_tool_names[-1] == "bash_run"

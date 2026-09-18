@@ -44,6 +44,8 @@ const emit = defineEmits<{
   focus: []
   blur: []
   'update:input': [value: string]
+  /** 粘贴携带文件（截图/复制图片等）时上抛；纯文本粘贴走浏览器默认行为。 */
+  'paste-files': [files: File[]]
 }>()
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -74,6 +76,14 @@ const handleKeydown = (event: KeyboardEvent) => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || props.isGenerating) return
   event.preventDefault()
   emit('submit')
+}
+
+/** 剪贴板文件（截图/复制的图片等）：拦截默认行为并上抛；纯文本粘贴不拦截。 */
+const handlePaste = (event: ClipboardEvent) => {
+  const files = Array.from(event.clipboardData?.files ?? [])
+  if (!files.length) return
+  event.preventDefault()
+  emit('paste-files', files)
 }
 
 const focus = () => {
@@ -114,6 +124,7 @@ watch(() => props.input, async () => {
           class="block w-full border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-auto placeholder:text-gray-400"
           @input="emit('update:input', ($event.target as HTMLTextAreaElement).value)"
           @keydown="handleKeydown"
+          @paste="handlePaste"
           @focus="emit('focus')"
           @blur="emit('blur')"
         ></textarea>

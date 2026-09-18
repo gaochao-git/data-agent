@@ -63,6 +63,7 @@ const emit = defineEmits<{
   clearSkill: []
   openSkillManager: []
   uploadFile: []
+  pasteFiles: [files: File[]]
   keydown: [event: KeyboardEvent]
   focus: []
   blur: []
@@ -164,6 +165,7 @@ onBeforeUnmount(() => {
     @update:input="emit('update:input', $event)"
     @submit="emit('submit')"
     @stop="emit('stop')"
+    @paste-files="emit('pasteFiles', $event)"
     @keydown="emit('keydown', $event)"
     @focus="emit('focus')"
     @blur="emit('blur')"

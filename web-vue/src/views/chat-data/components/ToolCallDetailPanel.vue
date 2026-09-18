@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../types'
-import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import FileDiffViewer from './FileDiffViewer.vue'
 
-interface Props {
-  toolCall?: ToolCallInfo | null
-  formatText?: (value: string) => string
-}
-
-const props = withDefaults(defineProps<Props>(), {
-  toolCall: null,
-  formatText: (value: string) => value,
+// 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
+// 见 AGENTS.md 4.3 —— chat-data 会被嵌入未安装 typescript 的宿主项目
+const props = defineProps({
+  toolCall: { type: Object as PropType<ToolCallInfo | null>, default: null },
+  formatText: { type: Function as PropType<(value: string) => string>, default: (value: string) => value },
+  conversationId: { type: String, default: '' },
 })
 
 const formatJson = (value: unknown) => props.formatText(JSON.stringify(value || {}, null, 2))
@@ -31,6 +31,15 @@ watch(
     resultExpanded.value = true
   }
 )
+
+// file_diff：「查看 Diff」按钮入口；对比视图在 FileDiffViewer 弹层内，结果区保持通用展示
+const fileDiffPayload = computed(() =>
+  parseFileDiffResult(props.toolCall?.tool_name, props.toolCall?.status, props.toolCall?.result),
+)
+const fileDiffOffloaded = computed(() =>
+  isFileDiffOffloaded(props.toolCall?.tool_name, props.toolCall?.status, props.toolCall?.result),
+)
+const diffViewerVisible = ref(false)
 
 const toolResult = computed(() => {
   const toolCall = props.toolCall
@@ -85,13 +94,29 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50"
           @click="resultExpanded = !resultExpanded"
         >
-          <span>结果</span>
+          <span class="flex items-center gap-2">
+            <span>结果</span>
+            <!-- file_diff：独立按钮打开对比查看器，不改动结果的通用展示 -->
+            <span
+              v-if="fileDiffPayload"
+              class="flex items-center gap-1 text-[#1f82d9] transition-colors hover:text-[#1668b3]"
+              role="button"
+              @click.stop="diffViewerVisible = true"
+            >
+              <i class="fa-solid fa-table-columns text-[10px]"></i>
+              <span>查看 Diff</span>
+            </span>
+          </span>
           <i
             class="fa-solid fa-chevron-right text-[10px] text-slate-300 transition-transform"
             :class="{ 'rotate-90': resultExpanded }"
           ></i>
         </button>
         <div v-if="resultExpanded" class="px-4 pb-4">
+          <!-- file_diff 结果过大被卸载时的友好提示（此时无法解析 diff） -->
+          <div v-if="fileDiffOffloaded" class="mb-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-600">
+            对比结果过大已保存到工作区；可让智能体用 file_read 分段查看 diff 明细。
+          </div>
           <pre class="m-0 max-h-[56vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ toolResult }}</pre>
         </div>
       </section>
@@ -120,4 +145,11 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
   <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-400">
     从消息中选择一个工具调用查看参数和结果。
   </div>
+
+  <!-- file_diff 对比查看器弹层 -->
+  <FileDiffViewer
+    v-model:visible="diffViewerVisible"
+    :payload="fileDiffPayload"
+    :conversation-id="conversationId"
+  />
 </template>

@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import ChatInputBox from '../ChatInputBox.vue'
 
@@ -88,5 +88,44 @@ describe('ChatInputBox 输入', () => {
     const wrapper = mountBox({ input: 'abc', maxlength: 2000 })
 
     expect(wrapper.text()).toContain('3/2000')
+  })
+})
+
+describe('ChatInputBox 粘贴文件', () => {
+  const dispatchPaste = (wrapper: ReturnType<typeof mountBox>, clipboardData: { files: File[] } | null) => {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData })
+    const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
+    wrapper.find('textarea').element.dispatchEvent(event)
+
+    return preventDefaultSpy
+  }
+
+  it('剪贴板携带文件时上抛 paste-files 并拦截默认行为', () => {
+    const wrapper = mountBox({ input: '' })
+    const file = new File(['img'], 'image.png', { type: 'image/png' })
+
+    const preventDefaultSpy = dispatchPaste(wrapper, { files: [file] })
+
+    expect(wrapper.emitted('paste-files')?.[0]).toEqual([[file]])
+    expect(preventDefaultSpy).toHaveBeenCalled()
+  })
+
+  it('纯文本粘贴不拦截、不发 paste-files', () => {
+    const wrapper = mountBox({ input: '' })
+
+    const preventDefaultSpy = dispatchPaste(wrapper, { files: [] })
+
+    expect(wrapper.emitted('paste-files')).toBeUndefined()
+    expect(preventDefaultSpy).not.toHaveBeenCalled()
+  })
+
+  it('无 clipboardData（非标准环境）时静默放行', () => {
+    const wrapper = mountBox({ input: '' })
+
+    const preventDefaultSpy = dispatchPaste(wrapper, null)
+
+    expect(wrapper.emitted('paste-files')).toBeUndefined()
+    expect(preventDefaultSpy).not.toHaveBeenCalled()
   })
 })

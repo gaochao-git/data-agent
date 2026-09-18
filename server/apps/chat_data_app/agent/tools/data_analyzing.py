@@ -55,6 +55,7 @@ from apps.chat_data_app.services.semantic.run.semantic_query_service import (
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import get_semantic_quality_checker
 from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload, tool_result_payload
+from .filesystem import read_text_file_full
 
 logger = get_logger(__name__)
 
@@ -479,54 +480,13 @@ async def _run_validate_dashboard(
 
 # YAML 全文直读上限（字符）：与导入接口 SemanticOssieImportRequest.yaml_content 的 2MB 口径一致
 _CHECK_YAML_MAX_CHARS = 2_000_000
-# read_text_file 是分页接口（offset 0 起始，返回 lines/has_more/next_offset），按页拉全
-_CHECK_YAML_PAGE_LINES = 2_000
-_CHECK_YAML_MAX_PAGES = 50
 
 
 async def _read_workspace_yaml_text(workspace_runtime, file_path: str) -> str:
-    """从会话工作区分页拉取 YAML 全文；读取失败直接 raise，由 ToolErrorMiddleware 转 error。"""
+    """从会话工作区拉取 YAML 全文；复用 filesystem.read_text_file_full，失败直接 raise，由 ToolErrorMiddleware 转 error。"""
     if workspace_runtime is None:
         raise ValueError("工作区不可用，无法读取 YAML 文件")
-    raw_path = str(file_path or "").strip()
-    chunks: list[str] = []
-    collected = 0
-    offset = 0
-    for _ in range(_CHECK_YAML_MAX_PAGES):
-        page = await workspace_runtime.read_text_file(
-            file_path=raw_path,
-            offset=offset,
-            limit=_CHECK_YAML_PAGE_LINES,
-            max_chars=_CHECK_YAML_MAX_CHARS + 1,
-        )
-        if not page.get("exists"):
-            raise ValueError(f"YAML 文件不存在，请确认工作区路径: {file_path}")
-        if page.get("is_dir"):
-            raise ValueError(f"file_path 是目录而非文件: {file_path}")
-        if page.get("is_binary"):
-            raise ValueError(f"file_path 是二进制文件，无法按 YAML 解析: {file_path}")
-        if page.get("offset_out_of_range"):
-            break
-        if page.get("truncated_lines"):
-            raise ValueError(f"YAML 文件超过 {_CHECK_YAML_MAX_CHARS} 字符，请拆分模型文件后再校验: {file_path}")
-        lines = [str(item) for item in page.get("lines") or []]
-        if not lines and offset == 0:
-            raise ValueError(f"YAML 文件为空: {file_path}")
-        page_text = "\n".join(lines)
-        chunks.append(page_text)
-        collected += len(page_text) + 1
-        if collected > _CHECK_YAML_MAX_CHARS:
-            raise ValueError(f"YAML 文件超过 {_CHECK_YAML_MAX_CHARS} 字符，请拆分模型文件后再校验: {file_path}")
-        if not page.get("has_more"):
-            break
-        next_offset = page.get("next_offset")
-        if next_offset is None:
-            break
-        offset = int(next_offset)
-    text = "\n".join(chunks)
-    if not text.strip():
-        raise ValueError(f"YAML 文件为空: {file_path}")
-    return text
+    return await read_text_file_full(workspace_runtime, file_path, max_chars=_CHECK_YAML_MAX_CHARS)
 
 
 async def _run_check_yaml(

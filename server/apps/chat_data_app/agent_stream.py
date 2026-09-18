@@ -91,6 +91,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "parse_document": "解析文档",
     "file_glob": "查找文件",
     "file_grep": "搜索文本",
+    "file_diff": "对比文件",
     "dir_create": "创建目录",
     "dir_list": "列出目录",
     "dir_delete": "删除目录",

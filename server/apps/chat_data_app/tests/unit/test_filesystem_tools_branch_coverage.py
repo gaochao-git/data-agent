@@ -345,3 +345,115 @@ async def test_file_edit_tool_rejects_identical_content_before_runtime():
             "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "123", "new_content": 123,
         })
     assert runtime.calls == []
+
+
+# ---------------------------------------------------------------------------
+# file_diff / read_text_file_full（分页契约替身）
+# ---------------------------------------------------------------------------
+
+
+class PagedFileRuntime:
+    """基于临时目录的 read_text_file 分页契约替身：offset 0 起始、lines/has_more/next_offset 翻页。"""
+
+    def __init__(self, root, page_size: int | None = None, binary_paths: set[str] | None = None):
+        self.root = root
+        self.page_size = page_size
+        self.binary_paths = binary_paths or set()
+
+    async def read_text_file(self, *, file_path, offset, limit, max_chars):
+        relative = str(file_path).replace("/mnt/user-data/", "").lstrip("/")
+        target = self.root / relative
+        if not target.exists():
+            return {"exists": False, "path": file_path}
+        if target.is_dir():
+            return {"exists": True, "is_dir": True, "path": file_path}
+        if str(file_path) in self.binary_paths:
+            return {"exists": True, "is_dir": False, "is_binary": True, "path": file_path}
+        content = target.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        effective_limit = self.page_size or limit
+        page_lines = lines[offset:offset + effective_limit]
+        has_more = offset + effective_limit < len(lines)
+        return {
+            "exists": True, "is_dir": False, "is_binary": False, "path": file_path,
+            "total_lines": len(lines), "empty": content == "",
+            "offset_out_of_range": content != "" and offset >= len(lines),
+            "lines": page_lines, "has_more": has_more,
+            "next_offset": offset + effective_limit if has_more else None,
+            "truncated_lines": [],
+        }
+
+
+def _write(root, name: str, text: str) -> str:
+    (root / "workspace").mkdir(exist_ok=True)
+    (root / "workspace" / name).write_text(text, encoding="utf-8")
+    return f"/mnt/user-data/workspace/{name}"
+
+
+@pytest.mark.asyncio
+async def test_file_diff_tool_identical_files(tmp_path):
+    runtime = PagedFileRuntime(tmp_path)
+    path_a = _write(tmp_path, "a.yaml", "version: '1'\nname: m\n")
+    path_b = _write(tmp_path, "b.yaml", "version: '1'\nname: m\n")
+    payload = _payload(await _invoke(runtime, "file_diff", {"file_a": path_a, "file_b": path_b}))
+    assert payload["status"] == "identical"
+    assert payload["added_lines"] == 0
+    assert payload["removed_lines"] == 0
+    assert "diff" not in payload
+
+
+@pytest.mark.asyncio
+async def test_file_diff_tool_changed_files_counts_and_diff(tmp_path):
+    runtime = PagedFileRuntime(tmp_path)
+    path_a = _write(tmp_path, "a.yaml", "version: '1'\nname: orders\nmetrics: []\n")
+    path_b = _write(tmp_path, "b.yaml", "version: '1'\nname: orders_v2\nmetrics: []\n")
+    payload = _payload(await _invoke(runtime, "file_diff", {"file_a": path_a, "file_b": path_b}))
+    assert payload["status"] == "changed"
+    assert payload["added_lines"] == 1
+    assert payload["removed_lines"] == 1
+    assert "-name: orders" in payload["diff"]
+    assert "+name: orders_v2" in payload["diff"]
+    assert payload["diff"].startswith("---")
+
+
+@pytest.mark.asyncio
+async def test_file_diff_tool_reads_across_pages(tmp_path, monkeypatch):
+    """页大小小于文件行数时必须翻页拉全，统计不能因丢行而错。"""
+    monkeypatch.setattr(fs, "_FULL_READ_PAGE_LINES", 2)
+    runtime = PagedFileRuntime(tmp_path, page_size=2)
+    lines_a = "\n".join(f"line-{i}" for i in range(7)) + "\n"
+    lines_b = "\n".join(f"line-{i}" for i in range(7)) + "\nline-7\nline-8\n"
+    path_a = _write(tmp_path, "a.txt", lines_a)
+    path_b = _write(tmp_path, "b.txt", lines_b)
+    payload = _payload(await _invoke(runtime, "file_diff", {"file_a": path_a, "file_b": path_b}))
+    assert payload["status"] == "changed"
+    assert payload["added_lines"] == 2
+    assert payload["removed_lines"] == 0
+
+
+@pytest.mark.asyncio
+async def test_file_diff_tool_missing_file_raises(tmp_path):
+    runtime = PagedFileRuntime(tmp_path)
+    path_a = _write(tmp_path, "a.yaml", "version: '1'\n")
+    with pytest.raises(ValueError, match="文件不存在"):
+        await _invoke(runtime, "file_diff", {"file_a": path_a, "file_b": "/mnt/user-data/workspace/missing.yaml"})
+
+
+@pytest.mark.asyncio
+async def test_file_diff_tool_rejects_binary(tmp_path):
+    runtime = PagedFileRuntime(tmp_path, binary_paths={"/mnt/user-data/uploads/blob.bin"})
+    path_a = _write(tmp_path, "a.yaml", "version: '1'\n")
+    (tmp_path / "uploads").mkdir(exist_ok=True)
+    (tmp_path / "uploads" / "blob.bin").write_bytes(b"\x00\x01")
+    with pytest.raises(ValueError, match="二进制"):
+        await _invoke(runtime, "file_diff", {
+            "file_a": path_a, "file_b": "/mnt/user-data/uploads/blob.bin",
+        })
+
+
+@pytest.mark.asyncio
+async def test_read_text_file_full_empty_file_raises(tmp_path):
+    runtime = PagedFileRuntime(tmp_path)
+    path = _write(tmp_path, "empty.yaml", "")
+    with pytest.raises(ValueError, match="文件为空"):
+        await fs.read_text_file_full(runtime, path)

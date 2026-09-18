@@ -148,4 +148,62 @@ describe('ToolCallCard', () => {
     expect(wrapper.find('.subagent-chain').exists()).toBe(false)
     expect(wrapper.findAll('.sub-tool-chip').length).toBe(0)
   })
+
+  it('keeps file_diff raw json as result and offers a separate diff viewer button', () => {
+    const result = '[file_diff]\n' + JSON.stringify({
+      file_a: '/mnt/user-data/workspace/semantic/orders__a1.yaml',
+      file_b: '/mnt/user-data/outputs/orders__a1.yaml',
+      status: 'changed',
+      added_lines: 2,
+      removed_lines: 1,
+      diff: '--- /mnt/user-data/workspace/semantic/orders__a1.yaml\n+++ /mnt/user-data/outputs/orders__a1.yaml\n@@ -1,3 +1,4 @@\n version: \'1\'\n-name: orders\n+name: orders_v2\n+metrics: []\n',
+    })
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-diff',
+          tool_name: 'file_diff',
+          args: { file_a: '/mnt/user-data/workspace/semantic/orders__a1.yaml', file_b: '/mnt/user-data/outputs/orders__a1.yaml' },
+          status: 'completed',
+          result,
+        },
+      },
+    })
+
+    // 结果区保持与其他工具一致的原始 JSON 展示
+    expect(wrapper.text()).toContain('added_lines')
+    // 卡片标题栏显示 +N -M 统计，并提供独立「查看 Diff」入口
+    expect(wrapper.text()).toContain('+2')
+    expect(wrapper.text()).toContain('-1')
+    const diffButton = wrapper.findAll('button').find(b => b.text().includes('查看 Diff'))
+    expect(diffButton).toBeTruthy()
+  })
+
+  it('offers diff viewer for identical file_diff without line stats', () => {
+    const result = '[file_diff]\n' + JSON.stringify({
+      file_a: '/mnt/user-data/workspace/a.yaml',
+      file_b: '/mnt/user-data/workspace/b.yaml',
+      status: 'identical',
+      added_lines: 0,
+      removed_lines: 0,
+    })
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-diff-same',
+          tool_name: 'file_diff',
+          args: { file_a: '/mnt/user-data/workspace/a.yaml', file_b: '/mnt/user-data/workspace/b.yaml' },
+          status: 'completed',
+          result,
+        },
+      },
+    })
+
+    const diffButton = wrapper.findAll('button').find(b => b.text().includes('查看 Diff'))
+    expect(diffButton).toBeTruthy()
+    // identical 不显示 +N -M 统计
+    expect(wrapper.text()).not.toContain('+0')
+  })
 })

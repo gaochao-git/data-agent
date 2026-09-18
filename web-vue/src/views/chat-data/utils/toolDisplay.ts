@@ -4,6 +4,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   file_read: '读取文件',
   file_glob: '查找文件',
   file_grep: '搜索文本',
+  file_diff: '对比文件',
   file_edit: '修改文件',
   file_write: '写入文件',
   file_move: '移动文件',
@@ -85,6 +86,12 @@ const transferDescription: DescriptionBuilder = (args) => {
   return source && target ? `${source} -> ${target}` : source || target
 }
 
+const fileDiffDescription: DescriptionBuilder = (args) => {
+  const fileA = normalizeVisiblePath(args.file_a)
+  const fileB = normalizeVisiblePath(args.file_b)
+  return fileA && fileB ? `${fileA} -> ${fileB}` : fileA || fileB
+}
+
 const presentArtifactsDescription: DescriptionBuilder = (args) => {
   const files = Array.isArray(args.files)
     ? args.files.map(normalizeVisiblePath).filter(Boolean)
@@ -132,6 +139,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   file_copy: transferDescription,
   file_glob: args => joinPathDetail(args.path || 'workspace', args.pattern),
   file_grep: args => joinPathDetail(args.path || 'workspace', args.pattern),
+  file_diff: fileDiffDescription,
   dir_create: args => normalizeVisiblePath(args.path),
   dir_list: args => normalizeVisiblePath(args.path || 'workspace'),
   dir_delete: args => normalizeVisiblePath(args.path),
@@ -176,6 +184,76 @@ export function getToolCompactDescription(
   const intent = intentDescription(args)
   if (intent) return intent
   return getToolTechnicalDescription(toolName, args)
+}
+
+// ---------------------------------------------------------------------------
+// file_diff 结果解析（ToolCallCard / ToolCallDetailPanel 共用）
+// ---------------------------------------------------------------------------
+
+export interface FileDiffPayload {
+  file_a: string
+  file_b: string
+  status: 'identical' | 'changed'
+  added_lines: number
+  removed_lines: number
+  diff?: string
+}
+
+export type FileDiffLineType = 'meta' | 'hunk' | 'add' | 'del' | 'context'
+
+export interface FileDiffLine {
+  type: FileDiffLineType
+  content: string
+}
+
+const FILE_DIFF_RESULT_PREFIX = '[file_diff]\n'
+
+/** 解析 file_diff 完成结果；非 file_diff / 未完成 / offload / 格式漂移时返回 null（调用方回退通用文本展示）。 */
+export function parseFileDiffResult(
+  toolName?: string | null,
+  status?: string | null,
+  result?: string | null,
+): FileDiffPayload | null {
+  if (String(toolName || '').trim() !== 'file_diff' || status !== 'completed') return null
+  const text = String(result || '')
+  if (!text.startsWith(FILE_DIFF_RESULT_PREFIX)) return null
+  try {
+    const payload = JSON.parse(text.slice(FILE_DIFF_RESULT_PREFIX.length)) as FileDiffPayload
+    return payload && typeof payload.status === 'string' ? payload : null
+  } catch {
+    return null
+  }
+}
+
+/** file_diff 结果超过上下文预算被卸载为指针时返回 true（此时无法解析 diff，前端给出友好提示）。 */
+export function isFileDiffOffloaded(
+  toolName?: string | null,
+  status?: string | null,
+  result?: string | null,
+): boolean {
+  return (
+    String(toolName || '').trim() === 'file_diff' &&
+    status === 'completed' &&
+    String(result || '').startsWith('[tool_result_offloaded]')
+  )
+}
+
+/** unified diff 文本按行分类：文件头灰、@@ 蓝、增行绿、删行红、上下文普通。
+ * 进入 hunk 正文后，以 ---/+++ 开头的行按删除/新增处理（正文内容可能自带 - 前缀），避免误判成文件头。 */
+export function splitFileDiffLines(diff?: string): FileDiffLine[] {
+  if (!diff) return []
+  let inHunk = false
+  return diff.split('\n').map((line): FileDiffLine => {
+    if (!inHunk) {
+      if (line.startsWith('---') || line.startsWith('+++')) return { type: 'meta', content: line }
+      if (!line.startsWith('@@')) return { type: 'context', content: line }
+      inHunk = true
+    }
+    if (line.startsWith('@@')) return { type: 'hunk', content: line }
+    if (line.startsWith('+')) return { type: 'add', content: line }
+    if (line.startsWith('-')) return { type: 'del', content: line }
+    return { type: 'context', content: line }
+  })
 }
 
 /**

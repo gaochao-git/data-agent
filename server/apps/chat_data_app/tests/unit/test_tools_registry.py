@@ -33,7 +33,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (  # no
 # 与 TOOL_SPECS 声明一一对应（bash_run 受运行选项控制，单独断言）
 EXPECTED_WITHOUT_BASH = [
     "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete",
-    "file_glob", "file_grep", "dir_create", "dir_list", "dir_delete",
+    "file_glob", "file_grep", "file_diff", "dir_create", "dir_list", "dir_delete",
     "parse_document", "read_image", "present_artifacts", "get_current_time",
     "data_analyzing_tool",
     "calculator_tool", "ask_user_question", "officecli_run",
@@ -81,6 +81,12 @@ def test_exclusion_sets_reference_registered_tools_only():
     ):
         unknown = excluded - registered
         assert not unknown, f"{label} 排除集引用了未注册工具: {sorted(unknown)}"
+
+
+def test_built_tools_are_declared_in_provides(tmp_path):
+    """实际装配出的工具必须全部登记在 provides：漏登记时排除集匹配会静默失效。"""
+    missing = set(_tool_names(tmp_path)) - provided_tool_names()
+    assert not missing, f"工具已装配但未登记 provides: {sorted(missing)}"
 
 
 def test_registry_names_are_unique_and_non_empty():

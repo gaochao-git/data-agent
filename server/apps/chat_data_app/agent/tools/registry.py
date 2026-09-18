@@ -73,6 +73,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             "file_delete",
             "file_glob",
             "file_grep",
+            "file_diff",
             "dir_create",
             "dir_list",
             "dir_delete",

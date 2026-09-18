@@ -10,7 +10,8 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 
 interface Props {
@@ -152,13 +153,35 @@ const executeQueryAction = computed(() => (props.toolCall.args || {})?.action ==
 const isLineCountTool = computed(() =>
   props.toolCall.tool_name === 'file_write' || props.toolCall.tool_name === 'file_edit',
 )
+
+// file_diff：解析结果用于标题 +N -M 统计与「查看 Diff」按钮入口；对比视图在 FileDiffViewer 弹层内
+const isFileDiffTool = computed(() => props.toolCall.tool_name === 'file_diff')
+
+const fileDiffPayload = computed(() =>
+  parseFileDiffResult(props.toolCall.tool_name, props.toolCall.status, props.toolCall.result),
+)
+const fileDiffOffloaded = computed(() =>
+  isFileDiffOffloaded(props.toolCall.tool_name, props.toolCall.status, props.toolCall.result),
+)
+const diffViewerVisible = ref(false)
+
 const addedLinesText = computed(() => {
+  if (isFileDiffTool.value) {
+    return fileDiffPayload.value && fileDiffPayload.value.status === 'changed'
+      ? `+${fileDiffPayload.value.added_lines}`
+      : ''
+  }
   if (!isLineCountTool.value) return ''
   const lines = props.toolCall.contentLines
   if (lines == null) return ''
   return `+${lines}`
 })
 const removedLinesText = computed(() => {
+  if (isFileDiffTool.value) {
+    return fileDiffPayload.value && fileDiffPayload.value.removed_lines > 0
+      ? `-${fileDiffPayload.value.removed_lines}`
+      : ''
+  }
   if (!isLineCountTool.value) return ''
   const lines = props.toolCall.removedLines
   if (lines == null || lines <= 0) return ''
@@ -584,17 +607,32 @@ function getSqlTokenClass(type: string): string {
         <span>执行中...</span>
       </div>
       <div v-else-if="toolCall.status === 'completed' && (toolCall.result || toolCall.renderId)" class="mb-3 last:mb-0">
-        <button
-          class="flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-gray-700"
-          @click="resultsExpanded = !resultsExpanded"
-        >
-          <i
-            class="fa-solid fa-chevron-right text-[10px] transition-transform duration-200"
-            :class="{ 'rotate-90': resultsExpanded }"
-          ></i>
-          <span>结果</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            class="flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-gray-700"
+            @click="resultsExpanded = !resultsExpanded"
+          >
+            <i
+              class="fa-solid fa-chevron-right text-[10px] transition-transform duration-200"
+              :class="{ 'rotate-90': resultsExpanded }"
+            ></i>
+            <span>结果</span>
+          </button>
+          <!-- file_diff：独立按钮打开对比查看器，不改动结果的通用展示 -->
+          <button
+            v-if="isFileDiffTool && fileDiffPayload"
+            class="flex items-center gap-1 text-xs font-medium text-[#1f82d9] bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-[#1668b3]"
+            @click="diffViewerVisible = true"
+          >
+            <i class="fa-solid fa-table-columns text-[10px]"></i>
+            <span>查看 Diff</span>
+          </button>
+        </div>
         <div v-if="resultsExpanded" class="mt-2">
+          <!-- file_diff 结果过大被卸载时的友好提示（此时无法解析 diff） -->
+          <div v-if="isFileDiffTool && fileDiffOffloaded" class="mb-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-600">
+            对比结果过大已保存到工作区；可让智能体用 file_read 分段查看 diff 明细。
+          </div>
           <!-- 文本结果 -->
           <div v-if="toolCall.result && parseResultContent(toolCall.result).length > 0" class="min-w-0 p-3 rounded-lg bg-white border border-black/[0.06] mb-2 last:mb-0">
             <template v-for="(part, idx) in parseResultContent(toolCall.result)" :key="idx">
@@ -663,6 +701,13 @@ function getSqlTokenClass(type: string): string {
       :member-datasource-id="saveMemberDatasourceId"
       :member-datasource-ids="saveMemberDatasourceIds"
       :execution-targets="executionTargets"
+    />
+
+    <!-- file_diff 对比查看器弹层 -->
+    <FileDiffViewer
+      v-model:visible="diffViewerVisible"
+      :payload="fileDiffPayload"
+      :conversation-id="conversationId"
     />
   </div>
 </template>

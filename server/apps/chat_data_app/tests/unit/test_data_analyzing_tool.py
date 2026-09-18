@@ -21,7 +21,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.tools import data_analyzing
+from apps.chat_data_app.agent.tools import data_analyzing, filesystem
 from apps.chat_data_app.schema import DATA_ANALYZING_ACTION_PAYLOAD_MODELS, DataAnalyzingInput
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
@@ -1052,7 +1052,7 @@ def test_check_yaml_missing_file_raises(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         runtime = _FakeWorkspaceRuntime(Path(tmp))
         monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
-        with pytest.raises(ValueError, match="YAML 文件不存在"):
+        with pytest.raises(ValueError, match="文件不存在"):
             asyncio.run(
                 data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
                     "action": "check_yaml",
@@ -1090,7 +1090,7 @@ def test_check_yaml_without_workspace_runtime_raises():
 
 def test_check_yaml_reads_full_file_across_pages(monkeypatch):
     """read_text_file 是分页契约：页大小小于文件行数时必须翻页拉全，不能丢行。"""
-    monkeypatch.setattr(data_analyzing, "_CHECK_YAML_PAGE_LINES", 2)
+    monkeypatch.setattr(filesystem, "_FULL_READ_PAGE_LINES", 2)
     result = _invoke_check_yaml(
         monkeypatch, _good_yaml(), existing_configs=[], file_name="paged.yaml",
         runtime_page_size=2,
@@ -1107,7 +1107,7 @@ def test_check_yaml_empty_file_raises(monkeypatch):
         (workspace_dir / "empty.yaml").write_text("", encoding="utf-8")
         runtime = _FakeWorkspaceRuntime(Path(tmp))
         monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
-        with pytest.raises(ValueError, match="YAML 文件为空"):
+        with pytest.raises(ValueError, match="文件为空"):
             asyncio.run(
                 data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
                     "action": "check_yaml",

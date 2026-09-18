@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -22,6 +23,67 @@ from .common import (
 
 _DEFAULT_GLOB_RESULTS = 100
 _DEFAULT_GREP_RESULTS = 100
+
+# 整体读取上限（字符）：与 file_grep 的 2 MiB 跳过口径一致
+FULL_READ_MAX_CHARS = 2 * 1024 * 1024
+# read_text_file 是分页接口（offset 0 起始、返回 lines 数组、has_more/next_offset 翻页），
+# 不存在一次性全文读取；需要全文的场景必须经 read_text_file_full 翻页拼接。
+_FULL_READ_PAGE_LINES = 2_000
+_FULL_READ_MAX_PAGES = 50
+
+
+async def read_text_file_full(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    file_path: str,
+    *,
+    max_chars: int = FULL_READ_MAX_CHARS,
+) -> str:
+    """按 read_text_file 分页契约拉取工作区文本文件全文。
+
+    任一页出现 truncated_lines（行级预算截断）或累计字符超上限，都视为文件超过
+    max_chars，直接报错；二进制、目录、不存在、空文件同样报错。
+    """
+    raw_path = str(file_path or "").strip()
+    if not raw_path:
+        raise ValueError("file_path 不能为空")
+    chunks: list[str] = []
+    collected = 0
+    offset = 0
+    for _ in range(_FULL_READ_MAX_PAGES):
+        page = await workspace_runtime.read_text_file(
+            file_path=raw_path,
+            offset=offset,
+            limit=_FULL_READ_PAGE_LINES,
+            max_chars=max_chars + 1,
+        )
+        if not page.get("exists"):
+            raise ValueError(f"文件不存在，请确认工作区路径: {file_path}")
+        if page.get("is_dir"):
+            raise ValueError(f"目标是目录而非文件: {file_path}")
+        if page.get("is_binary"):
+            raise ValueError(f"不支持按文本读取二进制文件: {file_path}")
+        if page.get("offset_out_of_range"):
+            break
+        if page.get("truncated_lines"):
+            raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {file_path}")
+        lines = [str(item) for item in page.get("lines") or []]
+        if not lines and offset == 0:
+            raise ValueError(f"文件为空: {file_path}")
+        page_text = "\n".join(lines)
+        chunks.append(page_text)
+        collected += len(page_text) + 1
+        if collected > max_chars:
+            raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {file_path}")
+        if not page.get("has_more"):
+            break
+        next_offset = page.get("next_offset")
+        if next_offset is None:
+            break
+        offset = int(next_offset)
+    text = "\n".join(chunks)
+    if not text.strip():
+        raise ValueError(f"文件为空: {file_path}")
+    return text
 
 
 def _validate_relative_glob(pattern: str, *, field_name: str) -> str:
@@ -298,6 +360,48 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         }
         return tool_result_payload("file_grep", payload)
 
+    @tool("file_diff", parse_docstring=True)
+    async def file_diff(file_a: str, file_b: str, intent: str = "") -> str:
+        """
+        对比当前会话内两个文本文件的差异（unified diff），修改文件后自查改动范围用。
+
+        两个文件整体读取（单文件上限 2 MiB，二进制不支持），输出 added_lines /
+        removed_lines 统计与完整 unified diff；内容完全一致时 status=identical。
+        file_edit/file_write 之后应先对比确认改动范围与预期一致，再继续下一步。
+
+        Args:
+            file_a: 原文件路径（diff 的 from 侧）。
+            file_b: 对比文件路径（diff 的 to 侧）。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
+        """
+        text_a = await read_text_file_full(workspace_runtime, file_a)
+        text_b = await read_text_file_full(workspace_runtime, file_b)
+        if text_a == text_b:
+            return tool_result_payload("file_diff", {
+                "file_a": str(file_a),
+                "file_b": str(file_b),
+                "status": "identical",
+                "added_lines": 0,
+                "removed_lines": 0,
+                "message": "两个文件内容完全一致",
+            })
+        lines_a = text_a.splitlines()
+        lines_b = text_b.splitlines()
+        diff_lines = list(difflib.unified_diff(
+            lines_a, lines_b,
+            fromfile=str(file_a), tofile=str(file_b), lineterm="",
+        ))
+        added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+        removed = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+        return tool_result_payload("file_diff", {
+            "file_a": str(file_a),
+            "file_b": str(file_b),
+            "status": "changed",
+            "added_lines": added,
+            "removed_lines": removed,
+            "diff": "\n".join(diff_lines),
+        })
+
     @tool("dir_create", parse_docstring=True)
     async def dir_create(path: str, intent: str = "") -> str:
         """在 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下创建目录。不能创建根目录或操作隐藏工具结果缓存。
@@ -359,10 +463,11 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         file_delete,
         file_glob,
         file_grep,
+        file_diff,
         dir_create,
         dir_list,
         dir_delete,
     ]
 
 
-__all__ = ["create_filesystem_tools"]
+__all__ = ["create_filesystem_tools", "read_text_file_full"]
