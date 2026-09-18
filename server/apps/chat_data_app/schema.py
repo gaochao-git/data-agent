@@ -872,6 +872,17 @@ class _CheckYamlActionPayload(BaseModel):
         description="会话工作区内 Ossie 语义模型 YAML 文件路径，如 /mnt/user-data/workspace/model.yaml",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_yaml_content(cls, data: Any) -> Any:
+        """模型仍按旧习惯传 yaml_content 时，给出可执行的改法而不是泛化拒绝。"""
+        if isinstance(data, dict) and "yaml_content" in data:
+            raise ValueError(
+                'check_yaml 不再接受 yaml_content 全文参数，请改传文件路径：'
+                '{"file_path": "/mnt/user-data/workspace/semantic/<模型文件>.yaml"}'
+            )
+        return data
+
 
 # action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
 # 入参校验与 handler 内的解析共用同一张表，保证两处口径一致。

@@ -968,10 +968,15 @@ semantic_model:
 
 
 class _FakeWorkspaceRuntime:
-    """模拟 ConversationWorkspaceRuntime.read_text_file 的最小契约（本地后端行为子集）。"""
+    """模拟 ConversationWorkspaceRuntime.read_text_file 的分页契约（本地后端行为子集）。
 
-    def __init__(self, root: Path):
+    与真实 backend 对齐：offset 0 起始、返回 lines 数组、has_more/next_offset 翻页、
+    超出 max_chars 时给出 truncated_lines（行级预算截断标记）。
+    """
+
+    def __init__(self, root: Path, page_size: int | None = None):
         self.root = root
+        self.page_size = page_size
 
     async def read_text_file(self, *, file_path, offset, limit, max_chars):
         # 可见路径 /mnt/user-data/<相对路径> 映射到临时根下同名相对路径
@@ -979,15 +984,29 @@ class _FakeWorkspaceRuntime:
         target = self.root / relative
         if not target.exists():
             return {"exists": False, "path": file_path}
+        if target.is_dir():
+            return {"exists": True, "is_dir": True, "path": file_path}
         content = target.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        effective_limit = self.page_size or limit
+        page_lines = lines[offset:offset + effective_limit]
+        has_more = offset + effective_limit < len(lines)
+        truncated_lines = []
+        if len(content) > max_chars:
+            # 简化：整体超预算时把最后一页最后一行标记为截断
+            truncated_lines = [{"line_number": len(lines), "original_chars": len(content), "returned_chars": 0}]
         return {
             "exists": True,
             "is_dir": False,
             "is_binary": False,
-            "empty": content == "",
             "path": file_path,
-            "content": content[:max_chars],
-            "truncated": len(content) > max_chars,
+            "total_lines": len(lines),
+            "empty": content == "",
+            "offset_out_of_range": content != "" and offset >= len(lines),
+            "lines": page_lines,
+            "has_more": has_more,
+            "next_offset": offset + effective_limit if has_more else None,
+            "truncated_lines": truncated_lines,
         }
 
 
@@ -997,6 +1016,7 @@ def _invoke_check_yaml(
     datasource_id: str = "ds_a",
     existing_configs: list | None = None,
     file_name: str = "model.yaml",
+    runtime_page_size: int | None = None,
 ) -> dict:
     manager = FakeManager()
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
@@ -1008,7 +1028,7 @@ def _invoke_check_yaml(
         workspace_dir = Path(tmp) / "workspace"
         workspace_dir.mkdir()
         (workspace_dir / file_name).write_text(yaml_text, encoding="utf-8")
-        runtime = _FakeWorkspaceRuntime(Path(tmp))
+        runtime = _FakeWorkspaceRuntime(Path(tmp), page_size=runtime_page_size)
         raw = asyncio.run(
             data_analyzing.create_data_analyzing_tool(datasource_id, workspace_runtime=runtime).ainvoke({
                 "action": "check_yaml",
@@ -1066,6 +1086,34 @@ def test_check_yaml_without_workspace_runtime_raises():
                 "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
             })
         )
+
+
+def test_check_yaml_reads_full_file_across_pages(monkeypatch):
+    """read_text_file 是分页契约：页大小小于文件行数时必须翻页拉全，不能丢行。"""
+    monkeypatch.setattr(data_analyzing, "_CHECK_YAML_PAGE_LINES", 2)
+    result = _invoke_check_yaml(
+        monkeypatch, _good_yaml(), existing_configs=[], file_name="paged.yaml",
+        runtime_page_size=2,
+    )
+    assert result["success"] is True
+    assert result["stage"] == "checked"
+    assert result["models"][0]["importable"] is True
+
+
+def test_check_yaml_empty_file_raises(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace_dir = Path(tmp) / "workspace"
+        workspace_dir.mkdir()
+        (workspace_dir / "empty.yaml").write_text("", encoding="utf-8")
+        runtime = _FakeWorkspaceRuntime(Path(tmp))
+        monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
+        with pytest.raises(ValueError, match="YAML 文件为空"):
+            asyncio.run(
+                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": "/mnt/user-data/workspace/empty.yaml"},
+                })
+            )
 
 
 def test_check_yaml_parse_failure_returns_structured_result(monkeypatch):
