@@ -1,9 +1,5 @@
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  semantic_search: '语义检索',
-  search_dataset: '检索语义模型',
-  dsl2sql_tool: '编译 SQL',
-  semantic_yaml_check_tool: '语义模型自检',
-  semantic_query_tool: '查询数据',
+  data_analyzing_tool: '数据分析',
   calculator_tool: '精确计算',
   file_read: '读取文件',
   file_glob: '查找文件',
@@ -107,9 +103,27 @@ const calculatorDescription: DescriptionBuilder = (args) => {
   return calculations.length === 1 ? firstText : `${firstText} 等 ${calculations.length} 项`
 }
 
+/** data_analyzing_tool 的动作中文名；历史会话旧工具名不进此表。 */
+const DATA_ANALYZING_ACTION_NAMES: Record<string, string> = {
+  validate_dsl: '编译 SQL',
+  validate_dashboard: '校验看板',
+  execute_query: '查询数据',
+  check_yaml: '语义模型自检',
+}
+
+/** 判断是否为数据分析合并工具（历史会话的旧工具名不算）。 */
+export function isDataAnalyzingTool(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === 'data_analyzing_tool'
+}
+
+const dataAnalyzingDescription: DescriptionBuilder = (args) => {
+  const action = String(args.action || '').trim()
+  if (action === 'execute_query') return normalizeVisiblePath((args.action_payload as ToolArgs)?.save_as)
+  const payload = (args.action_payload || {}) as ToolArgs
+  return compactInlineText(payload.user_query || payload.semantic_config_id)
+}
+
 const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
-  search_dataset: args => compactInlineText(args.query),
-  semantic_search: args => compactInlineText(args.query || args.semantic_config_id || args.operation),
   file_read: filePathDescription,
   file_edit: filePathDescription,
   file_write: filePathDescription,
@@ -124,9 +138,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   parse_document: transferDescription,
   read_image: filePathDescription,
   present_artifacts: presentArtifactsDescription,
-  semantic_query_tool: args => normalizeVisiblePath(args.save_as),
-  dsl2sql_tool: args => compactInlineText(args.user_query || args.semantic_config_id),
-  semantic_yaml_check_tool: () => '',
+  data_analyzing_tool: dataAnalyzingDescription,
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),

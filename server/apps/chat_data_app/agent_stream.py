@@ -80,11 +80,7 @@ logger = get_logger(__name__)
 AGENT_ID = "chat_data"
 
 REASONING_TOOL_DISPLAY_NAMES = {
-    "semantic_search": "语义检索",
-    "search_dataset": "检索语义模型",
-    "dsl2sql_tool": "生成 SQL",
-    "semantic_yaml_check_tool": "语义模型自检",
-    "semantic_query_tool": "查询数据",
+    "data_analyzing_tool": "数据分析",
     "calculator_tool": "精确计算",
     "file_read": "读取文件",
     "file_edit": "修改文件",

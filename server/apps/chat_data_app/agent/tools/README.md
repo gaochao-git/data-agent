@@ -13,8 +13,8 @@
 | `bash_run` | `bash_run.py` | 受限命令执行；**由 `runtime_options.bash_enabled` 控制注册（默认关）** |
 | `officecli_run` | `officecli_run.py` | OfficeCLI 文档解析/编辑（argv 直 execve，非通用执行器） |
 | `present_artifacts` | `present_artifacts.py` | 展示 outputs 最终产物 |
-| `semantic_query`/`semantic_search` | `semantic_*.py` | 语义模型查询/检索 |
-| `dsl2sql` | `dsl2sql.py` | DSL 校验与编译 |
+| `semantic_query` | `semantic_query.py` | 语义模型查询（DSL/只读 SQL 二选一执行） |
+| `dsl2sql` | `dsl2sql.py` | DSL / dashboard_spec 校验（不执行） |
 | `semantic_yaml_check` | `semantic_yaml_check.py` | Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读） |
 | `ask_user_question` | `ask_user_question.py` | 向用户追问 |
 | `calculator`/`current_time` | 同名模块 | 基础工具 |
@@ -24,4 +24,4 @@
 - 路径参数只接受规范形式 `/mnt/user-data/{workspace,outputs,uploads}/...` 与只读
   `/mnt/skills/<name>/...`；docstring 是模型照抄的输入模板，示例必须用规范形式。
 - 工具错误分两类返回：参数/路径类给可纠正消息；意外异常给通用文案并记录完整堆栈。
-- 新增工具需同步：工具注册（`data_agent.assemble_tools`）、前端展示类型（web-vue）、单元测试。
+- 新增工具需同步：注册表登记（`tools/registry.py` 的 `TOOL_SPECS`，含 `provides` 工具名与子智能体可见性策略）、前端展示类型（web-vue）、单元测试。

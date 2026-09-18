@@ -108,11 +108,6 @@ CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env(
 CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env(
     "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False
 )
-# 是否注册 semantic_search 工具（LLM 打分召回 + 兜底物化）；关闭后主/子智能体纯走
-# 预物化目录（dir_list/file_grep/file_read）检索语义模型。预物化本身不受此开关影响。
-CHAT_DATA_SEMANTIC_SEARCH_ENABLED = read_bool_env(
-    "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", True
-)
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。

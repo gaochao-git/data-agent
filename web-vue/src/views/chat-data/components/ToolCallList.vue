@@ -64,6 +64,11 @@ const toggleExpand = (id: string) => {
   expandedIds.value = newSet
 }
 
+// 查询分析入口：data_analyzing_tool 的 execute_query
+const isQueryAnalysisTool = (tc: ToolCallInfo): boolean => {
+  return tc.tool_name === 'data_analyzing_tool' && (tc.args || {})?.action === 'execute_query'
+}
+
 // 子智能体内部过程：task 卡片下方独立区域，工具与中间文本按发生顺序混排，
 // 整块可折叠（运行中展开、跑完自动收起，手动点过则听用户的）。
 // 内层工具的参数与结果不在此区展示；点击 chip 在右侧详情面板查看——与普通
@@ -303,8 +308,8 @@ watch(
         :active="activeToolCallId === tc.tool_call_id"
         :datasource-id="datasourceId"
         :execution-targets="executionTargets"
-        :on-view-analysis="tc.tool_name === 'semantic_query_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
-        :is-analysis-active="Boolean(tc.tool_name === 'semantic_query_tool' && tc.renderId && isAnalysisActive)"
+        :on-view-analysis="isQueryAnalysisTool(tc) && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
+        :is-analysis-active="Boolean(isQueryAnalysisTool(tc) && tc.renderId && isAnalysisActive)"
         :conversation-id="conversationId"
         @toggle-expand="toggleExpand(tc.tool_call_id)"
         @select="emit('selectTool', tc)"

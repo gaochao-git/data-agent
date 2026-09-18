@@ -18,9 +18,9 @@
 - 所有业务查询先确认语义模型和字段定义，不凭常识编造指标、维度、表、字段、枚举或查询结果。
 - 查询支持两种模式：**DSL 模式**和**SQL 模式**。这是查询路径术语，不是 `mode` 参数。
 - 常规查询使用 DSL 模式；只有 DSL 确实无法表达查询结构时，才使用 SQL 模式。
-- DSL 模式传顶层 `dsl`，SQL 模式传顶层 `sql`；`semantic_query_tool` 的 `dsl` 和 `sql` 只能二选一。SQL 模式不调用 `dsl2sql_tool`，不要传 `mode`。
+- 查询执行统一走 `data_analyzing_tool`：DSL 模式在 `action_payload` 里传 `dsl`，SQL 模式传 `sql`，两者只能二选一。SQL 模式不做 validate_dsl 校验，不要传 `mode`。
 - 指标、维度或业务口径本身不明确时必须澄清，不能用 SQL 绕过；字段已经确认、只是枚举值或时间存储格式未知时，才允许少量抽样确认。
-- 一次 `dsl2sql_tool` 或 `semantic_query_tool` 只能使用一个 `semantic_config_id`，不能混合多个模型的字段、分组或 JOIN。
+- 一次 `data_analyzing_tool` 调用只能使用一个 `semantic_config_id`，不能混合多个模型的字段、分组或 JOIN。
 - 机构范围由 `member_datasource_ids` 控制，不在 DSL 过滤机构名称、编码或 ID。
 
 ## 标准流程
@@ -36,7 +36,7 @@
 
 ### 2. 通过查询门禁
 
-调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，必须确认：
+调用 `data_analyzing_tool`（校验或执行查询）或 `calculator_tool` 前，必须确认：
 
 - 当前使用的语义模型明确；
 - 用户问题中的指标、维度、筛选对象和时间范围能与模型高置信匹配；
@@ -164,15 +164,15 @@ DSL 顶层只使用以下字段：
 ### DSL 模式
 
 1. 生成完整 DSL。
-2. 调用 `dsl2sql_tool`，显式传入同一个 `semantic_config_id` 和同一份 DSL 做校验/生成 SQL。
-3. 校验成功后调用 `semantic_query_tool`，显式传入同一个 `semantic_config_id`、本次范围的 `member_datasource_ids` 和同一份顶层 `dsl`。
-4. 不要把 DSL 字段提升到工具顶层，也不要修改校验工具返回的 SQL。
+2. 调用 `data_analyzing_tool(action="validate_dsl", action_payload={"dsl": <同一份 DSL>, "semantic_config_id": "<同一模型>"})` 做校验/生成 SQL。
+3. 校验成功后调用 `data_analyzing_tool(action="execute_query", action_payload={"dsl": <同一份 DSL>, "semantic_config_id": "<同一模型>", "member_datasource_ids": [...]})`。
+4. 不要把 DSL 字段提升到 `action_payload` 之外，也不要修改校验返回的 SQL。
 
 ## SQL 模式
 
-SQL 模式是 DSL 模式无法表达查询结构时的回退模式。只有满足该条件，才可以调用 `semantic_query_tool` 的顶层 `sql` 参数。典型结构包括 CTE、子查询、窗口函数、多阶段聚合、自连接、`UNION`、`EXISTS`、复杂 `CASE WHEN` 或 DSL 无法表达的中间结果计算。
+SQL 模式是 DSL 模式无法表达查询结构时的回退模式。只有满足该条件，才可以使用 `data_analyzing_tool(action="execute_query", action_payload={"sql": "..."})` 的 `sql` 参数。典型结构包括 CTE、子查询、窗口函数、多阶段聚合、自连接、`UNION`、`EXISTS`、复杂 `CASE WHEN` 或 DSL 无法表达的中间结果计算。
 
-SQL 模式必须同时传入 `semantic_config_id` 和 `member_datasource_ids`，不能同时传 `dsl`，也不调用 `dsl2sql_tool`。
+SQL 模式的 `action_payload` 必须同时传入 `semantic_config_id` 和 `member_datasource_ids`，不能同时传 `dsl`，也不做 validate_dsl 校验。
 
 SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度中维护的原始表名、原始列名和 `relationships` 中确认的关联关系；关联字段只用于连接路径，不能当作未暴露业务字段随意查询或过滤。已维护指标的表达式代表业务口径，不能擅自改写。不能因为指标、维度或口径不清就回退 SQL。
 

@@ -11,22 +11,13 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.tools import dsl2sql
+from apps.chat_data_app.agent.tools import data_analyzing
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 from apps.chat_data_app.agent.workspace.artifact_registry import (
     parse_chart_spec_payload_value,
     parse_output_artifact,
 )
 from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
-
-
-def test_dsl2sql_tool_description_is_limited_to_dsl_mode():
-    description = dsl2sql.create_dsl2sql_tool("ds_a").description
-
-    assert "DSL 模式的校验工具" in description
-    assert "只在 DSL 模式使用" in description
-    assert "SQL 模式" in description
-    assert "不调用本工具" in description
 
 
 def _write_json(path, payload):
@@ -36,7 +27,7 @@ def _write_json(path, payload):
 
 
 def _strip_tool_payload(text: str) -> dict:
-    return json.loads(text.replace("[dsl2sql_tool]", "", 1).strip())
+    return json.loads(text.replace("[data_analyzing_tool]", "", 1).strip())
 
 
 def _local_artifact_payload(root, file_path: str) -> dict:
@@ -299,14 +290,14 @@ def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path)
         "data": [],
         "encoding": {"x": "month", "y": ["sales"]},
     })
-    valid_chart = _write_json(root / "outputs" / "valid-chart.json", {
+    _write_json(root / "outputs" / "valid-chart.json", {
         "version": "1.0",
         "chart_type": "table",
         "data": [],
         "encoding": {"x": "", "y": []},
     })
     (root / "outputs" / "bad-dashboard-json.json").write_text("{bad", encoding="utf-8")
-    valid_dashboard = _write_json(root / "outputs" / "valid-dashboard.json", {"cards": []})
+    _write_json(root / "outputs" / "valid-dashboard.json", {"cards": []})
 
     assert _local_artifact_payload(root, "/mnt/user-data/outputs/missing.json") == {}
     assert _local_artifact_payload(root, "/mnt/user-data/outputs/bad-chart.json") == {}
@@ -322,7 +313,7 @@ def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path)
 
 def test_dashboard_artifact_payload_reads_cards_from_outputs(tmp_path):
     root = tmp_path
-    output = _write_json(root / "outputs" / "dashboard.json", {
+    _write_json(root / "outputs" / "dashboard.json", {
         "dashboard_name": "订单看板",
         "cards": [{"title": "销售额", "dsl": {"metrics": ["销售额"]}}],
     })
@@ -339,7 +330,7 @@ def test_dashboard_artifact_payload_reads_cards_from_outputs(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(monkeypatch):
+async def test_data_analyzing_tool_handles_single_batch_compare_and_invalid_payload(monkeypatch):
     class FakeGenerator:
         def __init__(self, semantic_config):
             self.semantic_config = semantic_config
@@ -363,16 +354,19 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
         assert username == "测试用户"
         return {"valid": True, "valid_count": len(dashboard_spec["cards"]), "warnings": ["ok"], "panels": [{"title": "面板"}]}
 
-    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_get_config)
-    monkeypatch.setattr(dsl2sql, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
-    monkeypatch.setattr(dsl2sql, "validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_get_config)
+    monkeypatch.setattr(data_analyzing, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
+    monkeypatch.setattr(data_analyzing, "validate_dashboard_spec_payload", fake_validate)
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    tool = dsl2sql.create_dsl2sql_tool("ds_a", user_id="user_a", operator_name="测试用户")
+    tool = data_analyzing.create_data_analyzing_tool("ds_a", user_id="user_a", operator_name="测试用户")
 
     single = _strip_tool_payload(await tool.ainvoke({
-        "semantic_config_id": "sc_a",
-        "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
+        "action": "validate_dsl",
+        "action_payload": {
+            "semantic_config_id": "sc_a",
+            "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
+        },
     }))
     assert single["success"] is True
     assert single["mode"] == "single"
@@ -380,40 +374,52 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     assert single["warnings"] == ["已移除明细字段"]
 
     batch_from_cards = _strip_tool_payload(await tool.ainvoke({
-        "semantic_config_id": "sc_a",
-        "dsl": {"cards": [{"title": "销售额"}]},
+        "action": "validate_dashboard",
+        "action_payload": {"semantic_config_id": "sc_a", "dsl": {"cards": [{"title": "销售额"}]}},
     }))
     batch_from_list = _strip_tool_payload(await tool.ainvoke({
-        "semantic_config_id": "sc_a",
-        "dsl": [{"title": "销售额"}, {"title": "订单数"}],
+        "action": "validate_dashboard",
+        "action_payload": {"semantic_config_id": "sc_a", "dsl": [{"title": "销售额"}, {"title": "订单数"}]},
     }))
     assert batch_from_cards["mode"] == "batch"
     assert batch_from_cards["valid_count"] == 1
     assert batch_from_list["valid_count"] == 2
 
     compare = _strip_tool_payload(await tool.ainvoke({
-        "semantic_config_id": "sc_a",
-        "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}},
+        "action": "validate_dsl",
+        "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}}},
     }))
     assert compare["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare["error"]
 
     # 校验失败现在以 ValueError 抛出，由 ToolErrorMiddleware 统一转成错误 ToolMessage
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await dsl2sql.create_dsl2sql_tool("").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
-    with pytest.raises(ValueError, match="缺少 semantic_config_id"):
-        await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}})
-    with pytest.raises(ValueError, match="dsl 必须是对象或数组"):
-        await tool.ainvoke({"semantic_config_id": "sc_a", "dsl": "不是json"})
+        await data_analyzing.create_data_analyzing_tool("").ainvoke({
+            "action": "validate_dsl",
+            "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
+        })
+    with pytest.raises(ValueError, match="semantic_config_id"):
+        await data_analyzing.create_data_analyzing_tool("ds_a", None).ainvoke({
+            "action": "validate_dsl",
+            "action_payload": {"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}},
+        })
+    with pytest.raises(ValueError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        await tool.ainvoke({
+            "action": "validate_dsl",
+            "action_payload": {"semantic_config_id": "sc_a", "dsl": "不是json"},
+        })
 
 
 @pytest.mark.asyncio
-async def test_dsl2sql_tool_propagates_dependency_errors(monkeypatch):
+async def test_data_analyzing_tool_propagates_dependency_errors(monkeypatch):
     async def fake_get_config(_datasource_id, _semantic_config_id, user_id=None, mode="summary"):
         assert mode == "full"
         raise RuntimeError("配置不存在")
 
-    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_get_config)
+    monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_get_config)
 
     with pytest.raises(RuntimeError, match="配置不存在"):
-        await dsl2sql.create_dsl2sql_tool("ds_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
+        await data_analyzing.create_data_analyzing_tool("ds_a").ainvoke({
+            "action": "validate_dsl",
+            "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
+        })

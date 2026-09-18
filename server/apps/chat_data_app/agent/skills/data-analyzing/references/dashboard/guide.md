@@ -248,7 +248,7 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板生成场景禁止在卡片中直接写 `sql` 字段。即使模型能够推断物理表和字段，也必须使用当前指标体系中的 `metrics`、`dimensions`、`filters` 生成 DSL，再交给平台工具转换 SQL。
 
-看板生成场景也禁止把 `semantic_query_tool` 返回的数据写入卡片。抽样验证必须向 `semantic_query_tool` 传 DSL，由工具内部生成 SQL 并执行，不能替代看板规格。
+看板生成场景也禁止把 `execute_query` 返回的数据写入卡片。抽样验证必须向 `execute_query` 传 DSL，由工具内部生成 SQL 并执行，不能替代看板规格。
 
 DSL 字段：
 
@@ -305,8 +305,8 @@ DSL 字段：
 
 1. 为每张卡片确定一个语义模型，再生成完整 `dashboard_spec`；每张卡片必须包含 `semantic_config_id`，旧规格可以使用顶层默认字段。
 2. 每张卡片的 `semantic_config_id` 必须取按 `references/analysis/query.md` 检索到的、当前目录中实际存在的语义模型 ID。
-3. **看板必须批量校验**：调用一次 `dsl2sql_tool(dsl=dashboard_spec)`，传入包含 `dashboard_name` 和完整 `cards` 数组的整个规格。工具会按卡片语义模型生成校验结果并返回 `mode=batch`、`valid_count`、`semantic_config_ids`、逐卡 `panels` 和 `warnings`。
-4. 根据批量返回的逐卡模型、`panels` 和 `warnings` 修正完整 `dashboard_spec`，再整体调用 `dsl2sql_tool`；禁止将每张卡片的 DSL 拆开单独校验。
+3. **看板必须批量校验**：调用一次 `data_analyzing_tool(action="validate_dashboard", action_payload={"dsl": dashboard_spec})`，传入包含 `dashboard_name` 和完整 `cards` 数组的整个规格。工具会按卡片语义模型生成校验结果并返回 `mode=batch`、`valid_count`、`semantic_config_ids`、逐卡 `panels` 和 `warnings`。
+4. 根据批量返回的逐卡模型、`panels` 和 `warnings` 修正完整 `dashboard_spec`，再整体调用 `validate_dashboard`；禁止将每张卡片的 DSL 拆开单独校验。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
 6. 新建预览时用 `file_move` 将校验完成的 `workspace/dashboard_draft.json` 移入新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才先 `file_read` 再用 `file_edit` 精确替换唯一内容，或直接在该 outputs 文件用 `file_write` 整体覆盖。
 7. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示最终看板预览。
@@ -315,8 +315,8 @@ DSL 字段：
 
 ## 失败处理
 
-- `dsl2sql_tool` 返回指标不存在：回到该卡片 `semantic_config_id` 对应的语义模型 YAML，按 `references/analysis/query.md` 的检索方式定位并确认字段定义，替换为真实存在的指标，不要编造指标。
-- `dsl2sql_tool` 返回维度不可用：检查工具返回的该指标可用维度，移除或替换不可用维度。
+- 校验（validate_dsl / validate_dashboard）返回指标不存在：回到该卡片 `semantic_config_id` 对应的语义模型 YAML，按 `references/analysis/query.md` 的检索方式定位并确认字段定义，替换为真实存在的指标，不要编造指标。
+- 校验返回维度不可用：检查工具返回的该指标可用维度，移除或替换不可用维度。
 - 趋势卡片校验失败：优先改用工具返回指标体系中真实存在的时间维度，并设置合适的 `time_grain`。
 - 排行卡片校验失败：确认 `order_by.field` 使用指标名，`dimensions` 使用对象、商品、机构、区域等真实维度。
 - 过滤条件失败：只使用当前存在的维度作为 `filters.dimension`，不要使用物理字段名或自由文本字段。

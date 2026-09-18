@@ -11,15 +11,12 @@ from apps.chat_data_app.agent.tools.ask_user_question import ask_user_question_t
 from apps.chat_data_app.agent.tools.bash_run import create_bash_run_tool
 from apps.chat_data_app.agent.tools.calculator import calculator_tool
 from apps.chat_data_app.agent.tools.current_time import get_current_time_tool
-from apps.chat_data_app.agent.tools.dsl2sql import create_dsl2sql_tool
+from apps.chat_data_app.agent.tools.data_analyzing import create_data_analyzing_tool
 from apps.chat_data_app.agent.tools.filesystem import create_filesystem_tools
 from apps.chat_data_app.agent.tools.officecli_run import create_officecli_run_tool
 from apps.chat_data_app.agent.tools.parse_document import create_parse_document_tool
 from apps.chat_data_app.agent.tools.present_artifacts import create_present_artifacts_tool
 from apps.chat_data_app.agent.tools.read_image import create_read_image_tool
-from apps.chat_data_app.agent.tools.semantic_query import semantic_query_tool
-from apps.chat_data_app.agent.tools.semantic_search import create_semantic_search
-from apps.chat_data_app.agent.tools.semantic_yaml_check import create_semantic_yaml_check_tool
 
 
 def _collect_model_visible_tools() -> list:
@@ -30,10 +27,7 @@ def _collect_model_visible_tools() -> list:
         *create_read_image_tool(runtime),
         create_present_artifacts_tool(runtime),
         get_current_time_tool,
-        create_semantic_search(),
-        create_dsl2sql_tool(),
-        create_semantic_yaml_check_tool(),
-        semantic_query_tool,
+        create_data_analyzing_tool(),
         calculator_tool,
         ask_user_question_tool,
         create_officecli_run_tool(runtime),
@@ -43,7 +37,7 @@ def _collect_model_visible_tools() -> list:
 
 def test_every_model_visible_tool_declares_intent_metadata():
     tools = _collect_model_visible_tools()
-    assert len(tools) == 23
+    assert len(tools) == 20
     missing = sorted(
         tool.name for tool in tools if "intent" not in (tool.args or {})
     )

@@ -123,23 +123,23 @@ index.vue
   -> routers/conversations.py: completion()
   -> agent_stream.py: sql_completion_handler()
   -> agent/data_agent.py
-  -> dsl2sql_tool / semantic_query_tool
+  -> data_analyzing_tool（execute_query）
   -> services/semantic/run/semantic_query_service.py
   -> services/sql_run/runtime.py: execute_agent_sql()
   -> execute_sql_for_member()
   -> services/sql_run/executor.py
 ```
 
-查询支持 DSL 模式和 SQL 模式。DSL 模式为默认主链路：`NL -> DSL -> SQL -> semantic_query_tool`；只有 DSL 模式无法表达查询结构时，智能体才允许使用 SQL 模式，通过 `semantic_query_tool(sql=...)` 直接执行只读 SQL。两种模式通过顶层 `dsl` / `sql` 参数二选一表达，不传 `mode`；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
+查询支持 DSL 模式和 SQL 模式，统一由合并工具 `data_analyzing_tool` 承载（`dsl2sql_tool` / `semantic_query_tool` / `semantic_yaml_check_tool` 已于 2026-09-18 合并，按 `action` 分派）。DSL 模式为默认主链路：`NL -> DSL -> SQL -> execute_query`；只有 DSL 模式无法表达查询结构时，智能体才允许使用 SQL 模式，通过 `execute_query` 的 `action_payload.sql` 直接执行只读 SQL。两种模式通过 `action_payload` 的 `dsl` / `sql` 参数二选一表达，不传 `mode`；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
 
 执行模式：
 
 - 前端只发起 `streamCompletion()` SSE，不拿 `task_id` 轮询。
-- `semantic_query_tool` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
+- `data_analyzing_tool` 的 `execute_query` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
 - SQL 执行在当前工具调用内等待完成，结果通过结构化 JSON 工具结果回到智能体和 SSE 流。
 - 如果任务记录或执行明细创建失败，当前 SQL 工具调用直接失败，不再绕过任务审计降级查询；智能问数的用户交互主口径仍是“对话流内同步等待工具结果”。
 
-`semantic_query_tool` 的查询结果返回协议固定为 JSON 字符串，不再使用 XML 标签：
+`data_analyzing_tool` 的 `execute_query` 查询结果返回协议固定为 JSON 字符串，不再使用 XML 标签：
 
 ```json
 {
@@ -158,7 +158,7 @@ index.vue
 }
 ```
 
-前端先根据 SSE `tool` 事件的 `tool_name=semantic_query_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
+前端先根据 SSE `tool` 事件的 `tool_name=data_analyzing_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
 
 ### 2. 可视化查询
 
@@ -231,7 +231,7 @@ SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成 `sql: string[]` 一�
 - `sql_batch` 内部按 SQL 语句顺序执行；同一条 SQL 选择的多个执行对象仍并发执行。
 - 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态；单条 SQL 返回 `results[]`，多条 SQL 返回 `statement_results[]`，每个语句节点内继续使用统一 `results[]` 成员结果。
 - 任务取消走 `POST /query-tasks/{task_id}/cancel`；HTTP Hive 通过远端 `remote_task_id` 停止，MySQL direct 通过连接 ID `KILL QUERY`，Hive direct 当前没有真实 kill 能力。
-- SQL 查询页面不消费智能体 `semantic_query_tool` 工具结果，也不直接调用 `execute_agent_sql()`。
+- SQL 查询页面不消费智能体 `data_analyzing_tool` 工具结果，也不直接调用 `execute_agent_sql()`。
 
 ### 4. 看板查询
 
@@ -478,7 +478,6 @@ chat_data_app/
 │   ├── prompts/           # 提示词模板和 system prompt builder
 │   └── skills/            # 系统技能源目录；发布时复制到 CHAT_DATA_HOME/skills/system
 ├── services/
-│   ├── semantic_searchs.py              # 语义工具处理器
 │   ├── datasource_manager.py          # 数据源管理
 │   └── datasource_metadata.py         # MySQL/Hive 物理元数据实现、适配器与注册表
 ├── evaluate/
@@ -503,7 +502,7 @@ chat_data_app/
 ```
 create_agent
   ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
-  └─ tools 节点：执行 file_read、semantic_search、dsl2sql_tool、semantic_query_tool 等工具
+  └─ tools 节点：执行 file_read、data_analyzing_tool 等工具
 
 model → tools → model，直到模型不再发起工具调用后结束。
 ```
@@ -513,8 +512,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 | 工具 | 说明 |
 |-----|------|
 | `file_read` | 读取受控会话文件，或读取运行时技能快照中的 `SKILL.md` 与其声明资源 |
-| `dsl2sql_tool` | 根据语义参数生成 SQL |
-| `semantic_query_tool` | 执行语义查询；接收语义 DSL，内部生成 SQL 后执行 |
+| `data_analyzing_tool` | 数据分析合并工具：按 `action` 分派——`validate_dsl` 根据语义参数校验并生成 SQL、`execute_query` 执行语义查询、`validate_dashboard` 批量校验看板规格、`check_yaml` 语义模型 YAML 自检 |
 
 ### 智能问数上下文边界
 

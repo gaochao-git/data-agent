@@ -42,7 +42,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 - 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`。先用 `dir_list` 浏览清单，再用 `file_grep` 按业务关键词定位候选，只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
 - 指标、维度、业务口径不明确时必须澄清，不能凭常识编造，也不能用 SQL 绕过。
-- 一次 `dsl2sql_tool` 或 `semantic_query_tool` 只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。
+- 一次 `data_analyzing_tool` 调用只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。
 
 ## 能力路由细则
 
@@ -77,4 +77,4 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 - 查询与分析：`references/analysis/query.md`「多步分析与结果处理」——回答具体数值或形成业务结论前，必须已读取 `result_path` 中的实际数据。
 - 看板生成：`references/dashboard/workflow.md`「完成判定」——只写入草稿不算完成，必须已 `present_artifacts` 展示最终 outputs 看板。
-- 质量检查与治理：`references/governance/quality-check.md`「产出新 YAML」——交付前必须用 `semantic_yaml_check_tool` 自检通过。
+- 质量检查与治理：`references/governance/quality-check.md`「产出新 YAML」——交付前必须用 `data_analyzing_tool` 的 `check_yaml` 自检通过。

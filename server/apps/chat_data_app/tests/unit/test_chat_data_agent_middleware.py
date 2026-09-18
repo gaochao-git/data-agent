@@ -61,7 +61,7 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
 
     normalized = normalize_response_tool_call_names(
         unknown_message,
-        [SimpleNamespace(name="semantic_search")],
+        [SimpleNamespace(name="file_read")],
     )
 
     assert normalized.tool_calls[0]["name"] == "unknown_toolunknown_tool"
@@ -70,29 +70,29 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
         content="",
         tool_calls=[{
             "id": "call_select",
-            "name": "semantic_searchsemantic_searchsemantic_search",
+            "name": "file_readfile_readfile_read",
             "args": {},
         }],
     )
     normalized = normalize_response_tool_call_names(
         repeated_message,
-        [SimpleNamespace(name="semantic_search")],
+        [SimpleNamespace(name="file_read")],
     )
-    assert normalized.tool_calls[0]["name"] == "semantic_search"
+    assert normalized.tool_calls[0]["name"] == "file_read"
 
     similar_message = AIMessage(
         content="",
         tool_calls=[{
             "id": "call_similar",
-            "name": "semantic_search_extra",
+            "name": "file_read_extra",
             "args": {},
         }],
     )
     normalized = normalize_response_tool_call_names(
         similar_message,
-        [SimpleNamespace(name="semantic_search")],
+        [SimpleNamespace(name="file_read")],
     )
-    assert normalized.tool_calls[0]["name"] == "semantic_search_extra"
+    assert normalized.tool_calls[0]["name"] == "file_read_extra"
 
 
 def test_normalize_response_tool_call_names_coerces_string_args():
@@ -954,7 +954,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
 
 @pytest.mark.asyncio
 async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
-    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])
+    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="file_read")])
 
     async def handler(_request):
         return ModelResponse(result=[
@@ -962,7 +962,7 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
                 content="",
                 tool_calls=[{
                     "id": "call_select",
-                    "name": "semantic_searchsemantic_search",
+                    "name": "file_readfile_read",
                     "args": {"query": "查询入金金额"},
                 }],
             )
@@ -970,14 +970,14 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
 
     response = await middleware.awrap_model_call(SimpleNamespace(), handler)
 
-    assert response.result[0].tool_calls[0]["name"] == "semantic_search"
+    assert response.result[0].tool_calls[0]["name"] == "file_read"
     assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
 @pytest.mark.asyncio
 async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standard_normalizer(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
-    tool = SimpleNamespace(name="semantic_search")
+    tool = SimpleNamespace(name="file_read")
     middleware = context_usage.create_request_context_usage_middleware(tools=[tool])
 
     async def handler(_request):
@@ -986,7 +986,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
                 content="",
                 tool_calls=[{
                     "id": "call_select",
-                    "name": "semantic_searchsemantic_search",
+                    "name": "file_readfile_read",
                     "args": {"query": "查询入金金额"},
                 }],
             )
@@ -1002,7 +1002,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
 
     response = await middleware.awrap_model_call(request, handler)
 
-    assert response.model_response.result[0].tool_calls[0]["name"] == "semantic_searchsemantic_search"
+    assert response.model_response.result[0].tool_calls[0]["name"] == "file_readfile_read"
     assert response.model_response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
@@ -1039,11 +1039,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert errors
 
     captured = {}
-    selection_tool_kwargs = {}
-
-    def fake_create_semantic_search(**kwargs):
-        selection_tool_kwargs.update(kwargs)
-        return "semantic_search"
 
     def fake_create_agent(**kwargs):
         captured.update(kwargs)
@@ -1056,9 +1051,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         return FakeChatModel()
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", fake_create_streaming_chat_model)
-    monkeypatch.setattr(data_agent, "create_semantic_search", fake_create_semantic_search)
-    monkeypatch.setattr(data_agent, "semantic_query_tool", "semantic_query_tool")
-    monkeypatch.setattr(data_agent, "calculator_tool", "calculator_tool")
     monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
 
     from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
@@ -1073,10 +1065,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     )
 
     assert agent.name == "agent"
-    assert selection_tool_kwargs["model_id"] == "m1"
-    assert selection_tool_kwargs["datasource_id"] == "ds_a"
-    assert selection_tool_kwargs["user_id"] == "u1"
-    assert selection_tool_kwargs["datasource_group_context"] is None
     assert model_kwargs["model_id"] == "m1"
     assert model_kwargs["stream_usage"] is True
     assert captured["checkpointer"] == "ckpt"
@@ -1099,13 +1087,10 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "read_image",
         "present_artifacts",
         "get_current_time",
-        "semantic_search",
-        "dsl2sql_tool",
-        "semantic_yaml_check_tool",
-            "semantic_query_tool",
-            "calculator_tool",
-            "ask_user_question",
-            "officecli_run",
+        "data_analyzing_tool",
+        "calculator_tool",
+        "ask_user_question",
+        "officecli_run",
     ]
     assert len(captured["middleware"]) == 11
     assert captured["middleware"][0].name == "ImageInjectionMiddleware"

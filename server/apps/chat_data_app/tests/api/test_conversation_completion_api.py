@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 
-from apps.chat_data_app.agent.tools import dsl2sql
+from apps.chat_data_app.agent.tools import data_analyzing
 from apps.chat_data_app import agent_run_support
 from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
@@ -192,7 +192,7 @@ def _tool_event_contents(stream_text: str) -> list[str]:
     return contents
 
 
-def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
+def test_completion_api_streams_multi_tool_result_passthrough(client, auth_headers, monkeypatch):
     payload = {
         "success": True,
         "semantic_config_ids": ["cfg_order", "cfg_user"],
@@ -204,7 +204,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     graph = FakeGraph([
         (
             FakeMessageChunk(
-                tool_calls=[{"id": "call_select", "name": "semantic_search"}],
+                tool_calls=[{"id": "call_select", "name": "file_grep"}],
             ),
             {"langgraph_node": "model"},
         ),
@@ -213,7 +213,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
                 tool_call_chunks=[
                     {
                         "id": "call_select",
-                        "name": "semantic_search",
+                        "name": "file_grep",
                         "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
                     }
                 ],
@@ -222,10 +222,10 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
         ),
         (
             FakeMessageChunk(
-                content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="semantic_search",
+                name="file_grep",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -256,7 +256,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     assert graph.initial_state["messages"][0].additional_kwargs["timestamp"]
 
 
-def test_completion_api_streams_single_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
+def test_completion_api_streams_single_tool_result_passthrough(client, auth_headers, monkeypatch):
     payload = {
         "success": True,
         "semantic_config_ids": ["cfg_order"],
@@ -266,15 +266,15 @@ def test_completion_api_streams_single_semantic_retrieval_tool_result(client, au
     }
     graph = FakeGraph([
         (
-            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "semantic_search"}]),
+            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "file_grep"}]),
             {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
-                content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="semantic_search",
+                name="file_grep",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -336,14 +336,14 @@ class ToolCallingLLM:
                 content="",
                 tool_calls=[{
                     "id": "call_dsl",
-                    "name": "dsl2sql_tool",
-                    "args": self.tool_args,
+                    "name": "data_analyzing_tool",
+                    "args": {"action": "validate_dsl", "action_payload": self.tool_args},
                 }],
             )
         return AIMessage(content="已生成 SQL。")
 
 
-def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, auth_headers, monkeypatch):
+def test_completion_api_runs_real_validate_dsl_action_with_structured_having(client, auth_headers, monkeypatch):
     manager = FakeDatasourceManager()
     semantic_service = FakeSemanticConfigService(manager)
     datasource = manager.datasources["ds_a"]
@@ -420,7 +420,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
         assert kwargs["mode"] == "full"
         return dict(config)
 
-    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_load_semantic_model)
+    monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_load_semantic_model)
     from apps.chat_data_app.agent import data_agent
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda *_args, **_kwargs: fake_llm)
@@ -436,7 +436,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     assert response.status_code == 200
     text = response.text
     assert "event: tool" in text
-    assert "dsl2sql_tool" in text
+    assert "data_analyzing_tool" in text
     assert "LEFT JOIN order_items" in text
     assert "HAVING SUM(orders.out_amount) > (SUM(order_items.amount) * 10)" in text
     assert "已生成 SQL。" in text

@@ -5,7 +5,7 @@ ChatData API 数据模型定义
 import json
 from datetime import datetime
 from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
@@ -788,12 +788,12 @@ class SemanticQueryInput(BaseModel):
     )
     sql: Optional[str] = Field(
         default=None,
-        description="SQL 模式专用：仅当 DSL 模式明确无法表达查询结构时使用的只读 SQL；直接执行且不调用 dsl2sql_tool；与顶层 dsl 二选一，不要传 mode",
+        description="SQL 模式专用：仅当 DSL 模式明确无法表达查询结构时使用的只读 SQL；直接执行且不调用 validate_dsl 校验；与顶层 dsl 二选一，不要传 mode",
     )
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次查询使用的指标集 ID，必须来自本轮 semantic_search search_models 返回结果",
+        description="本次查询使用的指标集 ID，来自物化语义模型的检索结果",
     )
     member_datasource_ids: List[str] = Field(
         ...,
@@ -811,6 +811,123 @@ class SemanticQueryInput(BaseModel):
         if value is None:
             return None
         return _normalize_json_object(value, "dsl")
+
+
+class _ValidateDslActionPayload(BaseModel):
+    """``validate_dsl`` 的入参结构：校验单个查询 DSL，返回编译后 SQL（不执行）。"""
+
+    dsl: Dict[str, Any] = Field(..., description="单个查询 DSL 对象")
+    semantic_config_id: str = Field(..., min_length=1, description="本次校验使用的语义模型 ID")
+
+    @field_validator("dsl", mode="before")
+    @classmethod
+    def normalize_dsl(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return _normalize_json_object(value, "dsl")
+
+
+class _ValidateDashboardActionPayload(BaseModel):
+    """``validate_dashboard`` 的入参结构：批量校验完整 dashboard_spec 的所有卡片。"""
+
+    dsl: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
+        ...,
+        description="包含 dashboard_name 与完整 cards 数组的 dashboard_spec；兼容旧规格的卡片数组形态",
+    )
+    semantic_config_id: Optional[str] = Field(
+        default=None,
+        description="语义模型 ID；单张卡片未携带 semantic_config_id 时的缺省值",
+    )
+
+    @field_validator("dsl", mode="before")
+    @classmethod
+    def normalize_dsl(cls, value: Any) -> Any:
+        """兼容 JSON 字符串与二次转义；兼容 dashboard 批量卡片数组形态。"""
+        if value is None:
+            return None
+        current = value
+        for _ in range(2):
+            if not isinstance(current, str):
+                break
+            try:
+                current = json.loads(current.strip())
+            except json.JSONDecodeError as exc:
+                raise ValueError("dsl 必须是对象/数组或有效的 JSON 字符串") from exc
+        if not isinstance(current, (dict, list)):
+            raise ValueError("dsl 必须是对象或数组")
+        return current
+
+
+class _CheckYamlActionPayload(BaseModel):
+    """``check_yaml`` 的入参结构：语义模型 YAML 交付前自检。"""
+
+    yaml_content: str = Field(..., min_length=1, description="完整的 Ossie 语义模型 YAML 文本")
+
+
+# action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
+# 入参校验与 handler 内的解析共用同一张表，保证两处口径一致。
+DATA_ANALYZING_ACTION_PAYLOAD_MODELS = {
+    "validate_dsl": _ValidateDslActionPayload,
+    "validate_dashboard": _ValidateDashboardActionPayload,
+    "execute_query": SemanticQueryInput,
+    "check_yaml": _CheckYamlActionPayload,
+}
+
+
+class DataAnalyzingInput(BaseModel):
+    """数据分析工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
+
+    四个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
+    ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检。
+    action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
+    但每个 action 的 payload 在入口用 pydantic 模型校验，错参在入参即报错，不进 handler。
+    """
+
+    action: Literal["validate_dsl", "validate_dashboard", "execute_query", "check_yaml"] = Field(
+        ...,
+        description=(
+            "操作类型：validate_dsl 校验单个查询 DSL 并返回编译后 SQL（不执行）；"
+            "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
+            "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检"
+        ),
+    )
+    action_payload: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "操作参数，结构随 action 变化："
+            "validate_dsl 传 {\"dsl\": <单个查询DSL>, \"semantic_config_id\": \"...\"}；"
+            "validate_dashboard 传 {\"dsl\": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "
+            "\"semantic_config_id\": \"卡片缺省值，可选\"}；"
+            "execute_query 传 {\"dsl\": <完整语义DSL> 或 \"sql\": \"...\", \"semantic_config_id\": \"...\", "
+            "\"member_datasource_ids\": [...]}；"
+            "check_yaml 传 {\"yaml_content\": \"完整 Ossie YAML 文本\"}"
+        ),
+    )
+    intent: str = Field(
+        default="",
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
+    )
+
+    @model_validator(mode="after")
+    def check_action_payload(self) -> "DataAnalyzingInput":
+        payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS.get(self.action)
+        if payload_model is None:
+            raise ValueError(f"不支持的 action: {self.action}")
+        try:
+            payload_model.model_validate(self.action_payload)
+        except ValidationError as exc:
+            detail = "; ".join(
+                f"{'.'.join(str(part) for part in error.get('loc', ())) or 'action_payload'}: {error.get('msg', '')}"
+                for error in exc.errors()
+            )
+            raise ValueError(f"action={self.action} 的 action_payload 校验失败：{detail}") from None
+        if self.action == "execute_query":
+            # SemanticQueryInput 只做字段级校验；dsl/sql 二选一在入口统一拦截
+            has_dsl = self.action_payload.get("dsl") is not None
+            has_sql = bool(str(self.action_payload.get("sql") or "").strip())
+            if has_dsl == has_sql:
+                raise ValueError("action=execute_query 必须且只能传入 dsl 或 sql 其中一个")
+        return self
 
 
 class CalculatorItem(BaseModel):
@@ -833,7 +950,7 @@ class CalculatorItem(BaseModel):
 class GenerateChartInput(BaseModel):
     """图表生成工具的输入参数"""
     result_id: str = Field(
-        description="查询结果ID，从 semantic_query_tool 返回的 result_id"
+        description="查询结果ID，从 data_analyzing_tool 的 execute_query 返回的 result_id"
     )
     chart_type: Optional[ChartType] = Field(
         default=None,

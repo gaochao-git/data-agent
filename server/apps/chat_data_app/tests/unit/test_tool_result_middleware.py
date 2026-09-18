@@ -120,26 +120,6 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
 
 
 @pytest.mark.asyncio
-async def test_large_semantic_search_result_is_offloaded_by_shared_middleware(monkeypatch, tmp_path):
-    request, paths = _workspace_request(monkeypatch, tmp_path)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    content = '[semantic_search]\n{"operation":"list_fields","fields":[{"description":"' + "x" * 200 + '"}]}'
-    message = ToolMessage(content=content, name="semantic_search", tool_call_id="call_semantic")
-
-    result = await tool_result._finalize_tool_message(message, request)
-
-    assert result.content.startswith("[tool_result_offloaded]\n")
-    assert "source_tool=semantic_search" in result.content
-    assert "result_path=/mnt/user-data/outputs/.tool-offload/" in result.content
-    assert "content_in_context=false" in result.content
-    assert "preview:" not in result.content
-    assert "file_read" not in result.content
-    files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
-    assert len(files) == 1
-    assert files[0].read_text(encoding="utf-8") == content
-
-
-@pytest.mark.asyncio
 async def test_structured_generic_tool_result_is_serialized_before_offload(monkeypatch, tmp_path):
     request, paths = _workspace_request(monkeypatch, tmp_path)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
@@ -206,27 +186,6 @@ async def test_query_result_storage_failure_returns_structured_delivery_error(mo
             "result_persisted": False,
         },
     }
-    assert result.artifact is None
-
-
-@pytest.mark.asyncio
-async def test_semantic_search_storage_failure_returns_bounded_content(monkeypatch, tmp_path):
-    request, _paths = _workspace_request(monkeypatch, tmp_path)
-
-    async def fail_write_tool_result(self, **_kwargs):
-        raise OSError("storage unavailable")
-
-    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    content = '[semantic_search]\n{"fields":"' + "x" * 200 + '"}'
-    message = ToolMessage(content=content, name="semantic_search", tool_call_id="call_semantic")
-
-    result = await tool_result._finalize_tool_message(message, request)
-
-    assert len(result.content) <= 100
-    assert result.content.startswith("[tool_result_truncated]\n")
-    assert "source_tool=semantic_search" in result.content
-    assert "content_complete=false" in result.content
     assert result.artifact is None
 
 

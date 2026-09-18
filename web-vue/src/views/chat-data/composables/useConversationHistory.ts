@@ -235,7 +235,11 @@ const withHistoryToolResult = (
   let renderType: ToolCallInfo['renderType']
   let semanticParams: SemanticParams | undefined
 
-  if (toolCall.tool_name === 'semantic_query_tool') {
+  // 查询结果渲染：data_analyzing_tool 的 execute_query
+  const isQueryResultTool = toolCall.tool_name === 'data_analyzing_tool' &&
+    (toolCall.args || {})?.action === 'execute_query'
+
+  if (isQueryResultTool) {
     const queryResultData = getRenderableQueryResultData(result)
     if (queryResultData) {
       renderId = queryResultData

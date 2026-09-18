@@ -40,7 +40,7 @@ from apps.chat_data_app.agent_stream import (
     sql_completion_handler,
     AgentRunStreamFailedError,
 )
-from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
+from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
@@ -185,7 +185,7 @@ def test_format_sse_serializes_dict_as_event_payload():
 
 def test_format_tool_event_uses_result_as_content():
     text = _format_tool_event(
-        tool_name="semantic_query_tool",
+        tool_name="data_analyzing_tool",
         tool_call_id="call_1",
         status="completed",
         args={"dsl": {"metrics": ["订单数"]}},
@@ -194,7 +194,7 @@ def test_format_tool_event_uses_result_as_content():
     )
 
     assert "event: tool" in text
-    assert '"tool_name": "semantic_query_tool"' in text
+    assert '"tool_name": "data_analyzing_tool"' in text
     assert '"content": "执行完成"' in text
     assert '"timestamp": "2026-06-02 10:00:00"' in text
 
@@ -215,10 +215,10 @@ def test_reasoning_and_thinking_helper_branches():
     thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
     assert thinking_event.startswith("event: thinking")
     assert "正在分析" in thinking_event
-    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 semantic_search"}))
-    assert "语义检索" in tool_thinking_event
-    assert "semantic_search" not in tool_thinking_event
-    assert _format_reasoning_for_display("调用 semantic_query_tool") == "调用 查询数据"
+    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"}))
+    assert "数据分析" in tool_thinking_event
+    assert "data_analyzing_tool" not in tool_thinking_event
+    assert _format_reasoning_for_display("调用 data_analyzing_tool") == "调用 数据分析"
     assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
     # 短工具名（task）只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
     assert _format_reasoning_for_display("派发 task 处理") == "派发 派发子智能体 处理"
@@ -232,10 +232,10 @@ def test_reasoning_and_thinking_helper_branches():
     _append_reasoning_segment(segments, "a", 0)
     _append_reasoning_segment(segments, "b", 0)
     _append_reasoning_segment(segments, "c", 1)
-    _append_reasoning_segment(segments, "调用 semantic_search", 1)
+    _append_reasoning_segment(segments, "调用 data_analyzing_tool", 1)
     assert segments == [
         {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
-        {"id": "reasoning-1", "content": "c调用 语义检索", "tool_call_count": 1},
+        {"id": "reasoning-1", "content": "c调用 数据分析", "tool_call_count": 1},
     ]
 
 
@@ -474,7 +474,7 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     _override_semantic_context(monkeypatch)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_auto_semantic_search",
+        thread_id="conv_auto_file_grep",
         user_query="5+5等于多少",
         datasource_id="ds_a",
         semantic_config_id=None,
@@ -630,9 +630,9 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_select", "name": "semantic_search", "args": "{\"query\":\"查交易金额\"}"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_select", "name": "file_grep", "args": "{\"query\":\"查交易金额\"}"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询支付数据"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -649,10 +649,10 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
 
     joined = "".join(events)
     assert "event: tool" in joined
-    assert "[semantic_search]" in _tool_event_contents(events)[-1]
+    assert "[file_grep]" in _tool_event_contents(events)[-1]
     assert '"semantic_config_ids": ["cfg_pay"]' in _tool_event_contents(events)[-1]
     assert '"expression": "SUM(pay.amount)"' in _tool_event_contents(events)[-1]
-    assert '"tool_name": "semantic_search"' in joined
+    assert '"tool_name": "file_grep"' in joined
     assert "event: semantic_config_selected" not in joined
     assert "event: semantic_config_select_required" not in joined
     assert "已查询支付数据" in joined
@@ -735,8 +735,8 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="请选择指标集"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -746,7 +746,7 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_multiple_semantic_search_event",
+        thread_id="conv_multiple_file_grep_event",
         user_query="查询金额",
         datasource_id="ds_a",
         semantic_config_id=None,
@@ -774,8 +774,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已按多个指标集完成查询"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -811,8 +811,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="这个问题需要跨指标集合并，当前不支持。"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -942,8 +942,8 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
@@ -978,8 +978,8 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "semantic_search"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="semantic_search"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
@@ -1006,8 +1006,8 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "data_analyzing_tool"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "data_analyzing_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "model"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询订单数据"), {"langgraph_node": "model"}),
             (_FakeMessageChunk(content="内部工具模型输出"), {"langgraph_node": "tools"}),
@@ -1240,7 +1240,7 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
             raise RuntimeError("state missing")
 
     fake_graph = StateFailGraph(events=[
-        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "model"}),
+        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "data_analyzing_tool", "args": ""}]), {"langgraph_node": "model"}),
         (_FakeMessageChunk(content="完成"), {"langgraph_node": "model"}),
     ])
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
@@ -1321,7 +1321,6 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
 # ---- 图片附件准入（vision_attachments 路径标记，base64 由 middleware 请求层装载） ----
 
 from apps.chat_data_app.services.agent_run.message_compose import (
-    build_file_attachment_text as _build_file_attachment_text,
     is_image_attachment as _is_image_attachment,
     select_vision_attachments as _select_vision_attachments,
 )

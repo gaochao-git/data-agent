@@ -30,7 +30,6 @@ from apps.chat_data_app.services.dashboard import spec_service as dashboard_spec
 from apps.chat_data_app.services.sql_run import providers as query_providers  # noqa: E402
 from apps.chat_data_app.services.semantic.run import (  # noqa: E402
     semantic_model_repository,
-    semantic_model_search,
     semantic_query_service,
 )
 from utils.crypto import decrypt_env_value  # noqa: E402
@@ -77,8 +76,6 @@ def _patch_test_services(monkeypatch, manager):
     monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(semantic_model_repository, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
-    monkeypatch.setattr(semantic_model_search, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_model_search, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(dashboard_spec_service, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_spec_service, "get_semantic_config_service", lambda: semantic_service)
     return semantic_service

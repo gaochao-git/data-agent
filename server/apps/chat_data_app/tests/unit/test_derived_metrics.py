@@ -17,7 +17,6 @@ from apps.chat_data_app.services.semantic.core.query_plan import is_derived_metr
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
-from apps.chat_data_app.services.semantic.run.semantic_model_search import _compact_metric_summary
 from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import (
     derive_period_date_range,
     derived_metric_filter_leaves,
@@ -530,14 +529,6 @@ def test_spec_service_treats_derived_metric_as_aggregate():
     )
     assert dsl["metrics"] == ["本月成交额"]
     assert removed == ["已移除聚合卡片中不能混用的原始值指标：原始值"]
-
-
-def test_search_summary_includes_derived_fixed_definition():
-    config = build_derived_config()
-    derived_metric = config["metrics"][2]
-    summary = _compact_metric_summary(derived_metric)
-    assert summary["fixed_definition"] == "指标[销售额] · 本月 · 订单状态=已支付"
-    assert "fixed_definition" not in _compact_metric_summary(config["metrics"][0])
 
 
 def test_ossie_converter_exports_derived_metric_with_base_expression():

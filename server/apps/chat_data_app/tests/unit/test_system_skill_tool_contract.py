@@ -165,10 +165,11 @@ def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
 # ---------------------------------------------------------------------------
 
 def test_quality_check_capability_requires_tool_self_check():
-    """质量治理能力必须以 semantic_yaml_check_tool 为执行臂，禁止纯口算质量报告。"""
+    """质量治理能力必须以 data_analyzing_tool 的 check_yaml 为执行臂，禁止纯口算质量报告。"""
     quality_check = _skill_doc(DATA_ANALYZING_SKILL, "references/governance/quality-check.md")
 
-    assert "semantic_yaml_check_tool" in quality_check
+    assert "data_analyzing_tool" in quality_check
+    assert "check_yaml" in quality_check
     assert "all_importable" in quality_check
     assert "禁止跳过自检直接交付" in quality_check
 
@@ -202,9 +203,9 @@ def test_query_capability_contains_complete_query_contract():
     assert "范围优先使用半开区间" in query
     assert "不能同时传 `dsl`" in query
     assert "**DSL 模式**和**SQL 模式**" in query
-    assert "DSL 模式传顶层 `dsl`" in query
-    assert "SQL 模式传顶层 `sql`" in query
-    assert "SQL 模式不调用 `dsl2sql_tool`" in query
+    assert "DSL 模式在 `action_payload` 里传 `dsl`" in query
+    assert "SQL 模式传 `sql`" in query
+    assert "SQL 模式不做 validate_dsl 校验" in query
     assert "不是 `mode` 参数" in query
     assert "CTE" in query
     assert "年度总量对比" in query

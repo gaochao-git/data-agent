@@ -8,8 +8,7 @@
 **已知例外**：``@tool(parse_docstring=True)`` 的工具描述必须是常量字面量
 （f-string 不能当 docstring，``__doc__`` 会变成 ``None``），拿不到这里的常量。
 这类位置写**技能名**字面量（如 ``data-analyzing``），由
-``tests/unit/test_semantic_tools.py::test_semantic_search_description_defers_to_data_analyzing_skill``
-与 ``tests/unit/test_semantic_yaml_check_tool.py::test_description_points_at_data_analyzing_skill``
+``tests/unit/test_data_analyzing_tool.py::test_tool_description_points_at_data_analyzing_skill``
 断言「文案里的字面量 == 本模块的常量」兜住漂移。**不要写显示名**：显示名是 SKILL.md
 的 ``title``，属展示层（2026-09-18 一天内改过两次），绑它只会让工具文案无谓变红。
 

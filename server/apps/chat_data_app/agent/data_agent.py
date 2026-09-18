@@ -8,7 +8,6 @@ from langchain.agents import create_agent
 from ..agent.context.context_budget import ContextRequestBudget
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
-from ..services.runtime_config import CHAT_DATA_SEMANTIC_SEARCH_ENABLED
 from .agent_runtime import (
     build_standard_agent_middleware,
     create_streaming_chat_model,
@@ -32,19 +31,13 @@ from .prompts.chat_data import (
     PLAN_SUBAGENT_PROMPT,
     build_unified_system_prompt,
 )
-from .tools.calculator import calculator_tool
-from .tools.current_time import get_current_time_tool
-from .tools.dsl2sql import create_dsl2sql_tool
-from .tools.filesystem import create_filesystem_tools
-from .tools.parse_document import create_parse_document_tool
-from .tools.present_artifacts import create_present_artifacts_tool
-from .tools.read_image import create_read_image_tool
-from .tools.bash_run import create_bash_run_tool
-from .tools.officecli_run import create_officecli_run_tool
-from .tools.semantic_query import semantic_query_tool
-from .tools.semantic_search import create_semantic_search
-from .tools.semantic_yaml_check import create_semantic_yaml_check_tool
-from .tools.ask_user_question import ask_user_question_tool
+from .tools.registry import (
+    DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
+    TOOL_SPECS,
+    ToolBuildContext,
+)
 
 
 @dataclass(frozen=True)
@@ -107,81 +100,20 @@ def assemble_tools(
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
 ) -> list:
-    """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
-    identity = identity_context or IdentityContext()
-    datasource = datasource_context or DatasourceContext()
-    invocation = model_invocation or ModelInvocationConfig()
-    user_id = identity.user_id if identity.user_id is not None else "system"
-    semantic_search = (
-        create_semantic_search(
-            model_id=invocation.model_id,
-            datasource_id=datasource.datasource_id,
-            user_id=user_id,
-            datasource_group_context=datasource.datasource_group_context,
-            source_type=datasource.source_type,
-            workspace_runtime=workspace_runtime,
-        )
-        if CHAT_DATA_SEMANTIC_SEARCH_ENABLED
-        else None
+    """按 ``tools/registry.py`` 注册表装配固定工具集，只有 Bash 受运行选项控制。"""
+    context = ToolBuildContext(
+        runtime_options=runtime_options,
+        workspace_runtime=workspace_runtime,
+        identity=identity_context or IdentityContext(),
+        datasource=datasource_context or DatasourceContext(),
+        model_invocation=model_invocation or ModelInvocationConfig(),
     )
-    tools = [
-        *create_filesystem_tools(workspace_runtime),
-        *create_parse_document_tool(workspace_runtime),
-        *create_read_image_tool(workspace_runtime),
-        create_present_artifacts_tool(workspace_runtime),
-        get_current_time_tool,
-        *([semantic_search] if semantic_search is not None else []),
-        create_dsl2sql_tool(
-            datasource.datasource_id,
-            user_id=user_id,
-            operator_name=identity.operator_name,
-        ),
-        create_semantic_yaml_check_tool(datasource.datasource_id),
-        semantic_query_tool,
-        calculator_tool,
-        ask_user_question_tool,
-        create_officecli_run_tool(workspace_runtime),
-    ]
-    if runtime_options.bash_enabled:
-        tools.append(create_bash_run_tool(workspace_runtime))
-    return tools
+    return [tool for spec in TOOL_SPECS for tool in spec.build(context)]
 
 
-# 子智能体不继承的基础工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
-# present_artifacts 是用户可见的产物呈现（最终交付由主智能体负责）。
-SUBAGENT_BASE_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_artifacts"})
-
-# data-explore 在基础排除集之上额外排除的写操作工具：只读事实收集不写文件、
-# 不执行命令、不做文档编辑，避免子智能体在探查过程中产生副作用。
-DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
-    "file_edit",
-    "file_write",
-    "file_move",
-    "file_copy",
-    "file_delete",
-    "dir_create",
-    "dir_delete",
-    "bash_run",
-    "officecli_run",
-})
-
-# plan 在基础排除集之上额外排除执行类工具：规划子智能体只盘点资料与产出计划，
-# 不运行查询、不做计算、不编辑文档，保证规划与执行分离（执行由主智能体完成）。
-PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
-    "file_edit",
-    "file_move",
-    "file_copy",
-    "file_delete",
-    "dir_create",
-    "dir_delete",
-    "bash_run",
-    "officecli_run",
-    "semantic_query_tool",
-    "dsl2sql_tool",
-    "calculator_tool",
-    "read_image",
-    "parse_document",
-})
+# 子智能体工具可见性策略（SUBAGENT_BASE_EXCLUDED_TOOL_NAMES /
+# DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES / PLAN_EXTRA_EXCLUDED_TOOL_NAMES）
+# 单一事实源在 tools/registry.py，本模块按名字导入以保持既有引用路径不变。
 
 DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
 DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
@@ -271,7 +203,6 @@ def create_data_agent(
     datasource = datasource_context or DatasourceContext()
     invocation = model_invocation or ModelInvocationConfig()
     user_id = identity.user_id
-    operator_name = identity.operator_name
     model_id = invocation.model_id
     enable_thinking = invocation.enable_thinking
     thinking_effort = invocation.thinking_effort

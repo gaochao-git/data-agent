@@ -146,7 +146,7 @@ SCENE_ROUTING_BLOCK = """## 场景路由
 - 业务数据查询、具体指标或维度询问，以及“订单数、用户数、销售额”等短问法：按“语义查询门禁”处理。"""
 
 SEMANTIC_QUERY_GATE_BLOCK = f"""## 语义查询门禁
-- 业务数据查询命中当前可用的 `{DATA_ANALYZING_SKILL}` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，并按其中的能力路由进入「查询与分析」；不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`。
+- 业务数据查询命中当前可用的 `{DATA_ANALYZING_SKILL}` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，并按其中的能力路由进入「查询与分析」；不得在读取前调用 `data_analyzing_tool`。
 - 进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循 `{DATA_ANALYZING_SKILL}` 技能的 `{SEMANTIC_MODEL_AUTHORITY_DOC}`；系统层不重复定义这些具体规则。
 - 当前可用技能中没有 `{DATA_ANALYZING_SKILL}` 时，不得虚构技能路径；向用户说明该技能当前不可用。"""
 
@@ -257,7 +257,8 @@ PLAN_SUBAGENT_PROMPT = f"""# 角色
 
 ## 规划流程
 1. 盘点资料：用 dir_list/file_read 核实任务书提到的 workspace/outputs/uploads
-   文件与技能路径是否真实存在；涉及语义数据用 semantic_search 确认模型与字段。
+   文件与技能路径是否真实存在；涉及语义数据以 workspace/semantic/ 下的物化
+   YAML 与「数据分析」技能文档确认模型与字段。
    计划必须基于核实过的资料，引用不存在的文件等于安排失败。
 2. 分解步骤：每步写清——做什么、输入（/mnt/user-data/... 路径）、期望产出
    （路径与形态）、验收标准。已有文件能引用的不要安排重复收集；需要新数据的

@@ -57,7 +57,7 @@ def build_query_result_response(
     error: str | None = None,
     meta: dict[str, Any] | None = None,
 ) -> str:
-    """Build the stable public ``semantic_query_tool`` response envelope."""
+    """Build the stable public ``data_analyzing_tool`` query-result response envelope."""
     return json.dumps(
         {
             "type": QUERY_RESULT_TYPE,

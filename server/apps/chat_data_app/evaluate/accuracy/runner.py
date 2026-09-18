@@ -193,14 +193,14 @@ def parse_tool_content(content: str) -> dict[str, Any]:
 def strip_tool_content_prefix(content: str) -> str:
     """移除工具返回内容中的内部前缀。"""
     text = str(content or "").strip()
-    for prefix in ("[dsl2sql_tool]", "[semantic_query_tool]"):
-        if text.startswith(prefix):
-            return text.replace(prefix, "", 1).strip()
+    prefix = "[data_analyzing_tool]"
+    if text.startswith(prefix):
+        return text.replace(prefix, "", 1).strip()
     return text
 
 
 def extract_sql_from_tool_content(content: str) -> str:
-    """从智能问数 dsl2sql_tool 返回内容中提取 SQL。"""
+    """从数据分析工具返回内容中提取 SQL。"""
     text = strip_tool_content_prefix(content)
     if not text:
         return ""
@@ -216,9 +216,11 @@ def extract_sql_from_tool_content(content: str) -> str:
 
 
 def build_dsl_from_tool_args(args: dict[str, Any]) -> dict[str, Any]:
-    """将智能问数语义工具参数还原为评测 DSL。"""
+    """将智能问数语义工具参数还原为评测 DSL（兼容合并后的 action_payload 包装）。"""
     if not isinstance(args, dict):
         return {}
+    if isinstance(args.get("action_payload"), dict):
+        args = args["action_payload"]
     nested_dsl = args.get("dsl")
     if isinstance(nested_dsl, dict):
         return normalize_pagination_values(nested_dsl)
@@ -338,7 +340,7 @@ def choose_final_dsl2sql_trace(tool_traces: list[ToolTrace]) -> tuple[ToolTrace 
     selected_trace = None
     selected_payload: dict[str, Any] = {}
     for trace in tool_traces:
-        if trace.name != "dsl2sql_tool":
+        if trace.name != "data_analyzing_tool":
             continue
         payload = build_dsl2sql_payload(trace)
         if payload:
@@ -351,7 +353,7 @@ def summarize_execution_success(tool_traces: list[ToolTrace]) -> bool | None:
     execute_payloads = [
         parse_tool_content(trace.content)
         for trace in tool_traces
-        if trace.name == "semantic_query_tool" and trace.content
+        if trace.name == "data_analyzing_tool" and trace.content
     ]
     execute_payloads = [payload for payload in execute_payloads if payload]
     if not execute_payloads:
@@ -483,7 +485,7 @@ def resolve_live_case_error(
     compile_result: dict[str, Any],
 ) -> str:
     if not dsl_trace:
-        return stream_error or "未捕获到 dsl2sql_tool 调用"
+        return stream_error or "未捕获到 data_analyzing_tool 校验调用"
     if not compile_success:
         return stream_error or str(compile_result.get("error") or "DSL2SQL 编译失败")
     return stream_error

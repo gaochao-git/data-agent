@@ -190,7 +190,7 @@ def test_iter_subagent_stream_events_truncates_long_results():
 
     events = subagents_module._iter_subagent_stream_events([
         ToolMessage(content=long_text, tool_call_id="inner-1", name="file_read"),
-        ToolMessage(content="失败原因", tool_call_id="inner-2", name="semantic_query_tool", status="error"),
+        ToolMessage(content="失败原因", tool_call_id="inner-2", name="data_analyzing_tool", status="error"),
     ], parent_tool_call_id="call_1")
 
     assert len(events) == 2
@@ -765,7 +765,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
             return self
 
     @lc_tool
-    def semantic_query_tool(query: str) -> str:
+    def data_analyzing_tool(query: str) -> str:
         """查询数据（测试用：返回内部协议结果）。"""
         return tool_results.build_internal_query_result(
             {
@@ -780,12 +780,12 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
     model = _ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
             "id": "inner-q1", "type": "tool_call",
-            "name": "semantic_query_tool", "args": {"query": "总量"},
+            "name": "data_analyzing_tool", "args": {"query": "总量"},
         }]),
         AIMessage(content="查询完成，共 1 行"),
     ])
 
-    spec = _spec(tools=[semantic_query_tool], model=model)
+    spec = _spec(tools=[data_analyzing_tool], model=model)
     tool = build_task_tool([spec])
 
     result = await tool.coroutine(

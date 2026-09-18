@@ -26,7 +26,7 @@ def test_system_prompt_requires_semantic_skill_gate_before_query():
     assert "第一步必须调用 `file_read`" in prompt
     assert f"<name>{DATA_ANALYZING_SKILL}</name>" in prompt
     assert "## 语义查询门禁" in prompt
-    assert "不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`" in prompt
+    assert "不得在读取前调用 `data_analyzing_tool`" in prompt
     assert "进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择" in prompt
     assert "**DSL 模式**和**SQL 模式**" not in prompt
     assert "DSL 模式传顶层 `dsl`" not in prompt

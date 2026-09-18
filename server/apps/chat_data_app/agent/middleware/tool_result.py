@@ -54,18 +54,6 @@ async def _finalize_tool_message(
     content = _tool_message_text(message.content)
     if content is None:
         return message
-    if tool_name == "semantic_search":
-        externalized, recovery = await _persist_semantic_search_result(content, request, tool_name)
-        if recovery is None:
-            if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
-                return message
-            return _replace_tool_message(
-                message,
-                content=_build_truncated_tool_result_message(tool_name, len(content)),
-            )
-        if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
-            return _replace_tool_message(message, recovery=recovery)
-        return _replace_tool_message(message, content=externalized, recovery=recovery)
     if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
         return message
     externalized, recovery = await _externalize_generic_text(content, tool_name, request)
@@ -110,7 +98,7 @@ async def _finalize_query_result(
         ), None
 
     recovery = build_tool_result_recovery(
-        source_tool="semantic_query_tool",
+        source_tool="data_analyzing_tool",
         result_path=record.virtual_path,
         result_size_chars=result_size_chars,
         result_id=record.result_id,
@@ -162,31 +150,6 @@ async def _externalize_generic_text(
         result_path=record.virtual_path,
         result_size_chars=len(content),
         preview=_clip_text_to_chars(content, 512),
-    ), recovery
-
-
-async def _persist_semantic_search_result(
-    content: str,
-    request: Any,
-    tool_name: str,
-) -> tuple[str, dict[str, Any] | None]:
-    """Persist exact semantic tool data so later compaction can reference it."""
-    try:
-        record = await _write_private_tool_result(content=content, suffix=".txt", request=request)
-    except Exception as exc:
-        logger.error("保存语义工具结果恢复副本失败: %s", exc, exc_info=True)
-        return content, None
-    recovery = build_tool_result_recovery(
-        source_tool=tool_name,
-        result_path=record.virtual_path,
-        result_size_chars=len(content),
-        result_id=record.result_id,
-    )
-    return _build_offloaded_tool_result_message(
-        tool_name=tool_name,
-        result_path=record.virtual_path,
-        result_size_chars=len(content),
-        preview=None,
     ), recovery
 
 

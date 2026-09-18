@@ -61,27 +61,10 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
 
     assert tool_names == [
         "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete", "file_glob", "file_grep", "dir_create", "dir_list", "dir_delete", "parse_document", "read_image", "present_artifacts", "get_current_time",
-        "semantic_search", "dsl2sql_tool", "semantic_yaml_check_tool", "semantic_query_tool", "calculator_tool", "ask_user_question", "officecli_run",
+        "data_analyzing_tool", "calculator_tool", "ask_user_question", "officecli_run",
     ]
     assert bash_tool_names[-1] == "bash_run"
     assert bash_tool_names[:-1] == tool_names
-
-
-def test_assemble_tools_semantic_search_switch(monkeypatch, tmp_path):
-    runtime, options = _runtime(tmp_path, bash_enabled=False)
-
-    def _tool_names():
-        return [tool.name for tool in assemble_tools(
-            options, runtime,
-            identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
-        )]
-
-    monkeypatch.setattr(data_agent, "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", False)
-    assert "semantic_search" not in _tool_names()
-
-    monkeypatch.setattr(data_agent, "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", True)
-    assert "semantic_search" in _tool_names()
 
 
 def test_create_data_agent_uses_standard_middleware_without_model_fallback(monkeypatch, tmp_path):

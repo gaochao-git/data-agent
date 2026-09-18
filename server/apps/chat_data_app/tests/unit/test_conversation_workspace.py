@@ -26,7 +26,7 @@ from apps.chat_data_app.agent.workspace import (
 from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
+from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
 from apps.chat_data_app.agent.workspace.workspace_execution import _artifact_payload_from_bytes
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 
@@ -46,7 +46,7 @@ from apps.chat_data_app.agent.workspace.workspace_special_services import (
     stabilize_office_preview_html,
 )
 
-sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
+sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
 uploaded_file_service_module = importlib.import_module(
@@ -588,12 +588,12 @@ async def test_runtime_rejects_symlinked_skill_directory(tmp_path):
         await runtime.list_dir(path="/mnt/skills/evil-skill", max_depth=1)
 
 
-def test_normalize_dsl_payload_accepts_escaped_json_string():
+def test_normalize_json_like_payload_accepts_escaped_json_string():
     payload = {"metrics": ["订单金额"], "dimensions": [], "filters": [], "order_by": [], "limit": 100}
 
-    assert normalize_dsl_payload(json.dumps(payload, ensure_ascii=False)) == payload
-    assert normalize_dsl_payload(json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)) == payload
-    assert normalize_dsl_payload("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```") == payload
+    assert normalize_json_like_payload(json.dumps(payload, ensure_ascii=False)) == payload
+    assert normalize_json_like_payload(json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)) == payload
+    assert normalize_json_like_payload("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```") == payload
 
 
 def test_outputs_chart_json_artifact_detected_by_suffix_and_schema():
@@ -1467,7 +1467,6 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
 @pytest.mark.asyncio
 async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
-    writes = []
     input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
 
     async def fake_get_config(datasource_id, semantic_config_id, user_id=None):
@@ -1512,10 +1511,9 @@ async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch)
     )
     state = _analysis_query_state(paths, user_query="统计销售额")
 
-    result = await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": input_dsl,
+    result = await tools["data_analyzing_tool"].ainvoke({
+        "action": "execute_query",
+        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
         "state": state,
     })
 
@@ -1570,10 +1568,9 @@ async def test_semantic_query_tool_keeps_full_result(monkeypatch):
     )
     state = _analysis_query_state(paths, user_query="查询订单数")
 
-    result = await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": input_dsl,
+    result = await tools["data_analyzing_tool"].ainvoke({
+        "action": "execute_query",
+        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
         "state": state,
     })
 
@@ -1622,10 +1619,9 @@ async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatc
     )
     state = _analysis_query_state(paths, conversation_id="conv_large")
 
-    result = await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["内容"]},
+    result = await tools["data_analyzing_tool"].ainvoke({
+        "action": "execute_query",
+        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["内容"]}},
         "state": state,
     })
 
@@ -1641,10 +1637,9 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await tools_without_datasource["semantic_query_tool"].ainvoke({
-            "semantic_config_id": "sc_1",
-            "member_datasource_ids": ["m1"],
-            "dsl": {"metrics": ["订单数"]},
+        await tools_without_datasource["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
             "state": state_without_datasource,
         })
 
@@ -1655,32 +1650,28 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
     )
     state = _analysis_query_state(paths)
     with pytest.raises(ValueError, match="sql 必须放在顶层 sql 参数中"):
-        await tools["semantic_query_tool"].ainvoke({
-            "semantic_config_id": "sc_1",
-            "member_datasource_ids": ["m1"],
-            "dsl": {"sql": "select 1"},
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"sql": "select 1"}},
             "state": state,
         })
 
     with pytest.raises(ValueError, match="semantic_config_id"):
-        await sql_tool_module.semantic_query_tool.ainvoke({
-            "semantic_config_id": "",
-            "member_datasource_ids": ["m1"],
-            "dsl": {"metrics": ["订单数"]},
+        await sql_tool_module.create_data_analyzing_tool().ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
             "state": _analysis_query_state(paths),
         })
     with pytest.raises(ValueError, match="dsl"):
-        await tools["semantic_query_tool"].ainvoke({
-            "semantic_config_id": "sc_1",
-            "member_datasource_ids": ["m1"],
-            "dsl": [{"metrics": ["订单数"]}],
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": [{"metrics": ["订单数"]}]},
             "state": state,
         })
     with pytest.raises(ValueError, match="dsl 必须是单个查询对象"):
-        await tools["semantic_query_tool"].ainvoke({
-            "semantic_config_id": "sc_1",
-            "member_datasource_ids": ["m1"],
-            "dsl": {"cards": []},
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"cards": []}},
             "state": state,
         })
 
@@ -1717,11 +1708,19 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
     )
     state = _analysis_query_state(paths)
 
-    args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "state": state}
+    args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"]}
     with pytest.raises(ValueError, match="指标不存在"):
-        await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["bad"]}})
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {**args, "dsl": {"metrics": ["bad"]}},
+            "state": state,
+        })
     with pytest.raises(ValueError, match="DSL2SQL 未生成 SQL"):
-        await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["empty"]}})
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {**args, "dsl": {"metrics": ["empty"]}},
+            "state": state,
+        })
 
 
 @pytest.mark.asyncio
@@ -1752,10 +1751,9 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     state = _analysis_query_state(paths)
 
     with pytest.raises(RuntimeError, match="执行失败"):
-        await tools["semantic_query_tool"].ainvoke({
-            "semantic_config_id": "sc_1",
-            "member_datasource_ids": ["m1"],
-            "dsl": {"metrics": ["订单数"]},
+        await tools["data_analyzing_tool"].ainvoke({
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
             "state": state,
         })
 

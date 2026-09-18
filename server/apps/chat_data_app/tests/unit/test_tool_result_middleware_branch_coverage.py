@@ -4,7 +4,7 @@
 1. 纯工具函数（`_clip_text_to_chars` / `_tool_message_text` / `_read_tool_recovery` /
    `_request_tool_args` / `_required_state_value` / int 兜底 / `_replace_tool_message`）。
 2. middleware 入口的非 ToolMessage 与 error 状态短路。
-3. `semantic_search` 落盘成功/失败与体积阈值交叉出的四个出口，以及查询失败态。
+3. 查询失败态与超限卸载出口。
 """
 
 from __future__ import annotations
@@ -56,17 +56,6 @@ def _query_tool_message(query_result: dict) -> ToolMessage:
         ),
         name="semantic_query_tool",
         tool_call_id="call_query",
-    )
-
-
-def _fail_write(monkeypatch):
-    async def fail_write_tool_result(self, **_kwargs):
-        raise OSError("storage unavailable")
-
-    monkeypatch.setattr(
-        conversation_workspace.ConversationWorkspaceRuntime,
-        "write_tool_result",
-        fail_write_tool_result,
     )
 
 
@@ -159,35 +148,6 @@ async def test_write_private_tool_result_requires_workspace_root():
 async def test_finalize_returns_message_when_content_is_not_serializable():
     message = ToolMessage(content=42, name="calculator_tool", tool_call_id="c")
     assert await tool_result._finalize_tool_message(message, _request()) is message
-
-
-@pytest.mark.asyncio
-async def test_semantic_search_small_result_keeps_content_when_persist_fails(monkeypatch, tmp_path):
-    """落盘失败但结果不大 → 不截断，原样放行。"""
-    request, _paths = _workspace_request(monkeypatch, tmp_path)
-    _fail_write(monkeypatch)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 10_000)
-    message = ToolMessage(content="很小的检索结果", name="semantic_search", tool_call_id="c")
-
-    result = await tool_result._finalize_tool_message(message, request)
-
-    assert result is message
-    assert result.artifact is None
-
-
-@pytest.mark.asyncio
-async def test_semantic_search_small_result_attaches_recovery_when_persisted(monkeypatch, tmp_path):
-    """落盘成功但结果不大 → 内容留在上下文，只补一个恢复引用。"""
-    request, _paths = _workspace_request(monkeypatch, tmp_path)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 10_000)
-    message = ToolMessage(content="很小的检索结果", name="semantic_search", tool_call_id="c")
-
-    result = await tool_result._finalize_tool_message(message, request)
-
-    assert result.content == "很小的检索结果"
-    recovery = result.artifact["chatdata_tool_result_recovery"]
-    assert recovery["source_tool"] == "semantic_search"
-    assert recovery["result_size_chars"] == len("很小的检索结果")
 
 
 @pytest.mark.asyncio

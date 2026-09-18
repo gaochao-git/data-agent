@@ -29,7 +29,7 @@ import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, hideSemanticConfigSelectionPayloads, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, isBinaryPreviewPath, OFFICE_HTML_PREVIEW_EXTENSIONS } from '../utils'
+import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, isBinaryPreviewPath, OFFICE_HTML_PREVIEW_EXTENSIONS } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -782,8 +782,14 @@ const sidePanelSubtitle = computed(() => (
     : '工具调用参数与结果'
 ))
 
+// 查询结果渲染工具：data_analyzing_tool 的 execute_query
+const isQueryResultRenderTool = (toolInfo?: ToolCallInfo | null): boolean => {
+  if (!toolInfo) return false
+  return toolInfo.tool_name === 'data_analyzing_tool' && (toolInfo.args || {})?.action === 'execute_query'
+}
+
 const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
-  if (toolInfo.tool_name !== 'semantic_query_tool') return toolInfo
+  if (!isQueryResultRenderTool(toolInfo)) return toolInfo
   const result = String(toolInfo.result || '')
   const queryResultData = getRenderableQueryResultData(result)
   const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
@@ -796,15 +802,15 @@ const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo 
 }
 
 const normalizeToolCallForDisplay = (toolInfo: ToolCallInfo): ToolCallInfo => (
-  toolInfo.tool_name === 'semantic_query_tool' ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
+  isQueryResultRenderTool(toolInfo) ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
 )
 
 const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => (
   Boolean(
-    toolCall?.tool_name === 'semantic_query_tool' &&
-    toolCall.status === 'completed' &&
-    toolCall.renderId &&
-    toolCall.renderType === 'queryResult'
+    isQueryResultRenderTool(toolCall) &&
+    toolCall?.status === 'completed' &&
+    toolCall?.renderId &&
+    toolCall?.renderType === 'queryResult'
   )
 )
 
@@ -2149,7 +2155,7 @@ watch(
   },
 )
 
-const getConversationDisplayContent = (content: string) => hideSemanticConfigSelectionPayloads(content).trim()
+const getConversationDisplayContent = (content: string) => content.trim()
 
 // 距底部 100px 内视为「贴底」：内容增长时自动跟随，也容忍用户的小幅回滚
 const NEAR_BOTTOM_THRESHOLD_PX = 100

@@ -110,16 +110,6 @@ const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
 const paramLabel = (key: string): string =>
   TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
 
-type SemanticSelectionResult = {
-  success?: boolean
-  operation?: string
-  directory?: boolean
-  semantic_config_ids?: string[]
-  semantic_configs?: Record<string, Record<string, unknown>>
-  semantic_config_directory?: Array<Record<string, unknown>>
-  message?: string
-}
-
 // DSL 参数标签颜色
 const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   metrics: { bg: 'rgba(59, 130, 246, 0.1)', text: '#2563eb' },
@@ -153,9 +143,14 @@ const compactDescription = computed(() => {
 const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
 const visibleError = computed(() => getQueryResultError(props.toolCall.result) || String(props.toolCall.result || '执行失败'))
 
-// 是否可以保存到看板（semantic_query_tool 完成且查询结果包含内部生成的 SQL）
+// 合并后的数据分析工具
+const isDataAnalyzingTool = computed(() => props.toolCall.tool_name === 'data_analyzing_tool')
+const executeQueryAction = computed(() => (props.toolCall.args || {})?.action === 'execute_query')
+
+// 是否可以保存到看板（查询执行完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
-  return props.toolCall.tool_name === 'semantic_query_tool' &&
+  return isDataAnalyzingTool.value &&
+    executeQueryAction.value &&
     props.toolCall.status === 'completed' &&
     Boolean(generatedSql.value)
 })
@@ -199,7 +194,12 @@ function isEmptyParamValue(value: unknown): boolean {
 
 function buildSemanticDslParam(args: Record<string, unknown>): Record<string, unknown> | null {
   if (Object.prototype.hasOwnProperty.call(args, 'dsl')) return null
-  if (props.toolCall.tool_name !== 'dsl2sql_tool' && props.toolCall.tool_name !== 'semantic_query_tool') return null
+  if (isDataAnalyzingTool.value) {
+    // 合并工具只有单条校验与执行查询展示查询 DSL；看板批量校验的 dsl 是完整规格，不展开
+    if (args.action !== 'validate_dsl' && args.action !== 'execute_query') return null
+  } else {
+    return null
+  }
   return extractSemanticDslFromArgs(args)
 }
 
@@ -230,7 +230,7 @@ const displayParams = computed<DisplayParam[]>(() => {
   })
   const semanticDsl = buildSemanticDslParam(args)
   if (semanticDsl && !isEmptyParamValue(semanticDsl)) entries.push(['dsl', semanticDsl])
-  if (props.toolCall.tool_name === 'dsl2sql_tool' || props.toolCall.tool_name === 'semantic_query_tool') {
+  if (isDataAnalyzingTool.value) {
     const queryArgs = Object.fromEntries(entries)
     return Object.keys(queryArgs).length > 0 ? [['query_params', queryArgs]] : []
   }
@@ -303,50 +303,6 @@ function cleanResult(result: string): string {
     .trim()
 }
 
-function parseSemanticSelectionResult(result?: string): SemanticSelectionResult | null {
-  const toolName = props.toolCall.tool_name
-  if (toolName !== 'semantic_search') return null
-  const cleaned = cleanResult(String(result || '')).replace(/^\[semantic_search\]\s*/, '').trim()
-  if (!cleaned) return null
-  try {
-    const parsed = JSON.parse(cleaned) as SemanticSelectionResult
-    if (parsed.operation !== 'search_models') return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-const semanticSelectionResult = computed(() => parseSemanticSelectionResult(props.toolCall.result))
-const semanticSelectionRawJson = computed(() => {
-  if (!semanticSelectionResult.value) return ''
-  return cleanResult(String(props.toolCall.result || '')).trim()
-})
-const semanticSelectionConfigs = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result) return []
-  const configs = result.semantic_configs || {}
-  const ids = Array.isArray(result.semantic_config_ids) ? result.semantic_config_ids : []
-  if (result.directory) {
-    return (result.semantic_config_directory || []).map((config) => ({
-      id: String(config.id || '').trim(),
-      name: String(config.name || config.id || '').trim(),
-    })).filter(config => config.id)
-  }
-  return ids.map((id) => ({
-    id: String(id || '').trim(),
-    name: String(configs[id]?.name || id).trim(),
-  })).filter(config => config.id)
-})
-const semanticSelectionHeader = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result) return ''
-  if (result.directory) return '当前可见语义模型'
-  return semanticSelectionConfigs.value.length > 0
-    ? `检索到 ${semanticSelectionConfigs.value.length} 个相关语义模型`
-    : '未检索到相关语义模型'
-})
-
 type ResultPart = { type: 'text' | 'sql' | 'json'; content: string }
 
 function formatQueryResultJson(result: string): string {
@@ -356,8 +312,8 @@ function formatQueryResultJson(result: string): string {
 
 // 解析结果内容，将 SQL 代码块、JSON 与普通文本分离
 function parseResultContent(result: string): ResultPart[] {
-  if (props.toolCall.tool_name === 'semantic_search' && semanticSelectionResult.value) return []
-  if (props.toolCall.tool_name === 'semantic_query_tool' && !props.renderQueryResultPreview) {
+  const isQueryResultTool = isDataAnalyzingTool.value && executeQueryAction.value
+  if (isQueryResultTool && !props.renderQueryResultPreview) {
     const jsonText = formatQueryResultJson(result)
     if (jsonText) return [{ type: 'json', content: jsonText }]
   }
@@ -617,27 +573,6 @@ function getSqlTokenClass(type: string): string {
           <span>结果</span>
         </button>
         <div v-if="resultsExpanded" class="mt-2">
-          <!-- 指标集选择结果 -->
-          <div v-if="semanticSelectionResult" class="min-w-0 p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
-            <div class="flex items-center gap-2 font-medium text-slate-800">
-              <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
-              <span>{{ semanticSelectionHeader }}</span>
-            </div>
-            <div v-if="semanticSelectionConfigs.length" class="mt-2 flex flex-wrap gap-1.5">
-              <span
-                v-for="config in semanticSelectionConfigs"
-                :key="config.id"
-                class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
-                :title="config.id"
-              >
-                {{ config.name || config.id }}
-              </span>
-            </div>
-            <div v-if="semanticSelectionRawJson" class="mt-3">
-              <div class="mb-1.5 text-xs text-slate-500">模型实际接收内容</div>
-              <pre class="max-h-[32rem] max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-slate-700 m-0">{{ semanticSelectionRawJson }}</pre>
-            </div>
-          </div>
           <!-- 文本结果 -->
           <div v-if="toolCall.result && parseResultContent(toolCall.result).length > 0" class="min-w-0 p-3 rounded-lg bg-white border border-black/[0.06] mb-2 last:mb-0">
             <template v-for="(part, idx) in parseResultContent(toolCall.result)" :key="idx">

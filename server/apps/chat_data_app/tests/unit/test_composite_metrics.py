@@ -16,7 +16,6 @@ from apps.chat_data_app.services.semantic.core.query_plan import is_composite_me
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
-from apps.chat_data_app.services.semantic.run.semantic_model_search import _compact_metric_summary
 from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import (
     composite_metric_verbalization,
     resolve_composite_metric,
@@ -380,17 +379,6 @@ def test_bi_composite_metric_no_extra_filters():
 def test_spec_service_treats_composite_metric_as_aggregate():
     composite_metric = next(m for m in build_composite_config()["metrics"] if m["name"] == "客单价")
     assert _is_aggregate_metric(composite_metric) is True
-
-
-def test_search_summary_includes_composite_fixed_definition():
-    config = build_composite_config()
-    metrics_map = {m["name"]: m for m in config["metrics"]}
-    composite_metric = config["metrics"][3]
-    summary = _compact_metric_summary(composite_metric, metrics_map)
-    assert summary["fixed_definition"] == (
-        "销售额 / 订单数（销售额 = SUM(orders.amount)；订单数 = COUNT(DISTINCT orders.order_id)）"
-    )
-    assert "fixed_definition" not in _compact_metric_summary(config["metrics"][0])
 
 
 def test_ossie_converter_exports_composite_metric_with_formula():

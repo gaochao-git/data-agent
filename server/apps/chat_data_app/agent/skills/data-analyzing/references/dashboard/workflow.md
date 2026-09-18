@@ -48,17 +48,17 @@ workspace/dashboard_draft.json
 4. 按 `references/analysis/query.md` 检索语义模型并精读候选 YAML，为每张卡片确定一个语义模型、确认准备使用的指标和维度定义；无法唯一判断时先澄清该卡片。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定语义模型
 5. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 6. 内部构建完整 `dashboard_spec`，每张卡片必须包含 `semantic_config_id`；旧规格才使用顶层默认字段
-7. **一次批量校验整份规格**：调用 `dsl2sql_tool(dsl=dashboard_spec)`，其中 `dsl` 必须是包含 `dashboard_name` 和完整 `cards` 数组的整个 `dashboard_spec`。
-8. 工具返回 `mode=batch`、`valid_count`、逐卡 `panels` 和 `warnings`；不要为每张卡片单独调用 `dsl2sql_tool`。如果有卡片失败，修正完整 `dashboard_spec` 后再次整体提交，不能拆卡片重试。
+7. **一次批量校验整份规格**：调用 `data_analyzing_tool(action="validate_dashboard", action_payload={"dsl": dashboard_spec})`，其中 `dsl` 必须是包含 `dashboard_name` 和完整 `cards` 数组的整个 `dashboard_spec`。
+8. 工具返回 `mode=batch`、`valid_count`、逐卡 `panels` 和 `warnings`；不要为每张卡片单独调用校验。如果有卡片失败，修正完整 `dashboard_spec` 后再次整体提交，不能拆卡片重试。
 9. 校验通过后用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿
 10. 校验完成后用 `file_move(source_path="/mnt/user-data/workspace/dashboard_draft.json", destination_path="/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json")` 将草稿移入最终产物区；不要再次用 `file_write` 重写相同内容
 11. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文；需要整体覆盖时改用 `file_write`
 12. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 展示最终看板预览
 13. 简短总结预览结果
 
-新建看板预览时不要复用或覆盖已有 outputs 看板文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。修改已有预览文件前必须 `file_read` 当前文件内容，修改后必要时重新调用 `dsl2sql_tool` 校验。
+新建看板预览时不要复用或覆盖已有 outputs 看板文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。修改已有预览文件前必须 `file_read` 当前文件内容，修改后必要时重新调用 `validate_dashboard` 校验。
 
-`semantic_query_tool` 只用于接收抽样 DSL，并在内部生成 SQL 后确认是否有数据，或确认枚举、状态、类型、时间、金额等字段存储口径；执行结果不能写入 `dashboard_spec`。
+`execute_query` 只用于接收抽样 DSL，并在内部生成 SQL 后确认是否有数据，或确认枚举、状态、类型、时间、金额等字段存储口径；执行结果不能写入 `dashboard_spec`。
 
 ## 设计规则
 
@@ -82,7 +82,7 @@ workspace/dashboard_draft.json
 
 1. 已读取主指南。
 2. 已构建包含 `dashboard_name` 和非空 `cards` 的 `dashboard_spec`。
-3. 已将完整 `dashboard_spec` 一次传给 `dsl2sql_tool` 批量校验，并根据逐卡 `semantic_config_id`、`panels` / `warnings` 修正失败卡片。
+3. 已将完整 `dashboard_spec` 一次传给 `validate_dashboard` 批量校验，并根据逐卡 `semantic_config_id`、`panels` / `warnings` 修正失败卡片。
 4. 已生成或更新一个 `outputs/*.dashboard.json` 文件，且可被识别为 dashboard_spec。
 5. 已调用 `present_artifacts` 显式展示最终 outputs 看板。
 6. 最终文件符合“设计规则”的字段底线。
