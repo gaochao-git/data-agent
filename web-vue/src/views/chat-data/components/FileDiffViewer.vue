@@ -121,7 +121,8 @@ watch(mode, (value) => {
   if (!props.visible) return
   if (value === 'merge') {
     if (fileContents.value) void renderMergeView()
-    else if (!mergeLoading.value && !mergeError.value) void loadFileContents()
+    // 拉取失败后允许重试：loadFileContents 会清掉旧错误重新拉取
+    else if (!mergeLoading.value) void loadFileContents()
   } else {
     destroyMergeView()
   }

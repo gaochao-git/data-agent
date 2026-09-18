@@ -120,4 +120,20 @@ describe('FileDiffViewer', () => {
     // 降级后仍能看到简洁 diff
     expect(wrapper.findAll('.bg-emerald-50').length).toBe(2)
   })
+
+  it('retries merge load after a previous failure', async () => {
+    apiMocks.getConversationWorkspaceFileContent.mockRejectedValueOnce(new Error('gone'))
+    const wrapper = await mountViewer()
+    await clickMergeModeButton(wrapper)
+    expect(wrapper.text()).toContain('文件全文读取失败，已切换为简洁对比')
+
+    // 失败后再次切换到并排对比：清掉旧错误重新拉取
+    apiMocks.getConversationWorkspaceFileContent
+      .mockResolvedValueOnce({ data: { content: '第一行' } })
+      .mockResolvedValueOnce({ data: { content: '第一行' } })
+    await clickMergeModeButton(wrapper)
+
+    expect(wrapper.text()).not.toContain('文件全文读取失败')
+    expect(mergeMocks.MergeView).toHaveBeenCalledTimes(1)
+  })
 })
