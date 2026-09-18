@@ -2972,6 +2972,7 @@ const submitAnalysisQuery = async (
             result: event.content || event.result || existing?.result,
             progressMessage: event.message || existing?.progressMessage,
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
+            contentLines: typeof event.content_lines === 'number' ? event.content_lines : existing?.contentLines,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,

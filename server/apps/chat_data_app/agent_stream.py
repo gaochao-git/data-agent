@@ -284,6 +284,71 @@ def _visible_tool_count(tool_names: dict[str, str]) -> int:
     return len(tool_names)
 
 
+# 需要实时显示生成行数的工具及其长文本字段名
+_STREAMING_LINE_COUNT_TOOLS: dict[str, str] = {
+    "file_write": "content",
+    "file_edit": "new_content",
+}
+
+
+def _extract_streaming_text_field(args_text: str, field_name: str) -> str | None:
+    """从生成中的 args JSON 里提取指定字符串字段的当前值（可能不完整）。
+
+    模型流式输出工具参数时，args 是 ``{"file_path":"...","content":"..."}`` 这样的
+    JSON 片段。在 content 生成过程中 JSON 尚未闭合，无法用 json.loads 解析；
+    这里用状态机直接定位 ``"<field_name>":"`` 之后的字符串值，处理转义字符。
+    """
+    marker = f'"{field_name}"'
+    idx = args_text.find(marker)
+    if idx < 0:
+        return None
+    rest = args_text[idx + len(marker):]
+    colon = rest.find(':')
+    if colon < 0:
+        return None
+    rest = rest[colon + 1:].lstrip()
+    if not rest.startswith('"'):
+        return None
+    out: list[str] = []
+    i = 1
+    while i < len(rest):
+        c = rest[i]
+        if c == '\\' and i + 1 < len(rest):
+            nxt = rest[i + 1]
+            mapping = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', '\\': '\\', '/': '/'}
+            out.append(mapping.get(nxt, nxt))
+            i += 2
+        elif c == '"':
+            break  # 字符串闭合
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def _count_text_lines(text: str) -> int:
+    """统计文本行数（空文本 0 行；以换行结尾不计额外空行）。"""
+    if not text:
+        return 0
+    return text.count('\n') + (0 if text.endswith('\n') else 1)
+
+
+def _format_tool_progress_event(
+    tool_call_id: str,
+    tool_name: str,
+    content_lines: int,
+) -> str:
+    """工具执行中推送进度事件，当前用于 file_write/file_edit 的实时行数显示。"""
+    data = {
+        "type": "tool_progress",
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "content_lines": content_lines,
+        "timestamp": _get_timestamp(),
+    }
+    return _format_sse("tool_progress", data)
+
+
 def _format_tool_event(
     tool_name: str,
     tool_call_id: str | None,
@@ -509,6 +574,15 @@ class _ToolStreamState:
             current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
+                # file_write / file_edit 在生成 content 时实时统计行数，前端工具卡片可显示 "+N"
+                tool_name = self.tool_names.get(current_tool_call_id, "")
+                field_name = _STREAMING_LINE_COUNT_TOOLS.get(tool_name)
+                if field_name:
+                    content = _extract_streaming_text_field(self.args_buffer[current_tool_call_id], field_name)
+                    if content is not None:
+                        events.append(_format_tool_progress_event(
+                            current_tool_call_id, tool_name, _count_text_lines(content),
+                        ))
         return events
 
     def build_tool_message_payload(self, message_chunk: Any) -> dict[str, Any]:

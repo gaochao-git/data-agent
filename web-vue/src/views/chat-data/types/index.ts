@@ -444,6 +444,8 @@ export interface ToolCallInfo {
   result?: string
   progressMessage?: string
   progress?: number
+  // file_write / file_edit 流式生成时的实时行数（工具执行中由 tool_progress 事件推送）
+  contentLines?: number
   status: 'generating' | 'running' | 'completed' | 'error'
   // 关联的渲染内容
   renderId?: string
@@ -611,6 +613,8 @@ export interface ToolLifecycleEventData extends ToolEventData {
   delta?: string
   // 完整消息已通过增量流出：收敛时前端只补截断标记，不覆盖内容
   streamed?: boolean
+  // tool_progress：file_write/file_edit 流式生成时的实时行数
+  content_lines?: number
 }
 
 // 语义层配置

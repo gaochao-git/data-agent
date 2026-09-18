@@ -2898,7 +2898,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                       @click="dimensionSectionCollapsed = !dimensionSectionCollapsed"
                     >
                       <div class="text-xs font-medium text-gray-600 shrink-0">维度配置</div>
-                      <div class="text-[11px] text-gray-400 truncate">一行 = 一个物理字段，默认全量为维度 · {{ fieldRows.length }} 个</div>
+                      <div class="text-[11px] text-gray-400 truncate">一行 = 一个物理字段，勾选决定是否参与维度 · {{ fieldRows.length }} 个</div>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
                       <button

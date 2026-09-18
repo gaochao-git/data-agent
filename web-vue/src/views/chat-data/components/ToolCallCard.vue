@@ -147,6 +147,17 @@ const visibleError = computed(() => getQueryResultError(props.toolCall.result) |
 const isDataAnalyzingTool = computed(() => props.toolCall.tool_name === 'data_analyzing_tool')
 const executeQueryAction = computed(() => (props.toolCall.args || {})?.action === 'execute_query')
 
+// file_write / file_edit 流式生成时的实时行数显示（对标 WorkBuddy 的 "+N"）
+const isLineCountTool = computed(() =>
+  props.toolCall.tool_name === 'file_write' || props.toolCall.tool_name === 'file_edit',
+)
+const lineCountText = computed(() => {
+  if (!isLineCountTool.value) return ''
+  const lines = props.toolCall.contentLines
+  if (lines == null) return ''
+  return `+${lines}`
+})
+
 // 是否可以保存到看板（查询执行完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
   return isDataAnalyzingTool.value &&
@@ -438,6 +449,7 @@ function getSqlTokenClass(type: string): string {
     <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
     <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
       <span class="shrink-0 font-semibold">{{ displayName }}</span>
+      <span v-if="lineCountText" class="ml-1.5 shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ lineCountText }}</span>
       <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
     </span>
     <span
@@ -466,6 +478,7 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-wrench"></i>
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
+        <span v-if="lineCountText" class="shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ lineCountText }}</span>
         <span
           v-if="durationText"
           class="shrink-0 rounded bg-black/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-gray-400"
