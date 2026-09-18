@@ -466,3 +466,109 @@ async def test_tool_wrapper_surfaces_uploads_violation(tmp_path):
     with pytest.raises(ValueError, match="uploads") as excinfo:
         await tool.ainvoke({"command_args": ["add", "/mnt/user-data/uploads/x.docx", "/body", "--type", "p"]})
     assert "file_copy" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_save_stdout_to_writes_untruncated_stdout_to_workspace(monkeypatch, tmp_path):
+    """save_stdout_to 把完整 stdout 原样写入 workspace，返回保存路径。"""
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_demo.txt",
+    )
+    assert payload["success"] is True
+    assert payload["saved_stdout_to"]
+    physical = Path(runtime.workspace_root) / "workspace" / "diff_demo.txt"
+    assert physical.exists()
+    assert "OFFICECLI_CALLED" in physical.read_text()
+
+
+@pytest.mark.asyncio
+async def test_save_stdout_to_rejects_relative_path(tmp_path):
+    """必须传 /mnt/user-data/workspace/ 开头的完整路径，相对路径不自动拼接。"""
+    runtime = _local_runtime(tmp_path)
+    with pytest.raises(ValueError, match="路径必须以"):
+        await run_officecli_command(
+            args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+            workspace_runtime=runtime, save_stdout_to="diff_demo.txt",
+        )
+
+
+@pytest.mark.asyncio
+async def test_save_stdout_to_accepts_workspace_absolute_path(monkeypatch, tmp_path):
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_abs.txt",
+    )
+    assert payload["success"] is True
+    assert (Path(runtime.workspace_root) / "workspace" / "diff_abs.txt").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_path,expected", [
+    ("/mnt/user-data/outputs/x.txt", "只允许写入"),
+    ("/mnt/user-data/uploads/x.txt", "只允许写入"),
+    ("/mnt/skills/officecli/x.txt", "只允许写入"),
+    ("/etc/x.txt", "路径必须以"),
+    ("diff_demo.txt", "路径必须以"),
+    ("workspace/../outputs/x.txt", "路径必须以"),
+    ("/mnt/user-data/workspace/../outputs/x.txt", "越界"),
+    ("/mnt/user-data/workspace/semantic/model.yaml", "只读快照"),
+])
+async def test_save_stdout_to_rejects_non_workspace_paths(tmp_path, bad_path, expected):
+    """路径校验复用 WORKSPACE_PATH_POLICY：相对形式/越界/semantic 快照等口径与全局一致。"""
+    runtime = _local_runtime(tmp_path)
+    with pytest.raises(ValueError, match=expected):
+        await run_officecli_command(
+            args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+            workspace_runtime=runtime, save_stdout_to=bad_path,
+        )
+
+
+@pytest.mark.asyncio
+async def test_save_stdout_to_skipped_when_command_fails(monkeypatch, tmp_path):
+    """命令失败时 stdout 不可信：跳过转存，走 success=False 主路径（stderr 完整返回）。"""
+    fail_bin = tmp_path / "officecli"
+    fail_bin.write_text("#!/bin/sh\necho boom >&2\nexit 3\n")
+    fail_bin.chmod(fail_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: str(fail_bin))
+    runtime = _local_runtime(tmp_path)
+
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_fail.txt",
+    )
+    assert payload["success"] is False
+    assert payload["saved_stdout_to"] == ""
+    assert "boom" in payload["stderr"]
+    assert not (Path(runtime.workspace_root) / "workspace" / "diff_fail.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_save_stdout_to_writes_untruncated_stdout_over_limit(monkeypatch, tmp_path):
+    """stdout 超过返回截断上限时，转存文件仍是完整原文（转存的核心价值）。"""
+    big_marker = "L" * 20000  # > MAX_OUTPUT_CHARS(12000)，payload stdout 会被截断
+    big_bin = tmp_path / "officecli"
+    big_bin.write_text(f"#!/bin/sh\nprintf '%s' '{big_marker}'\n")
+    big_bin.chmod(big_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: str(big_bin))
+    runtime = _local_runtime(tmp_path)
+
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_big.txt",
+    )
+    assert payload["success"] is True
+    assert payload["stdout_truncated"] is True
+    assert len(payload["stdout"]) < 20000
+    saved_text = (Path(runtime.workspace_root) / "workspace" / "diff_big.txt").read_text()
+    assert saved_text == big_marker

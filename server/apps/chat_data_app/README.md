@@ -99,6 +99,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 
 - **`workspace_backend` 是「运行环境标准化」，不是安全设备。** 选 `sandbox`（OpenSandbox）的目的只是把代码执行场所钉死为统一的 Python 版本、预装依赖、可复现环境，且不让 `pip install` / 临时进程 / 环境变量污染宿主生产服务。它的容器隔离（FS/网络/进程边界）只是顺带能力，本职是给代码一个一致的运行场所。
 - **`bash_enabled` 是真正的「安全策略控制」。** 它决定 Bash 工具是否注册；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/bash_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
+- **代码级总闸（2026-09-18）：`agent/tools/bash_run.py` 的 `BASH_RUN_DISABLED = True`。** 产品决定生产环境不开放 bash：即使上面的 env 或请求覆盖被误开启，`bash_run` 执行时也直接返回「功能已禁用」的结构化结论，命令不触达运行时。工具注册链路不变（`bash_enabled=true` 时工具仍可见，模型会把禁用结论转告用户）。这是刻意「下线而非删除」——恢复 bash 须把该常量改回 `False` 并重启进程，再按 2×2 矩阵确认隔离选型。
 
 **但 Bash 工具的校验是「策略轨道」而非「执行之墙」：** agent 可先用 `file_edit` 把任意脚本写到 `workspace/`，再 `bash evil.sh` 执行——脚本内容完全不被检查；local 模式下子进程以宿主权限运行，校验是唯一闸门且可被引号/进程替换绕过。因此 Bash 工具的开关是 policy（是否允许代码执行），**enforcement（真正把越界代码关住）要由沙箱容器兜底**。
 

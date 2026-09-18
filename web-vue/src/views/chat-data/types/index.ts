@@ -448,6 +448,8 @@ export interface ToolCallInfo {
   contentLines?: number
   // file_edit 整段替换口径下的被移除行数（old_content，由 tool_progress 事件推送）
   removedLines?: number
+  // 流式提取的调用意图（args 未解析前由 tool_progress 事件提前推送，长耗时工具执行中即可展示）
+  streamingIntent?: string
   status: 'generating' | 'running' | 'completed' | 'error'
   // 关联的渲染内容
   renderId?: string
@@ -619,6 +621,8 @@ export interface ToolLifecycleEventData extends ToolEventData {
   content_lines?: number
   // tool_progress：file_edit 整段替换口径下的被移除行数（old_content）
   removed_lines?: number
+  // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
+  intent?: string
 }
 
 // 语义层配置

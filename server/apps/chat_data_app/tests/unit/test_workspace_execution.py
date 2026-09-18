@@ -39,6 +39,13 @@ def _workspace_root(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.fixture(autouse=True)
+def _disable_bash_kill_switch(monkeypatch):
+    """bash_run 的代码级总闸（BASH_RUN_DISABLED=True）默认拒绝一切执行；
+    本文件测的是执行/路径校验机制本身，统一绕过总闸（总闸行为在 test_bash_run.py 覆盖）。"""
+    monkeypatch.setattr(bash_run, "BASH_RUN_DISABLED", False)
+
+
 def test_validate_backend_requires_absolute_chat_data_home(monkeypatch):
     # sandbox 模式将应用侧会话目录通过 Files API 上传，仍要求持久化根为绝对路径。
     monkeypatch.setenv("CHAT_DATA_HOME", "uploads/chat_data")

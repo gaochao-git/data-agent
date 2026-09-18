@@ -99,6 +99,8 @@ if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
         CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
     )
     CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = "local"
+# 注意：bash_run 另有代码级总闸（agent/tools/bash_run.py 的 BASH_RUN_DISABLED=True）：
+# env 或请求覆盖误开时，工具执行只会返回「功能已禁用」，命令不会真正触达运行时。
 CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
 # 是否注册 data-explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env(

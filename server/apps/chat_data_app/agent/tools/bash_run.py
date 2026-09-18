@@ -12,6 +12,42 @@ from .common import tool_result_payload
 DEFAULT_TIMEOUT_SECONDS = 20
 MAX_TIMEOUT_SECONDS = 120
 
+# ============================================================================
+# Bash 执行代码级总闸（优先级高于所有运行选项与 env）。
+# 产品决定生产环境不开放 bash：即使 CHAT_DATA_DEFAULT_BASH_ENABLED 或用户覆盖被
+# 误开启，bash_run 执行时也直接拒绝，命令不会触达运行时。工具注册链路保持原样
+# （bash_enabled=true 时工具仍可见），这样模型拿到的是明确的「已禁用」结论并转告用户，
+# 而不是工具凭空消失导致的静默失败。
+# 这是刻意「下线而非删除」：恢复方式 = 把本常量改回 False 并重启进程，无需动 env。
+# ============================================================================
+BASH_RUN_DISABLED = True
+
+BASH_RUN_DISABLED_MESSAGE = (
+    "bash 执行功能已在服务端禁用，本次未执行任何命令。"
+    "请直接告知用户该功能当前不可用；不要重试，也不要尝试用其他工具间接执行命令。"
+)
+
+
+def _disabled_payload(command: str) -> dict:
+    """总闸生效时的统一返回结构：字段与正常执行结果同形，消费方无需特判。"""
+    return {
+        "success": False,
+        "disabled": True,
+        "backend": "disabled",
+        "sandbox_id": None,
+        "cwd": None,
+        "command": str(command or ""),
+        "exit_code": None,
+        "timed_out": False,
+        "timeout_seconds": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "message": BASH_RUN_DISABLED_MESSAGE,
+        "next_required_action": "告知用户 bash 执行功能已被禁用；不要重试，也不要寻找替代执行途径。",
+    }
+
 
 def _validate_command(command: str) -> str:
     value = str(command or "").strip()
@@ -35,6 +71,9 @@ async def run_bash_command(
     workspace_runtime: ConversationWorkspaceRuntime,
 ) -> dict:
     """在当前工作区执行受限 Bash 命令。"""
+    # 代码级总闸：优先于一切运行选项，命中时不做任何校验、不触达命令
+    if BASH_RUN_DISABLED:
+        return _disabled_payload(command)
     safe_command = _validate_command(command)
     await workspace_runtime.validate_bash_paths(command=safe_command)
     try:

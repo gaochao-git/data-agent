@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 
@@ -138,7 +138,11 @@ const getResultField = (field: string): string => {
 }
 
 const compactDescription = computed(() => {
-  return getToolCompactDescription(props.toolCall.tool_name, props.toolCall.args || {})
+  // 流式 intent：args 未解析完成时由 tool_progress 提前推送，长耗时工具执行中即可展示目的
+  const args = props.toolCall.args || {}
+  const intent = compactInlineText(args.intent, 80) || props.toolCall.streamingIntent || ''
+  if (intent) return intent
+  return getToolTechnicalDescription(props.toolCall.tool_name, args)
 })
 
 const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
@@ -154,7 +158,7 @@ const isLineCountTool = computed(() =>
   props.toolCall.tool_name === 'file_write' || props.toolCall.tool_name === 'file_edit',
 )
 
-// file_diff：解析结果用于标题 +N -M 统计与「查看 Diff」按钮入口；对比视图在 FileDiffViewer 弹层内
+// file_diff：解析结果仅用于「查看 Diff」按钮入口与 offload 提示；+N -M 统计只在弹层内展示
 const isFileDiffTool = computed(() => props.toolCall.tool_name === 'file_diff')
 
 const fileDiffPayload = computed(() =>
@@ -166,22 +170,12 @@ const fileDiffOffloaded = computed(() =>
 const diffViewerVisible = ref(false)
 
 const addedLinesText = computed(() => {
-  if (isFileDiffTool.value) {
-    return fileDiffPayload.value && fileDiffPayload.value.status === 'changed'
-      ? `+${fileDiffPayload.value.added_lines}`
-      : ''
-  }
   if (!isLineCountTool.value) return ''
   const lines = props.toolCall.contentLines
   if (lines == null) return ''
   return `+${lines}`
 })
 const removedLinesText = computed(() => {
-  if (isFileDiffTool.value) {
-    return fileDiffPayload.value && fileDiffPayload.value.removed_lines > 0
-      ? `-${fileDiffPayload.value.removed_lines}`
-      : ''
-  }
   if (!isLineCountTool.value) return ''
   const lines = props.toolCall.removedLines
   if (lines == null || lines <= 0) return ''
@@ -510,7 +504,8 @@ function getSqlTokenClass(type: string): string {
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
         <span v-if="addedLinesText" class="shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
-        <span v-if="removedLinesText" class="ml-1 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
+        <span v-if="removedLinesText" class="ml-0 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
+        <span v-if="compactDescription" class="min-w-0 truncate font-mono text-[11px] font-normal text-slate-400">{{ compactDescription }}</span>
         <span
           v-if="durationText"
           class="shrink-0 rounded bg-black/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-gray-400"

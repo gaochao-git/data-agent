@@ -368,8 +368,8 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         两个文件整体读取（单文件上限 2 MiB，二进制不支持），输出 added_lines /
         removed_lines 统计与完整 unified diff；内容完全一致时 status=identical。
         file_edit/file_write/officecli 修改之后应先对比确认改动范围与预期一致，再继续下一步。
-        docx/xlsx/pptx 是二进制不能直接对比：先用 officecli_run 执行 view <文件> text
-        并用 -o 把转存文本写到 outputs/（需核对格式改动改用 annotated），再对比两个转存文本。
+        docx/xlsx/pptx 是二进制不能直接对比：先用 officecli_run 执行 view <文件> text 并传
+        save_stdout_to 把转存文本写到 workspace（需核对格式改动改用 annotated），再对比两个转存文本。
 
         Args:
             file_a: 原文件路径（diff 的 from 侧）。

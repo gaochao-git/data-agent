@@ -1,10 +1,12 @@
-"""file_write/file_edit 流式行数进度（tool_progress +N / -M）单测。
+"""file_write/file_edit 流式行数进度（tool_progress +N / -M）与流式 intent 预渲染单测。
 
 覆盖：
 - ``_count_text_lines`` 行数口径（空文本、结尾换行）
 - ``_extract_streaming_text_field`` 流式 JSON 字段提取（未闭合、转义、子串安全）
 - ``_ToolStreamState.handle_tool_call_chunks`` 集成：file_edit 的 -M（整段替换口径）、
   file_write 无 -M、非目标工具不推送、计数去重、完成态清理
+- 流式 intent：所有工具 args 出现 intent 即推送（长耗时工具执行前展示目的）、
+  去重、行数与 intent 合并事件、intent-only 事件不携带行数字段
 """
 import json
 
@@ -26,6 +28,17 @@ def progress_counts(events: list[str]) -> list[tuple[int, int]]:
         for event in events
         if sse_event_name(event) == "tool_progress"
         for payload in [sse_event_payload(event)]
+    ]
+
+
+def progress_intents(events: list[str]) -> list[str]:
+    """从事件流中提取 intent 序列（仅含携带 intent 的事件）。"""
+    return [
+        payload["intent"]
+        for event in events
+        if sse_event_name(event) == "tool_progress"
+        for payload in [sse_event_payload(event)]
+        if "intent" in payload
     ]
 
 
@@ -143,14 +156,73 @@ def test_non_target_tool_emits_no_progress():
     assert progress_counts(events) == []
 
 
+def test_intent_streamed_for_any_tool():
+    """所有工具的 intent 参数在 args 里出现即推送，非行数工具的事件不带行数字段。"""
+    state = agent_stream._ToolStreamState()
+    events = _feed(state, [
+        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+        {"id": "", "name": "", "args": '{"file_path": "b.html", "intent": "读取配置文件"}', "index": 0},
+    ])
+
+    progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
+    assert progress_intents(events) == ["读取配置文件"]
+    assert all("content_lines" not in payload for payload in progress)
+    assert all("removed_lines" not in payload for payload in progress)
+
+
+def test_intent_dedupes_unchanged_value():
+    """intent 未变化时不重复推送。"""
+    state = agent_stream._ToolStreamState()
+    events = _feed(state, [
+        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+        {"id": "", "name": "", "args": '{"intent": "读取配置文件"', "index": 0},
+        # intent 已闭合且未变化的空白 chunk：不再推
+        {"id": "", "name": "", "args": '   ', "index": 0},
+        {"id": "", "name": "", "args": ', "file_path": "b.html"}', "index": 0},
+    ])
+
+    assert progress_intents(events) == ["读取配置文件"]
+
+
+def test_file_write_merges_counts_and_intent_in_one_event():
+    """行数与 intent 同时首次出现时合并推一个事件，两者都携带。"""
+    state = agent_stream._ToolStreamState()
+    events = _feed(state, [
+        {"id": "call-1", "name": "file_write", "args": "", "index": 0},
+        {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb", "intent": "写入配置"}', "index": 0},
+    ])
+
+    progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
+    assert len(progress) == 1
+    assert progress[0]["content_lines"] == 2
+    assert progress[0]["removed_lines"] == 0
+    assert progress[0]["intent"] == "写入配置"
+
+
+def test_intent_only_event_after_counts_settled():
+    """行数已推送后 intent 才到达：第二个事件只带 intent，行数字段缺省（前端保留已有值）。"""
+    state = agent_stream._ToolStreamState()
+    events = _feed(state, [
+        {"id": "call-1", "name": "file_write", "args": "", "index": 0},
+        {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb"', "index": 0},
+        {"id": "", "name": "", "args": ', "intent": "写入配置"}', "index": 0},
+    ])
+
+    progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
+    assert len(progress) == 2
+    assert progress[0]["content_lines"] == 2 and "intent" not in progress[0]
+    assert "content_lines" not in progress[1] and progress[1]["intent"] == "写入配置"
+
+
 def test_progress_state_cleared_after_tool_result():
-    """工具结果到达后，行数去重状态与 args buffer 一起清理。"""
+    """工具结果到达后，行数/intent 去重状态与 args buffer 一起清理。"""
     state = agent_stream._ToolStreamState()
     _feed(state, [
         {"id": "call-1", "name": "file_write", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"content": "a"}', "index": 0},
+        {"id": "", "name": "", "args": '{"content": "a", "intent": "写入"}', "index": 0},
     ])
     assert state.progress_line_counts == {"call-1": (1, 0)}
+    assert state.progress_intents == {"call-1": "写入"}
 
     from langchain_core.messages import ToolMessageChunk
 
@@ -158,4 +230,5 @@ def test_progress_state_cleared_after_tool_result():
     state.build_tool_message_payload(chunk)
 
     assert "call-1" not in state.progress_line_counts
+    assert "call-1" not in state.progress_intents
     assert "call-1" not in state.args_buffer

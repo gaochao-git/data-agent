@@ -135,7 +135,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             if ctx.runtime_options.bash_enabled
             else []
         ),
-        note="受 CHAT_DATA_DEFAULT_BASH_ENABLED 运行选项控制的可选执行工具",
+        note="受 CHAT_DATA_DEFAULT_BASH_ENABLED 运行选项控制的可选执行工具；bash_run.BASH_RUN_DISABLED 代码级总闸生效时即使注册也拒绝执行",
     ),
 )
 

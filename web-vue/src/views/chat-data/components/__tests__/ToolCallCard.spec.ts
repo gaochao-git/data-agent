@@ -149,6 +149,41 @@ describe('ToolCallCard', () => {
     expect(wrapper.findAll('.sub-tool-chip').length).toBe(0)
   })
 
+  it('shows streaming intent while args are not yet parsed', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: false,
+        toolCall: {
+          tool_call_id: 'call-officecli',
+          tool_name: 'officecli_run',
+          args: {},
+          streamingIntent: '生成转存文本用于对比',
+          status: 'running',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('生成转存文本用于对比')
+  })
+
+  it('prefers parsed args.intent over streamingIntent after completion', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: false,
+        toolCall: {
+          tool_call_id: 'call-officecli',
+          tool_name: 'officecli_run',
+          args: { intent: '导出修改后单元格清单' },
+          streamingIntent: '生成转存文本用于对比',
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('导出修改后单元格清单')
+    expect(wrapper.text()).not.toContain('生成转存文本用于对比')
+  })
+
   it('keeps file_diff raw json as result and offers a separate diff viewer button', () => {
     const result = '[file_diff]\n' + JSON.stringify({
       file_a: '/mnt/user-data/workspace/semantic/orders__a1.yaml',
@@ -173,9 +208,11 @@ describe('ToolCallCard', () => {
 
     // 结果区保持与其他工具一致的原始 JSON 展示
     expect(wrapper.text()).toContain('added_lines')
-    // 卡片标题栏显示 +N -M 统计，并提供独立「查看 Diff」入口
-    expect(wrapper.text()).toContain('+2')
-    expect(wrapper.text()).toContain('-1')
+    // 时间线卡片不显示 +N -M 统计（只在弹层内展示），提供独立「查看 Diff」入口
+    const text = wrapper.text()
+    const beforeViewer = text.slice(0, text.indexOf('查看 Diff'))
+    expect(beforeViewer).not.toContain('+2')
+    expect(beforeViewer).not.toContain('-1')
     const diffButton = wrapper.findAll('button').find(b => b.text().includes('查看 Diff'))
     expect(diffButton).toBeTruthy()
   })

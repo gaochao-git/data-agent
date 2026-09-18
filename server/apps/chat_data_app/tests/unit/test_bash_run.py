@@ -30,6 +30,13 @@ class _FakeRuntime:
         return dict(self._execution)
 
 
+@pytest.fixture(autouse=True)
+def _disable_bash_kill_switch(monkeypatch):
+    """bash_run 的代码级总闸（BASH_RUN_DISABLED=True）默认拒绝一切执行；
+    本文件的机制类测试统一绕过总闸，总闸自身行为由末尾的专门用例覆盖。"""
+    monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", False)
+
+
 def _execution(**overrides) -> dict:
     payload = {
         "backend": "local",
@@ -152,3 +159,52 @@ async def test_bash_run_tool_failure_wrapped(monkeypatch):
     # 失败显式化：异常穿透由 ToolErrorMiddleware 转 status="error" 的 ToolMessage
     with pytest.raises(RuntimeError, match="boom"):
         await tool.ainvoke({"command": "echo hi"})
+
+
+# ============ 代码级总闸（BASH_RUN_DISABLED=True，生产默认） ============
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_refuses_execution_without_touching_runtime(monkeypatch):
+    """总闸生效时直接拒绝：不做路径校验、不触达命令，返回统一的禁用结构。"""
+    monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", True)
+    runtime = _FakeRuntime(_execution())
+
+    result = await run_bash_command(
+        command="echo hi", workspace_runtime=runtime
+    )
+
+    assert result["success"] is False
+    assert result["disabled"] is True
+    assert "已在服务端禁用" in result["message"]
+    assert result["exit_code"] is None
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_takes_precedence_over_command_validation(monkeypatch):
+    """总闸优先于命令校验：禁用态下连违规命令也不进入校验分支（校验行为不泄露）。"""
+    monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", True)
+    runtime = _FakeRuntime(_execution())
+
+    result = await run_bash_command(
+        command="sudo rm -rf /", workspace_runtime=runtime
+    )
+
+    assert result["disabled"] is True
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_bash_run_tool_reports_disabled(monkeypatch):
+    """总闸生效时工具包装层正常返回（不抛错）：模型拿到明确结论并转告用户。"""
+    monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", True)
+    tool = create_bash_run_tool(_FakeRuntime(_execution()))
+
+    result = await tool.ainvoke({"command": "echo hi"})
+
+    assert result.startswith("[bash_run]\n")
+    payload = json.loads(result.split("\n", 1)[1])
+    assert payload["disabled"] is True
+    assert "已在服务端禁用" in payload["message"]
+    assert "不要重试" in payload["next_required_action"]

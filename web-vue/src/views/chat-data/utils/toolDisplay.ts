@@ -62,7 +62,7 @@ const normalizeVisiblePath = (value: unknown): string => (
     .replace(/\/+/g, '/')
 )
 
-const compactInlineText = (value: unknown, maxLength = 120): string => {
+export const compactInlineText = (value: unknown, maxLength = 120): string => {
   const text = String(value || '').trim().replace(/\s+/g, ' ')
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }

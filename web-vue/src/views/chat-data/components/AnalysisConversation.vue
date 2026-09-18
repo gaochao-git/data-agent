@@ -3042,6 +3042,7 @@ const submitAnalysisQuery = async (
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
             contentLines: typeof event.content_lines === 'number' ? event.content_lines : existing?.contentLines,
             removedLines: typeof event.removed_lines === 'number' ? event.removed_lines : existing?.removedLines,
+            streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,

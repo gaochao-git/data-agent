@@ -338,18 +338,26 @@ def _count_text_lines(text: str) -> int:
 def _format_tool_progress_event(
     tool_call_id: str,
     tool_name: str,
-    content_lines: int,
-    removed_lines: int,
+    content_lines: int | None,
+    removed_lines: int | None,
+    intent: str | None = None,
 ) -> str:
-    """工具执行中推送进度事件，用于 file_write/file_edit 的实时行数显示（+N / -M）。"""
+    """工具执行中推送进度事件：file_write/file_edit 的实时行数（+N / -M）、通用 intent 预渲染。
+
+    行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
+    """
     data = {
         "type": "tool_progress",
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
-        "content_lines": content_lines,
-        "removed_lines": removed_lines,
         "timestamp": _get_timestamp(),
     }
+    if content_lines is not None:
+        data["content_lines"] = content_lines
+    if removed_lines is not None:
+        data["removed_lines"] = removed_lines
+    if intent:
+        data["intent"] = intent
     return _format_sse("tool_progress", data)
 
 
@@ -513,6 +521,8 @@ class _ToolStreamState:
         self.active_tool_call_id: str | None = None
         # 已推送的实时行数 (added, removed)，用于行数未变化时去重，避免 SSE 事件洪峰
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
+        # 已推送的流式 intent，用于 intent 未变化时去重
+        self.progress_intents: dict[str, str] = {}
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -565,25 +575,38 @@ class _ToolStreamState:
         )
 
     def _streaming_progress_events(self, tool_call_id: str, tool_name: str, args_text: str) -> list[str]:
-        """file_write/file_edit 生成 args 期间实时统计行数并推送进度事件（+N / -M）。
+        """工具生成 args 期间推送进度事件：intent 预渲染（所有工具）+ 行数统计（file_write/file_edit）。
 
-        整段替换口径：added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数。
-        计数与上次一致时不重复推送；两个目标字段都还没开始生成时也不推送。
+        - intent：args 里出现 intent 字段即推送，让长耗时工具在执行前就能向用户展示调用目的；
+          与上次推送一致时不重复。
+        - 行数：整段替换口径，added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数；
+          计数与上次一致时不重复推送。
+        - 两类信息任一变化就合并推一个事件，行数字段仅行数统计工具携带。
         """
         fields = _STREAMING_LINE_COUNT_TOOLS.get(tool_name)
-        if not fields:
+        added: str | None = None
+        removed: str | None = None
+        if fields:
+            added = _extract_streaming_text_field(args_text, fields["added_field"])
+            removed = _extract_streaming_text_field(args_text, fields["removed_field"]) if fields.get("removed_field") else ""
+        counts: tuple[int, int] | None = None
+        if added is not None or removed is not None:
+            counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
+        intent = _extract_streaming_text_field(args_text, "intent")
+
+        counts_changed = counts is not None and self.progress_line_counts.get(tool_call_id) != counts
+        intent_changed = bool(intent) and self.progress_intents.get(tool_call_id) != intent
+        if not counts_changed and not intent_changed:
             return []
-        added = _extract_streaming_text_field(args_text, fields["added_field"])
-        removed: str | None = ""
-        if fields.get("removed_field"):
-            removed = _extract_streaming_text_field(args_text, fields["removed_field"])
-        if added is None and removed is None:
-            return []
-        counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
-        if self.progress_line_counts.get(tool_call_id) == counts:
-            return []
-        self.progress_line_counts[tool_call_id] = counts
-        return [_format_tool_progress_event(tool_call_id, tool_name, counts[0], counts[1])]
+        if counts is not None:
+            self.progress_line_counts[tool_call_id] = counts
+        if intent:
+            self.progress_intents[tool_call_id] = intent
+        # 行数未变化的合并事件不携带行数字段，前端保留已有值
+        event_counts = counts if counts_changed else (None, None)
+        return [_format_tool_progress_event(
+            tool_call_id, tool_name, event_counts[0], event_counts[1], intent,
+        )]
 
     def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
         events: list[str] = []
@@ -627,6 +650,7 @@ class _ToolStreamState:
             self.args_buffer.pop(tool_call_id, None)
             self.args_fallback.pop(tool_call_id, None)
             self.progress_line_counts.pop(tool_call_id, None)
+            self.progress_intents.pop(tool_call_id, None)
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
         return msg_data
 
