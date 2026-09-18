@@ -80,6 +80,10 @@ async def run_officecli_command(
                     "请先用 file_copy 将文件复制到 /mnt/user-data/workspace 后再操作。"
                 )
     timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS))
+    # save_stdout_to 在执行前校验：路径非法 fail-fast，不白跑一趟命令（与测试口径一致）。
+    save_target = ""
+    if save_stdout_to:
+        save_target = _validate_save_stdout_path(save_stdout_to)
     execution = await workspace_runtime.run_officecli(
         args=safe_args, cwd=cwd, timeout_seconds=timeout
     )
@@ -88,12 +92,11 @@ async def run_officecli_command(
     stderr, stderr_truncated = truncate_output(str(execution["stderr"]))
     success = (int(execution["exit_code"]) == 0) and not bool(execution["timed_out"])
     saved_stdout_to = ""
-    if save_stdout_to and success:
-        target = _validate_save_stdout_path(save_stdout_to)
+    if save_target and success:
         written = await workspace_runtime.write_text_file(
-            file_path=target, content=raw_stdout, mode="overwrite"
+            file_path=save_target, content=raw_stdout, mode="overwrite"
         )
-        saved_stdout_to = str(written.get("file_path") or target)
+        saved_stdout_to = str(written.get("file_path") or save_target)
     return {
         "success": success,
         "backend": execution["backend"],
