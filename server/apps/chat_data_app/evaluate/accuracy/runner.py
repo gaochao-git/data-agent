@@ -355,7 +355,12 @@ def summarize_execution_success(tool_traces: list[ToolTrace]) -> bool | None:
         for trace in tool_traces
         if trace.name == "data_analyzing_tool" and trace.content
     ]
-    execute_payloads = [payload for payload in execute_payloads if payload]
+    # 只统计执行查询结果（query_result envelope / 带 status）；validate 的 success 仅代表编译通过
+    execute_payloads = [
+        payload
+        for payload in execute_payloads
+        if payload and (payload.get("type") == "query_result" or "status" in payload)
+    ]
     if not execute_payloads:
         return None
     return _result_succeeded(execute_payloads[-1])

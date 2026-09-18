@@ -200,9 +200,9 @@ def test_dsl2sql_payload_selection_and_execution_summary():
         content="[data_analyzing_tool]\n```sql\nselect sum(amount) from orders\n```",
     )
     other_trace = ToolTrace(
-        name="calculator_tool",
+        name="data_analyzing_tool",
         status="done",
-        content=json.dumps({"success": False}),
+        content=json.dumps({"status": "failed"}),
     )
 
     payload = runner.build_dsl2sql_payload(trace_from_json)

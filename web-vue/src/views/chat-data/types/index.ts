@@ -409,7 +409,7 @@ export interface DashboardSpecPayload {
   conversation_id?: string | null
 }
 
-// 语义参数（从 data_analyzing_tool 的 action_payload 提取；历史会话为 dsl2sql_tool）
+// 语义参数（从 data_analyzing_tool 的 action_payload 提取）
 export interface SemanticParams {
   metrics?: string[]
   // dimensions 可以是字符串或对象（带 time_grain）
@@ -450,7 +450,7 @@ export interface ToolCallInfo {
   renderType?: 'queryResult' | 'chart'
   // 图表推荐
   visualization?: VisualizationConfig
-  // 语义参数（从关联的 data_analyzing_tool 获取；历史会话为 dsl2sql_tool）
+  // 语义参数（从关联的 data_analyzing_tool 获取）
   semanticParams?: SemanticParams
   // 工具执行起止时间（epoch 毫秒，后端 ToolTimingMiddleware 盖章）：耗时由两者相减得出
   started_at_ms?: number | null

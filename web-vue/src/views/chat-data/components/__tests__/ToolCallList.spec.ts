@@ -26,8 +26,8 @@ describe('ToolCallList', () => {
               {
                 kind: 'tool',
                 id: 'inner-2',
-                tool_name: 'semantic_query_tool',
-                args: { query: '订单量' },
+                tool_name: 'data_analyzing_tool',
+                args: { action: 'execute_query', action_payload: { semantic_config_id: 'sc_a' } },
                 status: 'running',
               },
             ],
@@ -47,7 +47,7 @@ describe('ToolCallList', () => {
     expect(chain.attributes('data-parent-tool-call-id')).toBe('call-task')
     expect(chain.text()).toContain('子智能体执行过程')
     expect(chain.text()).toContain('精确计算')
-    expect(chain.text()).toContain('查询数据')
+    expect(chain.text()).toContain('数据分析')
     // 内层工具结果不在消息流内展示（完整参数/结果点击 chip 走右侧详情面板）
     expect(chain.text()).not.toContain('↳')
 
@@ -350,7 +350,7 @@ describe('ToolCallList', () => {
             status: 'running',
             subagentTrail: [
               { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed', result: '2' },
-              { kind: 'tool', id: 'inner-2', tool_name: 'semantic_query_tool', args: { query: '订单量' }, status: 'running' },
+              { kind: 'tool', id: 'inner-2', tool_name: 'data_analyzing_tool', args: { action: 'execute_query' }, status: 'running' },
             ],
           },
         ],
@@ -360,7 +360,7 @@ describe('ToolCallList', () => {
     const chain = wrapper.find('.subagent-chain')
     // 标题行给出「正在执行什么」：内层工具常在亚秒级完成，chip 上的小
     // spinner 会一闪而过，标题行才是用户能持续看到的位置
-    expect(chain.text()).toContain('正在执行：查询数据')
+    expect(chain.text()).toContain('正在执行：数据分析')
     expect(chain.find('.subagent-chain-toggle .fa-spinner').exists()).toBe(true)
 
     // 执行中的 chip 与已完成的 chip 视觉可区分（对齐主图卡片的 running 底色）
@@ -383,13 +383,13 @@ describe('ToolCallList', () => {
       status: 'running' as const,
       subagentTrail: [
         { kind: 'tool' as const, id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 / 0' }, status: 'error' as const, result: 'boom' },
-        { kind: 'tool' as const, id: 'inner-2', tool_name: 'semantic_query_tool', args: { query: '订单量' }, status: 'running' as const },
+        { kind: 'tool' as const, id: 'inner-2', tool_name: 'data_analyzing_tool', args: { action: 'execute_query' }, status: 'running' as const },
       ],
     }
     const wrapper = mount(ToolCallList, { props: { toolCalls: [toolCall] } })
 
     // 运行中：有工具正在跑，标题行优先说「正在执行什么」
-    expect(wrapper.find('.subagent-chain').text()).toContain('正在执行：查询数据')
+    expect(wrapper.find('.subagent-chain').text()).toContain('正在执行：数据分析')
 
     await wrapper.setProps({ toolCalls: [{ ...toolCall, status: 'completed' as const }] })
     // 收敛后：不再有 in-flight 提示，标题行回归「子智能体执行过程」

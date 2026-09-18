@@ -9,16 +9,19 @@ describe('ToolCallDetailPanel', () => {
       props: {
         toolCall: {
           tool_call_id: 'call-search',
-          tool_name: 'search_dataset',
-          args: { query: '产品分类模型' },
+          tool_name: 'data_analyzing_tool',
+          args: {
+            action: 'execute_query',
+            action_payload: { semantic_config_id: 'sc_a' },
+          },
           status: 'completed',
           result: '{"success": true}',
         },
       },
     })
 
-    expect(wrapper.text()).toContain('检索语义模型')
-    expect(wrapper.text()).toContain('产品分类模型')
-    expect(wrapper.text()).not.toContain('search_dataset')
+    expect(wrapper.text()).toContain('数据分析')
+    expect(wrapper.text()).toContain('sc_a')
+    expect(wrapper.text()).not.toContain('data_analyzing_tool')
   })
 })

@@ -363,8 +363,8 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
         async def astream(self, *_args, **_kwargs):
             yield "custom", {"type": "token_usage", "usage": {"total_tokens": 7}}
             yield "custom", {"type": "context_compression", "event": {"id": "context-compression-1"}}
-            yield "messages", (FakeChunk(additional_kwargs={"reasoning_content": "调用 semantic_search"}), {"langgraph_node": "model"})
-            yield "messages", (FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_query_tool", "args": {"dsl": {}}}]), {"langgraph_node": "model"})
+            yield "messages", (FakeChunk(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"}), {"langgraph_node": "model"})
+            yield "messages", (FakeChunk(tool_calls=[{"id": "tc1", "name": "data_analyzing_tool", "args": {"dsl": {}}}]), {"langgraph_node": "model"})
             yield "messages", (FakeChunk(content="{}", msg_type="tool", tool_call_id="tc1"), {"langgraph_node": "tools"})
             yield "messages", (FakeChunk(content="完成", msg_type="ai"), {"langgraph_node": "model"})
 
@@ -389,9 +389,9 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
 
     assert "event: token_usage" in text
     assert "event: context_compression" in text
-    assert "语义检索" in text
+    assert "数据分析" in text
     assert "event: tool" in text
-    assert "semantic_query_tool" in text
+    assert "data_analyzing_tool" in text
     assert "event: message" in text
     assert end_payload["timestamp"] == "2026-07-15 09:00:00"
     assert end_payload["usage"]["total_tokens"] == 7

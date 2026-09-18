@@ -63,8 +63,8 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
     first_user = HumanMessage(content="查询订单", id="turn-1", additional_kwargs={"timestamp": "2026-07-24 10:00:00"})
     first_turn_messages = [
         first_user,
-        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "tool-1", "name": "semantic_query_tool", "args": {}}]),
-        ToolMessage(content="订单查询结果", id="tool-result-1", tool_call_id="tool-1", name="semantic_query_tool"),
+        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "tool-1", "name": "data_analyzing_tool", "args": {}}]),
+        ToolMessage(content="订单查询结果", id="tool-result-1", tool_call_id="tool-1", name="data_analyzing_tool"),
         AIMessage(content="订单已查询完成", id="assistant-2"),
     ]
     first_reasoning = [
@@ -271,11 +271,11 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
         content="工具结果",
         id="tool-1",
         tool_call_id="call-1",
-        name="semantic_query_tool",
+        name="data_analyzing_tool",
     )
     messages = [
         user_message,
-        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "call-1", "name": "semantic_query_tool", "args": {}}]),
+        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "call-1", "name": "data_analyzing_tool", "args": {}}]),
         tool_message,
         AIMessage(content="已完成", id="assistant-2"),
     ]

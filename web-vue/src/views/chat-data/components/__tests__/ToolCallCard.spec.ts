@@ -20,21 +20,21 @@ describe('ToolCallCard', () => {
     expect(wrapper.find('[title="/mnt/user-data/workspace/reports/word.md"]').exists()).toBe(true)
   })
 
-  it('shows the search query after the mapped dataset-search tool name', () => {
+  it('shows the compact description for the merged data-analyzing tool', () => {
     const wrapper = mount(ToolCallCard, {
       props: {
         compact: true,
         toolCall: {
           tool_call_id: 'call-search',
-          tool_name: 'search_dataset',
-          args: { query: '产品分类模型' },
+          tool_name: 'data_analyzing_tool',
+          args: { action: 'validate_dsl', action_payload: { semantic_config_id: 'sc_a' } },
           status: 'completed',
         },
       },
     })
 
-    expect(wrapper.text()).toContain('检索语义模型')
-    expect(wrapper.text()).toContain('产品分类模型')
+    expect(wrapper.text()).toContain('数据分析')
+    expect(wrapper.text()).toContain('sc_a')
   })
 
   it('shows the full file path after the write-file tool name', () => {

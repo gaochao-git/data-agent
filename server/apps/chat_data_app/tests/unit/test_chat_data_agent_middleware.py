@@ -285,7 +285,7 @@ async def test_context_compression_references_parallel_tool_results_without_brea
         limit=200,
     )
     recovery_b = build_tool_result_recovery(
-        source_tool="semantic_query_tool",
+        source_tool="data_analyzing_tool",
         result_path="/mnt/user-data/outputs/.tool-offload/result-b.json",
         result_size_chars=6000,
         result_id="result-b",
@@ -297,7 +297,7 @@ async def test_context_compression_references_parallel_tool_results_without_brea
             id="assistant-parallel",
             tool_calls=[
                 {"id": "call-a", "name": "file_read", "args": {}},
-                {"id": "call-b", "name": "semantic_query_tool", "args": {}},
+                {"id": "call-b", "name": "data_analyzing_tool", "args": {}},
             ],
         ),
         ToolMessage(
@@ -310,7 +310,7 @@ async def test_context_compression_references_parallel_tool_results_without_brea
         ToolMessage(
             content="乙" * 6000,
             id="tool-b",
-            name="semantic_query_tool",
+            name="data_analyzing_tool",
             tool_call_id="call-b",
             artifact=merge_tool_result_recovery_artifact(None, recovery_b),
         ),
@@ -664,14 +664,14 @@ async def test_context_compression_counts_runtime_summary_wrapper_in_trigger_bud
 async def test_context_compression_preserves_all_completed_content_when_summary_input_is_within_budget():
     tool_call = {
         "id": "call-1",
-        "name": "semantic_query_tool",
+        "name": "data_analyzing_tool",
         "args": {"dsl": {"filter": "条件" * 3000}},
     }
     complete_tool_result = "完整工具结果 " * 10000
     messages = [
         HumanMessage(content="历史问题"),
         AIMessage(content="", tool_calls=[tool_call]),
-        ToolMessage(content=complete_tool_result, tool_call_id="call-1", name="semantic_query_tool"),
+        ToolMessage(content=complete_tool_result, tool_call_id="call-1", name="data_analyzing_tool"),
         AIMessage(content="历史结论"),
         HumanMessage(content="当前问题"),
     ]
@@ -707,8 +707,8 @@ async def test_context_compression_compacts_summary_input_without_mutating_runti
     large_tool_result = "完整工具结果" * 5000
     messages = [
         HumanMessage(content="历史问题"),
-        AIMessage(content="", tool_calls=[{"id": "call-1", "name": "semantic_query_tool", "args": {}}]),
-        ToolMessage(content=large_tool_result, tool_call_id="call-1", name="semantic_query_tool"),
+        AIMessage(content="", tool_calls=[{"id": "call-1", "name": "data_analyzing_tool", "args": {}}]),
+        ToolMessage(content=large_tool_result, tool_call_id="call-1", name="data_analyzing_tool"),
         AIMessage(content="历史结论"),
         HumanMessage(content="当前问题"),
     ]
@@ -749,8 +749,8 @@ def test_summary_input_compacts_only_the_largest_tool_result_until_budget_is_met
     smaller_tool_result = "较小工具结果" * 800
     messages = [
         HumanMessage(content="第一轮问题"),
-        AIMessage(content="", tool_calls=[{"id": "call-large", "name": "semantic_query_tool", "args": {}}]),
-        ToolMessage(content=large_tool_result, tool_call_id="call-large", name="semantic_query_tool"),
+        AIMessage(content="", tool_calls=[{"id": "call-large", "name": "data_analyzing_tool", "args": {}}]),
+        ToolMessage(content=large_tool_result, tool_call_id="call-large", name="data_analyzing_tool"),
         AIMessage(content="第一轮结论"),
         HumanMessage(content="第二轮问题"),
         AIMessage(content="", tool_calls=[{"id": "call-small", "name": "file_read", "args": {}}]),
@@ -853,10 +853,10 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
     recent_tool_content = "结果 " * 1000
     messages = [
         HumanMessage(content="历史问题"),
-        ToolMessage(content=original_tool_content, tool_call_id="call_old", name="semantic_query_tool"),
+        ToolMessage(content=original_tool_content, tool_call_id="call_old", name="data_analyzing_tool"),
         AIMessage(content="历史回答"),
         HumanMessage(content="历史问题2"),
-        ToolMessage(content=recent_tool_content, tool_call_id="call_recent", name="semantic_query_tool"),
+        ToolMessage(content=recent_tool_content, tool_call_id="call_recent", name="data_analyzing_tool"),
         HumanMessage(content="当前问题"),
     ]
     monkeypatch.setattr(
@@ -1116,11 +1116,11 @@ async def test_tool_error_middleware_returns_error_tool_message(monkeypatch):
     async def handler(_request):
         raise RuntimeError("tool down")
 
-    request = SimpleNamespace(tool=None, tool_call={"id": "call_1", "name": "semantic_query_tool"})
+    request = SimpleNamespace(tool=None, tool_call={"id": "call_1", "name": "data_analyzing_tool"})
     message = await middleware.awrap_tool_call(request, handler)
 
     assert message.content == "工具执行失败: tool down"
-    assert message.name == "semantic_query_tool"
+    assert message.name == "data_analyzing_tool"
     assert message.tool_call_id == "call_1"
     assert message.status == "error"
 
@@ -1160,7 +1160,7 @@ def test_message_integrity_removes_interrupted_single_tool_call_tail():
         AIMessage(
             content="",
             id="assistant-tool",
-            tool_calls=[{"id": "call-pending", "name": "semantic_query_tool", "args": {}}],
+            tool_calls=[{"id": "call-pending", "name": "data_analyzing_tool", "args": {}}],
         ),
     ]
 

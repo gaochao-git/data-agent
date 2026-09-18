@@ -42,7 +42,6 @@ describe('toolDisplay', () => {
   })
 
   it('extracts the primary argument shown after compact tool names', () => {
-    expect(getToolCompactDescription('search_dataset', { query: '产品分类模型' })).toBe('产品分类模型')
     expect(getToolCompactDescription('file_write', {
       file_path: '/mnt/user-data/outputs/语义模型分析报告.md',
     })).toBe('/mnt/user-data/outputs/语义模型分析报告.md')
@@ -73,10 +72,10 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('present_artifacts', {
       files: ['/mnt/user-data/outputs/报告.md', '/mnt/user-data/outputs/明细.xlsx'],
     })).toBe('/mnt/user-data/outputs/报告.md 等 2 个文件')
-    expect(getToolCompactDescription('semantic_search', {
-      operation: 'search_models',
-      query: '查询订单收入相关模型',
-    })).toBe('查询订单收入相关模型')
+    expect(getToolCompactDescription('data_analyzing_tool', {
+      action: 'execute_query',
+      action_payload: { save_as: 'outputs/结果.json' },
+    })).toBe('outputs/结果.json')
     expect(getToolCompactDescription('calculator_tool', {
       calculations: [
         { name: '已支付占比', expression: '205/235*100' },
