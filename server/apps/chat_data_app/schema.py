@@ -859,9 +859,18 @@ class _ValidateDashboardActionPayload(BaseModel):
 
 
 class _CheckYamlActionPayload(BaseModel):
-    """``check_yaml`` 的入参结构：语义模型 YAML 交付前自检。"""
+    """``check_yaml`` 的入参结构：语义模型 YAML 交付前自检。
 
-    yaml_content: str = Field(..., min_length=1, description="完整的 Ossie 语义模型 YAML 文本")
+    只收工作区路径、由后端直读文件：避免模型把整份 YAML 复述进参数
+    （token 翻倍、复述走样、参数超长），校验对象始终是磁盘上的权威内容。
+    """
+
+    file_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="会话工作区内 Ossie 语义模型 YAML 文件路径，如 /mnt/user-data/workspace/model.yaml",
+    )
 
 
 # action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
@@ -900,7 +909,7 @@ class DataAnalyzingInput(BaseModel):
             "\"semantic_config_id\": \"卡片缺省值，可选\"}；"
             "execute_query 传 {\"dsl\": <完整语义DSL> 或 \"sql\": \"...\", \"semantic_config_id\": \"...\", "
             "\"member_datasource_ids\": [...]}；"
-            "check_yaml 传 {\"yaml_content\": \"完整 Ossie YAML 文本\"}"
+            "check_yaml 传 {\"file_path\": \"/mnt/user-data/workspace/model.yaml\"}"
         ),
     )
     intent: str = Field(

@@ -477,13 +477,42 @@ async def _run_validate_dashboard(
 # check_yaml：语义模型 YAML 交付前自检（原 semantic_yaml_check_tool 逻辑平移）
 # ---------------------------------------------------------------------------
 
+# YAML 全文直读上限（字符）：与导入接口 SemanticOssieImportRequest.yaml_content 的 2MB 口径一致
+_CHECK_YAML_MAX_CHARS = 2_000_000
+
+
+async def _read_workspace_yaml_text(workspace_runtime, file_path: str) -> str:
+    """从会话工作区直读 YAML 全文；读取失败直接 raise，由 ToolErrorMiddleware 转 error。"""
+    if workspace_runtime is None:
+        raise ValueError("工作区不可用，无法读取 YAML 文件")
+    read_result = await workspace_runtime.read_text_file(
+        file_path=str(file_path or "").strip(),
+        offset=1,
+        limit=100_000,
+        max_chars=_CHECK_YAML_MAX_CHARS + 1,
+    )
+    if not read_result.get("exists"):
+        raise ValueError(f"YAML 文件不存在，请确认工作区路径: {file_path}")
+    if read_result.get("is_dir"):
+        raise ValueError(f"file_path 是目录而非文件: {file_path}")
+    if read_result.get("is_binary"):
+        raise ValueError(f"file_path 是二进制文件，无法按 YAML 解析: {file_path}")
+    if read_result.get("empty"):
+        raise ValueError(f"YAML 文件为空: {file_path}")
+    if read_result.get("truncated"):
+        raise ValueError(f"YAML 文件超过 {_CHECK_YAML_MAX_CHARS} 字符，请拆分模型文件后再校验: {file_path}")
+    return str(read_result.get("content") or "")
+
+
 async def _run_check_yaml(
     *,
-    yaml_content: str,
+    file_path: str,
     datasource_id: str,
     user_id: str | None = None,
+    workspace_runtime=None,
 ) -> str:
     """与导入接口（ossie-import/preview）共用 prepare_ossie_import_models，保证校验口径一致。"""
+    yaml_content = await _read_workspace_yaml_text(workspace_runtime, file_path)
     ds_manager = get_datasource_manager()
     datasource = await ds_manager.get_datasource_async(datasource_id)
     if not datasource:
@@ -570,6 +599,7 @@ def create_data_analyzing_tool(
     datasource_id: str | None = None,
     user_id: str | None = None,
     operator_name: str | None = None,
+    workspace_runtime=None,
 ):
     bound_datasource_id = str(datasource_id or "").strip()
     bound_user_id = str(user_id or "system").strip() or "system"
@@ -595,7 +625,7 @@ def create_data_analyzing_tool(
         - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
         - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
         - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": [...]}
-        - check_yaml: {"yaml_content": "完整 Ossie YAML 文本"}
+        - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS[action]
@@ -633,9 +663,10 @@ def create_data_analyzing_tool(
         if not bound_datasource_id:
             raise ValueError("当前会话未绑定数据源")
         return await _run_check_yaml(
-            yaml_content=payload.yaml_content,
+            file_path=payload.file_path,
             datasource_id=bound_datasource_id,
             user_id=bound_user_id,
+            workspace_runtime=workspace_runtime,
         )
 
     return data_analyzing_tool

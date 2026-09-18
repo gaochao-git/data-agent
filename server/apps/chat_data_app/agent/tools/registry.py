@@ -107,6 +107,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 ctx.datasource.datasource_id,
                 user_id=ctx.identity.user_id or "system",
                 operator_name=ctx.identity.operator_name,
+                workspace_runtime=ctx.workspace_runtime,
             )
         ],
         note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",

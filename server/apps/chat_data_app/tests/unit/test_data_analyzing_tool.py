@@ -9,6 +9,8 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -69,7 +71,7 @@ def test_input_requires_matching_payload_per_action():
         DataAnalyzingInput.model_validate({"action": "validate_dsl", "action_payload": {"semantic_config_id": "cfg_a"}})
     with pytest.raises(ValidationError, match=r"action=validate_dashboard 的 action_payload 校验失败：dsl: Field required"):
         DataAnalyzingInput.model_validate({"action": "validate_dashboard", "action_payload": {}})
-    with pytest.raises(ValidationError, match=r"action=check_yaml 的 action_payload 校验失败：yaml_content"):
+    with pytest.raises(ValidationError, match=r"action=check_yaml 的 action_payload 校验失败：file_path"):
         DataAnalyzingInput.model_validate({"action": "check_yaml", "action_payload": {}})
 
 
@@ -965,11 +967,36 @@ semantic_model:
 """
 
 
+class _FakeWorkspaceRuntime:
+    """模拟 ConversationWorkspaceRuntime.read_text_file 的最小契约（本地后端行为子集）。"""
+
+    def __init__(self, root: Path):
+        self.root = root
+
+    async def read_text_file(self, *, file_path, offset, limit, max_chars):
+        # 可见路径 /mnt/user-data/<相对路径> 映射到临时根下同名相对路径
+        relative = str(file_path).replace("/mnt/user-data/", "").lstrip("/")
+        target = self.root / relative
+        if not target.exists():
+            return {"exists": False, "path": file_path}
+        content = target.read_text(encoding="utf-8")
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "empty": content == "",
+            "path": file_path,
+            "content": content[:max_chars],
+            "truncated": len(content) > max_chars,
+        }
+
+
 def _invoke_check_yaml(
     monkeypatch,
     yaml_text: str,
     datasource_id: str = "ds_a",
     existing_configs: list | None = None,
+    file_name: str = "model.yaml",
 ) -> dict:
     manager = FakeManager()
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
@@ -977,12 +1004,17 @@ def _invoke_check_yaml(
         data_analyzing, "get_semantic_config_service",
         lambda: FakeSemanticService(existing_configs),
     )
-    raw = asyncio.run(
-        data_analyzing.create_data_analyzing_tool(datasource_id).ainvoke({
-            "action": "check_yaml",
-            "action_payload": {"yaml_content": yaml_text},
-        })
-    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace_dir = Path(tmp) / "workspace"
+        workspace_dir.mkdir()
+        (workspace_dir / file_name).write_text(yaml_text, encoding="utf-8")
+        runtime = _FakeWorkspaceRuntime(Path(tmp))
+        raw = asyncio.run(
+            data_analyzing.create_data_analyzing_tool(datasource_id, workspace_runtime=runtime).ainvoke({
+                "action": "check_yaml",
+                "action_payload": {"file_path": f"/mnt/user-data/workspace/{file_name}"},
+            })
+        )
     return json.loads(raw.replace(RESULT_PREFIX, "", 1))
 
 
@@ -991,19 +1023,47 @@ def test_check_yaml_requires_bound_datasource():
         asyncio.run(
             data_analyzing.create_data_analyzing_tool("").ainvoke({
                 "action": "check_yaml",
-                "action_payload": {"yaml_content": "version: '1'"},
+                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
             })
         )
 
 
-def test_check_yaml_missing_datasource_raises(monkeypatch):
+def test_check_yaml_missing_file_raises(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        runtime = _FakeWorkspaceRuntime(Path(tmp))
+        monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
+        with pytest.raises(ValueError, match="YAML 文件不存在"):
+            asyncio.run(
+                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": "/mnt/user-data/workspace/missing.yaml"},
+                })
+            )
+
+
+def test_check_yaml_missing_datasource_raises(monkeypatch, tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    (workspace_dir / "model.yaml").write_text("version: '1'", encoding="utf-8")
     manager = FakeManager(datasource=None)
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
+    runtime = _FakeWorkspaceRuntime(tmp_path)
     with pytest.raises(ValueError, match="数据源不存在"):
         asyncio.run(
-            data_analyzing.create_data_analyzing_tool("ds_x").ainvoke({
+            data_analyzing.create_data_analyzing_tool("ds_x", workspace_runtime=runtime).ainvoke({
                 "action": "check_yaml",
-                "action_payload": {"yaml_content": "version: '1'"},
+                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
+            })
+        )
+
+
+def test_check_yaml_without_workspace_runtime_raises():
+    """工作区运行时缺失时直接报错，不允许退化为要求模型复述 YAML 全文。"""
+    with pytest.raises(ValueError, match="工作区不可用"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool("ds_a").ainvoke({
+                "action": "check_yaml",
+                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
             })
         )
 
