@@ -28,14 +28,17 @@ describe('CodeFilePreview', () => {
     expect(content.attributes('contenteditable')).toBe('false')
   })
 
-  it('emits syntax token classes from the highlight style (not a plain text dump)', async () => {
+  it('wraps yaml tokens in styled spans via the default highlight style (not a plain text dump)', async () => {
     const wrapper = mount(CodeFilePreview, {
       props: { content: SAMPLE_YAML },
     })
     await nextTick()
 
-    // yaml 属性名应产出 cm-propertyName token；不设 HighlightStyle 时这些 class 不存在
-    expect(wrapper.findAll('.cm-propertyName').length).toBeGreaterThan(0)
+    // 语法高亮来自 vue-codemirror 注入的 basicSetup defaultHighlightStyle（哈希类名，
+    // 不产出 cm-propertyName 等语义类）；有 token 被 span 包裹即代表高亮生效，
+    // 纯文本 dump 时行内容是裸文本节点、没有 span。
+    const tokenSpans = wrapper.findAll('.cm-line span')
+    expect(tokenSpans.length).toBeGreaterThan(0)
   })
 
   it('re-renders when content changes', async () => {
