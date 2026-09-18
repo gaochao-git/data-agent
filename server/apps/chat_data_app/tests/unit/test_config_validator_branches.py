@@ -140,6 +140,25 @@ def test_find_unknown_expression_columns_direct():
     assert unknown == ["typo_x"]
 
 
+def test_non_ascii_bad_column_is_reported():
+    """中文（非 ASCII）坏字段名同样要被提取拦截：锚定放行的混合表达式必须报未知列。"""
+    unknown = cv._find_unknown_expression_columns("SUM(`amount` + `不存在字段测试`)", TABLE_COLUMNS["orders"])
+    assert unknown == ["不存在字段测试"]
+    metrics = [{"name": "中文坏列", "table": "orders", "expression": "SUM(`amount` + `不存在字段测试`)"}]
+    error = cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS)
+    assert error is not None and "不存在字段测试" in error
+
+
+def test_non_ascii_only_aggregate_is_not_constant():
+    """SUM(中文坏字段) 不是常量聚合：不再因提取不到 ASCII 标识符而豁免物理校验。"""
+    assert cv._is_constant_aggregate_expression("SUM(`不存在字段测试`)") is False
+    assert cv._is_constant_aggregate_expression("COUNT(1)") is True  # 真·常量聚合仍豁免
+    metrics = [{"name": "纯中文坏列", "table": "orders", "expression": "SUM(`不存在字段测试`)"}]
+    error = cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS)
+    # 纯中文无合法锚定列，被锚定校验拦截；关键回归是不能再被误判成常量聚合而豁免
+    assert error is not None and "物理字段" in error
+
+
 # ---------------------------------------------------------------------------
 # _validate_allowed_operators（78->79：非数组）
 # ---------------------------------------------------------------------------

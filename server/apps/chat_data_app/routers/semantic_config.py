@@ -698,6 +698,22 @@ async def preview_admin_ossie_semantic_import(
         return business_response(msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
+def _collect_modeled_tables(configs: List[Dict[str, Any]]) -> set:
+    """汇总所有配置引用过的物理表名：指标/维度的 table，以及关系两侧表名。"""
+    modeled_tables: set = set()
+    for config in configs:
+        for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+            if isinstance(item, dict) and item.get("table"):
+                modeled_tables.add(str(item["table"]).strip())
+        for relationship in config.get("relationships") or []:
+            if isinstance(relationship, dict):
+                for key in ("left_table", "right_table"):
+                    value = str(relationship.get(key) or "").strip()
+                    if value:
+                        modeled_tables.add(value)
+    return modeled_tables
+
+
 @router.get("/admin/datasources/{datasource_id}/semantic-configs/quality-check")
 async def check_admin_semantic_config_quality(
     datasource_id: str,
@@ -724,17 +740,7 @@ async def check_admin_semantic_config_quality(
         checker = get_semantic_quality_checker()
         reports = [checker.check_config(config, physical_columns=physical_columns).to_payload() for config in configs]
 
-        modeled_tables: set = set()
-        for config in configs:
-            for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
-                if isinstance(item, dict) and item.get("table"):
-                    modeled_tables.add(str(item["table"]).strip())
-            for relationship in config.get("relationships") or []:
-                if isinstance(relationship, dict):
-                    for key in ("left_table", "right_table"):
-                        value = str(relationship.get(key) or "").strip()
-                        if value:
-                            modeled_tables.add(value)
+        modeled_tables = _collect_modeled_tables(configs)
         inventory_tables = {table for table, _column in physical_columns} if physical_columns is not None else set()
         unmodeled_tables = sorted(inventory_tables - modeled_tables)
         avg_score = round(sum(report["score"] for report in reports) / len(reports)) if reports else 100
@@ -771,14 +777,10 @@ async def import_admin_ossie_semantic_configs(
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(getattr(current_user, "username", "") or "")
-        conflict_actions = {
-            str(name).strip(): str(action).strip().lower()
-            for name, action in (payload.conflict_actions or {}).items()
-        }
-        invalid_actions = sorted({action for action in conflict_actions.values() if action not in {"replace", "skip"}})
-        if invalid_actions:
+        conflict_actions, action_error = _normalize_conflict_actions(payload)
+        if action_error:
             return business_response(
-                msg=f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}",
+                msg=action_error,
                 code=ErrorCode.CHATDATA_VALIDATION_FAILED,
                 status="error",
             )
@@ -793,58 +795,18 @@ async def import_admin_ossie_semantic_configs(
                 status="error",
             )
         semantic_service = get_semantic_config_service()
-        created, replaced, skipped = [], [], []
         # 整批落库放进同一事务：任一模型写入失败即整体回滚，避免留下半批草稿
         # （接口对外语义是「全有或全无」）。
         try:
             async with transaction_scope():
-                for item in imports:
-                    if item.conflict_locked:
-                        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
-                        # 也不透出其 config_id 等元信息
-                        skipped.append({
-                            "name": item.name,
-                            "reason": "存在同名配置且无操作权限，已忽略",
-                        })
-                        continue
-                    if item.existing_config:
-                        existing_config_id = str(item.existing_config["config_id"])
-                        if conflict_actions.get(item.name, "skip") != "replace":
-                            skipped.append({
-                                "name": item.name,
-                                "config_id": existing_config_id,
-                                "reason": "同名配置已存在，未导入",
-                            })
-                            continue
-                        # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
-                        # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
-                        config = await semantic_service.update_async(
-                            datasource_id,
-                            existing_config_id,
-                            description=item.description or "",
-                            business_notes=item.business_notes or "",
-                            metrics=item.metrics,
-                            dimensions=item.dimensions,
-                            relationships=item.relationships,
-                            enabled=False,
-                            update_by=user_id,
-                            update_by_name=username,
-                        )
-                        if not config:
-                            raise _OssieImportWriteError(f"更新草稿失败: {item.name}")
-                        replaced.append({"config_id": config.get("id"), "name": config.get("name")})
-                        continue
-                    config = await semantic_service.create_async(
-                        datasource_id=datasource_id,
-                        enabled=False,
-                        scope_type="public",
-                        create_by=user_id,
-                        create_by_name=username,
-                        **item.to_config_payload(),
-                    )
-                    if not config:
-                        raise _OssieImportWriteError(f"创建草稿失败: {item.name}")
-                    created.append({"config_id": config.get("id"), "name": config.get("name")})
+                created, replaced, skipped = await _persist_ossie_imports(
+                    imports,
+                    conflict_actions,
+                    semantic_service,
+                    datasource_id,
+                    user_id,
+                    username,
+                )
         except _OssieImportWriteError as e:
             logger.error("Ossie 导入写入失败，已回滚: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
             return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -896,6 +858,94 @@ async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Requ
     except Exception as e:
         logger.error(f"语义字段预填失败: {str(e)}", exc_info=True)
         return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Dict[str, str], Optional[str]]:
+    """归一化 conflict_actions 为「模型名 -> 小写动作」。
+
+    存在 replace/skip 之外的动作时返回错误文案，调用方据此直接回错误响应。
+    """
+    actions = {
+        str(name).strip(): str(action).strip().lower()
+        for name, action in (payload.conflict_actions or {}).items()
+    }
+    invalid_actions = sorted({action for action in actions.values() if action not in {"replace", "skip"}})
+    if invalid_actions:
+        return actions, f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}"
+    return actions, None
+
+
+async def _persist_one_ossie_model(
+    item: Any,
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
+    if item.conflict_locked:
+        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+        # 也不透出其 config_id 等元信息
+        return "skipped", {"name": item.name, "reason": "存在同名配置且无操作权限，已忽略"}
+    if not item.existing_config:
+        config = await semantic_service.create_async(
+            datasource_id=datasource_id,
+            enabled=False,
+            scope_type="public",
+            create_by=user_id,
+            create_by_name=username,
+            **item.to_config_payload(),
+        )
+        if not config:
+            raise _OssieImportWriteError(f"创建草稿失败: {item.name}")
+        return "created", {"config_id": config.get("id"), "name": config.get("name")}
+
+    existing_config_id = str(item.existing_config["config_id"])
+    if conflict_actions.get(item.name, "skip") != "replace":
+        return "skipped", {
+            "name": item.name,
+            "config_id": existing_config_id,
+            "reason": "同名配置已存在，未导入",
+        }
+    # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
+    # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    config = await semantic_service.update_async(
+        datasource_id,
+        existing_config_id,
+        description=item.description or "",
+        business_notes=item.business_notes or "",
+        metrics=item.metrics,
+        dimensions=item.dimensions,
+        relationships=item.relationships,
+        enabled=False,
+        update_by=user_id,
+        update_by_name=username,
+    )
+    if not config:
+        raise _OssieImportWriteError(f"更新草稿失败: {item.name}")
+    return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
+
+
+async def _persist_ossie_imports(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。"""
+    created: List[Dict[str, Any]] = []
+    replaced: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    buckets = {"created": created, "replaced": replaced, "skipped": skipped}
+    for item in imports:
+        kind, payload = await _persist_one_ossie_model(
+            item, conflict_actions, semantic_service, datasource_id, user_id, username
+        )
+        buckets[kind].append(payload)
+    return created, replaced, skipped
 
 
 @router.post("/semantic/prefill")

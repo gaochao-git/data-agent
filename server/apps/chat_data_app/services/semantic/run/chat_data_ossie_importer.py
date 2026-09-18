@@ -176,6 +176,15 @@ def _normalize_ossie_datatypes(data: Dict[str, Any]) -> None:
                     item["datatype"] = mapped
 
 
+def _optional_str(value: Any) -> Optional[str]:
+    """归一成可选字符串：去空白后为空串的一律按 None 处理。
+
+    集中承担 ``str(x or "").strip() or None`` 这段模板，避免在转换函数里重复铺开
+    ——它既是可读性问题，也是圈复杂度的主要来源（每个 ``or`` 都算一个分支）。
+    """
+    return str(value or "").strip() or None
+
+
 def _extension_data(extensions: Any, warnings: List[str], label: str) -> Dict[str, Any]:
     """提取第一个可解析的 CHAT_DATA 扩展；无扩展返回空 dict。"""
     for ext in extensions or []:
@@ -234,11 +243,8 @@ class OssieToChatDataImporter:
     """Build ChatData semantic config drafts from an Ossie document."""
 
     def import_yaml(self, yaml_content: str) -> List[OssieSemanticModelImport]:
-        document = parse_ossie_document(yaml_content)
-        models = document.semantic_model or []
-        if not models:
-            raise ValueError("Ossie 文档不包含 semantic_model，没有可导入的内容")
-        return [self._convert_model(model) for model in models]
+        """解析 YAML 后复用 import_document（两者唯一差别在文档来源）。"""
+        return self.import_document(parse_ossie_document(yaml_content))
 
     def import_document(self, document: OSIDocument) -> List[OssieSemanticModelImport]:
         models = document.semantic_model or []
@@ -247,24 +253,19 @@ class OssieToChatDataImporter:
         return [self._convert_model(model) for model in models]
 
     def _convert_model(self, model: OSISemanticModel) -> OssieSemanticModelImport:
-        result = OssieSemanticModelImport(
-            name=str(model.name or "").strip(),
-            description=str(model.description or "").strip() or None,
-            business_notes=str(model.ai_context or "").strip() or None,
-        )
+        result = self._new_import_result(model)
         if not result.name:
             result.errors.append("semantic_model 缺少 name，无法导入")
             return result
         label = f"语义模型 {result.name}"
 
         model_extension = _extension_data(model.custom_extensions, result.warnings, label)
-        result.source_config_id = str(model_extension.get("semantic_config_id") or "").strip() or None
+        result.source_config_id = _optional_str(model_extension.get("semantic_config_id"))
         # snapshot_role=model_reference_only 不产生 warning：来源配置提示（source_config_id）按产品口径
         # 不在导入预览里展示，字段本身保留，供调用方与后续追溯使用。
 
-        dataset_names = [str(dataset.name or "").strip() for dataset in model.datasets or []]
-        if len(set(dataset_names)) != len(dataset_names):
-            result.errors.append(f"{label} 存在重名 dataset: {dataset_names}")
+        dataset_names = self._resolve_dataset_names(model, label, result)
+        if dataset_names is None:
             return result
 
         for dataset in model.datasets or []:
@@ -275,6 +276,28 @@ class OssieToChatDataImporter:
         for index, relationship in enumerate(model.relationships or [], start=1):
             self._convert_relationship(relationship, index, result)
         return result
+
+    @staticmethod
+    def _new_import_result(model: OSISemanticModel) -> OssieSemanticModelImport:
+        """构造导入结果骨架；名称/描述/业务说明的空值与 None 归一集中在此。"""
+        return OssieSemanticModelImport(
+            name=str(model.name or "").strip(),
+            description=_optional_str(model.description),
+            business_notes=_optional_str(model.ai_context),
+        )
+
+    @staticmethod
+    def _resolve_dataset_names(
+        model: OSISemanticModel,
+        label: str,
+        result: OssieSemanticModelImport,
+    ) -> Optional[List[str]]:
+        """收集 dataset 名；存在重名时记录错误并返回 None（调用方据此放弃该模型）。"""
+        names = [str(dataset.name or "").strip() for dataset in model.datasets or []]
+        if len(set(names)) != len(names):
+            result.errors.append(f"{label} 存在重名 dataset: {names}")
+            return None
+        return names
 
     def _convert_field(self, ossie_field: Any, dataset_names: List[str], result: OssieSemanticModelImport) -> None:
         name = str(ossie_field.name or "").strip()
@@ -294,38 +317,64 @@ class OssieToChatDataImporter:
         if table is None:
             return
 
-        column = str(extension.get("column") or "").strip()
-        if not column:
-            candidate = _strip_backticks(expression)
-            if _PLAIN_IDENTIFIER_PATTERN.match(candidate):
-                column = candidate
-                result.warnings.append(f"{label} 缺少 CHAT_DATA 扩展的 column，按表达式推断物理字段: {column}")
-            else:
-                result.errors.append(f"{label} 缺少 CHAT_DATA 扩展的 column，且表达式不是单一物理字段（{expression}），无法确定")
-                return
+        column = self._field_column(extension, expression, label, result)
+        if column is None:
+            return
 
         entry: Dict[str, Any] = {"name": name, "table": table, "column": column, "expression": expression}
         # 逻辑字段名 / 表别名：导出侧写入扩展，原样还原，保证往返无损
-        field_name = str(extension.get("field_name") or "").strip()
+        field_name = _optional_str(extension.get("field_name")) or ""
         if field_name:
             entry["field_name"] = field_name
-        table_alias = str(extension.get("table_alias") or "").strip()
+        table_alias = _optional_str(extension.get("table_alias")) or ""
         if table_alias:
             entry["table_alias"] = table_alias
         # logical_type：扩展携带的存储值优先（enum 等无法由 datatype 还原），其余按 datatype 映射
-        logical_type = str(extension.get("logical_type") or "").strip()
-        if logical_type not in LOGICAL_TYPE_VALUES:
-            logical_type = _OSIE_DATATYPE_TO_LOGICAL_TYPE.get(ossie_field.datatype)
-        dimension = ossie_field.dimension
-        if dimension is not None and dimension.is_time and logical_type not in ("date", "datetime"):
-            logical_type = "date"
-            result.warnings.append(f"{label} 标记为时间维度但类型不是日期/时间，默认按 date 处理，请人工确认")
+        logical_type = self._field_logical_type(extension, ossie_field, label, result)
         if logical_type:
             entry["logical_type"] = logical_type
-        description = str(ossie_field.description or "").strip()
+        description = _optional_str(ossie_field.description)
         if description:
             entry["description"] = description
         result.dimensions.append(entry)
+
+    @staticmethod
+    def _field_column(
+        extension: Dict[str, Any],
+        expression: str,
+        label: str,
+        result: OssieSemanticModelImport,
+    ) -> Optional[str]:
+        """确定物理字段：优先扩展 column，缺失时按单一标识符表达式推断。
+
+        两者都拿不到时记录错误并返回 None（调用方据此跳过该维度）。
+        """
+        column = _optional_str(extension.get("column")) or ""
+        if column:
+            return column
+        candidate = _strip_backticks(expression)
+        if _PLAIN_IDENTIFIER_PATTERN.match(candidate):
+            result.warnings.append(f"{label} 缺少 CHAT_DATA 扩展的 column，按表达式推断物理字段: {candidate}")
+            return candidate
+        result.errors.append(f"{label} 缺少 CHAT_DATA 扩展的 column，且表达式不是单一物理字段（{expression}），无法确定")
+        return None
+
+    @staticmethod
+    def _field_logical_type(
+        extension: Dict[str, Any],
+        ossie_field: Any,
+        label: str,
+        result: OssieSemanticModelImport,
+    ) -> str:
+        """确定逻辑类型：扩展存储值优先，其余按 datatype 映射；时间维度做日期兜底。"""
+        logical_type = _optional_str(extension.get("logical_type")) or ""
+        if logical_type not in LOGICAL_TYPE_VALUES:
+            logical_type = _OSIE_DATATYPE_TO_LOGICAL_TYPE.get(ossie_field.datatype) or ""
+        dimension = ossie_field.dimension
+        if dimension is not None and dimension.is_time and logical_type not in ("date", "datetime"):
+            result.warnings.append(f"{label} 标记为时间维度但类型不是日期/时间，默认按 date 处理，请人工确认")
+            return "date"
+        return logical_type
 
     def _convert_metric(self, ossie_metric: Any, dataset_names: List[str], result: OssieSemanticModelImport) -> None:
         name = str(ossie_metric.name or "").strip()
@@ -353,23 +402,33 @@ class OssieToChatDataImporter:
         if table is None:
             return
         entry: Dict[str, Any] = {"name": name, "expression": expression, "table": table}
+        self._apply_common_metric_fields(entry, extension, ossie_metric)
+        result.metrics.append(entry)
+
+    @staticmethod
+    def _apply_common_metric_fields(
+        entry: Dict[str, Any],
+        extension: Dict[str, Any],
+        ossie_metric: Any,
+    ) -> None:
+        """写入原子指标共有的可选字段：逻辑字段名 / 表别名 / data_type / 描述。"""
         # 逻辑字段名 / 表别名：与维度同理，导出侧写入扩展，原样还原
-        field_name = str(extension.get("field_name") or "").strip()
+        field_name = _optional_str(extension.get("field_name"))
         if field_name:
             entry["field_name"] = field_name
-        table_alias = str(extension.get("table_alias") or "").strip()
+        table_alias = _optional_str(extension.get("table_alias"))
         if table_alias:
             entry["table_alias"] = table_alias
         # data_type：扩展携带的存储值优先（decimal(10,2) 等精度形态无法由 datatype 还原）
-        data_type = str(extension.get("data_type") or "").strip()
+        data_type = _optional_str(extension.get("data_type"))
         if not data_type:
             data_type = _OSIE_DATATYPE_TO_DATA_TYPE.get(ossie_metric.datatype)
         if data_type:
             entry["data_type"] = data_type
-        description = str(ossie_metric.description or "").strip()
+        description = _optional_str(ossie_metric.description)
         if description:
             entry["description"] = description
-        result.metrics.append(entry)
+
     def _convert_derived_metric(
         self,
         ossie_metric: Any,
@@ -431,10 +490,7 @@ class OssieToChatDataImporter:
     def _convert_relationship(self, ossie_relationship: Any, index: int, result: OssieSemanticModelImport) -> None:
         label = f"关系[{index}]"
         extension = _extension_data(ossie_relationship.custom_extensions, result.warnings, label)
-        from_table = str(getattr(ossie_relationship, "from_dataset", "") or "").strip()
-        to_table = str(ossie_relationship.to or "").strip()
-        from_columns = [str(column or "").strip() for column in ossie_relationship.from_columns or []]
-        to_columns = [str(column or "").strip() for column in ossie_relationship.to_columns or []]
+        from_table, to_table, from_columns, to_columns = self._relation_endpoints(ossie_relationship)
         if not from_table or not to_table:
             result.errors.append(f"{label} 缺少 from/to 数据集，无法导入")
             return
@@ -448,30 +504,14 @@ class OssieToChatDataImporter:
         except ValueError as exc:
             result.errors.append(f"{label} {exc}")
             return
-        join_type = str(extension.get("join_type") or "").strip().lower()
-        if join_type not in ("inner", "left", "right"):
-            if join_type:
-                result.warnings.append(f"{label} 的 join_type 不支持（{join_type}），按 left 处理")
-            join_type = "left"
-
-        ext_left_table = str(extension.get("left_table") or "").strip()
-        ext_right_table = str(extension.get("right_table") or "").strip()
-        if ext_left_table and ext_right_table:
-            if {ext_left_table, ext_right_table} != {from_table, to_table}:
-                result.warnings.append(
-                    f"{label} 的扩展表 ({ext_left_table}/{ext_right_table}) 与 from/to ({from_table}/{to_table}) 不一致，以扩展为准"
-                )
-            left_table, right_table = ext_left_table, ext_right_table
-        else:
-            # 无扩展（外部文件）：按 from→to 方向导入，from 侧为多端
-            left_table, right_table = from_table, to_table
-            result.warnings.append(f"{label} 缺少 CHAT_DATA 扩展的左右表方向，按 from→to 导入（基数默认 {relationship_type}），请人工确认")
-
+        join_type = self._relation_join_type(extension, label, result)
+        left_table, right_table, has_ext = self._resolve_relation_sides(
+            extension, from_table, to_table, relationship_type, label, result
+        )
         # 导出方向还原：one_to_many 导出时反转过方向（from=右表/to=左表）
-        if relationship_type == "one_to_many" and ext_left_table and ext_right_table:
-            left_columns, right_columns = to_columns, from_columns
-        else:
-            left_columns, right_columns = from_columns, to_columns
+        left_columns, right_columns = self._relation_columns(
+            relationship_type, has_ext, from_columns, to_columns
+        )
 
         result.relationships.append({
             "left_table": left_table,
@@ -483,6 +523,73 @@ class OssieToChatDataImporter:
             "relationship_type": relationship_type,
             "join_type": join_type,
         })
+
+    @staticmethod
+    def _relation_endpoints(
+        ossie_relationship: Any,
+    ) -> Tuple[str, str, List[str], List[str]]:
+        """抽取关系两端表名与 join 字段列表（去空白，空集合归一为 []）。"""
+        from_table = str(getattr(ossie_relationship, "from_dataset", "") or "").strip()
+        to_table = str(ossie_relationship.to or "").strip()
+        from_columns = [str(column or "").strip() for column in ossie_relationship.from_columns or []]
+        to_columns = [str(column or "").strip() for column in ossie_relationship.to_columns or []]
+        return from_table, to_table, from_columns, to_columns
+
+    @staticmethod
+    def _relation_join_type(
+        extension: Dict[str, Any],
+        label: str,
+        result: OssieSemanticModelImport,
+    ) -> str:
+        """归一化 join_type：仅接受 inner/left/right，其余退化 left 并给出警告。"""
+        join_type = str(extension.get("join_type") or "").strip().lower()
+        if join_type in ("inner", "left", "right"):
+            return join_type
+        if join_type:
+            result.warnings.append(f"{label} 的 join_type 不支持（{join_type}），按 left 处理")
+        return "left"
+
+    @staticmethod
+    def _resolve_relation_sides(
+        extension: Dict[str, Any],
+        from_table: str,
+        to_table: str,
+        relationship_type: str,
+        label: str,
+        result: OssieSemanticModelImport,
+    ) -> Tuple[str, str, bool]:
+        """确定 left/right 表：优先 CHAT_DATA 扩展，缺失时按 from→to 兜底并告警。
+
+        返回 ``(left_table, right_table, has_ext_tables)``：第三个值表示左右表方向
+        是否由扩展给出，仅当它为 True 时才需要还原 one_to_many 的导出逆序。
+        """
+        ext_left = str(extension.get("left_table") or "").strip()
+        ext_right = str(extension.get("right_table") or "").strip()
+        if not (ext_left and ext_right):
+            # 无扩展（外部文件）：按 from→to 方向导入，from 侧为多端
+            result.warnings.append(
+                f"{label} 缺少 CHAT_DATA 扩展的左右表方向，按 from→to 导入"
+                f"（基数默认 {relationship_type}），请人工确认"
+            )
+            return from_table, to_table, False
+        if {ext_left, ext_right} != {from_table, to_table}:
+            result.warnings.append(
+                f"{label} 的扩展表 ({ext_left}/{ext_right}) 与 from/to "
+                f"({from_table}/{to_table}) 不一致，以扩展为准"
+            )
+        return ext_left, ext_right, True
+
+    @staticmethod
+    def _relation_columns(
+        relationship_type: str,
+        has_ext_tables: bool,
+        from_columns: List[str],
+        to_columns: List[str],
+    ) -> Tuple[List[str], List[str]]:
+        """导出时 one_to_many 反转过方向（from=右表/to=左表），有扩展时按此还原。"""
+        if relationship_type == "one_to_many" and has_ext_tables:
+            return to_columns, from_columns
+        return from_columns, to_columns
 
 
 def build_model_checklist(
@@ -504,11 +611,16 @@ def build_model_checklist(
     不输出质量分与等级——分数无法指导动作，触发明细才有操作价值。
     """
     checklist: List[Dict[str, str]] = []
-    metric_count = len(item.metrics)
-    dimension_count = len(item.dimensions)
-    relationship_count = len(item.relationships)
 
-    # ① OSSI schema 校验：走到这里即解析成功（失败在更早的 parse 阶段整体报错）
+    _append_schema_rows(checklist)
+    _append_mapping_rows(checklist, item)
+    _append_physical_row(checklist, item, validation_error, inventory_available)
+    _append_quality_row(checklist, quality_findings)
+    return checklist
+
+
+def _append_schema_rows(checklist: List[Dict[str, str]]) -> None:
+    """① OSSI schema 校验：走到这里即解析成功（失败在更早的 parse 阶段整体报错）。"""
     checklist.append({
         "group": "schema",
         "name": "文档结构合法性",
@@ -522,7 +634,9 @@ def build_model_checklist(
         "message": "全部字段类型为 OSI 合法枚举（SQL 常见别名已自动归一）",
     })
 
-    # ② 结构映射：表归属 + 派生/复合还原，状态由 stats 计数推导
+
+def _append_mapping_rows(checklist: List[Dict[str, str]], item: OssieSemanticModelImport) -> None:
+    """② 结构映射：表归属 + 派生/复合还原 + 模型名冲突，状态由 stats 计数推导。"""
     declared = item.stats.get("attribution_declared", 0)
     inferred = item.stats.get("attribution_inferred", 0)
     attribution_failed = item.stats.get("attribution_failed", 0)
@@ -580,8 +694,17 @@ def build_model_checklist(
             "message": "已存在同名配置但无操作权限，导入时将忽略该模型",
         })
 
-    # ③ 物理校验：validate_semantic_config_for_save 的整体结论（表/列存在性 + 关系连通性）
-    # 只有 stats 记录了 physical_checked 才真正执行过（结构映射失败的模型不会送检）
+
+def _append_physical_row(
+    checklist: List[Dict[str, str]],
+    item: OssieSemanticModelImport,
+    validation_error: Optional[str],
+    inventory_available: bool,
+) -> None:
+    """③ 物理校验：validate_semantic_config_for_save 的整体结论（表/列存在性 + 关系连通性）。
+
+    只有 stats 记录了 physical_checked 才真正执行过（结构映射失败的模型不会送检）。
+    """
     if not inventory_available:
         checklist.append({
             "group": "physical",
@@ -604,6 +727,9 @@ def build_model_checklist(
             "message": validation_error,
         })
     else:
+        metric_count = len(item.metrics)
+        dimension_count = len(item.dimensions)
+        relationship_count = len(item.relationships)
         checklist.append({
             "group": "physical",
             "name": "物理字段校验",
@@ -611,7 +737,22 @@ def build_model_checklist(
             "message": f"指标 {metric_count} · 维度 {dimension_count} · 关系 {relationship_count} 全部命中数据源物理元数据",
         })
 
-    # ④ 质量规则核对：只报触发项与计数，不输出评分
+
+def _quality_severity_counts(quality_findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    """按 severity 统计质量 findings 的错误 / 警告 / 建议条数（其余等级忽略）。"""
+    counts = {"error": 0, "warning": 0, "info": 0}
+    for finding in quality_findings:
+        severity = finding.get("severity")
+        if severity in counts:
+            counts[severity] += 1
+    return counts
+
+
+def _append_quality_row(
+    checklist: List[Dict[str, str]],
+    quality_findings: Optional[List[Dict[str, Any]]],
+) -> None:
+    """④ 质量规则核对：只报触发项与计数，不输出评分。"""
     if quality_findings is None:
         checklist.append({
             "group": "quality",
@@ -619,32 +760,32 @@ def build_model_checklist(
             "status": "skip",
             "message": "仅对可导入模型执行质量检查，本模型未执行",
         })
-    else:
-        error_count = sum(1 for finding in quality_findings if finding.get("severity") == "error")
-        warning_count = sum(1 for finding in quality_findings if finding.get("severity") == "warning")
-        info_count = sum(1 for finding in quality_findings if finding.get("severity") == "info")
-        if error_count or warning_count or info_count:
-            parts = []
-            if error_count:
-                parts.append(f"{error_count} 条错误")
-            if warning_count:
-                parts.append(f"{warning_count} 条警告")
-            if info_count:
-                parts.append(f"{info_count} 条建议")
-            checklist.append({
-                "group": "quality",
-                "name": "质量规则核对",
-                "status": "fail" if error_count else ("warn" if warning_count else "pass"),
-                "message": f"{' · '.join(parts)}，明细见下方列表",
-            })
-        else:
-            checklist.append({
-                "group": "quality",
-                "name": "质量规则核对",
-                "status": "pass",
-                "message": f"{len(_QUALITY_RULES)} 条质量规则全部未触发",
-            })
-    return checklist
+        return
+    counts = _quality_severity_counts(quality_findings)
+    error_count = counts["error"]
+    warning_count = counts["warning"]
+    info_count = counts["info"]
+    if not (error_count or warning_count or info_count):
+        checklist.append({
+            "group": "quality",
+            "name": "质量规则核对",
+            "status": "pass",
+            "message": f"{len(_QUALITY_RULES)} 条质量规则全部未触发",
+        })
+        return
+    parts = []
+    if error_count:
+        parts.append(f"{error_count} 条错误")
+    if warning_count:
+        parts.append(f"{warning_count} 条警告")
+    if info_count:
+        parts.append(f"{info_count} 条建议")
+    checklist.append({
+        "group": "quality",
+        "name": "质量规则核对",
+        "status": "fail" if error_count else ("warn" if warning_count else "pass"),
+        "message": f"{' · '.join(parts)}，明细见下方列表",
+    })
 
 
 __all__ = [

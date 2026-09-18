@@ -36,6 +36,12 @@ let mergeView: MergeView | null = null
 
 const diffLines = computed<FileDiffLine[]>(() => splitFileDiffLines(props.payload?.diff))
 const fileNameOf = (path: string) => String(path || '').split('/').pop() || path
+// changed 但无行级差异：差异仅在行尾（尾换行符有无 / CRLF 与 LF），splitlines 不可见
+const emptyDiffText = computed(() =>
+  props.payload?.status === 'identical'
+    ? '两个文件内容完全一致'
+    : '无行级差异；两文件可能在行尾换行符或行结束符（CRLF/LF）上不同',
+)
 
 const close = () => emit('update:visible', false)
 
@@ -209,7 +215,7 @@ onBeforeUnmount(destroyMergeView)
             <span class="min-w-0 flex-1">{{ line.content || ' ' }}</span>
           </div>
         </div>
-        <div v-else class="flex h-40 items-center justify-center text-sm text-slate-400">两个文件内容完全一致</div>
+        <div v-else class="flex h-40 items-center justify-center text-sm text-slate-400">{{ emptyDiffText }}</div>
       </template>
     </div>
   </el-dialog>

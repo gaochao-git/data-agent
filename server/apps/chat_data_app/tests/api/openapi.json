@@ -3665,7 +3665,7 @@
     },
     "/api/chatdata/admin/agent-schedules/{job_id}/runs": {
       "get": {
-        "description": "查看任意任务的执行历史。",
+        "description": "查看任意任务的执行历史分页。",
         "operationId": "list_agent_schedule_runs_admin_api_chatdata_admin_agent_schedules__job_id__runs_get",
         "parameters": [
           {
@@ -3684,6 +3684,16 @@
             "schema": {
               "default": 50,
               "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
               "type": "integer"
             }
           }
@@ -6165,8 +6175,30 @@
     },
     "/api/chatdata/agent-schedules": {
       "get": {
-        "description": "获取当前用户的定时任务列表。",
+        "description": "获取当前用户的定时任务分页列表。",
         "operationId": "list_agent_schedules_api_chatdata_agent_schedules_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6177,6 +6209,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -6341,7 +6383,7 @@
     },
     "/api/chatdata/agent-schedules/{job_id}/runs": {
       "get": {
-        "description": "获取定时任务的执行历史（含关联 Agent Run 状态）。",
+        "description": "获取定时任务的执行历史分页（含关联 Agent Run 状态）。",
         "operationId": "list_agent_schedule_runs_api_chatdata_agent_schedules__job_id__runs_get",
         "parameters": [
           {
@@ -6360,6 +6402,16 @@
             "schema": {
               "default": 50,
               "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
               "type": "integer"
             }
           }

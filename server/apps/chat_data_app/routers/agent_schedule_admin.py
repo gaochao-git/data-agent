@@ -111,15 +111,16 @@ async def set_agent_schedule_enabled_admin(job_id: str, payload: AgentScheduleEn
 
 
 @router.get("/admin/agent-schedules/{job_id}/runs")
-async def list_agent_schedule_runs_admin(job_id: str, request: Request, limit: int = 50):
-    """查看任意任务的执行历史。"""
+async def list_agent_schedule_runs_admin(job_id: str, request: Request, limit: int = 50, offset: int = 0):
+    """查看任意任务的执行历史分页。"""
     _ = request
     try:
         data = await agent_schedule_service.admin_list_job_runs(
             job_id=job_id,
             limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
         )
-        return business_response(data={"runs": data}, msg="获取成功")
+        return business_response(data=data, msg="获取成功")
     except AgentScheduleNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_SCHEDULE_NOT_FOUND, status="error")
     except HTTPException:

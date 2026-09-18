@@ -613,6 +613,29 @@ class MySQLExecutor(SQLExecutor):
             )
         return self._pool
 
+    @staticmethod
+    async def _fetch_connection_id(cursor) -> str:
+        """取当前 MySQL 连接 ID（用于超时 KILL 与回调透传），空结果返回空串。"""
+        await cursor.execute("SELECT CONNECTION_ID()")
+        connection_row = await cursor.fetchone()
+        if not connection_row:
+            return ""
+        if isinstance(connection_row, (list, tuple)):
+            return str(connection_row[0])
+        return str(connection_row)
+
+    @staticmethod
+    async def _maybe_invoke_db_connection_callback(
+        connection_id: str,
+        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]],
+    ) -> None:
+        """连接 ID 就绪且回调存在时调用回调；若为 awaitable 协程则 await。"""
+        if not (connection_id and db_connection_callback is not None):
+            return
+        result = db_connection_callback({"db_connection_id": connection_id})
+        if inspect.isawaitable(result):
+            await result
+
     async def execute(
         self,
         sql: str,
@@ -642,15 +665,8 @@ class MySQLExecutor(SQLExecutor):
             pool = await self._get_pool()
             async with pool.acquire() as conn:
                 async with conn.cursor() as cursor:
-                    connection_id = ""
-                    await cursor.execute("SELECT CONNECTION_ID()")
-                    connection_row = await cursor.fetchone()
-                    if connection_row:
-                        connection_id = str(connection_row[0] if isinstance(connection_row, (list, tuple)) else connection_row)
-                    if connection_id and db_connection_callback is not None:
-                        callback_result = db_connection_callback({"db_connection_id": connection_id})
-                        if inspect.isawaitable(callback_result):
-                            await callback_result
+                    connection_id = await self._fetch_connection_id(cursor)
+                    await self._maybe_invoke_db_connection_callback(connection_id, db_connection_callback)
 
                     sql_with_limit = build_effective_sql(
                         sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id

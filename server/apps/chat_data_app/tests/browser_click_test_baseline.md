@@ -1747,3 +1747,28 @@ ChatData
 环境：后端 5001 / 前端 8089 / agent-browser 0.27.0，入口 `parentComponentName=执法检查`。**定向回归**，覆盖 8 个编号（SEM-02/07/09/12/15/16/17/18）；SEM-16/17 仅验证弹窗结构与文案口径、未实际新建落库；SEM-07 多表重复字段解冲突回归由 §5.12 同日覆盖、本轮未重复。其余编号（含 AG/BI/EVAL/DS/SYS 等）未执行，发布前须全量执行，不得以本记录代替发布裁决。
 
 本轮无新增缺陷；新增观察项 3 条（见上），其中第 2 条建议沉淀进基线 §2 测试规则。
+
+### §5.14 近两日（09-17~09-18）全部 commit 变更点击回归（2026-09-19 06:14，agent-browser）
+
+- 背景：用户要求对 git 近两日 24 个 commit 的全部变更做浏览器点击验证。按功能域分组执行，证据截图存 `.workbuddy/screenshots/2day_verify/`（01~18）。
+- 素材：`chat_data/threads/10001/2026-09-15/2b0e30f3-*/user-data/workspace/semantic/产品分类模型__634279.yaml`（冲突分支）+ 由其改模型名生成的临时件 `ai_e2e_new_model_0919.yaml`（新模型分支，验证后删除）；file_diff 实测数据取自既有会话「文本比较工具咨询」（demo_v1.txt/demo_v2.txt，6 张「对比文件」卡片）。
+
+| 验证项 | 结果 | 证据/要点 |
+| --- | --- | --- |
+| CodeFilePreview（yaml 工作区文件预览，f7c795e/093f92c） | ✅ PASS | 文件树点 `用户-订单模型__624.yaml` → 右侧 CodeMirror 只读预览：行号（37 个 gutter 元素）+ yaml 语法高亮；`.cm-editor` contenteditable 关闭（截图 04） |
+| 工作区刷新按钮新口径（d0ab795） | ✅ PASS | `data-console-files-refresh` title=「刷新文件列表与预览内容」，点击后列表+预览内容重载、预览不卸载；busy 态（正在刷新+spin）为瞬态未捕获，逻辑由 computed `isWorkspaceRefreshBusy` 保证 |
+| 统一数据分析工具真实运行展示（faf79f6 系列 + 质量检查技能 9772620） | ✅ PASS | 会话「语义模型质量分析」历史回放：data-analyzing 技能读取 → 6 次「数据分析」机器质量检查（508~889ms）→ 汇总统计 → 质量体检报告完整渲染（截图 06） |
+| Ossie 导入门禁（15a8297） | ✅ PASS | 选 2 个文件后「未校验」+ footer 提示「请先点模型校验」+ 确认导入禁用（截图 08）；校验后解锁 |
+| Ossie 校验/冲突/差异（94c6ddd 系列 + 48e9c6d/2e9379e 行号） | ✅ PASS | 冲突行=替换+通过+「查看详情/查看差异」，新模型行=新增+通过+仅「查看详情」；footer「新增 1 · 替换 1，共 2 个模型 · 2 个可导入」；差异面板双栏 merge view **两侧均有行号**、变更行绿色高亮、独立成块（截图 09/10）；收起后按钮互斥互换；XHR 探针全程 0 次 ossie-import 落库请求 |
+| 输入框粘贴图片（3b78f69） | ✅ PASS | 合成 ClipboardEvent（`Object.defineProperty` 注入 clipboardData）粘贴 PNG → 输入框上方出现 `e2e-paste.png` 芯片（截图 14），可移除；纯文本不拦截由单测覆盖 |
+| file_diff 双模式+行号（48e9c6d/2e9379e，真实 agent 运行数据） | ✅ PASS | 「文本比较工具咨询」会话 6 张「对比文件」卡；「查看 Diff」弹层：简洁模式行号列 1-5（meta/hunk 行留空）+删红增绿（截图 15）；并排模式双栏**两侧行号 1-5**（截图 16）；切换按钮激活深色/未激活透明无边框（21:16 样式修复回归通过） |
+| 写入工具实时行数（2d20c33/ab7ea37） | ✅ PASS | 新会话真实运行：模型调 file_write 写 3 行文件 → 卡片「写入文件 **+3**」徽标，流式期与完成后均显示（截图 18）；file_edit 的 -M 口径由单测覆盖未实测 |
+| 维度勾选/指标管理 UI（26aa8e7） | ✅ PASS | 后台模型管理：维度配置一行=一物理字段、已选 6/6、指标管理「原子/派生/复合指标统一管理」区渲染正常（截图 12 背景层）；勾选态持久化已由 §5.12 覆盖 |
+| 后端为主 commit（模型报错 36bfb12、config_validator 4a1a5c0、技能合并 9e57ccd/abd562c 等） | ⏭ 单测覆盖 | 无独立 UI 面，由 tests/unit/ 覆盖（3097 passed，09-18） |
+
+**观察项（非缺陷）**：
+1. 会话历史回放中 file_write/file_edit 卡片不显示 +N/-M 徽标为**预期行为**：`contentLines/removedLines` 是流式期字段（`ToolCallCard.vue:166-181`），本轮实测完成后仍保留（+3 持续显示）；若某历史会话不显示，以真实运行为准。
+2. 本轮出现一次**页面白屏**（body.children=0），刷新即恢复，未复现；时间点在大量合成 DOM 事件（Escape/反复点击）之后，倾向为合成操作诱发的一次性状态，不计缺陷；如再复现需带 console 报错重查。
+3. el-dialog 为 `position:fixed`（offsetParent=null），用 `offsetParent` 过滤弹层会漏判；应按 `.el-overlay` 的 `display` 判断开合。另 `pages/index.vue` 双挂载 + 未打开 el-dialog 预渲染 DOM 的隐藏双实例问题（§5.13 观察项 2）本轮再次踩实。
+
+环境：后端 5001 / 前端 8089 / agent-browser 0.27.0，入口 `parentComponentName=执法检查`。本轮为 2 日 commit 定向回归，不代替发布前全量基线执行。SEM-18 的「确认导入」二次确认 ElMessageBox 本轮未重复点击（§5.13 已覆盖），且避免真实落库。

@@ -702,7 +702,7 @@ function getSqlTokenClass(type: string): string {
     <FileDiffViewer
       v-model:visible="diffViewerVisible"
       :payload="fileDiffPayload"
-      :conversation-id="conversationId"
+      :conversation-id="conversationId || ''"
     />
   </div>
 </template>

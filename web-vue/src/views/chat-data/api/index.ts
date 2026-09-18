@@ -1635,11 +1635,12 @@ export function getConversationContext(conversationId: string): Promise<ApiRespo
 
 // ============ 智能体定时任务 API ============
 
-/** 获取当前用户的定时任务列表 */
-export function getAgentSchedules(): Promise<ApiResponse<{ jobs: AgentScheduleItem[] }>> {
+/** 获取当前用户的定时任务分页列表 */
+export function getAgentSchedules(params?: { limit?: number; offset?: number }): Promise<ApiResponse<{ jobs: AgentScheduleItem[]; total: number }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/agent-schedules`,
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 
@@ -1677,12 +1678,12 @@ export function triggerAgentScheduleNow(jobId: string): Promise<ApiResponse<{ tr
   })
 }
 
-/** 获取定时任务执行历史 */
-export function getAgentScheduleRuns(jobId: string, limit = 50): Promise<ApiResponse<{ runs: AgentScheduleRunItem[] }>> {
+/** 获取定时任务执行历史分页 */
+export function getAgentScheduleRuns(jobId: string, params?: { limit?: number; offset?: number }): Promise<ApiResponse<{ runs: AgentScheduleRunItem[]; total: number }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/agent-schedules/${jobId}/runs`,
     method: 'get',
-    params: { limit }
+    params
   })
 }
 
@@ -1721,11 +1722,11 @@ export function setAdminAgentScheduleEnabled(jobId: string, enabledFlag: number)
   })
 }
 
-/** 后台：查看任意定时任务的执行历史 */
-export function getAdminAgentScheduleRuns(jobId: string, limit = 50): Promise<ApiResponse<{ runs: AgentScheduleRunItem[] }>> {
+/** 后台：查看任意定时任务的执行历史分页 */
+export function getAdminAgentScheduleRuns(jobId: string, params?: { limit?: number; offset?: number }): Promise<ApiResponse<{ runs: AgentScheduleRunItem[]; total: number }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/${jobId}/runs`,
     method: 'get',
-    params: { limit }
+    params
   })
 }

@@ -293,26 +293,28 @@ _STREAMING_LINE_COUNT_TOOLS: dict[str, dict[str, str]] = {
 }
 
 
-def _extract_streaming_text_field(args_text: str, field_name: str) -> str | None:
+def _extract_streaming_text_field(args_text: str, field_name: str) -> tuple[str | None, bool]:
     """从生成中的 args JSON 里提取指定字符串字段的当前值（可能不完整）。
 
     模型流式输出工具参数时，args 是 ``{"file_path":"...","content":"..."}`` 这样的
     JSON 片段。在 content 生成过程中 JSON 尚未闭合，无法用 json.loads 解析；
     这里用状态机直接定位 ``"<field_name>":"`` 之后的字符串值，处理转义字符。
+    返回 ``(value, closed)``：``closed`` 表示字符串已闭合（值最终确定）。
     """
     marker = f'"{field_name}"'
     idx = args_text.find(marker)
     if idx < 0:
-        return None
+        return None, False
     rest = args_text[idx + len(marker):]
     colon = rest.find(':')
     if colon < 0:
-        return None
+        return None, False
     rest = rest[colon + 1:].lstrip()
     if not rest.startswith('"'):
-        return None
+        return None, False
     out: list[str] = []
     i = 1
+    closed = False
     while i < len(rest):
         c = rest[i]
         if c == '\\' and i + 1 < len(rest):
@@ -321,11 +323,12 @@ def _extract_streaming_text_field(args_text: str, field_name: str) -> str | None
             out.append(mapping.get(nxt, nxt))
             i += 2
         elif c == '"':
-            break  # 字符串闭合
+            closed = True  # 字符串闭合
+            break
         else:
             out.append(c)
             i += 1
-    return ''.join(out)
+    return ''.join(out), closed
 
 
 def _count_text_lines(text: str) -> int:
@@ -577,8 +580,7 @@ class _ToolStreamState:
     def _streaming_progress_events(self, tool_call_id: str, tool_name: str, args_text: str) -> list[str]:
         """工具生成 args 期间推送进度事件：intent 预渲染（所有工具）+ 行数统计（file_write/file_edit）。
 
-        - intent：args 里出现 intent 字段即推送，让长耗时工具在执行前就能向用户展示调用目的；
-          与上次推送一致时不重复。
+        - intent：args 里 intent 字符串闭合后推送一次（部分前缀不推，避免逐 chunk 洪峰）。
         - 行数：整段替换口径，added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数；
           计数与上次一致时不重复推送。
         - 两类信息任一变化就合并推一个事件，行数字段仅行数统计工具携带。
@@ -587,12 +589,17 @@ class _ToolStreamState:
         added: str | None = None
         removed: str | None = None
         if fields:
-            added = _extract_streaming_text_field(args_text, fields["added_field"])
-            removed = _extract_streaming_text_field(args_text, fields["removed_field"]) if fields.get("removed_field") else ""
+            added, _ = _extract_streaming_text_field(args_text, fields["added_field"])
+            if fields.get("removed_field"):
+                removed, _ = _extract_streaming_text_field(args_text, fields["removed_field"])
+            else:
+                removed = ""
         counts: tuple[int, int] | None = None
         if added is not None or removed is not None:
             counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
-        intent = _extract_streaming_text_field(args_text, "intent")
+        intent, intent_closed = _extract_streaming_text_field(args_text, "intent")
+        if not intent_closed:
+            intent = None
 
         counts_changed = counts is not None and self.progress_line_counts.get(tool_call_id) != counts
         intent_changed = bool(intent) and self.progress_intents.get(tool_call_id) != intent

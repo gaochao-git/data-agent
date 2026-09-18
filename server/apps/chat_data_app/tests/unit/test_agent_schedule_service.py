@@ -220,7 +220,8 @@ async def test_delete_job_soft_deletes(harness):
     job = await service.create_job(**_create_kwargs(create_payload()))
     result = await service.delete_job(job_id=job["job_id"], user_id="user-1", username="用户一")
     assert result == {"job_id": job["job_id"]}
-    assert await service.list_jobs(user_id="user-1") == []
+    data = await service.list_jobs(user_id="user-1")
+    assert data == {"jobs": [], "total": 0}
     async with get_session() as session:
         row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
     assert row.delete_flag == 1
@@ -337,14 +338,55 @@ async def test_list_job_runs_joins_agent_run_status(harness):
             create_time=now,
         ))
 
-    runs = await service.list_job_runs(job_id=job["job_id"], user_id="user-1")
+    result = await service.list_job_runs(job_id=job["job_id"], user_id="user-1")
+    runs = result["runs"]
+    assert result["total"] == 1
     assert len(runs) == 1
     assert runs[0]["run_id"] == "run-1"
     assert runs[0]["status"] == "dispatched"
     assert runs[0]["run_status"] == "finished"
-    json.dumps(runs)
+    json.dumps(result)
     with pytest.raises(AgentScheduleNotFoundError):
         await service.list_job_runs(job_id="missing", user_id="user-1")
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_pagination(harness):
+    """执行历史按 limit/offset 分页，total 为去软删后的全量计数。"""
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    job = await service.create_job(**_create_kwargs(create_payload()))
+    now = datetime.now()
+    async with get_session() as session:
+        for i in range(3):
+            session.add(ChatDataAgentScheduleRun(
+                job_id=job["job_id"],
+                user_id="user-1",
+                conversation_id="conv-1",
+                plan_time=now - timedelta(minutes=i + 1),
+                trigger_status="succeeded",
+                delete_flag=0,
+                create_time=now,
+            ))
+        # 软删行不计入 total 也不出现在任何页
+        session.add(ChatDataAgentScheduleRun(
+            job_id=job["job_id"],
+            user_id="user-1",
+            conversation_id="conv-1",
+            plan_time=now,
+            trigger_status="cancelled",
+            delete_flag=1,
+            create_time=now,
+        ))
+
+    page1 = await service.list_job_runs(job_id=job["job_id"], user_id="user-1", limit=2, offset=0)
+    page2 = await service.list_job_runs(job_id=job["job_id"], user_id="user-1", limit=2, offset=2)
+    assert page1["total"] == 3
+    assert len(page1["runs"]) == 2
+    # 按计划时间倒序：第一页是最近的两次执行
+    assert page1["runs"][0]["plan_time"] > page1["runs"][1]["plan_time"]
+    assert page2["total"] == 3
+    assert len(page2["runs"]) == 1
 
 
 @pytest.mark.asyncio
@@ -553,10 +595,34 @@ async def test_list_jobs_attaches_live_conversation_titles(harness):
         ))
     await service.create_job(**_create_kwargs(create_payload()))
 
-    items = await service.list_jobs(user_id="user-1")
+    data = await service.list_jobs(user_id="user-1")
 
-    assert len(items) == 1
-    assert items[0]["conversation_title"] == "昨日销售分析"
+    assert data["total"] == 1
+    assert len(data["jobs"]) == 1
+    assert data["jobs"][0]["conversation_title"] == "昨日销售分析"
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_pagination(harness):
+    """任务列表按 limit/offset 分页，total 为去软删后的全量计数。"""
+    service, create_conversation, create_payload, get_session = harness
+    await create_conversation()
+    created = [
+        await service.create_job(**_create_kwargs(create_payload(title=f"任务{i}")))
+        for i in range(3)
+    ]
+    # 软删一个：不应计入 total，也不出现在任何页
+    await service.delete_job(job_id=created[0]["job_id"], user_id="user-1", username="用户一")
+
+    page1 = await service.list_jobs(user_id="user-1", limit=1, offset=0)
+    page2 = await service.list_jobs(user_id="user-1", limit=1, offset=1)
+    assert page1["total"] == 2
+    assert [job["title"] for job in page1["jobs"]] == ["任务2"]
+    assert [job["title"] for job in page2["jobs"]] == ["任务1"]
+
+    offset_beyond = await service.list_jobs(user_id="user-1", limit=10, offset=2)
+    assert offset_beyond["total"] == 2
+    assert offset_beyond["jobs"] == []
 
 
 @pytest.mark.asyncio

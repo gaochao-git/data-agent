@@ -88,6 +88,19 @@ describe('FileDiffViewer', () => {
     expect(wrapper.find('.bg-emerald-50').exists()).toBe(false)
   })
 
+  it('explains line-ending-only changes instead of claiming identical', async () => {
+    // changed + 无行级差异（尾换行符/CRLF）：不能误报“完全一致”
+    const wrapper = await mountViewer({
+      ...changedPayload,
+      status: 'changed',
+      added_lines: 0,
+      removed_lines: 0,
+      diff: '',
+    })
+    expect(wrapper.text()).toContain('行尾换行符')
+    expect(wrapper.text()).not.toContain('完全一致')
+  })
+
   it('loads both files and builds MergeView in merge mode', async () => {
     apiMocks.getConversationWorkspaceFileContent
       .mockResolvedValueOnce({ data: { content: '第一行\n第三行：待修改' } })

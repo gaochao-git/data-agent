@@ -4166,7 +4166,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
         <template v-else>
           <ToolCallDetailPanel
             :tool-call="activeToolCall"
-            :conversation-id="localConversationId"
+            :conversation-id="localConversationId || ''"
             :format-text="replaceVisiblePathsForDisplay"
           />
         </template>

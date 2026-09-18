@@ -355,10 +355,11 @@ async def test_file_edit_tool_rejects_identical_content_before_runtime():
 class PagedFileRuntime:
     """基于临时目录的 read_text_file 分页契约替身：offset 0 起始、lines/has_more/next_offset 翻页。"""
 
-    def __init__(self, root, page_size: int | None = None, binary_paths: set[str] | None = None):
+    def __init__(self, root, page_size: int | None = None, binary_paths: set[str] | None = None, infinite: bool = False):
         self.root = root
         self.page_size = page_size
         self.binary_paths = binary_paths or set()
+        self.infinite = infinite
 
     async def read_text_file(self, *, file_path, offset, limit, max_chars):
         relative = str(file_path).replace("/mnt/user-data/", "").lstrip("/")
@@ -372,14 +373,27 @@ class PagedFileRuntime:
         content = target.read_text(encoding="utf-8")
         lines = content.splitlines()
         effective_limit = self.page_size or limit
+        if self.infinite and offset >= len(lines):
+            # 模拟超长文件：内容读完后仍不断声称有下一页，用于验证翻页上限的 fail-fast
+            return {
+                "exists": True, "is_dir": False, "is_binary": False, "path": file_path,
+                "total_lines": len(lines), "empty": False, "offset_out_of_range": False,
+                "lines": [f"filler-{offset}"], "has_more": True,
+                "next_offset": offset + effective_limit,
+                "truncated_lines": [],
+            }
         page_lines = lines[offset:offset + effective_limit]
         has_more = offset + effective_limit < len(lines)
+        next_offset = offset + effective_limit if has_more else None
+        if self.infinite and not has_more and page_lines:
+            has_more = True
+            next_offset = offset + effective_limit
         return {
             "exists": True, "is_dir": False, "is_binary": False, "path": file_path,
             "total_lines": len(lines), "empty": content == "",
             "offset_out_of_range": content != "" and offset >= len(lines),
             "lines": page_lines, "has_more": has_more,
-            "next_offset": offset + effective_limit if has_more else None,
+            "next_offset": next_offset,
             "truncated_lines": [],
         }
 
@@ -449,6 +463,29 @@ async def test_file_diff_tool_rejects_binary(tmp_path):
         await _invoke(runtime, "file_diff", {
             "file_a": path_a, "file_b": "/mnt/user-data/uploads/blob.bin",
         })
+
+
+@pytest.mark.asyncio
+async def test_read_text_file_full_page_limit_raises(tmp_path, monkeypatch):
+    """翻页次数耗尽仍未读完必须报错，不允许静默截断成假全文。"""
+    monkeypatch.setattr(fs, "_FULL_READ_MAX_PAGES", 3)
+    monkeypatch.setattr(fs, "_FULL_READ_PAGE_LINES", 2)
+    runtime = PagedFileRuntime(tmp_path, page_size=2, infinite=True)
+    path = _write(tmp_path, "long.txt", "l0\nl1\nl2\n")
+    with pytest.raises(ValueError, match="行上限，无法整体读取"):
+        await fs.read_text_file_full(runtime, path)
+
+
+@pytest.mark.asyncio
+async def test_file_diff_counts_special_prefix_content_lines(tmp_path):
+    """正文行本身以 +++/--- 开头时不能被误排除：计数与前端染色口径一致。"""
+    runtime = PagedFileRuntime(tmp_path)
+    path_a = _write(tmp_path, "a.txt", "x\n")
+    path_b = _write(tmp_path, "b.txt", "x\n++foo\n--bar\n")
+    payload = _payload(await _invoke(runtime, "file_diff", {"file_a": path_a, "file_b": path_b}))
+    assert payload["status"] == "changed"
+    assert payload["added_lines"] == 2
+    assert payload["removed_lines"] == 0
 
 
 @pytest.mark.asyncio

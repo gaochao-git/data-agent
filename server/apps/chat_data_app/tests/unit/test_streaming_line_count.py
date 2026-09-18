@@ -62,36 +62,36 @@ def test_count_text_lines_empty_and_partial():
 
 def test_extract_field_from_complete_json():
     args = '{"file_path": "a.html", "content": "line1\\nline2"}'
-    assert agent_stream._extract_streaming_text_field(args, "content") == "line1\nline2"
+    assert agent_stream._extract_streaming_text_field(args, "content") == ("line1\nline2", True)
 
 
 def test_extract_field_from_unclosed_json():
-    """流式生成中 JSON 未闭合，也能提取当前已生成的部分。"""
+    """流式生成中 JSON 未闭合，也能提取当前已生成的部分；closed=False。"""
     args = '{"file_path": "a.html", "content": "line1\\nli'
-    assert agent_stream._extract_streaming_text_field(args, "content") == "line1\nli"
+    assert agent_stream._extract_streaming_text_field(args, "content") == ("line1\nli", False)
 
 
 def test_extract_field_handles_escapes():
     args = r'{"content": "a\nb\"c\\d\/e\tf"}'
-    assert agent_stream._extract_streaming_text_field(args, "content") == 'a\nb"c\\d/e\tf'
+    assert agent_stream._extract_streaming_text_field(args, "content") == ('a\nb"c\\d/e\tf', True)
 
 
 def test_extract_field_returns_none_before_value_starts():
-    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html"', "content") is None
-    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content"', "content") is None
-    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content":', "content") is None
-    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content": 123', "content") is None
+    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html"', "content") == (None, False)
+    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content"', "content") == (None, False)
+    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content":', "content") == (None, False)
+    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content": 123', "content") == (None, False)
 
 
 def test_extract_field_key_substring_safety():
     """``content_type`` 不是 ``content`` 的匹配（marker 含闭合引号）。"""
     args = '{"content_type": "text/html", "content": "body"}'
-    assert agent_stream._extract_streaming_text_field(args, "content") == "body"
+    assert agent_stream._extract_streaming_text_field(args, "content") == ("body", True)
 
 
 def test_extract_field_nested_object_value_is_skipped_until_string():
     """值不是字符串字面量（对象/数字）时不提取。"""
-    assert agent_stream._extract_streaming_text_field('{"content": {"a": 1}', "content") is None
+    assert agent_stream._extract_streaming_text_field('{"content": {"a": 1}', "content") == (None, False)
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +168,22 @@ def test_intent_streamed_for_any_tool():
     assert progress_intents(events) == ["读取配置文件"]
     assert all("content_lines" not in payload for payload in progress)
     assert all("removed_lines" not in payload for payload in progress)
+
+
+def test_intent_not_streamed_until_string_closed():
+    """intent 字符串未闭合时不推送（逐字流式 provider 下避免前缀洪峰），闭合后推一次。"""
+    state = agent_stream._ToolStreamState()
+    events = _feed(state, [
+        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+        # intent 逐字到达：每次前缀都不同，未闭合前不推
+        {"id": "", "name": "", "args": '{"intent": "读', "index": 0},
+        {"id": "", "name": "", "args": '取配', "index": 0},
+        {"id": "", "name": "", "args": '置文件', "index": 0},
+        # 闭合才推
+        {"id": "", "name": "", "args": '"}', "index": 0},
+    ])
+
+    assert progress_intents(events) == ["读取配置文件"]
 
 
 def test_intent_dedupes_unchanged_value():

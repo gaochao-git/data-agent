@@ -762,6 +762,28 @@ async def prepare_ossie_import_models(
     # 配置不进入冲突表（不允许 replace，也不泄露其元信息），改为标记强制跳过。
     service = semantic_service or get_semantic_config_service()
     existing_configs = await service.get_configs_async(datasource_id)
+    configs_by_name, locked_conflict_names = _build_existing_config_index(existing_configs, user_id)
+    await _apply_physical_validation(
+        imports,
+        ds_manager,
+        datasource_id,
+        datasource,
+        configs_by_name,
+        locked_conflict_names,
+    )
+    return imports, None
+
+
+def _build_existing_config_index(
+    existing_configs: Any,
+    user_id: str,
+) -> Tuple[Dict[str, Dict[str, Any]], Set[str]]:
+    """构建同名配置索引。
+
+    同组内模型名全局唯一（不区分 scope/create_by）。冲突表只收录 admin_manage 口径下
+    可操作的配置（即公共配置）；他人私有配置等不可操作的同名配置不进入冲突表
+    （不允许 replace，也不泄露其元信息），改为收集到 locked 集合以便标记强制跳过。
+    """
     configs_by_name: Dict[str, Dict[str, Any]] = {}
     locked_conflict_names: Set[str] = set()
     for config in existing_configs or []:
@@ -779,6 +801,21 @@ async def prepare_ossie_import_models(
             }
         else:
             locked_conflict_names.add(config_name)
+    return configs_by_name, locked_conflict_names
+
+
+async def _apply_physical_validation(
+    imports: List[OssieSemanticModelImport],
+    ds_manager: Any,
+    datasource_id: str,
+    datasource: Dict,
+    configs_by_name: Dict[str, Dict[str, Any]],
+    locked_conflict_names: Set[str],
+) -> None:
+    """逐个可导入模型做物理校验（复用 validate_semantic_config_for_save），并落同名标记。
+
+    错误写入 item.errors 并使 importable=False。
+    """
     for item in imports:
         if not item.importable:
             continue
@@ -796,4 +833,3 @@ async def prepare_ossie_import_models(
             item.validation_error = validation_error
         item.existing_config = configs_by_name.get(item.name)
         item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
-    return imports, None

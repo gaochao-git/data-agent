@@ -91,11 +91,19 @@ class AgentScheduleDao:
         )
         return result.scalar_one_or_none()
 
-    async def list_jobs_by_user(self, session: AsyncSession, user_id: str) -> list[ChatDataAgentSchedule]:
+    async def list_jobs_by_user(
+        self,
+        session: AsyncSession,
+        user_id: str,
+        limit: int,
+        offset: int = 0,
+    ) -> list[ChatDataAgentSchedule]:
         result = await session.execute(
             select(ChatDataAgentSchedule)
             .where(ChatDataAgentSchedule.user_id == user_id, ChatDataAgentSchedule.delete_flag == 0)
             .order_by(ChatDataAgentSchedule.id.desc())
+            .offset(max(offset, 0))
+            .limit(max(limit, 1))
         )
         return list(result.scalars().all())
 
@@ -268,6 +276,7 @@ class AgentScheduleDao:
         session: AsyncSession,
         job_id: str,
         limit: int,
+        offset: int = 0,
     ) -> list[ChatDataAgentScheduleRun]:
         result = await session.execute(
             select(ChatDataAgentScheduleRun)
@@ -276,9 +285,21 @@ class AgentScheduleDao:
                 ChatDataAgentScheduleRun.delete_flag == 0,
             )
             .order_by(ChatDataAgentScheduleRun.plan_time.desc(), ChatDataAgentScheduleRun.id.desc())
+            .offset(max(offset, 0))
             .limit(max(limit, 1))
         )
         return list(result.scalars().all())
+
+    async def count_runs_by_job(self, session: AsyncSession, job_id: str) -> int:
+        result = await session.execute(
+            select(func.count())
+            .select_from(ChatDataAgentScheduleRun)
+            .where(
+                ChatDataAgentScheduleRun.job_id == job_id,
+                ChatDataAgentScheduleRun.delete_flag == 0,
+            )
+        )
+        return int(result.scalar() or 0)
 
     # ---- 全局控制（后台一键暂停） ----
 

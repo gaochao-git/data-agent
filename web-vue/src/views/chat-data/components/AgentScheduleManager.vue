@@ -56,6 +56,13 @@ const visible = computed({
 const loading = ref(false)
 const jobs = ref<AgentScheduleItem[]>([])
 const hasLoaded = ref(false)
+const jobsTotal = ref(0)
+const jobsPage = ref(1)
+const jobsPageSize = ref(20)
+
+// 记录上次已发出的查询签名：size-change 与 current-change 可能因同一次
+// 分页器交互先后触发，参数相同则只发一次请求（force 场景不受限）
+let lastJobsQuery = ''
 
 const editorVisible = ref(false)
 const editingJobId = ref('')
@@ -84,6 +91,10 @@ const runsVisible = ref(false)
 const runsLoading = ref(false)
 const runsJob = ref<AgentScheduleItem | null>(null)
 const runs = ref<AgentScheduleRunItem[]>([])
+const runsTotal = ref(0)
+const runsPage = ref(1)
+const runsPageSize = ref(20)
+let lastRunsQuery = ''
 
 // 编辑基线：打开弹窗时的任务快照，提交时据它生成只含改动项的补丁（见 utils/agentSchedule）
 const editorBaseline = ref<ScheduleFormBaseline>(createScheduleBaseline())
@@ -164,12 +175,22 @@ const copyConversationId = async (conversationId: string) => {
   }
 }
 
-const loadJobs = async () => {
+const buildJobsParams = () => ({
+  limit: jobsPageSize.value,
+  offset: (jobsPage.value - 1) * jobsPageSize.value
+})
+
+const loadJobs = async (force = false) => {
+  const params = buildJobsParams()
+  const query = JSON.stringify(params)
+  if (!force && query === lastJobsQuery) return
+  lastJobsQuery = query
   loading.value = true
   try {
-    const res = await getAgentSchedules()
+    const res = await getAgentSchedules(params)
     if (res.status === 'success') {
       jobs.value = res.data.jobs || []
+      jobsTotal.value = res.data.total || 0
       hasLoaded.value = true
     } else {
       ElMessage.error(res.msg || '获取定时任务失败')
@@ -180,6 +201,17 @@ const loadJobs = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleJobsPageChange = async (page: number) => {
+  jobsPage.value = page
+  await loadJobs()
+}
+
+const handleJobsSizeChange = async (size: number) => {
+  jobsPageSize.value = size
+  jobsPage.value = 1
+  await handleJobsPageChange(1)
 }
 
 const ensureLoaded = async () => {
@@ -389,7 +421,7 @@ const submitJob = async () => {
     if (res.status === 'success') {
       ElMessage.success(editingJobId.value ? '任务已更新' : '任务已创建')
       editorVisible.value = false
-      await loadJobs()
+      await loadJobs(true)
     } else {
       ElMessage.error(res.msg || '保存失败')
     }
@@ -406,10 +438,10 @@ const toggleJob = async (job: AgentScheduleItem, enabled: boolean) => {
     const res = await updateAgentSchedule(job.job_id, { enabled_flag: enabled ? 1 : 0 })
     if (res.status === 'success') {
       ElMessage.success(enabled ? '任务已启用' : '任务已停用')
-      await loadJobs()
+      await loadJobs(true)
     } else {
       ElMessage.error(res.msg || '操作失败')
-      await loadJobs()
+      await loadJobs(true)
     }
   } catch (err) {
     console.error('切换定时任务状态失败:', err)
@@ -431,7 +463,7 @@ const removeJob = async (job: AgentScheduleItem) => {
     const res = await deleteAgentSchedule(job.job_id)
     if (res.status === 'success') {
       ElMessage.success('已删除')
-      await loadJobs()
+      await loadJobs(true)
     } else {
       ElMessage.error(res.msg || '删除失败')
     }
@@ -452,7 +484,7 @@ const triggerNow = async (job: AgentScheduleItem) => {
       } else {
         ElMessage.warning(res.msg || '会话正忙，已加入队列稍后自动执行')
       }
-      await loadJobs()
+      await loadJobs(true)
     } else {
       ElMessage.error(res.msg || '立即执行失败')
     }
@@ -464,12 +496,20 @@ const triggerNow = async (job: AgentScheduleItem) => {
   }
 }
 
-const loadRuns = async (jobId: string) => {
+const loadRuns = async (jobId: string, force = false) => {
+  const params = {
+    limit: runsPageSize.value,
+    offset: (runsPage.value - 1) * runsPageSize.value
+  }
+  const query = JSON.stringify({ jobId, ...params })
+  if (!force && query === lastRunsQuery) return
+  lastRunsQuery = query
   runsLoading.value = true
   try {
-    const res = await getAgentScheduleRuns(jobId)
+    const res = await getAgentScheduleRuns(jobId, params)
     if (res.status === 'success') {
       runs.value = res.data.runs || []
+      runsTotal.value = res.data.total || 0
     } else {
       ElMessage.error(res.msg || '获取执行历史失败')
     }
@@ -481,11 +521,23 @@ const loadRuns = async (jobId: string) => {
   }
 }
 
+const handleRunsPageChange = async (page: number) => {
+  runsPage.value = page
+  if (runsJob.value) await loadRuns(runsJob.value.job_id)
+}
+
+const handleRunsSizeChange = async (size: number) => {
+  runsPageSize.value = size
+  runsPage.value = 1
+  if (runsJob.value) await loadRuns(runsJob.value.job_id)
+}
+
 const openRuns = async (job: AgentScheduleItem) => {
   runsJob.value = job
   runs.value = []
+  runsPage.value = 1
   runsVisible.value = true
-  await loadRuns(job.job_id)
+  await loadRuns(job.job_id, true)
 }
 
 defineExpose({ ensureLoaded })
@@ -583,6 +635,20 @@ defineExpose({ ensureLoaded })
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="flex shrink-0 justify-end pt-2">
+      <el-pagination
+        :current-page="jobsPage"
+        :page-size="jobsPageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="jobsTotal"
+        layout="total, sizes, prev, pager, next"
+        size="small"
+        background
+        @current-change="handleJobsPageChange"
+        @size-change="handleJobsSizeChange"
+      />
+    </div>
 
     <!-- 新建 / 编辑 -->
     <el-dialog
@@ -751,13 +817,22 @@ defineExpose({ ensureLoaded })
             size="small"
             :loading="runsLoading"
             :disabled="!runsJob"
-            @click="runsJob && loadRuns(runsJob.job_id)"
+            @click="runsJob && loadRuns(runsJob.job_id, true)"
           >
             <i v-if="!runsLoading" class="fa-solid fa-rotate-right text-[11px]" style="margin-right: 4px;"></i>刷新
           </el-button>
         </div>
       </template>
-      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
+      <AgentScheduleRunsTable
+        :runs="runs"
+        :loading="runsLoading"
+        :total="runsTotal"
+        :current-page="runsPage"
+        :page-size="runsPageSize"
+        @page-change="handleRunsPageChange"
+        @size-change="handleRunsSizeChange"
+        @copy-conversation-id="copyConversationId"
+      />
     </el-dialog>
   </el-dialog>
 </template>

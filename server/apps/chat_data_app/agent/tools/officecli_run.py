@@ -11,7 +11,10 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
 )
 from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
 from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
+from utils.logger import get_logger
 from .common import tool_result_payload
+
+logger = get_logger(__name__)
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -48,6 +51,27 @@ def _validate_args(args: list[str]) -> list[str]:
     return list(parse_officecli_args(args).args)
 
 
+def _guard_uploads_readonly(command, cwd: str | None) -> None:
+    """修改/写入类子命令不允许落在 uploads 只读区，否则抛 ValueError。
+
+    读源允许；拦截后提示用 file_copy 复制到 workspace，避免 agent 直接改用户原始上传文件。
+    """
+    if not (command.mutates or command.write_indices):
+        return
+    effective_cwd = str(cwd or "/mnt/user-data/workspace").strip()
+    if command.mutates and _under_uploads(effective_cwd):
+        raise ValueError(
+            "uploads 目录为只读，不允许写入或修改。请先用 file_copy 将文件复制到 "
+            "/mnt/user-data/workspace 后再操作。"
+        )
+    for index, path in command_path_values(command, effective_cwd):
+        if index in command.write_indices and _under_uploads(path):
+            raise ValueError(
+                f"uploads 目录为只读，不允许写入或修改该路径: {path}。"
+                "请先用 file_copy 将文件复制到 /mnt/user-data/workspace 后再操作。"
+            )
+
+
 async def run_officecli_command(
     *,
     args: list[str],
@@ -61,24 +85,13 @@ async def run_officecli_command(
     save_stdout_to 非空且命令成功时，把未截断的完整 stdout 原样写入 workspace 下该路径
     （整体覆盖），供 view text/annotated 等 stdout-only 输出落盘（它们的 -o 会被
     officecli 静默忽略）；命令失败时跳过转存，由 success=False 与 stderr 主路径报错。
+    转存写入失败不改变命令成功结论：payload 里 saved_stdout_to 为空、saved_stdout_error
+    携带原因，stdout/stderr 照常返回，不丢弃已执行命令的结果。
     """
     command = parse_officecli_args(args)
     safe_args = list(command.args)
-    # uploads 为只读区：修改/写入类子命令不允许操作 uploads 路径（读源允许）。
-    # 拦截后提示用 file_copy 复制到 workspace，避免 agent 直接改用户原始上传文件。
-    if command.mutates or command.write_indices:
-        effective_cwd = str(cwd or "/mnt/user-data/workspace").strip()
-        if command.mutates and _under_uploads(effective_cwd):
-            raise ValueError(
-                "uploads 目录为只读，不允许写入或修改。请先用 file_copy 将文件复制到 "
-                "/mnt/user-data/workspace 后再操作。"
-            )
-        for index, path in command_path_values(command, effective_cwd):
-            if index in command.write_indices and _under_uploads(path):
-                raise ValueError(
-                    f"uploads 目录为只读，不允许写入或修改该路径: {path}。"
-                    "请先用 file_copy 将文件复制到 /mnt/user-data/workspace 后再操作。"
-                )
+    # uploads 为只读区：修改/写入类子命令不允许操作 uploads 路径（读源允许），见 helper。
+    _guard_uploads_readonly(command, cwd)
     timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS))
     # save_stdout_to 在执行前校验：路径非法 fail-fast，不白跑一趟命令（与测试口径一致）。
     save_target = ""
@@ -92,11 +105,20 @@ async def run_officecli_command(
     stderr, stderr_truncated = truncate_output(str(execution["stderr"]))
     success = (int(execution["exit_code"]) == 0) and not bool(execution["timed_out"])
     saved_stdout_to = ""
+    saved_stdout_error = ""
     if save_target and success:
-        written = await workspace_runtime.write_text_file(
-            file_path=save_target, content=raw_stdout, mode="overwrite"
-        )
-        saved_stdout_to = str(written.get("file_path") or save_target)
+        try:
+            written = await workspace_runtime.write_text_file(
+                file_path=save_target, content=raw_stdout, mode="overwrite"
+            )
+            saved_stdout_to = str(written.get("file_path") or save_target)
+        except Exception as exc:
+            # 命令已成功执行，转存失败不能让它整笔失败丢掉 stdout/stderr；
+            # 记录真实原因进 payload，由模型决定换路径重试还是直接用 stdout。
+            logger.warning(
+                "officecli 转存 stdout 失败: target=%s error=%s", save_target, exc, exc_info=True
+            )
+            saved_stdout_error = f"转存失败: {exc}"
     return {
         "success": success,
         "backend": execution["backend"],
@@ -111,6 +133,7 @@ async def run_officecli_command(
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated,
         "saved_stdout_to": saved_stdout_to,
+        "saved_stdout_error": saved_stdout_error,
         "next_required_action": (
             "编辑后执行 officecli validate 与 view 校验；确认无误再继续或调用 present_artifacts。"
             if success else "检查子命令、文件路径与参数后重试；officecli 报错见 stderr。"

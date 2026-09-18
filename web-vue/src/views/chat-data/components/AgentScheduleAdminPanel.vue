@@ -36,6 +36,10 @@ const runsLoading = ref(false)
 const runsJobTitle = ref('')
 const runsJobId = ref('')
 const runs = ref<AgentScheduleRunItem[]>([])
+const runsTotal = ref(0)
+const runsPage = ref(1)
+const runsPageSize = ref(20)
+let lastRunsQuery = ''
 
 const successRate = computed(() => {
   if (!overview.value || !overview.value.total_runs) return '-'
@@ -213,12 +217,20 @@ const copyConversationId = async (conversationId: string) => {
   }
 }
 
-const loadRuns = async (jobId: string) => {
+const loadRuns = async (jobId: string, force = false) => {
+  const params = {
+    limit: runsPageSize.value,
+    offset: (runsPage.value - 1) * runsPageSize.value
+  }
+  const query = JSON.stringify({ jobId, ...params })
+  if (!force && query === lastRunsQuery) return
+  lastRunsQuery = query
   runsLoading.value = true
   try {
-    const res = await getAdminAgentScheduleRuns(jobId)
+    const res = await getAdminAgentScheduleRuns(jobId, params)
     if (res.status === 'success') {
       runs.value = res.data.runs || []
+      runsTotal.value = res.data.total || 0
     } else {
       ElMessage.error(res.msg || '获取执行历史失败')
     }
@@ -230,12 +242,24 @@ const loadRuns = async (jobId: string) => {
   }
 }
 
+const handleRunsPageChange = async (page: number) => {
+  runsPage.value = page
+  if (runsJobId.value) await loadRuns(runsJobId.value)
+}
+
+const handleRunsSizeChange = async (size: number) => {
+  runsPageSize.value = size
+  runsPage.value = 1
+  if (runsJobId.value) await loadRuns(runsJobId.value)
+}
+
 const openRuns = async (job: AgentScheduleItem) => {
   runsJobTitle.value = job.title
   runsJobId.value = job.job_id
   runs.value = []
+  runsPage.value = 1
   runsVisible.value = true
-  await loadRuns(job.job_id)
+  await loadRuns(job.job_id, true)
 }
 
 defineExpose({ ensureLoaded })
@@ -425,13 +449,22 @@ defineExpose({ ensureLoaded })
             size="small"
             :loading="runsLoading"
             :disabled="!runsJobId"
-            @click="runsJobId && loadRuns(runsJobId)"
+            @click="runsJobId && loadRuns(runsJobId, true)"
           >
             <i v-if="!runsLoading" class="fa-solid fa-rotate-right text-[11px]" style="margin-right: 4px;"></i>刷新
           </el-button>
         </div>
       </template>
-      <AgentScheduleRunsTable :runs="runs" :loading="runsLoading" @copy-conversation-id="copyConversationId" />
+      <AgentScheduleRunsTable
+        :runs="runs"
+        :loading="runsLoading"
+        :total="runsTotal"
+        :current-page="runsPage"
+        :page-size="runsPageSize"
+        @page-change="handleRunsPageChange"
+        @size-change="handleRunsSizeChange"
+        @copy-conversation-id="copyConversationId"
+      />
     </el-dialog>
   </div>
 </template>

@@ -193,16 +193,18 @@ class AgentScheduleService:
             session.add(job)
             return job.to_dict()
 
-    async def list_jobs(self, *, user_id: str) -> list[dict]:
+    async def list_jobs(self, *, user_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """当前用户的任务分页列表，返回 ``{"jobs": [...], "total": n}``。"""
         async with get_session() as session:
-            jobs = await self._dao.list_jobs_by_user(session, user_id)
+            jobs = await self._dao.list_jobs_by_user(session, user_id, limit, offset)
+            total = await self._dao.count_jobs_by_user(session, user_id)
             titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job in jobs])
             items = []
             for job in jobs:
                 item = job.to_dict()
                 item["conversation_title"] = titles.get(job.conversation_id)
                 items.append(item)
-            return items
+            return {"jobs": items, "total": total}
 
     async def update_job(
         self,
@@ -422,17 +424,22 @@ class AgentScheduleService:
             job.update_by_name = username
             return {"job_id": job.job_id}
 
-    async def list_job_runs(self, *, job_id: str, user_id: str, limit: int = 50) -> list[dict]:
+    async def list_job_runs(self, *, job_id: str, user_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """任务执行历史分页，返回 ``{"runs": [...], "total": n}``。"""
         async with get_session() as session:
             job = await self._dao.get_job(session, job_id)
             if job is None or job.user_id != user_id:
                 raise AgentScheduleNotFoundError("定时任务不存在")
-            runs = await self._dao.list_runs_by_job(session, job_id, limit)
+            runs = await self._dao.list_runs_by_job(session, job_id, limit, offset)
+            total = await self._dao.count_runs_by_job(session, job_id)
             run_statuses = await self._dao.list_run_statuses(
                 session,
                 [run.run_id for run in runs if run.run_id],
             )
-            return [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs]
+            return {
+                "runs": [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs],
+                "total": total,
+            }
 
     async def trigger_now(
         self,
@@ -615,18 +622,22 @@ class AgentScheduleService:
             job.update_by_name = username
             return job.to_dict()
 
-    async def admin_list_job_runs(self, *, job_id: str, limit: int = 50) -> list[dict]:
-        """查看任意任务的执行历史（后台入口，无归属校验）。"""
+    async def admin_list_job_runs(self, *, job_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """查看任意任务的执行历史分页（后台入口，无归属校验）。"""
         async with get_session() as session:
             job = await self._dao.get_job(session, job_id)
             if job is None:
                 raise AgentScheduleNotFoundError("定时任务不存在")
-            runs = await self._dao.list_runs_by_job(session, job_id, limit)
+            runs = await self._dao.list_runs_by_job(session, job_id, limit, offset)
+            total = await self._dao.count_runs_by_job(session, job_id)
             run_statuses = await self._dao.list_run_statuses(
                 session,
                 [run.run_id for run in runs if run.run_id],
             )
-            return [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs]
+            return {
+                "runs": [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs],
+                "total": total,
+            }
 
     @staticmethod
     def _load_options(job: ChatDataAgentSchedule) -> dict[str, Any]:

@@ -194,33 +194,73 @@ class SemanticQualityChecker:
         for metric in metrics:
             name = _clean(metric.get("name")) or "<未命名>"
             kind = str(metric.get("metric_kind") or "").strip()
-            if kind == "derived":
-                base = _clean(metric.get("base_metric"))
-                if not base or base not in metric_names:
-                    raw.append(("EXE_DERIVED_BASE_MISSING", name))
-                elif not (metric.get("period") or metric.get("filters")):
-                    raw.append(("EXE_DERIVED_NO_CONSTRAINT", name))
-            elif kind == "composite":
-                formula = str(metric.get("formula") or "").strip()
-                if not formula:
-                    raw.append(("EXE_COMPOSITE_FORMULA_MISSING", name))
-                    continue
-                unresolved = self._unresolved_formula_tokens(formula, metric_names)
-                if unresolved:
-                    raw.append(("EXE_COMPOSITE_UNRESOLVED", f"{name}({','.join(unresolved[:3])})"))
-
+            if self._check_derived_or_composite(metric, metric_names, raw):
+                continue  # 公式缺失的复合指标不再参与物理列校验
             if physical_columns is not None:
-                table = _clean(metric.get("table"))
                 column = _metric_source_column(metric) if not kind else _clean(metric.get("column"))
-                if table and column and (table, column) not in physical_columns:
-                    raw.append(("EXE_UNKNOWN_COLUMN", f"{name}({table}.{column})"))
-
+                self._append_unknown_column(
+                    raw, "EXE_UNKNOWN_COLUMN", name,
+                    _clean(metric.get("table")), column, physical_columns,
+                )
         if physical_columns is not None:
-            for dimension in [item for item in config.get("dimensions") or [] if isinstance(item, dict)]:
-                table = _clean(dimension.get("table"))
-                column = _clean(dimension.get("column"))
-                if table and column and (table, column) not in physical_columns:
-                    raw.append(("EXE_UNKNOWN_COLUMN", f"{_clean(dimension.get('name'))}({table}.{column})"))
+            self._check_dimension_columns(config, raw, physical_columns)
+
+    @staticmethod
+    def _check_derived_or_composite(
+        metric: Dict[str, Any],
+        metric_names: Set[str],
+        raw: List[Tuple[str, str]],
+    ) -> bool:
+        """派生/复合指标的可执行性：来源指标缺失、无约束、公式缺失或公式不可解析。
+
+        返回 True 表示应跳过该指标的后续物理列校验（对应原 composite 缺公式时的 continue）。
+        """
+        name = _clean(metric.get("name")) or "<未命名>"
+        kind = str(metric.get("metric_kind") or "").strip()
+        if kind == "derived":
+            base = _clean(metric.get("base_metric"))
+            if not base or base not in metric_names:
+                raw.append(("EXE_DERIVED_BASE_MISSING", name))
+            elif not (metric.get("period") or metric.get("filters")):
+                raw.append(("EXE_DERIVED_NO_CONSTRAINT", name))
+            return False
+        if kind != "composite":
+            return False
+        formula = str(metric.get("formula") or "").strip()
+        if not formula:
+            raw.append(("EXE_COMPOSITE_FORMULA_MISSING", name))
+            return True
+        unresolved = SemanticQualityChecker._unresolved_formula_tokens(formula, metric_names)
+        if unresolved:
+            raw.append(("EXE_COMPOSITE_UNRESOLVED", f"{name}({','.join(unresolved[:3])})"))
+        return False
+
+    @staticmethod
+    def _append_unknown_column(
+        raw: List[Tuple[str, str]],
+        code: str,
+        target: str,
+        table: str,
+        column: str,
+        physical_columns: Set[Tuple[str, str]],
+    ) -> None:
+        """已给出物理列但该 (table, column) 不在库表清单中时记一条问题。"""
+        if table and column and (table, column) not in physical_columns:
+            raw.append((code, f"{target}({table}.{column})"))
+
+    @staticmethod
+    def _check_dimension_columns(
+        config: Dict[str, Any],
+        raw: List[Tuple[str, str]],
+        physical_columns: Set[Tuple[str, str]],
+    ) -> None:
+        """维度侧未知物理列检查。"""
+        for dimension in [item for item in config.get("dimensions") or [] if isinstance(item, dict)]:
+            SemanticQualityChecker._append_unknown_column(
+                raw, "EXE_UNKNOWN_COLUMN", _clean(dimension.get("name")),
+                _clean(dimension.get("table")), _clean(dimension.get("column")),
+                physical_columns,
+            )
 
     @staticmethod
     def _unresolved_formula_tokens(formula: str, metric_names: Set[str]) -> List[str]:
@@ -258,22 +298,32 @@ class SemanticQualityChecker:
                 raw.append(("COV_DUPLICATE_DIMENSION_COLUMN", f"{table}.{column}({len(names)}个)"))
 
         if physical_columns is not None:
-            referenced = {key for key in seen}
-            for metric in metrics:
-                if metric.get("metric_kind"):
-                    continue
-                table = _clean(metric.get("table"))
-                column = _metric_source_column(metric)
-                if table and column:
-                    referenced.add((table, column))
-            tables = {key[0] for key in referenced}
-            unmodeled = sorted(
-                f"{table}.{column}"
-                for table, column in physical_columns
-                if table in tables and (table, column) not in referenced
-            )
-            if unmodeled:
-                raw.append(("COV_UNMODELED_COLUMNS", f"{unmodeled[0]}({len(unmodeled)}列)"))
+            self._append_unmodeled_columns(metrics, seen.keys(), raw, physical_columns)
+
+    @staticmethod
+    def _append_unmodeled_columns(
+        metrics: List[Dict[str, Any]],
+        dimension_keys,
+        raw: List[Tuple[str, str]],
+        physical_columns: Set[Tuple[str, str]],
+    ) -> None:
+        """已建模表上未被任何维度/指标引用的物理列，按首列 + 总列数记一条问题。"""
+        referenced = set(dimension_keys)
+        for metric in metrics:
+            if metric.get("metric_kind"):
+                continue
+            table = _clean(metric.get("table"))
+            column = _metric_source_column(metric)
+            if table and column:
+                referenced.add((table, column))
+        tables = {key[0] for key in referenced}
+        unmodeled = sorted(
+            f"{table}.{column}"
+            for table, column in physical_columns
+            if table in tables and (table, column) not in referenced
+        )
+        if unmodeled:
+            raw.append(("COV_UNMODELED_COLUMNS", f"{unmodeled[0]}({len(unmodeled)}列)"))
 
     def _check_consistency(
         self,
@@ -283,7 +333,29 @@ class SemanticQualityChecker:
         raw: List[Tuple[str, str]],
         physical_columns: Optional[Set[Tuple[str, str]]],
     ) -> None:
-        expression_owner: Dict[str, str] = {}
+        """一致性检查：重复表达式、关系自环/重复/未引用表、关系环。
+
+        physical_columns 由调用方统一下发，本检查项只依赖库内元数据故未使用，
+        保留参数是为了与其余三个检查项保持同一调用签名。
+        """
+        self._collect_duplicate_expressions(metrics, raw)
+        modeled_tables = {_clean(item.get("table")) for item in [*metrics, *dimensions] if _clean(item.get("table"))}
+        seen_pairs, edges = self._collect_relationship_edges(relationships, modeled_tables, raw)
+        for (left, right, _columns), count in seen_pairs.items():
+            if count > 1:
+                raw.append(("CON_RELATIONSHIP_DUPLICATE", f"{left}->{right}"))
+
+        cycle = self._find_cycle(edges)
+        if cycle:
+            raw.append(("CON_RELATIONSHIP_CYCLE", "->".join(cycle)))
+
+    @staticmethod
+    def _collect_duplicate_expressions(
+        metrics: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+    ) -> Dict[str, str]:
+        """统计重复的 expression（跳过派生/复合与空表达式），返回 expression -> 首个指标名。"""
+        owner: Dict[str, str] = {}
         for metric in metrics:
             if metric.get("metric_kind"):
                 continue
@@ -291,12 +363,22 @@ class SemanticQualityChecker:
             name = _clean(metric.get("name")) or "<未命名>"
             if not expression:
                 continue
-            if expression in expression_owner:
-                raw.append(("CON_DUPLICATE_METRIC_EXPRESSION", f"{name}={expression_owner[expression]}"))
+            if expression in owner:
+                raw.append(("CON_DUPLICATE_METRIC_EXPRESSION", f"{name}={owner[expression]}"))
             else:
-                expression_owner[expression] = name
+                owner[expression] = name
+        return owner
 
-        modeled_tables = {_clean(item.get("table")) for item in [*metrics, *dimensions] if _clean(item.get("table"))}
+    @staticmethod
+    def _collect_relationship_edges(
+        relationships: List[Dict[str, Any]],
+        modeled_tables: Set[str],
+        raw: List[Tuple[str, str]],
+    ) -> Tuple[Dict[Tuple[str, str, str], int], Dict[str, Set[str]]]:
+        """累计关系 (left, right, columns) 计数并构建无向边邻接表。
+
+        同时记录自环与未被建模的表；两侧表名为空时不参与边与表引用校验。
+        """
         seen_pairs: Dict[Tuple[str, str, str], int] = {}
         edges: Dict[str, Set[str]] = {}
         for relationship in relationships:
@@ -310,22 +392,19 @@ class SemanticQualityChecker:
             )
             pair = (left, right, columns_key)
             seen_pairs[pair] = seen_pairs.get(pair, 0) + 1
-            if left and right:
-                if left == right:
-                    raw.append(("CON_RELATIONSHIP_SELF", left))
-                else:
-                    edges.setdefault(left, set()).add(right)
-                    edges.setdefault(right, set()).add(left)
-                for table in (left, right):
-                    if modeled_tables and table not in modeled_tables:
-                        raw.append(("CON_RELATIONSHIP_TABLE_UNREFERENCED", table))
-        for (left, right, _columns), count in seen_pairs.items():
-            if count > 1:
-                raw.append(("CON_RELATIONSHIP_DUPLICATE", f"{left}->{right}"))
-
-        cycle = self._find_cycle(edges)
-        if cycle:
-            raw.append(("CON_RELATIONSHIP_CYCLE", "->".join(cycle)))
+            if not (left and right):
+                continue
+            if left == right:
+                raw.append(("CON_RELATIONSHIP_SELF", left))
+            else:
+                edges.setdefault(left, set()).add(right)
+                edges.setdefault(right, set()).add(left)
+            # 自环（left == right）时两侧是同一张表，只检查一次：否则同一表名会被记两条 target，
+            # 报告里出现「T, T」重复项，并让「等 N 处」计数虚高。
+            for table in (left,) if left == right else (left, right):
+                if modeled_tables and table not in modeled_tables:
+                    raw.append(("CON_RELATIONSHIP_TABLE_UNREFERENCED", table))
+        return seen_pairs, edges
 
     @staticmethod
     def _find_cycle(edges: Dict[str, Set[str]]) -> List[str]:

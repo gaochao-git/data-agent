@@ -554,6 +554,28 @@ async def test_save_stdout_to_skipped_when_command_fails(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_save_stdout_to_write_failure_keeps_command_result(monkeypatch, tmp_path):
+    """转存写入失败不改变命令成功结论：stdout/stderr 照常返回，payload 回显失败原因。"""
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    async def _broken_write(**kwargs):
+        raise IsADirectoryError("目标是已存在的目录，无法覆盖为文件")
+
+    monkeypatch.setattr(runtime, "write_text_file", _broken_write)
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
+        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_dir",
+    )
+    assert payload["success"] is True
+    assert payload["saved_stdout_to"] == ""
+    assert "转存失败" in payload["saved_stdout_error"]
+    assert "OFFICECLI_CALLED" in payload["stdout"]
+
+
+@pytest.mark.asyncio
 async def test_save_stdout_to_writes_untruncated_stdout_over_limit(monkeypatch, tmp_path):
     """stdout 超过返回截断上限时，转存文件仍是完整原文（转存的核心价值）。"""
     big_marker = "L" * 20000  # > MAX_OUTPUT_CHARS(12000)，payload stdout 会被截断

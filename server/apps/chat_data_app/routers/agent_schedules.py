@@ -31,12 +31,16 @@ def _resolve_current_user(request: Request) -> Any:
 
 
 @router.get("/agent-schedules")
-async def list_agent_schedules(request: Request):
-    """获取当前用户的定时任务列表。"""
+async def list_agent_schedules(request: Request, limit: int = 50, offset: int = 0):
+    """获取当前用户的定时任务分页列表。"""
     try:
         current_user = _resolve_current_user(request)
-        data = await agent_schedule_service.list_jobs(user_id=str(current_user.user_id))
-        return business_response(data={"jobs": data}, msg="获取成功")
+        data = await agent_schedule_service.list_jobs(
+            user_id=str(current_user.user_id),
+            limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
+        )
+        return business_response(data=data, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
@@ -136,16 +140,17 @@ async def delete_agent_schedule(job_id: str, request: Request):
 
 
 @router.get("/agent-schedules/{job_id}/runs")
-async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 50):
-    """获取定时任务的执行历史（含关联 Agent Run 状态）。"""
+async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 50, offset: int = 0):
+    """获取定时任务的执行历史分页（含关联 Agent Run 状态）。"""
     try:
         current_user = _resolve_current_user(request)
         data = await agent_schedule_service.list_job_runs(
             job_id=job_id,
             user_id=str(current_user.user_id),
             limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
         )
-        return business_response(data={"runs": data}, msg="获取成功")
+        return business_response(data=data, msg="获取成功")
     except AgentScheduleNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_SCHEDULE_NOT_FOUND, status="error")
     except HTTPException:

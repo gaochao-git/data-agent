@@ -262,9 +262,11 @@ async def test_resume_fast_forwards_cron_cursor(harness):
 async def test_admin_list_job_runs_without_ownership(harness):
     await harness.seed_job("job-1", user_id="user-1")
     await harness.seed_run("job-1", trigger_status="succeeded")
-    runs = await harness.service.admin_list_job_runs(job_id="job-1")
+    result = await harness.service.admin_list_job_runs(job_id="job-1")
+    runs = result["runs"]
+    assert result["total"] == 1
     assert len(runs) == 1
     assert runs[0]["status"] == "succeeded"
-    json.dumps(runs)
+    json.dumps(result)
     with pytest.raises(AgentScheduleNotFoundError):
         await harness.service.admin_list_job_runs(job_id="missing")

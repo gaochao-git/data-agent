@@ -32,6 +32,43 @@ _FULL_READ_PAGE_LINES = 2_000
 _FULL_READ_MAX_PAGES = 50
 
 
+async def _fetch_full_read_page(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    raw_path: str,
+    offset: int,
+    max_chars: int,
+) -> tuple[str, "int | None"]:
+    """拉取单页并做存在性/类型/越界/超限校验。
+
+    返回 ``(page_text, next_offset)``：``next_offset`` 为 ``None`` 表示应当停止翻页
+    （已到文件末尾、无下一偏移或越界）；出错（不存在/目录/二进制/超限/空文件）直接抛
+    ``ValueError``。
+    """
+    page = await workspace_runtime.read_text_file(
+        file_path=raw_path,
+        offset=offset,
+        limit=_FULL_READ_PAGE_LINES,
+        max_chars=max_chars + 1,
+    )
+    if not page.get("exists"):
+        raise ValueError(f"文件不存在，请确认工作区路径: {raw_path}")
+    if page.get("is_dir"):
+        raise ValueError(f"目标是目录而非文件: {raw_path}")
+    if page.get("is_binary"):
+        raise ValueError(f"不支持按文本读取二进制文件: {raw_path}")
+    if page.get("offset_out_of_range"):
+        return "", None
+    if page.get("truncated_lines"):
+        raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {raw_path}")
+    lines = [str(item) for item in page.get("lines") or []]
+    if not lines and offset == 0:
+        raise ValueError(f"文件为空: {raw_path}")
+    page_text = "\n".join(lines)
+    if not page.get("has_more"):
+        return page_text, None
+    return page_text, page.get("next_offset")
+
+
 async def read_text_file_full(
     workspace_runtime: ConversationWorkspaceRuntime,
     file_path: str,
@@ -40,8 +77,9 @@ async def read_text_file_full(
 ) -> str:
     """按 read_text_file 分页契约拉取工作区文本文件全文。
 
-    任一页出现 truncated_lines（行级预算截断）或累计字符超上限，都视为文件超过
-    max_chars，直接报错；二进制、目录、不存在、空文件同样报错。
+    任一页出现 truncated_lines（行级预算截断）或累计字符超上限，或翻页次数超过
+    上限仍未读完，都视为文件超过整体读取上限，直接报错；二进制、目录、不存在、
+    空文件同样报错。
     """
     raw_path = str(file_path or "").strip()
     if not raw_path:
@@ -50,36 +88,21 @@ async def read_text_file_full(
     collected = 0
     offset = 0
     for _ in range(_FULL_READ_MAX_PAGES):
-        page = await workspace_runtime.read_text_file(
-            file_path=raw_path,
-            offset=offset,
-            limit=_FULL_READ_PAGE_LINES,
-            max_chars=max_chars + 1,
+        page_text, next_offset = await _fetch_full_read_page(
+            workspace_runtime, raw_path, offset, max_chars
         )
-        if not page.get("exists"):
-            raise ValueError(f"文件不存在，请确认工作区路径: {file_path}")
-        if page.get("is_dir"):
-            raise ValueError(f"目标是目录而非文件: {file_path}")
-        if page.get("is_binary"):
-            raise ValueError(f"不支持按文本读取二进制文件: {file_path}")
-        if page.get("offset_out_of_range"):
-            break
-        if page.get("truncated_lines"):
-            raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {file_path}")
-        lines = [str(item) for item in page.get("lines") or []]
-        if not lines and offset == 0:
-            raise ValueError(f"文件为空: {file_path}")
-        page_text = "\n".join(lines)
-        chunks.append(page_text)
-        collected += len(page_text) + 1
-        if collected > max_chars:
-            raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {file_path}")
-        if not page.get("has_more"):
-            break
-        next_offset = page.get("next_offset")
+        if page_text:
+            chunks.append(page_text)
+            collected += len(page_text) + 1
+            if collected > max_chars:
+                raise ValueError(f"文件超过 {max_chars} 字符上限，无法整体读取: {file_path}")
         if next_offset is None:
             break
         offset = int(next_offset)
+    else:
+        raise ValueError(
+            f"文件超过 {_FULL_READ_MAX_PAGES * _FULL_READ_PAGE_LINES} 行上限，无法整体读取: {file_path}"
+        )
     text = "\n".join(chunks)
     if not text.strip():
         raise ValueError(f"文件为空: {file_path}")
@@ -393,8 +416,21 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             lines_a, lines_b,
             fromfile=str(file_a), tofile=str(file_b), lineterm="",
         ))
-        added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
-        removed = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+        # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
+        # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
+        in_hunk = False
+        added = 0
+        removed = 0
+        for line in diff_lines:
+            if line.startswith("@@"):
+                in_hunk = True
+                continue
+            if not in_hunk:
+                continue
+            if line.startswith("+"):
+                added += 1
+            elif line.startswith("-"):
+                removed += 1
         return tool_result_payload("file_diff", {
             "file_a": str(file_a),
             "file_b": str(file_b),

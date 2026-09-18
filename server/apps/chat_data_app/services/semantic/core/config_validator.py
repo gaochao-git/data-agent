@@ -61,7 +61,10 @@ def _validate_dimensions_against_tables(dimensions: List[Dict], table_columns_ma
 
 
 _FUNCTION_CALL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\(")
-_IDENTIFIER_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# 标识符提取用 Unicode 感知 pattern（\w 原生含 CJK）：非 ASCII 的坏字段名也要能被
+# 提取出来报未知列；否则中文错误标识符对校验不可见（甚至把 SUM(中文) 误判成常量聚合）。
+# 函数名/表前缀保持 ASCII：SQL 函数名与物理表名就是 ASCII 命名。
+_IDENTIFIER_TOKEN_PATTERN = re.compile(r"[^\W\d][\w]*", re.UNICODE)
 _TABLE_PREFIX_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.")
 _SQL_KEYWORD_TOKENS: Set[str] = {
     "select", "from", "where", "group", "by", "having", "order", "case",
