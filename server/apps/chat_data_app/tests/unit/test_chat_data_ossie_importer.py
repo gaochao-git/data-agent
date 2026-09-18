@@ -765,8 +765,8 @@ def test_preview_route_marks_existing_config_conflict(monkeypatch):
     assert model["existing_config"] == {"config_id": "sc_9", "name": "商品模型", "enabled": True}
     checklist = _checklist_by_name(model["checklist"])
     assert checklist["模型名冲突"]["status"] == "warn"
-    assert "sc_9" in checklist["模型名冲突"]["message"]
-    assert "启用中" in checklist["模型名冲突"]["message"]
+    # 文案只给结论：不带 config_id / 启用态，也不复述行内控件（替换/忽略）的说明
+    assert checklist["模型名冲突"]["message"] == "已存在同名配置"
 
 
 def test_preview_route_no_conflict_when_name_absent(monkeypatch):
@@ -1002,7 +1002,7 @@ def test_checklist_conflict_row_from_existing_config():
     rows = build_model_checklist(item)
     by_name = _checklist_by_name(rows)
     assert by_name["模型名冲突"]["status"] == "warn"
-    assert "禁用中" in by_name["模型名冲突"]["message"]
+    assert by_name["模型名冲突"]["message"] == "已存在同名配置"
 
     no_conflict = build_model_checklist(OssieSemanticModelImport(name="模型B"))
     assert all(row["name"] != "模型名冲突" for row in no_conflict)

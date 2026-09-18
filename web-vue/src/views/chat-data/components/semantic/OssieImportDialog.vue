@@ -44,14 +44,17 @@ const fileChecked = ref<Record<number, boolean>>({})
 const detailOpen = ref<Record<number, boolean>>({})
 const previewing = ref(false)
 const importing = ref(false)
-/** 正在单独导入的文件 id（收起行「导入」按钮的 loading 态） */
-const importingFileId = ref<number | null>(null)
 /** 本轮校验已覆盖到的文件 id：区分「尚未校验」与「校验通过但文件内没有模型」，前者必须拦住导入 */
 const previewedFileIds = ref<Record<number, boolean>>({})
 /** 文件级校验失败原因：非空即该文件本轮校验请求失败，行内状态按错误展示并给出原因 */
 const filePreviewError = ref<Record<number, string>>({})
 const models = ref<DialogModel[]>([])
-/** 冲突模型的处理动作：模型 muid → replace/skip，默认替换（迭代闭环的常见路径） */
+/**
+ * 冲突模型的处理动作：模型 muid → replace/skip。
+ * 09-18 产品口径收敛后，收起行不再有「替换 / 忽略」入口（是否导入只由左侧勾选决定，不想导入就删掉文件行），
+ * 这里的取值因此恒为默认的 replace；保留结构是为了不动后端 replace/skip 契约 ——
+ * 「他人私有配置」仍由后端强制 skip，前端不参与该选择。
+ */
 const conflictActions = ref<Record<string, 'replace' | 'skip'>>({})
 const existingConfigsCache = ref<Record<string, SemanticConfigItem> | null>(null)
 const diffOpen = ref<Record<string, boolean>>({})
@@ -65,7 +68,6 @@ const resetState = () => {
   detailOpen.value = {}
   previewing.value = false
   importing.value = false
-  importingFileId.value = null
   previewedFileIds.value = {}
   filePreviewError.value = {}
   models.value = []
@@ -84,8 +86,8 @@ watch(visible, value => {
 // 后端导入是「全有或全无」：任一模型存在阻断问题即整体拒绝，按钮须与该语义一致。
 // 同名冲突不阻断（可替换/忽略）；未勾选文件的模型不参与判定。
 const allImportable = computed(() => activeModels.value.length > 0 && activeModels.value.every(model => model.importable))
-/** 有导入请求在途（单文件或批量）：期间冻结一切会改动预览数据的操作，避免请求与状态互相踩踏 */
-const busy = computed(() => importing.value || importingFileId.value !== null)
+/** 有导入请求在途：期间冻结一切会改动预览数据的操作，避免请求与状态互相踩踏 */
+const busy = computed(() => importing.value)
 /** 勾选但没拿到校验结果的文件数（含校验失败的）：这些文件会被导入循环跳过，必须拦在按钮上 */
 const unvalidatedCount = computed(() =>
   activeFiles.value.filter(file => !previewedFileIds.value[file.id]).length)
@@ -249,64 +251,57 @@ const fileStatusLabel = (status: FileCheckStatus) =>
   status === 'pass' ? '通过' : status === 'warn' ? '警告' : status === 'fail' ? '错误' : '未校验'
 
 // ============ 收起行（文件表）里的同名冲突处置 ============
-// 产品口径：收起行即完成「导入勾选 / 替换 / 忽略 / 单文件导入」的处置，展开区只看详情
-// （校验清单、差异对比）。冲突动作按**文件**统一处置，与后端「以文件为粒度整体落库」一致。
+// 产品口径（09-18 收敛）：收起行只做两件事 —— 左侧勾选决定是否导入（与「模型校验」同一口径，
+// 勾选即参与校验与导入），同名冲突时给出唯一的「查看差异」入口。
+// 不再有「替换 / 忽略 / 单文件导入」三个控件：不想导入直接删掉文件行即可，
+// 冲突模型按文件统一按「替换」提交（覆盖前有二次确认兜底）。
 
 /** 归属于某个文件的预览模型 */
 const modelsOfFile = (fileId: number) => models.value.filter(model => model.source_file_id === fileId)
 
 /**
- * 可替换/忽略的同名冲突模型。
- * - 他人私有（conflict_locked）不在其中：后端强制忽略，不给选择；
- * - 已被阻断（!importable）的冲突模型也不在其中：该文件本来就导不了，行内只靠「导入」按钮的
- *   title 与底部提示承载，等修好重新校验后再出现处置控件。
+ * 可查看差异的同名冲突模型。
+ * - 他人私有（conflict_locked）不在其中：后端强制忽略，不提供差异对比；
+ * - 已被阻断（!importable）的冲突模型也不在其中：该文件本来就导不了，行内只靠状态徽标的
+ *   title 与底部提示承载，等修好重新校验后再出现差异入口。
  */
 const fileConflictModels = (fileId: number) =>
   modelsOfFile(fileId).filter(model => model.importable && model.existing_config)
 
 const fileHasConflict = (fileId: number) => fileConflictModels(fileId).length > 0
 
-/** 行内冲突动作：文件内冲突模型全部选「忽略」才显示忽略，否则显示替换（默认替换） */
-const fileAction = (fileId: number): 'replace' | 'skip' => {
-  const list = fileConflictModels(fileId)
-  return list.length > 0 && list.every(model => conflictActions.value[model.muid] === 'skip') ? 'skip' : 'replace'
-}
-
-const setFileAction = (fileId: number, action: 'replace' | 'skip') => {
-  const next = { ...conflictActions.value }
-  fileConflictModels(fileId).forEach(model => {
-    next[model.muid] = action
-  })
-  conflictActions.value = next
-}
-
-/** 行内冲突提示的 title：单模型给启用态，多模型给数量（完整说明在展开后的「模型名冲突」清单行） */
+/** 行内冲突按钮的 title：单模型给启用态（清单行的「模型名冲突」只给结论，不带元信息），多模型给数量 */
 const fileConflictTitle = (fileId: number) => {
   const list = fileConflictModels(fileId)
   const first = list[0]
-  if (list.length === 1 && first?.existing_config) {
-    return `已存在同名配置（${first.existing_config.enabled ? '启用中' : '禁用中'}）`
-  }
-  return list.length ? `${list.length} 个模型与现有配置同名` : ''
+  const base = list.length === 1 && first?.existing_config
+    ? `已存在同名配置（${first.existing_config.enabled ? '启用中' : '禁用中'}）`
+    : list.length ? `${list.length} 个模型与现有配置同名` : ''
+  // 冲突默认按「替换」提交：把后果写在按钮上，避免只看到一个「查看差异」而误以为是新建
+  return base ? `${base}，导入将覆盖该配置` : ''
 }
 
-/** 无操作权限的同名冲突数量（不提供替换/忽略，导入时后端强制忽略） */
+/** 无操作权限的同名冲突数量（不提供差异对比，导入时后端强制忽略） */
 const fileLockedCount = (fileId: number) =>
   modelsOfFile(fileId).filter(model => model.importable && model.conflict_locked).length
 
-/** 单文件导入的门禁与底部批量导入同一口径：需已校验，且该文件内模型无阻断问题 */
-const fileRowImportable = (fileId: number) => {
-  const list = modelsOfFile(fileId)
-  return previewedFileIds.value[fileId] === true && list.length > 0 && list.every(model => model.importable)
+/**
+ * 「操作」列文字按钮（`查看差异` / `查看详情`）的态样式。
+ * 静息时两者同款灰色文字按钮（看不出主次，这正是产品要的）；**展开后转为蓝色高亮**，
+ * 让用户一眼看出当前打开的是差异还是详情 —— 两者互斥，同一行最多只有一个蓝的。
+ * 颜色取项目的语义蓝（与差异区块的 `border-blue-100` / `bg-blue-50/40` 同色系）。
+ * 冻结（busy）期间统一灰化，与「导入在途全弹窗冻结」保持一致。
+ */
+const rowActionClass = (active: boolean, frozen = false) => {
+  if (frozen) return 'cursor-not-allowed text-gray-300'
+  return active ? 'text-blue-600 hover:text-blue-700' : 'text-gray-500 hover:text-gray-700'
 }
 
-const fileRowImportTitle = (fileId: number) => {
-  if (filePreviewError.value[fileId]) return `该文件校验失败：${filePreviewError.value[fileId]}`
-  if (!previewedFileIds.value[fileId]) return '请先点击「模型校验」'
-  const list = modelsOfFile(fileId)
-  if (!list.length) return '该文件中没有可导入的语义模型'
-  if (!list.every(model => model.importable)) return '该文件存在阻断问题，修正后再导入'
-  return '只导入该文件'
+/** 收起某个文件内全部冲突模型的差异面板（差异与详情互斥时复用） */
+const closeFileDiff = (fileId: number) => {
+  fileConflictModels(fileId).forEach(model => {
+    diffOpen.value[model.muid] = false
+  })
 }
 
 const toggleFile = (fileId: number, event: Event) => {
@@ -357,7 +352,10 @@ const fileModelGroups = computed(() =>
 const singleFileName = computed(() => (files.value.length === 1 ? files.value[0]?.name : ''))
 
 const toggleDetail = (fileId: number) => {
-  detailOpen.value = { ...detailOpen.value, [fileId]: !detailOpen.value[fileId] }
+  const next = !detailOpen.value[fileId]
+  detailOpen.value = { ...detailOpen.value, [fileId]: next }
+  // 差异与详情互斥：同一时刻只显示一个（内容与用途都不同），展开详情即收起该文件的差异面板
+  if (next) closeFileDiff(fileId)
 }
 
 const handlePreview = async () => {
@@ -525,6 +523,7 @@ const handleImport = async () => {
     }
     emit('imported', created + replaced)
     reportImportResult({ created, replaced, skipped })
+    // 批量路径已把整批处理完，这里只隐藏弹窗（不跳转页面、不重置其他面板状态）
     visible.value = false
   } catch (err) {
     console.error('Ossie 导入失败:', err)
@@ -552,62 +551,72 @@ const confirmImport = () => {
   ).then(() => handleImport()).catch(() => {})
 }
 
-/** 收起行「导入」：只导入该文件，成功后移除该文件并保留弹窗，便于继续处理其余文件 */
-const handleImportFile = async (file: LoadedYamlFile) => {
-  if (importing.value || importingFileId.value !== null) return
-  importingFileId.value = file.id
-  try {
-    const result = await importSingleFile(file)
-    if (result) {
-      reportImportResult(result)
-      emit('imported', result.created + result.replaced)
-      removeFile(file.id)
-      // 全部处理完才关闭，否则留在弹窗里继续导入剩余文件
-      if (!files.value.length) visible.value = false
-    }
-  } catch (err) {
-    console.error('Ossie 导入失败:', err)
-    ElMessage.error('导入失败，请稍后重试')
-  } finally {
-    importingFileId.value = null
-  }
+// ============ 同名冲突 diff（CodeMirror MergeView 双栏对比，见 OssieMergeDiff.vue） ============
+// 入口只有一个：文件行「操作」列里的「查看差异」按钮（与「查看详情」并列且互斥）。
+// 差异面板**独立成块**渲染在文件表下方，不与「校验结果」详情区混在一起 ——
+// 看差异不必展开详情，展开详情也会收起差异，两者各显示各的。
+
+/** 该文件的冲突差异是否已全部展开（只取决于差异面板自身，与详情展开状态无关） */
+const fileDiffOpen = (fileId: number) => {
+  const list = fileConflictModels(fileId)
+  return list.length > 0 && list.every(model => diffOpen.value[model.muid])
 }
 
-// ============ 同名冲突 diff（CodeMirror MergeView 双栏对比，见 OssieMergeDiff.vue） ============
+/** 当前已打开差异面板的模型：差异区按它渲染（按 models 原序，多文件多模型时顺序稳定） */
+const openDiffModels = computed(() => models.value.filter(model => diffOpen.value[model.muid]))
 
-const toggleDiff = async (muid: string) => {
-  if (diffOpen.value[muid]) {
-    diffOpen.value[muid] = false
+const fileDiffLoading = (fileId: number) =>
+  fileConflictModels(fileId).some(model => diffLoading.value[model.muid])
+
+/** 加载差异对比所需的现有配置（已加载过直接复用）：只取数据，不改展开状态 */
+const ensureDiffLoaded = async (muid: string): Promise<boolean> => {
+  if (diffExisting.value[muid]) return true
+  const model = models.value.find(item => item.muid === muid)
+  if (!model?.existing_config) return false
+  if (!existingConfigsCache.value) {
+    diffLoading.value[muid] = true
+    try {
+      const res = await getAdminSemanticConfigs(props.datasourceId)
+      if (res.status !== 'success') {
+        ElMessage.error(res.msg || '加载现有配置失败')
+        return false
+      }
+      const map: Record<string, SemanticConfigItem> = {}
+      ;(res.data?.configs || []).forEach(config => {
+        map[config.id] = config
+      })
+      existingConfigsCache.value = map
+    } catch (err) {
+      console.error('加载现有配置失败:', err)
+      ElMessage.error('加载现有配置失败，请稍后重试')
+      return false
+    } finally {
+      diffLoading.value[muid] = false
+    }
+  }
+  const existing = existingConfigsCache.value![model.existing_config.config_id]
+  diffExisting.value[muid] = existing || 'missing'
+  return true
+}
+
+/**
+ * 操作列「查看差异」：打开该文件内全部冲突模型的差异面板；已全部打开时收起。
+ * 与同文件的「查看详情」互斥：打开差异即收起详情，两块内容不同时出现。
+ * 逐个 await 而非并发：多模型文件都要读同一份现有配置列表，并发只会打重复请求。
+ */
+const toggleFileDiff = async (fileId: number) => {
+  const list = fileConflictModels(fileId)
+  if (!list.length) return
+  if (fileDiffOpen(fileId)) {
+    closeFileDiff(fileId)
     return
   }
-  if (!diffExisting.value[muid]) {
-    const model = models.value.find(item => item.muid === muid)
-    if (!model?.existing_config) return
-    if (!existingConfigsCache.value) {
-      diffLoading.value[muid] = true
-      try {
-        const res = await getAdminSemanticConfigs(props.datasourceId)
-        if (res.status !== 'success') {
-          ElMessage.error(res.msg || '加载现有配置失败')
-          return
-        }
-        const map: Record<string, SemanticConfigItem> = {}
-        ;(res.data?.configs || []).forEach(config => {
-          map[config.id] = config
-        })
-        existingConfigsCache.value = map
-      } catch (err) {
-        console.error('加载现有配置失败:', err)
-        ElMessage.error('加载现有配置失败，请稍后重试')
-        return
-      } finally {
-        diffLoading.value[muid] = false
-      }
+  detailOpen.value = { ...detailOpen.value, [fileId]: false }
+  for (const model of list) {
+    if (await ensureDiffLoaded(model.muid)) {
+      diffOpen.value = { ...diffOpen.value, [model.muid]: true }
     }
-    const existing = existingConfigsCache.value![model.existing_config.config_id]
-    diffExisting.value[muid] = existing || 'missing'
   }
-  diffOpen.value[muid] = true
 }
 
 /** diff 视图入参：已解析到现有配置时返回它，否则返回 undefined（模板渲染兜底文案） */
@@ -626,7 +635,7 @@ const diffExistingFor = (muid: string) => {
   >
     <div class="space-y-3">
       <div class="text-xs leading-5 text-gray-500">
-        上传 Ossie 语义模型 YAML 文件（可多选批量校验，由 AI 生成或从其他平台导出），模型校验通过后创建
+        上传 Ossie 语义模型 YAML 文件，模型校验通过后创建
         <span class="text-orange-500 font-medium">默认禁用</span>
         的草稿配置，需人工复核后启用。
       </div>
@@ -664,7 +673,7 @@ const diffExistingFor = (muid: string) => {
             </td>
             <td class="px-2 py-1">文件</td>
             <td class="w-[80px] px-2 py-1">检查结果</td>
-            <td class="w-[92px] px-2 py-1 text-center">操作</td>
+            <td class="w-[168px] px-2 py-1 text-right">操作</td>
           </tr>
         </thead>
         <tbody>
@@ -683,59 +692,16 @@ const diffExistingFor = (muid: string) => {
                   <i class="fa-solid fa-file-lines shrink-0 text-gray-300"></i>
                   <span class="truncate">{{ file.name }}</span>
                 </span>
-                <!-- 收起行即完成处置：新增靠左侧勾选，同名冲突在此选「替换 / 忽略」 -->
+                <!-- 同名但无操作权限（他人私有）：不提供差异对比，导入时后端强制忽略。
+                     这是纯信息提示（非动作），留在文件名一侧；动作按钮统一在「操作」列。 -->
                 <span
-                  v-if="fileHasConflict(file.id)"
-                  class="flex shrink-0 items-center gap-1.5 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px]"
-                  :title="fileConflictTitle(file.id)"
-                >
-                  <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
-                  <label class="flex items-center gap-1 text-gray-600" :class="busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
-                    <input
-                      type="radio"
-                      :name="`file-conflict-${file.id}`"
-                      value="replace"
-                      :checked="fileAction(file.id) === 'replace'"
-                      :disabled="busy"
-                      @change="setFileAction(file.id, 'replace')"
-                    />
-                    替换
-                  </label>
-                  <label class="flex items-center gap-1 text-gray-600" :class="busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
-                    <input
-                      type="radio"
-                      :name="`file-conflict-${file.id}`"
-                      value="skip"
-                      :checked="fileAction(file.id) === 'skip'"
-                      :disabled="busy"
-                      @change="setFileAction(file.id, 'skip')"
-                    />
-                    忽略
-                  </label>
-                </span>
-                <!-- 同名但无操作权限（他人私有）：不提供选择，导入时后端强制忽略 -->
-                <span
-                  v-else-if="fileLockedCount(file.id)"
+                  v-if="fileLockedCount(file.id)"
                   class="shrink-0 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px] text-amber-600"
                   title="已存在同名配置但无操作权限，导入时将忽略该模型"
                 >
                   <i class="fa-solid fa-triangle-exclamation"></i>
                   同名无权限 · 忽略
                 </span>
-                <!-- 单文件导入：与底部批量导入同一门禁口径（未校验、校验失败或存在阻断问题时禁用） -->
-                <button
-                  type="button"
-                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition-colors"
-                  :class="fileRowImportable(file.id) && !busy
-                    ? 'cursor-pointer border-blue-200 text-blue-600 hover:bg-blue-50'
-                    : 'cursor-not-allowed border-gray-200 text-gray-300'"
-                  :disabled="!fileRowImportable(file.id) || busy"
-                  :title="fileRowImportTitle(file.id)"
-                  @click="handleImportFile(file)"
-                >
-                  <i v-if="importingFileId === file.id" class="fa-solid fa-spinner fa-spin"></i>
-                  <template v-else>导入</template>
-                </button>
               </div>
             </td>
             <td class="px-2 py-1.5">
@@ -749,14 +715,37 @@ const diffExistingFor = (muid: string) => {
               </span>
             </td>
             <td class="px-2 py-1.5">
-              <div class="flex items-center justify-center gap-2">
+              <div class="flex items-center justify-end gap-2">
+                <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
+                     `查看差异` 在后（仅同名冲突行有）、删除最右。
+                     详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
+                     （打开差异即收起详情，反之亦然），各看各的内容；
+                     展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
+                <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
+                     `查看差异` 在后（仅同名冲突行有）、删除最右。
+                     详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
+                     （打开差异即收起详情，反之亦然），各看各的内容；
+                     展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
                 <button
                   v-if="models.some(model => model.source_file_id === file.id)"
                   type="button"
-                  class="text-gray-500 transition-colors hover:text-gray-700"
+                  class="transition-colors"
+                  :class="rowActionClass(detailOpen[file.id] === true)"
                   @click="toggleDetail(file.id)"
                 >
-                  {{ detailOpen[file.id] ? '收起' : '查看详情' }}
+                  {{ detailOpen[file.id] ? '收起详情' : '查看详情' }}
+                </button>
+                <button
+                  v-if="fileHasConflict(file.id)"
+                  type="button"
+                  class="flex shrink-0 items-center gap-1 transition-colors"
+                  :class="rowActionClass(fileDiffOpen(file.id), busy)"
+                  :disabled="busy"
+                  :title="fileConflictTitle(file.id)"
+                  @click="toggleFileDiff(file.id)"
+                >
+                  {{ fileDiffOpen(file.id) ? '收起差异' : '查看差异' }}
+                  <i v-if="fileDiffLoading(file.id)" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
                 </button>
                 <button
                   type="button"
@@ -774,6 +763,33 @@ const diffExistingFor = (muid: string) => {
         </tbody>
       </table>
 
+      <!-- 差异对比：**单独一块**，不混进下面的「校验结果」详情区（与同文件的详情互斥，
+           同一时刻只显示一个）。置于文件表正下方；
+           单个 diff 面板高 260px，多冲突模型会很长，因此这块内部自己滚动，不撑高弹窗。 -->
+      <div v-if="openDiffModels.length" class="rounded-md border border-blue-100">
+        <div class="flex items-center justify-between border-b border-blue-100 bg-blue-50/40 px-3 py-1.5">
+          <span class="flex items-center gap-1.5 text-[12px] font-medium text-gray-600">
+            <i class="fa-solid fa-code-compare text-blue-500"></i>
+            与现有配置的差异
+          </span>
+          <span class="text-[11px] text-gray-400">共 {{ openDiffModels.length }} 个同名模型</span>
+        </div>
+        <div class="max-h-[320px] space-y-3 overflow-y-auto px-3 py-2">
+          <div v-for="model in openDiffModels" :key="`diff-${model.muid}`">
+            <div class="flex items-center gap-2 text-[11px] text-gray-500">
+              <span class="font-medium text-gray-600">{{ model.name || '未命名模型' }}</span>
+              <span v-if="files.length > 1 && model.source_file" class="text-gray-400">来源文件：{{ model.source_file }}</span>
+            </div>
+            <OssieMergeDiff
+              v-if="diffExistingFor(model.muid)"
+              :existing="diffExistingFor(model.muid)!"
+              :imported="model"
+            />
+            <div v-else class="mt-1 text-[11px] text-gray-400">未找到现有配置详情，无法对比</div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="models.length" class="space-y-2">
         <div class="flex items-center justify-between">
           <span class="text-[12px] font-medium text-gray-600">校验结果</span>
@@ -790,8 +806,8 @@ const diffExistingFor = (muid: string) => {
               class="rounded-md border px-3 py-2.5"
               :class="model.importable ? 'border-gray-200' : 'border-red-200 bg-red-50/40'"
             >
-              <!-- 名称行：模型标识 + 状态 + 详情入口。同名冲突的「替换/忽略」在收起态的文件行处置，
-                   此处只承载详情：差异对比入口（完整冲突说明在下方「模型名冲突」清单行，含 config_id 与启用态）。 -->
+              <!-- 名称行：模型标识 + 状态 + 规模摘要。处置与差异入口都在收起态文件行（见文件表），
+                   展开区只承载详情（校验清单 / 错误 / 警告 / 质量规则），差异对比是独立的一块。 -->
               <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-gray-700 truncate">{{ model.name || '未命名模型' }}</span>
                 <span
@@ -801,18 +817,9 @@ const diffExistingFor = (muid: string) => {
                   {{ model.importable ? '可导入' : '存在问题' }}
                 </span>
                 <div class="ml-auto flex shrink-0 items-center gap-2">
-                  <button
-                    v-if="model.existing_config"
-                    type="button"
-                    class="flex shrink-0 items-center gap-1 rounded border border-blue-200 px-1.5 py-0.5 text-[11px] text-blue-600 transition-colors hover:bg-blue-50"
-                    @click="toggleDiff(model.muid)"
-                  >
-                    {{ diffOpen[model.muid] ? '收起差异' : '查看与现有配置的差异' }}
-                    <i v-if="diffLoading[model.muid]" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
-                  </button>
-                  <!-- 同名但无操作权限（他人私有）：不提供替换/忽略，导入时后端强制忽略 -->
+                  <!-- 差异入口只在收起态文件行（见文件表）：展开区是详情容器，不再重复一个同功能按钮 -->
                   <span
-                    v-else-if="model.conflict_locked"
+                    v-if="model.conflict_locked"
                     class="rounded border border-amber-200 bg-amber-50/60 px-2 py-0.5 text-[11px] text-amber-600"
                   >
                     <i class="fa-solid fa-triangle-exclamation"></i>
@@ -824,23 +831,14 @@ const diffExistingFor = (muid: string) => {
               <div v-if="files.length > 1 && model.source_file" class="mt-1 text-[11px] text-gray-400">
                 来源文件：{{ model.source_file }}
               </div>
-              <!-- 差异对比是双栏面板，仍需整行宽度，保留在名称行下方 -->
-              <div
-                v-if="diffOpen[model.muid] && diffExistingFor(model.muid)"
-                class="mt-1.5"
-              >
-                <OssieMergeDiff
-                  :existing="diffExistingFor(model.muid)!"
-                  :imported="model"
-                />
-              </div>
-              <div
-                v-else-if="diffOpen[model.muid] && diffExisting[model.muid] === 'missing'"
-                class="mt-1.5 text-[11px] text-gray-400"
-              >
-                未找到现有配置详情，无法对比
-              </div>
+              <!-- 列宽只能由 colgroup 决定：本表首行是 `colspan=3` 的分组行，而 table-fixed 会用首行推列宽，
+                   写在 td 上的宽度会被忽略并退化成三等分（说明列只剩 1/3 宽，被迫折成 2~3 行、白占行高）。 -->
               <table v-if="model.checklist?.length" class="mt-2 w-full table-fixed border-collapse text-[11px] leading-4">
+                <colgroup>
+                  <col class="w-[140px]" />
+                  <col class="w-[56px]" />
+                  <col />
+                </colgroup>
                 <tbody>
                   <template v-for="(entry, i) in checklistRowsWithGroups(model.checklist)" :key="`cl-${model.muid}-${i}`">
                     <tr v-if="entry.kind === 'group'">
@@ -849,8 +847,8 @@ const diffExistingFor = (muid: string) => {
                       </td>
                     </tr>
                     <tr v-else class="border-t border-gray-100">
-                      <td class="w-[38%] px-2 py-1.5 text-gray-600">{{ entry.row.name }}</td>
-                      <td class="w-[64px] px-1 py-1.5">
+                      <td class="px-2 py-1.5 text-gray-600">{{ entry.row.name }}</td>
+                      <td class="px-1 py-1.5">
                         <span class="rounded px-1.5 py-0.5 text-[10px]" :class="statusTextClass(entry.row.status)">
                           {{ statusLabel(entry.row.status) }}
                         </span>

@@ -100,7 +100,7 @@ type DialogWrapper = Awaited<ReturnType<typeof mountDialog>>
 const findButton = (wrapper: DialogWrapper, text: string) =>
   wrapper.findAll('button').find(button => button.text().includes(text))
 
-/** 文件表里的文件行（收起态）：处置控件（替换/忽略/导入）应落在这里，展开区只放详情 */
+/** 文件表里的文件行（收起态）：处置入口（同名冲突的「查看差异」）应落在这里，展开区只放详情 */
 const findFileRow = (wrapper: DialogWrapper, fileName: string) =>
   wrapper.findAll('tr').find(row => row.text().includes(fileName))!
 
@@ -317,7 +317,7 @@ describe('OssieImportDialog', () => {
     expect(findButton(wrapper, '确认导入')!.attributes('disabled')).toBeDefined()
   })
 
-  it('conflicted model defaults to replace and sends conflict_actions on import', async () => {
+  it('conflicted model exposes only a row-level diff entry and still imports as replace', async () => {
     const conflictedModel = { ...importableModel, existing_config: { config_id: 'sc_old', name: '商品模型', enabled: true } }
     apiMocks.previewAdminOssieSemanticImport.mockResolvedValue({
       status: 'success',
@@ -330,18 +330,21 @@ describe('OssieImportDialog', () => {
     const wrapper = await mountDialog()
     await chooseFileAndPreview(wrapper)
 
-    // 冲突提示收敛为收起行的图标 title（完整说明由下方「模型名冲突」清单行承载）
-    expect(wrapper.find('[title="已存在同名配置（启用中）"]').exists()).toBe(true)
-    // 处置控件在收起态的文件行：替换 / 忽略 / 单文件导入
+    // 冲突提示收敛为收起行按钮的 title（完整说明由下方「模型名冲突」清单行承载）
+    expect(wrapper.find('[title*="已存在同名配置（启用中）"]').exists()).toBe(true)
+    // 收起行只剩「查看差异」一个动作：替换/忽略单选与单文件导入按钮都已下线，
+    // 是否导入只由左侧勾选决定（不想导入就删掉该行）
     const fileRow = findFileRow(wrapper, 'model.yaml')
-    expect(fileRow.findAll('input[type="radio"]')).toHaveLength(2)
-    expect(fileRow.text()).toContain('替换')
-    expect(fileRow.text()).toContain('忽略')
-    expect(fileRow.text()).toContain('导入')
-    // 展开后的模型卡片不重复处置控件，只保留差异对比入口（展开=看详情）
+    expect(fileRow.findAll('input[type="radio"]')).toHaveLength(0)
+    expect(fileRow.text()).toContain('查看差异')
+    expect(fileRow.findAll('button').some(button => button.text() === '导入')).toBe(false)
+    // 展开后的模型卡片不重复处置控件，也不重复差异入口（展开=看详情）
     const modelCard = wrapper.findAll('span').find(node => node.text() === '商品模型')!.element.closest('.rounded-md')
     expect(modelCard!.querySelectorAll('input[type="radio"]')).toHaveLength(0)
-    expect(modelCard!.textContent).toContain('查看与现有配置的差异')
+    expect(modelCard!.textContent).not.toContain('查看与现有配置的差异')
+    // 校验清单的列宽只能由 colgroup 承载：本表首行是 colspan=3 的分组行，table-fixed 会用首行推列宽，
+    // 写在 td 上的宽度会被静默忽略并退化成三等分（说明列只剩 1/3 宽 → 折行、白占行高）
+    expect(wrapper.findAll('colgroup col')).toHaveLength(3)
     // 默认选中「替换」，footer 汇总展示替换数量
     expect(wrapper.text()).toContain('将新建 0 · 替换 1')
     // 替换会覆盖现有配置并强制禁用，属不可逆动作：先走「取消」分支，必须一个请求都不发
@@ -362,64 +365,23 @@ describe('OssieImportDialog', () => {
       yamlContent,
       { 商品模型: 'replace' },
     )
+    // 批量导入处理完整批：只隐藏弹窗（不跳转页面、不重置其他面板状态）
+    expect(wrapper.emitted('update:visible')).toEqual([[false]])
   })
 
-  it('choosing skip sends skip action and reports no-change import', async () => {
-    const conflictedModel = { ...importableModel, existing_config: { config_id: 'sc_old', name: '商品模型', enabled: false } }
+  it('plain new model exposes no diff entry in the file row', async () => {
     apiMocks.previewAdminOssieSemanticImport.mockResolvedValue({
       status: 'success',
-      data: { models: [conflictedModel] },
-    })
-    apiMocks.importAdminOssieSemanticConfigs.mockResolvedValue({
-      status: 'success',
-      data: { created: [], replaced: [], skipped: [{ name: '商品模型', config_id: 'sc_old', reason: '同名配置已存在，未导入' }] },
+      data: { models: [importableModel] },
     })
     const wrapper = await mountDialog()
     await chooseFileAndPreview(wrapper)
 
-    const skipRadio = findFileRow(wrapper, 'model.yaml').findAll('input[type="radio"]')[1]
-    await skipRadio!.setValue()
-    expect(wrapper.text()).toContain('将新建 0 · 忽略 1')
-
-    await findButton(wrapper, '确认导入')!.trigger('click')
-    await flushPromises()
-    expect(apiMocks.importAdminOssieSemanticConfigs).toHaveBeenCalledWith(
-      'ds_a',
-      yamlContent,
-      { 商品模型: 'skip' },
-    )
-    expect(apiMocks.importAdminOssieSemanticConfigs).toHaveBeenCalledTimes(1)
-  })
-
-  it('row-level import imports only that file and keeps the dialog for the rest', async () => {
-    apiMocks.previewAdminOssieSemanticImport
-      .mockResolvedValueOnce({ status: 'success', data: { models: [importableModel] } })
-      .mockResolvedValueOnce({ status: 'success', data: { models: [{ ...importableModel, name: '订单模型' }] } })
-    apiMocks.importAdminOssieSemanticConfigs.mockResolvedValue({
-      status: 'success',
-      data: { created: [{ config_id: 'sc_1', name: '商品模型' }] },
-    })
-
-    const wrapper = await mountDialog()
-    const input = wrapper.find('input[type="file"]')
-    const fileA = new File([yamlContent], 'a.yaml', { type: 'application/yaml' })
-    const fileB = new File([yamlContent], 'b.yaml', { type: 'application/yaml' })
-    Object.defineProperty(input.element, 'files', { value: [fileA, fileB] })
-    await input.trigger('change')
-    await waitForFileRows(wrapper)
-    await findButton(wrapper, '模型校验')!.trigger('click')
-    await flushPromises()
-
-    // 收起行「导入」只请求该文件，用该文件自身的 YAML 内容
-    await findFileRow(wrapper, 'a.yaml').findAll('button').find(button => button.text() === '导入')!.trigger('click')
-    await flushPromises()
-
-    expect(apiMocks.importAdminOssieSemanticConfigs).toHaveBeenCalledTimes(1)
-    expect(apiMocks.importAdminOssieSemanticConfigs).toHaveBeenCalledWith('ds_a', yamlContent, {})
-    // 已导入的文件从列表移除，弹窗保留给剩余文件；父组件按次数刷新配置列表
-    expect(wrapper.text()).not.toContain('a.yaml')
-    expect(wrapper.text()).toContain('b.yaml')
-    expect(wrapper.emitted('imported')).toEqual([[1]])
+    // 新模型没有可对比的现有配置：行内不出现差异入口，也不需要任何处置控件
+    const fileRow = findFileRow(wrapper, 'model.yaml')
+    expect(fileRow.text()).not.toContain('查看差异')
+    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('查看与现有配置的差异')
   })
 
   it('locked conflict (others private config) is skipped without replace option', async () => {
@@ -474,13 +436,90 @@ describe('OssieImportDialog', () => {
     const wrapper = await mountDialog()
     await chooseFileAndPreview(wrapper)
 
-    await wrapper.findAll('button').find(button => button.text().includes('查看与现有配置的差异'))!.trigger('click')
+    // 差异入口在操作列（与「查看详情」「移除」同列），文件名一侧只留纯信息
+    const fileRow = findFileRow(wrapper, 'model.yaml')
+    const cells = fileRow.findAll('td')
+    expect(cells[1]!.text()).toContain('model.yaml')
+    expect(cells[1]!.findAll('button')).toHaveLength(0)
+    // 操作列按钮顺序固定为 `查看详情` → `查看差异` → 移除：详情是通用动作放最左，
+    // 所有行（含新模型行）位置一致；差异仅冲突行有，排在详情右侧
+    expect(cells[3]!.findAll('button').map(button => button.text())).toEqual(['查看详情', '查看差异', ''])
+
+    await fileRow.findAll('button').find(button => button.text().includes('查看差异'))!.trigger('click')
     await flushPromises()
 
     expect(apiMocks.getAdminSemanticConfigs).toHaveBeenCalledWith('ds_a')
+    // 详情保持原状（未展开）：操作列的按钮文案仍是「查看详情」
+    const rowButtonTexts = fileRow.findAll('button').map(button => button.text())
+    expect(rowButtonTexts).toContain('查看详情')
+    expect(rowButtonTexts).not.toContain('收起详情')
     // CodeMirror MergeView 挂载（stub），左栏为按 config_id 解析出的现有配置
+    const diffStub = wrapper.find('.merge-diff-stub')
+    expect(diffStub.exists()).toBe(true)
+    expect(diffStub.text()).toContain('MERGE_DIFF:sc_old')
+    // 差异单独成块（自带标题），块内只有差异、没有任何校验清单内容 → 与详情区不混在一起
+    const diffBlock = diffStub.element.closest('div.rounded-md')!
+    expect(diffBlock.textContent).toContain('与现有配置的差异')
+    expect(diffBlock.textContent).not.toContain('文档结构合法性')
+    // 全部打开后按钮转为「收起差异」；再点一次只收起差异
+    expect(fileRow.text()).toContain('收起差异')
+    await fileRow.findAll('button').find(button => button.text().includes('收起差异'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.merge-diff-stub').exists()).toBe(false)
+    expect(fileRow.findAll('button').map(button => button.text())).toContain('查看详情')
+  })
+
+  it('diff and detail are mutually exclusive for the same file', async () => {
+    const conflictedModel = {
+      ...importableModel,
+      existing_config: { config_id: 'sc_old', name: '商品模型', enabled: true },
+    }
+    apiMocks.previewAdminOssieSemanticImport.mockResolvedValue({
+      status: 'success',
+      data: { models: [conflictedModel] },
+    })
+    apiMocks.getAdminSemanticConfigs.mockResolvedValue({
+      status: 'success',
+      data: { configs: [{ id: 'sc_old', name: '商品模型', metrics: [], dimensions: [], relationships: [] }] },
+    })
+    const wrapper = await mountDialog()
+    await chooseFileAndPreview(wrapper)
+
+    const fileRow = findFileRow(wrapper, 'model.yaml')
+    const rowButtonTexts = () => fileRow.findAll('button').map(button => button.text())
+    const rowButtonClass = (label: string) =>
+      fileRow.findAll('button').find(button => button.text() === label)!.classes().join(' ')
+    const clickRow = async (label: string) => {
+      await fileRow.findAll('button').find(button => button.text() === label)!.trigger('click')
+      await flushPromises()
+    }
+
+    // 静息态：两个都是灰色文字按钮（同款、看不出主次），没有任何展开项
+    expect(rowButtonClass('查看差异')).toContain('text-gray-500')
+    expect(rowButtonClass('查看详情')).toContain('text-gray-500')
+
+    // 先看详情：只出校验清单，不带出差异面板，也不请求现有配置；展开的那个转蓝色高亮
+    await clickRow('查看详情')
+    expect(rowButtonTexts()).toContain('收起详情')
+    expect(rowButtonClass('收起详情')).toContain('text-blue-600')
+    expect(rowButtonClass('查看差异')).toContain('text-gray-500')
+    expect(wrapper.find('.merge-diff-stub').exists()).toBe(false)
+    expect(apiMocks.getAdminSemanticConfigs).not.toHaveBeenCalled()
+
+    // 再点差异：差异单独成块出现，同时详情收起（两者不同时显示，各看各的）；蓝色高亮随之转移
+    await clickRow('查看差异')
     expect(wrapper.find('.merge-diff-stub').exists()).toBe(true)
-    expect(wrapper.find('.merge-diff-stub').text()).toContain('MERGE_DIFF:sc_old')
+    expect(rowButtonTexts()).toContain('查看详情')
+    expect(rowButtonTexts()).not.toContain('收起详情')
+    expect(rowButtonClass('收起差异')).toContain('text-blue-600')
+    expect(rowButtonClass('查看详情')).toContain('text-gray-500')
+
+    // 又点详情：详情回来，差异收起，蓝色高亮回到详情
+    await clickRow('查看详情')
+    expect(wrapper.find('.merge-diff-stub').exists()).toBe(false)
+    expect(rowButtonTexts()).toContain('收起详情')
+    expect(rowButtonClass('收起详情')).toContain('text-blue-600')
+    expect(rowButtonClass('查看差异')).toContain('text-gray-500')
   })
 
   it('diff shows fallback message when existing config is missing', async () => {
@@ -499,10 +538,13 @@ describe('OssieImportDialog', () => {
     const wrapper = await mountDialog()
     await chooseFileAndPreview(wrapper)
 
-    await wrapper.findAll('button').find(button => button.text().includes('查看与现有配置的差异'))!.trigger('click')
+    await findFileRow(wrapper, 'model.yaml').findAll('button')
+      .find(button => button.text().includes('查看差异'))!.trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.merge-diff-stub').exists()).toBe(false)
+    // 兜底文案同样落在独立的差异块里
+    expect(wrapper.text()).toContain('与现有配置的差异')
     expect(wrapper.text()).toContain('未找到现有配置详情，无法对比')
   })
 
@@ -621,9 +663,6 @@ describe('OssieImportDialog', () => {
     expect(wrapper.text()).toContain('1 个文件尚未校验，请点「模型校验」')
     const pendingRow = findFileRow(wrapper, 'b.yaml')
     expect(pendingRow.text()).toContain('未校验')
-    const pendingImport = pendingRow.findAll('button').find(button => button.text() === '导入')!
-    expect(pendingImport.attributes('disabled')).toBeDefined()
-    expect(pendingImport.attributes('title')).toBe('请先点击「模型校验」')
   })
 
   it('file-level preview failure shows error status instead of unvalidated', async () => {
@@ -637,7 +676,7 @@ describe('OssieImportDialog', () => {
     const row = findFileRow(wrapper, 'model.yaml')
     expect(row.text()).toContain('错误')
     expect(row.text()).not.toContain('未校验')
-    // 失败原因挂在状态徽标 / 行内导入按钮的 title 上
+    // 失败原因挂在检查结果徽标的 title 上（行内不额外占位）
     expect(row.find('[title*="文档结构校验失败"]').exists()).toBe(true)
     expect(findButton(wrapper, '确认导入')!.attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('1 个文件校验失败，请查看文件行提示')
@@ -693,7 +732,8 @@ describe('OssieImportDialog', () => {
     // 在途期间：重新校验会重建 models、删文件会抽走正在导入的数据，都必须冻结
     expect(findButton(wrapper, '模型校验')!.attributes('disabled')).toBeDefined()
     const row = findFileRow(wrapper, 'model.yaml')
-    expect(row.findAll('input[type="radio"]')[0]!.attributes('disabled')).toBeDefined()
+    const diffButton = row.findAll('button').find(button => button.text().includes('查看差异'))!
+    expect(diffButton.attributes('disabled')).toBeDefined()
     const removeButton = row.find('i.fa-trash-can').element.closest('button') as HTMLButtonElement
     expect(removeButton.disabled).toBe(true)
 
