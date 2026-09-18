@@ -373,6 +373,7 @@ const handleTableDragEnd = () => {
 const addScopeTable = (configId: string, tableName: string) => {
   const entries = getScopeEntries(configId)
   const alias = generateScopeAlias(tableName, entries)
+  markDefaultDimensionScopeAlias(configId, alias)
   toggleScopeEntry(configId, { table: tableName, alias }, true)
 }
 
@@ -380,6 +381,7 @@ const addScopeTable = (configId: string, tableName: string) => {
 const removeScopeTable = (configId: string, alias: string) => {
   const entry = getScopeEntryByAlias(configId, alias)
   if (!entry) return
+  clearDefaultDimensionScopeAliases(configId, [entry.alias])
   toggleScopeEntry(configId, entry, false)
 }
 
@@ -579,6 +581,7 @@ const handleDeleteConfig = async (configId: string, configName: string) => {
     const nextSignatures = { ...savedConfigSignatures.value }
     delete nextSignatures[configId]
     savedConfigSignatures.value = nextSignatures
+    clearDefaultDimensionScopeAliases(configId)
     const currentSelectedId = props.selectedConfigId || expandedId.value
     const nextSelectedId = currentSelectedId === configId
       ? newConfigs[0]?.id || null
@@ -682,6 +685,8 @@ interface FieldConfigRow {
   metadataSupplement?: string
   logicalType: SemanticLogicalType
   expression: string
+  /** 是否参与维度：未勾选行仅作占位展示，应用字段设置时不写入 dimensions */
+  isDimension: boolean
   isCustom?: boolean
   isMissingPhysical?: boolean
 }
@@ -690,6 +695,38 @@ const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
 const showFieldPhysicalDetails = ref(false)
+
+// 默认维度勾选：会话内记录「尚未持久化过维度配置」的表别名，其物理列默认勾选为维度；
+// 应用字段设置后按持久化的 dimensions 推导勾选态，默认集清空（机制沿用 9772620 之前的口径）
+const defaultDimensionScopeAliases = ref<Record<string, string[]>>({})
+const getDefaultDimensionAliasSet = (configId: string) => {
+  return new Set(defaultDimensionScopeAliases.value[configId] || [])
+}
+const markDefaultDimensionScopeAlias = (configId: string, alias: string) => {
+  if (!configId || !alias) return
+  const current = getDefaultDimensionAliasSet(configId)
+  if (current.has(alias)) return
+  defaultDimensionScopeAliases.value = {
+    ...defaultDimensionScopeAliases.value,
+    [configId]: [...current, alias],
+  }
+}
+const clearDefaultDimensionScopeAliases = (configId: string, aliases?: string[]) => {
+  if (!configId) return
+  const current = getDefaultDimensionAliasSet(configId)
+  const nextMap = { ...defaultDimensionScopeAliases.value }
+  if (!aliases) {
+    delete nextMap[configId]
+  } else {
+    aliases.forEach(alias => current.delete(alias))
+    if (current.size > 0) {
+      nextMap[configId] = [...current]
+    } else {
+      delete nextMap[configId]
+    }
+  }
+  defaultDimensionScopeAliases.value = nextMap
+}
 
 const showAddFieldDialog = ref(false)
 // 弹窗作用域：field=字段配置（维度变体），metric=指标（原子/派生/复合）
@@ -731,6 +768,7 @@ const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(r
   metadataSupplement: row.metadataSupplement,
   logicalType: row.logicalType,
   expression: row.expression,
+  isDimension: row.isDimension,
   isCustom: row.isCustom,
 })))
 const isFieldRowsDirty = computed(() => buildFieldRowsEditSignature(fieldRows.value) !== fieldRowsSnapshot.value)
@@ -747,7 +785,10 @@ const duplicateFieldDisplayNameSet = computed(() => {
     if (!name) return
     nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
   }
-  fieldRows.value.forEach(row => countName(getFieldRowEffectiveDisplayName(row)))
+  // 仅统计参与维度的行：未勾选行不写入 dimensions，不参与重名冲突
+  fieldRows.value.forEach(row => {
+    if (row.isDimension) countName(getFieldRowEffectiveDisplayName(row))
+  })
   ;(activeConfig.value?.metrics || []).forEach(metric => countName(metric.name))
   return new Set(
     Array.from(nameCounts.entries())
@@ -825,6 +866,7 @@ const isRawColumnExpression = (expression: string | undefined, column: string) =
 const validateFieldRowsBeforeApply = () => {
   const usedNames = new Set<string>()
   for (const row of fieldRows.value) {
+    if (!row.isDimension) continue
     const sourceColumn = row.sourceColumn || row.column
     if (!row.table || !sourceColumn) {
       return `字段 ${row.key} 缺少表或字段信息`
@@ -1719,6 +1761,7 @@ const confirmAddDimension = () => {
     metadataSupplement: '',
     logicalType: inferLogicalType(columnType),
     expression: quoteIdentifier(columnName),
+    isDimension: true,
     isCustom: true,
   })
   void refreshFieldColumnDictVisibleMap()
@@ -1956,6 +1999,7 @@ const acceptHistoryDimension = (suggestion: SemanticHistoryLearningSuggestion) =
     metadataSupplement: '',
     logicalType: suggestion.logical_type || inferLogicalType(columnType),
     expression: (suggestion.expression || quoteIdentifier(columnName)).trim(),
+    isDimension: true,
     isCustom: true,
   })
   void refreshFieldColumnDictVisibleMap()
@@ -2069,14 +2113,17 @@ const handleColumnDictSaved = async () => {
   await refreshFieldColumnDictVisibleMap()
 }
 
-// 字段配置 = 纯维度清单：作用域内每个物理列恒为一个维度行（一行=一列），
-// 维度可改名/改逻辑类型/改表达式；指标不再回挂到字段行，统一在「指标」区管理。
+// 字段配置 = 维度勾选清单：作用域内每个物理列一行（一行=一列），勾选状态决定是否写入 dimensions；
+// 勾选态 = 持久化的 dimensions 有该物理列条目，或该表别名尚未持久化过配置（会话内默认全勾）；
+// 指标不回挂到字段行，统一在「指标」区管理。
 const buildFieldRows = (configId: string) => {
   const config = configs.value.find(c => c.id === configId)
   if (!config) return []
   const scopeEntries = getScopeEntries(configId)
   const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
+  const defaultDimensionAliasSet = getDefaultDimensionAliasSet(configId)
 
+  const dimensionSet = new Set<string>()
   const dimensionByColumnMap = new Map<string, SemanticDimension>()
   const customRowsMap = new Map<string, FieldConfigRow>()
   const configuredKeys = new Set<string>()
@@ -2099,6 +2146,7 @@ const buildFieldRows = (configId: string) => {
         sourceColumn: d.column,
         columnType: existed?.columnType || '',
         displayName: existed?.displayName || d.name || fieldName,
+        isDimension: true,
         columnComment: getTableColumnComment(d.table, d.column),
         description: existed?.description || d.description || '',
         metadataSupplement: existed?.metadataSupplement || d.metadata_supplement || '',
@@ -2111,6 +2159,7 @@ const buildFieldRows = (configId: string) => {
     if (!dimensionByColumnMap.has(physicalKey)) {
       dimensionByColumnMap.set(physicalKey, d)
     }
+    dimensionSet.add(physicalKey)
   })
 
   const rows: FieldConfigRow[] = []
@@ -2131,6 +2180,7 @@ const buildFieldRows = (configId: string) => {
         column: col.name,
         sourceColumn: col.name,
         columnType,
+        isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
         displayName,
         columnComment,
         description: dimInfo?.description || '',
@@ -2164,6 +2214,7 @@ const buildFieldRows = (configId: string) => {
       column: d.field_name || d.column,
       sourceColumn: d.column,
       columnType: '',
+      isDimension: true,
       displayName: d.name || d.field_name || d.column,
       columnComment: getTableColumnComment(d.table, d.column),
       description: d.description || '',
@@ -2185,6 +2236,7 @@ const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
     if (!draft) return row
     return {
       ...row,
+      isDimension: draft.isDimension,
       displayName: draft.displayName,
       description: draft.description ?? row.description,
       metadataSupplement: draft.metadataSupplement,
@@ -2207,7 +2259,7 @@ const loadFieldRows = (configId: string) => {
   void refreshFieldColumnDictVisibleMap()
 }
 
-// 应用字段设置：fieldRows 只表达维度（全部行），指标由「指标」区即时维护，此处不触碰 metrics
+// 应用字段设置：仅勾选行写入 dimensions，指标由「指标」区即时维护，此处不触碰 metrics
 const applyFieldSetting = (showToast = true) => {
   const configId = activeConfig.value?.id
   if (!configId) return false
@@ -2222,6 +2274,7 @@ const applyFieldSetting = (showToast = true) => {
 
   const existingDimensionMap = new Map(config.dimensions.map(item => [buildDimensionPreserveKey(item), item]))
   const nextDimensions: SemanticDimension[] = fieldRows.value
+    .filter(r => r.isDimension)
     .map(r => {
       const dimension: SemanticDimension = {
         name: ((r.displayName || '').trim() || r.column),
@@ -2238,6 +2291,7 @@ const applyFieldSetting = (showToast = true) => {
     })
 
   updateConfig(configId, { dimensions: nextDimensions })
+  clearDefaultDimensionScopeAliases(configId)
   fieldRowsSnapshot.value = buildFieldRowsEditSignature(fieldRows.value)
   if (showToast) {
     ElMessage.success('字段设置已应用')
@@ -2321,6 +2375,14 @@ watch(
   },
   { immediate: true }
 )
+
+// 勾选/取消维度：指标由「指标」区独立管理，此处无 isMetric 互斥；补默认表达式兜底
+const handleDimensionToggle = (row: FieldConfigRow, checked: boolean) => {
+  row.isDimension = checked
+  if (checked && !row.expression) {
+    row.expression = quoteIdentifier(row.sourceColumn || row.column)
+  }
+}
 
 const handleExpressionInput = (row: FieldConfigRow, expression: string) => {
   row.expression = expression
@@ -2878,13 +2940,14 @@ const saveBusinessNotes = (businessNotes: string) => {
                     请先在左侧选择数据表
                   </div>
                   <div v-else class="flex-1 overflow-auto rounded-md border border-gray-200 bg-white">
-                    <table :class="[showFieldPhysicalDetails ? 'min-w-[1940px]' : 'min-w-[1540px]', 'w-full border-collapse text-[12px]']">
+                    <table :class="[showFieldPhysicalDetails ? 'min-w-[2012px]' : 'min-w-[1612px]', 'w-full border-collapse text-[12px]']">
                       <thead class="bg-gray-50 text-gray-600">
                         <tr>
                           <th class="text-left px-3 py-2 border border-gray-200">表</th>
                           <th class="text-left px-3 py-2 border border-gray-200">字段</th>
                           <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">类型</th>
                           <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">列备注</th>
+                          <th class="text-center px-3 py-2 border border-gray-200 w-[64px]" title="勾选后该字段参与维度；多表关联的重复字段（如两侧关联键）可取消勾选">维度</th>
                           <th class="text-left px-3 py-2 border border-gray-200 w-[118px]">逻辑类型</th>
                           <th class="text-left px-3 py-2 border border-gray-200">表达式</th>
                           <th class="text-left px-3 py-2 border border-gray-200">显示名称</th>
@@ -2911,11 +2974,21 @@ const saveBusinessNotes = (businessNotes: string) => {
                           <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">
                             <div class="max-w-[220px] truncate" :title="row.columnComment || '-'">{{ row.columnComment || '-' }}</div>
                           </td>
+                          <td class="px-3 py-2 border border-gray-200 text-center">
+                            <input
+                              :checked="row.isDimension"
+                              :disabled="row.isMissingPhysical"
+                              type="checkbox"
+                              class="cursor-pointer disabled:cursor-not-allowed"
+                              :title="row.isMissingPhysical ? '物理字段不存在' : '是否将该字段作为维度参与查询'"
+                              @change="handleDimensionToggle(row, ($event.target as HTMLInputElement).checked)"
+                            />
+                          </td>
                           <td class="px-3 py-2 border border-gray-200">
                             <select
                               v-model="row.logicalType"
                               class="w-full px-2 py-1 border border-gray-200 rounded text-[12px] bg-white disabled:bg-gray-50 disabled:text-gray-400"
-                              :disabled="row.isMissingPhysical"
+                              :disabled="row.isMissingPhysical || !row.isDimension"
                             >
                               <option v-for="option in LOGICAL_TYPE_OPTIONS" :key="option.value" :value="option.value">
                                 {{ option.label }}
@@ -2928,12 +3001,12 @@ const saveBusinessNotes = (businessNotes: string) => {
                                 :value="row.expression"
                                 type="text"
                                 class="flex-1 px-2 py-1 border border-gray-200 rounded text-[12px] font-mono disabled:bg-gray-50 disabled:text-gray-400"
-                                :disabled="row.isMissingPhysical"
+                                :disabled="row.isMissingPhysical || !row.isDimension"
                                 @input="handleExpressionInput(row, ($event.target as HTMLInputElement).value)"
                               />
                               <button
                                 class="w-7 h-7 border border-gray-200 rounded bg-white text-gray-500 hover:text-blue-500 hover:border-blue-300 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"
-                                :disabled="row.isMissingPhysical"
+                                :disabled="row.isMissingPhysical || !row.isDimension"
                                 title="弹窗编辑表达式"
                                 @click="openExpressionEditorDialog(row)"
                               >
