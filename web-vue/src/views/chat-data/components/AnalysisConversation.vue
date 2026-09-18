@@ -27,6 +27,7 @@ import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
+import CodeFilePreview from './CodeFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, formatEpochDateTime, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, isBinaryPreviewPath, OFFICE_HTML_PREVIEW_EXTENSIONS } from '../utils'
@@ -1730,6 +1731,7 @@ const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pd
 const selectedConsoleIsOfficeFile = computed(() => OFFICE_HTML_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
+const selectedConsoleIsYaml = computed(() => ['yaml', 'yml'].includes(selectedConsoleFileExt.value))
 const selectedConsoleIsHtml = computed(() => selectedConsoleFileExt.value === 'html' || selectedConsoleFileExt.value === 'htm')
 // HTML 渲染必须用原始文本：replaceVisiblePathsForDisplay 会改写数据里的模型可见路径，
 // 破坏内联 JSON 数据与代码。仅源码视图走替换后的展示文案。
@@ -2456,6 +2458,7 @@ watch(
     Boolean(hasSelectedConsoleTable.value),
     selectedConsoleIsMarkdown.value,
     selectedConsoleIsHtml.value,
+    selectedConsoleIsYaml.value,
   ] as const,
   () => {
     if (selectedConsoleChartSpec.value) {
@@ -2467,6 +2470,10 @@ watch(
       return
     }
     if (selectedConsoleIsMarkdown.value || selectedConsoleIsHtml.value) {
+      consoleFilePreviewMode.value = 'render'
+      return
+    }
+    if (selectedConsoleIsYaml.value) {
       consoleFilePreviewMode.value = 'render'
       return
     }
@@ -4070,6 +4077,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 </tbody>
               </table>
               </div>
+              <CodeFilePreview
+                v-else-if="selectedConsoleIsYaml && consoleFilePreviewMode === 'render'"
+                :content="selectedConsoleFileText"
+                :class="workspaceFilePreviewHeightClass"
+              />
               <iframe
                 v-else-if="selectedConsoleIsPdf && selectedConsoleBinaryBlob?.url"
                 :src="selectedConsoleBinaryBlob.url"

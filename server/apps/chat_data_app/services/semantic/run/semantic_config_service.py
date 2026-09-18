@@ -12,6 +12,7 @@ from utils.logger import get_logger
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
+from .chat_data_ossie_importer import OssieSemanticModelImport, OssieToChatDataImporter
 
 logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -728,3 +729,71 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
             if table_name and column_name:
                 columns.add((table_name, column_name))
     return columns
+
+
+async def prepare_ossie_import_models(
+    ds_manager: Any,
+    datasource: Dict,
+    datasource_id: str,
+    yaml_content: str,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> Tuple[List[OssieSemanticModelImport], Optional[str]]:
+    """Ossie 模型导入与 check_yaml 工具共用的校验前置（唯一权威实现，两侧各不再单独维护）。
+
+    步骤：
+    1. YAML 解析为模型草稿（格式非法抛 ValueError，调用方转成各自错误形态）；
+    2. 请求内重名模型整体拒绝（避免「全有或全无」落库时互相踩踏）；
+    3. 同名冲突标注：admin 口径下可操作的公共同名配置写 existing_config（可替换），
+       他人私有等不可操作同名标记 conflict_locked（导入时强制跳过）；
+    4. 逐模型物理校验（复用 validate_semantic_config_for_save，错误写入 item.errors
+       并使 importable=False）。
+
+    返回 (models, duplicate_error)；duplicate_error 非 None 时 models 为空列表。
+    semantic_service 不传时用全局单例（仅同名冲突检测需要）。
+    """
+    imports = OssieToChatDataImporter().import_yaml(yaml_content)
+    importable_names = [item.name for item in imports if item.importable]
+    if len(set(importable_names)) != len(importable_names):
+        duplicated = sorted({name for name in importable_names if importable_names.count(name) > 1})
+        return [], f"文件内存在重名模型: {'、'.join(duplicated)}，请修正后重试"
+    # 同名冲突检测：同组内模型名全局唯一（不区分 scope/create_by）。冲突表只收录
+    # admin_manage 口径下可操作的配置（即公共配置）；他人私有配置等不可操作的同名
+    # 配置不进入冲突表（不允许 replace，也不泄露其元信息），改为标记强制跳过。
+    service = semantic_service or get_semantic_config_service()
+    existing_configs = await service.get_configs_async(datasource_id)
+    configs_by_name: Dict[str, Dict[str, Any]] = {}
+    locked_conflict_names: Set[str] = set()
+    for config in existing_configs or []:
+        config_name = str(config.get("name") or "").strip()
+        config_id = str(config.get("id") or "").strip()
+        if not config_name or not config_id:
+            continue
+        if config_name in configs_by_name:
+            continue
+        if can_mutate_semantic_config(config, user_id, admin_manage=True):
+            configs_by_name[config_name] = {
+                "config_id": config_id,
+                "name": config_name,
+                "enabled": bool(config.get("enabled")),
+            }
+        else:
+            locked_conflict_names.add(config_name)
+    for item in imports:
+        if not item.importable:
+            continue
+        item.bump("physical_checked")
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            item.metrics,
+            item.dimensions,
+            item.relationships,
+        )
+        if validation_error:
+            item.errors.append(validation_error)
+            item.validation_error = validation_error
+        item.existing_config = configs_by_name.get(item.name)
+        item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+    return imports, None

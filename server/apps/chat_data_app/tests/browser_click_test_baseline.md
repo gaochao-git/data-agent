@@ -822,9 +822,9 @@ ChatData
 #### FILE-02 文本和结构化文件
 
 - 角色：`USER_A`
-- 前置：已有 TXT、MD、CSV、TSV、JSON 文件。
+- 前置：已有 TXT、MD、CSV、TSV、JSON、YAML 文件。
 - 操作：点击文件，查看预览和源码；下载；对 CSV/TSV/JSON 查看表头、内容和格式错误。
-- 预期：内容、编码、换行和 Markdown 渲染正确；源码/预览切换不改文件；损坏文件显示可读错误，不白屏。
+- 预期：内容、编码、换行和 Markdown 渲染正确；源码/预览切换不改文件；损坏文件显示可读错误，不白屏。**YAML 预览（2026-09-18 起，`CodeFilePreview.vue`）**：`.yaml/.yml` 走 CodeMirror 只读高亮渲染（`yaml()` 语言包 + 自定义 `HighlightStyle`），预期出现 `.cm-editor`、行号 `.cm-lineNumbers`、token class（如 `.cm-propertyName`/`.cm-string`）、`contenteditable="false"`；文件名截断不影响判定。其余类型（json/csv/txt 等）仍走原有分支（表格/纯文本），不得被 yaml 分支劫持。**高亮样式口径（2026-09-18 实锤）**：`vue-codemirror` 对所有编辑器强制注入 `basicSetup`（含 `defaultHighlightStyle`）——SQL 编辑器的高亮一直来自 CodeMirror 默认调色板（keyword 紫红/string 红等），`SqlEditor.vue` 里 `.cm-keyword{color:#1677FF}` 等自定义配色 CSS 因 tag class 从不产出而**实际未命中**（死样式，视觉≠注释口径，非功能缺陷）；`CodeFilePreview.vue` 显式挂自定义 `HighlightStyle` 使其 Apple 配色真正生效（重复 `lineNumbers()` 已实测被去重，无双列）。
 
 #### FILE-03 Office 和 PDF 文件
 

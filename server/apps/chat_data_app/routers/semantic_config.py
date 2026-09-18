@@ -33,7 +33,7 @@ from ..services.semantic.run.semantic_history_learning_service import (
     _load_history_conversation_context,
     build_semantic_history_learning_service,
 )
-from ..services.semantic.run.chat_data_ossie_importer import OssieToChatDataImporter, build_model_checklist
+from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist
 from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
 from ..services.semantic.run.semantic_config_service import (
     can_mutate_semantic_config,
@@ -41,6 +41,7 @@ from ..services.semantic.run.semantic_config_service import (
     is_private_semantic_config_owner,
     is_public_semantic_config,
     load_semantic_physical_columns as _load_physical_columns,
+    prepare_ossie_import_models,
     validate_semantic_config_for_save,
 )
 from ..services.sql_run.parser import extract_physical_tables
@@ -622,13 +623,11 @@ async def _prepare_ossie_import(
     payload: SemanticOssieImportRequest,
     request: Request,
 ):
-    """Ossie 导入公共前置：鉴权、数据源校验、YAML 解析、逐模型保存校验与同名冲突标记。
+    """Ossie 导入公共前置：鉴权、数据源校验，校验核心委托 service 层共享实现。
 
-    返回 (imports, None) 或 (None, error_response)；解析失败统一收敛为
-    CHATDATA_VALIDATION_FAILED，逐模型物理校验错误写入 item.errors，
-    同名活跃配置摘要写入 item.existing_config（不影响 importable，由导入动作决定替换/跳过）。
-    同名冲突只对 admin_manage 口径下可操作的配置（公共配置）建表：
-    他人私有配置等不可操作的同名配置标记 item.conflict_locked，导入时强制跳过。
+    校验口径（解析 / 请求内重名 / 同名冲突标注 / 逐模型物理校验）统一在
+    services.semantic_config_service.prepare_ossie_import_models，与 check_yaml
+    工具共用同一套实现；本函数只做 HTTP 错误形态转换。
     """
     current_user = _get_current_user(request)
     user_id = str(current_user.user_id)
@@ -637,58 +636,19 @@ async def _prepare_ossie_import(
     if not datasource:
         return None, business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     try:
-        imports = OssieToChatDataImporter().import_yaml(payload.yaml_content)
+        imports, duplicate_error = await prepare_ossie_import_models(
+            ds_manager,
+            datasource,
+            datasource_id,
+            payload.yaml_content,
+            semantic_service=get_semantic_config_service(),
+            user_id=user_id,
+        )
     except ValueError as e:
         logger.warning("Ossie 文档解析失败: datasource_id=%s error=%s", datasource_id, e)
         return None, business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
-    # 请求内同名模型会让「全有或全无」的落库顺序互相踩踏，提前整体拒绝
-    importable_names = [item.name for item in imports if item.importable]
-    if len(set(importable_names)) != len(importable_names):
-        duplicated = sorted({name for name in importable_names if importable_names.count(name) > 1})
-        return None, business_response(
-            msg=f"文件内存在重名模型: {'、'.join(duplicated)}，请修正后重试",
-            code=ErrorCode.CHATDATA_VALIDATION_FAILED,
-            status="error",
-        )
-    # 同名冲突检测：同组内模型名全局唯一（不区分 scope/create_by）。冲突表只收录
-    # admin_manage 口径下可操作的配置（即公共配置）；他人私有配置等不可操作的同名
-    # 配置不进入冲突表（不允许 replace，也不泄露其元信息），改为标记强制跳过。
-    semantic_service = get_semantic_config_service()
-    existing_configs = await semantic_service.get_configs_async(datasource_id)
-    configs_by_name: Dict[str, Dict[str, Any]] = {}
-    locked_conflict_names: Set[str] = set()
-    for config in existing_configs or []:
-        config_name = str(config.get("name") or "").strip()
-        config_id = str(config.get("id") or "").strip()
-        if not config_name or not config_id:
-            continue
-        if config_name in configs_by_name:
-            continue
-        if can_mutate_semantic_config(config, user_id, admin_manage=True):
-            configs_by_name[config_name] = {
-                "config_id": config_id,
-                "name": config_name,
-                "enabled": bool(config.get("enabled")),
-            }
-        else:
-            locked_conflict_names.add(config_name)
-    for item in imports:
-        if not item.importable:
-            continue
-        item.bump("physical_checked")
-        validation_error = await validate_semantic_config_for_save(
-            ds_manager,
-            datasource_id,
-            datasource,
-            item.metrics,
-            item.dimensions,
-            item.relationships,
-        )
-        if validation_error:
-            item.errors.append(validation_error)
-            item.validation_error = validation_error
-        item.existing_config = configs_by_name.get(item.name)
-        item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+    if duplicate_error:
+        return None, business_response(msg=duplicate_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
     return imports, None
 
 
@@ -713,7 +673,11 @@ async def preview_admin_ossie_semantic_import(
             model = item.to_preview_payload()
             findings = None
             if item.importable:
-                report = checker.check_config(item.to_config_payload(), physical_columns=physical_columns)
+                # 质量检查输入与 check_yaml 工具完全一致：草稿态（enabled=False、公共口径）
+                report = checker.check_config(
+                    {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
+                    physical_columns=physical_columns,
+                )
                 # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
                 findings = report.to_payload()["findings"]
                 model["quality"] = {"findings": findings}

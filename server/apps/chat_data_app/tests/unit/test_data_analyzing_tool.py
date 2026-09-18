@@ -920,6 +920,16 @@ class FakeManager:
         return None
 
 
+class FakeSemanticService:
+    """同名冲突检测的数据侧桩：configs 可注入同名公共/他人私有配置。"""
+
+    def __init__(self, configs=None):
+        self._configs = configs or []
+
+    async def get_configs_async(self, datasource_id):
+        return self._configs
+
+
 def _good_yaml() -> str:
     return """
 version: "1.0"
@@ -955,9 +965,18 @@ semantic_model:
 """
 
 
-def _invoke_check_yaml(monkeypatch, yaml_text: str, datasource_id: str = "ds_a") -> dict:
+def _invoke_check_yaml(
+    monkeypatch,
+    yaml_text: str,
+    datasource_id: str = "ds_a",
+    existing_configs: list | None = None,
+) -> dict:
     manager = FakeManager()
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(
+        data_analyzing, "get_semantic_config_service",
+        lambda: FakeSemanticService(existing_configs),
+    )
     raw = asyncio.run(
         data_analyzing.create_data_analyzing_tool(datasource_id).ainvoke({
             "action": "check_yaml",
@@ -1025,3 +1044,44 @@ def test_check_yaml_blocks_unknown_physical_column(monkeypatch):
     assert model["importable"] is False
     assert any("必须引用表 orders 的物理字段" in error for error in model["errors"])
     assert "quality" not in model
+
+
+def test_check_yaml_marks_replaceable_same_name_conflict(monkeypatch):
+    """与导入预览同口径：公共同名标注 existing_config（可替换），清单不再出现「模型名冲突」。"""
+    payload = _invoke_check_yaml(monkeypatch, _good_yaml(), existing_configs=[
+        {"id": "sc_1", "name": "订单模型", "scope_type": "public", "enabled": True},
+    ])
+    assert payload["success"] is True
+    model = payload["models"][0]
+    assert model["importable"] is True
+    assert model["existing_config"] == {"config_id": "sc_1", "name": "订单模型", "enabled": True}
+    assert model["conflict_locked"] is False
+    assert all(row["name"] != "模型名冲突" for row in model["checklist"])
+
+
+def test_check_yaml_marks_locked_same_name_conflict(monkeypatch):
+    """他人私有同名：conflict_locked=True，清单保留「模型名冲突」警告行（导入会被强制忽略）。"""
+    payload = _invoke_check_yaml(monkeypatch, _good_yaml(), existing_configs=[
+        {"id": "sc_2", "name": "订单模型", "scope_type": "private", "create_by": "someone_else", "enabled": True},
+    ])
+    model = payload["models"][0]
+    assert model["importable"] is True
+    assert model["existing_config"] is None
+    assert model["conflict_locked"] is True
+    by_name = {row["name"]: row for row in model["checklist"]}
+    assert by_name["模型名冲突"]["status"] == "warn"
+    assert "无操作权限" in by_name["模型名冲突"]["message"]
+
+
+def test_check_yaml_rejects_duplicate_names_in_request(monkeypatch):
+    """请求内重名整体拒绝，与导入预览同口径（stage=duplicate_names）。"""
+    good = _good_yaml()
+    _, sep, entry = good.partition("  - name: 订单模型")
+    assert sep
+    # 复制完整模型条目（同名「订单模型」），构造单文档内的请求内重名
+    duplicated = good + "  - name: 订单模型" + entry
+    payload = _invoke_check_yaml(monkeypatch, duplicated)
+    assert payload["success"] is False
+    assert payload["stage"] == "duplicate_names"
+    assert "重名模型" in payload["error"]
+    assert payload["models"] == []

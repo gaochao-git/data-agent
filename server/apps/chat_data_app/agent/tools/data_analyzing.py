@@ -36,12 +36,12 @@ from apps.chat_data_app.services.dashboard.spec_service import (
 from apps.chat_data_app.services.datasource.manager import get_datasource_manager
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
-    OssieToChatDataImporter,
     build_model_checklist,
 )
 from apps.chat_data_app.services.semantic.run.semantic_config_service import (
+    get_semantic_config_service,
     load_semantic_physical_columns,
-    validate_semantic_config_for_save,
+    prepare_ossie_import_models,
 )
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import (
     load_runtime_semantic_config,
@@ -481,20 +481,37 @@ async def _run_check_yaml(
     *,
     yaml_content: str,
     datasource_id: str,
+    user_id: str | None = None,
 ) -> str:
-    """与导入接口（ossie-import/preview）共用同一批服务层函数，保证口径一致。"""
+    """与导入接口（ossie-import/preview）共用 prepare_ossie_import_models，保证校验口径一致。"""
     ds_manager = get_datasource_manager()
     datasource = await ds_manager.get_datasource_async(datasource_id)
     if not datasource:
         raise ValueError(f"数据源不存在: {datasource_id}")
     try:
-        imports = OssieToChatDataImporter().import_yaml(str(yaml_content or ""))
+        imports, duplicate_error = await prepare_ossie_import_models(
+            ds_manager,
+            datasource,
+            datasource_id,
+            str(yaml_content or ""),
+            semantic_service=get_semantic_config_service(),
+            user_id=str(user_id or ""),
+        )
     except ValueError as exc:
         return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
             "success": False,
             "stage": "parse",
             "datasource_id": datasource_id,
             "error": str(exc),
+            "models": [],
+            "all_importable": False,
+        })
+    if duplicate_error:
+        return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
+            "success": False,
+            "stage": "duplicate_names",
+            "datasource_id": datasource_id,
+            "error": duplicate_error,
             "models": [],
             "all_importable": False,
         })
@@ -511,35 +528,23 @@ async def _run_check_yaml(
             "metric_count": len(item.metrics),
             "dimension_count": len(item.dimensions),
             "relationship_count": len(item.relationships),
+            # 同名冲突标注与导入预览同口径：模型自检也能发现「会被替换/会被忽略」的后果
+            "existing_config": dict(item.existing_config) if item.existing_config else None,
+            "conflict_locked": bool(item.conflict_locked),
         }
         findings = None
         if item.importable:
-            item.bump("physical_checked")
-            validation_error = await validate_semantic_config_for_save(
-                ds_manager,
-                datasource_id,
-                datasource,
-                item.metrics,
-                item.dimensions,
-                item.relationships,
+            report = checker.check_config(
+                {
+                    **item.to_config_payload(),
+                    "enabled": False,
+                    "scope_type": "public",
+                },
+                physical_columns=physical_columns,
             )
-            if validation_error:
-                item.validation_error = validation_error
-                item.errors.append(validation_error)
-                model_payload["importable"] = False
-                model_payload["errors"] = list(item.errors)
-            else:
-                report = checker.check_config(
-                    {
-                        **item.to_config_payload(),
-                        "enabled": False,
-                        "scope_type": "public",
-                    },
-                    physical_columns=physical_columns,
-                )
-                # 只透出触发的 findings：评分无法指导动作，自检链路不输出 score/grade
-                findings = report.to_payload()["findings"]
-                model_payload["quality"] = {"findings": findings}
+            # 只透出触发的 findings：评分无法指导动作，自检链路不输出 score/grade
+            findings = report.to_payload()["findings"]
+            model_payload["quality"] = {"findings": findings}
         model_payload["checklist"] = build_model_checklist(
             item,
             validation_error=item.validation_error,
@@ -630,6 +635,7 @@ def create_data_analyzing_tool(
         return await _run_check_yaml(
             yaml_content=payload.yaml_content,
             datasource_id=bound_datasource_id,
+            user_id=bound_user_id,
         )
 
     return data_analyzing_tool
