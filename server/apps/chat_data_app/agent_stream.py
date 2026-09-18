@@ -284,10 +284,11 @@ def _visible_tool_count(tool_names: dict[str, str]) -> int:
     return len(tool_names)
 
 
-# 需要实时显示生成行数的工具及其长文本字段名
-_STREAMING_LINE_COUNT_TOOLS: dict[str, str] = {
-    "file_write": "content",
-    "file_edit": "new_content",
+# 需要实时显示生成行数的工具：added_field 计 "+N"（写入行数），
+# removed_field 计 "-M"（被替换移除行数，file_edit 整段替换口径）。
+_STREAMING_LINE_COUNT_TOOLS: dict[str, dict[str, str]] = {
+    "file_write": {"added_field": "content"},
+    "file_edit": {"added_field": "new_content", "removed_field": "old_content"},
 }
 
 
@@ -337,13 +338,15 @@ def _format_tool_progress_event(
     tool_call_id: str,
     tool_name: str,
     content_lines: int,
+    removed_lines: int,
 ) -> str:
-    """工具执行中推送进度事件，当前用于 file_write/file_edit 的实时行数显示。"""
+    """工具执行中推送进度事件，用于 file_write/file_edit 的实时行数显示（+N / -M）。"""
     data = {
         "type": "tool_progress",
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
         "content_lines": content_lines,
+        "removed_lines": removed_lines,
         "timestamp": _get_timestamp(),
     }
     return _format_sse("tool_progress", data)
@@ -507,6 +510,8 @@ class _ToolStreamState:
         self.running_tool_ids: list[str] = []
         self.emitted_running_tool_ids: set[str] = set()
         self.active_tool_call_id: str | None = None
+        # 已推送的实时行数 (added, removed)，用于行数未变化时去重，避免 SSE 事件洪峰
+        self.progress_line_counts: dict[str, tuple[int, int]] = {}
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -558,6 +563,27 @@ class _ToolStreamState:
             or _resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids)
         )
 
+    def _streaming_progress_events(self, tool_call_id: str, tool_name: str, args_text: str) -> list[str]:
+        """file_write/file_edit 生成 args 期间实时统计行数并推送进度事件（+N / -M）。
+
+        整段替换口径：added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数。
+        计数与上次一致时不重复推送；两个目标字段都还没开始生成时也不推送。
+        """
+        fields = _STREAMING_LINE_COUNT_TOOLS.get(tool_name)
+        if not fields:
+            return []
+        added = _extract_streaming_text_field(args_text, fields["added_field"])
+        removed: str | None = ""
+        if fields.get("removed_field"):
+            removed = _extract_streaming_text_field(args_text, fields["removed_field"])
+        if added is None and removed is None:
+            return []
+        counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
+        if self.progress_line_counts.get(tool_call_id) == counts:
+            return []
+        self.progress_line_counts[tool_call_id] = counts
+        return [_format_tool_progress_event(tool_call_id, tool_name, counts[0], counts[1])]
+
     def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
         events: list[str] = []
         for chunk in tool_call_chunks or []:
@@ -574,15 +600,11 @@ class _ToolStreamState:
             current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
-                # file_write / file_edit 在生成 content 时实时统计行数，前端工具卡片可显示 "+N"
+                # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 tool_name = self.tool_names.get(current_tool_call_id, "")
-                field_name = _STREAMING_LINE_COUNT_TOOLS.get(tool_name)
-                if field_name:
-                    content = _extract_streaming_text_field(self.args_buffer[current_tool_call_id], field_name)
-                    if content is not None:
-                        events.append(_format_tool_progress_event(
-                            current_tool_call_id, tool_name, _count_text_lines(content),
-                        ))
+                events.extend(self._streaming_progress_events(
+                    current_tool_call_id, tool_name, self.args_buffer[current_tool_call_id],
+                ))
         return events
 
     def build_tool_message_payload(self, message_chunk: Any) -> dict[str, Any]:
@@ -603,6 +625,7 @@ class _ToolStreamState:
             )
             self.args_buffer.pop(tool_call_id, None)
             self.args_fallback.pop(tool_call_id, None)
+            self.progress_line_counts.pop(tool_call_id, None)
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
         return msg_data
 

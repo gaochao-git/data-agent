@@ -696,6 +696,9 @@ const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
 const showFieldPhysicalDetails = ref(false)
 
+/** 已勾选参与维度的行数：维度区副标题「已选 X/Y」用；未勾选行不写入 dimensions，仅占位展示 */
+const dimensionFieldCount = computed(() => fieldRows.value.filter(row => row.isDimension).length)
+
 // 默认维度勾选：会话内记录「尚未持久化过维度配置」的表别名，其物理列默认勾选为维度；
 // 应用字段设置后按持久化的 dimensions 推导勾选态，默认集清空（机制沿用 9772620 之前的口径）
 const defaultDimensionScopeAliases = ref<Record<string, string[]>>({})
@@ -2898,7 +2901,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                       @click="dimensionSectionCollapsed = !dimensionSectionCollapsed"
                     >
                       <div class="text-xs font-medium text-gray-600 shrink-0">维度配置</div>
-                      <div class="text-[11px] text-gray-400 truncate">一行 = 一个物理字段，勾选决定是否参与维度 · {{ fieldRows.length }} 个</div>
+                      <div class="text-[11px] text-gray-400 truncate">一行 = 一个物理字段，勾选决定是否参与维度 · 已选 {{ dimensionFieldCount }}/{{ fieldRows.length }}</div>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
                       <button

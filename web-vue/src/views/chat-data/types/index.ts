@@ -446,6 +446,8 @@ export interface ToolCallInfo {
   progress?: number
   // file_write / file_edit 流式生成时的实时行数（工具执行中由 tool_progress 事件推送）
   contentLines?: number
+  // file_edit 整段替换口径下的被移除行数（old_content，由 tool_progress 事件推送）
+  removedLines?: number
   status: 'generating' | 'running' | 'completed' | 'error'
   // 关联的渲染内容
   renderId?: string
@@ -615,6 +617,8 @@ export interface ToolLifecycleEventData extends ToolEventData {
   streamed?: boolean
   // tool_progress：file_write/file_edit 流式生成时的实时行数
   content_lines?: number
+  // tool_progress：file_edit 整段替换口径下的被移除行数（old_content）
+  removed_lines?: number
 }
 
 // 语义层配置
