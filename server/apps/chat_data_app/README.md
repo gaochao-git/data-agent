@@ -534,9 +534,9 @@ model → tools → model，直到模型不再发起工具调用后结束。
 
 ```text
 判断是否查数
- -> 第一步 file_read 读取 semantic-query 技能的 SKILL.md（语义查询门禁）
+ -> 第一步 file_read 读取 data-analyzing 技能的 SKILL.md（语义查询门禁）
 -> 当前数据源组全部启用语义模型的 YAML 已预物化到 /mnt/user-data/workspace/semantic/
--> 按 semantic-query 技能选模型（目录检索、换词规则、无命中判定与精读口径确认的唯一维护点都在该技能，此处不展开）
+-> 按 data-analyzing 技能选模型（目录检索、换词规则、无命中判定与精读口径确认的唯一维护点都在该技能，此处不展开）
 -> 只对命中的候选模型 file_read 精读 YAML，确认指标/维度/关系与口径后选定模型
 -> 生成 DSL
 -> DSL2SQL

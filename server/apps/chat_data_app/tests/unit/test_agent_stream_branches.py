@@ -328,8 +328,8 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert agent_stream._visible_tool_count({}) == 0
     assert agent_stream._visible_tool_count({
         "hidden": "load_skill_tool",
-        "sql": "semantic_query_tool",
-        "dsl": "dsl2sql_tool",
+        "sql": "data_analyzing_tool",
+        "dsl": "calculator_tool",
     }) == 3
 
     reasoning_segments = []
