@@ -50,13 +50,7 @@ SKILL_FIXED_DIRS = ("references", "assets")
 # services/agent_run/uploaded_file_service.py），两处体验保持一致。
 _SKILL_UPLOAD_ALLOWED_SUFFIXES = {f".{ext}" for ext in ALLOWED_FILE_EXTENSIONS}
 
-SKILL_ALIASES = {
-    "risk-analysis": "dashboard-generation",
-    "organization-profile": "dashboard-generation",
-    "机构画像分析": "dashboard-generation",
-    "风险分析技能": "dashboard-generation",
-    "看板生成技能": "dashboard-generation",
-}
+
 def _user_skill_root() -> Path:
     """返回用户技能物理根目录。"""
     return USER_SKILL_ROOT.expanduser().resolve()
@@ -102,12 +96,6 @@ def _resolve_user_skill_version_dir(path_value: Any, field_name: str = "技能�
     if not raw or raw == ".":
         raise ValueError("技能版本目录无效")
     return _resolve_user_skill_path(Path(raw), field_name)
-
-
-def resolve_skill_name(name: str) -> str:
-    """解析技能别名，兼容前端残留标题或旧技能名。"""
-    normalized = str(name or "").strip()
-    return SKILL_ALIASES.get(normalized, normalized)
 
 
 def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
@@ -432,11 +420,10 @@ class SkillService:
         return sorted(skills, key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")))
 
     async def get_skill_async(self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
-        resolved_name = resolve_skill_name(name)
-        skill = await self._get_system_skill_detail_async(resolved_name)
+        skill = await self._get_system_skill_detail_async(name)
         if skill:
             return skill
-        return await self._get_db_skill_detail_async(resolved_name, include_draft=include_draft, user_id=user_id, user_names=user_names)
+        return await self._get_db_skill_detail_async(name, include_draft=include_draft, user_id=user_id, user_names=user_names)
 
     async def resolve_skill_path_async(self, name: str, user_id: str = "") -> Optional[Dict[str, Any]]:
         """异步解析可加载技能的 SKILL.md 路径。"""
@@ -485,11 +472,10 @@ class SkillService:
 
     async def _get_system_skill_metadata_async(self, name: str) -> Optional[Dict[str, Any]]:
         """异步读取文件系统系统技能元数据，不访问技能数据库。"""
-        resolved_name = resolve_skill_name(name)
-        metadata = (await asyncio.to_thread(load_metadata)).get(resolved_name)
+        metadata = (await asyncio.to_thread(load_metadata)).get(name)
         if not metadata:
             clear_metadata_cache()
-            metadata = (await asyncio.to_thread(load_metadata)).get(resolved_name)
+            metadata = (await asyncio.to_thread(load_metadata)).get(name)
         if not metadata:
             return None
         return {
@@ -1056,7 +1042,7 @@ class SkillService:
     async def _get_db_skill_metadata_async(self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         """异步从数据库读取可加载技能元数据。"""
         try:
-            row = await self.dao.get_skill_async(resolve_skill_name(name), user_id=user_id)
+            row = await self.dao.get_skill_async(name, user_id=user_id)
             if not row:
                 return None
             if not self._db_skill_row_loadable(row, include_draft):

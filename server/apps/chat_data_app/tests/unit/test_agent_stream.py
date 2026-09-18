@@ -44,6 +44,7 @@ from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
@@ -483,9 +484,9 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     assert "5+5=10" in joined
     assert "prompt_context" not in fake_graph.initial_state
     assert "## 当前语义模型" in captured_agent_kwargs["model_invocation"].system_prompt
-    # 系统提示词不再枚举模型目录、不重复检索步骤，指向 semantic-query 技能
+    # 系统提示词不再枚举模型目录、不重复检索步骤，指向数据分析技能
     assert "当前可见指标集目录" not in captured_agent_kwargs["model_invocation"].system_prompt
-    assert "semantic-query" in captured_agent_kwargs["model_invocation"].system_prompt
+    assert DATA_ANALYZING_SKILL in captured_agent_kwargs["model_invocation"].system_prompt
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
 

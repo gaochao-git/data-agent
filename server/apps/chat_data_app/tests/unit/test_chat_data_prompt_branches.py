@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from apps.chat_data_app.agent.prompts import chat_data
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
 # ---------------------------------------------------------------------------
@@ -48,12 +49,12 @@ def test_build_semantic_layer_context_without_selection():
     assert chat_data.build_semantic_layer_context({}) == unselected
 
 
-def test_build_semantic_layer_context_delegates_to_semantic_query_skill():
-    """检索用法单一维护在 semantic-query 技能：提示词只声明目录存在 + 指向技能，不重复步骤。"""
+def test_build_semantic_layer_context_delegates_to_data_analyzing_skill():
+    """检索用法单一维护在数据分析技能：提示词只声明目录存在 + 指向技能，不重复步骤。"""
     unselected = chat_data.build_semantic_layer_context(None)
 
     assert "/mnt/user-data/workspace/semantic/" in unselected
-    assert "semantic-query" in unselected
+    assert DATA_ANALYZING_SKILL in unselected
     assert "SKILL.md" in unselected
     assert "semantic_search" not in unselected
     # 不再重复定义检索步骤
@@ -61,7 +62,7 @@ def test_build_semantic_layer_context_delegates_to_semantic_query_skill():
     assert "file_grep" not in unselected
     # 已选模型分支同样只指向技能
     selected = chat_data.build_semantic_layer_context({"id": "cfg_1", "name": "交易域"})
-    assert "semantic-query" in selected
+    assert DATA_ANALYZING_SKILL in selected
     assert "file_grep" not in selected
     assert "semantic_search" not in selected
 

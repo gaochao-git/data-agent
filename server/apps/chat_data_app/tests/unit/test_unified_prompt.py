@@ -10,23 +10,24 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 from apps.chat_data_app.agent.prompts.chat_data import build_unified_system_prompt
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.skills.loader import format_skills_prompt
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
 def test_system_prompt_requires_semantic_skill_gate_before_query():
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
         available_skills_xml=format_skills_prompt([{
-            "name": "semantic-query",
-            "title": "语义查询技能",
+            "name": DATA_ANALYZING_SKILL,
+            "title": "数据分析技能",
             "description": "基于语义模型完成数据查询",
         }]),
     )
 
     assert "第一步必须调用 `file_read`" in prompt
-    assert "<name>semantic-query</name>" in prompt
+    assert f"<name>{DATA_ANALYZING_SKILL}</name>" in prompt
     assert "## 语义查询门禁" in prompt
     assert "不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`" in prompt
-    assert "读取技能后，语义模型检索、字段确认、DSL/SQL 模式选择" in prompt
+    assert "进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择" in prompt
     assert "**DSL 模式**和**SQL 模式**" not in prompt
     assert "DSL 模式传顶层 `dsl`" not in prompt
     assert "SQL 模式传顶层 `sql`" not in prompt
@@ -65,8 +66,8 @@ def test_system_prompt_keeps_detailed_semantic_rules_in_skill():
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
         available_skills_xml=format_skills_prompt([{
-            "name": "semantic-query",
-            "title": "语义查询技能",
+            "name": DATA_ANALYZING_SKILL,
+            "title": "数据分析技能",
             "description": "基于语义模型完成数据查询",
         }]),
     )
@@ -78,7 +79,7 @@ def test_system_prompt_keeps_detailed_semantic_rules_in_skill():
     assert '"dimensions":[{"name":"时间维度"' not in prompt
     assert "当前数据库方言：Hive" in prompt
     assert "DSL 中只写 `time_grain`" in prompt
-    assert "/mnt/skills/semantic-query/references/dialect.md" not in prompt
+    assert "/mnt/skills/data-analyzing/references/dialect.md" not in prompt
     assert prompt.count("## 输出与最终回答") == 1
     assert "## 输出规范" not in prompt
     assert "## 最终回答" not in prompt
@@ -89,4 +90,4 @@ def test_system_prompt_keeps_dialect_fallback_for_legacy_skill_snapshot():
 
     assert "当前数据库方言：Hive" in prompt
     assert "DSL 中只写 `time_grain`" in prompt
-    assert "/mnt/skills/semantic-query/references/dialect.md" not in prompt
+    assert "/mnt/skills/data-analyzing/references/dialect.md" not in prompt

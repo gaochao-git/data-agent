@@ -5,7 +5,7 @@
 
 设计约束：
 - 只做确定性检查（覆盖度/可执行性/一致性/来源/文档五类），规则与
-  agent/skills/semantic-quality-check/references/quality-rules.md 保持同一套
+  agent/skills/data-analyzing/references/governance/quality-rules.md 保持同一套
   编码与口径；会话内技能按该清单分析，导入 preview 按本模块机器把关；
 - 不依赖数据库：config 是 SemanticConfigService 返回的配置字典，
   物理列清单 physical_columns 为可选的 {(table, column)} 集合
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 SCORE_DEDUCTION = {"error": 8, "warning": 3, "info": 1}
 MAX_TARGET_EXAMPLES = 5
 
-# 规则目录：code -> (severity, category, label)。与技能 references/quality-rules.md 同源。
+# 规则目录：code -> (severity, category, label)。与技能 references/governance/quality-rules.md 同源。
 RULES: Dict[str, Tuple[str, str, str]] = {
     # 来源完整性 provenance
     "PROV_METRIC_MISSING_TABLE": ("error", "provenance", "原子指标缺少归属表 table"),

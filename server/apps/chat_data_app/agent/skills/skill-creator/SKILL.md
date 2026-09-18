@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-title: 技能生成技能
+title: 技能创建
 description: 根据业务人员的自然语言需求，设计并生成符合当前智能分析平台规范的用户技能目录、SKILL.md、参考文档和素材。
 metadata:
   domain: 数据分析
@@ -8,7 +8,7 @@ metadata:
   output_type: skill
 ---
 
-# 技能生成技能
+# 技能创建
 
 ## 适用目标
 

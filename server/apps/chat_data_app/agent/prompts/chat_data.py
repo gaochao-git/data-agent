@@ -1,5 +1,11 @@
 """ChatData 单一 Agent 的系统提示词。"""
 
+from utils.builtin_skills import (
+    DATA_ANALYZING_SKILL,
+    SEMANTIC_MODEL_AUTHORITY_DOC,
+    builtin_skill_file,
+)
+
 from .security_prompt import SECURITY_PROMPT
 from ..runtime_options import AgentRuntimeOptions
 
@@ -19,15 +25,16 @@ def format_datasource_group_context_for_llm(context: str) -> str:
 def build_semantic_layer_context(semantic_config: dict | None) -> str:
     """构建统一语义层上下文（问数态使用）。
 
-    语义模型检索、候选定位与字段口径确认的完整规则以 semantic-query 技能
-    （SKILL.md）为单一维护点，系统提示词只声明工作区目录存在 + 指向该技能，
-    不重复定义检索步骤，也不枚举模型清单。
+    语义模型检索、候选定位与字段口径确认的完整规则，以「数据分析」技能内的
+    ``references/analysis/query.md`` 为单一维护点，系统提示词只声明工作区目录存在 +
+    指向该技能，不重复定义检索步骤，也不枚举模型清单。
     """
     if not semantic_config:
         return (
             "## 当前语义模型\n"
             "本轮未手动选择语义模型。当前数据源组全部启用语义模型的 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`；"
-            "语义模型的检索、候选定位与字段口径确认以 `semantic-query` 技能为唯一依据，先读取其 SKILL.md 再执行，本提示不重复定义。\n"
+            "语义模型的检索、候选定位与字段口径确认以 "
+            f"`{DATA_ANALYZING_SKILL}` 技能为唯一依据，先读取其 SKILL.md 并按其中的能力路由执行，本提示不重复定义。\n"
         )
 
     config_id = str(semantic_config.get("id") or "").strip()
@@ -40,7 +47,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     return (
         header
         + "。这是本轮优先参考，不代表锁定。\n"
-        + "需要具体指标、维度、枚举、关联或表列，或需要交叉核对其它模型时，按 `semantic-query` 技能的检索与口径确认规则执行。\n"
+        + f"需要具体指标、维度、枚举、关联或表列，或需要交叉核对其它模型时，按 `{DATA_ANALYZING_SKILL}` 技能的检索与口径确认规则执行。\n"
     )
 
 
@@ -138,10 +145,10 @@ SCENE_ROUTING_BLOCK = """## 场景路由
 - 用户不知道能查什么、有哪些数据或如何开始：仅根据当前数据源说明和语义模型目录做引导，不把目录当作完整字段口径，也不编造具体查询示例。
 - 业务数据查询、具体指标或维度询问，以及“订单数、用户数、销售额”等短问法：按“语义查询门禁”处理。"""
 
-SEMANTIC_QUERY_GATE_BLOCK = """## 语义查询门禁
-- 业务数据查询命中当前可用的 `semantic-query` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`；不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`。
-- 读取技能后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循该技能；系统层不重复定义这些具体规则。
-- 当前可用技能中没有 `semantic-query` 时，不得虚构技能路径；说明当前语义查询技能不可用。"""
+SEMANTIC_QUERY_GATE_BLOCK = f"""## 语义查询门禁
+- 业务数据查询命中当前可用的 `{DATA_ANALYZING_SKILL}` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，并按其中的能力路由进入「查询与分析」；不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`。
+- 进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循 `{DATA_ANALYZING_SKILL}` 技能的 `{SEMANTIC_MODEL_AUTHORITY_DOC}`；系统层不重复定义这些具体规则。
+- 当前可用技能中没有 `{DATA_ANALYZING_SKILL}` 时，不得虚构技能路径；向用户说明该技能当前不可用。"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 回复只展示简短结论、关键数字、产物路径或预览状态。
@@ -154,9 +161,9 @@ OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 不要擅自改变查询结果单位；结果为空时明确说明本次查询没有返回数据，不要编造原因。
 - **禁止编造数据**，只能引用真实工具返回的数值。"""
 
-ERROR_HANDLING_BLOCK = """## 错误处理
+ERROR_HANDLING_BLOCK = f"""## 错误处理
 - 工具失败或报错时先读取返回的具体原因；同一工具同类错误重复出现时停止重试，简要说明失败原因或能力边界；不要继续使用相同参数反复调用。
-- 语义查询相关错误（口径不唯一、当前配置不支持、缺少语义模型或指标等）按 `semantic-query` 技能的失败处理执行：停止该查询分支并向用户澄清一个最关键问题，不反复调用工具。"""
+- 语义查询相关错误（口径不唯一、当前配置不支持、缺少语义模型或指标等）按 `{DATA_ANALYZING_SKILL}` 技能的失败处理执行：停止该查询分支并向用户澄清一个最关键问题，不反复调用工具。"""
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +232,7 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
-- 涉及语义模型时，第一步先用 `file_read` 读取 `/mnt/skills/semantic-query/SKILL.md` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
+- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 回传要求

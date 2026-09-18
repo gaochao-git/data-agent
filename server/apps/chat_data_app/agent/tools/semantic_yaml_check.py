@@ -32,7 +32,7 @@ def create_semantic_yaml_check_tool(datasource_id: str | None = None):
     async def semantic_yaml_check_tool(yaml_content: str, intent: str = "") -> str:
         """语义模型 YAML 自检工具：把你生成或修改的 Ossie 语义模型 YAML 全文传入，执行与导入接口完全相同的检查（OSSI schema 校验、结构映射、物理字段校验、质量报告），只读不落库。
 
-        在按 semantic-quality-check 技能生成或优化语义模型 YAML 后、交付给用户下载之前，必须调用本工具自检；
+        在按 `data-analyzing` 技能生成或优化语义模型 YAML 后、交付给用户下载之前，必须调用本工具自检；
         根据返回的逐模型 errors 修正后重新调用，直到 all_importable 为 true 再把 YAML 写入 outputs 交付。
         禁止跳过自检直接交付 YAML 文件。
 

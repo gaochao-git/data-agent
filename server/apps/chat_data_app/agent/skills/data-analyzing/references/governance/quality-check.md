@@ -1,14 +1,5 @@
----
-name: semantic-quality-check
-description: 评估当前语义模型的质量（覆盖度、口径一致性、来源完整性、文档完备性），结合业务对话找出差距并辅助数仓人员补充知识、产出可回导的新模型 YAML。
-metadata:
-  title: 语义质量检查技能
-  domain: 数据治理
-  category: semantic_quality_check
-  output_type: report
----
 
-# 语义质量检查技能
+# 语义质量检查与治理
 
 ## 适用范围
 
@@ -18,12 +9,12 @@ metadata:
 2. **差距分析**：数仓人员基于一键生成的基础模型做扩展前，先找出"缺什么指标、缺什么维度、哪些口径说不清"，再结合业务知识对话补充。
 3. **优化产出**：把补充后的知识写成新的 Ossie 模型 YAML，供用户下载后通过语义配置页的「导入」回流平台。
 
-本技能只负责质量分析、差距对话与 YAML 产出；查询执行遵循 semantic-query 技能，文件与产物任务遵循其各自的工具协议。
+本文档只负责质量分析、差距对话与 YAML 产出；查询执行遵循 references/analysis/query.md，文件与产物任务遵循其各自的工具协议。
 
 ## 必读资料
 
-- 执行质量检查前，读取：`/mnt/skills/semantic-quality-check/references/quality-rules.md`（检查项清单与严重度，与平台导入预览的机器检查同源）。
-- 产出新 YAML 前，读取：`/mnt/skills/semantic-quality-check/references/yaml-authoring.md`（可回导的 YAML 格式要求）。
+- 执行质量检查前，读取：`/mnt/skills/data-analyzing/references/governance/quality-rules.md`（检查项清单与严重度，与平台导入预览的机器检查同源）。
+- 产出新 YAML 前，读取：`/mnt/skills/data-analyzing/references/governance/yaml-authoring.md`（可回导的 YAML 格式要求）。
 
 ## 标准流程
 
@@ -35,7 +26,7 @@ metadata:
 
 ### 2. 执行质量检查
 
-1. **先用 `semantic_yaml_check_tool` 跑机器检查**：把模型 YAML 全文传入，得到与导入预览同源的逐项 findings 与统计（检查项清单见 `references/quality-rules.md`）。不要人工逐项复算机器已给出的结论。
+1. **先用 `semantic_yaml_check_tool` 跑机器检查**：把模型 YAML 全文传入，得到与导入预览同源的逐项 findings 与统计（检查项清单见 `references/governance/quality-rules.md`）。不要人工逐项复算机器已给出的结论。
 2. 在机器报告之上补充业务层分析：检查项之外，如果发现业务口径明显可疑（例如"销售额"没有说明是否含税），作为口头提示补充，不列入问题清单。
 3. 报告按严重度排序，先讲结论（可导入与否、最要紧的 2-3 个问题），再展开明细；不要贴大段 YAML 原文。
 
@@ -47,7 +38,7 @@ metadata:
 
 ### 4. 产出新 YAML
 
-1. **拷贝后局部修改，禁止整份重写**：先用 `file_copy` 把定位到的原模型 YAML（`/mnt/user-data/workspace/semantic/` 下的文件）拷贝到当前会话 `outputs/` 目录，之后只对这份拷贝件做 `file_edit` 局部修改。禁止不读原文、凭记忆重写整份 YAML；未调整的部分必须与原文件逐字一致（最小 diff）。按 `references/yaml-authoring.md` 补齐可回导所需的字段与 CHAT_DATA 扩展。
+1. **拷贝后局部修改，禁止整份重写**：先用 `file_copy` 把定位到的原模型 YAML（`/mnt/user-data/workspace/semantic/` 下的文件）拷贝到当前会话 `outputs/` 目录，之后只对这份拷贝件做 `file_edit` 局部修改。禁止不读原文、凭记忆重写整份 YAML；未调整的部分必须与原文件逐字一致（最小 diff）。按 `references/governance/yaml-authoring.md` 补齐可回导所需的字段与 CHAT_DATA 扩展。
 2. **交付前必须自检**：用 `semantic_yaml_check_tool(yaml_content=完整YAML)` 执行与导入接口相同的四道检查（schema、结构映射、物理字段、质量报告）。返回 `all_importable=false` 或存在 error 级 finding 时，按 errors/findings 修正后重新调用，直到通过；禁止跳过自检直接交付。
 3. 自检通过后，产出文件即第 1 步的拷贝件，已在当前会话 `outputs/` 目录；告知用户文件路径，由用户下载后走「语义配置 → 导入」回流。
 4. 在最终回复中简述自检结果（可导入与否、遗留 error/warning），说明导入时平台还会做同样的机器校验，最终以导入校验为准。
@@ -56,6 +47,6 @@ metadata:
 ## 边界与禁止
 
 - 不编造指标、维度、表、字段、枚举或查询结果；确认不了的口径就问，不猜。
-- 问题判定口径固定按 references/quality-rules.md 执行，不自创检查规则。
+- 问题判定口径固定按 references/governance/quality-rules.md 执行，不自创检查规则。
 - 产出 YAML 只写当前会话 outputs 目录，不改写 workspace 里已物化的原模型文件。
 - 用户只要体检报告时，止步于报告与建议，不主动改写 YAML。

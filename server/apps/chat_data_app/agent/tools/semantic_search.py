@@ -10,6 +10,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 from pydantic import Field
 
+from utils.builtin_skills import DATA_ANALYZING_SKILL
+
 from apps.chat_data_app.services.semantic.run.semantic_model_search import search_semantic_models
 from apps.chat_data_app.services.semantic.run.semantic_materializer import (
     SEMANTIC_SNAPSHOT_DIR,
@@ -80,7 +82,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "success": True,
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
-        "message": "已返回相关语义模型的轻量引用；字段口径确认与检索方式以 semantic-query 技能为准。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
+        "message": f"已返回相关语义模型的轻量引用；字段口径确认与检索方式以 {DATA_ANALYZING_SKILL} 技能为准。" if returned_ids else "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。",
     }
 
 
@@ -202,7 +204,7 @@ def _list_fields_payload(
         "next_offset": next_offset if has_more else None,
         "fields": page,
         "message": (
-            "已返回字段轻量索引。字段完整定义与口径确认以 semantic-query 技能为准。"
+            f"已返回字段轻量索引。字段完整定义与口径确认以 {DATA_ANALYZING_SKILL} 技能为准。"
         ),
     }
 
@@ -238,12 +240,12 @@ def create_semantic_search(
         - search_models：在当前用户可见的全部启用语义模型中按完整业务意图检索，返回候选模型轻量引用，
           并确保候选模型的 Ossie YAML 已物化到会话工作区 semantic/ 目录。
         - list_fields：传 semantic_config_id；可用 field_type=all/metric/dimension 和 offset/limit 分页。
-        本工具只做检索辅助；语义模型检索流程、候选确认与字段口径确认一律以 `semantic-query` 技能为准，本工具不重复定义。
+        本工具只做检索辅助；语义模型检索流程、候选确认与字段口径确认一律以 `data-analyzing` 技能为准，本工具不重复定义。
 
         Args:
             operation: 操作类型：search_models 搜索相关语义模型，list_fields 分页列出模型字段。
             query: search_models 使用的用户问题；不传时使用当前会话最近一条用户消息。
-            semantic_config_id: list_fields 使用的语义模型 ID；语义模型检索方式以 semantic-query 技能为准。
+            semantic_config_id: list_fields 使用的语义模型 ID；语义模型检索方式以 `data-analyzing` 技能为准。
             field_type: list_fields 的字段范围：all、metric、dimension。
             offset: list_fields 分页起点，从 0 开始。
             limit: list_fields 单次最多返回的字段数，范围 1-200。

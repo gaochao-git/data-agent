@@ -1,31 +1,5 @@
----
-name: dashboard-generation
-title: 看板生成技能
-description: 基于用户需求、数据源、指标体系和语义工具，自动设计分析看板卡片，生成并校验 DSL，输出可预览的看板规格。
-metadata:
-  domain: 数据分析
-  category: dashboard_generation
-  output_type: dashboard
-  input_schema:
-    fields:
-      - name: goal
-        label: 看板目标
-        type: text
-        required: false
-        placeholder: 请输入希望分析或监控的问题，例如经营风险、销售表现、客户结构
-      - name: target
-        label: 分析对象
-        type: text
-        required: false
-        placeholder: 可选，例如机构、区域、产品、渠道、客户群
-      - name: time_range
-        label: 时间范围
-        type: text
-        required: false
-        placeholder: 可选，例如近12个月、本季度、2025年
----
 
-# 看板生成技能
+# 看板生成
 
 ## 适用目标
 
@@ -53,25 +27,25 @@ workspace/dashboard_draft.json
 
 ## 必读资料
 
-进入本技能后执行：
+进入看板生成路径后执行：
 
 1. 读取主指南：
-   - `/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md`
-2. 读取语义查询技能：语义模型检索与字段口径确认以 `/mnt/skills/semantic-query/SKILL.md` 为唯一依据，本技能不重复定义这些规则
+   - `/mnt/skills/data-analyzing/references/dashboard/guide.md`
+2. 读取查询与分析规范：语义模型检索与字段口径确认以 `/mnt/skills/data-analyzing/references/analysis/query.md` 为唯一依据，本文档不重复定义这些规则
 3. 用户需求宽泛或需要模板时，再读取一个示例：
-   - 综合 / 默认分析：`/mnt/skills/dashboard-generation/assets/examples/comprehensive-dashboard.json`
-   - 风险 / 异常 / 预警：`/mnt/skills/dashboard-generation/assets/examples/risk-monitoring-dashboard.json`
-   - 机构 / 区域 / 产品 / 客户画像：`/mnt/skills/dashboard-generation/assets/examples/profile-dashboard.json`
+   - 综合 / 默认分析：`/mnt/skills/data-analyzing/assets/dashboard/examples/comprehensive-dashboard.json`
+   - 风险 / 异常 / 预警：`/mnt/skills/data-analyzing/assets/dashboard/examples/risk-monitoring-dashboard.json`
+   - 机构 / 区域 / 产品 / 客户画像：`/mnt/skills/data-analyzing/assets/dashboard/examples/profile-dashboard.json`
 
 ## 工具流程
 
 按下面顺序完成，不把工具参数、JSON、DSL、SQL 或工具返回原文写进用户正文。
 每次调用工具前先输出一句短句说明当前要做什么；工具返回后用一句短句概括发现，再继续下一步。
 
-1. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
-2. `file_read("/mnt/skills/semantic-query/SKILL.md")`：语义模型检索与字段口径确认以该技能为唯一依据
+1. `file_read("/mnt/skills/data-analyzing/references/dashboard/guide.md")`
+2. `file_read("/mnt/skills/data-analyzing/references/analysis/query.md")`：语义模型检索与字段口径确认以该文档为唯一依据
 3. 按需 `file_read` 一个示例 JSON
-4. 按 `semantic-query` 技能检索语义模型并精读候选 YAML，为每张卡片确定一个语义模型、确认准备使用的指标和维度定义；无法唯一判断时先澄清该卡片。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定语义模型
+4. 按 `references/analysis/query.md` 检索语义模型并精读候选 YAML，为每张卡片确定一个语义模型、确认准备使用的指标和维度定义；无法唯一判断时先澄清该卡片。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定语义模型
 5. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 6. 内部构建完整 `dashboard_spec`，每张卡片必须包含 `semantic_config_id`；旧规格才使用顶层默认字段
 7. **一次批量校验整份规格**：调用 `dsl2sql_tool(dsl=dashboard_spec)`，其中 `dsl` 必须是包含 `dashboard_name` 和完整 `cards` 数组的整个 `dashboard_spec`。
@@ -88,11 +62,11 @@ workspace/dashboard_draft.json
 
 ## 设计规则
 
-具体规格、布局、图表选择、DSL 规则和失败处理以 `references/dashboard-generation-guide.md` 为准。这里保留必须遵守的底线：
+具体规格、布局、图表选择、DSL 规则和失败处理以 `references/dashboard/guide.md` 为准。这里保留必须遵守的底线：
 
 - 每张卡片的指标、维度、过滤、排序字段必须来自该卡片 `semantic_config_id` 对应的语义模型。
-- 语义模型检索、候选定位与字段口径确认全部按 `semantic-query` 技能执行，本技能不重复定义；不能凭模型名称、文件名或字段相似性猜测，检索无命中即停止并澄清。主模型需为每张卡片选择一个真实 ID 并确认使用的字段，无法唯一判断时先向用户澄清，不得生成该卡片 DSL。
-- 每张卡片的 `semantic_config_id` 必填，取值必须是按 `semantic-query` 技能检索到的、当前目录中实际存在的语义模型 ID；顶层同名字段仅兼容旧规格默认值。
+- 语义模型检索、候选定位与字段口径确认全部按 `references/analysis/query.md` 执行，本文档不重复定义；不能凭模型名称、文件名或字段相似性猜测，检索无命中即停止并澄清。主模型需为每张卡片选择一个真实 ID 并确认使用的字段，无法唯一判断时先向用户澄清，不得生成该卡片 DSL。
+- 每张卡片的 `semantic_config_id` 必填，取值必须是按 `references/analysis/query.md` 检索到的、当前目录中实际存在的语义模型 ID；顶层同名字段仅兼容旧规格默认值。
 - 同一张卡片不得混用多个语义模型；不同卡片可以使用不同语义模型，但仍使用当前会话绑定的同一个 `datasource_id`。
 - 默认生成最小可用看板，优先覆盖总览、趋势、结构 / 对比、排行 / 诊断等核心视角。
 - 每张卡片必须包含 `title`、`chart_type`、`layout`、`dsl`。

@@ -22,6 +22,7 @@ from apps.chat_data_app.agent.tools.semantic_search import (
     create_semantic_search,
 )
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import list_runtime_semantic_config_directory, load_runtime_semantic_config
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
 def _patch_runtime_configs(monkeypatch, configs=None):
@@ -37,12 +38,17 @@ def _patch_runtime_configs(monkeypatch, configs=None):
     )
 
 
-def test_semantic_search_description_defers_to_semantic_query_skill():
-    """工具契约不再自行教检索流程，统一指向 semantic-query 技能。"""
+def test_semantic_search_description_defers_to_data_analyzing_skill():
+    """工具契约不再自行教检索流程，统一指向该技能。
+
+    工具描述是常量 docstring（f-string 不能当 docstring，``__doc__`` 会变 ``None``），插不进常量，
+    所以反过来断言「描述里写死的技能名 == 常量」。**这里用技能名而不是显示名**：显示名是
+    frontmatter ``title``，属于展示层，2026-09-18 当天就被改过两次，绑显示名的字面量会跟着红。
+    """
     description = create_semantic_search(datasource_id="ds_a").description
 
     assert "当前用户可见的全部启用语义模型" in description
-    assert "semantic-query" in description
+    assert f"`{DATA_ANALYZING_SKILL}`" in description
     assert "本工具不重复定义" in description
     assert "file_grep" not in description
 
@@ -326,16 +332,6 @@ def test_semantic_search_returns_selected_reference_without_full_config(monkeypa
     async def fake_search_semantic_models(**_kwargs):
         return {"semantic_config_ids": ["sc_order"]}
 
-    config = {
-        "id": "sc_order",
-        "name": "订单分析",
-        "metrics": [{"name": "订单金额", "table": "orders"}],
-        "dimensions": [{"name": "用户名称", "table": "users"}],
-        "relationships": [{"left_table": "orders", "right_table": "users"}],
-        "joins": [{"left_table": "orders", "right_table": "users"}],
-        "tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}],
-    }
-
     monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_search.search_semantic_models", fake_search_semantic_models)
     async def fake_materialize(**_kwargs):
         return {"directory": [{
@@ -494,7 +490,7 @@ def test_semantic_search_list_fields_reauthorizes_materializes_and_paginates(mon
     assert payload["has_more"] is True
     assert payload["next_offset"] == 3
     assert [item["name"] for item in payload["fields"]] == ["订单总数", "下单时间"]
-    assert "semantic-query 技能" in payload["message"]
+    assert f"{DATA_ANALYZING_SKILL} 技能" in payload["message"]
 
 
 def test_semantic_search_list_fields_filters_and_rejects_inaccessible_model(monkeypatch):

@@ -53,8 +53,8 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     # 运行域技能统一为扁平 /mnt/skills/<name>，不再按类别/挂载逐条校验；
     # sandbox_visible_path 仅做路径级放行与越界校验，文件存在性由运行时快照层保证。
     assert sandbox_visible_path(
-        "/mnt/skills/dashboard-generation/references/guide.md"
-    ) == "/mnt/skills/dashboard-generation/references/guide.md"
+        "/mnt/skills/data-analyzing/references/guide.md"
+    ) == "/mnt/skills/data-analyzing/references/guide.md"
     # URL 编码只允许出现在规范前缀内；编码短形式按非规范输入拒绝。
     assert sandbox_visible_path("/mnt/user-data%2Foutputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
     with pytest.raises(ValueError, match="/mnt/user-data/"):
@@ -76,7 +76,7 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     # 技能路径只读，写入被拒。
     with pytest.raises(ValueError, match="只允许写入"):
         sandbox_visible_path(
-            "/mnt/skills/dashboard-generation/SKILL.md",
+            "/mnt/skills/data-analyzing/SKILL.md",
             writable=True,
         )
 
@@ -646,7 +646,7 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
     # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
     workspace_root = _workspace_root(tmp_path)
-    skill_dir = workspace_root.parent / "runtime-skills" / "dashboard-generation"
+    skill_dir = workspace_root.parent / "runtime-skills" / "data-analyzing"
     references = skill_dir / "references"
     references.mkdir(parents=True)
     (references / "guide.md").write_text("guide text\n", encoding="utf-8")
@@ -655,11 +655,11 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
         user_id="user_a",
         backend="local",
     )
-    assert (runtime.runtime_skills_dir / "dashboard-generation").is_dir()
+    assert (runtime.runtime_skills_dir / "data-analyzing").is_dir()
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/skills/dashboard-generation/references/guide.md",
+            command="cat /mnt/skills/data-analyzing/references/guide.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,
         )
@@ -731,7 +731,7 @@ def test_sandbox_bash_uses_files_api_snapshot_paths(monkeypatch, tmp_path):
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/skills/dashboard-generation/SKILL.md",
+            command="cat /mnt/skills/data-analyzing/SKILL.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,
         )
@@ -739,7 +739,7 @@ def test_sandbox_bash_uses_files_api_snapshot_paths(monkeypatch, tmp_path):
 
     assert result["success"] is True
     assert result["cwd"] == "/mnt/user-data/workspace"
-    assert "/mnt/skills/dashboard-generation/SKILL.md" in calls[0]
+    assert "/mnt/skills/data-analyzing/SKILL.md" in calls[0]
 
 
 def test_sandbox_commands_run_as_unprivileged_user(monkeypatch):
@@ -1090,10 +1090,10 @@ def test_path_mapping_mask_restores_virtual_paths():
 
 def test_path_mapping_skill_translate_and_mask_roundtrip(tmp_path):
     # 运行域技能：本会话快照目录/<name> <-> 扁平虚拟 /mnt/skills/<name>。
-    snapshot_dir = tmp_path / "skills-snapshot" / "dashboard-generation"
+    snapshot_dir = tmp_path / "skills-snapshot" / "data-analyzing"
     snapshot_dir.mkdir(parents=True)
     mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, runtime_skills_dir=snapshot_dir.parent)
-    cmd = "cat /mnt/skills/dashboard-generation/references/guide.md"
+    cmd = "cat /mnt/skills/data-analyzing/references/guide.md"
     translated = mapping.translate(cmd)
     assert translated == f"cat {snapshot_dir}/references/guide.md"
     # 反向遮蔽后应还原为原始虚拟路径

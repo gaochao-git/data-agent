@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -113,9 +114,9 @@ CHAT_DATA_SEMANTIC_SEARCH_ENABLED = read_bool_env(
     "CHAT_DATA_SEMANTIC_SEARCH_ENABLED", True
 )
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
-# 检索用法的单一维护点是 semantic-query 技能（SKILL.md），错误提示统一指向该技能，
-# 不随工具开关切换文案，也不在此重复检索步骤。
-SEMANTIC_MODEL_DISCOVERY_HINT = "按 semantic-query 技能检索并确认语义模型"
+# 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
+# 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。
+SEMANTIC_MODEL_DISCOVERY_HINT = f"按 {DATA_ANALYZING_SKILL} 技能检索并确认语义模型"
 # 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":

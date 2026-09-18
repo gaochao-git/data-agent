@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.tools import semantic_yaml_check
 from apps.chat_data_app.agent.tools.semantic_yaml_check import create_semantic_yaml_check_tool
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 _DATASOURCE = {
     "ds_tables": [
@@ -133,3 +134,14 @@ def test_tool_blocks_unknown_physical_column(monkeypatch):
     assert model["importable"] is False
     assert any("必须引用表 orders 的物理字段" in error for error in model["errors"])
     assert "quality" not in model
+
+
+def test_description_points_at_data_analyzing_skill():
+    """工具描述是常量 docstring（f-string 会让 ``__doc__`` 变 ``None``），插不进常量，靠本例锁住。
+
+    指向写**技能名**而不是显示名：显示名是 frontmatter ``title``，属展示层，
+    改显示名不该让工具文案连带变红；技能名才是跨层契约。
+    """
+    description = create_semantic_yaml_check_tool(datasource_id="ds_a").description
+
+    assert f"`{DATA_ANALYZING_SKILL}`" in description

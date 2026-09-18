@@ -6,6 +6,9 @@ import json
 from datetime import datetime
 from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from utils.builtin_skills import DATA_ANALYZING_SKILL
+
 from .chart_types import ChartType
 from .services.runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS
 from .services.semantic.core.input_validator import FILTER_OPERATORS
@@ -755,7 +758,7 @@ class ExecuteSemanticInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次 DSL 使用的指标集 ID；语义模型检索方式以 semantic-query 技能为准",
+        description=f"本次 DSL 使用的指标集 ID；语义模型检索方式以 {DATA_ANALYZING_SKILL} 技能为准",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -853,7 +856,7 @@ class GenerateChartInput(BaseModel):
 class LoadSkillInput(BaseModel):
     """加载 Skill 工具的输入参数"""
     skill_name: str = Field(
-        description="要加载的 skill 名称，如 dashboard-generation"
+        description=f"要加载的 skill 名称，如 {DATA_ANALYZING_SKILL}"
     )
 
 

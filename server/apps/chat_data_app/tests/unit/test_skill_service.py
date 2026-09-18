@@ -2,7 +2,6 @@ import os
 import sys
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -13,10 +12,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.skills import clear_metadata_cache, format_skills_prompt, parse_metadata
-from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
+from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
 from apps.chat_data_app.agent.skills.skill_service import SkillService, skill_service
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
 @pytest.fixture(autouse=True)
@@ -62,26 +61,30 @@ metadata:
 def test_skill_service_lists_and_filters_skills():
     clear_metadata_cache()
 
-    skills = asyncio.run(skill_service.list_skills_async(search="看板", category="dashboard_generation"))
+    skills = asyncio.run(skill_service.list_skills_async(search="看板", category="data_analyzing"))
 
-    risk_skill = next(item for item in skills if item["name"] == "dashboard-generation")
-    assert risk_skill["title"] == "看板生成技能"
-    assert risk_skill["output_type"] == "dashboard"
-    assert risk_skill["input_schema"]["fields"][0]["name"] == "goal"
+    analyzing_skill = next(item for item in skills if item["name"] == DATA_ANALYZING_SKILL)
+    assert analyzing_skill["title"] == "数据分析"
+    assert analyzing_skill["output_type"] == "mixed"
+    # 合并后不再暴露原看板技能的入参表单（input_schema 已随合并移除）
+    assert analyzing_skill["input_schema"] == {}
 
 
 def test_skill_service_get_skill_returns_content_and_files():
     clear_metadata_cache()
 
-    skill = asyncio.run(skill_service.get_skill_async("dashboard-generation"))
+    skill = asyncio.run(skill_service.get_skill_async(DATA_ANALYZING_SKILL))
 
     assert skill is not None
-    assert skill["name"] == "dashboard-generation"
-    assert "看板生成技能" in skill["content"]
+    assert skill["name"] == DATA_ANALYZING_SKILL
+    assert "数据分析技能" in skill["content"]
     assert isinstance(skill["references"], list)
     assert "scripts" not in skill
-    assert "dashboard-generation-guide.md" in skill["references"]
-    assert "examples/comprehensive-dashboard.json" in skill["assets"]
+    # references / assets 按能力分层，列表里带能力子目录
+    assert "dashboard/guide.md" in skill["references"]
+    assert "analysis/query.md" in skill["references"]
+    assert "governance/quality-check.md" in skill["references"]
+    assert "dashboard/examples/comprehensive-dashboard.json" in skill["assets"]
 
 
 def test_officecli_system_skill_includes_standard_report_template():
@@ -101,7 +104,7 @@ def test_skill_service_gets_skill_creator_system_skill():
 
     assert skill is not None
     assert skill["name"] == "skill-creator"
-    assert skill["title"] == "技能生成技能"
+    assert skill["title"] == "技能创建"
     assert skill["category"] == "skill_creation"
     assert "output-patterns.md" in skill["references"]
     assert "workflows.md" in skill["references"]
@@ -111,11 +114,11 @@ def test_skill_service_gets_skill_creator_system_skill():
 def test_skill_service_get_skill_metadata_does_not_return_content():
     clear_metadata_cache()
 
-    skill = asyncio.run(skill_service.resolve_skill_path_async("看板生成技能"))
+    skill = asyncio.run(skill_service.resolve_skill_path_async(DATA_ANALYZING_SKILL))
 
     assert skill is not None
-    assert skill["name"] == "dashboard-generation"
-    assert skill["title"] == "看板生成技能"
+    assert skill["name"] == DATA_ANALYZING_SKILL
+    assert skill["title"] == "数据分析"
     assert skill["source"] == "system"
     assert "content" not in skill
     assert "path" in skill
@@ -792,7 +795,6 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
     dao = FakeStore()
     monkeypatch.setattr(service, "_dao", dao)
 
-    assert skill_service_module.resolve_skill_name("风险分析技能") == "dashboard-generation"
     assert skill_service_module._alpha_suffix(1) == "a"
     assert skill_service_module._alpha_suffix(27) == "aa"
     assert info["title"] == "sales-analysis"
@@ -1560,6 +1562,37 @@ def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path,
     asyncio.run(run_create())
 
     assert created["visibility_type"] == "private"
+
+
+def test_system_skill_names_are_reserved_and_legacy_names_are_free(tmp_path, monkeypatch):
+    """系统技能标识不可被用户技能占用；旧技能名不再被别名劫持，用户可自由使用。
+
+    系统技能不入库，``skill_name_exists_async`` 查不到它们，所以
+    ``create_user_skill_async`` 里那条「已被系统技能占用」是唯一防线；
+    旧名解冻的前提是别名表已删除，这里一并锁住，避免别名机制被重新引入。
+    """
+    service = skill_service_module.SkillService()
+
+    class EmptyStore:
+        async def get_skill_async(self, name, user_id=""):
+            return None
+
+        async def skill_name_exists_async(self, skill_name):
+            return False
+
+    async def run_create(skill_name):
+        monkeypatch.setattr(service, "_dao", EmptyStore())
+        monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+        return await service.create_user_skill_async(
+            {"skill_name": skill_name, "skill_title": "示例", "content": "# 示例"}, "u1"
+        )
+
+    with pytest.raises(ValueError, match="已被系统技能占用"):
+        asyncio.run(run_create(DATA_ANALYZING_SKILL))
+
+    for legacy in ("semantic-query", "dashboard-generation", "semantic-quality-check", "看板生成技能"):
+        assert asyncio.run(service._get_system_skill_metadata_async(legacy)) is None
+    assert asyncio.run(service._get_system_skill_metadata_async(DATA_ANALYZING_SKILL))
 
 
 def test_create_user_skill_async_rejects_globally_occupied_name(tmp_path, monkeypatch):

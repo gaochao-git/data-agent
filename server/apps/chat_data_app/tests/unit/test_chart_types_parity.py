@@ -2,7 +2,7 @@
 
 chart 类型在五处声明：后端 ``chart_types.py``、前端 ``chartTypes.ts``、前端
 ``CHART_TYPE_HELP_TEXT``、后端 ``get_chart_type_prompt_text``（提示词物料）、
-dashboard-generation 技能文档（SKILL.md 与主指南）。任何一处新增/改名图表类型
+data-analyzing 技能的看板主指南。任何一处新增/改名图表类型
 而其余未同步时，本测试立即失败。新增图表类型的唯一合法流程是五处同步改动。
 """
 
@@ -17,10 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 FRONTEND_CHART_TYPES_PATH = (
     REPO_ROOT / "web-vue" / "src" / "views" / "chat-data" / "chartTypes.ts"
 )
-# 图表类型清单的文档维护点是主指南（guide.md）；SKILL.md 不重复罗列类型
+# 图表类型清单的文档维护点是数据分析技能的看板主指南；SKILL.md 不重复罗列类型
 # （类型清单另有 chart_types.py 注册表与 get_chart_type_prompt_text 两处声明）。
+# 读的是 git 跟踪的种子技能目录（agent/skills），不是机器本地的运行时副本
+# CHAT_DATA_HOME/skills/system——后者不入库、会与种子漂移。
 SKILL_DOC_PATHS = [
-    REPO_ROOT / "chat_data" / "skills" / "system" / "dashboard-generation" / "references" / "dashboard-generation-guide.md",
+    REPO_ROOT / "server" / "apps" / "chat_data_app" / "agent" / "skills" / "data-analyzing" / "references" / "dashboard" / "guide.md",
 ]
 
 BACKEND_KEYS = [item["key"] for item in CHART_TYPE_ITEMS]
@@ -70,7 +72,7 @@ def test_frontend_registry_keys_and_labels_match_backend():
     assert frontend_items == backend_items, (
         "chartTypes.ts 与后端 chart_types.py 注册表不一致（顺序/key/label/能力标记），"
         "新增图表类型必须五处同步：后端注册表、前端注册表、CHART_TYPE_HELP_TEXT、"
-        "get_chart_type_prompt_text、dashboard-generation 技能文档"
+        "get_chart_type_prompt_text、data-analyzing 技能的看板主指南"
     )
 
 
