@@ -39,6 +39,7 @@ import { deriveAnalysisTodos } from '../utils/analysisTodos'
 import { createTopReachTracker } from '../utils/scrollReach'
 import { collapseAllDirectories, collectCollapsibleDirectoryPaths, DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES, expandAllDirectories, formatFileSize, isTreeFullyCollapsed, isWorkspaceFileDeletable, isWorkspaceFileDownloadable, syncTruncatedTitle } from '../utils/consoleFileTree'
 import { evictWorkspaceFileCache } from '../utils/workspacePreviewCache'
+import { extractWrittenFilePathCandidates } from '../utils/toolDisplay'
 
 interface Props {
   datasource?: DataSource | null
@@ -662,6 +663,15 @@ const loadingOfficePreviewSequence = ref<number | null>(null)
 const loadingWorkspaceFileSequence = ref<number | null>(null)
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
+// 手动刷新按钮的忙碌态：列表请求与当前预览内容请求（文本/二进制/Office）任一进行中都算。
+// 只绑列表态会出现「图标停转了但内容还在加载」的错觉（按钮 title 同步用这个口径）。
+const isWorkspaceRefreshBusy = computed(() => {
+  if (isWorkspaceFilesLoading.value) return true
+  const selectedPath = selectedConsoleFilePath.value
+  if (!selectedPath) return false
+  if (loadingWorkspaceFilePath.value === selectedPath) return true
+  return loadingOfficePreviewKey.value === `${localConversationId.value}:${selectedPath}`
+})
 const presentedArtifactContents = ref<Record<string, string>>({})
 const loadedPresentedArtifactKeys = ref<Set<string>>(new Set())
 const loadingPresentedArtifactKeys = ref<Set<string>>(new Set())
@@ -1468,12 +1478,16 @@ const scheduleWorkspaceFilesRefresh = () => {
   }, 500)
 }
 
-// 手动刷新文件列表（预览区头部按钮）。tool_result 与 run 结束都会自动刷新，
-// 这里只是给用户一个兜底入口。传 localConversationId 与自动刷新保持一致：
+// 手动刷新（预览区头部按钮）：刷新文件列表之外，还要强制重载当前预览的内容——
+// 列表刷新不会作废内容缓存（见 utils/workspacePreviewCache.ts），只刷列表会让人以为
+// 「点了刷新但预览还是旧的」。传 localConversationId 与自动刷新保持一致：
 // loadWorkspaceFiles 在 id 不匹配时会丢弃结果且不复位 loading 态。
 const refreshWorkspaceFiles = () => {
   if (!localConversationId.value) return
   void loadWorkspaceFiles(localConversationId.value)
+  if (selectedConsoleFilePath.value) {
+    void loadWorkspaceFileContent(localConversationId.value, selectedConsoleFilePath.value, { forceReload: true })
+  }
 }
 
 // 预览类型常量与 isBinaryPreviewPath 已提取到 utils/filePreview.ts（与技能管理预览共用，唯一来源）。
@@ -1559,6 +1573,22 @@ const isCurrentWorkspaceFilePreviewRequest = (
   && conversationId === localConversationId.value
   && path === selectedConsoleFilePath.value
 )
+
+// 工作区文件被工具改写后，若改的正是当前预览的文件，强制重载预览内容。
+// 预览内容缓存按路径命中短路（见 utils/workspacePreviewCache.ts），磁盘上的新内容不会自愈，
+// 必须由「知道文件已变」的一方显式 forceReload；工具 args 里的路径先归一化成与
+// selectedConsoleFilePath 同一口径（剥掉 /mnt/user-data 前缀）再比较。
+// bash_run / officecli_run 的间接写入没有结构化路径，覆盖不到，只能靠手动刷新兜底。
+const reloadWorkspacePreviewIfSelected = (toolInfo?: ToolCallInfo | null) => {
+  const conversationId = localConversationId.value
+  const selectedPath = selectedConsoleFilePath.value
+  if (!conversationId || !selectedPath) return
+  const args = (toolInfo?.args || {}) as Record<string, unknown>
+  const writtenPaths = extractWrittenFilePathCandidates(args).map(normalizeVisiblePath)
+  if (writtenPaths.some(path => path === selectedPath)) {
+    void loadWorkspaceFileContent(conversationId, selectedPath, { forceReload: true })
+  }
+}
 
 const loadWorkspaceOfficeHtmlPreview = async (
   conversationId: string,
@@ -2572,6 +2602,8 @@ const upsertToolMessage = (toolInfo: ToolCallInfo) => {
   if (displayToolInfo.status === 'completed') {
     scheduleWorkspaceFilesRefresh()
     loadPresentedArtifacts(localConversationId.value)
+    // 改的就是正在预览的文件时，预览内容立刻跟着刷新，不等用户手动兜底
+    reloadWorkspacePreviewIfSelected(displayToolInfo)
   }
 }
 
@@ -3969,12 +4001,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   v-if="selectedConsoleFile"
                   type="button"
                   class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-                  :title="isWorkspaceFilesLoading ? '正在刷新文件列表' : '刷新文件列表'"
-                  :disabled="isWorkspaceFilesLoading"
+                  :title="isWorkspaceRefreshBusy ? '正在刷新' : '刷新文件列表与预览内容'"
+                  :disabled="isWorkspaceRefreshBusy"
                   data-console-files-refresh="true"
                   @click="refreshWorkspaceFiles"
                 >
-                  <i class="fa-solid fa-rotate-right" :class="isWorkspaceFilesLoading ? 'fa-spin' : ''"></i>
+                  <i class="fa-solid fa-rotate-right" :class="isWorkspaceRefreshBusy ? 'fa-spin' : ''"></i>
                 </button>
                 <button
                   v-if="selectedConsoleFile"

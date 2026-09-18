@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../toolDisplay'
+import { extractWrittenFilePathCandidates, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -142,5 +142,45 @@ describe('toolDisplay', () => {
       'batch /mnt/user-data/workspace/月报.docx'
     )
     expect(getToolTechnicalDescription('unknown_tool', { intent: 'x' })).toBe('')
+  })
+})
+
+describe('extractWrittenFilePathCandidates', () => {
+  it('collects path keys from file tools (file_path/target_path/destination_path/path)', () => {
+    expect(extractWrittenFilePathCandidates({
+      file_path: '/mnt/user-data/outputs/a.md',
+      target_path: '/mnt/user-data/outputs/b.md',
+      destination_path: '/mnt/user-data/outputs/c.md',
+      path: '/mnt/user-data/workspace/d.md',
+    })).toEqual([
+      '/mnt/user-data/outputs/a.md',
+      '/mnt/user-data/outputs/b.md',
+      '/mnt/user-data/outputs/c.md',
+      '/mnt/user-data/workspace/d.md',
+    ])
+  })
+
+  it('reads save_as from data_analyzing execute_query action_payload', () => {
+    expect(extractWrittenFilePathCandidates({
+      action: 'execute_query',
+      action_payload: { sql: 'SELECT 1', save_as: '/mnt/user-data/outputs/结果.csv' },
+    })).toEqual(['/mnt/user-data/outputs/结果.csv'])
+  })
+
+  it('expands present_artifacts files list', () => {
+    expect(extractWrittenFilePathCandidates({
+      files: ['/mnt/user-data/outputs/报告.docx', '/mnt/user-data/outputs/图.png'],
+      intent: '展示产物',
+    })).toEqual(['/mnt/user-data/outputs/报告.docx', '/mnt/user-data/outputs/图.png'])
+  })
+
+  it('skips non-string and blank values, returns empty for read-only tools', () => {
+    expect(extractWrittenFilePathCandidates({
+      command: 'echo hi',
+      file_path: '   ',
+      files: [123, null, ''],
+      action_payload: { save_as: 42 },
+    })).toEqual([])
+    expect(extractWrittenFilePathCandidates({})).toEqual([])
   })
 })

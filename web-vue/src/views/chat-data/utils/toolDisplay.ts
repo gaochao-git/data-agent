@@ -188,3 +188,25 @@ export function getToolTechnicalDescription(
   const name = String(toolName || '').trim()
   return TOOL_DESCRIPTION_BUILDERS[name]?.(args) || ''
 }
+
+/**
+ * 从工具入参中提取所有可能指向「被写入/产生」文件路径的原始值。
+ * 覆盖：文件类工具的 file_path/target_path/destination_path/path、
+ * data_analyzing_tool execute_query 的 action_payload.save_as、
+ * present_artifacts 的 files[]（字符串数组）。
+ * 已知覆盖不到：bash_run / officecli_run 的间接写入（命令文本里没有结构化路径），
+ * 这类改动只能靠手动刷新兜底。
+ * 返回值未做可见路径归一化，由调用方按自己的口径（如剥 /mnt/user-data 前缀）再处理。
+ */
+export function extractWrittenFilePathCandidates(args: ToolArgs = {}): string[] {
+  const candidates: unknown[] = [
+    args.file_path,
+    args.target_path,
+    args.destination_path,
+    args.path,
+    (args.action_payload as ToolArgs | undefined)?.save_as,
+    ...(Array.isArray(args.files) ? args.files : []),
+  ]
+  return candidates
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+}

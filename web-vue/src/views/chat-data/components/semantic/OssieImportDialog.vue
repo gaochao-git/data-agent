@@ -647,7 +647,7 @@ const diffExistingFor = (muid: string) => {
         >
           <i class="fa-solid fa-file-import"></i>
           {{ files.length ? '追加 YAML 文件' : '选择 YAML 文件' }}
-          <input type="file" accept=".yaml,.yml,.txt" multiple class="hidden" @change="handleFileChange" />
+          <input type="file" accept=".yaml,.yml" multiple class="hidden" @change="handleFileChange" />
         </label>
         <span v-if="files.length" class="min-w-0 flex-1 truncate text-[12px] text-gray-500">
           {{ singleFileName || `已选择 ${files.length} 个文件` }}

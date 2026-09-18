@@ -839,6 +839,8 @@ ChatData
 - 前置：文件可预览且 Agent 会修改同一工作区文件。
 - 操作：连续点击同一文件两次；在 Agent 写入前后点击文件并刷新文件树/预览。
 - 预期：第二次点击仍能获取内容，不出现“暂无可预览内容”的错误假状态；内容变化后再次请求得到新内容；请求中的旧响应不能覆盖更新后的内容；加载状态稳定，不反复闪烁。
+- 刷新语义（**2026-09-18 起，`AnalysisConversation.vue`**）：预览区头部刷新按钮（`data-console-files-refresh`，`v-if="selectedConsoleFile"` 时才渲染，title 「刷新文件列表与预览内容」/ 加载中「正在刷新」）**同时刷新文件列表与强制重载当前预览内容** —— 列表刷新不会作废预览内容缓存（见 `utils/workspacePreviewCache.ts`），只刷列表会让人以为「点了刷新但预览还是旧的」。判据：点击后同时发出 `workspace-files` 与文件内容请求（XHR 探针可证）。
+- 自动重载：Agent 工具改写的文件**恰是当前预览文件时**，工具 `completed` 即刻 `forceReload` 预览内容，不等用户手动点刷新（`reloadWorkspacePreviewIfSelected`，路径候选统一由 `utils/toolDisplay.ts` 的 `extractWrittenFilePathCandidates` 提取，含 `file_path`/`target_path`/`destination_path`/`path`/`action_payload.save_as`/`files[]`，单测见 `toolDisplay.spec.ts`）。**覆盖缺口（非缺陷，回落到手动刷新）**：`bash_run`/`officecli_run` 的间接写入（命令文本无结构化路径）不在自动重载范围内。刷新按钮忙碌态绑 `isWorkspaceRefreshBusy`（列表请求 + 当前预览内容请求任一进行中）。
 
 #### FILE-05 行数统计和大文件读取
 
