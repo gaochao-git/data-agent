@@ -77,7 +77,7 @@ def test_skill_service_get_skill_returns_content_and_files():
 
     assert skill is not None
     assert skill["name"] == DATA_ANALYZING_SKILL
-    assert "数据分析技能" in skill["content"]
+    assert "# 数据分析" in skill["content"]
     assert isinstance(skill["references"], list)
     assert "scripts" not in skill
     # references / assets 按能力分层，列表里带能力子目录
