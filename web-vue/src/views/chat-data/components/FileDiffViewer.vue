@@ -9,7 +9,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, lineNumbers } from '@codemirror/view'
 import { MergeView } from '@codemirror/merge'
 import { yaml } from '@codemirror/lang-yaml'
 import { sql } from '@codemirror/lang-sql'
@@ -75,6 +75,8 @@ const renderMergeView = async () => {
   const extensionsOf = (path: string) => [
     langExtension(path),
     diffTheme,
+    // MergeView 是手动拼 extensions 构建的（无 basicSetup），行号必须显式加
+    lineNumbers(),
     EditorView.lineWrapping,
     EditorView.editable.of(false),
     EditorState.readOnly.of(true),
@@ -165,16 +167,17 @@ onBeforeUnmount(destroyMergeView)
           <span class="shrink-0 font-mono text-[11px] font-medium text-rose-500">-{{ payload.removed_lines }}</span>
         </template>
         <div class="ml-auto flex items-center rounded-md border border-slate-200 bg-white p-0.5">
+          <!-- chat-data 的 Tailwind 不引 preflight：裸 button 必须显式压掉 UA 默认灰底/黑边框（border-none + 两分支各给 bg） -->
           <button
             type="button"
-            class="rounded px-2 py-1 text-xs transition-colors"
-            :class="mode === 'merge' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-100'"
+            class="rounded border-none px-2 py-1 text-xs transition-colors"
+            :class="mode === 'merge' ? 'bg-slate-700 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100'"
             @click="mode = 'merge'"
           >并排对比</button>
           <button
             type="button"
-            class="rounded px-2 py-1 text-xs transition-colors"
-            :class="mode === 'simple' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-100'"
+            class="rounded border-none px-2 py-1 text-xs transition-colors"
+            :class="mode === 'simple' ? 'bg-slate-700 text-white' : 'bg-transparent text-slate-500 hover:bg-slate-100'"
             @click="mode = 'simple'"
           >简洁对比</button>
         </div>
@@ -197,9 +200,13 @@ onBeforeUnmount(destroyMergeView)
           <div
             v-for="(line, idx) in diffLines"
             :key="idx"
-            class="whitespace-pre"
+            class="flex whitespace-pre"
             :class="{ 'bg-emerald-50 text-emerald-700': line.type === 'add', 'bg-rose-50 text-rose-700': line.type === 'del', 'text-sky-600': line.type === 'hunk', 'text-slate-400': line.type === 'meta', 'text-slate-600': line.type === 'context' }"
-          >{{ line.content || ' ' }}</div>
+          >
+            <span class="w-9 shrink-0 select-none pr-2 text-right text-slate-300">{{ line.oldNo ?? '' }}</span>
+            <span class="w-9 shrink-0 select-none pr-2 text-right text-slate-300">{{ line.newNo ?? '' }}</span>
+            <span class="min-w-0 flex-1">{{ line.content || ' ' }}</span>
+          </div>
         </div>
         <div v-else class="flex h-40 items-center justify-center text-sm text-slate-400">两个文件内容完全一致</div>
       </template>

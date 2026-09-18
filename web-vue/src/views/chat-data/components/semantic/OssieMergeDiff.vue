@@ -6,7 +6,7 @@
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, lineNumbers } from '@codemirror/view'
 import { MergeView } from '@codemirror/merge'
 import { yaml } from '@codemirror/lang-yaml'
 import { toYaml } from '../../utils/yamlDump'
@@ -94,6 +94,8 @@ onMounted(() => {
   const baseExtensions = [
     yaml(),
     diffTheme,
+    // MergeView 手动拼 extensions（无 basicSetup 兜底），行号必须显式加
+    lineNumbers(),
     EditorView.lineWrapping,
     EditorView.editable.of(false),
     EditorState.readOnly.of(true),

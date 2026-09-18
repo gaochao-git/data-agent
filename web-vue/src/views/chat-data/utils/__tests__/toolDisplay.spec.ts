@@ -158,6 +158,34 @@ describe('splitFileDiffLines', () => {
     expect(lines.map(l => l.type)).toEqual(['meta', 'meta', 'hunk', 'context', 'add', 'del'])
   })
 
+  it('computes old/new line numbers from hunk headers', () => {
+    const lines = splitFileDiffLines([
+      '--- /a.txt',
+      '+++ /b.txt',
+      '@@ -1,2 +1,3 @@',
+      ' context',
+      '+added',
+      '-removed',
+      ' tail',
+    ].join('\n'))
+    expect(lines[2]).toEqual({ type: 'hunk', content: '@@ -1,2 +1,3 @@' })
+    expect(lines[3]).toEqual({ type: 'context', content: ' context', oldNo: 1, newNo: 1 })
+    expect(lines[4]).toEqual({ type: 'add', content: '+added', newNo: 2 })
+    expect(lines[5]).toEqual({ type: 'del', content: '-removed', oldNo: 2 })
+    expect(lines[6]).toEqual({ type: 'context', content: ' tail', oldNo: 3, newNo: 3 })
+  })
+
+  it('resets numbering at each hunk header', () => {
+    const lines = splitFileDiffLines([
+      '@@ -10,2 +10,2 @@',
+      ' ctx',
+      '@@ -50,1 +60,1 @@',
+      '+new',
+    ].join('\n'))
+    expect(lines[1]).toEqual({ type: 'context', content: ' ctx', oldNo: 10, newNo: 10 })
+    expect(lines[3]).toEqual({ type: 'add', content: '+new', newNo: 60 })
+  })
+
   it('treats ---/+++ lines inside hunk body as del/add, not header', () => {
     const lines = splitFileDiffLines([
       '--- /a.txt',
@@ -168,9 +196,10 @@ describe('splitFileDiffLines', () => {
       '@@ -5,1 +6,1 @@',
       ' context',
     ].join('\n'))
-    expect(lines[3]).toEqual({ type: 'del', content: '---正文里以减号开头的删除行' })
-    expect(lines[4]).toEqual({ type: 'add', content: '+++正文里以加号开头的新增行' })
+    expect(lines[3]).toEqual({ type: 'del', content: '---正文里以减号开头的删除行', oldNo: 1 })
+    expect(lines[4]).toEqual({ type: 'add', content: '+++正文里以加号开头的新增行', newNo: 1 })
     expect(lines[5]).toEqual({ type: 'hunk', content: '@@ -5,1 +6,1 @@' })
+    expect(lines[6]).toEqual({ type: 'context', content: ' context', oldNo: 5, newNo: 6 })
   })
 })
 

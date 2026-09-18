@@ -15,6 +15,7 @@ const mergeMocks = vi.hoisted(() => ({
 vi.mock('@codemirror/merge', () => ({ MergeView: mergeMocks.MergeView }))
 vi.mock('@codemirror/view', () => ({
   EditorView: { theme: () => [], editable: { of: () => [] }, lineWrapping: [] },
+  lineNumbers: () => ['line-numbers-ext'],
 }))
 vi.mock('@codemirror/state', () => ({ EditorState: { readOnly: { of: () => [] } } }))
 vi.mock('@codemirror/lang-yaml', () => ({ yaml: () => [] }))
@@ -104,6 +105,9 @@ describe('FileDiffViewer', () => {
     expect(options?.a.doc).toBe('第一行\n第三行：待修改')
     expect(options?.b.doc).toBe('第一行\n第三行：已修改\n新增行')
     expect(options?.parent).toBeInstanceOf(HTMLElement)
+    // 行号必须显式注入（MergeView 手动拼 extensions，无 basicSetup 兜底）
+    expect(options?.a.extensions).toContainEqual(['line-numbers-ext'])
+    expect(options?.b.extensions).toContainEqual(['line-numbers-ext'])
   })
 
   it('falls back to simple mode when file contents fail to load', async () => {

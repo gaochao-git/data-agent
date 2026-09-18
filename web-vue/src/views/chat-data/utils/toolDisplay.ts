@@ -204,6 +204,10 @@ export type FileDiffLineType = 'meta' | 'hunk' | 'add' | 'del' | 'context'
 export interface FileDiffLine {
   type: FileDiffLineType
   content: string
+  /** 简洁对比行号：del/context 行的旧文件行号（add 行无；由 hunk 头起始行号推算） */
+  oldNo?: number
+  /** 简洁对比行号：add/context 行的新文件行号（del 行无；由 hunk 头起始行号推算） */
+  newNo?: number
 }
 
 const FILE_DIFF_RESULT_PREFIX = '[file_diff]\n'
@@ -242,18 +246,44 @@ export function isFileDiffOffloaded(
  * 进入 hunk 正文后，以 ---/+++ 开头的行按删除/新增处理（正文内容可能自带 - 前缀），避免误判成文件头。 */
 export function splitFileDiffLines(diff?: string): FileDiffLine[] {
   if (!diff) return []
+  // hunk 头形如 @@ -oldStart,oldCount +newStart,newCount @@（count 可省略）
+  const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+  const result: FileDiffLine[] = []
   let inHunk = false
-  return diff.split('\n').map((line): FileDiffLine => {
+  let oldNo = 0
+  let newNo = 0
+  for (const line of diff.split('\n')) {
     if (!inHunk) {
-      if (line.startsWith('---') || line.startsWith('+++')) return { type: 'meta', content: line }
-      if (!line.startsWith('@@')) return { type: 'context', content: line }
+      if (line.startsWith('---') || line.startsWith('+++')) {
+        result.push({ type: 'meta', content: line })
+        continue
+      }
+      if (!line.startsWith('@@')) {
+        result.push({ type: 'context', content: line })
+        continue
+      }
       inHunk = true
     }
-    if (line.startsWith('@@')) return { type: 'hunk', content: line }
-    if (line.startsWith('+')) return { type: 'add', content: line }
-    if (line.startsWith('-')) return { type: 'del', content: line }
-    return { type: 'context', content: line }
-  })
+    if (line.startsWith('@@')) {
+      const m = line.match(HUNK_HEADER)
+      if (m) {
+        oldNo = Number(m[1])
+        newNo = Number(m[2])
+      }
+      result.push({ type: 'hunk', content: line })
+      continue
+    }
+    if (line.startsWith('+')) {
+      result.push({ type: 'add', content: line, newNo: newNo++ })
+      continue
+    }
+    if (line.startsWith('-')) {
+      result.push({ type: 'del', content: line, oldNo: oldNo++ })
+      continue
+    }
+    result.push({ type: 'context', content: line, oldNo: oldNo++, newNo: newNo++ })
+  }
+  return result
 }
 
 /**
