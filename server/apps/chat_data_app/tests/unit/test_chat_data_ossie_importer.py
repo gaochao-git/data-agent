@@ -749,7 +749,7 @@ def _conflicted_manager():
 
 
 def test_preview_route_marks_existing_config_conflict(monkeypatch):
-    """同组内存在同名活跃配置时，preview 标注冲突且清单出现「模型名冲突」警告行。"""
+    """同组内存在同名活跃配置时，preview 标注冲突；同名不再进校验清单（覆盖导入是正常工作流）。"""
     manager = _conflicted_manager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
@@ -760,13 +760,11 @@ def test_preview_route_marks_existing_config_conflict(monkeypatch):
     )))
     assert response["code"] == ErrorCode.SUCCESS
     model = response["data"]["models"][0]
-    # 冲突不影响可导入（由导入动作决定替换/跳过）
+    # 冲突不影响可导入（由导入动作决定替换/跳过）；动作徽章数据仍随模型返回
     assert model["importable"] is True
     assert model["existing_config"] == {"config_id": "sc_9", "name": "商品模型", "enabled": True}
-    checklist = _checklist_by_name(model["checklist"])
-    assert checklist["模型名冲突"]["status"] == "warn"
-    # 文案只给结论：不带 config_id / 启用态，也不复述行内控件（替换/忽略）的说明
-    assert checklist["模型名冲突"]["message"] == "已存在同名配置"
+    # 可操作同名不再生成「模型名冲突」清单行，前端由名称行动作徽章（替换/忽略）表达
+    assert all(row["name"] != "模型名冲突" for row in model["checklist"])
 
 
 def test_preview_route_no_conflict_when_name_absent(monkeypatch):
@@ -996,13 +994,16 @@ def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
     assert len(manager.created_kwargs) == 2
 
 
-def test_checklist_conflict_row_from_existing_config():
-    """build_model_checklist 按 existing_config 生成「模型名冲突」警告行。"""
+def test_checklist_conflict_row_only_for_locked_conflict():
+    """可操作同名不再进清单（覆盖导入是正常工作流）；仅 locked 同名保留「模型名冲突」警告行。"""
     item = OssieSemanticModelImport(name="模型A", existing_config={"config_id": "sc_1", "name": "模型A", "enabled": False})
     rows = build_model_checklist(item)
-    by_name = _checklist_by_name(rows)
+    assert all(row["name"] != "模型名冲突" for row in rows)
+
+    locked = OssieSemanticModelImport(name="模型C", conflict_locked=True)
+    by_name = _checklist_by_name(build_model_checklist(locked))
     assert by_name["模型名冲突"]["status"] == "warn"
-    assert by_name["模型名冲突"]["message"] == "已存在同名配置"
+    assert "无操作权限" in by_name["模型名冲突"]["message"]
 
     no_conflict = build_model_checklist(OssieSemanticModelImport(name="模型B"))
     assert all(row["name"] != "模型名冲突" for row in no_conflict)

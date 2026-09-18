@@ -165,6 +165,8 @@ describe('OssieImportDialog', () => {
     expect(apiMocks.previewAdminOssieSemanticImport).toHaveBeenCalledWith('ds_a', yamlContent)
     expect(wrapper.text()).toContain('商品模型')
     expect(wrapper.text()).toContain('可导入')
+    // 模式列：无同名文件行标「新增」徽章（导入动作不进校验清单，直接在文件行展示）
+    expect(wrapper.text()).toContain('新增')
     expect(wrapper.text()).toContain('0 维度 · 0 指标 · 0 关系')
     // 「来源配置：sc_xxx（将创建新草稿，不更新原配置）」按产品口径不再展示
     expect(wrapper.text()).not.toContain('来源配置：')
@@ -330,8 +332,14 @@ describe('OssieImportDialog', () => {
     const wrapper = await mountDialog()
     await chooseFileAndPreview(wrapper)
 
-    // 冲突提示收敛为收起行按钮的 title（完整说明由下方「模型名冲突」清单行承载）
+    // 冲突提示收敛为文件行「模式」列徽章；同名不再进校验清单，覆盖后果悬浮在徽章 title 上
     expect(wrapper.find('[title*="已存在同名配置（启用中）"]').exists()).toBe(true)
+    const conflictedRow = findFileRow(wrapper, 'model.yaml')
+    expect(conflictedRow.text()).toContain('替换')
+    expect(conflictedRow.find('[title*="覆盖同名现有配置"]').exists()).toBe(true)
+    // 展开后的模型卡片不再重复动作徽章，校验清单也不出现「模型名冲突」
+    const modelCard = wrapper.findAll('span').find(node => node.text() === '商品模型')!.element.closest('.rounded-md')
+    expect(modelCard!.textContent).not.toContain('模型名冲突')
     // 收起行只剩「查看差异」一个动作：替换/忽略单选与单文件导入按钮都已下线，
     // 是否导入只由左侧勾选决定（不想导入就删掉该行）
     const fileRow = findFileRow(wrapper, 'model.yaml')
@@ -339,7 +347,6 @@ describe('OssieImportDialog', () => {
     expect(fileRow.text()).toContain('查看差异')
     expect(fileRow.findAll('button').some(button => button.text() === '导入')).toBe(false)
     // 展开后的模型卡片不重复处置控件，也不重复差异入口（展开=看详情）
-    const modelCard = wrapper.findAll('span').find(node => node.text() === '商品模型')!.element.closest('.rounded-md')
     expect(modelCard!.querySelectorAll('input[type="radio"]')).toHaveLength(0)
     expect(modelCard!.textContent).not.toContain('查看与现有配置的差异')
     // 校验清单的列宽只能由 colgroup 承载：本表首行是 colspan=3 的分组行，table-fixed 会用首行推列宽，
@@ -441,9 +448,11 @@ describe('OssieImportDialog', () => {
     const cells = fileRow.findAll('td')
     expect(cells[1]!.text()).toContain('model.yaml')
     expect(cells[1]!.findAll('button')).toHaveLength(0)
+    // 模式列（cells[2]）：该文件与现有配置同名，标「替换」
+    expect(cells[2]!.text()).toContain('替换')
     // 操作列按钮顺序固定为 `查看详情` → `查看差异` → 移除：详情是通用动作放最左，
     // 所有行（含新模型行）位置一致；差异仅冲突行有，排在详情右侧
-    expect(cells[3]!.findAll('button').map(button => button.text())).toEqual(['查看详情', '查看差异', ''])
+    expect(cells[4]!.findAll('button').map(button => button.text())).toEqual(['查看详情', '查看差异', ''])
 
     await fileRow.findAll('button').find(button => button.text().includes('查看差异'))!.trigger('click')
     await flushPromises()

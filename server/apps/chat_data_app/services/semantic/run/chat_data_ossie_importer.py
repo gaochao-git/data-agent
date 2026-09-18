@@ -569,17 +569,10 @@ def build_model_checklist(
             "message": kind_message,
         })
 
-    # 同名冲突提示：不属于失败，只给结论。处置动作（替换/忽略）由收起态的文件行承载，
-    # config_id / 启用态等元信息不再重复出现在文案里（启用态仍在文件行冲突图标的 title 上）。
-    if item.existing_config:
-        checklist.append({
-            "group": "mapping",
-            "name": "模型名冲突",
-            "status": "warn",
-            "message": "已存在同名配置",
-        })
-    elif item.conflict_locked:
-        # 同名配置不可操作（如他人私有配置）：不展示其元信息，导入时将强制跳过
+    # 同名配置不再作为检查项：覆盖已有模型再导入是正常工作流，「替换/忽略」动作
+    # 由前端模型行徽章与文件行冲突入口表达。仅保留无操作权限（如他人私有配置）的
+    # 同名场景——导入会被强制跳过、用户预期落空，这才是需要警示的异常。
+    if item.conflict_locked:
         checklist.append({
             "group": "mapping",
             "name": "模型名冲突",

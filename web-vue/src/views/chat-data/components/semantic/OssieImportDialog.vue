@@ -270,7 +270,7 @@ const fileConflictModels = (fileId: number) =>
 
 const fileHasConflict = (fileId: number) => fileConflictModels(fileId).length > 0
 
-/** 行内冲突按钮的 title：单模型给启用态（清单行的「模型名冲突」只给结论，不带元信息），多模型给数量 */
+/** 行内冲突按钮的 title：单模型给启用态，多模型给数量（元信息不再重复出现在展开区清单里） */
 const fileConflictTitle = (fileId: number) => {
   const list = fileConflictModels(fileId)
   const first = list[0]
@@ -279,6 +279,55 @@ const fileConflictTitle = (fileId: number) => {
     : list.length ? `${list.length} 个模型与现有配置同名` : ''
   // 冲突默认按「替换」提交：把后果写在按钮上，避免只看到一个「查看差异」而误以为是新建
   return base ? `${base}，导入将覆盖该配置` : ''
+}
+
+/**
+ * 模型行的导入动作徽章（替换/忽略/新增）。「同名」不进校验清单——覆盖已有模型再导入
+ * 是正常工作流，后果在名称行直接展示；locked（无操作权限）由行内琥珀长文案单独表达，
+ * 不再重复一个徽章；不可导入的模型没有动作可展示。
+ */
+const modelImportAction = (model: DialogModel): 'replace' | 'skip' | 'new' | null => {
+  if (!model.importable || model.conflict_locked) return null
+  if (model.existing_config) {
+    return conflictActions.value[model.muid] === 'skip' ? 'skip' : 'replace'
+  }
+  return 'new'
+}
+
+/** 文件行「模式」列的徽章样式与文案 */
+const IMPORT_MODE_LABELS: Record<'replace' | 'new' | 'skip', string> = {
+  replace: '替换',
+  new: '新增',
+  skip: '忽略',
+}
+
+/** 模式徽章的悬浮说明：覆盖后果写在 title 里（原底部「（覆盖现有配置）」文案合并于此） */
+const IMPORT_MODE_TITLES: Record<'replace' | 'new' | 'skip', string> = {
+  replace: '替换会覆盖同名现有配置的内容并强制禁用（保留配置 ID），提交前会再确认一次',
+  new: '不存在同名配置，导入后新建',
+  skip: '同名配置无法操作，导入时将忽略该部分模型',
+}
+
+/**
+ * 文件行「模式」列：该文件内可导入模型的导入动作汇总。
+ * 单一动作直接给词（绝大多数文件单模型），混合动作带计数（如「替换 2 · 新增 1」）；
+ * 未校验或没有可导入模型时为空（行内显示「—」）。同名不进校验清单——覆盖已有
+ * 模型再导入是正常工作流，模式直接标在文件行让用户一眼看到后果。
+ */
+const fileImportModeChips = (fileId: number): Array<{ label: string; title: string }> => {
+  const counts: Record<'replace' | 'new' | 'skip', number> = { replace: 0, new: 0, skip: 0 }
+  modelsOfFile(fileId).forEach(model => {
+    const action = modelImportAction(model)
+    if (action) counts[action] += 1
+  })
+  const entries = (Object.entries(counts) as Array<['replace' | 'new' | 'skip', number]>)
+    .filter(([, count]) => count > 0)
+  const total = entries.reduce((sum, [, count]) => sum + count, 0)
+  if (!total) return []
+  return entries.map(([action, count]) => ({
+    label: entries.length === 1 ? IMPORT_MODE_LABELS[action] : `${IMPORT_MODE_LABELS[action]} ${count}`,
+    title: IMPORT_MODE_TITLES[action],
+  }))
 }
 
 /** 无操作权限的同名冲突数量（不提供差异对比，导入时后端强制忽略） */
@@ -672,6 +721,7 @@ const diffExistingFor = (muid: string) => {
               />
             </td>
             <td class="px-2 py-1">文件</td>
+            <td class="w-[80px] px-2 py-1">模式</td>
             <td class="w-[80px] px-2 py-1">检查结果</td>
             <td class="w-[168px] px-2 py-1 text-right">操作</td>
           </tr>
@@ -703,6 +753,18 @@ const diffExistingFor = (muid: string) => {
                   同名无权限 · 忽略
                 </span>
               </div>
+            </td>
+            <td class="px-2 py-1.5">
+              <!-- 模式列：该文件内模型的导入动作（替换/新增/忽略），未校验或无可导入模型时为「—」；中性文本样式，后果悬浮在 title -->
+              <span v-if="fileImportModeChips(file.id).length" class="flex flex-wrap items-center gap-1.5">
+                <span
+                  v-for="chip in fileImportModeChips(file.id)"
+                  :key="chip.label"
+                  class="text-[11px] text-gray-500"
+                  :title="chip.title"
+                >{{ chip.label }}</span>
+              </span>
+              <span v-else class="text-[11px] text-gray-300">—</span>
             </td>
             <td class="px-2 py-1.5">
               <!-- 校验失败时把后端原因挂在徽标 title 上，行内不额外占位 -->
@@ -807,7 +869,7 @@ const diffExistingFor = (muid: string) => {
               :class="model.importable ? 'border-gray-200' : 'border-red-200 bg-red-50/40'"
             >
               <!-- 名称行：模型标识 + 状态 + 规模摘要。处置与差异入口都在收起态文件行（见文件表），
-                   展开区只承载详情（校验清单 / 错误 / 警告 / 质量规则），差异对比是独立的一块。 -->
+                   导入动作（替换/新增/忽略）由文件表「模式」列统一展示，展开区只承载详情。 -->
               <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-gray-700 truncate">{{ model.name || '未命名模型' }}</span>
                 <span
@@ -893,10 +955,7 @@ const diffExistingFor = (muid: string) => {
         <!-- 门禁不通过时先说清原因：按钮变灰却没有解释，是这条流程最容易卡住用户的地方 -->
         <span v-if="footerHint" class="text-[11px]" :class="footerHint.tone">{{ footerHint.text }}</span>
         <span v-else-if="models.length" class="text-[11px] text-green-600">
-          将新建 {{ newCount }}<template v-if="replaceCount"> · 替换 {{ replaceCount }}<span
-            class="text-amber-600"
-            title="替换会覆盖同名现有配置的内容并强制禁用（保留配置 ID），提交前会再确认一次"
-          >（覆盖现有配置）</span></template><template v-if="skipCount"> · 忽略 {{ skipCount }}</template>
+          将新建 {{ newCount }}<template v-if="replaceCount"> · 替换 {{ replaceCount }}</template><template v-if="skipCount"> · 忽略 {{ skipCount }}</template>
         </span>
         <div class="ml-auto flex gap-2">
           <el-button :disabled="busy" @click="visible = false">取消</el-button>
