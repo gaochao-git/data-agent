@@ -1,10 +1,10 @@
 /**
- * 控制台「工作区文件」目录树的折叠集合运算。
+ * 控制台「工作区文件」目录树的折叠集合运算与建树逻辑。
  *
  * 折叠状态用「已折叠路径的 Set」表示：集合里有的路径收起，没有的展开。
  * 顶层目录的路径就是目录名（uploads / workspace / outputs），更深层节点是 'a/b' 形式的完整相对路径。
- * 其余树逻辑（建树、展平可见行）仍留在 AnalysisConversation.vue，这里只放与折叠集合有关的纯函数，
- * 便于单测覆盖「一键全折叠 / 全展开」的边界（文件节点、空目录、已有默认折叠项）。
+ * 折叠集合的纯函数与建树/展平均在这里，便于单测覆盖「一键全折叠 / 全展开」的边界
+ * （文件节点、空目录、已有默认折叠项）；组件只负责响应式装配与交互。
  */
 
 /**
@@ -180,3 +180,220 @@ export function formatFileSize(bytes: number | null | undefined): string {
   const text = scaled.toFixed(1).replace(/\.0$/, '')
   return `${text} ${FILE_SIZE_UNITS[unitIndex]}`
 }
+
+// ---------------------------------------------------------------------------
+// 工作区文件树构建（从 conversation/Conversation.vue 平移，纯函数 + 类型）
+// ---------------------------------------------------------------------------
+
+/** 工作区文件面板里的一个文件条目（由会话工作区文件列表接口聚合而来）。 */
+export interface ProducedFile {
+  path: string
+  fullPath: string
+  relativePath: string
+  displayPath: string
+  source: string
+  status: string
+  /** 字节数，来自工作区列表接口的 st_size；行尾展示用，拿不到时为 0 且不渲染 */
+  size: number
+  /** 修改时间（秒级 Unix 时间戳，后端 st_mtime）；行尾展示用，拿不到时为 0 且不渲染 */
+  mtime: number
+}
+
+export interface ProducedFileTreeNode {
+  name: string
+  path: string
+  label?: string
+  depth: number
+  file?: ProducedFile
+  children: ProducedFileTreeNode[]
+}
+
+export interface VisibleProducedFileTreeNode {
+  node: ProducedFileTreeNode
+  depth: number
+  isLast: boolean
+}
+
+export interface ProducedFileDirectory extends ProducedFileTreeNode {
+  label: string
+}
+
+/** 面板固定展示的三个顶层目录（顺序即渲染顺序）。 */
+export const PRODUCED_FILE_DIRECTORIES: Array<{ name: string; label: string }> = [
+  { name: 'uploads', label: '用户上传文件' },
+  { name: 'workspace', label: '智能体中间文件' },
+  { name: 'outputs', label: '智能体输出文件' },
+]
+
+/**
+ * 把任意路径写法归一化成 `uploads/...` 形式的可见相对路径：
+ * 剥掉 `/mnt/user-data` 前缀、统一分隔符、去多余斜杠。
+ */
+export function normalizeVisiblePath(path: unknown): string {
+  return normalizeWorkspaceRelativePath(String(path ?? ''))
+}
+
+/** 可见相对路径 → 沙箱内展示路径（`/mnt/user-data/<relative>`），空路径回退根目录。 */
+export function toSandboxDisplayPath(path: unknown): string {
+  const relativePath = normalizeVisiblePath(path)
+  if (!relativePath) return '/mnt/user-data'
+  return `/mnt/user-data/${relativePath}`
+}
+
+export interface ProducedFileInput {
+  /** 后端返回的相对路径（优先）或任意原始路径 */
+  relative_path?: string
+  path?: string
+  source?: string
+  size?: number | string
+  mtime?: number | string
+}
+
+/** 单个文件条目聚合：归一化相对路径与沙箱展示路径，非法路径丢弃。 */
+export function toProducedFile(rawPath: string, source: string, size: number, mtime: number): ProducedFile | null {
+  const relativePath = normalizeVisiblePath(rawPath)
+  if (!rawPath || !relativePath) return null
+  return {
+    path: rawPath,
+    fullPath: toSandboxDisplayPath(relativePath),
+    relativePath,
+    displayPath: toSandboxDisplayPath(relativePath),
+    source,
+    status: 'completed',
+    size,
+    mtime,
+  }
+}
+
+/** 把工作区文件列表聚合成「文件条目列表」：去重，且只保留三个固定目录的路径（与平移前口径一致）。 */
+export function buildProducedFiles(files: ProducedFileInput[]): ProducedFile[] {
+  const produced: ProducedFile[] = []
+  const seenPaths = new Set<string>()
+  for (const file of files) {
+    const rawPath = file.relative_path || file.path || ''
+    const relativePath = normalizeVisiblePath(rawPath)
+    if (!relativePath || seenPaths.has(relativePath)) continue
+    const rootDirectory = relativePath.split('/')[0] || ''
+    if (!PRODUCED_FILE_DIRECTORIES.some(directory => directory.name === rootDirectory)) continue
+    const item = toProducedFile(rawPath, file.source || 'workspace', Number(file.size) || 0, Number(file.mtime) || 0)
+    if (!item) continue
+    seenPaths.add(relativePath)
+    produced.push(item)
+  }
+  return produced
+}
+
+/**
+ * 把文件条目按相对路径挂到三个固定顶层目录下，逐级建立中间目录节点。
+ * 固定目录常驻（空也有上传入口等行级交互），额外顶层归入「其他文件」。
+ */
+export function buildProducedFileTree(files: ProducedFile[]): {
+  root: string
+  directories: ProducedFileDirectory[]
+} {
+  const directoryMap = new Map<string, ProducedFileDirectory>()
+  PRODUCED_FILE_DIRECTORIES.forEach((directory) => {
+    directoryMap.set(directory.name, {
+      ...directory,
+      path: directory.name,
+      depth: 0,
+      children: [],
+    })
+  })
+
+  for (const file of files) {
+    const relativePath = normalizeVisiblePath(file.path)
+    if (!relativePath) continue
+    const [directoryName, ...restParts] = relativePath.split('/').filter(Boolean)
+    if (!directoryName) continue
+    if (!directoryMap.has(directoryName)) {
+      directoryMap.set(directoryName, {
+        name: directoryName,
+        label: '其他文件',
+        path: directoryName,
+        depth: 0,
+        children: [],
+      })
+    }
+    const rootDirectory = directoryMap.get(directoryName)!
+    let current: ProducedFileTreeNode = rootDirectory
+    restParts.forEach((part, index) => {
+      const nodePath = [directoryName, ...restParts.slice(0, index + 1)].join('/')
+      const isFile = index === restParts.length - 1
+      let child = current.children.find(item => item.name === part && item.path === nodePath)
+      if (!child) {
+        child = {
+          name: part,
+          path: nodePath,
+          depth: index + 1,
+          children: [],
+          ...(isFile ? { file } : {}),
+        }
+        current.children.push(child)
+      } else if (isFile) {
+        child.file = file
+      }
+      current = child
+    })
+  }
+
+  return {
+    root: '/mnt/user-data',
+    directories: Array.from(directoryMap.values()),
+  }
+}
+
+/** 统计节点（目录或文件）子树内的文件数量。 */
+export function getFileCount(node: ProducedFileTreeNode): number {
+  return (node.file ? 1 : 0) + node.children.reduce((count, child) => count + getFileCount(child), 0)
+}
+
+/**
+ * 展平出「可见行」序列：文件行直接输出，目录行在未折叠时递归展开子级。
+ * `depth` 从 1 起（顶层目录行本身是 depth 0 的独立渲染分支）。
+ */
+export function flattenFileTreeNodes(
+  nodes: ProducedFileTreeNode[],
+  depth = 1,
+  isCollapsed: (path: string) => boolean = () => false,
+): VisibleProducedFileTreeNode[] {
+  const visible: VisibleProducedFileTreeNode[] = []
+  nodes.forEach((node, index) => {
+    visible.push({ node, depth, isLast: index === nodes.length - 1 })
+    if (!node.file && node.children.length && !isCollapsed(node.path)) {
+      visible.push(...flattenFileTreeNodes(node.children, depth + 1, isCollapsed))
+    }
+  })
+  return visible
+}
+
+// 文件树每级的左缩进。基准 6px 必须等于顶层目录行按钮的 px-1.5，之后每级固定 +18px——
+// 两端用同一个基准，「顶层目录 → 它的子节点」这一步的跨度才和更深层一致。
+// （此前基准写的是 10px：第一级跨度 22px、后面 18px，居中那一级看着就比上下两级偏右。）
+export const CONSOLE_TREE_INDENT_BASE_PX = 6
+export const CONSOLE_TREE_INDENT_STEP_PX = 18
+
+export const consoleTreeIndentStyle = (depth: number) => ({
+  paddingLeft: `${CONSOLE_TREE_INDENT_BASE_PX + depth * CONSOLE_TREE_INDENT_STEP_PX}px`,
+})
+
+// 行首「展开箭头 / 占位」槽位宽度。文件行用 w-3 的空 span（正好 12px），目录行的箭头是 FA 图标——
+// FA 7 在 `.fa-solid/.fa-regular` 上有一条 `width: var(--fa-width, 1.25em)`，优先级与 `.w-3` 相同且更靠后，
+// 所以 w-3/w-4 这类宽度类在图标上是不生效的：箭头实际宽 1.25em（text-[10px] 时为 12.5px），
+// 比文件行宽 0.5px，会让「目录行」的同名列比「文件行」整体右移半像素。这里显式钉成 12px 对齐。
+// 箭头字形在盒内左对齐，钉窄后字形本身不动，只有其后的文件夹图标与名字左移 0.5px。
+export const CONSOLE_TREE_LEAD_SLOT_PX = 12
+export const consoleTreeLeadSlotStyle = { width: `${CONSOLE_TREE_LEAD_SLOT_PX}px` }
+
+// 行尾「修改时间 / 大小」两列。
+// 时间是 YYYY-MM-DD HH:mm:ss（19 字符定长），每行天然等宽，给 shrink-0 就够，不必钉宽度；
+// 大小则长度不一（「7 KB」28.8px vs「18.7 KB」44.7px），不钉宽度会把时间列的右边缘顶得忽左忽右，
+// 所以按实测最大内容给固定宽度 + 右对齐（字号改动需同步复测）。
+//
+// 两侧还会在面板被拖窄时整体收起（见 CONSOLE_TREE_META_VISIBILITY_CLASS）：这两列合计约 167px，
+// 加上 24px 缩进、33px 占位+图标、56px 行尾操作位与内边距，面板一窄就只剩名字被压成省略号。
+// 用容器查询（`@container` 落在树包裹层上）而不是 JS 监听宽度：拖拽改的是行内 width，
+// 容器查询会自动响应，且不必因为几像素变化就重渲染整棵树。
+export const CONSOLE_TREE_META_VISIBILITY_CLASS = 'hidden @min-[400px]:block'
+export const CONSOLE_TREE_TIME_COLUMN_CLASS = `shrink-0 text-[10px] tabular-nums text-slate-400 ${CONSOLE_TREE_META_VISIBILITY_CLASS}`
+export const CONSOLE_TREE_SIZE_COLUMN_CLASS = `w-[46px] shrink-0 text-right text-[10px] tabular-nums text-slate-400 ${CONSOLE_TREE_META_VISIBILITY_CLASS}`

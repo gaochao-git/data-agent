@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../types'
+import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../../types'
 
 type TokenUsageSort = 'round' | 'desc' | 'asc'
 

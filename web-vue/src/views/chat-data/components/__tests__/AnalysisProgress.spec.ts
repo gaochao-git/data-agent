@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import AnalysisProgress from '../AnalysisProgress.vue'
+import AnalysisProgress from '../conversation/AnalysisProgress.vue'
 import type { AnalysisTodosState } from '../../utils/analysisTodos'
 
 const buildState = (statuses: string[]): AnalysisTodosState => ({

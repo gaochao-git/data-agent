@@ -2,7 +2,7 @@
  * 控制台「工作区文件」预览缓存的失效逻辑。
  *
  * 预览缓存（文本内容 / 二进制 blob）以「归一化后的可见相对路径」为 key，命中时直接短路不发请求
- * （见 AnalysisConversation.vue 的 loadWorkspaceFileContent / loadWorkspaceBinaryFile）。
+ * （见 conversation/Conversation.vue 的 loadWorkspaceFileContent / loadWorkspaceBinaryFile）。
  * 因此文件在磁盘上被替换后，缓存里的旧副本不会自愈——必须由「知道文件已变」的那一方显式作废。
  *
  * 删除就是最容易被忽略的那一方，而且它不是理论风险：uploads 的重名策略是「已存在才加 -1 后缀」

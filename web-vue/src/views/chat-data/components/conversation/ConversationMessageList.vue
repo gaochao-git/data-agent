@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElTooltip } from 'element-plus'
-import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../types'
-import { extractGeneratedSqlFromToolCall } from '../utils/semanticTool'
-import { formatDateTimeValue, renderMarkdown } from '../utils'
-import AssistantMessageFooter from './AssistantMessageFooter.vue'
-import QueryResultPanel from './QueryResultPanel.vue'
-import ToolCallList from './ToolCallList.vue'
+import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
+import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
+import { formatDateTimeValue, renderMarkdown } from '../../utils'
+import AssistantMessageFooter from '../AssistantMessageFooter.vue'
+import QueryResultPanel from '../QueryResultPanel.vue'
+import ToolCallList from '../ToolCallList.vue'
 
 interface Props {
   messages: Message[]

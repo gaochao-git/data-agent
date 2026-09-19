@@ -1,7 +1,7 @@
 /**
  * 文件预览类型常量（唯一来源）。
  *
- * 主对话工作区预览（AnalysisConversation.vue）与技能管理预览（SkillManager.vue）
+ * 主对话工作区预览（conversation/Conversation.vue）与技能管理预览（SkillManager.vue）
  * 共用这份定义：新增可预览类型只改这里，两处行为自动保持一致。
  * 后端对应的预览能力：工作区 raw / office-html 端点，技能版本 files/raw / files/office-preview 端点。
  */

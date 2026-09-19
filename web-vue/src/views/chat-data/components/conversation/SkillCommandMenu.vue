@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { SkillInfo } from '../types'
-import { getSkillCreatorLabel } from '../utils'
+import type { SkillInfo } from '../../types'
+import { getSkillCreatorLabel } from '../../utils'
 
 interface Props {
   open: boolean

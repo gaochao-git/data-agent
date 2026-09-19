@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-import CodeFilePreview from '../CodeFilePreview.vue'
+import CodeFilePreview from '../conversation/CodeFilePreview.vue'
 
 const SAMPLE_YAML = [
   'version: 0.2.0.dev0',

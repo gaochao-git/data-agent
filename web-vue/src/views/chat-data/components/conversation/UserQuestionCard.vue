@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type { PropType } from 'vue'
-import type { PendingUserQuestion, UserQuestionAnswer } from '../types'
+import type { PendingUserQuestion, UserQuestionAnswer } from '../../types'
 
 const props = defineProps({
   question: { type: Object as PropType<PendingUserQuestion>, required: true },

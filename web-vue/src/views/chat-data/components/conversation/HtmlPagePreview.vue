@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { buildSandboxHtmlDocument } from '../utils/sandboxHtml'
+import { buildSandboxHtmlDocument } from '../../utils/sandboxHtml'
 
 /**
  * 自包含 HTML 页面的沙箱渲染容器（唯一权威入口）。

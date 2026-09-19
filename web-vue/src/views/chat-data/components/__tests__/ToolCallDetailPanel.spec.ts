@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import ToolCallDetailPanel from '../ToolCallDetailPanel.vue'
+import ToolCallDetailPanel from '../conversation/ToolCallDetailPanel.vue'
 
 describe('ToolCallDetailPanel', () => {
   it('uses the shared display name and primary argument in the detail header', () => {

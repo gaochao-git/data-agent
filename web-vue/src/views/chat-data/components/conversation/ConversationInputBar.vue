@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import ChatInputBox from './ChatInputBox.vue'
-import ModelPicker from './ModelPicker.vue'
+import ChatInputBox from '../ChatInputBox.vue'
+import ModelPicker from '../ModelPicker.vue'
 
 interface ModelThinkingOption {
   mode: 'none' | 'optional' | 'forced'

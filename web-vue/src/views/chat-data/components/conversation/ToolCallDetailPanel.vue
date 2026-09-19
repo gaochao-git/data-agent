@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
-import type { ToolCallInfo } from '../types'
-import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
-import FileDiffViewer from './FileDiffViewer.vue'
+import type { ToolCallInfo } from '../../types'
+import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
+import FileDiffViewer from '../FileDiffViewer.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
 // 见 AGENTS.md 4.3 —— chat-data 会被嵌入未安装 typescript 的宿主项目
@@ -20,7 +20,8 @@ const toolDisplayName = computed(() => getToolDisplayName(props.toolCall?.tool_n
 const toolActionName = computed(() => {
   const toolCall = props.toolCall
   if (!toolCall || toolCall.tool_name !== 'data_analyzing_tool') return ''
-  return getDataAnalyzingActionName((toolCall.args as Record<string, unknown> | undefined)?.action)
+  const action = (toolCall.args as Record<string, unknown> | undefined)?.action
+  return getDataAnalyzingActionName(typeof action === 'string' ? action : null)
 })
 const toolDescription = computed(() => {
   const toolCall = props.toolCall

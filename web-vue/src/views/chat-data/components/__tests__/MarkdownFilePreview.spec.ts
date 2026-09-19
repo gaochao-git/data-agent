@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import MarkdownFilePreview from '../MarkdownFilePreview.vue'
+import MarkdownFilePreview from '../conversation/MarkdownFilePreview.vue'
 
 describe('MarkdownFilePreview', () => {
   it('renders Markdown structure without enabling raw HTML', () => {

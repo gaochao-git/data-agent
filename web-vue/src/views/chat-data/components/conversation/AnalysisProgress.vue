@@ -4,7 +4,7 @@
  * 一旦出现即常驻本会话：不转圈、不主动消失，用分段计数实时反映清单状态。
  */
 import { computed, ref } from 'vue'
-import type { AnalysisTodosState } from '../utils/analysisTodos'
+import type { AnalysisTodosState } from '../../utils/analysisTodos'
 
 const props = defineProps<{ todos: AnalysisTodosState }>()
 

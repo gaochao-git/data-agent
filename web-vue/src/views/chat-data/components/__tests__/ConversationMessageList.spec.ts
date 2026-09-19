@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
-import ConversationMessageList from '../ConversationMessageList.vue'
+import ConversationMessageList from '../conversation/ConversationMessageList.vue'
 import type { Message } from '../../types'
 
 const longThinkingContent = `${'用户询问数据情况，需要先定位语义模型，再决定查询口径。'.repeat(3)}最后核对时间范围。`

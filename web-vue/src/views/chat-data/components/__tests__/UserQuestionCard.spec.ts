@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import UserQuestionCard from '../UserQuestionCard.vue'
+import UserQuestionCard from '../conversation/UserQuestionCard.vue'
 
 const question = {
   question_id: 'question-1',

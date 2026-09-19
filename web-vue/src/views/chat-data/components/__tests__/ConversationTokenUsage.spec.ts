@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import ConversationTokenUsage from '../ConversationTokenUsage.vue'
+import ConversationTokenUsage from '../conversation/ConversationTokenUsage.vue'
 
 const cacheUsage = {
   used: 12000,

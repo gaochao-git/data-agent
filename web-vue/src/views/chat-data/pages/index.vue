@@ -16,7 +16,7 @@ import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
-import AnalysisConversation from '../components/AnalysisConversation.vue'
+import Conversation from '../components/conversation/Conversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
 import type { BuilderConfig } from '../components/QuickQueries.vue'
@@ -502,9 +502,9 @@ const conversationModelStorageUserKey = computed(() => currentUser.value.id || c
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
-const conversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
+const conversationRef = ref<InstanceType<typeof Conversation> | null>(null)
 
-// 控制台面板可见性：由 AnalysisConversation 广播（面板内的 ✕ 也会触发），
+// 控制台面板可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
 // 右上角开关按钮的图标与提示都读它，不自己另存状态。
 const conversationConsoleVisible = ref(false)
 
@@ -1786,7 +1786,7 @@ onMounted(async () => {
           <div v-show="viewMode === 'conversation'" class="absolute inset-0 overflow-hidden">
             <div class="h-full flex min-h-0">
               <div class="flex-1 min-w-0 min-h-0">
-                <AnalysisConversation
+                <Conversation
                   ref="conversationRef"
                   :key="conversationKey"
                   :datasource="currentDatasource"

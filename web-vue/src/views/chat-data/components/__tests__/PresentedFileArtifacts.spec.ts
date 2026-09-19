@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import PresentedFileArtifacts from '../PresentedFileArtifacts.vue'
+import PresentedFileArtifacts from '../conversation/PresentedFileArtifacts.vue'
 
 describe('PresentedFileArtifacts', () => {
   it('renders delivery files and emits preview and download actions', async () => {

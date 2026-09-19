@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import ConversationTurnNavigator from '../ConversationTurnNavigator.vue'
+import ConversationTurnNavigator from '../conversation/ConversationTurnNavigator.vue'
 
 const turns = Array.from({ length: 6 }, (_, index) => ({
   id: `user-${index + 1}`,

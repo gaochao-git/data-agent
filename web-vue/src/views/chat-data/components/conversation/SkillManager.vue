@@ -21,9 +21,9 @@ import {
   unfavoriteSkill,
   updateSkill,
   uploadSkillVersionFile
-} from '../api'
-import type { SkillInfo, SkillVersionInfo } from '../types'
-import { getPreviewFileKind, getSkillCreatorLabel, IMAGE_PREVIEW_MIME, renderMarkdown } from '../utils'
+} from '../../api'
+import type { SkillInfo, SkillVersionInfo } from '../../types'
+import { getPreviewFileKind, getSkillCreatorLabel, IMAGE_PREVIEW_MIME, renderMarkdown } from '../../utils'
 
 // 平台技能固定目录只有 references 与 assets；scripts（可执行脚本）因安全顾虑已整体移除
 type SkillFileDir = 'references' | 'assets'
@@ -45,7 +45,7 @@ const props = defineProps<{
   initialSkillId?: string | null
 }>()
 
-// 新建技能改为对话式创建：把事件抛给宿主（AnalysisConversation），由它关闭弹窗、
+// 新建技能改为对话式创建：把事件抛给宿主（conversation/Conversation），由它关闭弹窗、
 // 挂上 skill-creator 技能并预填输入框（对齐 WorkBuddy 的 skill-creator 体验）。
 // 手写表单仅保留给「编辑」场景。
 const emit = defineEmits<{
@@ -116,7 +116,7 @@ const displayedContentHtml = computed(() => renderMarkdown(selectedFileContent.v
 const canEditSelectedFile = computed(() => Boolean(canManageFiles.value && selectedFileNode.value && selectedFileEditing.value))
 
 // ---- 二进制 / Office 文件预览（与主对话工作区预览同一套类型判定与渲染方式）----
-// 预览类型常量来自 utils/filePreview.ts（与 AnalysisConversation 共用，唯一来源）。
+// 预览类型常量来自 utils/filePreview.ts（与 conversation/Conversation 共用，唯一来源）。
 // 图片/PDF 走 raw 端点拿 blob；docx/xlsx/pptx 走 office-preview 端点拿服务端 OfficeCLI 渲染的 HTML。
 const selectedFileKind = computed(() => (selectedFileNode.value?.type === 'file' && selectedFileNode.value.file_path
   ? getPreviewFileKind(selectedFileNode.value.file_path)

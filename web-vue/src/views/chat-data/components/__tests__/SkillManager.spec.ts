@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { defineComponent, h, type PropType, type VNode } from 'vue'
 
-import SkillManager from '../SkillManager.vue'
+import SkillManager from '../conversation/SkillManager.vue'
 
 // ---- API mock：必须覆盖组件 import 的全部函数（缺 key 会是 undefined，调用即报错）----
 // 注意：技能固定目录只有 references 与 assets，scripts 已整体移除，mock 数据勿再回退。

@@ -236,7 +236,7 @@ const thinkingTailPreview = (thinking: string) => {
 }
 
 // ---- 子智能体链路滚动容器：粘底跟随，与主对话 isNearBottom 同款机制 ----
-// 参照主对话实现（AnalysisConversation 的 handleScroll + isNearBottom）：
+// 参照主对话实现（Conversation 的 handleScroll + isNearBottom）：
 // 跟随状态只在 @scroll 事件里重算（用户滚动或程序化滚动），内容增长不翻转
 // 状态——流式段落一次长高超过阈值不会误判为"用户在上翻浏览历史"；用户主动
 // 上滚离开底部 → 停止跟随；滚回底部附近 → 自动恢复跟随。

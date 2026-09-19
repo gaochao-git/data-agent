@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import HtmlPagePreview from '../HtmlPagePreview.vue'
+import HtmlPagePreview from '../conversation/HtmlPagePreview.vue'
 
 describe('HtmlPagePreview', () => {
   it('renders sandbox iframe with hardened document for non-empty html', () => {

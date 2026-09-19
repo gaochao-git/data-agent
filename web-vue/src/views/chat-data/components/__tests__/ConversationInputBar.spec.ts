@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import ConversationInputBar from '../ConversationInputBar.vue'
+import ConversationInputBar from '../conversation/ConversationInputBar.vue'
 
 const mountInput = (isGenerating: boolean) => mount(ConversationInputBar, {
   props: {
