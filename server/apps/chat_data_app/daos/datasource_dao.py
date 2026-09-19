@@ -981,6 +981,68 @@ class DataSourceDao:
             )
         return normalized_dict
 
+    async def fill_column_dict_async(
+        self,
+        group_id: str,
+        table_name: str,
+        column_name: str,
+        column_dict: Dict[str, Any],
+        create_by: str = "",
+        update_by: str = "",
+        create_by_name: str = "",
+        update_by_name: str = "",
+    ) -> List[str]:
+        """仅填空写单个字段数据字典：现值为空的字段用导入值填充，已有值一律保留。
+
+        返回实际填充的字段名列表；无可填充内容时不产生任何写入。
+        与 replace 的语义差异：replace 以传入内容全量覆盖（含清空），fill 只补空缺，
+        供 Ossie 导入闭环使用（拍板：冲突策略=仅填空，不走草稿）。
+        """
+        if not group_id or not table_name or not column_name:
+            return []
+        normalized_incoming = _normalize_column_dict(column_dict)
+        if _column_dict_is_empty(normalized_incoming):
+            return []
+        async with self._session_scope() as session:
+            row = (await session.execute(
+                select(DatasourceColumnDict).where(
+                    DatasourceColumnDict.group_id == group_id,
+                    DatasourceColumnDict.table_name == table_name,
+                    DatasourceColumnDict.column_name == column_name,
+                )
+            )).scalars().first()
+            existing = _normalize_column_dict(_load_json(row.dict_json, {}) if row else {})
+            filled = [
+                key for key in ("enum_values", "synonyms", "storage_format", "unit")
+                if normalized_incoming[key] and not existing[key]
+            ]
+            if not filled:
+                return []
+            merged = dict(existing)
+            for key in filled:
+                merged[key] = normalized_incoming[key]
+            row_values = {
+                "group_id": group_id,
+                "table_name": table_name,
+                "column_name": column_name,
+                "dict_json": json.dumps(_normalize_column_dict(merged), ensure_ascii=False),
+                "delete_flag": 0,
+                "create_by": create_by or "",
+                "create_by_name": create_by_name or "",
+                "update_by": update_by or "",
+                "update_by_name": update_by_name or "",
+            }
+            stmt = mysql_insert(DatasourceColumnDict).values(row_values)
+            await session.execute(
+                stmt.on_duplicate_key_update(
+                    dict_json=stmt.inserted.dict_json,
+                    delete_flag=0,
+                    update_by=stmt.inserted.update_by,
+                    update_by_name=stmt.inserted.update_by_name,
+                )
+            )
+            return filled
+
     async def soft_delete_group_async(self, group_id: str, update_by: str = "", update_by_name: str = "") -> None:
         async with self._session_scope() as session:
             await session.execute(

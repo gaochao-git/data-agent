@@ -131,6 +131,33 @@ _OSSI_DATATYPE_TO_DATA_TYPE = {
 }
 
 
+def _column_dict_extension_data(item: dict[str, Any]) -> dict[str, Any]:
+    """字段数据字典四项（enum_values/synonyms/storage_format/unit）的导出形态。
+
+    物化链路在配置副本上预挂 ``_column_dict``（见 SemanticConfigService.annotate_export_column_dicts，
+    键提取口径与运行时合并一致）；此处只做防御性结构过滤后原样透传，导入侧据此
+    按「仅填空」策略回写 datasource_column_dict，形成字典导出 → 导入闭环。
+    """
+    raw = item.get("_column_dict")
+    if not isinstance(raw, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    enum_values = [
+        {"value": _text(entry.get("value")), "label": _text(entry.get("label"))}
+        for entry in raw.get("enum_values") or []
+        if isinstance(entry, dict) and _text(entry.get("value"))
+    ]
+    if enum_values:
+        payload["enum_values"] = enum_values
+    synonyms = [_text(synonym) for synonym in raw.get("synonyms") or [] if _text(synonym)]
+    if synonyms:
+        payload["synonyms"] = synonyms
+    for key in ("storage_format", "unit"):
+        if _text(raw.get(key)):
+            payload[key] = _text(raw.get(key))
+    return payload
+
+
 def _dimension_extension_data(item: dict[str, Any], datatype: str | None) -> dict[str, Any]:
     """维度扩展描述：物理来源引用 + datatype 通道无法无损还原的 logical_type。
 
@@ -141,6 +168,9 @@ def _dimension_extension_data(item: dict[str, Any], datatype: str | None) -> dic
     logical_type = normalize_logical_type(item.get("logical_type"))
     if logical_type and _OSSI_DATATYPE_TO_LOGICAL_TYPE.get(datatype or "") != logical_type:
         data["logical_type"] = logical_type
+    column_dict = _column_dict_extension_data(item)
+    if column_dict:
+        data["column_dict"] = column_dict
     return data
 
 
@@ -153,6 +183,9 @@ def _metric_extension_data(item: dict[str, Any], datatype: str | None) -> dict[s
     data_type = _text(item.get("data_type"))
     if data_type and _OSSI_DATATYPE_TO_DATA_TYPE.get(datatype or "") != data_type:
         data["data_type"] = data_type
+    column_dict = _column_dict_extension_data(item)
+    if column_dict:
+        data["column_dict"] = column_dict
     if _is_derived_metric(item):
         data.update({
             "metric_kind": "derived",
@@ -312,6 +345,14 @@ class ChatDataToOssieConverter:
             "source_type": _text(source_type),
             "update_time": _text(normalized.get("update_time")),
             "snapshot_role": "model_reference_only",
+            # Ossie 的 dataset→field 两级结构会把平铺维度按表聚簇，平铺顺序在 YAML 里
+            # 没有位置可放；写入原始顺序清单（table.column 键），导入侧据此还原，
+            # 保证「物化下载→再导入」往返后维度顺序与库中一致。
+            "dimension_order": [
+                f"{_table_name(item)}.{_column_name(item)}"
+                for item in normalized.get("dimensions") or []
+                if isinstance(item, dict) and _table_name(item) and _column_name(item)
+            ],
         })
         model = OSISemanticModel(
             name=_text(normalized.get("name") or config_id),

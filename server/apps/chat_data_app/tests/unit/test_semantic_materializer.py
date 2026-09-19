@@ -386,3 +386,24 @@ def test_safe_file_name_semantics_and_collisions():
     long_name = "很" * 60
     truncated = semantic_materializer._safe_file_name({"id": "sc_z_55555555", "name": long_name})
     assert truncated == f"{'很' * 40}__55555555.yaml"
+
+
+def test_materializer_annotates_column_dicts_into_conversion_input(monkeypatch):
+    """字典四项闭环（导出侧）：渲染前把命中字典标注进转换副本，进缓存键；原配置不被污染。"""
+    semantic_materializer._YAML_CACHE.clear()
+    config = _config()
+    config["dimensions"][0].update({"table": "orders", "column": "city"})
+    manager = _FakeDatasourceManager([config])
+    manager.column_dicts = {("orders", "city"): {"unit": "个"}}
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: manager)
+    captured = []
+
+    def fake_convert(self, config, *, source_type=""):
+        captured.append(config)
+        return f"semantic_model: {config['id']}\n"
+
+    monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
+    _materialize(_FakeRuntime())
+
+    assert captured[0]["dimensions"][0]["_column_dict"] == {"unit": "个"}
+    assert "_column_dict" not in config["dimensions"][0]

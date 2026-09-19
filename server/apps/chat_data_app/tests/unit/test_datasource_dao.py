@@ -846,3 +846,88 @@ def test_update_datasource_group_all_optional_fields_and_duplicate_relations(mon
     sql_texts = [str(stmt) for stmt in executed]
     assert any("group_desc" in sql and "source_type" in sql and "template_source" in sql and "member_sources_text" in sql for sql in sql_texts)
     assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1
+
+
+# ============ 仅填空写字典（Ossie 导入闭环 P1-3） ============
+
+
+def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
+    """仅填空：现有值非空的字段保留原值，空缺字段用导入值填充并合并成一次 upsert。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": [
+        _column_dict_model(dict_json=json.dumps({
+            "enum_values": [{"value": "1", "label": "已有值"}],
+            "synonyms": [],
+            "storage_format": "",
+            "unit": "",
+        }, ensure_ascii=False)),
+    ]}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status",
+        {"enum_values": [{"value": "2", "label": "应忽略"}], "synonyms": ["付款"], "storage_format": "0/1", "unit": "元"},
+    ))
+
+    assert filled == ["synonyms", "storage_format", "unit"]
+    upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
+    assert len(upserts) == 1
+    merged = json.loads(upserts[0].compile().params["dict_json"])
+    assert merged["enum_values"] == [{"value": "1", "label": "已有值"}]
+    assert merged["synonyms"] == ["付款"]
+    assert merged["storage_format"] == "0/1"
+    assert merged["unit"] == "元"
+
+
+def test_fill_column_dict_creates_row_when_missing(monkeypatch):
+    """无存量行：导入值全部为「空缺」，整行新建并返回全部填充字段。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": []}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status", {"unit": "元"},
+        create_by="user_a", update_by="user_a", create_by_name="张三", update_by_name="张三",
+    ))
+
+    assert filled == ["unit"]
+    assert any("INSERT" in str(stmt).upper() for stmt in executed)
+
+
+def test_fill_column_dict_noop_when_all_fields_covered(monkeypatch):
+    """现有字典已全覆盖：不做任何写入，返回空清单。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": [
+        _column_dict_model(dict_json=json.dumps({
+            "enum_values": [{"value": "1", "label": "有效"}],
+            "synonyms": ["状态"],
+            "storage_format": "0/1",
+            "unit": "元",
+        }, ensure_ascii=False)),
+    ]}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status", {"enum_values": [{"value": "2", "label": "应忽略"}], "unit": "元"},
+    ))
+
+    assert filled == []
+    assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
+
+
+def test_fill_column_dict_short_circuits_on_invalid_args(monkeypatch):
+    """空键或空内容：直接短路返回空清单，不产生任何写入。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": []}, executed=executed)
+
+    async def run_checks():
+        return (
+            await store.fill_column_dict_async("", "orders", "status", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "", "status", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "orders", "", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "orders", "status", {}),
+        )
+
+    assert asyncio.run(run_checks()) == ([], [], [], [])
+    assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]

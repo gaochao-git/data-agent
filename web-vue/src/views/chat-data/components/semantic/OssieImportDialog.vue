@@ -146,6 +146,7 @@ const groupLabels: Record<OssieChecklistRow['group'], string> = {
   mapping: '② 结构映射',
   physical: '③ 物理校验',
   quality: '④ 质量规则',
+  dict: '⑤ 数据字典',
 }
 
 /** 清单行按分组插入组头，供表格逐行渲染 */

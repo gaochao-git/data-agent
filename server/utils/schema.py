@@ -322,6 +322,10 @@ CREATE TABLE `semantic_config` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_semantic_config_id` (`semantic_config_id`),
+  -- 同组内模型名唯一（软删除墓碑会改名释放原名，见 SemanticConfigDao._DELETED_NAME_EXPR）。
+  -- 与 next_version.md 的手工迁移保持同名同列序，新环境建表即有 DB 兜底，
+  -- 堵住「事务外取冲突快照、事务内落库」TOCTOU 窗口内的并发同名重复创建。
+  UNIQUE KEY `uniq_group_id_config_name_delete_flag` (`group_id`, `semantic_config_name`, `delete_flag`),
   KEY `idx_group_id` (`group_id`),
   KEY `idx_semantic_config_name` (`semantic_config_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='语义配置表';

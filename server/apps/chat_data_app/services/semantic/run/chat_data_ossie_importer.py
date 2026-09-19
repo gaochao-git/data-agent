@@ -94,6 +94,10 @@ class OssieSemanticModelImport:
     # 存在同名但当前不可操作的配置（如他人私有配置，不进入 existing_config 以免泄露
     # 其元信息）：不允许 replace，导入时强制跳过。同样不影响 importable。
     conflict_locked: bool = False
+    # 从 CHAT_DATA 扩展提取的字段字典条目 [{table, column, dict}]（仅含四项字典内容
+    # 非空的字段）。导入落库时按「仅填空」策略回写 datasource_column_dict（拍板：
+    # 不走草稿，只填充现有值为空的字段，已有值一律保留）；派生/复合指标无物理列，不提取。
+    column_dicts: List[Dict[str, Any]] = dataclass_field(default_factory=list)
 
     def bump(self, key: str, delta: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + delta
@@ -122,6 +126,8 @@ class OssieSemanticModelImport:
             "importable": self.importable,
             "existing_config": dict(self.existing_config) if self.existing_config else None,
             "conflict_locked": bool(self.conflict_locked),
+            # 仅填空字典闭环：模型携带的原始字典条目（是否真的填充由预览端对照现有字典计算）
+            "column_dicts": [dict(entry) for entry in self.column_dicts],
         })
         return payload
 
@@ -201,6 +207,94 @@ def _extension_data(extensions: Any, warnings: List[str], label: str) -> Dict[st
     return {}
 
 
+# 字段数据字典四项内容键（与 datasource_column_dict.dict_json 结构一致）
+_COLUMN_DICT_FIELD_KEYS = ("enum_values", "synonyms", "storage_format", "unit")
+# 仅填空填充明细的展示名（preview 清单 / checklist 消息共用）
+_COLUMN_DICT_FIELD_LABELS = {
+    "enum_values": "枚举值",
+    "synonyms": "同义词",
+    "storage_format": "存储格式",
+    "unit": "单位",
+}
+
+
+def _column_dict_from_extension(extension: Dict[str, Any]) -> Dict[str, Any]:
+    """从 CHAT_DATA 扩展提取字段字典四项（宽松归一，结构不合法的键忽略）。
+
+    只做提取与基础清洗；落库前的权威归一由 DAO 侧 _normalize_column_dict 兜底。
+    """
+    raw = extension.get("column_dict")
+    if not isinstance(raw, dict):
+        return {}
+    payload: Dict[str, Any] = {}
+    raw_enums = raw.get("enum_values")
+    if isinstance(raw_enums, list):
+        enum_values: List[Dict[str, str]] = []
+        seen_values: set = set()
+        for item in raw_enums:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()[:128]
+            if not value or value in seen_values:
+                continue
+            seen_values.add(value)
+            enum_values.append({"value": value, "label": str(item.get("label") or "").strip()[:255]})
+        if enum_values:
+            payload["enum_values"] = enum_values[:100]
+    raw_synonyms = raw.get("synonyms")
+    if isinstance(raw_synonyms, list):
+        synonyms: List[str] = []
+        for value in raw_synonyms:
+            text = str(value or "").strip()[:100]
+            if text and text not in synonyms:
+                synonyms.append(text)
+        if synonyms:
+            payload["synonyms"] = synonyms[:50]
+    for key, max_length in (("storage_format", 255), ("unit", 100)):
+        text = str(raw.get(key) or "").strip()[:max_length]
+        if text:
+            payload[key] = text
+    return payload
+
+
+def extract_metric_source_column(metric: Dict[str, Any]) -> str:
+    """从指标配置提取来源物理列：聚合表达式 SUM(col) > 单一标识符 > field 字段。
+
+    运行时字典合并（SemanticConfigService._column_dict_key）与本模块的导入侧
+    推断共用同一实现，保证导出标注与导入回填定位同一物理列。
+    """
+    expression = str(metric.get("expression") or "").strip()
+    match = re.match(r"^(?:COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(?:DISTINCT\s+)?`?([^`(),\s]+)`?\s*\)$", expression, re.IGNORECASE)
+    if match:
+        return match.group(1).split(".")[-1].strip("`")
+    match = re.match(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$", expression)
+    if match:
+        return match.group(1).split(".")[-1].strip("`")
+    field_name = str(metric.get("field") or "").strip()
+    return field_name.split(".")[-1].strip("`") if field_name else ""
+
+
+def plan_column_dict_fills(
+    item: "OssieSemanticModelImport",
+    existing_column_dicts: Dict[Tuple[str, str], Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """对照现有字典计算「仅填空」计划：返回 [{table, column, fields}]，fields 为将填充的字段名。
+
+    判空口径与 DAO 落库一致：现有字典该字段为空且导入值非空才填充；
+    仅作预览确认面，落库时以写入瞬间的字典状态由 DAO 重新计算。
+    """
+    plan: List[Dict[str, Any]] = []
+    for entry in item.column_dicts:
+        existing = existing_column_dicts.get((entry["table"], entry["column"])) or {}
+        fields = [
+            key for key in _COLUMN_DICT_FIELD_KEYS
+            if entry["dict"].get(key) and not existing.get(key)
+        ]
+        if fields:
+            plan.append({"table": entry["table"], "column": entry["column"], "fields": fields})
+    return plan
+
+
 def _dialect_value(dialect: Any) -> str:
     return str(getattr(dialect, "value", dialect) or "")
 
@@ -271,11 +365,30 @@ class OssieToChatDataImporter:
         for dataset in model.datasets or []:
             for ossie_field in dataset.fields or []:
                 self._convert_field(ossie_field, dataset_names, result)
+        self._restore_dimension_order(result, model_extension)
         for metric in model.metrics or []:
             self._convert_metric(metric, dataset_names, result)
         for index, relationship in enumerate(model.relationships or [], start=1):
             self._convert_relationship(relationship, index, result)
         return result
+
+    @staticmethod
+    def _restore_dimension_order(result: OssieSemanticModelImport, model_extension: Dict[str, Any]) -> None:
+        """按导出时记录的平铺顺序还原 dimensions（就地稳定排序）。
+
+        Ossie 的 dataset→field 结构天然把维度按表聚簇，与库中平铺顺序不一致；
+        导出侧在模型扩展 dimension_order 里记录原始 `table.column` 顺序，这里还原。
+        清单缺失（外部文件/旧快照）时不动；不在清单里的维度（手工新增）稳定排在已知维度之后。
+        """
+        keys = [key for key in model_extension.get("dimension_order") or [] if isinstance(key, str) and key]
+        if not keys or not result.dimensions:
+            return
+        order_index: Dict[str, int] = {}
+        for index, key in enumerate(keys):
+            order_index.setdefault(key, index)
+        result.dimensions.sort(
+            key=lambda entry: order_index.get(f"{entry.get('table')}.{entry.get('column')}", len(order_index))
+        )
 
     @staticmethod
     def _new_import_result(model: OSISemanticModel) -> OssieSemanticModelImport:
@@ -320,6 +433,7 @@ class OssieToChatDataImporter:
         column = self._field_column(extension, expression, label, result)
         if column is None:
             return
+        self._record_column_dict(result, extension, table, column)
 
         entry: Dict[str, Any] = {"name": name, "table": table, "column": column, "expression": expression}
         # 逻辑字段名 / 表别名：导出侧写入扩展，原样还原，保证往返无损
@@ -403,7 +517,33 @@ class OssieToChatDataImporter:
             return
         entry: Dict[str, Any] = {"name": name, "expression": expression, "table": table}
         self._apply_common_metric_fields(entry, extension, ossie_metric)
+        self._record_column_dict(
+            result, extension, table, self._metric_source_column(extension, expression),
+        )
         result.metrics.append(entry)
+
+    @staticmethod
+    def _metric_source_column(extension: Dict[str, Any], expression: str) -> str:
+        """指标字典回填的物理列：扩展声明优先，否则按指标源列规则提取；拿不到就返回空串（不回填）。"""
+        column = _optional_str(extension.get("column")) or ""
+        if column:
+            return column
+        return extract_metric_source_column({"expression": expression})
+
+    @staticmethod
+    def _record_column_dict(
+        result: "OssieSemanticModelImport",
+        extension: Dict[str, Any],
+        table: str,
+        column: str,
+    ) -> None:
+        """模型内去重（同字段取首见）后记录字典条目；无有效内容或定位不到物理列时跳过。"""
+        column_dict = _column_dict_from_extension(extension)
+        if not column_dict or not table or not column:
+            return
+        if any(entry["table"] == table and entry["column"] == column for entry in result.column_dicts):
+            return
+        result.column_dicts.append({"table": table, "column": column, "dict": column_dict})
 
     @staticmethod
     def _apply_common_metric_fields(
@@ -513,16 +653,23 @@ class OssieToChatDataImporter:
             relationship_type, has_ext, from_columns, to_columns
         )
 
-        result.relationships.append({
+        join_conditions = [
+            {"left_column": left_column, "right_column": right_column}
+            for left_column, right_column in zip(left_columns, right_columns)
+        ]
+        entry = {
             "left_table": left_table,
             "right_table": right_table,
-            "join_conditions": [
-                {"left_column": left_column, "right_column": right_column}
-                for left_column, right_column in zip(left_columns, right_columns)
-            ],
+            "join_conditions": join_conditions,
             "relationship_type": relationship_type,
             "join_type": join_type,
-        })
+        }
+        # 顶层快捷列是 UI/DB 关系行的镜像字段（= join_conditions[0]）：还原以保证
+        # 「导出 → 导入」往返与现有配置对齐，否则差异视图会把这两行显示为删除。
+        if join_conditions:
+            entry["left_column"] = join_conditions[0]["left_column"]
+            entry["right_column"] = join_conditions[0]["right_column"]
+        result.relationships.append(entry)
 
     @staticmethod
     def _relation_endpoints(
@@ -597,15 +744,18 @@ def build_model_checklist(
     validation_error: Optional[str] = None,
     quality_findings: Optional[List[Dict[str, Any]]] = None,
     inventory_available: bool = True,
+    dict_fill_plan: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, str]]:
-    """把单个模型的既有判定结果映射为校验清单（四组，逐行状态）。
+    """把单个模型的既有判定结果映射为校验清单（五组，逐行状态）。
 
     纯展示层翻译：检查逻辑零改动，行状态由 stats 计数 / validation_error /
     quality findings 确定性推导，保证工具、导入预览与实际闸门同一口径。
 
     - validation_error：validate_semantic_config_for_save 的返回（None=通过）；
     - quality_findings：SemanticQualityChecker 报告的 findings（可选，None=未执行）；
-    - inventory_available：数据源物理表结构是否可用（不可用时物理/清单类检查降级为 skip）。
+    - inventory_available：数据源物理表结构是否可用（不可用时物理/清单类检查降级为 skip）；
+    - dict_fill_plan：仅填空字典填充计划（plan_column_dict_fills 的结果；None=未评估，
+      如 agent check_yaml 工具路径未对照现有字典）。
 
     行结构：{group, name, status, message}，status ∈ pass / warn / fail / skip。
     不输出质量分与等级——分数无法指导动作，触发明细才有操作价值。
@@ -616,6 +766,7 @@ def build_model_checklist(
     _append_mapping_rows(checklist, item)
     _append_physical_row(checklist, item, validation_error, inventory_available)
     _append_quality_row(checklist, quality_findings)
+    _append_dict_row(checklist, item, dict_fill_plan)
     return checklist
 
 
@@ -788,10 +939,60 @@ def _append_quality_row(
     })
 
 
+_DICT_ROW_FILL_DETAIL_LIMIT = 5
+
+
+def _append_dict_row(
+    checklist: List[Dict[str, str]],
+    item: OssieSemanticModelImport,
+    dict_fill_plan: Optional[List[Dict[str, Any]]],
+) -> None:
+    """⑤ 数据字典：仅填空闭环的预览确认面（拍板：不走草稿，preview 清单即确认面）。
+
+    模型未携带字典信息时不展示该行，避免对存量文件制造恒绿噪音。
+    """
+    if not item.column_dicts:
+        return
+    if dict_fill_plan is None:
+        checklist.append({
+            "group": "dict",
+            "name": "数据字典填充",
+            "status": "skip",
+            "message": (
+                f"携带 {len(item.column_dicts)} 个字段的字典信息，"
+                "导入时按「仅填空」更新（本次未对照现有字典评估填充项）"
+            ),
+        })
+        return
+    if not dict_fill_plan:
+        checklist.append({
+            "group": "dict",
+            "name": "数据字典填充",
+            "status": "pass",
+            "message": "携带的字典信息对应的空缺项均已被现有值覆盖，无需填充",
+        })
+        return
+    details = "、".join(
+        f"{entry['table']}.{entry['column']}"
+        f"（{'/'.join(_COLUMN_DICT_FIELD_LABELS.get(field, field) for field in entry['fields'])}）"
+        for entry in dict_fill_plan[:_DICT_ROW_FILL_DETAIL_LIMIT]
+    )
+    if len(dict_fill_plan) > _DICT_ROW_FILL_DETAIL_LIMIT:
+        details += f" 等 {len(dict_fill_plan)} 项"
+    checklist.append({
+        "group": "dict",
+        "name": "数据字典填充",
+        "status": "pass",
+        "message": f"导入时将填充字典空缺项，仅填空不覆盖已有值：{details}",
+    })
+
+
 __all__ = [
     "CHAT_DATA_VENDOR_NAME",
     "OssieSemanticModelImport",
     "OssieToChatDataImporter",
     "build_model_checklist",
+    "extract_metric_source_column",
     "parse_ossie_document",
+    "plan_column_dict_fills",
 ]

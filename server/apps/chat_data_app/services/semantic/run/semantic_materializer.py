@@ -13,7 +13,7 @@ from typing import Any
 from utils.logger import get_logger
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
-from .semantic_config_service import get_semantic_config_service
+from .semantic_config_service import SemanticConfigService, get_semantic_config_service
 
 logger = get_logger(__name__)
 
@@ -222,19 +222,26 @@ def _partition_loaded_configs(
 async def _render_selected_configs(
     configs: list[dict[str, Any]],
     source_type: str,
+    column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[str, str]], list[dict[str, Any]], int, list[str]]:
-    """批量转换并缓存语义模型，返回 (entries, directory, cache_hits, failed_ids)。"""
+    """批量转换并缓存语义模型，返回 (entries, directory, cache_hits, failed_ids)。
+
+    渲染前把命中的字段字典标注到配置副本（annotate_export_column_dicts），
+    供 converter 把字典四项写入 Ossie 扩展；标注参与缓存键，字典变更后自动失效。
+    """
     root = PurePosixPath(SEMANTIC_SNAPSHOT_DIR)
     converter = ChatDataToOssieConverter()
 
     async def render(config: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
         config_id = _config_id(config)
         effective_source_type = str(source_type or config.get("source_type") or "").strip()
-        key = _config_cache_key(config, effective_source_type)
+        # 纯类方法、无实例状态：直接走 SemanticConfigService，避免被注入的服务替身影响
+        annotated = SemanticConfigService.annotate_export_column_dicts(config, column_dicts or {})
+        key = _config_cache_key(annotated, effective_source_type)
         cached = _cache_get(key)
         if cached is not None:
             return config, cached, True
-        content = await asyncio.to_thread(converter.convert, config, source_type=effective_source_type)
+        content = await asyncio.to_thread(converter.convert, annotated, source_type=effective_source_type)
         _cache_put(key, content)
         return config, content, False
 
@@ -289,7 +296,7 @@ async def materialize_runtime_semantic_models(
     ), return_exceptions=True)
     configs, failed_ids = _partition_loaded_configs(normalized_ids, loaded)
 
-    entries, directory, cache_hits, render_failed_ids = await _render_selected_configs(configs, source_type)
+    entries, directory, cache_hits, render_failed_ids = await _render_selected_configs(configs, source_type, column_dicts)
     failed_ids.extend(render_failed_ids)
 
     await workspace_runtime.write_internal_text_files(entries)

@@ -1061,8 +1061,8 @@ export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise
 
 /** 校验清单单行：{group, name, status, message}，由后端从既有判定结果确定性映射 */
 export interface OssieChecklistRow {
-  /** 检查分组：schema（OSSI 校验）/ mapping（结构映射）/ physical（物理校验）/ quality（质量规则） */
-  group: 'schema' | 'mapping' | 'physical' | 'quality'
+  /** 检查分组：schema（OSSI 校验）/ mapping（结构映射）/ physical（物理校验）/ quality（质量规则）/ dict（数据字典仅填空） */
+  group: 'schema' | 'mapping' | 'physical' | 'quality' | 'dict'
   name: string
   /** pass=通过 warn=警告（不阻断） fail=未通过（阻断导入） skip=跳过（未执行） */
   status: 'pass' | 'warn' | 'fail' | 'skip'

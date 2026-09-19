@@ -7,20 +7,22 @@
 
 ## P1（必修，核心链路不许带病）
 
-- [ ] **1. 补 `semantic_config` 建表模板缺失的同名唯一索引**
-  - 位置：`server/utils/schema.py:302-328`
-  - 问题：模板 DDL 只有 `uniq_semantic_config_id` + 普通索引；代码声称「实际生效的唯一索引是两列」，真实索引 `(group_id, semantic_config_name, delete_flag)` 只存在于手工迁移 SQL（原 `next_version.md:61`）。
-  - 后果：新环境按仓库模板建表即无 DB 兜底；导入冲突检测在事务外取快照（`routers/semantic_config.py:787`）、事务内才落库（`:801`），TOCTOU 窗口内并发同名导入会重复创建。
-  - 动作：把唯一索引加回 schema.py 模板（含存量环境的迁移说明）。性价比最高。
+- [x] **1. 补 `semantic_config` 建表模板缺失的同名唯一索引**（2026-09-19 完成）
+  - 已做：`schema.py` 模板加 `UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name, delete_flag)`，与 `next_version.md:61` 手工迁移同名同列序。
+  - ~~遗留核对：`semantic_config_dao.py:20` 注释称两列~~（2026-09-19 关闭：生产 SHOW CREATE TABLE 确认为三列 `uniq_group_id_config_name_delete_flag`，无旧索引需 DROP；dao 注释已更新，软删除改名逻辑保留——同名反复删除会积累多行 `(group_id, name, 1)` 撞三列键，改名仍必需）。
 
-- [ ] **2. 补链路级测试（当前为零）**
-  - `prepare_ossie_import_models` / `_build_existing_config_index` / `_apply_physical_validation` / conflict_locked 标注：tests 内零引用（`server/apps/chat_data_app/tests/`）。
-  - `ossie-import` + `ossie-import/preview` 两个端点无 API 级测试。
-  - 覆盖点：同名冲突四分支（skip/replace/skip且locked/物理校验拦截）、事务整体回滚、conflict_actions 非法值、数据源不存在、preview 与 import 结果一致性。
-  - 现状：importer 38+24、converter 13+12 用例全在纯函数层，链路行为无回归网。
+- [x] **2. 补链路级测试**（2026-09-19 完成，原「零测试」判断系误报，已收回）
+  - 误报原因：上轮 review 用 Bash grep `\|` 交替检索（已知会静默失效），漏掉了 09-18 commit `5b514c7` 就已存在的 14 个端点级用例（直接调用 `preview_admin_ossie_semantic_import` / `import_admin_ossie_semantic_configs`，覆盖：preview 成功/物理校验失败、import 强制 disabled、replace/skip/非法 conflict_action/locked 强制跳过/事务回滚/请求内重名/不泄露 locked 元信息）。
+  - 本次补充：`test_chat_data_ossie_importer.py` 追加 6 个直接契约用例——`prepare_ossie_import_models`（重名返回错误+空列表、公共冲突 existing_config 且不 locked、他人私有 locked 且不泄露）+ `_build_existing_config_index`（同名首见优先、缺名/缺 id 跳过、admin 口径私有全进 locked）。文件共 44 用例全绿。
 
-- [ ] **3. 数据字典闭环（功能新增，先拍板冲突策略再动手）**
-  - 缺口：
+- [x] **3. 数据字典闭环（功能新增）——已完成（2026-09-19）。拍板：冲突策略=仅填空；字典直写不走草稿，导入时直接落库**
+  - 拍板依据：导入本身是人工触发的 preview→confirm 流程（preview 的⑤数据字典 checklist 行即确认面），仅填空又非破坏性（已有值一律不覆盖），草稿+人工确认属于重复确认。
+  - DDL 结论：**本闭环不需要任何 ALTER，也无需登记建表语句**——字典四项全在 `datasource_column_dict.dict_json` 内，生产已建过该表（用户 2026-09-19 确认，此前误加的建表块已从 `next_version.md` 撤下）。另：`semantic_config` 三列唯一索引生产已执行（2026-09-19 SHOW CREATE TABLE 核对），:12 遗留核对随之关闭——生产为三列形态，无旧两列索引需 DROP。
+  - 已实现（导出）：`SemanticConfigService.annotate_export_column_dicts` 把命中字典挂到配置副本 `_column_dict`（键口径与运行时合并单源 `_column_dict_key`）；materializer 渲染前标注（进缓存键，字典变更自动失效）；converter `_column_dict_extension_data` 把四项写入维度/原子指标 CHAT_DATA 扩展（空值不写，不压进 description）。
+  - 已实现（导入）：importer `_column_dict_from_extension` 提取 + `OssieSemanticModelImport.column_dicts` 携带（派生/复合指标无物理列不提取，同字段取首见）；`plan_column_dict_fills` 对照现有字典算填充计划；preview 端点返回 `column_dict_fill_plan` + checklist⑤数据字典行；import 端点在同一事务内对 created/replaced 模型执行 `DataSourceDao.fill_column_dict_async`（仅填空，失败整批回滚；skipped 模型不写字典），payload 带 `column_dict_filled` 明细；agent check_yaml 工具路径 checklist 显示 skip 行（未评估）。
+  - 已实现（service 单源）：`extract_metric_source_column` 下放 importer 模块，service `_extract_metric_source_column` 委托之（导出标注与导入回填定位同一物理列）。
+  - 测试：新增 15 个用例（round-trip、提取归一去重、仅填空计划、checklist 三态、preview 计划、import 填充/跳过不写/失败回滚、DAO 仅填空×4、materializer 标注）；全量 unit 3126 全绿；vue-tsc 0 error。
+  - 缺口（已全部闭合）：
     - 导出：`chat_data_ossie_converter.py:395`（指标侧 `:510`）`description = item.get("description") or item.get("metadata_supplement")` —— 维度已有 description 时字典派生补充说明整体丢弃；
     - 导出：`allowed_values`/`mapping` 无导出通道（`_dimension_extension_data:134` 只写 `logical_type=enum`）；
     - 导入：`chat_data_ossie_importer.py:302-339` `_convert_field` 不读 allowed_values/mapping，也不回写 `datasource_column_dict`；

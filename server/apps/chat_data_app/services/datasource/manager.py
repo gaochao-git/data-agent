@@ -816,6 +816,35 @@ class DataSourceManager:
             update_by_name=operator_name or "",
         )
 
+    async def fill_column_dict_async(
+        self,
+        datasource_id: str,
+        table_name: str,
+        column_name: str,
+        column_dict: Dict[str, Any],
+        operator: str = "",
+        operator_name: str = "",
+    ) -> Optional[List[str]]:
+        """仅填空保存单个字段的数据字典（Ossie 导入闭环用）。
+
+        只填充现有字典为空的字段，已有值一律保留；返回实际填充的字段名列表，
+        物理列不存在时返回 None（与 replace 的列校验口径一致）。
+        """
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
+        table = self._find_table_column(datasource, table_name, column_name)
+        if not datasource or table is None:
+            return None
+        return await self.datasource_dao.fill_column_dict_async(
+            datasource.get("group_id") or "",
+            table_name,
+            column_name,
+            column_dict,
+            create_by=operator or "",
+            update_by=operator or "",
+            create_by_name=operator_name or "",
+            update_by_name=operator_name or "",
+        )
+
     async def get_table_indexes_async(
         self,
         datasource_id: str,

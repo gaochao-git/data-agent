@@ -57,6 +57,9 @@ CREATE TABLE `chat_data_agent_inbox` (
 ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
 ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
 
+-- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
+-- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
+-- 其余环境执行 ALTER 前先跑查重，有结果则先处理重复行。
 SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
 ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
 
