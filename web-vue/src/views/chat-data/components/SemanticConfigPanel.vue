@@ -2758,7 +2758,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                 <div class="h-full w-px rounded-full bg-gray-200 transition-colors group-hover:bg-blue-300 group-[.is-resizing]:bg-blue-400"></div>
               </div>
 
-              <div class="min-w-0 min-h-0 flex flex-col gap-3">
+              <div class="min-w-0 min-h-0 flex flex-col gap-3 overflow-y-auto">
                 <div
                   class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-2.5 flex flex-col shrink-0"
                   @dragover.prevent
@@ -2893,8 +2893,8 @@ const saveBusinessNotes = (businessNotes: string) => {
                   </div>
                 </div>
 
-                <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-3 flex flex-col" :class="dimensionSectionCollapsed ? 'shrink-0' : 'flex-1 min-h-0'">
-                  <div class="flex items-center justify-between gap-3" :class="dimensionSectionCollapsed ? '' : 'mb-2'">
+                <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-3 flex flex-col" :class="dimensionSectionCollapsed ? 'shrink-0' : ''">
+                  <div class="flex items-center justify-between gap-3" :class="dimensionSectionCollapsed ? '' : 'sticky top-0 z-10 -mx-3 -mt-3 mb-2 px-3 pt-3 bg-gray-50 rounded-t-lg'">
                     <div
                       class="flex items-center gap-2 min-w-0 cursor-pointer select-none"
                       :title="dimensionSectionCollapsed ? '展开维度配置' : '折叠维度配置'"
@@ -2938,11 +2938,11 @@ const saveBusinessNotes = (businessNotes: string) => {
                     </div>
                   </div>
                   <template v-if="!dimensionSectionCollapsed">
-                  <div v-if="fieldRows.length === 0" class="flex-1 border border-dashed border-gray-300 rounded-md bg-white flex flex-col items-center justify-center text-gray-400 text-xs">
+                  <div v-if="fieldRows.length === 0" class="min-h-[80px] border border-dashed border-gray-300 rounded-md bg-white flex flex-col items-center justify-center text-gray-400 text-xs">
                     <i class="fa-regular fa-table-cells-large mb-2"></i>
                     请先在左侧选择数据表
                   </div>
-                  <div v-else class="flex-1 overflow-auto rounded-md border border-gray-200 bg-white">
+                  <div v-else class="overflow-auto rounded-md border border-gray-200 bg-white">
                     <table :class="[showFieldPhysicalDetails ? 'min-w-[2012px]' : 'min-w-[1612px]', 'w-full border-collapse text-[12px]']">
                       <thead class="bg-gray-50 text-gray-600">
                         <tr>
@@ -3081,7 +3081,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                 </div>
 
                 <div class="border border-dashed border-gray-300 rounded-lg bg-gray-50/60 p-2.5 flex flex-col shrink-0">
-                  <div class="flex items-center justify-between gap-3" :class="metricSectionCollapsed ? '' : 'mb-1.5'">
+                  <div class="flex items-center justify-between gap-3" :class="metricSectionCollapsed ? '' : 'sticky top-0 z-10 -mx-2.5 -mt-2.5 mb-1.5 px-2.5 pt-2.5 bg-gray-50 rounded-t-lg'">
                     <div
                       class="flex items-center gap-2 min-w-0 cursor-pointer select-none"
                       :title="metricSectionCollapsed ? '展开指标管理' : '折叠指标管理'"
