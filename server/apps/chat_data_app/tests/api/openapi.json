@@ -7786,6 +7786,67 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/workspace-files/archive": {
+      "get": {
+        "description": "把会话工作区的单个顶层目录（当前仅放开 outputs）打包为 zip 下载。\n\n内容与权限口径复用文件列表的白名单（见 service 层注释）；大小限制针对 zip\n产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。\n临时 zip 通过 BackgroundTask 在响应发送后删除。",
+        "operationId": "download_conversation_workspace_archive",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "directory",
+            "required": true,
+            "schema": {
+              "title": "Directory",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Download Conversation Workspace Archive",
+        "tags": [
+          "ChatData 会话工作区文件"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/workspace-files/content": {
       "get": {
         "description": "读取 ChatData 会话工作区文本文件。",

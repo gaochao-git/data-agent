@@ -877,6 +877,13 @@ ChatData
 - 操作：查看消息流内「交互 HTML 页面」占位卡（文件名 + 类型标签，样式与 Word/Excel/PPT 文件卡一致）；点击「预览」在右侧预览面板打开；切换「源码/渲染」视图；点击「下载」；刷新浏览器与切换历史会话后卡片仍在。
 - 预期：HTML 产物以占位卡呈现，与 Word/Excel/PPT/Markdown 同列表、同交互口径，消息流内不渲染 iframe；预览面板 iframe 带 `sandbox="allow-scripts"` 且通过 `srcdoc` 渲染，无外链资源加载（内网无外网也应正常显示）；下载内容与原文件一致；历史会话恢复后卡片仍可打开预览；工作区文件树中同一 HTML 文件可正常打开。
 
+#### FILE-10 目录打包下载（2026-09-19 新增）
+
+- 角色：`USER_A`
+- 前置：会话 `outputs/` 下有产出文件；`workspace/`、`uploads/` 行为对照。
+- 操作：展开右侧工作区，查看 outputs 目录行新出现的「打包下载整个目录」按钮（`data-console-archive-download`，位于目录名与数量徽标之间，空目录不显示）；点击后浏览器下载 `outputs.zip`；对照 uploads / workspace 行无该按钮。
+- 预期：**只有 outputs 行出现该按钮**（白名单 `ARCHIVE_DOWNLOADABLE_DIRECTORIES`，2026-09-19 用户拍板）；zip 内容 = 文件树可见文件（arcname 保留 `outputs/...` 目录结构，系统结果目录 `query_result`/`.tool-offload` 与内部文件不进包，与单文件下载同一防泄漏口径）；大小限制针对 **zip 产物**（`CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB` 默认 50MB，限压缩后大小无法前端预检），超限后端中止并 toast 业务文案「压缩包超过大小限制…已中止打包」；业务错误以 HTTP 200 + JSON 体返回（blob.type=application/json），前端解析 msg 提示。
+
 ### 4.7 上下文、消息和会话历史
 
 > 本节 `CTX-*` 用例归属数据智能体的会话与上下文子功能，与 `AG-*` 同属业务端数据智能体模块；会话收藏属于会话管理，不属于 `FAV`。
@@ -1788,3 +1795,17 @@ ChatData
 观察项（非缺陷）：① 导入强制禁用后 `prematerialize` 跳过该模型（total 6→5），再物化前需先启用；② 语义面板会话内不感知面板外的配置变更（如外部 API 修改），重新选择模型/刷新后正确；③ 预存语义漂移记录：`metadata_supplement`→`description` 单槽位迁移（当前库无并存行，零损失）、`field_name==column`/`table_alias==table` 冗余键往返后省略（语义等价）、create 路径无 `tables` 通道（新导入模型快照 unique_keys 为空、datatype 走 logical_type 默认；replace 路径 DAO `**current` 保留 `tables` 无损失）。
 
 收尾：测试模型已用 A 原样 YAML 替换导回（恢复 11 维原名）并重新启用；字典填充数据保留。素材：`.workbuddy/e2e_ossie_roundtrip/`（A_原样/B_我改/C_智能体改/D_字典）。
+
+### §5.16 工作区目录打包下载（FILE-10）首验（2026-09-19 21:20，agent-browser）
+
+背景：新增 outputs 目录打包下载（用户拍板限压缩产物大小 50MB）。环境：gunicorn dev 重启加载新代码（5001）+ 前端 8089 + agent-browser。
+
+| 步骤 | 结果 | 证据 |
+| --- | --- | --- |
+| 直打接口 | ✅ PASS | 会话 7f901dce（语义模型质量检查与治理）：`GET .../workspace-files/archive?directory=outputs` → `application/zip`、disposition `attachment; filename="outputs.zip"`、zip 含 7 个可见文件（arcname 保留 outputs/ 前缀）、11582 字节 |
+| 非法目录分支 | ✅ PASS | `directory=../etc` → 业务错误（`目录不支持打包`，CHATDATA_BAD_REQUEST） |
+| UI 按钮渲染 | ✅ PASS | outputs 行出现「打包下载整个目录」按钮（data-console-archive-download，目录名与数量徽标 7 之间）；uploads 行只有上传按钮、workspace 行无归档按钮 |
+| UI 点击下载 | ✅ PASS | JS 拦截 `URL.createObjectURL`：点击后收到 blob `{size: 11582, type: "application/zip"}`，与直打接口字节数一致 |
+| 单测 | ✅ PASS | service 5 例（打包/排除系统结果与内部文件/非法与空目录/超限中止并清理临时文件/列表-打包竞态跳过）+ 路由分支 1 例 + consoleFileTree 白名单 2 例 |
+
+素材：`.workbuddy/e2e_workspace_archive/e2e_archive_button.png`。openapi 快照已重新生成（仅 +archive 端点 61 行）。

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import os
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -48,6 +51,7 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import (
 from apps.chat_data_app.services.runtime_config import (
     OFFICE_PREVIEW_SOURCE_MAX_MB,
     TEXT_PREVIEW_MAX_MB,
+    WORKSPACE_ARCHIVE_MAX_MB,
 )
 
 logger = get_logger(__name__)
@@ -65,6 +69,10 @@ WORKSPACE_OFFICE_SOURCE_MAX_BYTES = OFFICE_PREVIEW_SOURCE_MAX_MB * 1024 * 1024
 # raw（原始字节）预览上限：目前无对应 env，主对话与技能管理预览共用本常量（单一来源）。
 WORKSPACE_RAW_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
 
+# 目录打包下载的压缩包大小上限：限 zip 产物字节（MB 值在 runtime_config 集中读取，
+# CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB）。模块级求值：改 env 后必须重启进程才生效。
+WORKSPACE_ARCHIVE_MAX_BYTES = WORKSPACE_ARCHIVE_MAX_MB * 1024 * 1024
+
 
 def _format_size_limit(max_bytes: int) -> str:
     """把字节上限格式化成用户可读文案（>=1MB 显示 MB，否则显示字节）。"""
@@ -80,6 +88,14 @@ _BLOCKING_WORKSPACE_DELETE_RUN_STATUSES = frozenset({"pending", "active", "cance
 
 class WorkspaceFileDeleteConflictError(RuntimeError):
     """删除请求与正在执行的 Run 冲突。"""
+
+
+class WorkspaceArchiveTooLargeError(RuntimeError):
+    """目录打包下载的压缩包产物超过大小上限（限 zip 产物字节，非源文件大小）。"""
+
+    def __init__(self, max_bytes: int):
+        self.max_bytes = max_bytes
+        super().__init__(f"压缩包超过大小限制（{_format_size_limit(max_bytes)}），已中止打包")
 
 
 def resolve_workspace_date(create_time: datetime | None) -> str:
@@ -323,6 +339,84 @@ async def read_conversation_workspace_raw_file(
         conversation_id,
         path,
         max_bytes,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
+
+
+def _archive_workspace_directory(
+    conversation_id: str,
+    directory: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, Any]:
+    """把会话工作区的单个顶层目录打成 zip，写入临时文件并返回其路径等信息。
+
+    内容来源是 ``list_workspace_files`` 的白名单列表（已排除系统结果目录、内部文件与
+    逃逸符号链接），**不重新遍历磁盘**——保证「单文件下载不了的，打包也下不到」，与
+    单文件下载、前端文件树三方共用同一权限口径（consoleFileTree.ts 的防泄漏边界）。
+
+    大小限制针对 zip 产物字节（用户拍板 2026-09-19）：压缩率不可控，无法预检，故
+    边写边计量（每个文件落包后核对临时文件大小），超限抛 WorkspaceArchiveTooLargeError。
+    列表与打包之间文件可能被并发中的 Run 删除，消失的文件跳过而不失败；若因此
+    一个文件都没打进包，按空目录处理报错。
+    """
+    if directory not in WORKSPACE_DIR_NAMES:
+        raise ValueError(f"目录不支持打包: {directory}")
+    files = [
+        item
+        for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
+        if item["directory"] == directory
+    ]
+    if not files:
+        raise FileNotFoundError(f"{directory} 目录下没有可打包的文件")
+
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = str(Path(paths["root"]).resolve())
+    fd, tmp_path = tempfile.mkstemp(prefix=f"chatdata-{directory}-", suffix=".zip")
+    os.close(fd)
+    written = 0
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for item in files:
+                relative_path = str(item["relative_path"])
+                target = resolve_workspace_path(root, f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}")
+                if not target.is_file():
+                    continue
+                # arcname 用相对路径（含顶层目录前缀），解压后保留 outputs/... 的目录结构
+                zf.write(target, arcname=relative_path)
+                written += 1
+                if os.path.getsize(tmp_path) > WORKSPACE_ARCHIVE_MAX_BYTES:
+                    raise WorkspaceArchiveTooLargeError(WORKSPACE_ARCHIVE_MAX_BYTES)
+        if not written:
+            raise FileNotFoundError(f"{directory} 目录下没有可打包的文件")
+    except Exception:
+        # 失败一律清理临时文件（含超限中止），不留半成品
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return {
+        "temp_path": tmp_path,
+        "filename": f"{directory}.zip",
+        "file_count": written,
+        "size": os.path.getsize(tmp_path),
+    }
+
+
+async def archive_conversation_workspace_directory(
+    conversation_id: str,
+    *,
+    user_id: str,
+    directory: str,
+) -> dict[str, Any]:
+    """打包当前用户会话工作区的单个顶层目录（异步包装，打包走线程）。"""
+    return await asyncio.to_thread(
+        _archive_workspace_directory,
+        conversation_id,
+        directory,
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
     )

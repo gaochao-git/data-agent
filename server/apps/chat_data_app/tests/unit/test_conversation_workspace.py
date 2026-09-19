@@ -3,6 +3,8 @@ import sys
 import uuid
 import json
 import importlib
+import tempfile
+import zipfile
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -2237,3 +2239,113 @@ async def test_delete_conversation_workspace_file_falls_back_when_upload_record_
     assert nested_payload["record_cleaned"] is False
     assert not orphan.exists()
     assert not nested.exists()
+
+
+# ---------------------------------------------------------------------------
+# 目录打包下载（archive）
+# ---------------------------------------------------------------------------
+
+def test_archive_workspace_directory_packages_outputs(monkeypatch, tmp_path):
+    paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_a")
+    outputs = Path(paths["root"]) / "outputs"
+    (outputs / "模型").mkdir(parents=True, exist_ok=True)
+    (outputs / "模型.yaml").write_text("name: 模型\n", encoding="utf-8")
+    (outputs / "模型" / "明细.csv").write_text("id,amount\n1,10\n", encoding="utf-8")
+
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_a", "outputs", "user_a")
+
+    assert payload["filename"] == "outputs.zip"
+    assert payload["file_count"] == 2
+    with zipfile.ZipFile(payload["temp_path"]) as zf:
+        assert sorted(zf.namelist()) == ["outputs/模型.yaml", "outputs/模型/明细.csv"]
+        assert zf.read("outputs/模型.yaml").decode("utf-8") == "name: 模型\n"
+    os.unlink(payload["temp_path"])
+
+
+def test_archive_excludes_system_result_and_internal_files(monkeypatch, tmp_path):
+    paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_b")
+    root = Path(paths["root"])
+    (root / "outputs").mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / "result.csv").write_text("visible", encoding="utf-8")
+    (root / "outputs" / "query_result").mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / "query_result" / "secret.csv").write_text("audit", encoding="utf-8")
+    (root / "outputs" / ".tool-offload").mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / ".tool-offload" / "blob.bin").write_bytes(b"\x00\x01")
+    (root / "workspace" / "data_context.json").write_text("{}", encoding="utf-8")
+    (root / "workspace" / "note.txt").write_text("other dir", encoding="utf-8")
+
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_b", "outputs", "user_a")
+
+    with zipfile.ZipFile(payload["temp_path"]) as zf:
+        assert zf.namelist() == ["outputs/result.csv"]
+    os.unlink(payload["temp_path"])
+
+
+def test_archive_rejects_unknown_and_empty_directory(monkeypatch, tmp_path):
+    _isolated_workspace(monkeypatch, tmp_path, "conv_zip_c")
+
+    with pytest.raises(ValueError, match="目录不支持打包"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_c", "../uploads")
+
+    with pytest.raises(FileNotFoundError, match="没有可打包的文件"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_c", "outputs", "user_a")
+
+
+def test_archive_aborts_and_cleans_up_when_zip_exceeds_limit(monkeypatch, tmp_path):
+    _isolated_workspace(monkeypatch, tmp_path, "conv_zip_d", "user_a")
+    outputs = Path(
+        conversation_workspace_module.ensure_conversation_workspace("conv_zip_d", "user_a")["root"]
+    ) / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    # 随机字节不可压缩，8KB 源必然压出超过 512B 上限的产物
+    (outputs / "raw.bin").write_bytes(os.urandom(8192))
+    monkeypatch.setattr(conversation_workspace_module, "WORKSPACE_ARCHIVE_MAX_BYTES", 512)
+
+    # 记录 mkstemp 实际拿到的临时文件路径，断言中止后被清理（不扫全局临时目录，
+    # 避免混入其它运行的残留文件造成误判）
+    created = {}
+    original_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, path = original_mkstemp(*args, **kwargs)
+        created["path"] = path
+        return fd, path
+
+    monkeypatch.setattr(conversation_workspace_module.tempfile, "mkstemp", recording_mkstemp)
+
+    with pytest.raises(
+        conversation_workspace_module.WorkspaceArchiveTooLargeError, match="已中止打包"
+    ):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_d", "outputs", "user_a")
+
+    assert created["path"] and not os.path.exists(created["path"])
+
+
+def test_archive_skips_files_deleted_between_listing_and_packaging(monkeypatch, tmp_path):
+    paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_e")
+    outputs = Path(paths["root"]) / "outputs"
+    (outputs.mkdir(parents=True, exist_ok=True))
+    (outputs / "real.txt").write_text("real", encoding="utf-8")
+
+    original_list = conversation_workspace_module.list_workspace_files
+
+    def list_with_phantom(*args, **kwargs):
+        files = original_list(*args, **kwargs)
+        return files + [{
+            "path": "outputs/ghost.txt",
+            "relative_path": "outputs/ghost.txt",
+            "directory": "outputs",
+            "name": "ghost.txt",
+            "size": 10,
+            "mtime": 0,
+            "source": "outputs",
+        }]
+
+    monkeypatch.setattr(conversation_workspace_module, "list_workspace_files", list_with_phantom)
+
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_e", "outputs", "user_a")
+
+    assert payload["file_count"] == 1
+    with zipfile.ZipFile(payload["temp_path"]) as zf:
+        assert zf.namelist() == ["outputs/real.txt"]
+    os.unlink(payload["temp_path"])

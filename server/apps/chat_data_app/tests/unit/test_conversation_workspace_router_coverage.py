@@ -28,6 +28,12 @@ class FakeWorkspaceService:
         self.raw_payload = {"relative_path": "docs/报告.pdf", "data": b"bytes", "mime": "application/pdf"}
         self.query_result = {"result_id": "res_1"}
         self.preview = {"available": True}
+        self.archive_payload = {
+            "temp_path": "/tmp/chatdata-outputs-fake.zip",
+            "filename": "outputs.zip",
+            "file_count": 1,
+            "size": 10,
+        }
         self.errors = {}
 
     async def can_access(self, conversation_id, user_id):
@@ -63,6 +69,12 @@ class FakeWorkspaceService:
             raise exc
         return self.query_result
 
+    async def archive_directory(self, conversation_id, user_id=None, directory=None):
+        exc = self.errors.get("archive")
+        if exc:
+            raise exc
+        return self.archive_payload
+
 
 @pytest.fixture()
 def fake_service(monkeypatch):
@@ -73,6 +85,7 @@ def fake_service(monkeypatch):
     monkeypatch.setattr(cw_routes, "read_conversation_workspace_raw_file", service.read_raw)
     monkeypatch.setattr(cw_routes, "render_conversation_workspace_office_preview", service.render_preview)
     monkeypatch.setattr(cw_routes, "read_conversation_query_result", service.read_query_result)
+    monkeypatch.setattr(cw_routes, "archive_conversation_workspace_directory", service.archive_directory)
     return service
 
 
@@ -265,4 +278,42 @@ def test_import_skill_from_workspace_branches(fake_service, monkeypatch):
 
     monkeypatch.setattr(cw_routes.skill_service, "import_user_skill_from_directory_async", boom_import)
     payload = response_payload(asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request())))
+    assert payload["status"] == "error"
+
+
+def test_download_workspace_archive_branches(fake_service, monkeypatch):
+    patch_user(monkeypatch)
+
+    # 成功：返回 zip 二进制响应（attachment）
+    result = asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request()))
+    assert isinstance(result, Response)
+    disposition = result.headers["content-disposition"]
+    assert disposition.startswith("attachment")
+    assert "outputs.zip" in disposition
+
+    # 非法目录名：不触达 service，直接 BAD_REQUEST
+    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "../etc", fake_request())))
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
+    # 无权访问
+    fake_service.access = False
+    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    fake_service.access = True
+
+    # 目录为空（service FileNotFoundError）→ NOT_FOUND
+    fake_service.errors["archive"] = FileNotFoundError("outputs 目录下没有可打包的文件")
+    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert "没有可打包的文件" in payload["msg"]
+
+    # 压缩包超限 → BAD_REQUEST + 明确文案
+    fake_service.errors["archive"] = cw_routes.WorkspaceArchiveTooLargeError(50 * 1024 * 1024)
+    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert "已中止打包" in payload["msg"]
+
+    # 未知异常 → 兜底错误
+    fake_service.errors["archive"] = RuntimeError("boom")
+    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
     assert payload["status"] == "error"

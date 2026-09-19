@@ -910,6 +910,21 @@ export function getConversationWorkspaceRawFile(conversationId: string, path: st
   }) as unknown as Promise<Blob>
 }
 
+/**
+ * 打包下载会话工作区顶层目录（当前仅 outputs），返回 zip Blob。
+ * 业务错误（超过压缩包大小上限 / 目录为空 / 无权访问）以 HTTP 200 + JSON 体返回，
+ * 调用方需检查 blob.type 后自行解析 msg 提示。
+ */
+export function getConversationWorkspaceArchive(conversationId: string, directory: string): Promise<Blob> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/archive`,
+    method: 'get',
+    params: { directory },
+    responseType: 'blob',
+    timeout: 120000,
+  }) as unknown as Promise<Blob>
+}
+
 export interface ConversationWorkspaceOfficeHtmlPreview {
   available: boolean
   reason?: string

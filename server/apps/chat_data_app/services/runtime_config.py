@@ -77,6 +77,10 @@ QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECON
 # （Office 转出 HTML 的字符上限，12MB，独立配置）是两回事。
 TEXT_PREVIEW_MAX_MB = read_positive_int_env("CHAT_DATA_TEXT_PREVIEW_MAX_MB", 5)
 OFFICE_PREVIEW_SOURCE_MAX_MB = read_positive_int_env("CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB", 50)
+# 会话工作区目录打包下载的压缩包大小上限（MB）：限的是 zip 产物字节而非源文件总大小
+# （压缩率不可控，限源大小无法预测产物；用户拍板 2026-09-19 限压缩后大小）。默认 50。
+# 消费者为 conversation_workspace 的目录打包下载，打包过程中边写边计量、超限即中止。
+WORKSPACE_ARCHIVE_MAX_MB = read_positive_int_env("CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB", 50)
 DEFAULT_CONTEXT_WINDOW = 128000
 
 # ---- 单一 ChatData Agent 运行配置 ----

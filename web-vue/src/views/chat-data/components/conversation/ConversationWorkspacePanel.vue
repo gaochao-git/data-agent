@@ -29,6 +29,7 @@ import {
   getConversationWorkspaceFiles,
   getConversationWorkspaceOfficeHtmlPreview,
   getConversationWorkspaceRawFile,
+  getConversationWorkspaceArchive,
   uploadFile,
   type ConversationWorkspaceFile,
 } from '../../api'
@@ -46,6 +47,7 @@ import {
   getFileCount,
   isTreeFullyCollapsed,
   isWorkspaceFileDeletable,
+  isWorkspaceDirectoryArchiveDownloadable,
   syncTruncatedTitle,
   isWorkspaceFileDownloadable,
   normalizeVisiblePath,
@@ -560,6 +562,53 @@ const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedCon
   }
 }
 
+// 目录打包下载：把整个 outputs 目录打成 zip（用户拍板 2026-09-19，只放开 outputs）。
+// 大小限制针对压缩产物（后端 CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB）——压缩前
+// 无法预测产物大小，所以没有前端预检，超限时后端边打包边计量、中止并返回业务错误 JSON。
+// 后端业务错误走 HTTP 200 + JSON 体（与 raw 接口的错误形态一致），而本请求 responseType
+// 是 blob，因此拿到响应后先看 blob.type：application/json 说明是业务错误，解析 msg 提示。
+const isConsoleArchiveDownloading = ref<string>('')
+const handleDownloadConsoleDirectoryArchive = async (directoryName: string) => {
+  if (!isWorkspaceDirectoryArchiveDownloadable(directoryName)) {
+    ElMessage.warning('该目录不支持打包下载')
+    return
+  }
+  if (!props.conversationId) {
+    ElMessage.warning('会话未就绪，无法打包下载')
+    return
+  }
+  if (isConsoleArchiveDownloading.value) return
+  isConsoleArchiveDownloading.value = directoryName
+  try {
+    const blob = await getConversationWorkspaceArchive(props.conversationId, directoryName)
+    if (blob.type.includes('application/json')) {
+      const text = await blob.text()
+      let msg = '打包下载失败，请稍后重试'
+      try {
+        const payload = JSON.parse(text)
+        msg = payload?.data?.msg || payload?.msg || msg
+      } catch {
+        // 保留默认文案
+      }
+      ElMessage.warning(msg)
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${directoryName}.zip`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    console.error('打包下载工作区目录失败:', err)
+    ElMessage.error('打包下载失败，请稍后重试')
+  } finally {
+    isConsoleArchiveDownloading.value = ''
+  }
+}
+
 // 删除工作区文件：uploads / workspace / outputs 一视同仁，唯独 SQL 查询结果与工具结果缓存例外
 // ——它们是审计留存，后端删除接口同样拒绝（前端这层是纵深防御，见 utils/consoleFileTree.ts）。
 // 物理删除不可恢复，因此必须走二次确认；uploads 里的文件还会由后端连带清理 uploaded_files 记录，
@@ -853,6 +902,22 @@ defineExpose({
                 @click="openWorkspaceUploadPicker"
               >
                 <i class="fa-solid" :class="isWorkspaceFileUploading ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
+              </button>
+              <!-- 打包下载入口挂在 outputs 目录行：outputs 是智能体产出的汇聚地，
+                   是「一次拿走全部结果」的真实诉求；workspace 是中间文件、uploads
+                   内容用户本就有原件，不放开（见 utils/consoleFileTree.ts 白名单）。
+                   空目录不显示（打包只会得到报错）；大小限制在压缩产物，前端无预检。 -->
+              <button
+                v-if="directory.name === 'outputs' && getFileCount(directory)"
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600 disabled:opacity-50"
+                title="打包下载整个目录（zip）"
+                aria-label="打包下载整个目录"
+                :disabled="isConsoleArchiveDownloading === directory.name"
+                data-console-archive-download="true"
+                @click="handleDownloadConsoleDirectoryArchive(directory.name)"
+              >
+                <i class="fa-solid" :class="isConsoleArchiveDownloading === directory.name ? 'fa-spinner fa-spin' : 'fa-download'"></i>
               </button>
               <!-- 数量徽标统一放在每行最右端（按钮在其左侧），与面板头部同序：
                    所有数量落在同一条竖线上，扫一眼就能纵向比对。 -->

@@ -7,6 +7,7 @@ import {
   expandAllDirectories,
   formatFileSize,
   isTreeFullyCollapsed,
+  isWorkspaceDirectoryArchiveDownloadable,
   isWorkspaceFileDeletable,
   isWorkspaceFileDownloadable,
   syncTruncatedTitle,
@@ -288,5 +289,20 @@ describe('formatFileSize（行尾文件大小）', () => {
     expect(formatFileSize(Number.POSITIVE_INFINITY)).toBe('')
     expect(formatFileSize(null)).toBe('')
     expect(formatFileSize(undefined)).toBe('')
+  })
+})
+
+describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单）', () => {
+  it('只放开 outputs（用户拍板 2026-09-19）', () => {
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs')).toBe(true)
+    expect(isWorkspaceDirectoryArchiveDownloadable('workspace')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('uploads')).toBe(false)
+  })
+
+  it('空值与未知目录保守返回 false', () => {
+    expect(isWorkspaceDirectoryArchiveDownloadable('')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable(null)).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable(undefined)).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/query_result')).toBe(false)
   })
 })
