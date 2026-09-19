@@ -1772,3 +1772,19 @@ ChatData
 3. el-dialog 为 `position:fixed`（offsetParent=null），用 `offsetParent` 过滤弹层会漏判；应按 `.el-overlay` 的 `display` 判断开合。另 `pages/index.vue` 双挂载 + 未打开 el-dialog 预渲染 DOM 的隐藏双实例问题（§5.13 观察项 2）本轮再次踩实。
 
 环境：后端 5001 / 前端 8089 / agent-browser 0.27.0，入口 `parentComponentName=执法检查`。本轮为 2 日 commit 定向回归，不代替发布前全量基线执行。SEM-18 的「确认导入」二次确认 ElMessageBox 本轮未重复点击（§5.13 已覆盖），且避免真实落库。
+
+### §5.15 Ossie 下载物化→修改→导入 全链路往返验证（2026-09-19 17:45，agent-browser）
+
+背景：维度往返保序修复（converter 模型扩展 `dimension_order` + importer `_restore_dimension_order`）后，用户要求对「下载物化模型→修改→导入」全流程多场景浏览器验证。环境：后端 gunicorn dev 重启加载新代码（5001）+ 前端 `http://localhost:8089/chatdata?parentComponentName=执法检查` + agent-browser 0.27.0（视口 1600×1200）。物化：生产同构函数（`prepare_conversation_workspace` + `prematerialize_enabled_semantic_models`）驱动到 `e2e_roundtrip_0919a` 工作区，目标模型 `用户-订单模型`（sc_20260805133737_624，hive-localhost）。
+
+| 场景 | 结果 | 关键证据 |
+| --- | --- | --- |
+| A 原样导入 | ✅ PASS | 查看差异 changed/inserted/deleted 全 **0**（修复前为整块绿加红删）；真实替换落库「导入完成（替换 1）」 |
+| B 我改 YAML（描述/维度名/删维度/orders 内字段重排/指标描述） | ✅ PASS | 两侧全文逐行 diff = 恰好 4 处修改，**重排 0 噪音**（导入按 dimension_order 还原，无视文件内字段顺序）；落库后 UI 维度顺序 users 块→orders 块、改名/删除生效 |
+| C 智能体路径修改→重物化→导入 | ✅ PASS | PUT admin 接口（service 层同路径）改名+改描述 → 重物化文件按内容缓存失效重写 → 导入 diff **0** → 落库 → UI 重选模型后新名/顺序正确 |
+| D 数据字典闭环 | ✅ PASS | 预览 checklist 出现「⑤ 数据字典」行，填充计划精确：`orders.status（枚举值/同义词/存储格式）、users.status（枚举值/单位）`（空 unit 不写）；落库后 DB 字典值按仅填空精确填充 |
+| 代码级批量回环 | ✅ PASS | 6 个启用模型 convert→import 深度比对（维度顺序/内容、指标、关系）+ 二次物化幂等，ALL PASS；unit 全量单测同日 3129 passed |
+
+观察项（非缺陷）：① 导入强制禁用后 `prematerialize` 跳过该模型（total 6→5），再物化前需先启用；② 语义面板会话内不感知面板外的配置变更（如外部 API 修改），重新选择模型/刷新后正确；③ 预存语义漂移记录：`metadata_supplement`→`description` 单槽位迁移（当前库无并存行，零损失）、`field_name==column`/`table_alias==table` 冗余键往返后省略（语义等价）、create 路径无 `tables` 通道（新导入模型快照 unique_keys 为空、datatype 走 logical_type 默认；replace 路径 DAO `**current` 保留 `tables` 无损失）。
+
+收尾：测试模型已用 A 原样 YAML 替换导回（恢复 11 维原名）并重新启用；字典填充数据保留。素材：`.workbuddy/e2e_ossie_roundtrip/`（A_原样/B_我改/C_智能体改/D_字典）。

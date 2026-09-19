@@ -218,6 +218,35 @@ _COLUMN_DICT_FIELD_LABELS = {
 }
 
 
+def _enum_values_from_raw(raw_enums: Any) -> List[Dict[str, str]]:
+    """清洗枚举值列表（value 去重截断，结构不合法的项忽略）。"""
+    if not isinstance(raw_enums, list):
+        return []
+    enum_values: List[Dict[str, str]] = []
+    seen_values: set = set()
+    for item in raw_enums:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()[:128]
+        if not value or value in seen_values:
+            continue
+        seen_values.add(value)
+        enum_values.append({"value": value, "label": str(item.get("label") or "").strip()[:255]})
+    return enum_values[:100]
+
+
+def _synonyms_from_raw(raw_synonyms: Any) -> List[str]:
+    """清洗同义词列表（保序去重截断）。"""
+    if not isinstance(raw_synonyms, list):
+        return []
+    synonyms: List[str] = []
+    for value in raw_synonyms:
+        text = str(value or "").strip()[:100]
+        if text and text not in synonyms:
+            synonyms.append(text)
+    return synonyms[:50]
+
+
 def _column_dict_from_extension(extension: Dict[str, Any]) -> Dict[str, Any]:
     """从 CHAT_DATA 扩展提取字段字典四项（宽松归一，结构不合法的键忽略）。
 
@@ -227,29 +256,12 @@ def _column_dict_from_extension(extension: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     payload: Dict[str, Any] = {}
-    raw_enums = raw.get("enum_values")
-    if isinstance(raw_enums, list):
-        enum_values: List[Dict[str, str]] = []
-        seen_values: set = set()
-        for item in raw_enums:
-            if not isinstance(item, dict):
-                continue
-            value = str(item.get("value") or "").strip()[:128]
-            if not value or value in seen_values:
-                continue
-            seen_values.add(value)
-            enum_values.append({"value": value, "label": str(item.get("label") or "").strip()[:255]})
-        if enum_values:
-            payload["enum_values"] = enum_values[:100]
-    raw_synonyms = raw.get("synonyms")
-    if isinstance(raw_synonyms, list):
-        synonyms: List[str] = []
-        for value in raw_synonyms:
-            text = str(value or "").strip()[:100]
-            if text and text not in synonyms:
-                synonyms.append(text)
-        if synonyms:
-            payload["synonyms"] = synonyms[:50]
+    enum_values = _enum_values_from_raw(raw.get("enum_values"))
+    if enum_values:
+        payload["enum_values"] = enum_values
+    synonyms = _synonyms_from_raw(raw.get("synonyms"))
+    if synonyms:
+        payload["synonyms"] = synonyms
     for key, max_length in (("storage_format", 255), ("unit", 100)):
         text = str(raw.get(key) or "").strip()[:max_length]
         if text:

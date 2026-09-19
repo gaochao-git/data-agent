@@ -67,6 +67,20 @@ def _column_name(item: dict[str, Any]) -> str:
     return _text(item.get("column") or item.get("field") or item.get("field_name"))
 
 
+def _dimension_order(dimensions: Any) -> list[str]:
+    """平铺维度的原始顺序清单（table.column 键）。
+
+    Ossie 的 dataset→field 两级结构会把平铺维度按表聚簇，平铺顺序在 YAML 里
+    没有位置可放；写入原始顺序清单，导入侧据此还原，保证「物化下载→再导入」
+    往返后维度顺序与库中一致。
+    """
+    result: list[str] = []
+    for item in dimensions or []:
+        if isinstance(item, dict) and _table_name(item) and _column_name(item):
+            result.append(f"{_table_name(item)}.{_column_name(item)}")
+    return result
+
+
 def _expression(item: dict[str, Any], *, fallback: str = "") -> str:
     return _text(item.get("expression") or _column_name(item) or fallback)
 
@@ -348,11 +362,7 @@ class ChatDataToOssieConverter:
             # Ossie 的 dataset→field 两级结构会把平铺维度按表聚簇，平铺顺序在 YAML 里
             # 没有位置可放；写入原始顺序清单（table.column 键），导入侧据此还原，
             # 保证「物化下载→再导入」往返后维度顺序与库中一致。
-            "dimension_order": [
-                f"{_table_name(item)}.{_column_name(item)}"
-                for item in normalized.get("dimensions") or []
-                if isinstance(item, dict) and _table_name(item) and _column_name(item)
-            ],
+            "dimension_order": _dimension_order(normalized.get("dimensions")),
         })
         model = OSISemanticModel(
             name=_text(normalized.get("name") or config_id),

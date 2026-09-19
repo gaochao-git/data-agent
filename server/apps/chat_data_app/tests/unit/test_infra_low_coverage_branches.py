@@ -5,6 +5,7 @@ import json
 import logging
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1393,3 +1394,136 @@ def test_calculator_extra_branches():
     assert calculator._calculate_item({"expression": ""})["error"] == "expression 不能为空"
     assert calculator._calculate_item({"expression": "1/0"})["error"] == "除数不能为 0"
     assert calculator._calculate_item({"expression": "(1+2)", "decimal_places": 0})["result"] == "3"
+
+
+def test_api_logging_pure_helper_branches():
+    assert api_logging_module._client_ip({}, {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}) == "1.2.3.4"
+    assert api_logging_module._client_ip({"client": None}, {}) == ""
+    assert api_logging_module._client_ip({"client": ("10.0.0.1", 80)}, {}) == "10.0.0.1"
+
+    # 同名（大小写不敏感）多枚举头：替换首个、跳过其余；无匹配时追加到末尾
+    duplicate = [(b"a", b"1"), (b"A", b"2"), (b"b", b"3")]
+    assert api_logging_module._upsert_header(duplicate, b"a", b"9") == [(b"a", b"9"), (b"b", b"3")]
+    assert api_logging_module._upsert_header([(b"b", b"3")], b"a", b"9") == [(b"b", b"3"), (b"a", b"9")]
+
+    assert api_logging_module._is_streaming_response("text/event-stream; charset=utf-8", "") is True
+    assert api_logging_module._is_streaming_response("application/json", 'attachment; filename="a.pdf"') is True
+    assert api_logging_module._is_streaming_response("application/pdf", "") is True
+    assert api_logging_module._is_streaming_response("application/json", "") is False
+
+    assert api_logging_module._access_ext1("1.2.3.4", None) == "client_ip:1.2.3.4"
+    assert api_logging_module._access_ext1("", "u1") == "client_ip:-;user:u1"
+
+
+def test_api_logging_response_state_double_log_guard():
+    state = api_logging_module._ResponseLogState("r1", "GET", "/p", {}, "1.2.3.4", None, time.time())
+    state.log_response()
+    state.log_response()
+    state.log_error(RuntimeError("late"))
+    assert state.response_logged is True
+
+
+@pytest.mark.asyncio
+async def test_api_access_log_middleware_non_http_scope_passthrough():
+    called = []
+
+    async def app(scope, receive, send):
+        called.append(scope["type"])
+
+    middleware = api_logging_module.APIAccessLogMiddleware(app)
+    await middleware({"type": "websocket"}, None, None)
+    assert called == ["websocket"]
+
+
+def test_checkpoint_sqlite_context_exit_closes_connection():
+    class FakeConn:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    conn = FakeConn()
+    ctx = checkpoint._SqliteCheckpointerContext("/tmp/unused.db")
+    ctx.conn = conn
+    assert asyncio.run(ctx.__aexit__(None, None, None)) is False
+    assert conn.closed is True
+
+
+def test_checkpoint_failover_all_endpoints_fail_raises_last_connection_error(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+
+    class Context:
+        async def __aenter__(self):
+            raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+
+        async def __aexit__(self, *_args):
+            return False
+
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: Context())
+    with pytest.raises(OperationalError):
+        asyncio.run(context.__aenter__())
+    # 两个端点各失败一次后选择器绕回首个节点
+    assert selector.current().label() == "127.0.0.1:3306"
+
+
+def test_checkpoint_failover_without_endpoints_reports_missing_config(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", SimpleNamespace(endpoints=[]))
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: None)
+    with pytest.raises(RuntimeError, match="未配置可用节点"):
+        asyncio.run(context.__aenter__())
+
+
+def test_checkpoint_failover_exit_without_enter_returns_false():
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: None)
+    assert asyncio.run(context.__aexit__(None, None, None)) is False
+
+
+def test_checkpoint_advance_endpoint_without_selector_raises(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        checkpoint._advance_checkpointer_endpoint(SimpleNamespace(label=lambda: "h:p"), RuntimeError("x"))
+
+
+def test_checkpoint_build_factory_without_selector_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=object))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pw")
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        checkpoint._build_mysql_checkpointer_context_factory()
+
+
+def test_checkpoint_probe_reraises_non_connection_error():
+    class BadContext:
+        async def __aenter__(self):
+            raise RuntimeError("not a connection error")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    endpoint = SimpleNamespace(label=lambda: "h:p")
+    with pytest.raises(RuntimeError, match="not a connection error"):
+        asyncio.run(checkpoint._probe_mysql_checkpointer_endpoint(endpoint, lambda _endpoint: BadContext()))
+
+
+def test_checkpoint_select_endpoint_without_selector_raises(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        asyncio.run(checkpoint.select_available_checkpointer_endpoint())
+
+
+def test_setup_checkpointer_unknown_type_skips_probe_and_initializes(monkeypatch):
+    events = []
+    monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
+    monkeypatch.setattr("utils.database.init_database", lambda: asyncio.sleep(0, result=events.append(("init", None))))
+    asyncio.run(checkpoint.setup_checkpointer())
+    assert events == [("init", None)]
+
+
+def test_checkpoint_info_mysql_without_selector(monkeypatch):
+    monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    info = checkpoint.get_checkpoint_info()
+    assert info["type"] == "mysql"
+    assert info["endpoints"] == []
