@@ -34,6 +34,18 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 `agent/plugins/` 的 `plugin.json` 可声明 `mcp_servers`（与环境配置同 schema），
 由 `config.load_mcp_server_configs()` 合并；环境配置 id 优先，插件同 id 声明被忽略。
 
+## 安全边界与信任级别
+
+**装配本模块的配置等于向宿主进程授予两类能力，插件安装入口必须受控（仅管理员，网关侧校验）：**
+
+- `stdio` 传输的 `command`/`args` 会由宿主直接启动子进程 —— 等价于**宿主代码执行权**。
+  声明方（环境变量或插件 manifest）只能来自可信管理员；绝不能把插件安装能力开放给普通用户。
+- `streamable_http` / `sse` 的 `url` 允许任意 `http(s)` 地址 —— 构成**内网访问面（SSRF）**。
+  上线前确认部署网络的边界策略，必要时在网关出口限制可达网段。
+
+服务端无用户角色模型，`/admin/plugins` 与其他 admin 接口同口径：靠 service token +
+可信代理入口控制；service token 不得下发到普通用户侧。
+
 ## 明确不做（v1）
 
 - 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销。

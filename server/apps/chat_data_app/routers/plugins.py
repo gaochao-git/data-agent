@@ -21,6 +21,7 @@ from ..agent.plugins.installer import (
 )
 from ..agent.plugins.loader import load_plugins_metadata, set_plugin_enabled
 from ..agent.plugins.manifest import PluginManifestError
+from ..agent.mcp.manager import reset_mcp_tool_manager
 from . import JSON_API_RESPONSES
 
 logger = get_logger(__name__)
@@ -29,6 +30,18 @@ router = APIRouter(tags=["ChatData 插件管理（Admin）"], responses=JSON_API
 
 # 插件 zip 安装入口的字节上限：与 installer 的包上限一致（50MB）。
 _PLUGIN_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _invalidate_mcp_tool_cache() -> None:
+    """插件安装/启停/卸载后失效 MCP 工具枚举缓存。
+
+    技能快照对新会话天然重建；MCP manager 是带 TTL 的进程级单例，
+    不主动失效会让新装配在最长缓存窗口内看不到最新插件声明。
+    """
+    try:
+        reset_mcp_tool_manager()
+    except Exception as e:
+        logger.warning("重置 MCP 工具管理器失败: %s", e)
 
 
 class PluginEnabledRequest(BaseModel):
@@ -61,6 +74,7 @@ async def install_plugin(file: UploadFile):
                 status="error",
             )
         manifest = install_plugin_from_zip_bytes(data)
+        _invalidate_mcp_tool_cache()
         return business_response(
             data={"plugin": manifest.to_dict(), "effective": "新会话与下一次装配生效"},
             msg="插件安装成功",
@@ -85,6 +99,7 @@ async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, r
             return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_MANIFEST_INVALID, status="error")
         if not updated:
             return business_response(msg=f"插件不存在: {plugin_id}", code=ErrorCode.CHATDATA_PLUGIN_NOT_FOUND, status="error")
+        _invalidate_mcp_tool_cache()
         return business_response(
             data={"name": plugin_id, "enabled": payload.enabled},
             msg="插件已启用" if payload.enabled else "插件已禁用",
@@ -100,6 +115,7 @@ async def remove_plugin(plugin_id: str, request: Request):
     _ = request
     try:
         manifest = uninstall_plugin(plugin_id)
+        _invalidate_mcp_tool_cache()
         return business_response(data={"name": manifest.name, "version": manifest.version}, msg="插件已卸载")
     except PluginNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_NOT_FOUND, status="error")

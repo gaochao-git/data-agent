@@ -113,3 +113,39 @@ def test_plugin_enable_invalid_name_returns_manifest_invalid(client, auth_header
         headers=auth_headers,
     )
     assert response.json()["code"] == ErrorCode.CHATDATA_PLUGIN_MANIFEST_INVALID
+
+
+def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_root, monkeypatch):
+    """安装/启停/卸载成功后必须重置 MCP 工具管理器单例，避免 TTL 缓存延迟新装配感知。"""
+    from apps.chat_data_app.routers import plugins as plugins_routes
+
+    reset_calls = []
+    monkeypatch.setattr(
+        plugins_routes, "reset_mcp_tool_manager", lambda: reset_calls.append("reset") or None
+    )
+
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("p.zip", _plugin_zip(name="mcp-plugin"), "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+    enabled = client.put(
+        "/api/chatdata/admin/plugins/mcp-plugin/enabled",
+        json={"enabled": False},
+        headers=auth_headers,
+    )
+    assert enabled.json()["status"] == "success"
+    removed = client.delete("/api/chatdata/admin/plugins/mcp-plugin", headers=auth_headers)
+    assert removed.json()["status"] == "success"
+    assert reset_calls == ["reset", "reset", "reset"]
+
+    # 失败的变更（未知插件启停）不应触发重置
+    reset_calls.clear()
+    missing = client.put(
+        "/api/chatdata/admin/plugins/ghost/enabled",
+        json={"enabled": True},
+        headers=auth_headers,
+    )
+    assert missing.json()["code"] == ErrorCode.CHATDATA_PLUGIN_NOT_FOUND
+    assert reset_calls == []
