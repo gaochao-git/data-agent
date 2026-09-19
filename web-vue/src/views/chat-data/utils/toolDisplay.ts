@@ -26,6 +26,10 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
 
 export function getToolDisplayName(toolName?: string | null): string {
   const name = String(toolName || '').trim()
+  if (!name) return '工具调用'
+  // MCP 限定名不做前端硬编码映射：展示名由后端按插件 tool_labels 下发，
+  // 缺失时直接展示限定名（含 server 归属信息），而不是笼统的「工具调用」
+  if (name.startsWith('mcp_')) return name
   return TOOL_DISPLAY_NAMES[name] || '工具调用'
 }
 

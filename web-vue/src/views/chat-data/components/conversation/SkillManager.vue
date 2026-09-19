@@ -935,7 +935,7 @@ watch(() => props.initialSkillId, (skillId) => {
           <div class="min-w-0">
             <div class="flex items-center gap-2">
               <h3 class="m-0 truncate text-base font-semibold text-slate-800">{{ selectedSkill.title || selectedSkill.name }}</h3>
-              <span class="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{{ selectedSkill.source === 'system' ? '系统技能' : '用户技能' }}</span>
+              <span class="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{{ selectedSkill.source === 'system' ? '系统技能' : selectedSkill.source === 'plugin' ? '插件技能' : '用户技能' }}</span>
             </div>
             <p class="m-0 mt-1 text-sm text-slate-500">{{ selectedSkill.description || '暂无描述' }}</p>
           </div>

@@ -18,6 +18,7 @@ from apps.chat_data_app.agent.agent_runtime import (
 _OPTIONAL_SLOTS = {
     "tool_execution_fence_middleware": "ToolExecutionFenceMiddleware",
     "image_injection_middleware": "ImageInjectionMiddleware",
+    "mcp_tool_discovery_middleware": "MCPToolDiscoveryMiddleware",
     "tool_call_history_repair_middleware": "ToolCallHistoryRepairMiddleware",
     "steering_middleware": "SteeringMiddleware",
     "subagent_middleware": "SubagentMiddleware",

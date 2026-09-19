@@ -120,7 +120,8 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
 
-const displayName = computed(() => getToolDisplayName(props.toolCall.tool_name))
+// 标题链：后端下发的展示名（MCP tool_labels）→ 内置映射表/限定名兜底
+const displayName = computed(() => props.toolCall.display_name?.trim() || getToolDisplayName(props.toolCall.tool_name))
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')

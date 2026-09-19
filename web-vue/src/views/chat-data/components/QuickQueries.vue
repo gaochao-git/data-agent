@@ -576,7 +576,7 @@ watch(
             <span
               :class="[
                 'shrink-0 rounded-md px-2 py-0.5 text-[11px] leading-5',
-                skill.source === 'system' ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'
+                skill.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-500'
               ]"
               :title="getSkillCreatorLabel(skill)"
             >

@@ -293,6 +293,33 @@ def _system_metadata_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _plugin_skill_rows(existing_names: set[str]) -> List[Dict[str, Any]]:
+    """将已启用插件声明的技能转为前端展示行（source=plugin）。
+
+    与会话技能快照同语义：与系统/用户技能同名时跳过（快照为扁平 /mnt/skills/<name>）。
+    """
+    from ..plugins.loader import enabled_plugin_skill_sources
+    from .loader import parse_metadata
+
+    rows: List[Dict[str, Any]] = []
+    for name, skill_dir in enabled_plugin_skill_sources():
+        if name in existing_names:
+            continue
+        try:
+            meta = parse_metadata(skill_dir / "SKILL.md")
+        except Exception as err:
+            logger.warning("读取插件技能元数据失败，跳过展示: %s: %s", name, err)
+            continue
+        if not meta:
+            continue
+        existing_names.add(name)
+        info = _system_metadata_to_info(meta)
+        info["source"] = "plugin"
+        info["skill_id"] = f"plugin:{name}"
+        rows.append(info)
+    return rows
+
+
 def _build_skill_md(payload: Dict[str, Any]) -> str:
     """根据用户输入生成标准 SKILL.md 内容。"""
     skill_name = str(payload.get("skill_name") or payload.get("name") or "").strip()
@@ -370,7 +397,7 @@ class SkillService:
             return None
 
     def _collect_skill_source_rows(self, db_rows, system_metadata, user_id: str, user_names: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
-        """合并 DB 用户技能行与文件系统系统技能为统一的展示行。"""
+        """合并 DB 用户技能行、文件系统系统技能与插件技能为统一的展示行。"""
         source_rows = [
             _skill_row_to_info(row, user_id=user_id, user_names=user_names)
             for row in (db_rows or [])
@@ -378,6 +405,7 @@ class SkillService:
         ] if db_rows is not None else []
         for item in system_metadata.values():
             source_rows.append(_system_metadata_to_info(item))
+        source_rows.extend(_plugin_skill_rows(existing_names={str(item.get("name") or "") for item in source_rows}))
         return source_rows
 
     @staticmethod

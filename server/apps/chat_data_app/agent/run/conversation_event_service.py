@@ -15,6 +15,7 @@ from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, is_valid_redis_stream_id, load_run_content as _load_run_content, normalize_history_checkpoint
+from apps.chat_data_app.agent.mcp.manager import get_mcp_tool_display_name
 
 logger = get_logger(__name__)
 
@@ -737,10 +738,13 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
     for tool_call in getattr(message, "tool_calls", None) or []:
         if not isinstance(tool_call, dict):
             continue
+        name = str(tool_call.get("name") or "")
         tool_calls.append({
             "id": tool_call.get("id"),
-            "name": tool_call.get("name"),
+            "name": name,
             "args": tool_call.get("args") or {},
+            # MCP 工具的用户可见展示名；内置工具为空串，前端映射表兜底
+            "display_name": get_mcp_tool_display_name(name),
         })
     if tool_calls:
         payload["tool_calls"] = tool_calls
@@ -751,12 +755,15 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
 
 
 def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
+    tool_name = str(getattr(message, "name", "") or "")
     payload = {
         "id": _message_id(message),
         "role": "tool",
         "content": message.content,
         "tool_call_id": str(getattr(message, "tool_call_id", "") or ""),
-        "tool_name": str(getattr(message, "name", "") or ""),
+        "tool_name": tool_name,
+        # MCP 工具展示名随 tool_result 持久化，历史回放与直播口径一致
+        "display_name": get_mcp_tool_display_name(tool_name),
         "timestamp": _timestamp(message),
     }
     payload.update(_execution_timing(message))

@@ -1,20 +1,19 @@
 """``agent/mcp`` 管理器单测：配置解析、枚举缓存、调用与健康检查。
 
-用 mcp SDK 的内存会话（``create_connected_server_and_client_session``）模拟
-MCP server，不需要真实进程/网络；真实传输（stdio/http/sse）仅做配置解析校验。
+用门面契约的假客户端（async with + ``list_tools`` / ``call_tool``）模拟
+MCP server 响应，不需要真实进程/网络；真实传输（stdio/http/sse）仅做
+配置解析校验，协议行为由 SDK 自身与真机回环探针覆盖。
 """
 
 import json
 import os
 import sys
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-
-from mcp.server.fastmcp import FastMCP  # noqa: E402
-from mcp.shared.memory import create_connected_server_and_client_session  # noqa: E402
 
 from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
     MCP_SERVERS_ENV,
@@ -24,22 +23,64 @@ from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
     parse_mcp_server_config,
 )
 from apps.chat_data_app.agent.mcp.manager import (  # noqa: E402
+    MCPToolInfo,
     MCPToolManager,
     build_langchain_tools,
+    get_mcp_tool_display_name,
+    reset_mcp_tool_manager,
     sanitize_mcp_tool_name,
 )
 
-_test_server = FastMCP("test-server")
+
+def _tool_obj(name: str, description: str, schema: dict):
+    """模拟 2.x ``list_tools`` 返回的工具条目（字段名 input_schema，camelCase 仅为序列化 alias）。"""
+    return SimpleNamespace(name=name, description=description, input_schema=schema)
 
 
-@_test_server.tool(description="回显输入文本")
-def echo(text: str) -> str:
-    return f"echo: {text}"
+def _tool_obj_serialized_alias(name: str, description: str, schema: dict):
+    """模拟反序列化后同时可按 alias 访问的条目，确保两个属性路径都兼容。"""
+    return SimpleNamespace(name=name, description=description, input_schema=schema, inputSchema=schema)
 
 
-@_test_server.tool(description="必选+可选参数")
-def greet(name: str, greeting: str = "hello") -> str:
-    return f"{greeting}, {name}"
+def _list_result(tools, ttl_ms=None):
+    """模拟 2.x ``tools/list`` 结果（含 CacheableResult 可选字段）。"""
+    result = SimpleNamespace(tools=tools)
+    if ttl_ms is not None:
+        result.ttlMs = ttl_ms
+    return result
+
+
+def _call_result(text: str, *, is_error: bool = False, result_type: str | None = None):
+    """模拟 ``call_tool`` 结果：content[].text + isError + resultType（MRTR）。"""
+    return SimpleNamespace(
+        content=[SimpleNamespace(text=text)],
+        structuredContent=None,
+        isError=is_error,
+        resultType=result_type,
+    )
+
+
+def _fake_client(response_builder):
+    class FakeClient:
+        """门面契约假客户端：async with + list_tools/call_tool（无 initialize，门面内部协商）。"""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def list_tools(self):
+            return response_builder()
+
+        async def call_tool(self, name, arguments):
+            if name == "echo":
+                return _call_result(f"echo: {arguments.get('text', '')}")
+            if name == "greet":
+                return _call_result(f"{arguments.get('greeting', 'hello')}, {arguments.get('name', '')}")
+            return _call_result(f"unknown tool: {name}")
+
+    return FakeClient()
 
 
 def _make_manager(*, config_loader=None, cache_ttl=60):
@@ -50,8 +91,14 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
         if config.server_id == "bad":
             raise RuntimeError("simulated connection failure")
         opens["count"] += 1
-        async with create_connected_server_and_client_session(_test_server, raise_exceptions=True) as session:
-            yield session
+        yield _fake_client(lambda: _list_result([
+            _tool_obj("echo", "回显输入文本", {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
+            _tool_obj("greet", "必选+可选参数", {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "greeting": {"type": "string"}},
+                "required": ["name"],
+            }),
+        ]))
 
     manager = MCPToolManager(
         tool_timeout_seconds=10,
@@ -84,6 +131,37 @@ def test_parse_mcp_server_config_http_ok():
     )
     assert config.url == "https://mcp.example.com/mcp"
     assert config.headers == {"k": "v"}
+
+
+def test_parse_mcp_server_config_tool_labels_ok():
+    config = parse_mcp_server_config(
+        {
+            "id": "srv",
+            "transport": "stdio",
+            "command": "x",
+            "tool_labels": {" echo ": " 回显 ", "greet": "问候"},
+        },
+        source="env",
+    )
+    assert config.tool_labels == {"echo": "回显", "greet": "问候"}
+
+
+@pytest.mark.parametrize(
+    "tool_labels",
+    [
+        "not-a-dict",
+        {"echo": 1},
+        {1: "回显"},
+        {"echo": "  "},
+        {" ": "回显"},
+    ],
+)
+def test_parse_mcp_server_config_rejects_invalid_tool_labels(tool_labels):
+    with pytest.raises(MCPServerConfigError):
+        parse_mcp_server_config(
+            {"id": "ok", "transport": "stdio", "command": "x", "tool_labels": tool_labels},
+            source="env",
+        )
 
 
 @pytest.mark.parametrize(
@@ -168,6 +246,9 @@ async def test_list_tools_async_enumerates_and_caches():
     assert echo_info.server_id == "srv"
     assert echo_info.name == "echo"
     assert "回显" in echo_info.description
+    # schema 必须从 input_schema 字段透传（回归：误取序列化 alias 会退化为空 properties）
+    assert echo_info.input_schema["properties"] == {"text": {"type": "string"}}
+    assert echo_info.input_schema["required"] == ["text"]
     # 命中缓存不再打开会话
     again = await manager.list_tools_async()
     assert opens["count"] == 1
@@ -202,6 +283,39 @@ async def test_list_tools_async_dedupes_colliding_qualified_names():
 
 
 @pytest.mark.asyncio
+async def test_list_tools_async_labels_from_config_and_fallback():
+    """tool_labels 命中原始工具名时透传 label，未配置的工具回退原始工具名。"""
+
+    def config_loader():
+        return [
+            MCPServerConfig(
+                server_id="srv",
+                transport="stdio",
+                command="x",
+                tool_labels={"echo": "回显输入"},
+            ),
+        ]
+
+    manager, _opens = _make_manager(config_loader=config_loader)
+    tools = await manager.list_tools_async()
+    by_qualified = {t.qualified_name: t for t in tools}
+    assert by_qualified["mcp_srv_echo"].label == "回显输入"
+    assert by_qualified["mcp_srv_greet"].label == "greet"
+
+
+def test_dedupe_qualified_names_preserves_label():
+    from apps.chat_data_app.agent.mcp.manager import _dedupe_qualified_names
+
+    infos = [
+        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="甲"),
+        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="乙"),
+    ]
+    out = _dedupe_qualified_names(infos)
+    assert [t.qualified_name for t in out] == ["mcp_s_t", "mcp_s_t_1"]
+    assert [t.label for t in out] == ["甲", "乙"]
+
+
+@pytest.mark.asyncio
 async def test_call_tool_async_returns_text():
     manager, _opens = _make_manager()
     result = await manager.call_tool_async("srv", "echo", {"text": "hi"})
@@ -213,6 +327,56 @@ async def test_call_tool_async_optional_param_defaults():
     manager, _opens = _make_manager()
     result = await manager.call_tool_async("srv", "greet", {"name": "world"})
     assert result == "hello, world"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_async_marks_input_required_result():
+    """MRTR（SEP-2322）：input_required 中间结果必须显式标记，不能被当成最终答案。"""
+
+    @asynccontextmanager
+    async def factory(config: MCPServerConfig):
+        class InputRequiredClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def list_tools(self):
+                return _list_result([])
+
+            async def call_tool(self, name, arguments):
+                return _call_result("请补充查询时间范围", result_type="input_required")
+
+        yield InputRequiredClient()
+
+    manager = MCPToolManager(
+        tool_timeout_seconds=10,
+        session_factory=factory,
+        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+    )
+    result = await manager.call_tool_async("srv", "ask", {})
+    assert result.startswith("[mcp tool input_required]")
+
+
+@pytest.mark.asyncio
+async def test_list_tools_async_adopts_server_ttl_hint():
+    """2026-07-28 CacheableResult：服务端 ttlMs 提示应缩短本地缓存 TTL。"""
+
+    @asynccontextmanager
+    async def factory(config: MCPServerConfig):
+        yield _fake_client(lambda: _list_result([], ttl_ms=30_000))
+
+    manager = MCPToolManager(
+        tool_timeout_seconds=10,
+        cache_ttl_seconds=300,
+        session_factory=factory,
+        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+    )
+    await manager.list_tools_async()
+    # 基础 TTL 不被永久改写；生效 TTL 取服务端提示换算的更短者
+    assert manager._cache_ttl == 300
+    assert manager._effective_cache_ttl == 30  # 30000ms → 30s
 
 
 @pytest.mark.asyncio
@@ -256,6 +420,57 @@ async def test_build_langchain_tools_schema_and_call():
     assert "greeting" not in greet_schema.get("required", [])
     result = await echo_tool.coroutine(text="hello")
     assert result == "echo: hello"
+
+
+@pytest.mark.asyncio
+async def test_build_langchain_tools_metadata_display_name():
+    """label 随 StructuredTool.metadata 透传；无 label 的工具不下发 metadata。"""
+    tools_info = [
+        MCPToolInfo(
+            server_id="srv",
+            name="echo",
+            qualified_name="mcp_srv_echo",
+            description="回显输入文本",
+            input_schema={"type": "object", "properties": {}},
+            label="回显输入",
+        ),
+        MCPToolInfo(
+            server_id="srv",
+            name="raw",
+            qualified_name="mcp_srv_raw",
+            description="",
+            input_schema={"type": "object", "properties": {}},
+        ),
+    ]
+
+    async def _call(_server_id, _tool_name, _payload):
+        return ""
+
+    wrapped = build_langchain_tools(tools_info, call_tool_async=_call)
+    by_name = {tool.name: tool for tool in wrapped}
+    assert by_name["mcp_srv_echo"].metadata == {"display_name": "回显输入"}
+    assert not by_name["mcp_srv_raw"].metadata
+
+
+def test_get_mcp_tool_display_name_reads_singleton_cache():
+    """展示名解析只读进程级缓存：命中返回 label，未命中/空名返回空串。"""
+    manager = reset_mcp_tool_manager(tool_timeout_seconds=10, cache_ttl_seconds=60)
+    try:
+        manager._tools_cache = [
+            MCPToolInfo(
+                server_id="srv",
+                name="echo",
+                qualified_name="mcp_srv_echo",
+                description="",
+                input_schema={},
+                label="回显输入",
+            ),
+        ]
+        assert get_mcp_tool_display_name("mcp_srv_echo") == "回显输入"
+        assert get_mcp_tool_display_name("mcp_srv_missing") == ""
+        assert get_mcp_tool_display_name("") == ""
+    finally:
+        manager._tools_cache = None
 
 
 # ============ 装配入口（零配置零开销） ============

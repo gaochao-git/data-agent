@@ -96,3 +96,6 @@ server/logs/
 /.workbuddy/
 /chat_data/
 /server/.pytest-tmp/
+
+# mcp_servers 本地配置
+mcp_servers/.env

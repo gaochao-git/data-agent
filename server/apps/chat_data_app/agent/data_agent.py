@@ -6,6 +6,7 @@
 规格接入，不再复制装配函数。
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -13,7 +14,11 @@ from langchain.agents import create_agent
 
 from utils.logger import get_logger
 
-from ..agent.context.context_budget import ContextRequestBudget
+from ..agent.context.context_budget import (
+    ContextRequestBudget,
+    count_tools_tokens,
+    get_model_context_budget,
+)
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
@@ -23,6 +28,7 @@ from .agent_runtime import (
 from .agent_state import ChatDataAgentState
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
 from .middleware.context_compression import create_context_compression_middleware
+from .middleware.mcp_tool_discovery import MCPToolDiscoveryMiddleware
 from .middleware.subagents import SubagentMiddleware, SubagentSpec
 from .middleware.context_usage import (
     bind_context_usage_middleware,
@@ -111,6 +117,14 @@ class AgentAssemblySpec:
       优先级更高。子智能体仍只使用内置工具（MCP 等动态工具不下发给子智能体）。
     - ``enable_mcp_tools``：是否在装配时枚举 MCP/插件声明的动态工具
       （见 ``agent/mcp/manager.py``）；未配置任何 MCP server 时为空、零开销。
+    - ``mcp_server_ids``：MCP server 白名单（``None`` 表示全部允许）；在
+      MCPToolInfo 层按 server_id 精确过滤，白名单外的 server 不枚举不挂载。
+    - ``mcp_tool_search``：MCP 工具两级加载策略——``off`` 全量挂载不检索；
+      ``auto`` 工具 schema token 超过模型窗口 ``mcp_tool_search_threshold``
+      比例才启用检索模式；``forced`` 无条件启用。检索模式下工具执行仍注册
+      全量（ToolNode），仅模型可见工具列表按"始终挂载 + 已发现"过滤。
+    - ``always_mounted_tools``：检索模式下始终对模型可见的 MCP 限定工具名
+      （``mcp_<server>_<tool>``），用于核心高频工具免检索直出。
     - ``build_system_prompt``：``(runtime_options, workspace_root) -> prompt``，
       每次装配都会调用，prompt 必须由规格自身决定。
     """
@@ -121,10 +135,17 @@ class AgentAssemblySpec:
     tool_includes: frozenset[str] | None = None
     tool_excludes: frozenset[str] = frozenset()
     enable_mcp_tools: bool = True
+    mcp_server_ids: frozenset[str] | None = None
+    mcp_tool_search: str = "auto"
+    mcp_tool_search_threshold: float = 0.10
+    always_mounted_tools: frozenset[str] = frozenset()
+
+
+VALID_MCP_TOOL_SEARCH_MODES = frozenset({"off", "auto", "forced"})
 
 
 def validate_agent_assembly_spec(spec: AgentAssemblySpec) -> None:
-    """规格声明的工具名必须都已登记注册表，且 include/exclude 不得冲突。"""
+    """规格声明的工具名必须都已登记注册表，include/exclude 不得冲突，MCP 选项合法。"""
     from .tools.registry import provided_tool_names
 
     registered = provided_tool_names()
@@ -147,6 +168,23 @@ def validate_agent_assembly_spec(spec: AgentAssemblySpec) -> None:
                 f"Agent 装配规格 {spec.agent_id} 的工具同时出现在 includes/excludes: "
                 f"{sorted(conflict)}"
             )
+    if spec.mcp_tool_search not in VALID_MCP_TOOL_SEARCH_MODES:
+        raise ValueError(
+            f"Agent 装配规格 {spec.agent_id} 的 mcp_tool_search 必须是 "
+            f"{sorted(VALID_MCP_TOOL_SEARCH_MODES)} 之一: {spec.mcp_tool_search!r}"
+        )
+    if not 0.0 < spec.mcp_tool_search_threshold <= 1.0:
+        raise ValueError(
+            f"Agent 装配规格 {spec.agent_id} 的 mcp_tool_search_threshold 必须在 (0, 1] 内: "
+            f"{spec.mcp_tool_search_threshold!r}"
+        )
+    invalid_server_ids = {
+        server_id for server_id in (spec.mcp_server_ids or ()) if not str(server_id or "").strip()
+    }
+    if invalid_server_ids:
+        raise ValueError(
+            f"Agent 装配规格 {spec.agent_id} 的 mcp_server_ids 含空项: {sorted(invalid_server_ids)}"
+        )
 
 
 def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
@@ -262,10 +300,25 @@ def _chat_data_system_prompt(options: AgentRuntimeOptions, workspace_root: str) 
     return build_unified_system_prompt(options, workspace_root=workspace_root)
 
 
+MCP_TOOL_SEARCH_ENV = "CHAT_DATA_AGENT_MCP_TOOL_SEARCH"
+
+
+def _env_mcp_tool_search_mode() -> str:
+    """从环境变量读取检索模式（部署级覆盖），未配置或非法值返回默认 ``auto``。"""
+    raw = str(os.getenv(MCP_TOOL_SEARCH_ENV) or "").strip()
+    if not raw:
+        return "auto"
+    if raw not in VALID_MCP_TOOL_SEARCH_MODES:
+        logger.warning("环境变量 %s 非法（需为 %s 之一），忽略并使用 auto: %r", MCP_TOOL_SEARCH_ENV, sorted(VALID_MCP_TOOL_SEARCH_MODES), raw)
+        return "auto"
+    return raw
+
+
 CHAT_DATA_AGENT_SPEC = AgentAssemblySpec(
     agent_id="chat_data",
     agent_name="chat_data_agent",
     build_system_prompt=_chat_data_system_prompt,
+    mcp_tool_search=_env_mcp_tool_search_mode(),
 )
 
 
@@ -274,12 +327,44 @@ def _load_spec_mcp_tools(spec: AgentAssemblySpec) -> list:
     if not spec.enable_mcp_tools:
         return []
     try:
+        from .mcp.catalog import warn_long_mcp_descriptions
         from .mcp.manager import load_mcp_tools
 
-        return list(load_mcp_tools())
+        tools = list(load_mcp_tools(server_ids=spec.mcp_server_ids))
+        warn_long_mcp_descriptions(tools)
+        return tools
     except Exception as err:
         logger.warning("[data_agent] MCP 工具加载失败，跳过: %s", err)
         return []
+
+
+def _resolve_mcp_tool_search_service(
+    spec: AgentAssemblySpec,
+    tool_tokens: int,
+    model_id: str | None,
+):
+    """两级加载判定：off 关闭；forced 启用；auto 按工具 token 占模型窗口比例判断。
+
+    返回 ``MCPToolSearchService``（检索模式）或 ``None``（全量挂载模式，
+    行为与两级加载引入前一致）。
+    """
+    if spec.mcp_tool_search == "off" or not tool_tokens:
+        return None
+    threshold_tokens = int(
+        get_model_context_budget(model_id).context_window * spec.mcp_tool_search_threshold
+    )
+    if spec.mcp_tool_search == "auto" and tool_tokens <= threshold_tokens:
+        return None
+    from .mcp.catalog import MCPToolSearchService
+    from .mcp.manager import get_mcp_tool_manager
+
+    logger.info(
+        "[data_agent] 启用 MCP 工具检索模式: mode=%s tool_tokens=%d threshold_tokens=%d",
+        spec.mcp_tool_search,
+        tool_tokens,
+        threshold_tokens,
+    )
+    return MCPToolSearchService(get_mcp_tool_manager())
 
 
 def create_agent_from_spec(
@@ -329,7 +414,23 @@ def create_agent_from_spec(
         model_invocation=invocation,
         spec=spec,
     )
-    tools = builtin_tools + _load_spec_mcp_tools(spec)
+    mcp_tools = _load_spec_mcp_tools(spec)
+    tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
+    search_service = _resolve_mcp_tool_search_service(spec, tool_tokens, model_id) if mcp_tools else None
+    tools = builtin_tools + mcp_tools
+    if search_service is not None:
+        from .mcp.catalog import create_mcp_tool_search_tool
+
+        tools = [*tools, create_mcp_tool_search_tool(search_service)]
+    logger.info(
+        "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
+        spec.agent_id,
+        len(builtin_tools),
+        len(mcp_tools),
+        search_service is not None,
+        len(tools),
+        tool_tokens,
+    )
     effective_system_prompt = invocation.system_prompt or spec.build_system_prompt(
         options,
         runtime.workspace_root,
@@ -391,6 +492,14 @@ def create_agent_from_spec(
         tools,
         tool_execution_fence_middleware=tool_execution_fence_middleware,
         image_injection_middleware=image_injection_middleware,
+        mcp_tool_discovery_middleware=(
+            MCPToolDiscoveryMiddleware(
+                search_active=search_service is not None,
+                always_mounted_tools=spec.always_mounted_tools,
+            )
+            if search_service is not None
+            else None
+        ),
         tool_call_history_repair_middleware=tool_call_history_repair_middleware,
         steering_middleware=steering_middleware,
         subagent_middleware=subagent_middleware,

@@ -161,13 +161,14 @@ const normalizeContextCompressionEvent = (value: unknown): ChatDataContextCompre
 
 const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   if (!value || typeof value !== 'object') return null
-  const toolCall = value as { id?: unknown; name?: unknown; args?: unknown }
+  const toolCall = value as { id?: unknown; name?: unknown; args?: unknown; display_name?: unknown }
   const toolCallId = String(toolCall.id || '').trim()
   const toolName = String(toolCall.name || '').trim()
   if (!toolCallId || !toolName) return null
   return {
     tool_call_id: toolCallId,
     tool_name: toolName,
+    display_name: String(toolCall.display_name || '').trim() || undefined,
     args: toolCall.args && typeof toolCall.args === 'object' ? toolCall.args as Record<string, unknown> : {},
     status: 'completed',
   }

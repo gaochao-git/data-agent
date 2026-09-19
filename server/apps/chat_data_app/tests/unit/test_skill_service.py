@@ -16,7 +16,50 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
 from apps.chat_data_app.agent.skills.skill_service import SkillService, skill_service
+from apps.chat_data_app.agent.plugins import loader as plugins_loader_module
 from utils.builtin_skills import DATA_ANALYZING_SKILL
+
+
+def _make_plugin_skill(tmp_path: Path, name: str) -> Path:
+    skill_dir = tmp_path / "plugin" / "skills" / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ntitle: 插件技能{name}\ndescription: 插件声明的技能\n---\n\n# {name}\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_plugin_skill_rows_convert_and_skip_name_conflicts(tmp_path, monkeypatch):
+    skill_dir = _make_plugin_skill(tmp_path, "fault-analysis")
+    conflict_dir = _make_plugin_skill(tmp_path, "data-analyzing")
+    sources = [("fault-analysis", skill_dir), ("data-analyzing", conflict_dir)]
+    monkeypatch.setattr(plugins_loader_module, "enabled_plugin_skill_sources", lambda: sources)
+
+    rows = skill_service_module._plugin_skill_rows(existing_names={"data-analyzing"})
+
+    assert [row["name"] for row in rows] == ["fault-analysis"]
+    row = rows[0]
+    assert row["source"] == "plugin"
+    assert row["skill_id"] == "plugin:fault-analysis"
+    assert row["title"] == "插件技能fault-analysis"
+    assert row["publish_status"] == "published"
+
+
+def test_list_skills_async_includes_plugin_skills(tmp_path, monkeypatch):
+    skill_dir = _make_plugin_skill(tmp_path, "fault-analysis")
+    monkeypatch.setattr(
+        plugins_loader_module,
+        "enabled_plugin_skill_sources",
+        lambda: [("fault-analysis", skill_dir)],
+    )
+
+    service = SkillService()
+    skills = asyncio.run(service.list_skills_async(user_id="u1"))
+    by_name = {str(skill.get("name")): skill for skill in skills}
+
+    assert "fault-analysis" in by_name
+    assert by_name["fault-analysis"]["source"] == "plugin"
 
 
 @pytest.fixture(autouse=True)

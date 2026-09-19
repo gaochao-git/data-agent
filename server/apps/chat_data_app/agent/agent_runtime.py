@@ -118,6 +118,7 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",     # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
     "ImageInjectionMiddleware",         # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
+    "MCPToolDiscoveryMiddleware",       # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
     "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
     "ToolCallRateAlertMiddleware",      # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
@@ -146,6 +147,7 @@ def build_standard_agent_middleware(
     steering_middleware: Any | None = None,
     subagent_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
+    mcp_tool_discovery_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
@@ -165,6 +167,7 @@ def build_standard_agent_middleware(
     slots: dict[str, Any] = {
         "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
         "ImageInjectionMiddleware": image_injection_middleware,
+        "MCPToolDiscoveryMiddleware": mcp_tool_discovery_middleware,
         "ToolTimingMiddleware": create_tool_timing_middleware(),
         "ToolCallRateAlertMiddleware": create_tool_call_rate_alert_middleware(),
         "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,

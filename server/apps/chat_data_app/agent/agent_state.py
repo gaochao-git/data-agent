@@ -24,6 +24,22 @@ def merge_context_compression_events(
     return merged
 
 
+def merge_discovered_tool_names(
+    existing: list[str] | None,
+    new: list[str] | None,
+) -> list[str]:
+    """追加按需发现的 MCP 工具名，保持首次发现顺序并去重。"""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for name in [*(existing or []), *(new or [])]:
+        normalized = str(name or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
+
+
 class ExecutionContext(TypedDict, total=False):
     """工具执行所需的数据源和执行对象范围。"""
 
@@ -50,4 +66,5 @@ class ChatDataAgentState(AgentState, total=False):
     context_compression: dict[str, Any] | None
     context_summary: str | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
+    discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
     workspace: ConversationWorkspaceContext

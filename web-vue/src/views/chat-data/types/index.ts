@@ -112,7 +112,7 @@ export interface SkillInfo {
   category?: string
   output_type?: string
   input_schema?: Record<string, unknown>
-  source?: 'system' | 'user'
+  source?: 'system' | 'user' | 'plugin'
   visibility_type?: 'private' | 'global'
   publish_status?: 'draft' | 'published' | 'disabled'
   current_version_no?: number
@@ -302,10 +302,14 @@ export interface LangGraphMessage {
   tool_calls?: Array<{
     id: string
     name: string
+    // 用户可见展示名（MCP 工具由后端下发；内置工具为空串）
+    display_name?: string
     args: Record<string, unknown>
   }>
   tool_call_id?: string
   tool_name?: string
+  // 用户可见展示名（MCP 工具由后端下发；内置工具为空串）
+  display_name?: string
   // 后端在流式模式下累积的完整工具参数
   accumulated_args?: Record<string, unknown>
   timestamp?: string
@@ -440,6 +444,8 @@ export interface VisualizationConfig {
 export interface ToolCallInfo {
   tool_call_id: string
   tool_name: string
+  // 用户可见展示名（MCP 工具由后端按 plugin.json tool_labels 下发；内置工具走前端映射表）
+  display_name?: string
   args: Record<string, unknown>
   result?: string
   progressMessage?: string
@@ -591,6 +597,8 @@ export type ToolStatus = 'running' | 'completed' | 'error'
 // 工具事件数据
 export interface ToolEventData {
   tool_name: string
+  // 用户可见展示名（MCP 工具由后端下发，内置工具为空串）
+  display_name?: string
   tool_call_id: string | null
   status: ToolStatus
   args?: Record<string, unknown>

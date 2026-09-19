@@ -2,6 +2,7 @@ import type { SkillInfo } from '../types'
 
 export const getSkillCreatorLabel = (skill: SkillInfo, fallback = '用户技能') => {
   if (skill.source === 'system') return '系统'
+  if (skill.source === 'plugin') return '插件'
   return skill.creator_name || skill.create_by_name || skill.creator_id || skill.owner_user_id || fallback
 }
 

@@ -44,6 +44,7 @@ from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .agent.run.completion_options import parse_completion_run_options
 from .agent.middleware.steering import SteeringMessageTracker
+from .agent.mcp.manager import get_mcp_tool_display_name
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
@@ -644,6 +645,8 @@ class _ToolStreamState:
         msg_data["type"] = "tool"
         msg_data["timestamp"] = _get_timestamp()
         msg_data["tool_name"] = self.tool_names.get(tool_call_id, msg_data.get("name") or "")
+        # MCP 工具展示名随结果事件下发（tool_started 已带；这里补齐完成/失败事件）
+        msg_data["display_name"] = get_mcp_tool_display_name(str(msg_data["tool_name"] or ""))
         msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content"), msg_data.get("status")) else "completed"
         # ToolTimingMiddleware 盖在 additional_kwargs 里的执行起止时间，提升为顶层字段供前端展示。
         tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
@@ -678,6 +681,8 @@ class _ToolStreamState:
         payload = {
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
+            # MCP 工具的用户可见展示名（plugin.json tool_labels）；内置工具为空串由前端映射表兜底
+            "display_name": get_mcp_tool_display_name(tool_name),
             "status": "running",
             "args": args or {},
             # 直播侧 tool_started 占位即带开始时间（epoch 毫秒）；结果事件以 ToolTimingMiddleware 盖章值为准。

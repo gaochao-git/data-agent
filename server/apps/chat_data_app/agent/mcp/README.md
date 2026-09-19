@@ -1,5 +1,8 @@
 # agent/mcp — MCP client 能力
 
+> 协议对齐：MCP 规范 **2026-07-28**（SDK ``mcp==2.2.0``，2.x Client 门面 ``mode=auto``）。
+> 新协议 server 走 ``server/discover`` + 按请求模型；旧协议 server 自动回退 initialize 握手。
+
 宿主作为 **MCP client**，在 agent 装配时把外部 MCP server 的工具枚举进来，
 与内置注册表工具（`tools/registry.py`）一起挂到模型上。插件（`agent/plugins/`）
 声明的 MCP server 也经此链路生效。
@@ -9,7 +12,39 @@
 | 文件 | 职责 |
 | --- | --- |
 | `config.py` | server 配置解析与校验：`CHAT_DATA_MCP_SERVERS`（JSON 数组）+ 已启用插件的 `mcp_servers` 声明合并；单条非法只告警跳过 |
-| `manager.py` | 会话管理（stdio / streamable_http / sse 三种传输，按需建连用完即关）、工具枚举 TTL 缓存、调用、握手级健康检查、LangChain `StructuredTool` 包装 |
+| `manager.py` | 会话管理（stdio / streamable_http / sse 三种传输，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
+| `catalog.py` | 工具检索目录（手写 BM25，零新增依赖）+ `mcp_tool_search` 按需检索工具；两级加载的第二级，见下文 |
+
+## 两级加载（目录 + 按需检索）
+
+插件/MCP server 增多后，全量挂载工具 schema 会造成 token 风暴与选择噪声。
+装配规格（`AgentAssemblySpec`）通过 `mcp_tool_search` 控制加载策略：
+
+- `off`：全量挂载（默认行为，当前规模下 `auto` 判定也落在此档，行为零变化）。
+- `auto`：估算全部工具 schema token（复用 `agent/context/` 估算器），超过
+  模型窗口 `mcp_tool_search_threshold`（默认 0.10）比例才启用检索模式。
+- `forced`：无条件启用检索模式。
+
+检索模式下的运行方式：
+
+1. **执行注册全量、模型可见收敛**：全部 MCP 工具仍注册进 ToolNode（可执行），
+   但每次模型请求只暴露"内置工具 + `mcp_tool_search` + 始终挂载 + 已发现"。
+   过滤由 `agent/middleware/mcp_tool_discovery.py` 在请求侧完成（注册表与
+   可见性分离，参照 Anthropic Tool Search Tool 的 defer_loading 思路）。
+2. **先检索后调用**：模型先调 `mcp_tool_search(query, server_id?, limit?)`
+   拿到命中工具摘要（JSON：`results[].name/server_id/description`），再按
+   `name` 直接调用；命中名单由发现中间件并入 state 的 `discovered_tool_names`
+   （会话累积、随 checkpoint 持久），后续轮次免检索直出。
+3. **始终挂载**：规格 `always_mounted_tools` 声明的 MCP 限定工具名
+   （`mcp_<server>_<tool>`）免检索始终可见，用于核心高频工具。
+4. **目录失效**：`MCPCatalog.sync` 按工具清单内容指纹（qualified_name +
+   描述 + 入参 schema + 展示名）判断是否重建索引；枚举结果沿用 manager 的 TTL 缓存
+   与插件变更 reset 机制，本模块不新增缓存。
+5. `mcp_server_ids`：server 白名单（`None` 全量），在 `MCPToolInfo` 层按
+   server_id 精确过滤，白名单外 server 不枚举不挂载。
+
+装配可观测性：装配完成日志输出 builtin/mcp/search 工具数量与工具 schema
+token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者精简以降低成本）。
 
 ## 工具命名
 
@@ -27,6 +62,7 @@ CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
 ```
 
 transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `sse`（`url`/`headers`）。
+`sse` 已随 2026-07-28 进入 Deprecated 生命周期（2025-03-26 首次废弃），仅保留旧 server 兼容，配置时告警；新部署使用 `streamable_http`。
 `enabled: false` 的配置项不参与装配。
 
 ## 与插件的关系
@@ -46,8 +82,11 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 服务端无用户角色模型，`/admin/plugins` 与其他 admin 接口同口径：靠 service token +
 可信代理入口控制；service token 不得下发到普通用户侧。
 
-## 明确不做（v1）
+## 明确不做（v2）
 
-- 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销。
+- 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销
+  （2026-07-28 远程传输已无状态化，该取舍与新协议方向一致；stdio 仍是有状态模型）。
 - MCP 工具不进子智能体；如需只读约束，在 MCP server 侧自行收紧。
+- 嵌套 JSON Schema 不做结构校验（顶层类型映射，嵌套按 Any 透传）——2026-07-28 已将
+  inputSchema 放宽到完整 JSON Schema 2020-12（含 $ref），递归校验留待后续版本。
 - MCP 工具不携带内置工具的 `intent` 参数（那是内置工具的用户展示约定）。

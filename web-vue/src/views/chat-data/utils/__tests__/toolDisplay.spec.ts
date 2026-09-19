@@ -41,6 +41,11 @@ describe('toolDisplay', () => {
     expect(getToolDisplayName(null)).toBe('工具调用')
   })
 
+  it('passes MCP qualified names through without local mapping', () => {
+    // 展示名由后端 tool_labels 下发（display_name），前端不维护 MCP 映射表
+    expect(getToolDisplayName('mcp_fault-ssh_system_overview')).toBe('mcp_fault-ssh_system_overview')
+  })
+
   it('extracts the primary argument shown after compact tool names', () => {
     expect(getToolCompactDescription('file_write', {
       file_path: '/mnt/user-data/outputs/语义模型分析报告.md',

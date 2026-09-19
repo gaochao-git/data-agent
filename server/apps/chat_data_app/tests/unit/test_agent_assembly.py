@@ -6,6 +6,7 @@
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -105,3 +106,149 @@ def test_spec_validation_include_exclude_conflict_raises():
     )
     with pytest.raises(ValueError, match="includes/excludes"):
         validate_agent_assembly_spec(spec)
+
+
+# ============ MCP 两级加载规格 ============
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"mcp_tool_search": "always"}, "mcp_tool_search"),
+        ({"mcp_tool_search_threshold": 0.0}, "mcp_tool_search_threshold"),
+        ({"mcp_tool_search_threshold": 1.5}, "mcp_tool_search_threshold"),
+        ({"mcp_server_ids": frozenset({"ssh", " "})}, "mcp_server_ids"),
+    ],
+)
+def test_spec_validation_rejects_invalid_mcp_options(overrides, match):
+    spec = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+        **overrides,
+    )
+    with pytest.raises(ValueError, match=match):
+        validate_agent_assembly_spec(spec)
+
+
+def test_spec_mcp_server_ids_pass_through_to_load(monkeypatch):
+    """server 白名单在 MCPToolInfo 层过滤：白名单外 server 的工具不返回。"""
+    from apps.chat_data_app.agent.data_agent import _load_spec_mcp_tools
+    from apps.chat_data_app.agent.mcp import manager as mcp_manager
+
+    def fake_load(server_ids=None):
+        infos = [
+            SimpleNamespace(server_id="ssh", name="a", qualified_name="mcp_ssh_a", description="d", input_schema={}),
+            SimpleNamespace(server_id="db", name="b", qualified_name="mcp_db_b", description="d", input_schema={}),
+        ]
+        allowed = set(server_ids) if server_ids is not None else None
+        return [
+            info.qualified_name for info in infos
+            if allowed is None or info.server_id in allowed
+        ]
+
+    monkeypatch.setattr(mcp_manager, "load_mcp_tools", fake_load)
+    spec = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+        mcp_server_ids=frozenset({"ssh"}),
+    )
+    tools = _load_spec_mcp_tools(spec)
+    assert tools == ["mcp_ssh_a"]
+    # None 白名单 = 全部允许
+    spec_all = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+    )
+    assert len(_load_spec_mcp_tools(spec_all)) == 2
+
+
+def test_resolve_search_service_off_and_auto_below_threshold():
+    from apps.chat_data_app.agent.data_agent import _resolve_mcp_tool_search_service
+
+    spec = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+        mcp_tool_search="off",
+    )
+    assert _resolve_mcp_tool_search_service(spec, tool_tokens=10**9, model_id=None) is None
+    # auto：工具 token 远低于窗口 10% → 全量挂载
+    spec_auto = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+    )
+    assert _resolve_mcp_tool_search_service(spec_auto, tool_tokens=1, model_id=None) is None
+
+
+def test_resolve_search_service_auto_above_threshold_creates_service():
+    from apps.chat_data_app.agent.context.context_budget import get_model_context_budget
+    from apps.chat_data_app.agent.data_agent import _resolve_mcp_tool_search_service
+    from apps.chat_data_app.agent.mcp.catalog import MCPToolSearchService
+
+    spec_auto = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+    )
+    budget = get_model_context_budget(None)
+    service = _resolve_mcp_tool_search_service(
+        spec_auto,
+        tool_tokens=budget.context_window + 1,
+        model_id=None,
+    )
+    assert isinstance(service, MCPToolSearchService)
+
+
+def test_resolve_search_service_forced_always_enabled():
+    from apps.chat_data_app.agent.data_agent import _resolve_mcp_tool_search_service
+    from apps.chat_data_app.agent.mcp.catalog import MCPToolSearchService
+
+    spec_forced = AgentAssemblySpec(
+        agent_id="x",
+        agent_name="x_agent",
+        build_system_prompt=lambda _o, _r: "p",
+        mcp_tool_search="forced",
+    )
+    assert isinstance(
+        _resolve_mcp_tool_search_service(spec_forced, tool_tokens=1, model_id=None),
+        MCPToolSearchService,
+    )
+
+
+def test_env_mcp_tool_search_mode(monkeypatch):
+    """chat_data 规格从环境变量读取检索模式：缺省 auto、合法值透传、非法值告警降级 auto。"""
+    from apps.chat_data_app.agent.data_agent import (
+        MCP_TOOL_SEARCH_ENV,
+        _env_mcp_tool_search_mode,
+    )
+
+    monkeypatch.delenv(MCP_TOOL_SEARCH_ENV, raising=False)
+    assert _env_mcp_tool_search_mode() == "auto"
+
+    monkeypatch.setenv(MCP_TOOL_SEARCH_ENV, "forced")
+    assert _env_mcp_tool_search_mode() == "forced"
+
+    monkeypatch.setenv(MCP_TOOL_SEARCH_ENV, "  off  ")
+    assert _env_mcp_tool_search_mode() == "off"
+
+    monkeypatch.setenv(MCP_TOOL_SEARCH_ENV, "always")
+    assert _env_mcp_tool_search_mode() == "auto"
+
+
+def test_chat_data_agent_spec_applies_env_mode(monkeypatch):
+    """环境变量应在模块导入时固化为 CHAT_DATA_AGENT_SPEC 的 mcp_tool_search。"""
+    import importlib
+
+    from apps.chat_data_app.agent import data_agent
+
+    monkeypatch.setenv(data_agent.MCP_TOOL_SEARCH_ENV, "forced")
+    reloaded = importlib.reload(data_agent)
+    try:
+        assert reloaded.CHAT_DATA_AGENT_SPEC.mcp_tool_search == "forced"
+    finally:
+        monkeypatch.delenv(data_agent.MCP_TOOL_SEARCH_ENV, raising=False)
+        importlib.reload(data_agent)

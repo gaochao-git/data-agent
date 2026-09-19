@@ -9,31 +9,37 @@
       "id": "fault-db",
       "transport": "streamable_http",
       "url": "http://127.0.0.1:3001/mcp",
-      "description": "MySQL 诊断（源自 fullstack-langgraph db_query_server）：连接/锁/复制/事务/慢查询等 8 个只读诊断工具"
-    },
-    {
-      "id": "fault-es",
-      "transport": "streamable_http",
-      "url": "http://127.0.0.1:3003/mcp",
-      "description": "Elasticsearch 日志检索（源自 fullstack-langgraph es_search_server）"
-    },
-    {
-      "id": "fault-zabbix",
-      "transport": "streamable_http",
-      "url": "http://127.0.0.1:3004/mcp",
-      "description": "Zabbix 监控指标查询（源自 fullstack-langgraph zabbix_monitor_server）"
+      "description": "MySQL 诊断（本仓库 mcp_servers/db_query_server）：连接/状态/变量/锁/复制/事务/慢查询等 8 个只读诊断工具",
+      "tool_labels": {
+        "db_mysql_info": "MySQL 基本信息",
+        "db_mysql_status": "MySQL 运行状态",
+        "db_mysql_variables": "MySQL 系统变量",
+        "db_mysql_connections": "MySQL 连接排查",
+        "db_mysql_locks": "MySQL 锁等待",
+        "db_mysql_replication": "MySQL 主从复制",
+        "db_mysql_transactions": "MySQL 长事务",
+        "db_mysql_slowlog": "MySQL 慢查询分析"
+      }
     },
     {
       "id": "fault-ssh",
       "transport": "streamable_http",
       "url": "http://127.0.0.1:3002/mcp",
-      "description": "Linux 只读巡检（源自 fullstack-langgraph ssh_exec_server）：磁盘/进程/网络/日志/快照等 12 个固化只读命令"
-    },
-    {
-      "id": "fault-web",
-      "transport": "streamable_http",
-      "url": "http://127.0.0.1:3008/mcp",
-      "description": "联网搜索与网页抓取（源自 fullstack-langgraph web_search_server）"
+      "description": "Linux 只读巡检（本仓库 mcp_servers/ssh_exec_server）：系统/磁盘/进程/网络/文件/日志/快照等 12 个固化只读命令",
+      "tool_labels": {
+        "system_overview": "系统概览巡检",
+        "system_disk_usage": "磁盘用量排查",
+        "system_process_list": "进程资源排查",
+        "system_network_overview": "网络状态巡检",
+        "system_network_ping": "网络连通性检测",
+        "system_network_port_check": "端口监听检测",
+        "system_network_conn_stat": "连接状态统计",
+        "system_file_read": "远程文件读取",
+        "system_file_grep": "远程日志检索",
+        "system_file_list": "远程目录列表",
+        "system_journal_query": "系统日志查询",
+        "system_snapshot": "系统状态快照"
+      }
     }
   ]
 }

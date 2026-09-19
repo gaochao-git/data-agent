@@ -38,6 +38,8 @@ class MCPServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    # 原始工具名 → 用户可见中文友好名（前端展示用，不参与调用与命名空间）。
+    tool_labels: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
 
 
@@ -76,9 +78,22 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
         isinstance(k, str) and isinstance(v, str) for k, v in raw_headers.items()
     ):
         raise MCPServerConfigError(f"{source}: headers 必须是字符串到字符串的映射")
+    raw_tool_labels = raw.get("tool_labels") or {}
+    if not isinstance(raw_tool_labels, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in raw_tool_labels.items()
+    ):
+        raise MCPServerConfigError(f"{source}: tool_labels 必须是字符串到字符串的映射")
+    # 键为 MCP server 声明的原始工具名，值为非空展示名；空值条目视为无效配置直接报错。
+    tool_labels = {str(k).strip(): str(v).strip() for k, v in raw_tool_labels.items()}
+    if any(not key or not value for key, value in tool_labels.items()):
+        raise MCPServerConfigError(f"{source}: tool_labels 的键值都不能为空白字符串")
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
         raise MCPServerConfigError(f"{source}: enabled 必须是布尔值")
+    if transport == "sse":
+        # HTTP+SSE 传输在 2025-03-26 废弃、2026-07-28 起进入 Deprecated 生命周期；
+        # 仅保留与旧 server 的兼容，新部署应使用 streamable_http。
+        logger.warning("%s: sse 传输已废弃（MCP 2026-07-28），建议迁移 streamable_http: %s", source, server_id)
     return MCPServerConfig(
         server_id=server_id,
         transport=transport,
@@ -87,6 +102,7 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
         env=dict(raw_env),
         url=url,
         headers=dict(raw_headers),
+        tool_labels=tool_labels,
         enabled=bool(enabled),
     )
 

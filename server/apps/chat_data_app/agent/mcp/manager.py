@@ -1,14 +1,19 @@
 """MCP client 管理器：连接管理、工具枚举缓存与健康检查。
 
-设计口径（v1）：
-- 每次枚举/调用按需建立会话、用完即关（``open_mcp_session`` 按传输类型打开
-  stdio / streamable_http / sse 三种连接），不做常驻连接池；只读场景下开销
-  可控，行为可预期，避免后台任务生命周期管理引入的复杂度。
+设计口径（v2，对齐 MCP 规范 2026-07-28 / SDK 2.x）：
+- 连接走 SDK 2.x ``Client`` 门面（``mode=auto``）：新协议 server 经
+  ``server/discover`` 直接采用新式按请求模型，旧协议 server 回退 initialize
+  握手——对现有 1.x server 与 2026-07-28 server 同时兼容。
+- 每次枚举/调用按需建连、用完即关，不做常驻连接池；只读场景开销可控。
+  （新规范远程传输本就趋于无状态，该取舍与新协议方向一致；stdio 仍是
+  有状态模型，若日后高频调用再评估会话池。）
 - 工具枚举结果按 TTL 缓存（``CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS``），
   装配 agent 时同步读取缓存，未命中才真正连接。
 - 单个 server 枚举/调用失败只降级自身，不影响其他 server 与内置工具。
 - 挂到 LangChain 的工具名统一加 ``mcp_`` 前缀并拼接 server id
   （``mcp_<server_id>_<tool>``），与内置注册表名空间隔离，杜绝撞名。
+- ``ping`` 已随 2026-07-28 移除：健康检查改为 initialize/discover + 一次
+  ``tools/list`` 探针（新旧 server 通吃）。
 """
 
 from __future__ import annotations
@@ -22,10 +27,10 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
 from langchain_core.tools import StructuredTool
-from mcp import ClientSession, StdioServerParameters
+from mcp import Client, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import Field, create_model
 
 from utils.logger import get_logger
@@ -61,30 +66,43 @@ class MCPToolInfo:
     qualified_name: str  # 挂到 LangChain 的工具名（mcp_<server>_<tool>）
     description: str
     input_schema: dict[str, Any]
+    label: str = ""  # 用户可见友好名（plugin.json tool_labels 配置，缺省回退原始工具名）
 
 
 @asynccontextmanager
-async def open_mcp_session(config: MCPServerConfig) -> AsyncIterator[ClientSession]:
-    """按传输类型打开一个已就绪的 MCP ClientSession。"""
+async def open_mcp_session(config: MCPServerConfig, *, timeout_seconds: int = 60) -> AsyncIterator[Client]:
+    """按传输类型打开一个已连接的 2.x ``Client`` 门面。
+
+    ``mode=auto``：新协议 server 走 ``server/discover``（按请求、无握手），
+    旧协议 server 回退 initialize 握手——对两代 server 同时兼容。
+    http/sse 的自定义 headers 经传输层注入（streamable_http 用 httpx2 客户端
+    携带默认 headers；sse 传输原生支持 headers 参数）。
+    """
     if config.transport == "stdio":
-        parameters = StdioServerParameters(
+        server: Any = StdioServerParameters(
             command=config.command,
             args=list(config.args),
             env=config.env or None,
         )
-        async with stdio_client(parameters) as (read, write):
-            async with ClientSession(read, write) as session:
-                yield session
     elif config.transport == "streamable_http":
-        async with streamablehttp_client(config.url, headers=config.headers or None) as (read, write, _session_id):
-            async with ClientSession(read, write) as session:
-                yield session
+        if config.headers:
+            # 2.x 的 streamable_http_client 不再接受 headers 参数，
+            # 以携带默认 headers 的 httpx2 客户端注入（生命周期随连接关闭）。
+            import httpx2
+
+            http_client = httpx2.AsyncClient(headers=dict(config.headers))
+            server = streamable_http_client(config.url, http_client=http_client)
+        else:
+            server = config.url
     elif config.transport == "sse":
-        async with sse_client(config.url, headers=config.headers or None) as (read, write):
-            async with ClientSession(read, write) as session:
-                yield session
+        # 2026-07-28 起 HTTP+SSE 传输进入 Deprecated（2025-03-26 首次废弃），
+        # 仅保留与旧 server 的兼容；新部署应使用 streamable_http。
+        server = sse_client(config.url, headers=config.headers or None)
     else:
         raise ValueError(f"不支持的 MCP transport: {config.transport}")
+
+    async with Client(server, mode="auto", read_timeout_seconds=float(timeout_seconds)) as client:
+        yield client
 
 
 def sanitize_mcp_tool_name(server_id: str, tool_name: str) -> str:
@@ -108,6 +126,7 @@ def _dedupe_qualified_names(tools: list[MCPToolInfo]) -> list[MCPToolInfo]:
                 qualified_name=f"{info.qualified_name[:MCP_TOOL_NAME_MAX_LENGTH - len(suffix)]}{suffix}",
                 description=info.description,
                 input_schema=info.input_schema,
+                label=info.label,
             )
         out.append(info)
     return out
@@ -149,6 +168,10 @@ def _extract_call_result_text(result: Any) -> str:
     text = "\n".join(parts)
     if getattr(result, "isError", False):
         return f"[mcp tool error] {text}"
+    # MRTR（SEP-2322）：input_required 是多轮往返的中间结果，不是最终答案；
+    # 缺省 resultType 的旧 server 结果按 complete 处理（规范要求的兼容行为）。
+    if str(getattr(result, "resultType", "") or "") == "input_required":
+        return f"[mcp tool input_required] 服务端需要补充输入，本次结果不是最终结论: {text}"
     return text
 
 
@@ -169,15 +192,18 @@ class MCPToolManager:
         self._cache_ttl = cache_ttl_seconds if cache_ttl_seconds is not None else read_positive_int_env(
             _MCP_TOOLS_CACHE_TTL_ENV, 300
         )
-        self._session_factory = session_factory or open_mcp_session
+        self._session_factory = session_factory or (
+            lambda config: open_mcp_session(config, timeout_seconds=self._tool_timeout)
+        )
         self._config_loader = config_loader or load_mcp_server_configs
         self._tools_cache: list[MCPToolInfo] | None = None
         self._cache_time = 0.0
+        self._effective_cache_ttl = self._cache_ttl
 
     # ---- 枚举 ----
 
     def _cache_fresh(self) -> bool:
-        return self._tools_cache is not None and (time.monotonic() - self._cache_time) < self._cache_ttl
+        return self._tools_cache is not None and (time.monotonic() - self._cache_time) < self._effective_cache_ttl
 
     async def list_tools_async(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
         """枚举全部已配置 MCP server 的工具（带 TTL 缓存）。"""
@@ -189,9 +215,13 @@ class MCPToolManager:
             self._cache_time = time.monotonic()
             return []
         tools: list[MCPToolInfo] = []
+        server_ttls: list[int] = []
         for config in configs:
             try:
-                tools.extend(await self._list_server_tools(config))
+                server_tools, ttl_ms = await self._list_server_tools(config)
+                tools.extend(server_tools)
+                if ttl_ms is not None:
+                    server_ttls.append(ttl_ms)
             except Exception as err:
                 logger.warning(
                     "MCP server 工具枚举失败（跳过该 server）: id=%s transport=%s err=%s",
@@ -202,53 +232,91 @@ class MCPToolManager:
         tools = _dedupe_qualified_names(tools)
         self._tools_cache = tools
         self._cache_time = time.monotonic()
+        # 服务端通过 CacheableResult.ttlMs 声明的缓存新鲜度提示（2026-07-28，毫秒）：
+        # 取全部 server 提示的最小值换算为秒，仅用于缩短（不超过环境默认）且不
+        # 永久改写基础配置，避免某 server 的提示拖累其他 server 的工具新鲜度。
+        self._effective_cache_ttl = self._cache_ttl
+        if server_ttls:
+            hinted_seconds = max(1, min(server_ttls) // 1000)
+            self._effective_cache_ttl = min(self._cache_ttl, hinted_seconds)
         return list(tools)
 
-    async def _list_server_tools(self, config: MCPServerConfig) -> list[MCPToolInfo]:
-        async with self._session_factory(config) as session:
-            await asyncio.wait_for(session.initialize(), timeout=self._tool_timeout)
-            result = await asyncio.wait_for(session.list_tools(), timeout=self._tool_timeout)
-        return [
+    async def _list_server_tools(self, config: MCPServerConfig) -> tuple[list[MCPToolInfo], int | None]:
+        """枚举单个 server 的工具；返回 (工具清单, 服务端声明的缓存 ttlMs 或 None)。
+
+        进入 ``Client`` 上下文时门面自动完成 discover/initialize（``mode=auto``），
+        这里只做枚举探针——该探针同时是健康检查的实现（``ping`` 已随 2026-07-28 移除）。
+        """
+        async with self._session_factory(config) as client:
+            result = await asyncio.wait_for(client.list_tools(), timeout=self._tool_timeout)
+        ttl_ms = getattr(result, "ttlMs", None)
+        tools = [
             MCPToolInfo(
                 server_id=config.server_id,
                 name=tool.name,
                 qualified_name=sanitize_mcp_tool_name(config.server_id, tool.name),
                 description=str(getattr(tool, "description", None) or ""),
-                input_schema=dict(getattr(tool, "inputSchema", None) or {}) or {"type": "object", "properties": {}},
+                # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
+                # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
+                input_schema=dict(
+                    getattr(tool, "input_schema", None)
+                    or getattr(tool, "inputSchema", None)
+                    or {}
+                ) or {"type": "object", "properties": {}},
+                # 展示名按原始工具名查插件 tool_labels，未配置时回退原始工具名
+                label=str(config.tool_labels.get(tool.name) or "").strip() or str(tool.name or "").strip(),
             )
             for tool in list(getattr(result, "tools", None) or [])
         ]
+        return tools, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
 
     def list_tools(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
         """同步入口：供 agent 装配（同步函数）读取 MCP 工具清单。"""
         return _run_coro_sync(self.list_tools_async(force_refresh=force_refresh))
 
+    def get_display_name(self, qualified_name: str) -> str:
+        """按限定名查展示名（只读 TTL 缓存，不触发网络枚举）；未命中返回空串。"""
+        name = str(qualified_name or "").strip()
+        if not name:
+            return ""
+        for info in self._tools_cache or []:
+            if info.qualified_name == name:
+                return info.label
+        return ""
+
     # ---- 调用 ----
 
     async def call_tool_async(self, server_id: str, tool_name: str, arguments: dict[str, Any] | None) -> str:
-        """调用指定 server 的工具并返回文本结果。"""
+        """调用指定 server 的工具并返回文本结果。
+
+        门面 ``call_tool`` 内建 MRTR（多轮往返请求，SEP-2322）重试循环：
+        新协议 server 返回 ``input_required`` 时按 ``input_required_max_rounds``
+        自动补参重试；旧协议 server 的结果缺省 ``resultType`` 按 complete 处理。
+        """
         config = next((c for c in self._config_loader() if c.server_id == server_id), None)
         if config is None:
             raise ValueError(f"MCP server 未配置: {server_id}")
-        async with self._session_factory(config) as session:
-            await asyncio.wait_for(session.initialize(), timeout=self._tool_timeout)
+        async with self._session_factory(config) as client:
             result = await asyncio.wait_for(
-                session.call_tool(tool_name, arguments or {}),
-                timeout=self._tool_timeout,
+                client.call_tool(tool_name, arguments or {}),
+                timeout=max(self._tool_timeout * 3, 90),
             )
         return _extract_call_result_text(result)
 
     # ---- 健康检查 ----
 
     async def check_health_async(self, server_id: str) -> bool:
-        """对单个 server 做握手级健康检查（initialize + ping）。"""
+        """对单个 server 做健康检查（discover/initialize + 一次 ``tools/list`` 探针）。
+
+        ``ping`` 已随 MCP 2026-07-28 移除，``tools/list`` 是新旧两代 server
+        都支持的轻量探针；进入 ``Client`` 上下文本身即完成协议协商。
+        """
         config = next((c for c in self._config_loader() if c.server_id == server_id), None)
         if config is None:
             return False
         try:
-            async with self._session_factory(config) as session:
-                await asyncio.wait_for(session.initialize(), timeout=self._tool_timeout)
-                await asyncio.wait_for(session.send_ping(), timeout=self._tool_timeout)
+            async with self._session_factory(config) as client:
+                await asyncio.wait_for(client.list_tools(), timeout=self._tool_timeout)
             return True
         except Exception as err:
             logger.warning("MCP server 健康检查失败: id=%s err=%s", server_id, err)
@@ -288,6 +356,17 @@ def reset_mcp_tool_manager(**kwargs) -> MCPToolManager:
     return _manager
 
 
+def get_mcp_tool_display_name(qualified_name: str) -> str:
+    """事件序列化用：按限定名解析用户可见展示名（只读进程级缓存，不触发枚举）。
+
+    仅命中 MCP 工具时返回非空；内置工具/缓存未热时返回空串，由前端内置
+    映射表与限定名兜底展示。
+    """
+    if _manager is None:
+        return ""
+    return _manager.get_display_name(qualified_name)
+
+
 def build_langchain_tools(
     tools_info: list[MCPToolInfo],
     *,
@@ -301,7 +380,9 @@ def build_langchain_tools(
             _tool_name: str = info.name,
             **kwargs: Any,
         ) -> str:
-            return await call_tool_async(_server_id, _tool_name, kwargs)
+            # 可选参数显式 None 时省略：MCP 语义下缺省 = 服务端默认值，显式 null 通常不被服务端 schema 接受
+            payload = {key: value for key, value in kwargs.items() if value is not None}
+            return await call_tool_async(_server_id, _tool_name, payload)
 
         wrapped.append(
             StructuredTool(
@@ -309,17 +390,26 @@ def build_langchain_tools(
                 description=info.description or info.qualified_name,
                 args_schema=_schema_to_args_model(info.qualified_name, info.input_schema),
                 coroutine=_acall,
+                # 展示名随工具对象透传（用户可见，不参与调用）；无 label 时不下发
+                metadata={"display_name": info.label} if info.label else None,
             )
         )
     return wrapped
 
 
-def load_mcp_tools() -> list[StructuredTool]:
-    """agent 装配入口：枚举 MCP 工具并包装为 LangChain 工具；未配置时零开销返回空。"""
+def load_mcp_tools(server_ids: frozenset[str] | None = None) -> list[StructuredTool]:
+    """agent 装配入口：枚举 MCP 工具并包装为 LangChain 工具；未配置时零开销返回空。
+
+    ``server_ids`` 为装配规格声明的 server 白名单（``None`` 表示全部允许）；
+    过滤发生在 MCPToolInfo 层（server_id 精确匹配），不依赖限定名前缀。
+    """
     if not load_mcp_server_configs():
         return []
     manager = get_mcp_tool_manager()
     tools_info = manager.list_tools()
+    if server_ids is not None:
+        allowed = set(server_ids)
+        tools_info = [info for info in tools_info if info.server_id in allowed]
     return build_langchain_tools(tools_info, call_tool_async=manager.call_tool_async)
 
 
@@ -327,6 +417,7 @@ __all__ = [
     "MCPToolInfo",
     "MCPToolManager",
     "build_langchain_tools",
+    "get_mcp_tool_display_name",
     "get_mcp_tool_manager",
     "load_mcp_tools",
     "open_mcp_session",

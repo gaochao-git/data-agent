@@ -1722,6 +1722,7 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
       const toolInfo: ToolCallInfo = {
         tool_call_id: tc.id,
         tool_name: tc.name,
+        display_name: tc.display_name || existing?.display_name,
         args: { ...(existing?.args || {}), ...(tc.args || {}) },
         result: existing?.result,
         status: existing?.status || 'generating',
@@ -1738,6 +1739,7 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
     const toolInfo: ToolCallInfo = {
       tool_call_id: msg.tool_call_id,
       tool_name: msg.tool_name || existing?.tool_name || 'tool_call',
+      display_name: msg.display_name || existing?.display_name,
       args: { ...(existing?.args || {}), ...(msg.accumulated_args || {}) },
       result,
       status: msg.status === 'error' || isToolErrorResult(result) ? 'error' : 'completed',
@@ -1910,6 +1912,7 @@ const submitAnalysisQuery = async (
           const toolInfo: ToolCallInfo = {
             tool_call_id: event.tool_call_id,
             tool_name: event.tool_name || existing?.tool_name || 'tool_call',
+            display_name: event.display_name || existing?.display_name,
             args: { ...(existing?.args || {}), ...(event.args || {}) },
             result: event.content || event.result || existing?.result,
             progressMessage: event.message || existing?.progressMessage,

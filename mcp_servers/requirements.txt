@@ -1,0 +1,4 @@
+# mcp_servers 独立依赖（与 server/ 共用同一解释器安装；mcp 由 server/requirements.txt 同步提供）
+mcp==2.2.0
+pymysql==1.1.2
+paramiko==5.0.0

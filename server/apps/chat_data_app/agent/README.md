@@ -24,14 +24,15 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 | `run/` | Run 事件流与调度（事件持久化规格见 `services/agent_run/README.md`） |
 | `skills/` | 技能加载与技能服务 |
 | `context/` | 上下文预算估算 |
-| `mcp/` | 宿主内置 MCP client：工具枚举缓存/调用/健康检查（见 `mcp/README.md`） |
+| `mcp/` | 宿主内置 MCP client：工具枚举缓存/调用/健康检查 + 检索目录（两级加载，见 `mcp/README.md`） |
 | `plugins/` | 技能包插件：manifest + zip 安装 + 启停卸载（见 `plugins/README.md`） |
 
 ## 扩展边界
 
 - **内置工具**：`tools/registry.py` 单一事实源，随发版；
 - **MCP 工具**：环境变量 `CHAT_DATA_MCP_SERVERS` 或插件声明，agent 装配时动态枚举
-  （工具名 `mcp_<server>_<tool>`），只挂主智能体，不进子智能体；
+  （工具名 `mcp_<server>_<tool>`），只挂主智能体，不进子智能体；工具数量大时
+  按 `AgentAssemblySpec.mcp_tool_search` 两级加载（目录 + 按需检索），见 `mcp/README.md`；
 - **插件技能**：插件 `skills/` 声明经 `skill_service.list_runtime_skill_sources_async`
   进入会话技能快照（与系统/用户技能同名时跳过）。
 
