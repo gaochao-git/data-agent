@@ -78,7 +78,7 @@ SQL 查询（人工写 SQL）──────────────┐
 
 | `viewMode` | 页面能力 | 前端主组件 |
 |---|---|---|
-| `conversation` | 数据智能体 | `AnalysisConversation.vue` |
+| `conversation` | 数据智能体 | `conversation/Conversation.vue` |
 | `builder` | 可视化查询 | `QueryBuilder/index.vue` |
 | `editor` | SQL 查询 | `SqlEditor.vue` |
 | `dashboard` | 看板查询 | `Dashboard/DashboardEditor.vue` |
@@ -117,7 +117,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 
 ```text
 index.vue
-  -> AnalysisConversation.vue
+  -> conversation/Conversation.vue
   -> composables/useSqlGenerator.ts
   -> api/index.ts: streamCompletion()
   -> POST /agents/api/chatdata/conversations/{conversation_id}/completion
