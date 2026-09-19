@@ -678,7 +678,7 @@ async def preview_admin_ossie_semantic_import(
             model["column_dict_fill_plan"] = dict_fill_plan
             findings = None
             if item.importable:
-                # 质量检查输入与 check_yaml 工具完全一致：草稿态（enabled=False、公共口径）
+                # 质量检查输入与 check_yaml 工具完全一致（enabled 仅占位，不参与检查项）
                 report = checker.check_config(
                     {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
                     physical_columns=physical_columns,
@@ -900,14 +900,13 @@ async def _persist_one_ossie_model(
     if not item.existing_config:
         config = await semantic_service.create_async(
             datasource_id=datasource_id,
-            enabled=False,
             scope_type="public",
             create_by=user_id,
             create_by_name=username,
             **item.to_config_payload(),
         )
         if not config:
-            raise _OssieImportWriteError(f"创建草稿失败: {item.name}")
+            raise _OssieImportWriteError(f"创建配置失败: {item.name}")
         return "created", {"config_id": config.get("id"), "name": config.get("name")}
 
     existing_config_id = str(item.existing_config["config_id"])
@@ -917,8 +916,8 @@ async def _persist_one_ossie_model(
             "config_id": existing_config_id,
             "reason": "同名配置已存在，未导入",
         }
-    # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
-    # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
+    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
     config = await semantic_service.update_async(
         datasource_id,
         existing_config_id,
@@ -927,12 +926,11 @@ async def _persist_one_ossie_model(
         metrics=item.metrics,
         dimensions=item.dimensions,
         relationships=item.relationships,
-        enabled=False,
         update_by=user_id,
         update_by_name=username,
     )
     if not config:
-        raise _OssieImportWriteError(f"更新草稿失败: {item.name}")
+        raise _OssieImportWriteError(f"更新配置失败: {item.name}")
     return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
 
 

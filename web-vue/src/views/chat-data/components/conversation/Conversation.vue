@@ -759,13 +759,15 @@ const selectedMemberDatasourceIds = computed({
   set: (value: string[]) => emit('update:selectedMemberDatasourceIds', props.executionTargetMultiple ? value : value.slice(0, 1)),
 })
 const selectedModelValue = computed(() => modelOptions.value.find(m => m.id === selectedModel.value)?.value || selectedModel.value || null)
-const buildSkillRequestText = (text: string, skillName: string) => {
+const buildSkillRequestText = (text: string, skillNames: string[]) => {
   const normalizedText = String(text || '').trim()
-  return skillName ? `使用「${skillName}」技能回答：${normalizedText}` : normalizedText
+  if (!skillNames.length) return normalizedText
+  const prefix = skillNames.map(name => `「${name}」`).join('')
+  return `使用${prefix}技能回答：${normalizedText}`
 }
 const {
-  selectedSkill,
-  selectedSkillTitle,
+  selectedSkills,
+  selectedSkillTitles,
   commandSkills,
   displayedCommandSkills,
   isCommandSkillLoading,
@@ -774,7 +776,9 @@ const {
   loadCommandSkills,
   refreshCommandSkills,
   selectCommandSkill: selectCommandSkillBase,
-  clearSelectedSkill: clearSelectedSkillBase,
+  replaceSelectedSkill,
+  removeSelectedSkill,
+  clearSelectedSkills,
   handleSkillCommandKeyDown,
 } = useSkillCommandMenu({
   input,
@@ -1074,7 +1078,7 @@ const handleDownloadPresentedArtifact = async (artifact: { path: string; name: s
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
   const fieldName = String(payload?.fieldName || '').trim()
   if (!fieldName) return
-  selectedSkill.value = null
+  clearSelectedSkills()
   const currentInput = input.value.trim()
   const prefix = payload.fieldType === 'dimension' ? '按' : '查询'
   input.value = currentInput ? `${currentInput}、${fieldName}` : `${prefix}${fieldName}`
@@ -1280,7 +1284,7 @@ const getRenderableMessageToolCall = (message: Message, toolCallId: string) => {
 }
 
 const handleSkillSelect = (skill: SkillInfo) => {
-  selectedSkill.value = skill
+  replaceSelectedSkill(skill)
   inputBarRef.value?.focus()
 }
 
@@ -1292,7 +1296,7 @@ const startSkillCreation = async () => {
   isSkillManagerOpen.value = false
   if (!commandSkills.value.length) await loadCommandSkills()
   const creator = commandSkills.value.find(skill => skill.name === SKILL_CREATOR_NAME) || null
-  if (creator) selectedSkill.value = creator
+  if (creator) replaceSelectedSkill(creator)
   input.value = SKILL_CREATE_PROMPT
   inputBarRef.value?.focus()
 }
@@ -1329,8 +1333,8 @@ const onRuntimeOptionsChange = (options: { workspace_backend: 'local' | 'sandbox
   selectedRuntimeOptions.value = options
 }
 
-const clearSelectedSkill = () => {
-  clearSelectedSkillBase()
+const clearSelectedSkill = (name: string) => {
+  removeSelectedSkill(name)
   inputBarRef.value?.focus()
 }
 
@@ -1759,7 +1763,7 @@ const getExistingAssistantMessage = (messageId?: string) => {
 
 const submitAnalysisQuery = async (
   requestText: string,
-  options: AnalysisSubmitOptions & { skillName?: string | null; messageSkill?: Message['skill']; restoreInputText?: string } = {}
+  options: AnalysisSubmitOptions & { skillNames?: string[]; messageSkills?: Message['skills']; restoreInputText?: string } = {}
 ) => {
   if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory && !options.queuedMessageId) || isGenerating.value) return
   const isFirstMessage = options.appendUserMessage !== false
@@ -1772,7 +1776,7 @@ const submitAnalysisQuery = async (
     role: 'user',
     content: requestText,
     timestamp: new Date(),
-    skill: options.messageSkill,
+    skills: options.messageSkills,
     attachments: options.attachments,
   }
   if (options.appendUserMessage !== false) {
@@ -1799,7 +1803,7 @@ const submitAnalysisQuery = async (
   const assistantMessageId = assistantMessage.id
   if (options.appendUserMessage !== false) {
     input.value = ''
-    selectedSkill.value = null
+    clearSelectedSkills()
   }
   isGenerating.value = true
   activeToolCallId.value = null
@@ -1825,7 +1829,7 @@ const submitAnalysisQuery = async (
       }
       activeAssistantMessageId.value = null
       if (options.restoreInputText) input.value = options.restoreInputText
-      if (options.messageSkill) selectedSkill.value = options.messageSkill
+      if (options.messageSkills?.length) selectedSkills.value = options.messageSkills
       return
     }
     const resolvedConversationId = convId
@@ -1835,7 +1839,7 @@ const submitAnalysisQuery = async (
       }
       activeAssistantMessageId.value = null
       if (options.restoreInputText) input.value = options.restoreInputText
-      if (options.messageSkill) selectedSkill.value = options.messageSkill
+      if (options.messageSkills?.length) selectedSkills.value = options.messageSkills
       return
     }
     localConversationId.value = resolvedConversationId
@@ -1880,7 +1884,7 @@ const submitAnalysisQuery = async (
         modelId: selectedModelValue.value,
         memberDatasourceIds: selectedMemberDatasourceIds.value,
         agentId: 'chat_data',
-        skillName: options.skillName || null,
+        skillNames: options.skillNames?.length ? options.skillNames : null,
         onMessageEnd: (payload) => {
           if (payload.usage) tokenUsage.value = payload.usage
           updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
@@ -2136,17 +2140,15 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   }
 
   const queryText = input.value.trim()
-  const skillName = selectedSkill.value?.name || null
+  const skillNames = selectedSkills.value.map(skill => skill.name)
   const manualSemanticConfigId = props.semanticConfigSelection?.user_selected
     ? props.semanticConfigSelection.semantic_config_id
     : null
-  const messageSkill = selectedSkill.value
-    ? {
-        name: selectedSkill.value.name,
-        title: selectedSkill.value.title,
-        description: selectedSkill.value.description,
-      }
-    : undefined
+  const messageSkills: Message['skills'] = selectedSkills.value.map(skill => ({
+    name: skill.name,
+    title: skill.title,
+    description: skill.description,
+  }))
 
   // 超长输入兜底：转文件（带真实 file_id 进入 pendingFiles），成功后继续发送
   let effectiveQueryText = queryText
@@ -2182,13 +2184,13 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     effectiveQueryText = '请查看附件内容并进行分析'
   }
 
-  const requestText = buildSkillRequestText(effectiveQueryText, skillName || '')
+  const requestText = buildSkillRequestText(effectiveQueryText, skillNames)
   // 附件已捕获进 completedFileIds/attachments，发送瞬间即清空输入框附件卡片，
   // 并避免后续消息重复附带历史上传文件
   pendingFiles.value = []
   await submitAnalysisQuery(requestText, {
-    skillName,
-    messageSkill,
+    skillNames,
+    messageSkills,
     restoreInputText: queryText,
     semanticConfigIdOverride: manualSemanticConfigId,
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
@@ -2599,7 +2601,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             v-model:enable-deep-thinking="enableDeepThinking"
             v-model:thinking-effort="thinkingEffort"
             :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能' : '请输入任务，输入 / 可选择技能'"
-            :selected-skill-title="selectedSkillTitle"
+            :selected-skills="selectedSkills"
             :runtime-options="selectedRuntimeOptions"
             :user-overridable="userOverridable"
             :model-options="modelOptions"

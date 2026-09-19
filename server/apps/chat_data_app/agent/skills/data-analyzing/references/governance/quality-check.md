@@ -13,8 +13,8 @@
 
 ## 必读资料
 
-- 执行质量检查前，读取：`/mnt/skills/data-analyzing/references/governance/quality-rules.md`（检查项清单与严重度，与平台导入预览的机器检查同源）。
-- 产出新 YAML 前，读取：`/mnt/skills/data-analyzing/references/governance/yaml-authoring.md`（可回导的 YAML 格式要求）。
+- 执行质量检查前，读取：`/mnt/skills/data-analyzing/references/governance/quality-rules.md`（检查项清单、严重度与修复指引，与平台导入预览的机器检查同源）。
+- 产出/修改 YAML 前，读取：`/mnt/skills/data-analyzing/references/governance/yaml-authoring.md`（可回导的 YAML 格式要求）与 `/mnt/skills/data-analyzing/references/governance/model-template.md`（标准骨架与报告输出模板，直接照抄填空）。
 
 ## 标准流程
 
@@ -32,9 +32,10 @@
 
 ### 3. 差距对话与知识补充
 
-1. 围绕问题清单与用户逐项确认：缺失指标的业务口径（公式、统计周期、过滤条件）、缺失维度的枚举含义、派生/复合指标的成员构成。
-2. 一次只问一个最关键的问题；用户回答后先复述口径再写入模型，确认过的口径必须在 YAML 的 description / ai_context 中落字，不留口头约定。
-3. 涉及查询侧口径冲突（同名不同义、单位不一致）时优先澄清，不猜测。
+1. 修复分档按 quality-rules.md 的「修复指引」执行：确定性修复（补描述、补归属表、改 formula 等）直接在拷贝件上修；涉及业务口径的（缺指标/维度、列名存疑、重名取舍、时间窗过滤）先问用户再落字；只提示类不擅动。
+2. 围绕问题清单与用户逐项确认：缺失指标的业务口径（公式、统计周期、过滤条件）、缺失维度的枚举含义、派生/复合指标的成员构成。
+3. 一次只问一个最关键的问题；用户回答后先复述口径再写入模型，确认过的口径必须在 YAML 的 description / ai_context 中落字，不留口头约定。
+4. 涉及查询侧口径冲突（同名不同义、单位不一致）时优先澄清，不猜测。
 
 ### 4. 产出新 YAML
 

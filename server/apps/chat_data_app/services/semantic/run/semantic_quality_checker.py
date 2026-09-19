@@ -44,10 +44,12 @@ RULES: Dict[str, Tuple[str, str, str]] = {
     "COV_UNMODELED_COLUMNS": ("info", "coverage", "已建模表存在未纳入任何维度/指标的物理列"),
     # 一致性 consistency
     "CON_DUPLICATE_METRIC_EXPRESSION": ("info", "consistency", "多个原子指标使用相同表达式"),
+    "CON_NAME_DUPLICATE": ("warning", "consistency", "指标/维度存在重名"),
     "CON_RELATIONSHIP_DUPLICATE": ("warning", "consistency", "表关系重复定义"),
     "CON_RELATIONSHIP_SELF": ("info", "consistency", "表关系左右为同一张表"),
     "CON_RELATIONSHIP_TABLE_UNREFERENCED": ("warning", "consistency", "关系引用的表没有任何维度或指标建模"),
     "CON_RELATIONSHIP_CYCLE": ("warning", "consistency", "表关系存在循环依赖"),
+    "CON_RELATIONSHIP_KEY_UNCOVERED": ("warning", "consistency", "关系 one 端 join 列未覆盖该表声明的 primary/unique key"),
     # 文档完备性 documentation
     "DOC_METRIC_NO_DESCRIPTION": ("info", "documentation", "指标缺少描述"),
     "DOC_DIMENSION_NO_DESCRIPTION": ("info", "documentation", "维度缺少描述"),
@@ -153,7 +155,7 @@ class SemanticQualityChecker:
         self._check_provenance(metrics, dimensions, raw)
         self._check_executability(config, metrics, raw, physical_columns)
         self._check_coverage(metrics, dimensions, raw, physical_columns)
-        self._check_consistency(metrics, dimensions, relationships, raw, physical_columns)
+        self._check_consistency(config, metrics, dimensions, relationships, raw)
         self._check_documentation(config, metrics, dimensions, raw)
 
         findings = self._aggregate(raw)
@@ -327,17 +329,18 @@ class SemanticQualityChecker:
 
     def _check_consistency(
         self,
+        config: Dict[str, Any],
         metrics: List[Dict[str, Any]],
         dimensions: List[Dict[str, Any]],
         relationships: List[Dict[str, Any]],
         raw: List[Tuple[str, str]],
-        physical_columns: Optional[Set[Tuple[str, str]]],
     ) -> None:
-        """一致性检查：重复表达式、关系自环/重复/未引用表、关系环。
+        """一致性检查：重名、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
 
-        physical_columns 由调用方统一下发，本检查项只依赖库内元数据故未使用，
-        保留参数是为了与其余三个检查项保持同一调用签名。
+        键覆盖检查依赖 config.tables 里的声明键（主键/唯一索引元数据，属可选信息），
+        表没有声明键时跳过该条关系；不依赖任何外部物理清单。
         """
+        self._collect_duplicate_names(metrics, dimensions, raw)
         self._collect_duplicate_expressions(metrics, raw)
         modeled_tables = {_clean(item.get("table")) for item in [*metrics, *dimensions] if _clean(item.get("table"))}
         seen_pairs, edges = self._collect_relationship_edges(relationships, modeled_tables, raw)
@@ -348,6 +351,96 @@ class SemanticQualityChecker:
         cycle = self._find_cycle(edges)
         if cycle:
             raw.append(("CON_RELATIONSHIP_CYCLE", "->".join(cycle)))
+
+        declared_keys = self._declared_table_keys(config)
+        if declared_keys:
+            self._check_relationship_key_coverage(relationships, raw, declared_keys)
+
+    @staticmethod
+    def _collect_duplicate_names(
+        metrics: List[Dict[str, Any]],
+        dimensions: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+    ) -> None:
+        """指标内 / 维度内各自查重名（对齐 Ossie 唯一名检查的 namespace 口径）。
+
+        指标与维度是两个命名空间（base_metric/formula 引指标名，filters 引维度名），
+        跨空间同名不判；target 加前缀区分来源。
+        """
+        for label, items in (("指标", metrics), ("维度", dimensions)):
+            seen: set = set()
+            for item in items:
+                name = _clean(item.get("name"))
+                if not name:
+                    continue
+                if name in seen:
+                    raw.append(("CON_NAME_DUPLICATE", f"{label}:{name}"))
+                else:
+                    seen.add(name)
+
+    @staticmethod
+    def _declared_table_keys(config: Dict[str, Any]) -> Dict[str, List[Set[str]]]:
+        """从 config.tables 收集每张表声明的主键/唯一键列集合（表名/列名 casefold）。
+
+        键来源与 chat_data_ossie_converter._dataset_keys 同一版图：
+        primary_keys、unique_indexes、manual_indexes（index_type=primary/unique）。
+        表没有任何声明键时不出现在结果里，调用方据此跳过——键声明是可选元数据，
+        缺失不算问题（与 Ossie validate.py 对 undeclared keys 的处理一致）。
+        """
+        declared: Dict[str, List[Set[str]]] = {}
+        for table in config.get("tables") or []:
+            if not isinstance(table, dict):
+                continue
+            name = str(table.get("table") or table.get("table_name") or "").strip()
+            if not name:
+                continue
+            raw_keys: List[Any] = list(table.get("primary_keys") or [])
+            for item in table.get("unique_indexes") or []:
+                raw_keys.append(item.get("columns") if isinstance(item, dict) else None)
+            for item in table.get("manual_indexes") or []:
+                if isinstance(item, dict) and str(item.get("index_type") or "").lower() in {"primary", "unique"}:
+                    raw_keys.append(item.get("columns"))
+            keys: List[Set[str]] = []
+            for value in raw_keys:
+                columns = {
+                    str(column).strip().casefold()
+                    for column in (value if isinstance(value, list) else [])
+                    if str(column or "").strip()
+                }
+                if columns and columns not in keys:
+                    keys.append(columns)
+            if keys:
+                declared[name.casefold()] = keys
+        return declared
+
+    @staticmethod
+    def _check_relationship_key_coverage(
+        relationships: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+        declared_keys: Dict[str, List[Set[str]]],
+    ) -> None:
+        """one 端（right_table，按平台约定 left=多端/right=一端）的 join 列应覆盖
+        该表某条声明键。对齐 Ossie validate.py 的 to_columns/声明键覆盖检查：
+        覆盖任一声明键即可（键超集仍保证 many-to-one 语义）；many_to_many 两端
+        都不是键，跳过；join 列为空时交给导入闸门，此处不判。
+        """
+        for relationship in relationships:
+            left = _clean(relationship.get("left_table"))
+            right = _clean(relationship.get("right_table"))
+            if not (left and right):
+                continue
+            if str(relationship.get("relationship_type") or "").strip() == "many_to_many":
+                continue
+            keys = declared_keys.get(right.casefold())
+            if not keys:
+                continue
+            right_columns = {
+                _clean(condition.get("right_column")).casefold()
+                for condition in relationship.get("join_conditions") or []
+                if isinstance(condition, dict)
+            }
+            if right_columns and not any(key <= right_columns for key in keys):
+                raw.append(("CON_RELATIONSHIP_KEY_UNCOVERED", f"{left}->{right}"))
 
     @staticmethod
     def _collect_duplicate_expressions(

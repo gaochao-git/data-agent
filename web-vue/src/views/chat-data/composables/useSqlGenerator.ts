@@ -117,7 +117,7 @@ export function useSqlGenerator() {
       modelId?: string | null
       memberDatasourceIds?: string[]
       agentId?: string
-      skillName?: string | null
+      skillNames?: string[] | null
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
@@ -151,7 +151,7 @@ export function useSqlGenerator() {
       modelId,
       memberDatasourceIds,
       agentId = 'chat_data',
-      skillName,
+      skillNames,
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
@@ -222,8 +222,8 @@ export function useSqlGenerator() {
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {
         options.member_datasource_ids = memberDatasourceIds
       }
-      if (skillName) {
-        options.skill_names = [skillName]
+      if (skillNames?.length) {
+        options.skill_names = skillNames
       }
 
       const response = responseFactory ? await responseFactory(currentController.signal) : await streamCompletion(conversationId, {

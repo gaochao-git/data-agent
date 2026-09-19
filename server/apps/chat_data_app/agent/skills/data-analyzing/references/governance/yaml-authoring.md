@@ -22,6 +22,7 @@ semantic_model:
 
 - 每个物理表一个 dataset，`name` 为表名；维度写在 dataset 的 `fields` 数组。
 - 每个 field 必须有：`name`（维度名）、`expression`（ANSI_SQL 方言表达式）、`datatype`、`dimension.is_time`（时间维度标记）。
+- `description`（可选，规范字段）：维度的业务口径描述，导入后写入维度 description（修复 DOC_DIMENSION_NO_DESCRIPTION 就写这里）。键位置保持与导出一致：`dimension` 之后、`datatype` 之前。
 - **每个 field 必须带 CHAT_DATA 扩展声明物理归属**，缺省时：单 dataset 模型按唯一 dataset 推断（warning），多 dataset 模型直接阻断（error）：
 
 ```yaml

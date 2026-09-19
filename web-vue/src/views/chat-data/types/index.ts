@@ -379,7 +379,7 @@ export interface Message {
   turnId?: string
   dashboardSpec?: DashboardSpecPayload
   semanticConfigSelection?: SemanticConfigSelectionInfo
-  skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
+  skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]
   // tool 消息专用字段

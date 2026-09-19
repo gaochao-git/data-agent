@@ -1135,7 +1135,7 @@ export interface OssieImportCreatedItem {
 
 export interface OssieImportData {
   created: OssieImportCreatedItem[]
-  /** 替换的同名配置：保留原 config_id 全量覆盖内容并强制禁用 */
+  /** 替换的同名配置：保留原 config_id 全量覆盖内容，启用状态保持不变 */
   replaced?: OssieImportCreatedItem[]
   /** 因同名冲突被跳过的模型：无操作权限的同名配置（他人私有）不带 config_id，故为可选 */
   skipped?: Array<{ name: string; config_id?: string; reason: string }>
@@ -1155,8 +1155,8 @@ export function previewAdminOssieSemanticImport(
 }
 
 /**
- * 导入 Ossie 语义模型：逐模型创建禁用的公共草稿配置（全有或全无）。
- * conflictActions：模型名 → replace（覆盖同名配置内容，强制禁用）/ skip（跳过）；
+ * 导入 Ossie 语义模型：逐模型创建公共配置（全有或全无），新模型默认启用。
+ * conflictActions：模型名 → replace（覆盖同名配置内容，启用状态保持不变）/ skip（跳过）；
  * 同名冲突缺省按 skip 处理。
  */
 export function importAdminOssieSemanticConfigs(

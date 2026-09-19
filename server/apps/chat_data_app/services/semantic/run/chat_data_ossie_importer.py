@@ -3,7 +3,7 @@
 导入方向：Ossie YAML → ChatData 语义配置草稿（与 chat_data_ossie_converter 的导出互为逆操作）。
 
 核心约束：
-- 产物永远是"待人工确认"的草稿：enabled 由路由层强制为 False；
+- 启用状态由路由层决定：新建默认启用，替换同名配置沿用原状态（enabled 不传参）；
 - 物理正确性闸门复用 validate_semantic_config_for_save（表/列存在性、
   派生/复合分型、关系连通性），本模块只做结构映射与归属解析；
 - CHAT_DATA custom_extensions 是 round-trip 锚：派生/复合指标口径只从扩展
@@ -107,7 +107,7 @@ class OssieSemanticModelImport:
         return not self.errors
 
     def to_config_payload(self) -> Dict[str, Any]:
-        """转成 SemanticConfigCreateRequest 兼容的创建参数（enabled 由路由层强制 False）。"""
+        """转成 SemanticConfigCreateRequest 兼容的创建参数（enabled 由路由层决定）。"""
         return {
             "name": self.name,
             "description": self.description,

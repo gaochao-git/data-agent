@@ -626,7 +626,7 @@ def test_preview_route_reports_validation_error(monkeypatch):
     assert "score" not in models[0].get("quality", {})
 
 
-def test_import_route_creates_disabled_public_configs(monkeypatch):
+def test_import_route_creates_enabled_public_configs(monkeypatch):
     manager = FakeManager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
@@ -637,7 +637,8 @@ def test_import_route_creates_disabled_public_configs(monkeypatch):
     )))
     assert response["code"] == ErrorCode.SUCCESS
     assert response["data"]["created"] == [{"config_id": "sc_1", "name": "商品模型"}]
-    assert manager.created_kwargs[0]["enabled"] is False
+    # 不再强制禁用：不传 enabled，由 service 默认启用
+    assert "enabled" not in manager.created_kwargs[0]
     assert manager.created_kwargs[0]["scope_type"] == "public"
     assert manager.created_kwargs[0]["create_by"] == "user_a"
 
@@ -826,7 +827,8 @@ def test_import_route_replace_updates_existing_config(monkeypatch):
     assert response["data"]["skipped"] == []
     assert manager.created_kwargs == []
     updated = manager.updated_kwargs["sc_9"]
-    assert updated["enabled"] is False
+    # 不再强制禁用：replace 不传 enabled，service 沿用原启用状态
+    assert "enabled" not in updated
     assert updated["update_by"] == "user_a"
     assert updated["update_by_name"] == "张三"
     assert updated["metrics"] and updated["dimensions"]
