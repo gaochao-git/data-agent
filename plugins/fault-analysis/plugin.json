@@ -1,0 +1,8 @@
+{
+  "name": "fault-analysis",
+  "version": "1.0.0",
+  "display_name": "故障分析",
+  "description": "数据平台故障分析技能包：面向查询失败、数据异常、执行超时等问题的只读诊断，按现象收集、分层定位、结论建议的流程输出可追溯的分析结论。",
+  "skills": ["fault-analysis"],
+  "mcp_servers": []
+}
