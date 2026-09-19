@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import asyncio
@@ -2134,3 +2135,87 @@ def test_list_runtime_skill_sources_async_includes_system_skills(monkeypatch, tm
     assert "demo-sys" in names
     # system 类别来源不依赖 DB，单条异常不应中断整体
     assert all(isinstance(p, Path) and p.is_dir() for _, p in sources)
+
+
+def _install_plugin_skill(tmp_path, *, plugin_name="ops-readonly", skill_name="fault-analysis"):
+    """在临时 plugins 根下落一个合法插件目录，返回插件根。"""
+    plugins_home = tmp_path / "plugins"
+    plugin = plugins_home / plugin_name
+    skill = plugin / "skills" / skill_name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(f"---\nname: {skill_name}\n---\n", encoding="utf-8")
+    (plugin / "plugin.json").write_text(
+        json.dumps({"name": plugin_name, "version": "1.0.0", "skills": [skill_name]}),
+        encoding="utf-8",
+    )
+    return plugins_home
+
+
+def test_list_runtime_skill_sources_async_includes_enabled_plugin_skills(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
+
+    system_root = tmp_path / "system"
+    skill_dir = system_root / "demo-sys"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo-sys\n---\n", encoding="utf-8")
+    monkeypatch.setattr(
+        skill_service_module,
+        "load_metadata",
+        lambda: {"demo-sys": {"name": "demo-sys", "path": str(skill_dir / "SKILL.md")}},
+    )
+    monkeypatch.setattr(
+        skill_service_module,
+        "physical_skill_category_root",
+        lambda category, chat_data_home=None: system_root if category == "system" else tmp_path,
+    )
+
+    async def fake_list_skills(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(skill_service_module.skill_service.dao, "list_skills_async", fake_list_skills)
+
+    plugins_home = _install_plugin_skill(tmp_path)
+    monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
+    plugin_loader.clear_metadata_cache()
+    try:
+        sources = asyncio.run(skill_service_module.skill_service.list_runtime_skill_sources_async("u1"))
+    finally:
+        plugin_loader.clear_metadata_cache()
+    names = [name for name, _ in sources]
+    assert "demo-sys" in names
+    assert "fault-analysis" in names
+
+
+def test_list_runtime_skill_sources_async_skips_conflicting_plugin_skill_name(monkeypatch, tmp_path):
+    """插件技能与系统技能同名时跳过：快照是扁平 /mnt/skills/<name>，不允许重名。"""
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
+
+    system_root = tmp_path / "system"
+    skill_dir = system_root / "demo-sys"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo-sys\n---\n", encoding="utf-8")
+    monkeypatch.setattr(
+        skill_service_module,
+        "load_metadata",
+        lambda: {"demo-sys": {"name": "demo-sys", "path": str(skill_dir / "SKILL.md")}},
+    )
+    monkeypatch.setattr(
+        skill_service_module,
+        "physical_skill_category_root",
+        lambda category, chat_data_home=None: system_root if category == "system" else tmp_path,
+    )
+
+    async def fake_list_skills(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(skill_service_module.skill_service.dao, "list_skills_async", fake_list_skills)
+
+    plugins_home = _install_plugin_skill(tmp_path, skill_name="demo-sys")
+    monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
+    plugin_loader.clear_metadata_cache()
+    try:
+        sources = asyncio.run(skill_service_module.skill_service.list_runtime_skill_sources_async("u1"))
+    finally:
+        plugin_loader.clear_metadata_cache()
+    names = [name for name, _ in sources]
+    assert names.count("demo-sys") == 1

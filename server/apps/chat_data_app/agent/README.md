@@ -1,13 +1,17 @@
 # ChatData Agent
 
-ChatData 唯一的业务 Agent。本目录承载 Agent 的全部运行域实现：装配、工具、中间件、提示词、
-工作区文件系统、技能与运行时服务。
+ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、工作区文件系统、技能与运行时服务。
+
+装配为声明式规格驱动：`AgentAssemblySpec`（`data_agent.py`）声明 agent 名、system prompt
+与工具选择（include/exclude），`create_agent_from_spec(spec, ...)` 按规格装配；
+`chat_data` 是第一个规格（`CHAT_DATA_AGENT_SPEC`）。新增装配型智能体（如智能运维）按同一
+规格接入、随发版启用；资源型扩展（技能包/MCP server）走 `plugins/`，动态安装。
 
 ## 目录结构
 
 | 子包/文件 | 职责 |
 |---|---|
-| `data_agent.py` | Agent 装配入口：`create_data_agent` / `get_data_agent_graph`，按 `runtime_options` 组装工具集 |
+| `data_agent.py` | Agent 装配入口：`AgentAssemblySpec` / `create_agent_from_spec` / `create_data_agent` / `get_data_agent_graph`，工具按 `tools/registry.py` 注册表 + 规格筛选装配 |
 | `agent_state.py` | LangGraph 状态定义（`ChatDataAgentState`） |
 | `agent_runtime.py` | 共享运行时工具（模型获取等） |
 | `runtime_options.py` | 运行选项：`workspace_backend`（local/sandbox）、`bash_enabled`（默认 False） |
@@ -20,6 +24,16 @@ ChatData 唯一的业务 Agent。本目录承载 Agent 的全部运行域实现�
 | `run/` | Run 事件流与调度（事件持久化规格见 `services/agent_run/README.md`） |
 | `skills/` | 技能加载与技能服务 |
 | `context/` | 上下文预算估算 |
+| `mcp/` | 宿主内置 MCP client：工具枚举缓存/调用/健康检查（见 `mcp/README.md`） |
+| `plugins/` | 技能包插件：manifest + zip 安装 + 启停卸载（见 `plugins/README.md`） |
+
+## 扩展边界
+
+- **内置工具**：`tools/registry.py` 单一事实源，随发版；
+- **MCP 工具**：环境变量 `CHAT_DATA_MCP_SERVERS` 或插件声明，agent 装配时动态枚举
+  （工具名 `mcp_<server>_<tool>`），只挂主智能体，不进子智能体；
+- **插件技能**：插件 `skills/` 声明经 `skill_service.list_runtime_skill_sources_async`
+  进入会话技能快照（与系统/用户技能同名时跳过）。
 
 ## 依赖方向约定
 

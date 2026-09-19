@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
 from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
+from ..plugins.loader import enabled_plugin_skill_sources
 from apps.chat_data_app.daos.skill_dao import SkillDao
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     WORKSPACE_OFFICE_SOURCE_MAX_BYTES,
@@ -445,6 +446,14 @@ class SkillService:
             skill_dir = system_root / name
             if skill_dir.is_dir() and not skill_dir.is_symlink():
                 out.append((name, skill_dir))
+        # 插件技能：与系统/用户技能同名时跳过（快照是扁平 /mnt/skills/<name>，不允许重名）。
+        existing_names = {name for name, _dir in out}
+        for name, skill_dir in enabled_plugin_skill_sources():
+            if name in existing_names:
+                logger.warning("插件技能与现有技能同名，跳过快照纳入: %s", name)
+                continue
+            existing_names.add(name)
+            out.append((name, skill_dir))
         db_rows = await self._safe_db_skills_async(user_id=user_id) or []
         for row in db_rows:
             # 单个用户技能路径异常（如历史绝对路径、跨 CHAT_DATA_HOME 残留）不应中断

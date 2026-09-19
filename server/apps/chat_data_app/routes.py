@@ -18,6 +18,7 @@ from .routers.query_history import router as query_history_router
 from .routers.query_execution import router as query_execution_router
 from .routers.agent_schedules import router as agent_schedules_router
 from .routers.agent_schedule_admin import router as agent_schedule_admin_router
+from .routers.plugins import router as plugins_router
 
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"
@@ -51,3 +52,4 @@ router.include_router(query_favorites_router)
 router.include_router(query_execution_router)
 router.include_router(agent_schedules_router)
 router.include_router(agent_schedule_admin_router)
+router.include_router(plugins_router)

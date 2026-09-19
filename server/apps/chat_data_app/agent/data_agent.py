@@ -1,9 +1,17 @@
-"""ChatData 单一 Agent 的构建与工具装配。"""
+"""ChatData Agent 的构建与工具装配。
+
+装配以 ``AgentAssemblySpec`` 声明式规格驱动：内置工具按 ``tools/registry.py``
+注册表装配后按规格做工具名级筛选，system prompt 与 LangGraph agent 名由规格
+提供。``chat_data`` 是第一个声明式规格；后续装配型智能体（如智能运维）按同一
+规格接入，不再复制装配函数。
+"""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from langchain.agents import create_agent
+
+from utils.logger import get_logger
 
 from ..agent.context.context_budget import ContextRequestBudget
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
@@ -38,6 +46,8 @@ from .tools.registry import (
     TOOL_SPECS,
     ToolBuildContext,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -92,6 +102,65 @@ class ModelInvocationConfig:
     thinking_effort: str | None = None
 
 
+@dataclass(frozen=True)
+class AgentAssemblySpec:
+    """一个可装配 Agent 的声明式规格：工具选择 + prompt + 运行选项边界。
+
+    - ``tool_includes`` / ``tool_excludes``：对 ``tools/registry.py`` 内置注册表
+      的工具名级筛选；``tool_includes=None`` 表示全部内置工具，``tool_excludes``
+      优先级更高。子智能体仍只使用内置工具（MCP 等动态工具不下发给子智能体）。
+    - ``enable_mcp_tools``：是否在装配时枚举 MCP/插件声明的动态工具
+      （见 ``agent/mcp/manager.py``）；未配置任何 MCP server 时为空、零开销。
+    - ``build_system_prompt``：``(runtime_options, workspace_root) -> prompt``，
+      每次装配都会调用，prompt 必须由规格自身决定。
+    """
+
+    agent_id: str
+    agent_name: str
+    build_system_prompt: Callable[[AgentRuntimeOptions, str], str]
+    tool_includes: frozenset[str] | None = None
+    tool_excludes: frozenset[str] = frozenset()
+    enable_mcp_tools: bool = True
+
+
+def validate_agent_assembly_spec(spec: AgentAssemblySpec) -> None:
+    """规格声明的工具名必须都已登记注册表，且 include/exclude 不得冲突。"""
+    from .tools.registry import provided_tool_names
+
+    registered = provided_tool_names()
+    unknown_includes = set(spec.tool_includes or ()) - registered
+    if unknown_includes:
+        raise ValueError(
+            f"Agent 装配规格 {spec.agent_id} 的 tool_includes 引用了未注册工具: "
+            f"{sorted(unknown_includes)}"
+        )
+    unknown_excludes = set(spec.tool_excludes) - registered
+    if unknown_excludes:
+        raise ValueError(
+            f"Agent 装配规格 {spec.agent_id} 的 tool_excludes 引用了未注册工具: "
+            f"{sorted(unknown_excludes)}"
+        )
+    if spec.tool_includes is not None:
+        conflict = spec.tool_includes & spec.tool_excludes
+        if conflict:
+            raise ValueError(
+                f"Agent 装配规格 {spec.agent_id} 的工具同时出现在 includes/excludes: "
+                f"{sorted(conflict)}"
+            )
+
+
+def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
+    """按规格对内置工具做工具名级筛选；excludes 优先于 includes。"""
+    return [
+        tool for tool in tools
+        if str(getattr(tool, "name", "") or "") not in spec.tool_excludes
+        and (
+            spec.tool_includes is None
+            or str(getattr(tool, "name", "") or "") in spec.tool_includes
+        )
+    ]
+
+
 def assemble_tools(
     runtime_options: AgentRuntimeOptions,
     workspace_runtime: ConversationWorkspaceRuntime,
@@ -99,8 +168,12 @@ def assemble_tools(
     identity_context: IdentityContext | None = None,
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
+    spec: AgentAssemblySpec | None = None,
 ) -> list:
-    """按 ``tools/registry.py`` 注册表装配固定工具集，只有 Bash 受运行选项控制。"""
+    """按 ``tools/registry.py`` 注册表装配工具集，只有 Bash 受运行选项控制。
+
+    传入 ``spec`` 时在注册表装配结果上再按规格做工具名级筛选（内置工具）。
+    """
     context = ToolBuildContext(
         runtime_options=runtime_options,
         workspace_runtime=workspace_runtime,
@@ -108,7 +181,11 @@ def assemble_tools(
         datasource=datasource_context or DatasourceContext(),
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
-    return [tool for spec in TOOL_SPECS for tool in spec.build(context)]
+    tools = [tool for tool_spec in TOOL_SPECS for tool in tool_spec.build(context)]
+    if spec is not None:
+        validate_agent_assembly_spec(spec)
+        tools = _filter_tools_by_spec(tools, spec)
+    return tools
 
 
 # 子智能体工具可见性策略（SUBAGENT_BASE_EXCLUDED_TOOL_NAMES /
@@ -181,7 +258,32 @@ def build_subagent_middleware(
     return SubagentMiddleware(specs, run_controls=run_controls)
 
 
-def create_data_agent(
+def _chat_data_system_prompt(options: AgentRuntimeOptions, workspace_root: str) -> str:
+    return build_unified_system_prompt(options, workspace_root=workspace_root)
+
+
+CHAT_DATA_AGENT_SPEC = AgentAssemblySpec(
+    agent_id="chat_data",
+    agent_name="chat_data_agent",
+    build_system_prompt=_chat_data_system_prompt,
+)
+
+
+def _load_spec_mcp_tools(spec: AgentAssemblySpec) -> list:
+    """装配规格允许时枚举 MCP/插件动态工具；任何失败都降级为空集，不阻断装配。"""
+    if not spec.enable_mcp_tools:
+        return []
+    try:
+        from .mcp.manager import load_mcp_tools
+
+        return list(load_mcp_tools())
+    except Exception as err:
+        logger.warning("[data_agent] MCP 工具加载失败，跳过: %s", err)
+        return []
+
+
+def create_agent_from_spec(
+    spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
@@ -192,12 +294,16 @@ def create_data_agent(
     run_controls: AgentRunControls | None = None,
     persist_model_snapshot=None,
 ):
-    """创建唯一的 ``chat_data`` Agent。
+    """按声明式规格装配一个 LangGraph agent。
 
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
+
+    子智能体只继承内置工具（不含 MCP 等动态工具），且各子智能体的排除集策略
+    仍由 ``tools/registry.py`` 单一事实源约束。
     """
+    validate_agent_assembly_spec(spec)
     options = runtime_options or get_chat_data_default_runtime_options()
     identity = identity_context or IdentityContext()
     datasource = datasource_context or DatasourceContext()
@@ -215,16 +321,18 @@ def create_data_agent(
             backend=options.workspace_backend,
         )
     context_request_budget = ContextRequestBudget(model_id)
-    tools = assemble_tools(
+    builtin_tools = assemble_tools(
         options,
         runtime,
         identity_context=identity,
         datasource_context=datasource,
         model_invocation=invocation,
+        spec=spec,
     )
-    effective_system_prompt = invocation.system_prompt or build_unified_system_prompt(
+    tools = builtin_tools + _load_spec_mcp_tools(spec)
+    effective_system_prompt = invocation.system_prompt or spec.build_system_prompt(
         options,
-        workspace_root=runtime.workspace_root,
+        runtime.workspace_root,
     )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
@@ -235,7 +343,7 @@ def create_data_agent(
         stream_usage=True,
         llm_factory=get_chat_data_llm,
     )
-    subagent_middleware = build_subagent_middleware(options, tools, model=model, run_controls=run_controls)
+    subagent_middleware = build_subagent_middleware(options, builtin_tools, model=model, run_controls=run_controls)
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,
@@ -300,10 +408,25 @@ def create_data_agent(
         middleware=middleware,
         state_schema=ChatDataAgentState,
         checkpointer=checkpointer,
-        name="chat_data_agent",
+        name=spec.agent_name,
     )
     bind_context_usage_middleware(agent, context_usage_middleware)
     return agent
+
+
+def create_data_agent(
+    runtime_options: AgentRuntimeOptions | None = None,
+    *,
+    checkpointer=None,
+    **kwargs,
+):
+    """创建 ``chat_data`` Agent（规格见 ``CHAT_DATA_AGENT_SPEC``）。"""
+    return create_agent_from_spec(
+        CHAT_DATA_AGENT_SPEC,
+        runtime_options,
+        checkpointer=checkpointer,
+        **kwargs,
+    )
 
 
 def get_data_agent_graph(

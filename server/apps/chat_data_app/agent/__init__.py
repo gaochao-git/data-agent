@@ -17,12 +17,16 @@ from .runtime_options import (
     resolve_agent_runtime_options,
 )
 from .data_agent import (
+    AgentAssemblySpec,
     AgentRunControls,
+    CHAT_DATA_AGENT_SPEC,
     DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
+    create_agent_from_spec,
     create_data_agent,
     get_data_agent_graph,
+    validate_agent_assembly_spec,
 )
 from .prompts.chat_data import build_unified_system_prompt
 from utils.checkpoint import get_checkpointer, DB_PATH
@@ -30,14 +34,18 @@ from utils.checkpoint import get_checkpointer, DB_PATH
 __all__ = [
     "ChatDataAgentState",
     "AgentRuntimeOptions",
+    "AgentAssemblySpec",
     "AgentRunControls",
+    "CHAT_DATA_AGENT_SPEC",
     "DatasourceContext",
     "IdentityContext",
     "ModelInvocationConfig",
     "get_chat_data_default_runtime_options",
     "resolve_agent_runtime_options",
+    "create_agent_from_spec",
     "create_data_agent",
     "get_data_agent_graph",
+    "validate_agent_assembly_spec",
     "build_unified_system_prompt",
     "get_checkpointer",
     "DB_PATH",
