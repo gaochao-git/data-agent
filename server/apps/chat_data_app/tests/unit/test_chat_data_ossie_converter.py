@@ -280,3 +280,16 @@ def test_convert_writes_data_type_into_extension_only_when_lossy():
     assert lossy_ext["data_type"] == "decimal(10,2)"
     lossless = metrics[1]
     assert "data_type" not in json.loads(lossless["custom_extensions"][0]["data"])
+
+
+def test_convert_records_dimension_order_for_round_trip():
+    """维度平铺顺序在 dataset→field 结构里没有位置，写入模型扩展供导入侧还原保序。"""
+    config = _config()
+    config["dimensions"] = [
+        {"name": "城市", "table": "orders", "column": "city", "logical_type": "string"},
+        {"name": "昵称", "table": "users", "column": "nickname", "logical_type": "string"},
+        {"name": "状态", "table": "orders", "column": "status", "logical_type": "string"},
+    ]
+    document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
+    ext = json.loads(document["semantic_model"][0]["custom_extensions"][0]["data"])
+    assert ext["dimension_order"] == ["orders.city", "users.nickname", "orders.status"]

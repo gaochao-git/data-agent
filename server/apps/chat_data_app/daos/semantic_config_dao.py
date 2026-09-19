@@ -17,9 +17,11 @@ logger = get_logger(__name__)
 
 # 软删除时的改名表达式。
 #
-# 生产库实际生效的唯一索引是两列 (group_id, semantic_config_name)：墓碑行若保留原名
-# 会持续占名，导致「删除 → 用同名重建」被唯一键拒绝或被 upsert 复活墓碑。
-# 因此删除时必须同步改名——把自增主键拼进名字，保证任意多次删除互不撞名，同时释放原名。
+# 生产库唯一索引现为三列 uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,
+# delete_flag)（2026-09-19 SHOW CREATE TABLE 核对；迁移 SQL 见 next_version.md，旧环境为两列）。
+# 三列索引允许「墓碑行与活跃行同名」，但同一名字反复删除仍会积累多行 (group_id, name, 1) 撞键；
+# 未迁移的两列索引环境下墓碑保留原名还会持续占名，导致「删除 → 用同名重建」被唯一键拒绝
+# 或被 upsert 复活墓碑。因此删除时仍须同步改名——把自增主键拼进名字，保证任意多次删除互不撞名。
 #
 # 必须在同一条 UPDATE 的 SQL 表达式里完成，不能用 Python 读-改-写：
 # soft_delete_by_group_id_async 是单条批量 UPDATE（一次可删整组），没有逐行拼值的机会，且读改写有并发竞态。
