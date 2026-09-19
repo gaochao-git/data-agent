@@ -176,6 +176,12 @@ const applyRunDoneState = (
     activeAssistantMessageId.value = null
   } else if (status === 'waiting_user') {
     finishStreamingMessages()
+  } else if (status === 'failed') {
+    // 模型挂起等失败终态经 fallback done 到达时没有 error 事件兜底，
+    // 必须在这里收尾占位消息，否则「正在处理...」会一直转下去。
+    finalizeUnfinishedToolCalls('error')
+    finishStreamingMessages()
+    setActiveAssistantError('本轮执行失败，请重试')
   }
 
   if (status === 'finished' && nextRunId) {

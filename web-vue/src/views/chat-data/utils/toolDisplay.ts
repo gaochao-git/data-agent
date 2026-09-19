@@ -118,6 +118,12 @@ const DATA_ANALYZING_ACTION_NAMES: Record<string, string> = {
   check_yaml: '语义模型自检',
 }
 
+/** 数据分析合并工具的动作中文名；非数据分析工具或未知动作返回空串。 */
+export function getDataAnalyzingActionName(action?: string | null): string {
+  const key = String(action || '').trim()
+  return DATA_ANALYZING_ACTION_NAMES[key] || ''
+}
+
 /** 判断是否为数据分析合并工具（历史会话的旧工具名不算）。 */
 export function isDataAnalyzingTool(toolName?: string | null): boolean {
   return String(toolName || '').trim() === 'data_analyzing_tool'

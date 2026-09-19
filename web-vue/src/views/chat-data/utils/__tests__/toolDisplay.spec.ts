@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractWrittenFilePathCandidates, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
+import { extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -142,6 +142,13 @@ describe('toolDisplay', () => {
       'batch /mnt/user-data/workspace/月报.docx'
     )
     expect(getToolTechnicalDescription('unknown_tool', { intent: 'x' })).toBe('')
+  })
+
+  it('maps data_analyzing actions to Chinese names and leaves others empty', () => {
+    expect(getDataAnalyzingActionName('check_yaml')).toBe('语义模型自检')
+    expect(getDataAnalyzingActionName('execute_query')).toBe('查询数据')
+    expect(getDataAnalyzingActionName('unknown_action')).toBe('')
+    expect(getDataAnalyzingActionName(null)).toBe('')
   })
 })
 

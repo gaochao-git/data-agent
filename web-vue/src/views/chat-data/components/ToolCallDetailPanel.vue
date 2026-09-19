@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../types'
-import { getToolCompactDescription, getToolDisplayName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
@@ -16,6 +16,12 @@ const props = defineProps({
 const formatJson = (value: unknown) => props.formatText(JSON.stringify(value || {}, null, 2))
 
 const toolDisplayName = computed(() => getToolDisplayName(props.toolCall?.tool_name))
+// 数据分析合并工具在标题露出动作中文名（如「语义模型自检」），只看卡片名分不清具体动作
+const toolActionName = computed(() => {
+  const toolCall = props.toolCall
+  if (!toolCall || toolCall.tool_name !== 'data_analyzing_tool') return ''
+  return getDataAnalyzingActionName((toolCall.args as Record<string, unknown> | undefined)?.action)
+})
 const toolDescription = computed(() => {
   const toolCall = props.toolCall
   return toolCall ? getToolCompactDescription(toolCall.tool_name, toolCall.args || {}) : ''
@@ -65,7 +71,7 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
   <div v-if="toolCall" class="rounded-xl border border-slate-100 bg-white shadow-sm">
     <div class="border-b border-slate-100 px-4 py-3">
       <div class="flex min-w-0 items-center gap-2 text-xs text-slate-500" :title="toolDescription || toolCall.tool_name">
-        <span class="shrink-0 font-medium">{{ toolDisplayName }}</span>
+        <span class="shrink-0 font-medium">{{ toolActionName ? `${toolDisplayName} · ${toolActionName}` : toolDisplayName }}</span>
         <span v-if="toolDescription" class="min-w-0 truncate font-mono text-slate-400">{{ toolDescription }}</span>
       </div>
     </div>
