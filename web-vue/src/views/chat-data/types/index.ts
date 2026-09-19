@@ -902,3 +902,26 @@ export interface AgentSchedulePayload {
   datasource_id?: string | null
   options?: Record<string, unknown>
 }
+
+// 插件 manifest 中声明的 MCP server（管理端展示只需 id/transport）
+export interface PluginMcpServerInfo {
+  id: string
+  transport: string
+  url?: string
+  command?: string
+}
+
+// 插件 manifest 信息
+export interface PluginManifestInfo {
+  name: string
+  version: string
+  display_name: string
+  description: string
+  skills: string[]
+  mcp_servers: PluginMcpServerInfo[]
+}
+
+// 后台插件列表条目（manifest + 运行状态）
+export interface PluginInfo extends PluginManifestInfo {
+  enabled: boolean
+}

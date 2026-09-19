@@ -8,6 +8,7 @@ import { Close } from '@element-plus/icons-vue'
 import DataSourceManager from './DataSourceManager.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
+import PluginAdminPanel from './PluginAdminPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
 
@@ -21,10 +22,11 @@ const emit = defineEmits<{
   'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule'>('datasource')
+const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule' | 'plugins'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
+const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
 const loadingAdminDatasourceOptions = ref(false)
@@ -38,6 +40,7 @@ const tabs = [
   { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
   { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
   { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
+  { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
 ] as const
 
 const openDatasourceGroupModal = () => {
@@ -68,11 +71,16 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule') => {
+const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugins') => {
   activeTab.value = tab
   if (tab === 'schedule') {
     await nextTick()
     schedulePanelRef.value?.ensureLoaded()
+    return
+  }
+  if (tab === 'plugins') {
+    await nextTick()
+    pluginPanelRef.value?.ensureLoaded()
     return
   }
   if (tab !== 'sqlHistory') return
@@ -134,6 +142,11 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule') => {
       <AgentScheduleAdminPanel
         v-show="activeTab === 'schedule'"
         ref="schedulePanelRef"
+        class="h-full"
+      />
+      <PluginAdminPanel
+        v-show="activeTab === 'plugins'"
+        ref="pluginPanelRef"
         class="h-full"
       />
     </div>

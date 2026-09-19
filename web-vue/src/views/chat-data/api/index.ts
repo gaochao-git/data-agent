@@ -28,6 +28,7 @@ import type {
   AgentScheduleOverview,
   AgentSchedulePayload,
   AgentScheduleRunItem,
+  PluginInfo,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1728,5 +1729,44 @@ export function getAdminAgentScheduleRuns(jobId: string, params?: { limit?: numb
     url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/${jobId}/runs`,
     method: 'get',
     params
+  })
+}
+
+// ============ 插件管理 API（Admin） ============
+
+/** 后台：已安装插件列表（含禁用项） */
+export function getAdminPlugins(): Promise<ApiResponse<{ plugins: PluginInfo[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins`,
+    method: 'get'
+  })
+}
+
+/** 后台：上传插件 zip 安装（同名插件需先卸载；变更对新会话生效） */
+export function installPlugin(file: File): Promise<ApiResponse<{ plugin: PluginInfo; effective: string }>> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/install`,
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/** 后台：启用/禁用插件（立即影响新会话快照与新装配） */
+export function setAdminPluginEnabled(pluginId: string, enabled: boolean): Promise<ApiResponse<{ name: string; enabled: boolean }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}/enabled`,
+    method: 'put',
+    data: { enabled }
+  })
+}
+
+/** 后台：卸载插件并删除其目录 */
+export function uninstallPlugin(pluginId: string): Promise<ApiResponse<{ name: string; version: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}`,
+    method: 'delete'
   })
 }
