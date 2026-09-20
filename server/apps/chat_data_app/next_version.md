@@ -54,23 +54,6 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
-ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
-ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
-
--- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
--- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
--- 其余环境执行 ALTER 前先跑查重，有结果则先处理重复行。
-SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
-ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
-
--- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
-ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COMMENT '业务说明';
-
--- 技能表清理废弃字段：skill_scope 从未使用；root_dir/version_dir 已由推导规则替代
-ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
-ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
-ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
-
 -- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
 CREATE TABLE `chat_data_agent_schedule` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -144,6 +127,23 @@ CREATE TABLE `chat_data_schedule_control` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务全局控制表';
+
+ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
+ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
+
+-- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
+-- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
+-- 其余环境执行 ALTER 前先跑查重，有结果则先处理重复行。
+SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
+ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
+
+-- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
+ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COMMENT '业务说明';
+
+-- 技能表清理废弃字段：skill_scope 从未使用；root_dir/version_dir 已由推导规则替代
+ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
+ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
+ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
 ```
 
 ## 依赖变更
