@@ -14,6 +14,12 @@ const router = createRouter({
           name: 'ChatData',
           component: () => import('@/views/chat-data/pages/index.vue'),
           meta: { title: '智能问数' }
+        },
+        {
+          path: 'test-dialog',
+          name: 'TestDialog',
+          component: () => import('@/views/TestChatDataDialog.vue'),
+          meta: { title: '弹窗测试' }
         }
       ]
     },

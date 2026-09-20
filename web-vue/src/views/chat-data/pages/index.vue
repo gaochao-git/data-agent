@@ -105,6 +105,12 @@ const adminDatasourceCache = ref<Record<string, DataSource>>({})
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
+// 无数据源整页空态开关：2026-09-20 起按用户要求改为「页面常显、仅禁查询」——
+// 无数据源时仍展示侧栏/各模式页签（SQL 编辑框等场景需要），查询动作在各自入口被守卫拦截，
+// 数据源组切换位置显示「请先配置数据源组」。恢复整页空态：把本开关改回 true 即可（模板四处
+// isNoDatasourceEmptyPage 条件与空态块随之还原，无需其他改动）。
+const SHOW_NO_DATASOURCE_EMPTY_PAGE = false
+const isNoDatasourceEmptyPage = computed(() => noMatchedDatasource.value && SHOW_NO_DATASOURCE_EMPTY_PAGE)
 // storage key 统一 chatdata: 前缀;按用户隔离,避免共享浏览器多账号互相可见
 const semanticConfigStorageKey = () => `chatdata:conversation-semantic-config:${currentUser.value.id || 'anonymous'}`
 const conversationModelStorageKey = () => `chatdata:conversation-model:${currentUser.value.id || 'anonymous'}`
@@ -693,6 +699,11 @@ const selectConversation = async (id: string): Promise<boolean> => {
 }
 
 const ensureConversationDatasource = async (): Promise<boolean> => {
+  // 无任何可用数据源：发送必被后端拒绝，这里提前拦下并说明原因
+  if (noMatchedDatasource.value) {
+    ElMessage.warning('请先配置数据源组')
+    return false
+  }
   const boundDatasourceId = currentConversationDatasourceId.value
   if (boundDatasourceId) {
     if (!datasources.value.some(datasource => datasource.id === boundDatasourceId)) {
@@ -1159,6 +1170,11 @@ const datasourceSelectLockReason = computed(() => {
 })
 
 const openContextSelector = () => {
+  // 无数据源：不打开选择器（无可选项），提示原因；管理员可走旁边齿轮入口配置
+  if (noMatchedDatasource.value) {
+    ElMessage.warning(noMatchedDatasourceDesc.value)
+    return
+  }
   draftSelectedDatasourceId.value = selectedDatasourceId.value || resolveDefaultDatasourceId(datasources.value)
   draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
   draftDefaultAllExecutionTargets.value = isConversationContextMode.value
@@ -1208,12 +1224,14 @@ const handleConfirmContextSelector = () => {
 }
 
 const currentContextSummary = computed(() => {
+  // 无数据源：数据源组位置直接提示待配置（页面常显方案下这是主要提示位）
+  if (noMatchedDatasource.value) return '请先配置数据源组'
   const datasourceName = currentDatasource.value?.group_name || '暂无数据源'
   return `${datasourceName} / ${selectedExecutionTargetSummary.value}`
 })
 
 const showSidebarContextBar = computed(() => {
-  return datasources.value.length > 0 || executionTargets.value.length > 0
+  return noMatchedDatasource.value || datasources.value.length > 0 || executionTargets.value.length > 0
 })
 
 const showSidebarFooter = computed(() => {
@@ -1397,8 +1415,8 @@ onMounted(async () => {
     <!-- 根节点必须是单个真实 DOM 元素（不能在 template 直下放注释或组件，否则编译成 Fragment 根，宿主项目 transition(mode="out-in") + keep-alive 路由出口会导致页面切换卡死），注释与 el-config-provider 均须置于根 div 内 -->
     <!-- 高度 = 视口 - 主项目头部(导航栏50+标签栏32=82px)，按实际调整 -->
     <el-config-provider :locale="zhCn">
-    <!-- 未匹配数据源提示 -->
-    <div v-if="noMatchedDatasource" class="flex-1 flex items-center justify-center">
+    <!-- 未匹配数据源整页空态（默认关闭，见 SHOW_NO_DATASOURCE_EMPTY_PAGE 注释；页面改为常显+入口守卫） -->
+    <div v-if="isNoDatasourceEmptyPage" class="flex-1 flex items-center justify-center">
       <div class="text-center text-gray-400">
         <i class="fa-solid fa-database text-4xl mb-4 block"></i>
         <p class="text-sm">{{ noMatchedDatasourceTitle }}</p>
@@ -1415,7 +1433,7 @@ onMounted(async () => {
     </div>
 
     <!-- 顶部工具栏 -->
-    <div v-if="!noMatchedDatasource" class="h-10 px-5 flex items-end bg-[#EEF1F5] border-b border-[#B8C1CE]">
+    <div v-if="!isNoDatasourceEmptyPage" class="h-10 px-5 flex items-end bg-[#EEF1F5] border-b border-[#B8C1CE]">
       <div class="flex items-center justify-between w-full min-w-0">
         <div class="mode-trapezoid shrink-0">
           <button
@@ -1473,7 +1491,7 @@ onMounted(async () => {
     </div>
 
     <!-- 语义模型配置：全宽内容区，不占用左侧栏空间 -->
-    <div v-if="!noMatchedDatasource && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
+    <div v-if="!isNoDatasourceEmptyPage && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
         <select
@@ -1538,7 +1556,7 @@ onMounted(async () => {
     </div>
 
     <!-- 下方内容区（82px 头部 + 48px 工具栏 = 130px） -->
-    <div v-if="!noMatchedDatasource" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
+    <div v-if="!isNoDatasourceEmptyPage" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
       <!-- 左侧：公用侧边栏 -->
       <!-- 折叠态：窄条（32px）。与展开态右缘悬浮轨道同构：按钮悬挂在条外缘顶部（top-1），
            Tab 从 pt-8 起——两种状态下 Tab 的垂直位置完全一致（横向跟随侧栏边界） -->
