@@ -135,6 +135,18 @@ ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT 
 -- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
 -- 其余环境执行 ALTER 前先跑查重，有结果则先处理重复行。
 SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1
+-- 查重有结果时清理：每组（group_id, semantic_config_name, delete_flag）保留 MIN(id) 最早一行，删其余；
+-- 预览将删的行 = 同 WHERE 换成 SELECT *。与 ALTER 连续执行，避免两步之间新写入再造重复。
+DELETE FROM semantic_config
+WHERE id NOT IN (
+    SELECT min_id FROM (
+        SELECT MIN(id) AS min_id
+        FROM semantic_config
+        GROUP BY group_id, semantic_config_name, delete_flag
+    ) t
+);
+-- 清理后复查应返回空，再建索引
+SELECT group_id, semantic_config_name, COUNT(*) from semantic_config group by group_id,semantic_config_name,delete_flag HAVING COUNT(*)>1;
 ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
 
 -- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
