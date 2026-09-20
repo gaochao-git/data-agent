@@ -332,6 +332,33 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, monkeypatch):
+    """系统残留清理通道：允许删 semantic 下 YAML；语义目录外的路径仍被拒。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_delete", "user_a")
+    semantic_root = Path(paths["workspace"]) / "semantic"
+    semantic_root.mkdir()
+    stale = semantic_root / "已停用模型__deadbeef.yaml"
+    stale.write_text("stale", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=paths["root"], user_id="user_a", backend="local"
+    )
+
+    result = await runtime.delete_internal_text_files(
+        path="/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    )
+
+    assert not stale.exists()
+    assert result["path"] == "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    assert result["type"] == "file"
+
+    # 通道限定语义 YAML：semantic 之外的文件即使走内部通道也必须被拒
+    with pytest.raises(ValueError, match="内部语义模型写入"):
+        await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/plan.md")
+
+
+@pytest.mark.asyncio
 async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
@@ -1031,6 +1058,9 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def write_internal_text_files(self, *_args, **_kwargs):
             raise AssertionError("unexpected internal semantic model write")
+
+        async def delete_internal_text_files(self, *_args, **_kwargs):
+            raise AssertionError("unexpected internal semantic model delete")
 
         async def write_tool_result(self, *_args, **_kwargs):
             raise AssertionError("unexpected tool result")

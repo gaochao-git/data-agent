@@ -187,7 +187,9 @@ async def _prune_stale_semantic_files(workspace_runtime: Any, keep_paths: set[st
         if not path.endswith(".yaml") or path in keep_paths:
             continue
         try:
-            await workspace_runtime.delete_path(path=path, recursive=False, expected_type="file")
+            # 走系统内部删除通道：semantic 目录对模型工具是只读快照，
+            # 普通 delete_path 会被路径策略挡住（见 runtime.resolve_workspace_path）。
+            await workspace_runtime.delete_internal_text_files(path=path)
             logger.info("清理语义目录残留文件: %s", path)
         except Exception as exc:  # noqa: BLE001 - 清理属尽力而为
             logger.warning("清理语义目录残留文件失败: path=%s error=%s", path, exc)

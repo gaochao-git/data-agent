@@ -27,10 +27,10 @@ class _FakeRuntime:
             raise FileNotFoundError(f"目录不存在: {path}")
         return [{"type": "file", "path": f} for f in children]
 
-    async def delete_path(self, *, path, recursive, expected_type):
+    async def delete_internal_text_files(self, *, path):
         self.deleted.append(path)
         self.files.discard(path)
-        return {"path": path}
+        return {"path": path, "type": "file"}
 
 
 class _FakeDatasourceManager:
@@ -364,6 +364,38 @@ def test_prune_stale_survives_list_dir_failure(monkeypatch):
         prune_stale=True,
     ))
     # 清理失败不影响物化结果本身
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert runtime.deleted == []
+
+
+def test_prune_stale_survives_delete_failure(monkeypatch):
+    """删除通道被拒（如后端不支持）时只告警，不中断物化。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager([_config("sc_keep")]),
+    )
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+
+    class _BlockedDeleteRuntime(_FakeRuntime):
+        async def delete_internal_text_files(self, *, path):
+            raise ValueError("语义模型残留清理被后端拒绝")
+
+    runtime = _BlockedDeleteRuntime()
+    runtime.files.add(stale)
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=["sc_keep"],
+        prune_stale=True,
+    ))
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
     assert runtime.deleted == []
 

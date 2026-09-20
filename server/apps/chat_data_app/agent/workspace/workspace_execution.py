@@ -1970,6 +1970,40 @@ def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_pat
     return target
 
 
+async def sandbox_delete_internal_text_file(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    path: str,
+) -> dict[str, Any]:
+    """Delete one system-owned semantic model file via the OpenSandbox Files API.
+
+    仅服务于系统内部的语义残留清理通道（停用/删除模型遗留），路径解析带
+    ``allow_managed_semantic_model_write=True``，模型工具面仍保持 semantic 只读。
+    """
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        target = sandbox_visible_path(
+            path,
+            writable=True,
+            allow_managed_semantic_model_write=True,
+        )
+        if not _is_managed_semantic_model_sandbox_path(target):
+            raise ValueError("系统删除仅允许 /mnt/user-data/workspace/semantic/ 下的 YAML 语义模型文件")
+        files = getattr(session.sandbox, "files", None)
+        deleter = getattr(files, "delete_files", None)
+        if not callable(deleter):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_files")
+        await deleter([target])
+        await sync_sandbox_working_trees(session)
+        logger.info(
+            "OpenSandbox 语义模型残留文件删除完成: sandbox_id=%s path=%s",
+            session.sandbox_id,
+            target,
+        )
+        return {"path": sandbox_path_to_visible(target), "type": "file"}
+
+
 async def sandbox_replace_text_file(
     *,
     session_ref: SandboxExecutionSessionRef,

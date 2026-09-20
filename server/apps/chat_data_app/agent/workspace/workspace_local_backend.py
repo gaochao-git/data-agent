@@ -457,17 +457,21 @@ def _resolve_local_mutable_path(
     path: str,
     *,
     allow_uploads: bool = False,
+    allow_managed_semantic_model_write: bool = False,
 ) -> Path:
     """解析应用侧可变更路径。
 
     ``allow_uploads`` 只为人侧删除接口打开 uploads：用户要能清理自己上传的文件，
     但 uploads 根目录本身仍不可操作（只删文件，不删目录结构）。
+    ``allow_managed_semantic_model_write`` 只为系统内部的语义模型写入/残留清理
+    通道打开 semantic 目录；模型工具始终走默认值（semantic 只读快照）。
     """
     target = resolve_workspace_path(
         workspace_root,
         path,
         writable=True,
         allow_uploads_write=allow_uploads,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
     )
     mutable_roots = {
         resolve_workspace_path(workspace_root, "/mnt/user-data/workspace"),
@@ -495,8 +499,14 @@ def _delete_local_path(
     expected_type: Literal["file", "dir"],
     *,
     allow_uploads: bool = False,
+    allow_managed_semantic_model_write: bool = False,
 ) -> dict[str, Any]:
-    target = _resolve_local_mutable_path(workspace_root, path, allow_uploads=allow_uploads)
+    target = _resolve_local_mutable_path(
+        workspace_root,
+        path,
+        allow_uploads=allow_uploads,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+    )
     if target.is_symlink():
         raise ValueError("不允许操作符号链接")
     if not target.exists():
@@ -755,6 +765,22 @@ class LocalWorkspaceBackend:
             ]
 
         return await asyncio.to_thread(write_batch)
+
+    async def delete_internal_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        """Delete one system-owned semantic model file (residual cleanup path)."""
+        return await asyncio.to_thread(
+            _delete_local_path,
+            runtime.workspace_root,
+            path,
+            False,
+            "file",
+            allow_managed_semantic_model_write=True,
+        )
 
     async def write_tool_result(
         self,
