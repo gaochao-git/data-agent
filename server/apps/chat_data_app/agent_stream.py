@@ -701,6 +701,7 @@ _SUBAGENT_TOOL_EVENT_TYPES = {
     "subagent_message",
     "subagent_message_delta",
     "subagent_thinking_delta",
+    "subagent_context_usage",
 }
 
 

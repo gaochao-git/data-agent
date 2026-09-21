@@ -46,12 +46,13 @@ const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
   'subagent_message',
   'subagent_message_delta',
   'subagent_thinking_delta',
+  'subagent_context_usage',
 ])
 
 /**
  * Set.has() 不触发类型窄化，这里用 type-guard 把「集合内容恰好是
  * ToolLifecycleEventData['type'] 全集」这一不变量写进类型（块内 event
- * 随即窄化为那 7 个字面量）。
+ * 随即窄化为那 8 个字面量）。
  */
 const isToolLifecycleEvent = (e: SSEEventType): e is ToolLifecycleEventData['type'] =>
   TOOL_LIFECYCLE_EVENTS.has(e)

@@ -99,6 +99,35 @@ describe('ToolCallList', () => {
     expect(order).toEqual(['message', 'tool', 'message'])
   })
 
+  it('shows the context usage badge on the chain header when usage is known', () => {
+    const mountWithUsage = (percent: number) => mount(ToolCallList, {
+      props: {
+        defaultExpanded: true,
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [{ kind: 'message', id: 'msg-1', content: '过程' }],
+            subagentContextUsage: { used_tokens: 4321, threshold_tokens: 70000, percent },
+          },
+        ],
+      },
+    })
+
+    const normal = mountWithUsage(6)
+    const normalBadge = normal.find('.subagent-chain-toggle span:nth-of-type(2)')
+    expect(normal.text()).toContain('上下文 6%')
+    expect(normalBadge.classes()).not.toContain('bg-amber-100')
+
+    // ≥100% 表示已注入预算收尾告警，徽标转警示色
+    const alerted = mountWithUsage(100)
+    const alertedBadge = alerted.find('.subagent-chain-toggle span:nth-of-type(2)')
+    expect(alerted.text()).toContain('上下文 100%')
+    expect(alertedBadge.classes()).toContain('bg-amber-100')
+  })
+
   it('renders subagent messages through the same markdown pipeline as the main agent', () => {
     const wrapper = mount(ToolCallList, {
       props: {

@@ -7,6 +7,7 @@ import { getConversationHistory } from '../api'
 import type {
   ChatDataContextCompressionEvent,
   ChatDataTokenUsage,
+  SubagentContextUsage,
   SubagentTrailItem,
   ToolCallInfo,
   Message,
@@ -129,6 +130,7 @@ interface HistoryMessagePayload {
   tool_name?: unknown
   reasoning_turn_id?: unknown
   subagent_trail?: unknown
+  subagent_context_usage?: unknown
 }
 
 interface HistoryEventPayload {
@@ -225,11 +227,30 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
   return trail.length > 0 ? trail : undefined
 }
 
+// 子智能体上下文用量快照：随 task 的 tool_result payload 持久化（后端盖在
+// additional_kwargs.subagent_context_usage），历史回放时 task 卡片标题行还原用量徽标。
+const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | undefined => {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const toNonNegativeInt = (item: unknown): number => {
+    const parsed = Number(item)
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
+  }
+  const usedTokens = toNonNegativeInt(raw.used_tokens)
+  if (usedTokens <= 0) return undefined
+  return {
+    used_tokens: usedTokens,
+    threshold_tokens: toNonNegativeInt(raw.threshold_tokens),
+    percent: toNonNegativeInt(raw.percent),
+  }
+}
+
 const withHistoryToolResult = (
   toolCall: ToolCallInfo,
   result: string,
   subagentTrail?: SubagentTrailItem[],
   timing?: Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'>,
+  subagentContextUsage?: SubagentContextUsage,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -256,6 +277,7 @@ const withHistoryToolResult = (
     renderType,
     semanticParams,
     subagentTrail,
+    subagentContextUsage: subagentContextUsage ?? toolCall.subagentContextUsage,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -381,8 +403,9 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const result = String(messagePayload.content || '')
     const subagentTrail = normalizeSubagentTrail(messagePayload.subagent_trail)
     const timing = readExecutionTiming(messagePayload)
+    const subagentContextUsage = normalizeSubagentContextUsage(messagePayload.subagent_context_usage)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
     ))
   }
   return displayMessages
@@ -506,8 +529,9 @@ export const buildHistoryMessages = (
     const result = String(rawMessage.content || '')
     const subagentTrail = normalizeSubagentTrail(rawMessage.subagent_trail)
     const timing = readExecutionTiming(rawMessage)
+    const subagentContextUsage = normalizeSubagentContextUsage(rawMessage.subagent_context_usage)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing) : toolCall
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
     ))
   }
 

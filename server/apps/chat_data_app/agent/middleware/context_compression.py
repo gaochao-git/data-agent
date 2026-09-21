@@ -100,6 +100,13 @@ async def compress_messages_for_state(
     working_tokens = static_tokens + count_messages_tokens(working_messages) + _summary_tokens(effective_previous_summary)
     report["referenced_tool_results"] = referenced_count
     if working_tokens <= target_tokens:
+        logger.info(
+            "[agent] 上下文压缩：工具结果外置已达标，跳过摘要 before_tokens=%s after_tokens=%s threshold_tokens=%s referenced_tool_results=%s",
+            before_tokens,
+            working_tokens,
+            threshold_tokens,
+            referenced_count,
+        )
         _finalize_compression_report(
             report,
             before_tokens=before_tokens,
@@ -121,6 +128,13 @@ async def compress_messages_for_state(
     if compressible_end <= 0:
         report["compression_skipped_reason"] = "no_completed_message_groups"
         report["estimated_tokens_after"] = working_tokens
+        logger.warning(
+            "[agent] 上下文压缩跳过：无可压缩的完整消息组（no_completed_message_groups）"
+            " before_tokens=%s working_tokens=%s threshold_tokens=%s",
+            before_tokens,
+            working_tokens,
+            threshold_tokens,
+        )
         return _enforce_hard_input_limit(
             working_messages,
             effective_previous_summary,
@@ -164,6 +178,14 @@ async def compress_messages_for_state(
     if not summary_text:
         report["compression_skipped_reason"] = "empty_summary"
         report["estimated_tokens_after"] = working_tokens
+        logger.warning(
+            "[agent] 上下文压缩摘要为空，确定性收缩兜底（empty_summary，摘要输入不可用=%s）"
+            " before_tokens=%s working_tokens=%s threshold_tokens=%s",
+            bool(summary_input_report.get("summary_input_unusable")),
+            before_tokens,
+            working_tokens,
+            threshold_tokens,
+        )
         return _enforce_hard_input_limit(
             working_messages,
             effective_previous_summary,

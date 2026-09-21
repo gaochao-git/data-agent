@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from types import SimpleNamespace
 
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
@@ -140,13 +141,18 @@ async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch
     )
 
     assert result.update["messages"][0].content == "1 + 1 = 2"
+    # 用量事件（每个 updates 后一条）与过程事件同通道，序列断言先滤掉
+    written_filtered = [
+        payload for payload in written
+        if payload["event"].get("event_type") != "subagent_context_usage"
+    ]
     # 工具开始 → 工具结束 → 子智能体最终叙述
-    assert [payload["event"]["event_type"] for payload in written] == [
+    assert [payload["event"]["event_type"] for payload in written_filtered] == [
         "tool_started", "tool_completed", "subagent_message",
     ]
-    started = written[0]
-    completed = written[1]
-    assert written[2]["event"]["content"] == "1 + 1 = 2"
+    started = written_filtered[0]
+    completed = written_filtered[1]
+    assert written_filtered[2]["event"]["content"] == "1 + 1 = 2"
     assert started == {"type": "subagent_tool", "event": {
         "event_type": "tool_started",
         "tool_call_id": "inner-1",
@@ -302,14 +308,23 @@ def test_middleware_registers_single_task_tool_with_agent_catalog():
 
 
 def test_passthrough_keys_cover_subagent_state_schema_fields():
-    """白名单必须覆盖子智能体状态 schema 声明的全部业务字段（不含基类框架字段）。"""
+    """白名单必须覆盖子智能体状态 schema 的全部透传业务字段。
+
+    不含基类框架字段；压缩三键（context_summary / context_compression /
+    context_compression_events）是子图自有状态（子图压缩中间件写入，
+    生命周期属于本次派发），有意不从主图透传，也不得出现在白名单里。
+    """
     from apps.chat_data_app.agent.middleware.subagents import ChatDataSubAgentState
 
     framework_keys = {"messages", "jump_to", "structured_response"}
+    subgraph_owned_keys = {"context_summary", "context_compression", "context_compression_events"}
     schema_keys = {
-        key for key in ChatDataSubAgentState.__annotations__ if key not in framework_keys
+        key
+        for key in ChatDataSubAgentState.__annotations__
+        if key not in framework_keys and key not in subgraph_owned_keys
     }
     assert schema_keys and schema_keys <= set(SUBAGENT_STATE_PASSTHROUGH_KEYS)
+    assert not (set(SUBAGENT_STATE_PASSTHROUGH_KEYS) & subgraph_owned_keys)
 
 
 @pytest.mark.asyncio
@@ -334,6 +349,11 @@ async def test_task_tool_streams_text_and_thinking_deltas(monkeypatch):
     )
 
     assert result.update["messages"][0].content == "结论是上升"
+    # 用量事件（每个 updates 后一条）与过程事件同通道，序列断言先滤掉
+    written = [
+        payload for payload in written
+        if payload["event"].get("event_type") != "subagent_context_usage"
+    ]
     assert [payload["event"]["event_type"] for payload in written] == [
         "subagent_thinking_delta", "subagent_message_delta", "subagent_message_delta", "subagent_message",
     ]
@@ -372,6 +392,11 @@ async def test_task_tool_delta_streaming_caps_cumulative_text(monkeypatch):
     )
 
     assert result.update["messages"][0].content == "x" * cap + "yyyyyyyy"
+    # 用量事件（每个 updates 后一条）与过程事件同通道，先滤掉再断言增量序列
+    written = [
+        payload for payload in written
+        if payload["event"].get("event_type") != "subagent_context_usage"
+    ]
     deltas = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message_delta"]
     assert len(deltas) == 2
     assert deltas[0]["truncated"] is False
@@ -869,3 +894,439 @@ async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
     assert len(tool_entries) == 1
     assert tool_entries[0]["status"] == "error"
     assert "未绑定数据源" in tool_entries[0]["result"]
+
+
+def test_budget_alert_middleware_silent_below_threshold(monkeypatch):
+    """上下文未达告警阈值时原样放行请求，不追加任何提示。"""
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=10 ** 9),
+    )
+    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
+    request = SimpleNamespace(
+        system_message=SystemMessage(content="主提示词"),
+        messages=[AIMessage(content="短任务结论")],
+        override=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    seen = {}
+
+    def handler(req):
+        seen["request"] = req
+        return "done"
+
+    assert middleware.wrap_model_call(request, handler) == "done"
+    assert seen["request"] is request
+
+
+class _FakeModelRequest:
+    """保留属性的假 ModelRequest：override 合并字段，供跨轮次断言 tools/system_message。"""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def override(self, **kwargs):
+        merged = dict(self.__dict__)
+        merged.update(kwargs)
+        return _FakeModelRequest(**merged)
+
+
+def _over_threshold_request():
+    return _FakeModelRequest(
+        system_message=SystemMessage(content="主提示词"),
+        messages=[AIMessage(content="事实" * 1000)],
+        tools=["file_read"],
+    )
+
+
+def test_budget_alert_middleware_appends_warning_over_threshold(monkeypatch):
+    """上下文估算达到阈值时，本轮请求尾部追加预算收尾提示（软约束，不摘工具）。"""
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=100),
+    )
+    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
+    seen = {}
+
+    def handler(req):
+        seen["request"] = req
+        return "done"
+
+    request = _over_threshold_request()
+
+    assert middleware.wrap_model_call(request, handler) == "done"
+    # 注入通道=隐藏 HumanMessage 追加在消息尾部，system prompt 保持原样
+    request_messages = seen["request"].messages
+    assert len(request_messages) == len(request.messages) + 1
+    alert_message = request_messages[-1]
+    assert isinstance(alert_message, HumanMessage)
+    assert alert_message.additional_kwargs.get("budget_alert") is True
+    assert alert_message.additional_kwargs.get("hide_from_ui") is True
+    content = alert_message.content
+    assert "上下文预算提示" in content
+    assert "当前已完成任务为" in content
+    assert "待完成任务为" in content
+    # 只汇报事实，不替主智能体决定后续安排
+    assert "续接任务书为" not in content
+    assert seen["request"].system_message.content == "主提示词"
+    assert "建议" not in content
+    # 软约束：工具集保持不变，是否收尾由模型自行决定
+    assert seen["request"].tools == ["file_read"]
+
+    # 低于阈值零注入
+    fresh = _FakeModelRequest(
+        system_message=SystemMessage(content="主提示词"),
+        messages=[AIMessage(content="短")],
+        tools=["file_read"],
+    )
+    assert middleware.wrap_model_call(fresh, handler) == "done"
+    assert seen["request"].system_message.content == "主提示词"
+
+
+def test_budget_alert_middleware_env_override_takes_precedence(monkeypatch):
+    """SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 覆盖主图同源阈值（压测/调试用）。
+
+    主图预算取超大值（正常情况下永不提示）；覆盖比例 0.5 × 窗口 200 = 100，
+    同样体量的消息即触发提示，且提示文案里的阈值是换算后的覆盖值而非主图值；
+    覆盖线被硬限 clamp（150）兜住；软约束不摘工具。
+    """
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(
+            compression_trigger_tokens=10 ** 9,
+            context_window=200,
+            hard_input_limit_tokens=150,
+        ),
+    )
+    monkeypatch.setattr(subagents_module, "SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO", 0.5)
+    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
+    seen = {}
+
+    def handler(req):
+        seen["request"] = req
+        return "done"
+
+    request = _over_threshold_request()
+
+    assert middleware.wrap_model_call(request, handler) == "done"
+    # 注入通道=隐藏 HumanMessage 追加在消息尾部（非 system prompt 追加）
+    request_messages = seen["request"].messages
+    assert len(request_messages) == len(request.messages) + 1
+    alert_message = request_messages[-1]
+    assert isinstance(alert_message, HumanMessage)
+    assert alert_message.additional_kwargs.get("budget_alert") is True
+    assert alert_message.additional_kwargs.get("hide_from_ui") is True
+    assert "上下文预算提示" in alert_message.content
+    assert "100 tokens" in alert_message.content
+    assert seen["request"].system_message.content == "主提示词"
+    assert seen["request"].tools == ["file_read"]
+
+
+def test_budget_alert_ratio_override_clamped_by_hard_limit(monkeypatch):
+    """比例换算出的告警线超过硬限时被 clamp 到硬限，不会出现告警线越过硬限。"""
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(
+            compression_trigger_tokens=10 ** 9,
+            context_window=1000,
+            hard_input_limit_tokens=60,
+        ),
+    )
+    monkeypatch.setattr(subagents_module, "SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO", 0.9)
+    meta = subagents_module._subagent_budget_meta(_spec(), [])
+    assert meta["threshold_tokens"] == 60
+
+
+def test_extract_final_report_strips_tool_call_markup():
+    """无工具轮次退化的裸 <tool_call> 标记被剥掉，不混进回传报告。"""
+    messages = [AIMessage(
+        content=(
+            "<tool_call>\n<function=file_read>\n<parameter=file_path>/mnt/a.yaml</parameter>\n"
+            "</function>\n</tool_call>\n子智能体已完成盘点。\n让我为你展示结果:"
+        ),
+        id="m1",
+    )]
+    report = subagents_module._extract_final_report(messages)
+    assert "<tool_call>" not in report
+    assert "file_read" not in report
+    assert report.startswith("子智能体已完成盘点。")
+
+    # 悬空块（只有开头没有结尾）同样剥到末尾
+    dangling = subagents_module._extract_final_report(
+        [AIMessage(content="结论先行\n<tool_call>\n<function=list>", id="m2")]
+    )
+    assert dangling == "结论先行"
+
+    # 全部是标记时报告为空（上层兜底为「未产出有效结论」提示）
+    assert subagents_module._extract_final_report(
+        [AIMessage(content="<tool_call>\n<function=list>\n</function>\n</tool_call>", id="m3")]
+    ) == ""
+
+
+_RAW_MARKUP_MESSAGE = (
+    "由于部分文件较长，我需要继续读取剩余内容。\n\n"
+    "<tool_call>\n<function=file_read>\n<parameter=file_path>/mnt/a.yaml</parameter>\n</function>\n</tool_call>\n"
+    "<tool_call>\n<function=file_read>\n<parameter=file_path>/mnt/b.yaml</parameter>\n</function>\n</tool_call>"
+)
+
+
+def test_streaming_markup_filter_strips_blocks_across_chunks():
+    """裸 <tool_call> 标记被切成任意碎片时仍被流式剥除，普通文本保留。"""
+    filt = subagents_module._StreamingToolCallMarkupFilter()
+    # 逐字符喂入（最极端的碎片切分）
+    out = "".join(filt.feed(ch) for ch in _RAW_MARKUP_MESSAGE) + filt.flush()
+    assert "<tool_call" not in out
+    assert "file_read" not in out
+    assert out.startswith("由于部分文件较长，我需要继续读取剩余内容。")
+
+    # 按不规则块喂入
+    filt = subagents_module._StreamingToolCallMarkupFilter()
+    out = "".join(filt.feed(part) for part in ["正常开头\n<tool", "_call>\n<function=x>\n</tool_call>", "结尾文本"]) + filt.flush()
+    assert out == "正常开头\n结尾文本"
+
+    # 悬空块（只有开头没有结尾）：吞到消息末尾
+    filt = subagents_module._StreamingToolCallMarkupFilter()
+    out = filt.feed("结论先行\n<tool_call>\n<function=list>") + filt.flush()
+    assert out == "结论先行\n"
+
+    # 普通文本里的 "<" 不是标记开头，原样透传
+    filt = subagents_module._StreamingToolCallMarkupFilter()
+    out = filt.feed("a < b <toolx> c") + filt.flush()
+    assert out == "a < b <toolx> c"
+
+    # 普通文本不含任何 "<"：直通
+    filt = subagents_module._StreamingToolCallMarkupFilter()
+    assert filt.feed("纯文本增量") + filt.flush() == "纯文本增量"
+
+
+def test_full_message_events_and_trail_sanitize_markup():
+    """完整消息事件与 trail 快照都不携带裸 <tool_call> 标记（历史回放路径）。"""
+    event = subagents_module._subagent_message_event("m1", _RAW_MARKUP_MESSAGE, "call_1", already_streamed=False)
+    assert "<tool_call" not in event["content"]
+    assert event["content"].startswith("由于部分文件较长")
+
+    trail = subagents_module._build_trail_snapshot([AIMessage(content=_RAW_MARKUP_MESSAGE, id="m1")])
+    assert "<tool_call" not in trail[0]["content"]
+    assert trail[0]["content"].startswith("由于部分文件较长")
+
+
+@pytest.mark.asyncio
+async def test_task_tool_streamed_deltas_exclude_markup(monkeypatch):
+    """硬线摘工具轮次的退化文本流经增量通道时同样被剥除（直播路径）。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+    markup = _RAW_MARKUP_MESSAGE
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            # 标记在增量边界被切碎（真实流式形态）
+            yield "messages", (AIMessageChunk(content=markup[:40], id="m1"), {})
+            yield "messages", (AIMessageChunk(content=markup[40:], id="m1"), {})
+            yield "updates", {"model": {"messages": [AIMessage(content=markup, id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+
+    deltas = [
+        payload["event"] for payload in written
+        if payload["event"]["event_type"] == "subagent_message_delta"
+    ]
+    joined = "".join(event["delta"] for event in deltas)
+    assert "<tool_call" not in joined
+    assert "file_read" not in joined
+    assert joined.startswith("由于部分文件较长")
+
+
+@pytest.mark.asyncio
+async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monkeypatch):
+    """每个节点更新后发 subagent_context_usage 事件，最终用量盖到 ToolMessage。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=10_000),
+    )
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="第一步结论", id="m1")]}}
+            yield "updates", {"model": {"messages": [AIMessage(content="最终结论", id="m2")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        description="盘点", subagent_type="data-explore", runtime=_fake_runtime()
+    )
+
+    usage_events = [
+        payload["event"] for payload in written
+        if isinstance(payload, dict) and payload.get("type") == "subagent_tool"
+        and payload.get("event", {}).get("event_type") == "subagent_context_usage"
+    ]
+    # 两次节点更新各发一次，用量随消息累积单调不减
+    assert len(usage_events) == 2
+    assert usage_events[0]["used_tokens"] <= usage_events[1]["used_tokens"]
+    assert usage_events[1]["threshold_tokens"] == 10_000
+    assert usage_events[1]["percent"] == usage_events[1]["used_tokens"] * 100 // 10_000
+    stamped = result.update["messages"][0].additional_kwargs["subagent_context_usage"]
+    assert stamped == {
+        "used_tokens": usage_events[1]["used_tokens"],
+        "threshold_tokens": usage_events[1]["threshold_tokens"],
+        "percent": usage_events[1]["percent"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypatch):
+    """用量达阈值后，回传正文陈述事实（结论可能残缺），不替主智能体安排后续。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=1),
+    )
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="提前收尾的盘点结论", id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        description="盘点", subagent_type="data-explore", runtime=_fake_runtime()
+    )
+
+    message = result.update["messages"][0]
+    assert message.content.startswith("【子智能体预算提示】")
+    assert "提前收尾" in message.content
+    assert "结论可能不完整" in message.content
+    # 只陈述事实：不给主智能体安排后续动作
+    assert "重新派发子任务续接" not in message.content
+    assert "提前收尾的盘点结论" in message.content
+    # 未达阈值的正常路径不带提示（覆盖见上一条用量事件测试）
+    assert message.status != "error"
+
+
+# ---------------------------------------------------------------------------
+# 子图压缩（ContextCompressionMiddleware 复用）：collect 记账重建 + 摘要注入
+# ---------------------------------------------------------------------------
+
+
+def test_collect_update_messages_rebuilds_after_compression():
+    """压缩更新（REMOVE_ALL + compressed 列表）到达时重建记账且不重复外发。
+
+    压缩保留的是早前已见过的同一批消息对象：collected 必须收缩为保留集
+    （丢弃的消息不再计入用量、trail 与报告），且保留消息不作为「新增」
+    再次外发事件；压缩之后的正常轮次照常收集与外发。
+    """
+    state = subagents_module._SubagentStreamState("task-1")
+    ai1 = AIMessage(content="第一轮结论", id="a1")
+    tool_msg = ToolMessage(content="查询结果", tool_call_id="t1")
+    ai2 = AIMessage(content="第二轮结论", id="a2")
+
+    state.collect_update_messages({"model": {"messages": [ai1, tool_msg]}})
+    state.collect_update_messages({"model": {"messages": [ai2]}})
+    assert state.collected == [ai1, tool_msg, ai2]
+
+    # 压缩节点更新：全量替换为 [ai1, tool_msg]，ai2 被摘要吸收后丢弃
+    new_messages = state.collect_update_messages({
+        "ContextCompressionMiddleware.before_model": {
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), ai1, tool_msg],
+        },
+    })
+    assert state.collected == [ai1, tool_msg]
+    # 保留消息是已见过的同一批对象：不再作为新增外发，避免前端重复条目
+    assert new_messages == []
+
+    # 压缩之后的正常轮次：新消息照常收集并外发
+    ai3 = AIMessage(content="压缩后继续", id="a3")
+    new_messages = state.collect_update_messages({"model": {"messages": [ai3]}})
+    assert new_messages == [ai3]
+    assert state.collected == [ai1, tool_msg, ai3]
+
+
+def test_collect_update_messages_handles_targeted_removal():
+    """按 id 的定点 RemoveMessage：只摘除对应消息，其余记账保持。"""
+    state = subagents_module._SubagentStreamState("task-1")
+    ai1 = AIMessage(content="第一条", id="a1")
+    ai2 = AIMessage(content="第二条", id="a2")
+    state.collect_update_messages({"model": {"messages": [ai1, ai2]}})
+
+    new_messages = state.collect_update_messages({
+        "model": {"messages": [RemoveMessage(id="a1")]},
+    })
+    assert state.collected == [ai2]
+    assert new_messages == []
+
+
+def test_budget_alert_injects_runtime_summary_below_threshold(monkeypatch):
+    """子图压缩摘要（state.context_summary）无条件注入请求头部。
+
+    摘要是给模型看的：低于告警阈值也要以隐藏 HumanMessage 前插（与主图
+    ContextUsageMiddleware 同语义），但不触发收尾提示。
+    """
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=10 ** 9),
+    )
+    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
+    seen = {}
+
+    def handler(req):
+        seen["request"] = req
+        return "done"
+
+    request = _FakeModelRequest(
+        system_message=SystemMessage(content="主提示词"),
+        messages=[AIMessage(content="短", id="m1")],
+        tools=["file_read"],
+        state={"context_summary": "此前已完成 X 模型的字段盘点"},
+    )
+
+    assert middleware.wrap_model_call(request, handler) == "done"
+    req = seen["request"]
+    assert req is not request
+    assert len(req.messages) == 2
+    summary_message = req.messages[0]
+    assert isinstance(summary_message, HumanMessage)
+    assert summary_message.additional_kwargs.get("context_summary") is True
+    assert summary_message.additional_kwargs.get("hide_from_ui") is True
+    assert "此前已完成 X 模型的字段盘点" in summary_message.content
+    # 无告警：system prompt 保持原样
+    assert req.system_message.content == "主提示词"
+
+
+def test_budget_alert_counts_summary_tokens_for_threshold(monkeypatch):
+    """预算计数必须包含摘要 tokens：摘要把用量顶过阈值时同样触发收尾提示。"""
+    monkeypatch.setattr(
+        subagents_module, "get_model_context_budget",
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=100),
+    )
+    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
+    seen = {}
+
+    def handler(req):
+        seen["request"] = req
+        return "done"
+
+    # 消息本身很短，摘要足够长——只算消息不会超线，算上摘要必须超线
+    request = _FakeModelRequest(
+        system_message=SystemMessage(content="主提示词"),
+        messages=[AIMessage(content="短", id="m1")],
+        tools=["file_read"],
+        state={"context_summary": "历史背景" * 100},
+    )
+
+    assert middleware.wrap_model_call(request, handler) == "done"
+    req = seen["request"]
+    # 告警走隐藏 HumanMessage 追加在消息尾部，system prompt 保持原样
+    assert req.system_message.content == "主提示词"
+    assert len(req.messages) == 3  # 原始 1 条 + 头部摘要 + 尾部告警
+    # 摘要消息仍在头部（提示与摘要并存，模型既知历史又能收尾）
+    assert req.messages[0].additional_kwargs.get("context_summary") is True
+    assert "上下文预算提示" in req.messages[-1].content
+    assert req.messages[-1].additional_kwargs.get("budget_alert") is True
+    assert req.tools == ["file_read"]

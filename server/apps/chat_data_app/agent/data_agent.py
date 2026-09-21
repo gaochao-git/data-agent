@@ -146,12 +146,15 @@ def build_subagent_middleware(
     tools: list,
     *,
     model,
+    model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
     子智能体继承主智能体工具（各自扣除排除集），使用与主智能体相同的模型，
     运行在隔离上下文中；data-explore 额外扣除全部写操作工具保持只读。
+    ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
+    压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -164,6 +167,7 @@ def build_subagent_middleware(
                 SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
             ),
             model=model,
+            model_id=model_id,
         ))
     if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
@@ -175,6 +179,7 @@ def build_subagent_middleware(
                 SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
             ),
             model=model,
+            model_id=model_id,
         ))
     if not specs:
         return None
@@ -235,7 +240,9 @@ def create_data_agent(
         stream_usage=True,
         llm_factory=get_chat_data_llm,
     )
-    subagent_middleware = build_subagent_middleware(options, tools, model=model, run_controls=run_controls)
+    subagent_middleware = build_subagent_middleware(
+        options, tools, model=model, model_id=model_id, run_controls=run_controls
+    )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,

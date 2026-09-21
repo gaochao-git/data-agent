@@ -797,6 +797,31 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
     assert "subagent_trail" not in empty
 
 
+def test_tool_message_payload_carries_subagent_context_usage():
+    """task 工具的上下文用量快照随 tool_result 事件持久化（历史回放还原徽标用）。"""
+    from apps.chat_data_app.agent.run.conversation_event_service import (
+        _serialize_tool_message,
+    )
+
+    usage = {"used_tokens": 4321, "threshold_tokens": 70000, "percent": 6}
+    payload = _serialize_tool_message(ToolMessage(
+        content="盘点结论",
+        tool_call_id="call-task-1",
+        name="task",
+        additional_kwargs={"subagent_context_usage": usage},
+    ))
+    assert payload["subagent_context_usage"] == usage
+
+    # 无快照 / 非法形态不出现该字段
+    plain = _serialize_tool_message(ToolMessage(content="结果", tool_call_id="call-2", name="calculator_tool"))
+    assert "subagent_context_usage" not in plain
+    invalid = _serialize_tool_message(ToolMessage(
+        content="结论", tool_call_id="call-3", name="task",
+        additional_kwargs={"subagent_context_usage": "not-a-dict"},
+    ))
+    assert "subagent_context_usage" not in invalid
+
+
 async def _persist_qa_turn(
     service,
     *,

@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useDeepThinking } from '../../composables/useDeepThinking'
@@ -1543,6 +1543,38 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
       if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
       message.toolCalls = message.toolCalls.map(item => item.tool_call_id === parentId ? merged : item)
     }
+  }
+
+  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标），
+  // 不进 trail 列表；同一事件流内每次节点更新覆盖一次，天然收敛到最新值
+  const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
+    const parentId = event.parent_tool_call_id
+    if (!parentId || typeof event.used_tokens !== 'number') return
+    const usage: SubagentContextUsage = {
+      used_tokens: event.used_tokens,
+      threshold_tokens: event.threshold_tokens ?? 0,
+      percent: event.percent ?? 0,
+    }
+    const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
+      { ...tool, subagentContextUsage: usage }
+    )
+    const parentFromMap = toolCallsMap.value.get(parentId)
+    const merged = mergeParent(parentFromMap || {
+      tool_call_id: parentId,
+      tool_name: 'task',
+      args: {},
+      status: 'running',
+    })
+    toolCallsMap.value.set(parentId, merged)
+    for (const message of messages.value) {
+      if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
+      message.toolCalls = message.toolCalls.map(item => item.tool_call_id === parentId ? merged : item)
+    }
+  }
+
+  if (event.type === 'subagent_context_usage') {
+    upsertSubagentContextUsage(event)
+    return
   }
 
   // 流式增量：按 message_id 追加正文/思考
