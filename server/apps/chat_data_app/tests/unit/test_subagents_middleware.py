@@ -1098,6 +1098,39 @@ def test_streaming_markup_filter_strips_blocks_across_chunks():
     assert filt.feed("纯文本增量") + filt.flush() == "纯文本增量"
 
 
+def test_iter_chunk_stream_events_survives_fully_stripped_chunks():
+    """filter 吞光整个 chunk 文本时不崩（回归：UnboundLocalError）。
+
+    退化轮次里整块 <tool_call> 落在单个 chunk、或 inside 态下后续 chunk 全是
+    标记内文本时，feed 返回空串——事件翻译必须静默产出空事件而不是崩溃
+    （2026-09-21 深度 review 实锤：if allowed 悬空在 if text 之外导致
+    UnboundLocalError，整个子图直播流被打断）。
+    """
+    # 整块标记在单个 chunk 内
+    events = subagents_module._iter_chunk_stream_events(
+        AIMessageChunk(content="<tool_call>xxx</tool_call>", id="m1"),
+        "p1", {}, {}, {},
+    )
+    assert events == []
+
+    # inside 态下后续 chunk 全为标记内文本
+    filters = {}
+    filters.setdefault("m2", subagents_module._StreamingToolCallMarkupFilter()).feed("<tool_call>begin ")
+    events = subagents_module._iter_chunk_stream_events(
+        AIMessageChunk(content="more junk", id="m2"),
+        "p1", {}, {}, filters,
+    )
+    assert events == []
+
+    # 标记闭合后的正常文本照常外发
+    events = subagents_module._iter_chunk_stream_events(
+        AIMessageChunk(content="tail</tool_call>收尾结论", id="m2"),
+        "p1", {}, {}, filters,
+    )
+    assert len(events) == 1
+    assert events[0]["delta"] == "收尾结论"
+
+
 def test_full_message_events_and_trail_sanitize_markup():
     """完整消息事件与 trail 快照都不携带裸 <tool_call> 标记（历史回放路径）。"""
     event = subagents_module._subagent_message_event("m1", _RAW_MARKUP_MESSAGE, "call_1", already_streamed=False)

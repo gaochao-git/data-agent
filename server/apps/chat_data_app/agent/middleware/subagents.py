@@ -587,14 +587,14 @@ def _iter_chunk_stream_events(
         if text:
             cap = text_caps.setdefault(message_id, _StreamCapState())
             allowed, was_capped = cap.take(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS)
-        if allowed:
-            events.append({
-                "event_type": "subagent_message_delta",
-                "message_id": message_id,
-                "delta": allowed,
-                "truncated": was_capped,
-                "parent_tool_call_id": parent_tool_call_id,
-            })
+            if allowed:
+                events.append({
+                    "event_type": "subagent_message_delta",
+                    "message_id": message_id,
+                    "delta": allowed,
+                    "truncated": was_capped,
+                    "parent_tool_call_id": parent_tool_call_id,
+                })
     reasoning = _chunk_reasoning_text(chunk)
     if reasoning:
         cap = think_caps.setdefault(message_id, _StreamCapState())
