@@ -13,11 +13,10 @@ from apps.chat_data_app.schema import (
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
     PanelCreateRequest,
-    PanelExecuteRequest,
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
-from apps.chat_data_app.services import dashboard_runtime
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -149,12 +148,12 @@ def test_dashboard_not_found_error_paths(client, auth_headers, fake_dashboard_se
         assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_generate_panel_name_prefers_provided_name_and_fallbacks(client, monkeypatch):
+def test_generate_panel_name_prefers_provided_name_and_fallbacks(client, auth_headers, monkeypatch):
     monkeypatch.setattr(dashboard_routes, "generate_query_metadata", lambda sql: (_ for _ in ()).throw(RuntimeError("llm failed")))
     monkeypatch.setattr(dashboard_routes, "_get_timestamp", lambda: "unused", raising=False)
 
-    explicit = client.post("/api/chatdata/panel-name-generate", json={"name": "  明确标题  ", "sql": "select 1", "chart_type": "bar"})
-    fallback = client.post("/api/chatdata/panel-name-generate", json={"name": "", "sql": "select 1", "chart_type": "bar"})
+    explicit = client.post("/api/chatdata/panel-name-generate", json={"name": "  明确标题  ", "sql": "select 1", "chart_type": "bar"}, headers=auth_headers)
+    fallback = client.post("/api/chatdata/panel-name-generate", json={"name": "", "sql": "select 1", "chart_type": "bar"}, headers=auth_headers)
 
     assert explicit.json()["data"]["name"] == "明确标题"
     assert "柱状图_" in fallback.json()["data"]["name"]
@@ -355,16 +354,8 @@ def test_create_dashboard_query_task_and_panel_alias(fake_dashboard_service, mon
         SimpleNamespace(),
         PanelBatchExecuteRequest(panel_ids=["panel_a"], panel_member_datasource_ids={"panel_a": "member_a"}),
     )))
-    alias_payload = _payload(asyncio.run(dashboard_routes.create_panel_query_task(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="member_a"),
-    )))
-
     assert task_payload["data"]["task_id"] == "task_1"
-    assert alias_payload["data"]["task_id"] == "task_2"
-    assert runtime.scheduled == ["task_1", "task_2"]
+    assert runtime.scheduled == ["task_1"]
 
 
 def test_execute_panels_batch_streams_success_and_failure(fake_dashboard_service, monkeypatch):
@@ -498,7 +489,9 @@ def test_create_dashboard_panel_execution_persists_record(monkeypatch):
     ))
 
     assert len(execution_id) == 32
-    assert committed["value"] is True
+    # 提交已改由 get_session 退出时自动完成，fake session 观察不到显式 commit；
+    # 持久化语义以"记录进入 session"为准
+    assert committed["value"] is False
     assert added[0].task_id == "task_a"
     assert added[0].member_datasource_id == "member_a"
     assert added[0].executor_type == "http"

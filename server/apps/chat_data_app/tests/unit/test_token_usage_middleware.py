@@ -3,8 +3,10 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -17,6 +19,7 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     build_usage_from_llm_calls,
     build_message_breakdown,
     build_prompt_breakdown,
+    compact_token_usage_for_state,
     count_messages_tokens,
     count_tools_tokens,
     create_request_context_usage_middleware,
@@ -24,17 +27,35 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     estimate_text_tokens,
     estimate_tokens,
     invoke_with_context_usage,
-    _build_request_messages,
     _extract_result_messages,
     _get_agent_context_usage,
     _merge_response_usage,
     _request_model_name,
 )
-from apps.chat_data_app.services.context_budget import (
+
+from langchain_core.messages import BaseMessage
+
+
+def _build_request_messages(request):
+    """测试辅助：拼装 request 的 system + messages（原生产模块内已无调用方）。"""
+    messages = []
+    system_message = getattr(request, "system_message", None)
+    if isinstance(system_message, BaseMessage):
+        messages.append(system_message)
+    messages.extend(
+        message for message in list(getattr(request, "messages", None) or [])
+        if isinstance(message, BaseMessage)
+    )
+    return messages
+from apps.chat_data_app.agent.context.context_budget import (
+    ContextInputLimitExceededError,
     ContextBudget,
+    ContextRequestBudget,
     build_context_usage_payload,
     get_model_context_budget,
+    hard_input_guard_tokens,
     sanitize_context_usage_for_response,
+    validate_context_budget_startup_config,
 )
 from apps.chat_data_app.services.runtime_config import get_context_window
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -44,23 +65,39 @@ def test_estimate_tokens_uses_project_formula():
     assert estimate_tokens("你好 abc!") == int(2 * 0.7 + 1 * 1.3 + 1 * 0.5)
 
 
+def test_estimate_tokens_applies_byte_floor_to_unbroken_ascii():
+    assert estimate_tokens("x" * 5000) >= 1250
+
+
 def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert estimate_text_tokens("") == 0
     assert get_context_window("") == 128000
-    assert get_context_window("unknown-model") == 128000
-    assert get_context_window("QWEN-Plus") == 128000
+    # fail-fast：未注册模型报错而非静默回退
+    with pytest.raises(ValueError, match="不在"):
+        get_context_window("unknown-model")
+    with pytest.raises(ValueError, match="不在"):
+        get_context_window("QWEN-Plus")
 
     payload = build_context_usage_payload(
-        ContextBudget(context_window=1, max_output_tokens=0, trigger_ratio=1.0, input_budget_tokens=1),
+        ContextBudget(
+            context_window=1,
+            max_output_tokens=0,
+            compression_trigger_ratio=1.0,
+            hard_input_limit_tokens=1,
+            compression_trigger_tokens=1,
+            compression_target_tokens=1,
+        ),
         used=-10,
     )
     assert payload["used"] == 0
     assert payload["total"] == 1
     assert payload["percentage"] == 0.0
     assert payload["remaining"] == 1
+    assert payload["hard_input_guard_ratio"] == 0.95
+    assert payload["hard_input_guard_tokens"] == 1
 
 
-def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mutation():
+def test_sanitize_context_usage_for_response_redacts_and_deduplicates_without_mutation():
     usage = {
         "breakdown": [{
             "key": "system_prompt",
@@ -68,17 +105,68 @@ def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mu
             "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
         }],
         "llm_calls": [{
+            "input_tokens": 12,
             "breakdown": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
         }],
     }
 
     sanitized = sanitize_context_usage_for_response(usage)
 
-    assert sanitized["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
-    assert sanitized["breakdown"][0]["children"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
-    assert sanitized["llm_calls"][0]["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["breakdown"][0]["description"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["breakdown"][0]["redacted"] is True
+    assert "content" not in sanitized["breakdown"][0]
+    assert "content" not in sanitized["breakdown"][0]["children"][0]
+    assert "llm_calls" not in sanitized
     assert "SECRET_SYSTEM_PROMPT" not in json.dumps(sanitized, ensure_ascii=False)
     assert usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+    assert "breakdown" in usage["llm_calls"][0]
+
+
+def test_sanitize_context_usage_strips_content_but_keeps_counting_fields():
+    usage = {
+        "used": 90,
+        "total": 100,
+        "breakdown": [{
+            "key": "messages",
+            "label": "会话消息与工具上下文",
+            "tokens": 90,
+            "children": [{
+                "key": "message_1",
+                "label": "第 1 轮 · 用户消息",
+                "role": "human",
+                "round": 1,
+                "message_index": 1,
+                "message_id": "msg-1",
+                "tokens": 90,
+                "content": "很长的正文" * 100,
+            }],
+        }, {
+            "key": "tool_schema",
+            "label": "工具定义",
+            "tokens": 20,
+            "children": [{
+                "key": "tool_schema_0",
+                "label": "工具定义 · run_sql",
+                "role": "tool_schema",
+                "tokens": 20,
+                "content": '{"name": "run_sql"}',
+            }],
+        }],
+        "llm_calls": [{"input_tokens": 90}],
+    }
+
+    sanitized = sanitize_context_usage_for_response(usage)
+
+    child = sanitized["breakdown"][0]["children"][0]
+    assert "content" not in child
+    assert "llm_calls" not in sanitized
+    assert child["message_id"] == "msg-1"
+    assert child["tokens"] == 90
+    assert child["round"] == 1
+    assert child["role"] == "human"
+    # 工具定义无法从会话消息反查，保留完整 schema 正文。
+    tool_child = sanitized["breakdown"][1]["children"][0]
+    assert tool_child["content"] == '{"name": "run_sql"}'
 
 
 def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
@@ -91,13 +179,13 @@ def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypat
     }
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.context_budget.is_context_usage_system_prompt_visible",
+        "apps.chat_data_app.agent.context.context_budget.is_context_usage_system_prompt_visible",
         lambda: True,
     )
 
     sanitized = sanitize_context_usage_for_response(usage)
 
-    assert sanitized is usage
+    assert sanitized is not usage
     assert sanitized["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
 
 
@@ -130,27 +218,129 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
     assert count_tools_tokens([BadTool()]) == estimate_tokens('"bad tool schema"')
 
 
-def test_estimate_prompt_usage_marks_estimated(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b;0.2;256000")
+def test_estimate_prompt_usage_marks_estimated(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "qwen3.5-35b-a3b", "temperature": 0.2, "context_window": 256000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
 
     assert usage["used"] > 0
     assert usage["input_tokens"] == usage["used"]
     budget = get_model_context_budget("qwen3.5-35b-a3b")
-    assert usage["total"] == budget.input_budget_tokens
+    assert usage["total"] == budget.context_window
     assert usage["context_window"] == budget.context_window
     assert usage["max_output_tokens"] == budget.max_output_tokens
-    assert usage["input_budget_tokens"] == budget.input_budget_tokens
+    assert usage["hard_input_limit_tokens"] == budget.hard_input_limit_tokens
+    assert usage["hard_input_guard_tokens"] == hard_input_guard_tokens(budget.hard_input_limit_tokens)
+    assert usage["compression_trigger_tokens"] == budget.compression_trigger_tokens
     assert usage["estimated"] is True
 
 
-def test_model_context_budget_uses_shared_input_limit(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;64000")
-    monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "20000")
+def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
     budget = get_model_context_budget("budget-model")
 
-    assert budget.input_budget_tokens == min(int(64000 * 0.70), 64000 - 20000)
+    assert budget.hard_input_limit_tokens == 80000
+    assert hard_input_guard_tokens(budget.hard_input_limit_tokens) == 76000
+    assert budget.compression_trigger_tokens == 70000
+    assert budget.compression_target_tokens == 21000
+
+
+def test_model_context_budget_uses_registry_max_output_tokens(monkeypatch, tmp_path):
+    """注册表内联 max_output_tokens 优先于全局环境变量。"""
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "max_output_tokens": 8000, "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
+
+    budget = get_model_context_budget("budget-model")
+
+    assert budget.max_output_tokens == 8000
+    assert budget.hard_input_limit_tokens == 92000
+
+
+def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch, tmp_path):
+    import json
+
+    registry = tmp_path / "models.json"
+    registry.write_text(json.dumps([
+        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
+         "thinking": {"mode": "none"}},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_context_compression_config",
+        lambda: {"enabled": True, "trigger_ratio": 0.80},
+    )
+
+    budget = get_model_context_budget("budget-model")
+
+    assert budget.hard_input_limit_tokens == 70000
+    assert budget.compression_trigger_tokens == 66500
+
+
+def test_context_budget_startup_validation_rejects_output_reserve_without_input_space(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_chat_data_model_configs",
+        lambda: [{"id": "tiny", "context_window": 1000}],
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_chat_data_output_max_tokens",
+        lambda: 1000,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_context_compression_summary_output_max_tokens",
+        lambda: 200,
+    )
+
+    with pytest.raises(RuntimeError, match="CHAT_DATA_OUTPUT_MAX_TOKENS=1000"):
+        validate_context_budget_startup_config()
+
+
+def test_context_budget_startup_validation_rejects_trigger_ratio_above_guard(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", "0.951")
+
+    with pytest.raises(RuntimeError, match="CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO"):
+        validate_context_budget_startup_config()
+
+
+def test_context_request_budget_rejects_dynamic_static_input_above_guard(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: ContextBudget(
+            context_window=100,
+            max_output_tokens=20,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=80,
+            compression_trigger_tokens=56,
+            compression_target_tokens=16,
+        ),
+    )
+    budget = ContextRequestBudget("tiny")
+    budget.configure("系统提示词" * 200, [])
+
+    with pytest.raises(ContextInputLimitExceededError, match="固定输入超过上下文安全水位"):
+        budget.validate_static_input()
 
 
 def test_build_message_breakdown_includes_message_metadata_and_content():
@@ -169,6 +359,18 @@ def test_build_message_breakdown_includes_message_metadata_and_content():
     assert rows[1]["content"] == "我来分析"
 
 
+def test_build_message_breakdown_carries_message_id_and_tool_call_id_for_frontend_lookup():
+    rows = build_message_breakdown([
+        HumanMessage(content="你好", id="msg-user-1"),
+        ToolMessage(content="工具结果", id="msg-tool-1", tool_call_id="call-1"),
+    ])
+
+    assert rows[0]["message_id"] == "msg-user-1"
+    assert rows[0]["tool_call_id"] is None
+    assert rows[1]["message_id"] == "msg-tool-1"
+    assert rows[1]["tool_call_id"] == "call-1"
+
+
 def test_build_message_breakdown_keeps_system_message_content_by_default():
     rows = build_message_breakdown([
         SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
@@ -177,6 +379,19 @@ def test_build_message_breakdown_keeps_system_message_content_by_default():
     assert rows[0]["role"] == "system"
     assert rows[0]["content"] == "# 角色 SECRET_SYSTEM_PROMPT"
     assert rows[0].get("redacted") is None
+
+
+def test_build_message_breakdown_redacts_runtime_context_summary():
+    rows = build_message_breakdown([
+        HumanMessage(content="内部摘要内容", additional_kwargs={"context_summary": True}),
+        HumanMessage(content="当前用户问题"),
+    ])
+
+    assert rows[0]["label"] == "历史摘要（运行态）"
+    assert rows[0]["role"] == "context_summary"
+    assert rows[0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert rows[0]["redacted"] is True
+    assert rows[1]["round"] == 1
 
 
 def test_build_message_breakdown_redacts_when_explicitly_requested():
@@ -217,6 +432,23 @@ def test_message_tokens_handle_structured_content_and_raw_tool_calls():
     assert count_messages_tokens([message]) > 4
     rows = build_message_breakdown([message])
     assert "raw_tool_calls" in rows[0]["content"]
+
+
+def test_message_tokens_do_not_double_count_normalized_and_raw_tool_calls():
+    normalized = [{"id": "call_1", "name": "run_sql", "args": {"sql": "select 1"}}]
+    raw = [{
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "run_sql", "arguments": '{"sql":"select 1"}'},
+    }]
+    normalized_only = AIMessage(content="", tool_calls=normalized)
+    normalized_and_raw = AIMessage(
+        content="",
+        tool_calls=normalized,
+        additional_kwargs={"tool_calls": raw},
+    )
+
+    assert count_messages_tokens([normalized_and_raw]) == count_messages_tokens([normalized_only])
 
 
 def test_build_message_breakdown_includes_tool_output_content():
@@ -396,7 +628,8 @@ def test_request_message_and_model_helpers():
     )
 
     messages = _build_request_messages(request)
-    assert [message.type for message in messages] == ["system", "human"]
+    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[1], HumanMessage)
     assert _request_model_name(request) == "qwen-test"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model="model-field"))) == "model-field"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model_id="model-id-field"))) == "model-id-field"
@@ -534,21 +767,102 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
+def test_create_request_context_usage_middleware_stamps_execution_timing():
+    """模型调用起止时间盖进 record 和响应消息，供面板/历史相减得耗时。"""
+    async def run():
+        middleware = create_request_context_usage_middleware()
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="系统提示"),
+            messages=[HumanMessage(content="统计订单数")],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen3.5-35b-a3b"),
+        )
+
+        async def handler(_request):
+            return AIMessage(content="ok")
+
+        response = await middleware.awrap_model_call(request, handler)
+        return middleware, response
+
+    import asyncio
+
+    middleware, response = asyncio.run(run())
+    record = middleware.context_usage_records[0]
+    assert isinstance(record["started_at_ms"], int)
+    assert isinstance(record["ended_at_ms"], int)
+    assert record["ended_at_ms"] >= record["started_at_ms"]
+    message = response.model_response.result[0]
+    assert message.additional_kwargs["started_at_ms"] == record["started_at_ms"]
+    assert message.additional_kwargs["ended_at_ms"] == record["ended_at_ms"]
+
+
+def test_build_message_breakdown_carries_execution_timing_only_when_stamped():
+    rows = build_message_breakdown([
+        HumanMessage(content="你好", id="msg-user-1"),
+        AIMessage(
+            content="分析完成",
+            id="msg-ai-1",
+            additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
+        ),
+        ToolMessage(
+            content="工具结果",
+            id="msg-tool-1",
+            tool_call_id="call-1",
+            additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
+        ),
+    ])
+
+    assert rows[0]["started_at_ms"] is None
+    assert rows[0]["ended_at_ms"] is None
+    assert rows[1]["started_at_ms"] == 1000
+    assert rows[1]["ended_at_ms"] == 3500
+    assert rows[2]["started_at_ms"] == 4000
+    assert rows[2]["ended_at_ms"] == 4200
+
+
+def test_compact_token_usage_for_state_removes_large_details_without_mutation():
+    usage = {
+        "used": 10,
+        "total": 100,
+        "input_tokens": 10,
+        "llm_calls": [{"breakdown": [{"content": "large prompt"}]}],
+        "breakdown": [{"content": "large prompt"}],
+        "context_compression": {
+            "triggered": False,
+            "summary": "large summary should not be persisted",
+            "summary_chars": 12,
+        },
+    }
+
+    compact = compact_token_usage_for_state(usage)
+
+    assert compact == {
+        "used": 10,
+        "total": 100,
+        "input_tokens": 10,
+        "context_compression": {"triggered": False, "summary_chars": 12},
+    }
+    assert "llm_calls" in usage
+    assert "breakdown" in usage
+
+
 def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch):
     async def run():
         from apps.chat_data_app.agent.middleware import context_usage
 
         monkeypatch.setattr(
-            context_usage.ToolResultBudget,
+            context_usage.ContextRequestBudget,
             "configure",
             lambda self, system_prompt, tools, model_id=None: ContextBudget(
                 context_window=10000,
                 max_output_tokens=2000,
-                trigger_ratio=0.70,
-                input_budget_tokens=7000,
+                compression_trigger_ratio=0.70,
+                hard_input_limit_tokens=8000,
+                compression_trigger_tokens=7000,
+                compression_target_tokens=2100,
             ),
         )
-        monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
+        monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 7000)
         monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
         middleware = create_request_context_usage_middleware("qwen-test", state_schema=dict)
         captured = {}
@@ -579,6 +893,10 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
     assert response.model_response.result[0].content == "ok"
     usage = response.command.update["token_usage"]
     assert "context_editing" not in usage
+    assert "llm_calls" not in usage
+    assert "breakdown" not in usage
+    assert "llm_calls" in middleware.get_context_usage()
+    assert "breakdown" in middleware.get_context_usage()
     assert "context_editing" not in middleware.get_context_usage()
 
 

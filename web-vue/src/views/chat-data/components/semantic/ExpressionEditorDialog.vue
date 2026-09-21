@@ -16,14 +16,14 @@ interface ExpressionEditorRow {
   table: string
   column: string
   sourceColumn?: string
-  isMetric?: boolean
-  isDimension?: boolean
   expression?: string
 }
 
 const props = defineProps<{
   row: ExpressionEditorRow | null
   datasourceType?: string
+  // 快捷函数区作用域：dimension=常用函数目录（字符串/日期/CASE WHEN 等），metric=聚合函数
+  scope?: 'dimension' | 'metric'
 }>()
 
 const emit = defineEmits<{
@@ -88,14 +88,8 @@ watch(visible, (isVisible) => {
         class="w-full rounded-md border border-gray-200 px-3 py-2 font-mono text-[13px] leading-relaxed text-gray-700 outline-none focus:border-blue-500"
         placeholder="请输入字段表达式"
       ></textarea>
-      <div
-        v-if="row"
-        :class="[
-          'grid gap-3',
-          row.isMetric && row.isDimension ? 'grid-cols-2' : 'grid-cols-1'
-        ]"
-      >
-        <div v-if="row.isMetric" class="rounded-md border border-gray-200 p-3">
+      <div v-if="row" class="grid grid-cols-1 gap-3">
+        <div v-if="props.scope === 'metric'" class="rounded-md border border-gray-200 p-3">
           <div class="mb-1.5 text-xs font-medium text-gray-600">聚合函数</div>
           <div class="flex flex-wrap gap-1.5">
             <button
@@ -108,7 +102,7 @@ watch(visible, (isVisible) => {
             </button>
           </div>
         </div>
-        <div v-if="row.isDimension" class="rounded-md border border-gray-200 p-3">
+        <div v-if="props.scope !== 'metric'" class="rounded-md border border-gray-200 p-3">
           <div class="mb-1.5 text-xs font-medium text-gray-600">常用函数</div>
           <div class="max-h-[220px] overflow-auto pr-1">
             <div

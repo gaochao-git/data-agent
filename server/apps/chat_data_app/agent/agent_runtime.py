@@ -3,15 +3,18 @@
 from datetime import datetime
 from typing import Any, Callable
 
-from langchain.agents.middleware import wrap_model_call
+from langchain.agents.middleware import TodoListMiddleware, ToolErrorMiddleware, wrap_model_call
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
-from ..services.context_budget import ToolResultBudget
+from .middleware.tool_call_normalizer import (
+    create_tool_call_name_normalizer_middleware,
+    normalize_response_tool_call_names,  # noqa: F401  向后兼容 re-export，原定义已下沉至 middleware
+)
+from .middleware.tool_call_rate_alert import create_tool_call_rate_alert_middleware
+from .middleware.tool_timing import create_tool_timing_middleware
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic_tools import create_semantic_config_selection_tools
-from .middleware.tool_error import create_tool_error_middleware
 
 logger = get_logger(__name__)
 
@@ -41,6 +44,7 @@ def create_streaming_chat_model(
     *,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    thinking_effort: str | None = None,
     stream_usage: bool = False,
     llm_factory: Callable[..., BaseChatModel] = get_chat_data_llm,
 ) -> BaseChatModel:
@@ -49,6 +53,7 @@ def create_streaming_chat_model(
         "model": model_id,
         "streaming": True,
         "enable_thinking": enable_thinking,
+        "thinking_effort": thinking_effort,
     }
     if stream_usage:
         kwargs["stream_usage"] = True
@@ -70,108 +75,108 @@ def create_response_timestamp_middleware():
     return response_timestamp_middleware
 
 
+_PRE_VALIDATION_ERRORS = (ValueError, FileNotFoundError, IsADirectoryError, NotADirectoryError)
+
+
+def _format_tool_error(exc: Exception, tool_name: str = "") -> str:
+    """记录日志并向模型和前端返回带异常详情的错误提示。
+
+    这里是工具失败日志的**唯一权威记录点**（工具层只 raise，不重复记日志），
+    预期/非预期异常的分级判定也只在本处维护。异常详情对模型自愈（纠正参数后
+    重试）必要；成败信号由 ToolMessage.status 显式承载，content 只负责让人和
+    模型理解发生了什么。
+    """
+    label = f"[{tool_name}] " if tool_name else ""
+    if isinstance(exc, _PRE_VALIDATION_ERRORS):
+        logger.warning("[tools] %s工具执行失败(预期校验错误): %s", label, exc)
+    else:
+        logger.error("[tools] %s工具执行异常: %s", label, exc, exc_info=True)
+    return f"工具执行失败: {exc}"
+
+
+def on_tool_error(exc: Exception, request: Any) -> str:
+    """官方 ``ToolErrorMiddleware`` 回调：把异常转为带详情的 error ``ToolMessage``。
+
+    公开函数：子图中间件（middleware/subagents.py）与主图共用同一兜底。
+    """
+    tool_name = ""
+    try:
+        tool = getattr(request, "tool", None)
+        tool_name = str(getattr(tool, "name", "") or "") or str(
+            (getattr(request, "tool_call", None) or {}).get("name") or ""
+        )
+    except Exception as exc:
+        # 工具名提取失败不能阻断错误兜底,降级为无名工具继续格式化错误消息。
+        logger.warning("工具错误回调提取工具名失败,按无名工具兜底: error=%s", exc)
+        tool_name = ""
+    return _format_tool_error(exc, tool_name)
+
+
+# 中间件规范顺序（外层 -> 内层，按注册名）。新增 middleware 必须先在此表登记
+# 位置并写明原因；tests/unit/test_middleware_ordering.py 枚举全部启用组合，
+# 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
+MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
+    "ToolExecutionFenceMiddleware",     # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "ImageInjectionMiddleware",         # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
+    "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
+    "ToolCallRateAlertMiddleware",      # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
+    "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
+    "SteeringMiddleware",               # 在压缩之前注入插话，避免被摘要吞掉
+    "SubagentMiddleware",               # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
+    "TodoListMiddleware",               # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
+    "AfterModelHistoryMiddleware",      # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
+    "ContextCompressionMiddleware",
+    "ContextUsageMiddleware",
+    "ResponseTimestampMiddleware",
+    "ToolCallNameNormalizerMiddleware",
+    "ToolResultMiddleware",
+    "ToolErrorMiddleware",              # 恒为最内层兜底
+)
+
+
 def build_standard_agent_middleware(
     tools: list[Any],
     *,
     context_compression_middleware: Any | None = None,
     context_usage_middleware: Any | None = None,
+    tool_result_middleware: Any | None = None,
+    tool_call_history_repair_middleware: Any | None = None,
+    tool_execution_fence_middleware: Any | None = None,
+    image_injection_middleware: Any | None = None,
+    steering_middleware: Any | None = None,
+    subagent_middleware: Any | None = None,
+    after_model_history_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
-    """组装 create_agent 的公共 middleware 列表。"""
-    middleware: list[Any] = []
-    if context_compression_middleware is not None:
-        middleware.append(context_compression_middleware)
-    if context_usage_middleware is not None:
-        middleware.append(context_usage_middleware)
-    if include_response_timestamp:
-        middleware.append(create_response_timestamp_middleware())
-    if include_tool_call_normalizer:
-        from .middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
-        middleware.append(create_tool_call_name_normalizer_middleware(tools))
-    middleware.append(create_tool_error_middleware())
-    return middleware
+    """组装 create_agent 的公共 middleware 列表。
 
+    顺序由 ``MIDDLEWARE_CANONICAL_ORDER`` 唯一决定：本函数只负责"按注册名
+    建槽位、按权威顺序表出列"，不出现任何位置性的 if/append——新增中间件
+    只需在顺序表登记并在下方槽位表提供实例，位置写错在类型上即不可能。
 
-def create_semantic_selection_tools_bundle(
-    *,
-    model_id: str | None = None,
-    datasource_id: str | None = None,
-    semantic_config: dict | None = None,
-    user_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
-    include_query_tools: bool = True,
-    selection_tool_factory: Callable[..., list[Any]] = create_semantic_config_selection_tools,
-) -> list[Any]:
-    """创建指标集选择工具 bundle，统一问数和分析的公共参数。"""
-    kwargs: dict[str, Any] = {
-        "model_id": model_id,
-        "user_id": user_id,
-        "tool_result_budget": tool_result_budget,
-        "include_query_tools": include_query_tools,
+    注意各类 hook 的执行语义与列表位置的关系（LangChain create_agent）：
+    wrap_tool_call / wrap_model_call 先进为最外层；before_model 按列表顺序执行；
+    after_model 按列表**逆序**执行——将来若加入第二个 after_model middleware，
+    列表顺序与执行顺序相反，不能按直觉排列。
+    """
+    # 计时与 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，
+    # 不走调用方注入；其余 middleware 均由调用方按需注入（None = 不启用）。
+    slots: dict[str, Any] = {
+        "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
+        "ImageInjectionMiddleware": image_injection_middleware,
+        "ToolTimingMiddleware": create_tool_timing_middleware(),
+        "ToolCallRateAlertMiddleware": create_tool_call_rate_alert_middleware(),
+        "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,
+        "SteeringMiddleware": steering_middleware,
+        "SubagentMiddleware": subagent_middleware,
+        "TodoListMiddleware": TodoListMiddleware(),
+        "AfterModelHistoryMiddleware": after_model_history_middleware,
+        "ContextCompressionMiddleware": context_compression_middleware,
+        "ContextUsageMiddleware": context_usage_middleware,
+        "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
+        "ToolCallNameNormalizerMiddleware": (create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None),
+        "ToolResultMiddleware": tool_result_middleware,
+        "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),
     }
-    if datasource_id:
-        kwargs["datasource_id"] = datasource_id
-    if semantic_config is not None:
-        kwargs["semantic_config"] = semantic_config
-    return selection_tool_factory(**kwargs)
-
-
-def _get_available_tool_names(tools: list) -> set[str]:
-    """提取当前可用工具名称。"""
-    return {
-        str(name)
-        for item in tools or []
-        if (name := getattr(item, "name", None) or (item if isinstance(item, str) else None))
-    }
-
-
-def _normalize_repeated_tool_name(tool_name: Any, available_tool_names: set[str]) -> str:
-    """修复 OpenAI-compatible 流式工具调用中偶发的重复工具名。"""
-    raw_name = str(tool_name or "").strip()
-    if not raw_name or raw_name in available_tool_names:
-        return raw_name
-
-    for name in available_tool_names:
-        repeat_count, remainder = divmod(len(raw_name), len(name))
-        if repeat_count > 1 and remainder == 0 and raw_name == name * repeat_count:
-            return name
-
-    return raw_name
-
-
-def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
-    """在 tools 节点执行前归一化明显重复的已注册工具名。"""
-    tool_calls = getattr(message, "tool_calls", None)
-    if not tool_calls:
-        return message
-
-    available_tool_names = _get_available_tool_names(tools)
-    if not available_tool_names:
-        return message
-
-    changed = False
-    normalized_tool_calls = []
-    for tool_call in tool_calls:
-        if not isinstance(tool_call, dict):
-            normalized_tool_calls.append(tool_call)
-            continue
-        raw_name = tool_call.get("name")
-        normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
-        if normalized_name != raw_name:
-            tool_call = {**tool_call, "name": normalized_name}
-            changed = True
-        normalized_tool_calls.append(tool_call)
-
-    if not changed:
-        return message
-
-    logger.warning("已归一化重复工具调用名称，避免 OpenAI-compatible 流式 chunk 合并异常")
-    try:
-        message.tool_calls = normalized_tool_calls
-        return message
-    except Exception:
-        if hasattr(message, "model_copy"):
-            return message.model_copy(update={"tool_calls": normalized_tool_calls})
-        logger.warning("工具调用名称归一化写入失败: message=%r", message, exc_info=True)
-        return message
+    return [slots[name] for name in MIDDLEWARE_CANONICAL_ORDER if slots[name] is not None]

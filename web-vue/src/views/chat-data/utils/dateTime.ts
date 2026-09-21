@@ -56,3 +56,37 @@ export const formatDateTimeRange = (range: [Date, Date]): [string, string] => [
   formatLocalDateTime(range[0]),
   formatLocalDateTime(range[1])
 ]
+
+const MINUTE_SECONDS = 60
+const HOUR_SECONDS = 60 * MINUTE_SECONDS
+const DAY_SECONDS = 24 * HOUR_SECONDS
+const RELATIVE_FALLBACK_DAYS = 7
+
+/**
+ * 会话列表行的相对时间：刚刚 / N分钟前 / N小时前 / N天前，超过 7 天回落 MM-DD。
+ * 面板宽度紧张，超龄不显示年份；解析失败返回空串由调用方隐藏。
+ */
+export const formatRelativeConversationTime = (value?: Date | string | null, now: Date = new Date()): string => {
+  const date = parseDateTimeValue(value)
+  if (!date) return ''
+  const elapsedSeconds = Math.floor((now.getTime() - date.getTime()) / 1000)
+  if (elapsedSeconds < MINUTE_SECONDS) return '刚刚'
+  if (elapsedSeconds < HOUR_SECONDS) return `${Math.floor(elapsedSeconds / MINUTE_SECONDS)}分钟前`
+  if (elapsedSeconds < DAY_SECONDS) return `${Math.floor(elapsedSeconds / HOUR_SECONDS)}小时前`
+  const elapsedDays = Math.floor(elapsedSeconds / DAY_SECONDS)
+  if (elapsedDays <= RELATIVE_FALLBACK_DAYS) return `${elapsedDays}天前`
+  return `${padDateTimePart(date.getMonth() + 1)}-${padDateTimePart(date.getDate())}`
+}
+
+/**
+ * 秒级 Unix 时间戳（后端 `os.stat().st_mtime` 的口径）→ `YYYY-MM-DD HH:mm:ss` 本地时间。
+ *
+ * 工作区文件行用绝对时间而非相对时间：文件是版本对照的场景，需要能直接比出先后与具体时刻。
+ * 该格式每行等宽（19 字符），所以时间列不需要额外钉宽度就能对齐。
+ * 0 / 负数 / 非有限值一律返回空串：这些值代表「没有时间信息」，
+ * 换算成 1970 年会显示成 1970-01-01 00:00:00，比不显示更容易误导。
+ */
+export const formatEpochDateTime = (seconds?: number | null): string => {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return ''
+  return formatLocalDateTime(new Date(seconds * 1000))
+}

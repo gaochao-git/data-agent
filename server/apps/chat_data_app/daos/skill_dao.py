@@ -18,9 +18,14 @@ def get_session():
 class SkillDao:
     """封装用户技能元数据和收藏关系数据库读写。"""
 
+    @staticmethod
+    def _user_skill_id_filter():
+        return ChatDataSkillVersion.skill_id.in_(
+            select(ChatDataSkill.skill_id).where(ChatDataSkill.skill_source == "user")
+        )
+
     def _skill_visible_filter(self, user_id: str):
         return or_(
-            ChatDataSkill.skill_source == "system",
             ChatDataSkill.owner_user_id == (user_id or ""),
             and_(
                 ChatDataSkill.visibility_type == "global",
@@ -30,7 +35,11 @@ class SkillDao:
         )
 
     def _skill_base_filters(self, user_id: str, include_disabled: bool = True):
-        filters = [ChatDataSkill.delete_flag == 0, self._skill_visible_filter(user_id)]
+        filters = [
+            ChatDataSkill.delete_flag == 0,
+            ChatDataSkill.skill_source == "user",
+            self._skill_visible_filter(user_id),
+        ]
         if not include_disabled:
             filters.extend([
                 ChatDataSkill.skill_publish_status != "disabled",
@@ -46,14 +55,12 @@ class SkillDao:
             "skill_title": row.skill_title,
             "skill_desc": row.skill_desc,
             "skill_category": row.skill_category,
-            "skill_scope": getattr(row, "skill_scope", "analyze") or "analyze",
             "skill_source": row.skill_source,
             "visibility_type": row.visibility_type,
             "enabled_flag": row.enabled_flag,
             "skill_publish_status": row.skill_publish_status,
             "current_skill_version_no": row.current_skill_version_no,
             "owner_user_id": row.owner_user_id,
-            "skill_root_dir": row.skill_root_dir,
             "create_by": row.create_by,
             "create_by_name": row.create_by_name,
             "update_by": row.update_by,
@@ -69,7 +76,6 @@ class SkillDao:
         return {
             "skill_id": row.skill_id,
             "skill_version_no": row.skill_version_no,
-            "skill_version_dir": row.skill_version_dir,
             "version_publish_status": row.version_publish_status,
             "create_time": row.create_time,
             "update_time": row.update_time,
@@ -106,7 +112,7 @@ class SkillDao:
     async def list_skills_async(self, user_id: str = "", include_disabled: bool = False) -> List[Dict[str, Any]]:
         stmt = (
             self._skill_select(user_id, include_disabled=include_disabled)
-            .order_by(ChatDataSkill.skill_source.asc(), ChatDataSkill.update_time.desc())
+            .order_by(ChatDataSkill.update_time.desc())
         )
         async with get_session() as db:
             result = await db.execute(stmt)
@@ -132,6 +138,16 @@ class SkillDao:
             row, draft_no, favorite_id = item
             return self._skill_row_to_dict(row, draft_skill_version_no=draft_no, favorite_flag=1 if favorite_id else 0)
 
+    async def skill_name_exists_async(self, skill_name: str) -> bool:
+        """全局检查技能名称是否被占用（含已删除、他人私有记录），用于创建前友好报错。"""
+        value = str(skill_name or "").strip()
+        if not value:
+            return False
+        stmt = select(ChatDataSkill.id).where(ChatDataSkill.skill_name == value).limit(1)
+        async with get_session() as db:
+            result = await db.execute(stmt)
+            return result.first() is not None
+
     async def get_published_version_async(self, skill_id: str, skill_version_no: int) -> Optional[Dict[str, Any]]:
         stmt = (
             select(ChatDataSkillVersion)
@@ -140,6 +156,7 @@ class SkillDao:
                 ChatDataSkillVersion.skill_id == skill_id,
                 ChatDataSkillVersion.skill_version_no == int(skill_version_no or 0),
                 ChatDataSkillVersion.version_publish_status == "published",
+                self._user_skill_id_filter(),
             )
             .limit(1)
         )
@@ -150,7 +167,11 @@ class SkillDao:
     async def list_versions_async(self, skill_id: str) -> List[Dict[str, Any]]:
         stmt = (
             select(ChatDataSkillVersion)
-            .where(ChatDataSkillVersion.delete_flag == 0, ChatDataSkillVersion.skill_id == skill_id)
+            .where(
+                ChatDataSkillVersion.delete_flag == 0,
+                ChatDataSkillVersion.skill_id == skill_id,
+                self._user_skill_id_filter(),
+            )
             .order_by(ChatDataSkillVersion.skill_version_no.desc())
         )
         async with get_session() as db:
@@ -164,6 +185,7 @@ class SkillDao:
                 ChatDataSkillVersion.delete_flag == 0,
                 ChatDataSkillVersion.skill_id == skill_id,
                 ChatDataSkillVersion.skill_version_no == int(skill_version_no or 0),
+                self._user_skill_id_filter(),
             )
             .limit(1)
         )
@@ -184,6 +206,7 @@ class SkillDao:
                 ChatDataSkillVersion.delete_flag == 0,
                 ChatDataSkillVersion.skill_id == skill_id,
                 ChatDataSkillVersion.version_publish_status == status,
+                self._user_skill_id_filter(),
             )
             .order_by(ChatDataSkillVersion.skill_version_no.desc())
             .limit(1)
@@ -196,6 +219,7 @@ class SkillDao:
         stmt = select(func.coalesce(func.max(ChatDataSkillVersion.skill_version_no), 0)).where(
             ChatDataSkillVersion.skill_id == skill_id,
             ChatDataSkillVersion.delete_flag == 0,
+            self._user_skill_id_filter(),
         )
         async with get_session() as db:
             max_version_no = (await db.execute(stmt)).scalar_one()
@@ -209,14 +233,12 @@ class SkillDao:
                 skill_title=skill.get("skill_title") or "",
                 skill_desc=skill.get("skill_desc") or "",
                 skill_category=skill.get("skill_category") or "",
-                skill_scope=skill.get("skill_scope") or "analyze",
-                skill_source=skill.get("skill_source") or "user",
+                skill_source="user",
                 visibility_type=skill.get("visibility_type") or "private",
                 enabled_flag=int(skill.get("enabled_flag") or 1),
                 skill_publish_status=skill.get("skill_publish_status") or "draft",
                 current_skill_version_no=int(skill.get("current_skill_version_no") or 0),
                 owner_user_id=skill.get("owner_user_id") or "",
-                skill_root_dir=skill.get("skill_root_dir") or "",
                 create_by=skill.get("create_by") or "",
                 create_by_name=skill.get("create_by_name") or "",
                 update_by=skill.get("update_by") or "",
@@ -226,16 +248,20 @@ class SkillDao:
 
     async def update_skill_async(self, skill_id: str, values: Dict[str, Any], update_by: str = "", update_by_name: str = "") -> int:
         allowed = {
-            "skill_title", "skill_desc", "skill_category", "skill_scope",
+            "skill_title", "skill_desc", "skill_category",
             "visibility_type", "enabled_flag", "skill_publish_status",
-            "current_skill_version_no", "skill_root_dir",
+            "current_skill_version_no",
         }
         update_values = {key: values[key] for key in allowed if key in values}
         update_values["update_by"] = update_by or ""
         update_values["update_by_name"] = update_by_name or ""
         stmt = (
             update(ChatDataSkill)
-            .where(ChatDataSkill.skill_id == skill_id, ChatDataSkill.delete_flag == 0)
+            .where(
+                ChatDataSkill.skill_id == skill_id,
+                ChatDataSkill.skill_source == "user",
+                ChatDataSkill.delete_flag == 0,
+            )
             .values(**update_values)
         )
         async with get_session() as db:
@@ -251,7 +277,6 @@ class SkillDao:
         return ChatDataSkillVersion(
             skill_id=version.get("skill_id") or "",
             skill_version_no=int(version.get("skill_version_no") or 0),
-            skill_version_dir=version.get("skill_version_dir") or "",
             version_publish_status=version.get("version_publish_status") or "draft",
             create_by=version.get("create_by") or "",
             create_by_name=version.get("create_by_name") or "",
@@ -267,6 +292,7 @@ class SkillDao:
                     ChatDataSkillVersion.skill_id == skill_id,
                     ChatDataSkillVersion.skill_version_no == int(skill_version_no or 0),
                     ChatDataSkillVersion.delete_flag == 0,
+                    self._user_skill_id_filter(),
                 )
                 .values(version_publish_status="published", update_by=update_by or "", update_by_name=update_by_name or "")
             )
@@ -283,17 +309,20 @@ class SkillDao:
             "enabled_flag": 1,
         }, update_by=update_by, update_by_name=update_by_name)
 
-    async def delete_skill_async(self, skill_id: str, deleted_skill_name: str, deleted_root_dir: str, update_by: str = "", update_by_name: str = "") -> int:
+    async def delete_skill_async(self, skill_id: str, deleted_skill_name: str, update_by: str = "", update_by_name: str = "") -> int:
         """逻辑删除技能并释放唯一技能名。"""
         stmt = (
             update(ChatDataSkill)
-            .where(ChatDataSkill.skill_id == skill_id, ChatDataSkill.delete_flag == 0)
+            .where(
+                ChatDataSkill.skill_id == skill_id,
+                ChatDataSkill.skill_source == "user",
+                ChatDataSkill.delete_flag == 0,
+            )
             .values(
                 skill_name=deleted_skill_name,
                 skill_publish_status="disabled",
                 enabled_flag=0,
                 delete_flag=1,
-                skill_root_dir=deleted_root_dir,
                 update_by=update_by or "",
                 update_by_name=update_by_name or "",
             )
@@ -302,23 +331,15 @@ class SkillDao:
             result = await db.execute(stmt)
             return int(result.rowcount or 0)
 
-    async def update_version_dir_async(self, skill_id: str, skill_version_no: int, version_dir: str, update_by: str = "", update_by_name: str = "") -> int:
-        """更新技能版本目录。"""
-        stmt = (
-            update(ChatDataSkillVersion)
-            .where(
-                ChatDataSkillVersion.skill_id == skill_id,
-                ChatDataSkillVersion.skill_version_no == int(skill_version_no or 0),
-                ChatDataSkillVersion.delete_flag == 0,
-            )
-            .values(skill_version_dir=version_dir, update_by=update_by or "", update_by_name=update_by_name or "")
-        )
-        async with get_session() as db:
-            result = await db.execute(stmt)
-            return int(result.rowcount or 0)
-
     async def set_favorite_async(self, favorite_user_id: str, skill_id: str, favorite: bool, operator: str = "", operator_name: str = "") -> None:
         async with get_session() as db:
+            skill_stmt = select(ChatDataSkill.id).where(
+                ChatDataSkill.skill_id == skill_id,
+                ChatDataSkill.skill_source == "user",
+                ChatDataSkill.delete_flag == 0,
+            ).limit(1)
+            if (await db.execute(skill_stmt)).scalar_one_or_none() is None:
+                raise ValueError("用户技能不存在")
             stmt = select(ChatDataSkillFavorite).where(
                 ChatDataSkillFavorite.favorite_user_id == favorite_user_id,
                 ChatDataSkillFavorite.skill_id == skill_id,

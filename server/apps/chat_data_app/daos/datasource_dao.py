@@ -1,30 +1,28 @@
 """
-数据源/语义配置数据库存储。
+数据源数据库存储。
 
 当前运行时以 datasource_group 作为唯一数据源入口：
 - datasource_group: 组即数据源
 - datasource_table: 数据源表结构缓存
-- semantic_config: 数据源语义配置
 """
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from contextvars import ContextVar
 import json
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-from utils.database import get_session
-from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel, SemanticConfig
+from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel
 from utils.logger import get_logger
 from .datasource_dao_helpers import (
     _batch_items,
     _column_dict_is_empty,
     _format_time,
     _load_json,
+    _merge_table_indexes_for_sync,
+    _normalize_table_indexes_payload,
     _normalize_column_dict,
     _parse_member_source_entries,
     _parse_member_source_entry,
@@ -32,40 +30,29 @@ from .datasource_dao_helpers import (
     _parse_source_line,
     _unique_non_empty_texts,
 )
+from .dao_session import _ORM_SESSION, session_scope, transaction_scope
+from .semantic_config_dao import SemanticConfigDao
 
 logger = get_logger(__name__)
 
 _UNSET = object()
-_ORM_SESSION: ContextVar[Any] = ContextVar("chat_data_orm_session", default=None)
 _MAX_RECOMMENDED_QUESTION_COUNT = 50
 _MAX_RECOMMENDED_QUESTION_LENGTH = 50
 
 
+def _or_value(value: Any, default: Any) -> Any:
+    """等价于 `value or default` 的显式兜底，供映射字典复用。"""
+    return value or default
+
+
 class DataSourceDao:
-    """基于 MySQL 的数据源/语义配置数据访问层。"""
+    """基于 MySQL 的数据源数据访问层。"""
 
-    @asynccontextmanager
-    async def _session_scope(self):
-        active_session = _ORM_SESSION.get()
-        if active_session is not None:
-            yield active_session
-            return
-        async with get_session() as session:
-            yield session
+    def __init__(self) -> None:
+        self.semantic_config_dao = SemanticConfigDao()
 
-    @asynccontextmanager
-    async def transaction_async(self):
-        active_session = _ORM_SESSION.get()
-        if active_session is not None:
-            yield active_session
-            return
-
-        async with get_session() as session:
-            token = _ORM_SESSION.set(session)
-            try:
-                yield session
-            finally:
-                _ORM_SESSION.reset(token)
+    _session_scope = staticmethod(session_scope)
+    transaction_async = staticmethod(transaction_scope)
 
     def _group_model_to_row(self, model: DatasourceGroup) -> Dict[str, Any]:
         return {
@@ -87,26 +74,6 @@ class DataSourceDao:
             "update_by_name": model.update_by_name,
         }
 
-    def _semantic_config_model_to_row(self, model: SemanticConfig) -> Dict[str, Any]:
-        return {
-            "semantic_config_id": model.semantic_config_id,
-            "group_id": model.group_id,
-            "semantic_config_name": model.semantic_config_name,
-            "semantic_config_desc": model.semantic_config_desc,
-            "ontology_rules": model.ontology_rules,
-            "enabled_flag": model.enabled_flag,
-            "metrics_json": model.metrics_json,
-            "dimensions_json": model.dimensions_json,
-            "relationships_json": model.relationships_json,
-            "scope_type": model.scope_type,
-            "create_time": model.create_time,
-            "update_time": model.update_time,
-            "create_by": model.create_by,
-            "create_by_name": model.create_by_name,
-            "update_by": model.update_by,
-            "update_by_name": model.update_by_name,
-        }
-
     def _datasource_table_model_to_row(self, model: DatasourceTable) -> Dict[str, Any]:
         return {
             "group_id": model.group_id,
@@ -114,6 +81,7 @@ class DataSourceDao:
             "table_desc": model.table_desc,
             "table_business_desc": model.table_business_desc,
             "columns_json": model.columns_json,
+            "indexes_json": getattr(model, "indexes_json", None),
         }
 
     def _normalize_recommended_questions(self, value: Any) -> List[str]:
@@ -133,8 +101,9 @@ class DataSourceDao:
                 break
         return result
 
-    def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        group_id = row.get("group_id") or ""
+    @staticmethod
+    def _resolve_group_template_info(row: Dict[str, Any]) -> tuple[str, Dict[str, Any], str]:
+        """解析分组模板来源；返回 (template_source, 模板解析结果, 模板成员 ID)。"""
         template_source = str(row.get("template_source") or "").strip()
         parsed_template = _parse_member_source_entry(
             template_source,
@@ -150,6 +119,11 @@ class DataSourceDao:
             None,
         )
         template_member_id = member_entries[0]["datasource_id"] if member_entries else template_source
+        return template_source, parsed_template, template_member_id
+
+    def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        group_id = row.get("group_id") or ""
+        template_source, parsed_template, template_member_id = self._resolve_group_template_info(row)
         return {
             "id": group_id,
             "datasource_id": group_id,
@@ -157,19 +131,19 @@ class DataSourceDao:
             "group_ids": [group_id] if group_id else [],
             "template_datasource_id": template_member_id,
             "template_source": template_source,
-            "member_sources_text": row.get("member_sources_text") or "",
-            "group_name": row.get("group_name") or "",
-            "ds_description": row.get("group_desc") or "",
-            "query_context": row.get("query_context") or "",
+            "member_sources_text": _or_value(row.get("member_sources_text"), ""),
+            "group_name": _or_value(row.get("group_name"), ""),
+            "ds_description": _or_value(row.get("group_desc"), ""),
+            "query_context": _or_value(row.get("query_context"), ""),
             "recommended_questions": self._normalize_recommended_questions(row.get("recommended_questions_json")),
-            "source_type": row.get("source_type") or "",
-            "query_executor_type": parsed_template.get("query_executor_type") or "direct",
-            "create_time": _format_time(row.get("create_time")) or "",
-            "update_time": _format_time(row.get("update_time")) or "",
-            "create_by": row.get("create_by") or "",
-            "create_by_name": row.get("create_by_name") or "",
-            "update_by": row.get("update_by") or "",
-            "update_by_name": row.get("update_by_name") or "",
+            "source_type": _or_value(row.get("source_type"), ""),
+            "query_executor_type": _or_value(parsed_template.get("query_executor_type"), "direct"),
+            "create_time": _or_value(_format_time(row.get("create_time")), ""),
+            "update_time": _or_value(_format_time(row.get("update_time")), ""),
+            "create_by": _or_value(row.get("create_by"), ""),
+            "create_by_name": _or_value(row.get("create_by_name"), ""),
+            "update_by": _or_value(row.get("update_by"), ""),
+            "update_by_name": _or_value(row.get("update_by_name"), ""),
             "ds_tables": [],
             "mapped_modules": _load_json(row.get("mapped_modules_json"), []),
             "is_default": bool(row.get("is_default", 0)),
@@ -180,33 +154,29 @@ class DataSourceDao:
             },
         }
 
-    def _map_semantic_config_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "id": row["semantic_config_id"],
-            "semantic_config_id": row["semantic_config_id"],
-            "group_id": row["group_id"],
-            "name": row.get("semantic_config_name") or "",
-            "description": row.get("semantic_config_desc") or "",
-            "ontology_rules": row.get("ontology_rules"),
-            "scope_type": row.get("scope_type") or "public",
-            "enabled": bool(row.get("enabled_flag", 1)),
-            "metrics": _load_json(row.get("metrics_json"), []),
-            "dimensions": _load_json(row.get("dimensions_json"), []),
-            "relationships": _load_json(row.get("relationships_json"), []),
-            "create_time": _format_time(row.get("create_time")) or "",
-            "update_time": _format_time(row.get("update_time")) or "",
-            "create_by": row.get("create_by") or "",
-            "create_by_name": row.get("create_by_name") or "",
-            "update_by": row.get("update_by") or "",
-            "update_by_name": row.get("update_by_name") or "",
-        }
-
     def _map_datasource_table_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        columns = _load_json(row.get("columns_json"), [])
+        indexes = _normalize_table_indexes_payload(row.get("indexes_json"), columns)
+        physical_indexes = indexes["physical"]
+        manual_indexes = indexes["manual"]
         return {
             "table_name": row.get("table_name") or "",
             "description": row.get("table_desc") or row.get("table_name") or "",
             "business_desc": row.get("table_business_desc") or "",
-            "columns": _load_json(row.get("columns_json"), []),
+            "columns": columns,
+            "primary_keys": [item["columns"] for item in physical_indexes if item["index_type"] == "primary"],
+            "unique_indexes": [
+                {"name": item["index_name"], "columns": item["columns"], "source": "physical"}
+                for item in physical_indexes if item["index_type"] == "unique"
+            ],
+            "indexes": [
+                {"name": item["index_name"], "columns": item["columns"], "source": "physical"}
+                for item in physical_indexes if item["index_type"] == "secondary"
+            ],
+            "manual_indexes": [
+                {**item, "source": "manual"}
+                for item in manual_indexes
+            ],
             "groups": [],
         }
 
@@ -465,48 +435,71 @@ class DataSourceDao:
         if not group_id:
             return
         async with self._session_scope() as session:
+            await self._mark_group_relations_deleted(session, group_id, update_by=update_by, update_by_name=update_by_name)
+            relation_rows = self._build_group_relation_rows(group_id, groups, create_by=create_by, create_by_name=create_by_name, update_by=update_by, update_by_name=update_by_name)
+            await self._insert_group_relation_rows(session, relation_rows, update_by=update_by, update_by_name=update_by_name)
+
+    @staticmethod
+    async def _mark_group_relations_deleted(session, group_id: str, *, update_by: str, update_by_name: str) -> None:
+        """软删该分组现有表关系。"""
+        await session.execute(
+            update(DatasourceTableGroupRel)
+            .where(
+                DatasourceTableGroupRel.group_id == group_id,
+                DatasourceTableGroupRel.delete_flag == 0,
+            )
+            .values(
+                delete_flag=1,
+                update_by=update_by or "",
+                update_by_name=update_by_name or "",
+            )
+        )
+
+    @staticmethod
+    def _build_group_relation_rows(
+        group_id: str,
+        groups: List[Dict[str, Any]],
+        *,
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> List[Dict[str, Any]]:
+        """按 (table_group_name, table_name) 去重构建关系行。"""
+        relation_rows = []
+        seen: set[tuple[str, str]] = set()
+        for group in groups or []:
+            table_group_name = str((group or {}).get("table_group_name") or "").strip()
+            if not table_group_name:
+                continue
+            for table_name in _unique_non_empty_texts((group or {}).get("table_names") or []):
+                key = (table_group_name, table_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                relation_rows.append({
+                    "group_id": group_id,
+                    "table_group_name": table_group_name,
+                    "table_name": table_name,
+                    "create_by": create_by or "",
+                    "create_by_name": create_by_name or "",
+                    "update_by": update_by or "",
+                    "update_by_name": update_by_name or "",
+                    "delete_flag": 0,
+                })
+        return relation_rows
+
+    @staticmethod
+    async def _insert_group_relation_rows(session, relation_rows: List[Dict[str, Any]], *, update_by: str, update_by_name: str) -> None:
+        for batch in _batch_items(relation_rows):
+            stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
             await session.execute(
-                update(DatasourceTableGroupRel)
-                .where(
-                    DatasourceTableGroupRel.group_id == group_id,
-                    DatasourceTableGroupRel.delete_flag == 0,
-                )
-                .values(
-                    delete_flag=1,
+                stmt.on_duplicate_key_update(
+                    delete_flag=0,
                     update_by=update_by or "",
                     update_by_name=update_by_name or "",
                 )
             )
-            relation_rows = []
-            seen: set[tuple[str, str]] = set()
-            for group in groups or []:
-                table_group_name = str((group or {}).get("table_group_name") or "").strip()
-                if not table_group_name:
-                    continue
-                for table_name in _unique_non_empty_texts((group or {}).get("table_names") or []):
-                    key = (table_group_name, table_name)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    relation_rows.append({
-                        "group_id": group_id,
-                        "table_group_name": table_group_name,
-                        "table_name": table_name,
-                        "create_by": create_by or "",
-                        "create_by_name": create_by_name or "",
-                        "update_by": update_by or "",
-                        "update_by_name": update_by_name or "",
-                        "delete_flag": 0,
-                    })
-            for batch in _batch_items(relation_rows):
-                stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
-                await session.execute(
-                    stmt.on_duplicate_key_update(
-                        delete_flag=0,
-                        update_by=update_by or "",
-                        update_by_name=update_by_name or "",
-                    )
-                )
 
     async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
         row = await self._get_group_row_by_id_async(datasource_id)
@@ -576,57 +569,6 @@ class DataSourceDao:
         datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource.get("group_id"))
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
-
-    async def get_semantic_configs_async(self, datasource_id: str) -> List[Dict[str, Any]]:
-        row = await self._get_group_row_by_id_async(datasource_id)
-        if not row:
-            return []
-        return await self.get_semantic_configs_by_group_id_async(row.get("group_id"))
-
-    async def get_semantic_configs_by_group_id_async(self, group_id: str, user_id: str = "") -> List[Dict[str, Any]]:
-        if not group_id:
-            return []
-        normalized_user_id = str(user_id or "").strip()
-        conditions = [SemanticConfig.group_id == group_id, SemanticConfig.delete_flag == 0]
-        if normalized_user_id:
-            conditions.append(or_(SemanticConfig.scope_type == "public", and_(SemanticConfig.scope_type == "private", SemanticConfig.create_by == normalized_user_id)))
-        async with self._session_scope() as session:
-            query_result = await session.execute(
-                select(SemanticConfig)
-                .where(*conditions)
-                .order_by(
-                    case((SemanticConfig.scope_type == "public", 0), else_=1).asc(),
-                    SemanticConfig.semantic_config_name.asc(),
-                    SemanticConfig.id.asc(),
-                )
-            )
-            rows = [self._semantic_config_model_to_row(row) for row in query_result.scalars().all()]
-        return [self._map_semantic_config_row(row) for row in rows]
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[Dict[str, Any]]:
-        datasource = await self.get_datasource_async(datasource_id)
-        if not datasource:
-            return None
-        return await self.get_semantic_config_by_group_id_async(datasource.get("group_id"), config_id)
-
-    async def get_semantic_config_by_group_id_async(self, group_id: str, config_id: str) -> Optional[Dict[str, Any]]:
-        if not group_id:
-            return None
-        async with self._session_scope() as session:
-            query_result = await session.execute(
-                select(SemanticConfig)
-                .where(
-                    SemanticConfig.group_id == group_id,
-                    SemanticConfig.semantic_config_id == config_id,
-                    SemanticConfig.delete_flag == 0,
-                )
-                .limit(1)
-            )
-            model = query_result.scalars().first()
-        row = self._semantic_config_model_to_row(model) if model else None
-        if not row:
-            return None
-        return self._map_semantic_config_row(row)
 
     async def upsert_datasource_group_async(
         self,
@@ -736,6 +678,73 @@ class DataSourceDao:
                 )
             )
 
+    @staticmethod
+    def _build_table_sync_rows(
+        group_id: str,
+        tables: List[Dict[str, Any]],
+        existing_by_name: Dict[str, Any],
+        *,
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> List[Dict[str, Any]]:
+        # 与拆分前的 dict 构建保持一致：同名表 last-wins 去重，
+        # 保留最后一次出现的行（含其 sort_no）。
+        rows_by_name: Dict[str, Dict[str, Any]] = {}
+        for index, table in enumerate(tables):
+            table_name = str((table or {}).get("table_name") or "").strip()
+            if not table_name:
+                continue
+            existing = existing_by_name.get(table_name)
+            indexes = _merge_table_indexes_for_sync(
+                table,
+                getattr(existing, "indexes_json", None) if existing is not None else None,
+            )
+            rows_by_name[table_name] = {
+                "group_id": group_id,
+                "table_names": table_name,
+                "table_desc": table.get("description"),
+                "columns_json": json.dumps(table.get("columns") or [], ensure_ascii=False),
+                "indexes_json": json.dumps(indexes, ensure_ascii=False),
+                "sort_no": index,
+                "create_by": create_by,
+                "create_by_name": create_by_name,
+                "update_by": update_by,
+                "update_by_name": update_by_name,
+                "delete_flag": 0,
+            }
+        return list(rows_by_name.values())
+
+    async def _upsert_table_rows(self, session, rows: List[Dict[str, Any]]) -> None:
+        for batch in _batch_items(rows):
+            stmt = mysql_insert(DatasourceTable).values(batch)
+            await session.execute(
+                stmt.on_duplicate_key_update(
+                    table_desc=stmt.inserted.table_desc,
+                    columns_json=stmt.inserted.columns_json,
+                    indexes_json=stmt.inserted.indexes_json,
+                    sort_no=stmt.inserted.sort_no,
+                    update_by=stmt.inserted.update_by,
+                    update_by_name=stmt.inserted.update_by_name,
+                    delete_flag=0,
+                )
+            )
+
+    @staticmethod
+    async def _load_existing_table_rows(session, group_id: str, active_table_names: List[str]) -> Dict[str, Any]:
+        existing_result = await session.execute(
+            select(DatasourceTable).where(
+                DatasourceTable.group_id == group_id,
+                DatasourceTable.table_names.in_(active_table_names),
+            ).with_for_update()
+        )
+        return {
+            str(row.table_names or "").strip(): row
+            for row in existing_result.scalars().all()
+            if str(row.table_names or "").strip()
+        }
+
     async def replace_datasource_tables_async(
         self,
         group_id: str,
@@ -768,35 +777,76 @@ class DataSourceDao:
             if not active_table_names:
                 return
 
-            table_rows_by_name = {}
-            for index, table in enumerate(table_list):
-                table_name = str((table or {}).get("table_name") or "").strip()
-                if not table_name:
-                    continue
-                table_rows_by_name[table_name] = {
-                    "group_id": group_id,
-                    "table_names": table_name,
-                    "table_desc": table.get("description"),
-                    "columns_json": json.dumps(table.get("columns") or [], ensure_ascii=False),
-                    "sort_no": index,
-                    "create_by": create_by,
-                    "create_by_name": create_by_name,
-                    "update_by": update_by,
-                    "update_by_name": update_by_name,
-                    "delete_flag": 0,
-                }
-            for batch in _batch_items(list(table_rows_by_name.values())):
-                stmt = mysql_insert(DatasourceTable).values(batch)
-                await session.execute(
-                    stmt.on_duplicate_key_update(
-                        table_desc=stmt.inserted.table_desc,
-                        columns_json=stmt.inserted.columns_json,
-                        sort_no=stmt.inserted.sort_no,
-                        update_by=stmt.inserted.update_by,
-                        update_by_name=stmt.inserted.update_by_name,
-                        delete_flag=0,
-                    )
+            existing_by_name = await self._load_existing_table_rows(session, group_id, active_table_names)
+
+            table_rows = self._build_table_sync_rows(
+                group_id,
+                table_list,
+                existing_by_name,
+                create_by=create_by,
+                create_by_name=create_by_name,
+                update_by=update_by,
+                update_by_name=update_by_name,
+            )
+            await self._upsert_table_rows(session, table_rows)
+
+    async def get_datasource_table_indexes_async(self, group_id: str, table_name: str) -> Optional[Dict[str, Any]]:
+        """读取单表索引 JSON，供管理服务只更新 manual 分区。"""
+        if not group_id or not table_name:
+            return None
+        async with self._session_scope() as session:
+            result = await session.execute(
+                select(DatasourceTable).where(
+                    DatasourceTable.group_id == group_id,
+                    DatasourceTable.table_names == table_name,
+                    DatasourceTable.delete_flag == 0,
                 )
+            )
+            row = result.scalars().first()
+        if row is None:
+            return None
+        columns = _load_json(row.columns_json, [])
+        return _normalize_table_indexes_payload(getattr(row, "indexes_json", None), columns)
+
+    async def update_datasource_table_indexes_async(
+        self,
+        group_id: str,
+        table_name: str,
+        manual_indexes: List[Dict[str, Any]],
+        update_by: str = "",
+        update_by_name: str = "",
+    ) -> Optional[List[Dict[str, Any]]]:
+        """只更新单表索引 JSON 的 manual 分区。"""
+        if not group_id or not table_name:
+            return None
+        async with self._session_scope() as session:
+            result = await session.execute(
+                select(DatasourceTable).where(
+                    DatasourceTable.group_id == group_id,
+                    DatasourceTable.table_names == table_name,
+                    DatasourceTable.delete_flag == 0,
+                ).with_for_update()
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            columns = _load_json(row.columns_json, [])
+            payload = _normalize_table_indexes_payload(getattr(row, "indexes_json", None), columns)
+            payload["manual"] = manual_indexes
+            await session.execute(
+                update(DatasourceTable)
+                .where(
+                    DatasourceTable.group_id == group_id,
+                    DatasourceTable.table_names == table_name,
+                    DatasourceTable.delete_flag == 0,
+                )
+                .values(
+                    indexes_json=json.dumps(payload, ensure_ascii=False),
+                    update_by=update_by or "",
+                    update_by_name=update_by_name or "",
+                )
+            )
+        return manual_indexes
 
     async def update_datasource_table_business_desc_async(self, group_id: str, table_name: str, business_desc: str, update_by: str = "", update_by_name: str = "") -> None:
         if not group_id or not table_name:
@@ -931,6 +981,68 @@ class DataSourceDao:
             )
         return normalized_dict
 
+    async def fill_column_dict_async(
+        self,
+        group_id: str,
+        table_name: str,
+        column_name: str,
+        column_dict: Dict[str, Any],
+        create_by: str = "",
+        update_by: str = "",
+        create_by_name: str = "",
+        update_by_name: str = "",
+    ) -> List[str]:
+        """仅填空写单个字段数据字典：现值为空的字段用导入值填充，已有值一律保留。
+
+        返回实际填充的字段名列表；无可填充内容时不产生任何写入。
+        与 replace 的语义差异：replace 以传入内容全量覆盖（含清空），fill 只补空缺，
+        供 Ossie 导入闭环使用（拍板：冲突策略=仅填空，不走草稿）。
+        """
+        if not group_id or not table_name or not column_name:
+            return []
+        normalized_incoming = _normalize_column_dict(column_dict)
+        if _column_dict_is_empty(normalized_incoming):
+            return []
+        async with self._session_scope() as session:
+            row = (await session.execute(
+                select(DatasourceColumnDict).where(
+                    DatasourceColumnDict.group_id == group_id,
+                    DatasourceColumnDict.table_name == table_name,
+                    DatasourceColumnDict.column_name == column_name,
+                )
+            )).scalars().first()
+            existing = _normalize_column_dict(_load_json(row.dict_json, {}) if row else {})
+            filled = [
+                key for key in ("enum_values", "synonyms", "storage_format", "unit")
+                if normalized_incoming[key] and not existing[key]
+            ]
+            if not filled:
+                return []
+            merged = dict(existing)
+            for key in filled:
+                merged[key] = normalized_incoming[key]
+            row_values = {
+                "group_id": group_id,
+                "table_name": table_name,
+                "column_name": column_name,
+                "dict_json": json.dumps(_normalize_column_dict(merged), ensure_ascii=False),
+                "delete_flag": 0,
+                "create_by": create_by or "",
+                "create_by_name": create_by_name or "",
+                "update_by": update_by or "",
+                "update_by_name": update_by_name or "",
+            }
+            stmt = mysql_insert(DatasourceColumnDict).values(row_values)
+            await session.execute(
+                stmt.on_duplicate_key_update(
+                    dict_json=stmt.inserted.dict_json,
+                    delete_flag=0,
+                    update_by=stmt.inserted.update_by,
+                    update_by_name=stmt.inserted.update_by_name,
+                )
+            )
+            return filled
+
     async def soft_delete_group_async(self, group_id: str, update_by: str = "", update_by_name: str = "") -> None:
         async with self._session_scope() as session:
             await session.execute(
@@ -943,14 +1055,11 @@ class DataSourceDao:
                     update_by_name=update_by_name or "",
                 )
             )
-            await session.execute(
-                update(SemanticConfig)
-                .where(SemanticConfig.group_id == group_id)
-                .values(
-                    delete_flag=1,
-                    update_by=update_by or "",
-                    update_by_name=update_by_name or "",
-                )
+            semantic_config_dao = getattr(self, "semantic_config_dao", None) or SemanticConfigDao()
+            await semantic_config_dao.soft_delete_by_group_id_async(
+                group_id,
+                update_by=update_by,
+                update_by_name=update_by_name,
             )
             await session.execute(
                 update(DatasourceTable)
@@ -964,63 +1073,6 @@ class DataSourceDao:
             await session.execute(
                 update(DatasourceTableGroupRel)
                 .where(DatasourceTableGroupRel.group_id == group_id)
-                .values(
-                    delete_flag=1,
-                    update_by=update_by or "",
-                    update_by_name=update_by_name or "",
-                )
-            )
-
-    async def upsert_semantic_config_async(self, datasource_id: str, config: Dict[str, Any]) -> bool:
-        datasource = await self.get_datasource_async(datasource_id)
-        group_id = config.get("group_id") or (datasource or {}).get("group_id")
-        if not group_id:
-            logger.warning("数据源不存在或缺少 group_id，无法写入语义配置: datasource_id=%s", datasource_id)
-            return False
-
-        stmt = mysql_insert(SemanticConfig).values(
-            semantic_config_id=config.get("id") or config.get("semantic_config_id"),
-            group_id=group_id,
-            semantic_config_name=config.get("name") or config.get("semantic_config_name") or "",
-            semantic_config_desc=config.get("description") or config.get("semantic_config_desc"),
-            ontology_rules=config.get("ontology_rules"),
-            enabled_flag=1 if config.get("enabled", True) else 0,
-            metrics_json=json.dumps(config.get("metrics") or [], ensure_ascii=False),
-            dimensions_json=json.dumps(config.get("dimensions") or [], ensure_ascii=False),
-            relationships_json=json.dumps(config.get("relationships") or [], ensure_ascii=False),
-            scope_type=config.get("scope_type") or "public",
-            sort_no=int(config.get("sort_no") or 0),
-            create_by=config.get("create_by") or "",
-            create_by_name=config.get("create_by_name") or "",
-            update_by=config.get("update_by") or "",
-            update_by_name=config.get("update_by_name") or "",
-            delete_flag=0,
-        )
-        async with self._session_scope() as session:
-            await session.execute(
-                stmt.on_duplicate_key_update(
-                    group_id=stmt.inserted.group_id,
-                    semantic_config_name=stmt.inserted.semantic_config_name,
-                    semantic_config_desc=stmt.inserted.semantic_config_desc,
-                    ontology_rules=stmt.inserted.ontology_rules,
-                    enabled_flag=stmt.inserted.enabled_flag,
-                    metrics_json=stmt.inserted.metrics_json,
-                    dimensions_json=stmt.inserted.dimensions_json,
-                    relationships_json=stmt.inserted.relationships_json,
-                    scope_type=stmt.inserted.scope_type,
-                    sort_no=stmt.inserted.sort_no,
-                    update_by=stmt.inserted.update_by,
-                    update_by_name=stmt.inserted.update_by_name,
-                    delete_flag=0,
-                )
-            )
-        return True
-
-    async def soft_delete_semantic_config_async(self, semantic_config_id: str, update_by: str = "", update_by_name: str = "") -> None:
-        async with self._session_scope() as session:
-            await session.execute(
-                update(SemanticConfig)
-                .where(SemanticConfig.semantic_config_id == semantic_config_id)
                 .values(
                     delete_flag=1,
                     update_by=update_by or "",

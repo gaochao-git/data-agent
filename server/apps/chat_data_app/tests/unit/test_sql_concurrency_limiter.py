@@ -5,7 +5,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 
-from apps.chat_data_app.services import sql_concurrency_limiter as limiter
+from apps.chat_data_app.services.sql_run import concurrency as limiter
 
 
 async def _run_limited_pair(user_id: str, first_target: dict, second_target: dict) -> tuple[float, list[str]]:

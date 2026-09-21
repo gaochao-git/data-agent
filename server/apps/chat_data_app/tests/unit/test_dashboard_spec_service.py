@@ -2,7 +2,6 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -10,7 +9,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 import asyncio
 
-from apps.chat_data_app.services.dashboard_spec_service import (
+from apps.chat_data_app.services.dashboard.spec_service import (
     _build_dashboard_panel_chart_config,
     _build_panel_name_fallback,
     _chart_type_label,
@@ -33,6 +32,7 @@ from apps.chat_data_app.services.dashboard_spec_service import (
     normalize_dashboard_spec_order_by,
     normalize_semantic_dsl_payload,
     remove_mixed_raw_metrics_for_aggregate_dsl,
+    resolve_dashboard_card_semantic_config_id,
     validate_dashboard_card_structure,
     validate_dashboard_spec_structure,
     validate_dashboard_spec_payload,
@@ -105,7 +105,15 @@ def test_get_dashboard_spec_semantic_config_keeps_selected_source_type(monkeypat
             assert datasource_id == "ds_a"
             return []
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
+    manager = FakeManager()
+
+    class FakeSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            datasource = await manager.get_datasource_async(datasource_id)
+            return datasource["semantic_configs"][0] if datasource and config_id == "sc_a" else None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: FakeSemanticService())
 
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "sc_a"))
 
@@ -164,7 +172,7 @@ def test_filter_executable_dashboard_panel_plans_filters_failed_sql(monkeypatch)
         return True, ""
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.dashboard_spec_service.execute_dashboard_panel_sql_preflight",
+        "apps.chat_data_app.services.dashboard.spec_service.execute_dashboard_panel_sql_preflight",
         fake_preflight,
     )
 
@@ -222,8 +230,8 @@ def test_create_dashboard_from_spec_payload_skips_sql_precheck(monkeypatch):
             }],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: FakeService())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: FakeService())
 
     result = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={
@@ -291,8 +299,8 @@ def test_create_dashboard_from_spec_payload_keeps_invalid_sql_cards(monkeypatch)
             ],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
     result = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={
@@ -373,15 +381,15 @@ def test_normalize_dashboard_card_chart_config_keeps_allowed_style_options():
             "lineStyle": "smooth",
             "unsafe": "ignored",
         },
-        "dsl": {"metrics": ["风险事件数"], "dimensions": []},
     })
 
     assert config["kpiIcon"] == "fa-bolt"
     assert config["kpiColor"] == "#ffdc3d"
     assert config["chartColor"] == "#00e5ff"
     assert config["lineStyle"] == "smooth"
-    assert config["metrics"] == ["风险事件数"]
     assert "unsafe" not in config
+    assert "metrics" not in config
+    assert "dimensions" not in config
 
 
 def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
@@ -393,7 +401,6 @@ def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
             "lineStyle": "curved",
             "xField": "月份",
         },
-        "dsl": {"metrics": ["订单金额"], "dimensions": ["月份"]},
     })
 
     assert "kpiIcon" not in config
@@ -465,7 +472,14 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_datasource_async(self, datasource_id):
             return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: MissingManager())
+    missing_manager = MissingManager()
+
+    class MissingSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: missing_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: MissingSemanticService())
     try:
         asyncio.run(get_dashboard_spec_semantic_config("missing", "sc_a"))
     except ValueError as err:
@@ -476,7 +490,7 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
     try:
         asyncio.run(get_dashboard_spec_semantic_config("ds_a", None))
     except ValueError as err:
-        assert "缺少指标集ID" in str(err)
+        assert "缺少语义模型ID" in str(err)
     else:
         raise AssertionError("missing semantic config id should be rejected")
 
@@ -490,7 +504,18 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_cached_schema_async(self, datasource_id):
             return [{"table_name": "orders"}]
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: LazyManager())
+    lazy_manager = LazyManager()
+
+    class LazySemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return {
+                "id": config_id,
+                "enabled": config_id == "enabled",
+                "relationships": [{"left_table": "a"}],
+            } if config_id in {"enabled", "disabled"} else None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: lazy_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: LazySemanticService())
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "enabled"))
     assert config["id"] == "enabled"
     assert config["joins"] == [{"left_table": "a"}]
@@ -503,7 +528,14 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_cached_schema_async(self, datasource_id):
             return []
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: NoConfigManager())
+    no_config_manager = NoConfigManager()
+
+    class NoConfigSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: no_config_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: NoConfigSemanticService())
     try:
         asyncio.run(get_dashboard_spec_semantic_config("ds_a", "missing_config"))
     except ValueError as err:
@@ -543,7 +575,6 @@ def test_build_panel_sql_from_dashboard_card_passes_normalized_payload():
             },
         },
         FakeGenerator(),
-        user_query="按月统计销售额",
     )
 
     assert sql.endswith("offset 2")
@@ -554,7 +585,6 @@ def test_build_panel_sql_from_dashboard_card_passes_normalized_payload():
     assert captured["order_by"] == [{"field": "月份", "direction": "ASC"}]
     assert captured["limit"] == 5
     assert captured["offset"] == 2
-    assert captured["user_query"] == "按月统计销售额"
 
 
 def test_build_panel_sql_from_dashboard_card_raises_generator_error():
@@ -593,6 +623,96 @@ def test_validate_dashboard_spec_structure_rejects_missing_name_and_non_object_c
     assert validate_dashboard_spec_structure({"dashboard_name": "空看板", "cards": []}) == ["cards 必须是非空数组"]
 
 
+def test_dashboard_card_semantic_config_id_supports_card_override_and_legacy_default():
+    assert resolve_dashboard_card_semantic_config_id({"semantic_config_id": "card_model"}, "default_model") == "card_model"
+    assert resolve_dashboard_card_semantic_config_id({}, "default_model") == "default_model"
+    assert validate_dashboard_spec_structure({
+        "dashboard_name": "多模型看板",
+        "cards": [
+            {
+                "title": "订单卡片",
+                "semantic_config_id": "order_model",
+                "chart_type": "kpi",
+                "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                "dsl": {},
+            },
+            {
+                "title": "支付卡片",
+                "semantic_config_id": "payment_model",
+                "chart_type": "kpi",
+                "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                "dsl": {},
+            },
+        ],
+    }) == []
+
+
+def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeypatch):
+    generator_calls = []
+
+    class FakeGenerator:
+        def __init__(self, semantic_config):
+            self.semantic_config = semantic_config
+
+        def generate_sql(self, **_kwargs):
+            model_id = self.semantic_config["id"]
+            return {"success": True, "sql": f"select '{model_id}' as model_id"}
+
+    async def fake_get_config(_datasource_id, semantic_config_id, user_id=None):
+        generator_calls.append((semantic_config_id, user_id))
+        return {"id": semantic_config_id, "metrics": []}
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_dashboard_spec_semantic_config",
+        fake_get_config,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.SemanticAIQueryAdapter",
+        FakeGenerator,
+    )
+
+    result = asyncio.run(validate_dashboard_spec_payload(
+        dashboard_spec={
+            "dashboard_name": "多模型看板",
+            "cards": [
+                {
+                    "title": "订单卡片",
+                    "semantic_config_id": "orders",
+                    "chart_type": "kpi",
+                    "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                    "dsl": {"metrics": ["订单数"]},
+                },
+                {
+                    "title": "支付卡片",
+                    "semantic_config_id": "payments",
+                    "chart_type": "kpi",
+                    "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                    "dsl": {"metrics": ["支付数"]},
+                },
+                {
+                    "title": "订单趋势",
+                    "semantic_config_id": "orders",
+                    "chart_type": "line",
+                    "layout": {"x": 0, "y": 2, "w": 12, "h": 4},
+                    "dsl": {"metrics": ["订单数"]},
+                },
+            ],
+        },
+        datasource_id="ds_a",
+        user_id="user_a",
+    ))
+
+    assert generator_calls == [("orders", "user_a"), ("payments", "user_a")]
+    assert result["valid"] is True
+    assert result["semantic_config_ids"] == ["orders", "payments"]
+    assert [panel["semantic_config_id"] for panel in result["panels"]] == ["orders", "payments", "orders"]
+    assert [panel["sql"] for panel in result["panels"]] == [
+        "select 'orders' as model_id",
+        "select 'payments' as model_id",
+        "select 'orders' as model_id",
+    ]
+
+
 def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
     class FakeGenerator:
         semantic_config = {
@@ -622,6 +742,66 @@ def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
     assert any("不再支持 compare" in item for item in warnings)
 
 
+def test_build_panel_sql_from_dashboard_card_falls_back_to_card_top_level():
+    """dsl 缺省字段（含 offset）必须回退 card 顶层字段——预检与 SQL 生成共用同一合并口径。"""
+    captured = {}
+
+    class FakeGenerator:
+        semantic_config = {}
+
+        def generate_sql(self, **kwargs):
+            captured.update(kwargs)
+            return {"success": True, "sql": "select count(*) from orders offset 3"}
+
+    sql = build_panel_sql_from_dashboard_card(
+        {
+            "title": "订单数量",
+            "chart_type": "kpi",
+            "metrics": ["订单数量"],
+            "dimensions": ["日期"],
+            "filters": [{"field": "状态", "op": "=", "value": "paid"}],
+            "limit": 10,
+            "offset": 3,
+        },
+        FakeGenerator(),
+    )
+
+    assert sql.endswith("offset 3")
+    assert captured["metrics"] == ["订单数量"]
+    assert captured["dimensions"] == ["日期"]
+    assert captured["filters"] == [{"dimension": "状态", "operator": "=", "value": "paid"}]
+    assert captured["limit"] == 10
+    assert captured["offset"] == 3
+
+
+def test_build_panel_sql_from_dashboard_card_collects_normalize_warnings():
+    class FakeGenerator:
+        semantic_config = {
+            "metrics": [
+                {"name": "销售额", "expression": "SUM(amount)"},
+                {"name": "用户ID", "expression": "user_id"},
+            ]
+        }
+
+        def generate_sql(self, metrics, **_kwargs):
+            return {"success": True, "sql": f"select {metrics[0]} from orders"}
+
+    collected: list = []
+    build_panel_sql_from_dashboard_card(
+        {"title": "混用指标", "chart_type": "line", "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]}},
+        FakeGenerator(),
+        warnings=collected,
+    )
+
+    assert len(collected) == 1
+    assert "不能混用" in collected[0]
+    # 不传 warnings 时行为不变（默认丢弃）
+    build_panel_sql_from_dashboard_card(
+        {"title": "混用指标", "chart_type": "line", "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]}},
+        FakeGenerator(),
+    )
+
+
 def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(monkeypatch):
     class FakeManager:
         async def get_execution_datasources_async(self, datasource_id, member_ids):
@@ -637,7 +817,7 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
             self.target = target
             self.closed = False
 
-        async def execute(self, sql, limit, timeout, user_id, username=None):
+        async def execute(self, sql, limit, timeout, user_id, username=None, datasource_id=None):
             assert username == "测试用户"
             if self.target["mode"] == "fail":
                 return {"success": False, "error": "表不存在"}
@@ -648,9 +828,9 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
         async def close(self):
             self.closed = True
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_executor", lambda target: FakeExecutor(target))
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.resolve_query_timeout", lambda source_type: 600)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda target: FakeExecutor(target))
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", lambda source_type: 600)
 
     assert asyncio.run(execute_dashboard_panel_sql_preflight("empty", "select 1")) == (False, "当前数据源组下没有可执行的数据源")
     assert asyncio.run(execute_dashboard_panel_sql_preflight("ok", "select 1", user_id="u1", username="测试用户")) == (True, "")
@@ -700,9 +880,9 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
     async def fake_filter(plans, **_kwargs):
         return plans, ["预执行警告"]
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_spec_semantic_config", fake_semantic_config)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.SemanticSQLGenerator", FakeGenerator)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.filter_executable_dashboard_panel_plans", fake_filter)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_spec_semantic_config", fake_semantic_config)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.SemanticAIQueryAdapter", FakeGenerator)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.filter_executable_dashboard_panel_plans", fake_filter)
 
     valid = asyncio.run(validate_dashboard_spec_payload(
         dashboard_spec={
@@ -764,7 +944,7 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
     async def invalid_validation(**_kwargs):
         return {"valid": False, "warnings": ["结构错误"], "panels": []}
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", invalid_validation)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", invalid_validation)
     result = asyncio.run(create_dashboard_from_spec_payload(dashboard_spec={"cards": []}, datasource_id="ds_a"))
     assert result == {"dashboard": None, "panels": [], "warnings": ["结构错误"]}
 
@@ -772,8 +952,8 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
         return {"valid": True, "warnings": [], "panels": [{"index": 0, "title": "卡片", "chart_type": "kpi", "sql": "select 1", "error": ""}]}
 
     service = FakeService("add_fail")
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", valid_validation)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", valid_validation)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
     failed = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={"dashboard_name": "看板", "cards": [{"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}]},
         datasource_id="ds_a",
@@ -783,7 +963,7 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
     assert any("写入失败" in item for item in failed["warnings"])
 
     service = FakeService("read_empty")
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
     unreadable = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={"dashboard_name": "看板", "cards": [{"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}]},
         datasource_id="ds_a",
@@ -891,7 +1071,7 @@ def test_dashboard_spec_structure_invalid_layout_branches():
         "cards": [{"title": "无 DSL", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}}],
     })
     assert "dashboard_name 必填" in spec_errors
-    assert "semantic_config_id 必填" in spec_errors
+    assert any(item.startswith("semantic_config_id 必填") for item in spec_errors)
     assert any("缺少 dsl 对象" in item for item in spec_errors)
 
     x_range_errors = validate_dashboard_card_structure(
@@ -929,7 +1109,7 @@ def test_filter_executable_dashboard_panel_plans_keeps_existing_errors(monkeypat
         return True, ""
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.dashboard_spec_service.execute_dashboard_panel_sql_preflight",
+        "apps.chat_data_app.services.dashboard.spec_service.execute_dashboard_panel_sql_preflight",
         fake_preflight,
     )
 
@@ -967,8 +1147,8 @@ def test_create_dashboard_from_spec_payload_skips_non_dict_cards(monkeypatch):
         }
 
     service = FakeService()
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
     result = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={"dashboard_name": "", "analysis_target": "  " + "x" * 300, "cards": ["skip", {"title": "", "chart_type": "kpi", "layout": {}}]},
@@ -1014,9 +1194,9 @@ def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
         async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
             return await self.get_execution_datasources_async(datasource_id, member_ids)
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_executor", lambda _target: FakeExecutor())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.resolve_query_timeout", lambda _source_type: 60)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda _target: FakeExecutor())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", lambda _source_type: 60)
 
     ok, error = asyncio.run(execute_dashboard_panel_sql_preflight("ds_a", "select 1", user_id="u1", username="用户1"))
 
@@ -1050,8 +1230,8 @@ def test_create_dashboard_from_spec_payload_skips_empty_panel_and_deletes(monkey
         }
 
     service = FakeService()
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
     result = asyncio.run(create_dashboard_from_spec_payload(
         dashboard_spec={"dashboard_name": "空面板看板", "cards": [{"title": "空面板", "chart_type": "kpi", "layout": {}}]},

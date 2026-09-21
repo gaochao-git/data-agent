@@ -29,11 +29,14 @@ export const parseJsonObject = (value: string): Record<string, unknown> | null =
   }
 }
 
+/** 查询结果文本前缀。 */
+const QUERY_RESULT_PREFIX = /^\[data_analyzing_tool\]\s*/
+
 export const extractQueryResultPayload = (result?: string): QueryToolPayload | null => {
   const text = String(result || '').trim()
   if (!text) return null
 
-  const semanticToolText = text.replace(/^\[semantic_query_tool\]\s*/, '').trim()
+  const semanticToolText = text.replace(QUERY_RESULT_PREFIX, '').trim()
   const parsed = parseJsonObject(semanticToolText)
   if (!parsed) return null
   if (parsed.type !== 'query_result') return parsed
@@ -41,18 +44,24 @@ export const extractQueryResultPayload = (result?: string): QueryToolPayload | n
 }
 
 export const parseQueryResultEnvelope = (result?: string): QueryToolResultEnvelope | null => {
-  const text = String(result || '').replace(/^\[semantic_query_tool\]\s*/, '').trim()
+  const text = String(result || '').replace(QUERY_RESULT_PREFIX, '').trim()
   if (!text) return null
   const parsed = parseJsonObject(text)
   if (!parsed || parsed.type !== 'query_result') return null
   return parsed as QueryToolResultEnvelope
 }
 
+export const getQueryResultError = (result?: string): string => {
+  const envelope = parseQueryResultEnvelope(result)
+  if (!envelope || !['failed', 'cancelled'].includes(String(envelope.status || '').toLowerCase())) return ''
+  return String(envelope.error || '查询失败').trim()
+}
+
 export const getRenderableQueryResultData = (result?: string): string => {
   const envelope = parseQueryResultEnvelope(result)
   if (!envelope) return ''
   const meta = isRecord(envelope.meta) ? envelope.meta : {}
-  if (!isRecord(envelope.data) && !meta.artifact_id) return ''
+  if (!isRecord(envelope.data) && !meta.result_id) return ''
   if (isRecord(envelope.data)) return JSON.stringify(envelope.data)
   return JSON.stringify(envelope)
 }
@@ -64,6 +73,8 @@ export const extractGeneratedSqlFromToolCall = (toolCall?: Pick<ToolCallInfo, 'r
 
 export const extractSemanticDslFromArgs = (args?: Record<string, unknown>): Record<string, unknown> | null => {
   if (!args) return null
+  // 合并工具的 DSL 在 action_payload 里
+  if (isRecord(args.action_payload)) args = args.action_payload
   if (isRecord(args.dsl)) return args.dsl
 
   const hasDslField = SEMANTIC_DSL_KEYS.some(key => Object.prototype.hasOwnProperty.call(args, key))

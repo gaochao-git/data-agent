@@ -1,0 +1,52 @@
+{
+  "dashboard_name": "综合业务分析看板",
+  "analysis_target": "当前数据源",
+  "topic": "综合业务分析",
+  "cards": [
+    {
+      "title": "核心指标总览",
+      "semantic_config_id": "已确定的语义模型ID",
+      "chart_type": "kpi",
+      "purpose": "展示当前业务总体规模或核心结果",
+      "diagnosis": "用于快速判断整体水平是否偏高、偏低或变化明显",
+      "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+      "dsl": {"metrics": ["核心指标1"], "dimensions": [], "filters": [], "order_by": [], "limit": 100}
+    },
+    {
+      "title": "关键指标总览",
+      "semantic_config_id": "已确定的语义模型ID",
+      "chart_type": "kpi",
+      "purpose": "补充展示第二个核心指标",
+      "diagnosis": "与核心指标总览共同形成首屏判断",
+      "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+      "dsl": {"metrics": ["核心指标2"], "dimensions": [], "filters": [], "order_by": [], "limit": 100}
+    },
+    {
+      "title": "核心指标趋势",
+      "semantic_config_id": "已确定的语义模型ID",
+      "chart_type": "line",
+      "purpose": "观察核心指标随时间变化",
+      "diagnosis": "识别持续增长、回落、周期波动或异常拐点",
+      "layout": {"x": 0, "y": 2, "w": 6, "h": 4},
+      "dsl": {"metrics": ["核心指标1"], "dimensions": [{"name": "时间维度", "time_grain": "month"}], "filters": [], "order_by": [{"field": "时间维度", "direction": "ASC"}], "limit": 100}
+    },
+    {
+      "title": "结构分布",
+      "semantic_config_id": "已确定的语义模型ID",
+      "chart_type": "bar",
+      "purpose": "按主要业务维度拆解贡献",
+      "diagnosis": "识别贡献集中或结构失衡的维度项",
+      "layout": {"x": 6, "y": 2, "w": 6, "h": 4},
+      "dsl": {"metrics": ["核心指标1"], "dimensions": ["主要维度"], "filters": [], "order_by": [{"field": "核心指标1", "direction": "DESC"}], "limit": 10}
+    },
+    {
+      "title": "明细诊断",
+      "semantic_config_id": "已确定的语义模型ID",
+      "chart_type": "table",
+      "purpose": "保留可追溯的对象明细和多指标对照",
+      "diagnosis": "用于进一步筛查异常对象和后续处理",
+      "layout": {"x": 0, "y": 6, "w": 12, "h": 5},
+      "dsl": {"metrics": ["核心指标1", "核心指标2"], "dimensions": ["对象维度", "主要维度"], "filters": [], "order_by": [{"field": "核心指标1", "direction": "DESC"}], "limit": 50}
+    }
+  ]
+}

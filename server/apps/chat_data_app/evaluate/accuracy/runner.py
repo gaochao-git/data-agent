@@ -18,6 +18,13 @@ except ImportError:
     from scorers import score_dsl
 
 
+def _result_succeeded(result: Any) -> bool:
+    """查询结果是否成功；status 为唯一权威口径（query_result_succeeded 内兼容旧 success 记录）。"""
+    from apps.chat_data_app.services.sql_run.result import query_result_succeeded
+
+    return query_result_succeeded(result)
+
+
 ACCURACY_DIR = Path(__file__).resolve().parent
 SERVER_DIR = ACCURACY_DIR.parents[3]
 if str(SERVER_DIR) not in sys.path:
@@ -34,7 +41,6 @@ SEVEN_TUPLE_KEYS = ("nl", "gold_dsl", "gold_sql", "query_type", "difficulty", "s
 class AccuracyRunConfig:
     """准确率评测运行配置，供 API 层显式传入。"""
 
-    agent_id: str = "chat_data"
     query_mode: str = "query"
     model_id: str | None = None
     datasource_id: str | None = None
@@ -187,14 +193,14 @@ def parse_tool_content(content: str) -> dict[str, Any]:
 def strip_tool_content_prefix(content: str) -> str:
     """移除工具返回内容中的内部前缀。"""
     text = str(content or "").strip()
-    for prefix in ("[dsl2sql_tool]", "[semantic_query_tool]"):
-        if text.startswith(prefix):
-            return text.replace(prefix, "", 1).strip()
+    prefix = "[data_analyzing_tool]"
+    if text.startswith(prefix):
+        return text.replace(prefix, "", 1).strip()
     return text
 
 
 def extract_sql_from_tool_content(content: str) -> str:
-    """从智能问数 dsl2sql_tool 返回内容中提取 SQL。"""
+    """从数据分析工具返回内容中提取 SQL。"""
     text = strip_tool_content_prefix(content)
     if not text:
         return ""
@@ -210,9 +216,11 @@ def extract_sql_from_tool_content(content: str) -> str:
 
 
 def build_dsl_from_tool_args(args: dict[str, Any]) -> dict[str, Any]:
-    """将智能问数语义工具参数还原为评测 DSL。"""
+    """将智能问数语义工具参数还原为评测 DSL（兼容合并后的 action_payload 包装）。"""
     if not isinstance(args, dict):
         return {}
+    if isinstance(args.get("action_payload"), dict):
+        args = args["action_payload"]
     nested_dsl = args.get("dsl")
     if isinstance(nested_dsl, dict):
         return normalize_pagination_values(nested_dsl)
@@ -309,22 +317,14 @@ def flush_sse_event(*, state: dict[str, Any], tool_traces: list[ToolTrace]) -> N
 async def consume_internal_completion(
     *,
     conversation_id: str,
-    agent_id: str,
     query: str,
     options: dict[str, Any],
     user_id: str,
 ) -> tuple[list[ToolTrace], str]:
     """内部调用智能问数 handler，避免评测通过 URL 反调自身。"""
-    from apps.chat_data_app.handlers import data_analyze_completion_handler, sql_completion_handler
-    from apps.chat_data_app.services.feature_gate import ensure_agent_available_for_internal_run
+    from apps.chat_data_app.agent_stream import sql_completion_handler
 
-    if agent_id == "chat_data_data_analyze":
-        ensure_agent_available_for_internal_run(agent_id)
-        response = await data_analyze_completion_handler(conversation_id, query, options=options, user_id=user_id)
-    elif agent_id == "chat_data":
-        response = await sql_completion_handler(conversation_id, query, options=options, user_id=user_id)
-    else:
-        raise ValueError(f"不支持的评测 Agent: {agent_id}")
+    response = await sql_completion_handler(conversation_id, query, options=options, user_id=user_id)
 
     tool_traces: list[ToolTrace] = []
     state: dict[str, Any] = {"current_event": "message", "data_lines": [], "error": ""}
@@ -340,7 +340,7 @@ def choose_final_dsl2sql_trace(tool_traces: list[ToolTrace]) -> tuple[ToolTrace 
     selected_trace = None
     selected_payload: dict[str, Any] = {}
     for trace in tool_traces:
-        if trace.name != "dsl2sql_tool":
+        if trace.name != "data_analyzing_tool":
             continue
         payload = build_dsl2sql_payload(trace)
         if payload:
@@ -353,12 +353,17 @@ def summarize_execution_success(tool_traces: list[ToolTrace]) -> bool | None:
     execute_payloads = [
         parse_tool_content(trace.content)
         for trace in tool_traces
-        if trace.name == "semantic_query_tool" and trace.content
+        if trace.name == "data_analyzing_tool" and trace.content
     ]
-    execute_payloads = [payload for payload in execute_payloads if payload]
+    # 只统计执行查询结果（query_result envelope / 带 status）；validate 的 success 仅代表编译通过
+    execute_payloads = [
+        payload
+        for payload in execute_payloads
+        if payload and (payload.get("type") == "query_result" or "status" in payload)
+    ]
     if not execute_payloads:
         return None
-    return bool(execute_payloads[-1].get("success"))
+    return _result_succeeded(execute_payloads[-1])
 
 
 async def compile_dsl_locally(
@@ -366,31 +371,26 @@ async def compile_dsl_locally(
     datasource_id: str,
     semantic_config_id: str,
     dsl: dict[str, Any] | None,
-    user_query: str,
 ) -> dict[str, Any]:
-    """Compile captured DSL with the current local DSL2SQL implementation."""
+    """Compile captured DSL through the shared semantic query facade."""
     if not isinstance(dsl, dict):
         return {"success": False, "sql": "", "error": "未捕获到可编译 DSL"}
-    from apps.chat_data_app.services.dashboard_spec_service import (
+    from apps.chat_data_app.services.dashboard.spec_service import (
         get_dashboard_spec_semantic_config,
         remove_mixed_raw_metrics_for_aggregate_dsl,
     )
-    from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
+    from apps.chat_data_app.services.semantic.run.semantic_query_service import (
+        compile_semantic_ai_dsl,
+    )
 
     semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id)
     payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl, semantic_config)
     payload = normalize_pagination_values(payload)
     if payload.get("compare"):
         return {"success": False, "sql": "", "error": "DSL2SQL 不支持 compare；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析", "warnings": warnings}
-    result = SemanticSQLGenerator(semantic_config).generate_sql(
-        metrics=payload.get("metrics") or [],
-        dimensions=payload.get("dimensions") or [],
-        filters=payload.get("filters") or [],
-        having=payload.get("having") or [],
-        order_by=payload.get("order_by") or [],
-        limit=payload.get("limit"),
-        offset=payload.get("offset"),
-        user_query=user_query,
+    result = compile_semantic_ai_dsl(
+        semantic_config,
+        payload,
     )
     return {
         "success": bool(result.get("success")),
@@ -404,7 +404,7 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
     """Execute generated SQL through the same backend SQL executor used by DataAnalyze."""
     if not sql.strip():
         return {"success": False, "error": "SQL 为空"}
-    from apps.chat_data_app.services.semantic_query_service import execute_semantic_query_sql
+    from apps.chat_data_app.services.semantic.run.semantic_query_service import execute_semantic_query_sql
 
     return await execute_semantic_query_sql(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
 
@@ -431,7 +431,6 @@ async def collect_live_case_traces(
     return await asyncio.wait_for(
         consume_internal_completion(
             conversation_id=conversation_id,
-            agent_id=args.agent_id,
             query=question,
             options=build_completion_options(args, datasource_id, semantic_config_id),
             user_id=args.user_id,
@@ -446,7 +445,6 @@ async def compile_or_reuse_agent_sql(
     datasource_id: str,
     semantic_config_id: str,
     predicted_dsl: dict[str, Any] | None,
-    user_query: str,
     dsl_payload: dict[str, Any],
     agent_tool_sql: str,
 ) -> dict[str, Any]:
@@ -460,7 +458,6 @@ async def compile_or_reuse_agent_sql(
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
         dsl=predicted_dsl,
-        user_query=user_query,
     )
     return {
         "compile_success": bool(compile_result.get("success")),
@@ -479,7 +476,7 @@ async def maybe_execute_generated_sql(
     if args.skip_execution or not compile_success:
         return None, ""
     execution_result = await execute_sql_locally(sql=generated_sql, datasource_id=datasource_id, user_id=args.user_id)
-    execution_success = bool(execution_result.get("success"))
+    execution_success = _result_succeeded(execution_result)
     if execution_success:
         return execution_success, ""
     return execution_success, str(execution_result.get("error") or "SQL 执行失败")
@@ -493,7 +490,7 @@ def resolve_live_case_error(
     compile_result: dict[str, Any],
 ) -> str:
     if not dsl_trace:
-        return stream_error or "未捕获到 dsl2sql_tool 调用"
+        return stream_error or "未捕获到 data_analyzing_tool 校验调用"
     if not compile_success:
         return stream_error or str(compile_result.get("error") or "DSL2SQL 编译失败")
     return stream_error
@@ -584,7 +581,6 @@ async def run_live_case(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
             predicted_dsl=predicted_dsl,
-            user_query=question,
             dsl_payload=dsl_payload,
             agent_tool_sql=agent_tool_sql,
         )

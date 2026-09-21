@@ -3,32 +3,38 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 import weakref
 
 from langchain.agents.middleware import wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
-from ...services.context_budget import (
+from ..context.context_budget import (
     ContextBudget,
+    HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
     SYSTEM_PROMPT_PLACEHOLDER,
-    ToolResultBudget,
+    ContextRequestBudget,
+    build_runtime_context_summary_message,
     build_context_usage_payload,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     estimate_tokens,
+    extract_legacy_context_summary,
     get_model_context_budget,
+    hard_input_guard_tokens,
+    merge_context_summaries,
     sanitize_context_usage_for_response,
 )
-from ...services.runtime_config import get_context_compression_config
+from apps.chat_data_app.services.runtime_config import get_context_compression_config
 
 logger = get_logger(__name__)
 
@@ -39,13 +45,13 @@ def create_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
-    """创建统一的上下文裁剪和 token usage middleware。"""
+    """创建统一的上下文计量与 token usage middleware。"""
     records: list[dict[str, Any]] = []
-    request_budget = tool_result_budget or ToolResultBudget(model_id)
+    request_budget = context_request_budget or ContextRequestBudget(model_id)
 
     @wrap_model_call(name=name, state_schema=state_schema)
     async def context_usage_middleware(request, handler):
@@ -63,11 +69,13 @@ def create_context_usage_middleware(
             model_id=effective_model_id,
             request_budget=request_budget,
             context_compression=_request_context_compression(request),
+            context_summary=_request_context_summary(request),
         )
         record = _build_llm_call_record(token_usage, model_id=effective_model_id, index=len(records) + 1)
         records.append(record)
         _emit_context_usage(get_context_usage())
 
+        started_at_ms = _now_epoch_ms()
         try:
             response = await handler(_override_request(
                 request,
@@ -75,17 +83,39 @@ def create_context_usage_middleware(
                 messages=edited_messages,
             ))
         except Exception as exc:
+            logger.warning(
+                "[agent] 模型调用失败: index=%s model=%s started_at_ms=%s duration_ms=%s error=%s",
+                record["index"],
+                effective_model_id,
+                started_at_ms,
+                _now_epoch_ms() - started_at_ms,
+                exc,
+            )
             emit_llm_connection_alarm_if_needed(
                 exc,
                 ext1={"model_id": effective_model_id, "middleware": name},
             )
             raise
+        ended_at_ms = _now_epoch_ms()
+        record["started_at_ms"] = started_at_ms
+        record["ended_at_ms"] = ended_at_ms
         _merge_response_usage(record, response)
+        _stamp_response_timing(response, started_at_ms=started_at_ms, ended_at_ms=ended_at_ms)
+        logger.info(
+            "[agent] 模型调用完成: index=%s model=%s started_at_ms=%s ended_at_ms=%s duration_ms=%s input_tokens=%s output_tokens=%s",
+            record["index"],
+            effective_model_id,
+            started_at_ms,
+            ended_at_ms,
+            ended_at_ms - started_at_ms,
+            record.get("actual_input_tokens", record.get("input_tokens")),
+            record.get("output_tokens"),
+        )
         usage = get_context_usage()
         _emit_context_usage(usage)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
-            command=Command(update={"token_usage": usage}),
+            command=Command(update={"token_usage": compact_token_usage_for_state(usage)}),
         )
 
     def get_context_usage() -> dict[str, Any] | None:
@@ -100,14 +130,14 @@ def create_request_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
 ):
-    """创建每次模型请求前的当前上下文裁剪和 token usage middleware。"""
+    """创建每次模型请求前的上下文计量与 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
         tools=tools,
-        tool_result_budget=tool_result_budget,
+        context_request_budget=context_request_budget,
         state_schema=state_schema,
     )
 
@@ -138,19 +168,66 @@ def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None,
     }
 
 
-def create_chat_data_context_usage_middleware(
-    tools: list,
-    model_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
-    state_schema: Any | None = None,
-) -> Any:
-    """创建智能问数上下文裁剪和 token usage middleware。"""
-    return create_context_usage_middleware(
-        model_id=model_id,
-        tools=tools,
-        tool_result_budget=tool_result_budget,
-        state_schema=state_schema,
-    )
+_STATE_USAGE_FIELDS = (
+    "used",
+    "total",
+    "percentage",
+    "remaining",
+    "context_window",
+    "max_output_tokens",
+    "hard_input_limit_tokens",
+    "hard_input_guard_ratio",
+    "hard_input_guard_tokens",
+    "compression_trigger_tokens",
+    "compression_trigger_ratio",
+    "compression_target_tokens",
+    "input_tokens",
+    "current_input_tokens",
+    "max_input_tokens",
+    "cumulative_input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "estimated",
+    "current_cached_input_tokens",
+    "cumulative_cached_input_tokens",
+    "current_cache_hit_rate",
+    "cumulative_cache_hit_rate",
+)
+
+_STATE_COMPRESSION_FIELDS = (
+    "enabled",
+    "triggered",
+    "estimated_tokens_before",
+    "estimated_tokens_after",
+    "estimated_cleared_tokens",
+    "threshold_tokens",
+    "trigger_ratio",
+    "hard_input_limit_tokens",
+    "hard_input_guard_ratio",
+    "hard_input_guard_tokens",
+    "compression_target_tokens",
+    "static_input_tokens",
+    "compressed_messages",
+    "summary_chars",
+    "compression_skipped_reason",
+)
+
+
+def compact_token_usage_for_state(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """只保留 checkpoint 所需的统计值，避免保存 prompt、工具和消息明细。"""
+    if not isinstance(usage, dict):
+        return None
+    compact = {key: usage[key] for key in _STATE_USAGE_FIELDS if key in usage}
+    compression = usage.get("context_compression")
+    if isinstance(compression, dict):
+        compact_compression = {
+            key: compression[key]
+            for key in _STATE_COMPRESSION_FIELDS
+            if key in compression
+        }
+        if compact_compression:
+            compact["context_compression"] = compact_compression
+    return compact or None
 
 
 def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
@@ -191,8 +268,8 @@ async def invoke_with_context_usage(*, agent: Any, state: dict[str, Any], system
 
 def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int, tools: list[Any] | None = None, tools_tokens: int, overhead_tokens: int) -> list[dict[str, Any]]:
     """构造当前模型请求上下文拆分。"""
-    system_messages = [message for message in messages if getattr(message, "type", "") == "system"]
-    non_system_messages = [message for message in messages if getattr(message, "type", "") != "system"]
+    system_messages = [message for message in messages if isinstance(message, SystemMessage)]
+    non_system_messages = [message for message in messages if not isinstance(message, SystemMessage)]
     system_tokens = count_messages_tokens(system_messages)
     non_system_tokens = max(int(message_tokens or 0) - system_tokens, 0)
     items: list[dict[str, Any]] = []
@@ -233,13 +310,17 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
             "tokens": max(int(overhead_tokens), 0),
             "estimated_tokens": max(int(overhead_tokens), 0),
             "estimated": True,
-            "description": "模型协议固定开销，已计入本次输入预算。",
+            "description": "模型协议固定开销，已计入本次模型输入。",
         })
     return items
 
 
 def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
-    """按工具拆分 schema 估算 token。"""
+    """按工具拆分 schema 估算 token。
+
+    工具定义无法像消息正文一样从会话历史反查，因此保留完整 schema 正文；
+    工具数量有界（不随轮数增长），且 token_usage 每会话仅一行，体积可控。
+    """
     items = []
     for index, tool in enumerate(tools or []):
         try:
@@ -294,7 +375,7 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
             "tokens": overhead_tokens,
             "estimated_tokens": overhead_tokens,
             "estimated": True,
-            "description": "模型协议固定开销，已计入本次输入预算。",
+            "description": "模型协议固定开销，已计入本次模型输入。",
         })
     return items
 
@@ -311,24 +392,36 @@ def build_message_breakdown(
     round_index = 0
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
-        message_type = str(getattr(message, "type", "") or "message")
-        redacted = hide_content
+        message_type = _message_role(message)
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        is_context_summary = bool(additional_kwargs.get("context_summary"))
+        redacted = hide_content or is_context_summary
         content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
-        if message_type == "human":
+        if isinstance(message, HumanMessage) and not is_context_summary:
             round_index += 1
         estimated_tokens = count_messages_tokens([message])
         item = {
             "key": f"message_{index}",
-            "label": _message_label(message_type, round_index or 1),
-            "role": message_type,
+            "label": "历史摘要（运行态）" if is_context_summary else _message_label(message_type, round_index or 1),
+            "role": "context_summary" if is_context_summary else message_type,
             "round": round_index or 1,
             "message_index": index,
+            # 前端凭 message_id 从已加载的会话消息中取正文，payload 本身不落正文。
+            "message_id": getattr(message, "id", None),
+            "tool_call_id": getattr(message, "tool_call_id", None),
+            # AI 消息为模型调用、工具消息为工具执行的起止时间（epoch 毫秒）；
+            # 其余消息无此字段，耗时由前端相减得出。
+            "started_at_ms": _optional_non_negative_int(additional_kwargs.get("started_at_ms")),
+            "ended_at_ms": _optional_non_negative_int(additional_kwargs.get("ended_at_ms")),
             "tokens": _scale_tokens(estimated_tokens, scale),
             "estimated_tokens": estimated_tokens,
             "estimated": True,
             "content": content,
-            "description": content[:120],
         }
+        if is_context_summary:
+            item["description"] = "运行态上下文摘要，内容不对用户展示。"
+        elif redacted:
+            item["description"] = SYSTEM_PROMPT_PLACEHOLDER
         if redacted:
             item["redacted"] = True
         items.append(item)
@@ -348,8 +441,10 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
     context_budget = budget if isinstance(budget, ContextBudget) else ContextBudget(
         context_window=max(int(budget), 1),
         max_output_tokens=0,
-        trigger_ratio=1.0,
-        input_budget_tokens=max(int(budget), 1),
+        compression_trigger_ratio=1.0,
+        hard_input_limit_tokens=max(int(budget), 1),
+        compression_trigger_tokens=max(int(budget), 1),
+        compression_target_tokens=max(int(budget), 1),
     )
     payload = build_context_usage_payload(context_budget, current_input_tokens)
     payload.update({
@@ -377,7 +472,9 @@ def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
         pass
     try:
         setattr(agent, "_chat_data_context_usage_middleware", middleware)
-    except Exception:
+    except Exception as exc:
+        # 挂载失败仅意味着该 agent 缺少上下文用量统计,不应阻断 agent 装配,故记录后返回。
+        logger.warning("上下文用量中间件挂载到 agent 失败,token 用量统计将缺失: agent=%s error=%s", type(agent).__name__, exc)
         return
 
 
@@ -387,12 +484,17 @@ def _build_agent_context_usage(
     messages: list[Any],
     tools: list[Any],
     model_id: str | None,
-    request_budget: ToolResultBudget,
+    request_budget: ContextRequestBudget,
     context_compression: dict[str, Any] | None = None,
+    context_summary: str | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """构造当前模型入口 token usage。"""
     budget = request_budget.configure(system_prompt, tools, model_id=model_id)
-    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(system_prompt, messages)
+    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(
+        system_prompt,
+        messages,
+        context_summary=context_summary,
+    )
     llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)
     tool_tokens = count_tools_tokens(tools)
@@ -409,8 +511,8 @@ def _build_agent_context_usage(
         "total_tokens": input_tokens,
         "estimated": True,
         "context_compression": context_compression or _empty_context_compression_report(
-            context_window=budget.context_window,
-            message_budget_tokens=request_budget.remaining_for_messages(),
+            budget=budget,
+            static_input_tokens=request_budget.static_input_tokens,
         ),
         "breakdown": build_request_breakdown(
             messages=llm_messages,
@@ -423,17 +525,21 @@ def _build_agent_context_usage(
     return effective_system_prompt, request_messages, token_usage
 
 
-def _empty_context_compression_report(*, context_window: int, message_budget_tokens: int) -> dict[str, Any]:
+def _empty_context_compression_report(*, budget: ContextBudget, static_input_tokens: int) -> dict[str, Any]:
     config = get_context_compression_config()
-    trigger_ratio = float(config.get("trigger_ratio", 0.70))
     return {
         "enabled": bool(config.get("enabled", True)),
         "triggered": False,
         "estimated_tokens_before": 0,
         "estimated_tokens_after": 0,
         "estimated_cleared_tokens": 0,
-        "threshold_tokens": max(int(message_budget_tokens or int(max(context_window, 1) * trigger_ratio)), 1),
-        "trigger_ratio": trigger_ratio,
+        "threshold_tokens": budget.compression_trigger_tokens,
+        "trigger_ratio": budget.compression_trigger_ratio,
+        "hard_input_limit_tokens": budget.hard_input_limit_tokens,
+        "hard_input_guard_ratio": HARD_INPUT_GUARD_RATIO,
+        "hard_input_guard_tokens": hard_input_guard_tokens(budget.hard_input_limit_tokens),
+        "compression_target_tokens": budget.compression_target_tokens,
+        "static_input_tokens": max(int(static_input_tokens), 0),
         "compressed_messages": 0,
         "summary_chars": 0,
         "compression_skipped_reason": "",
@@ -449,17 +555,21 @@ def _override_request(request: Any, **kwargs):
     return type(request)(**data)
 
 
-def _merge_compression_summary_into_system_prompt(system_prompt: str, messages: list[Any]) -> tuple[str, list[Any]]:
-    """将压缩摘要合并进唯一 system prompt，避免模型入口出现多个 system 消息。"""
-    if not messages:
-        return system_prompt, []
-    first = messages[0]
-    additional_kwargs = getattr(first, "additional_kwargs", None) or {}
-    if isinstance(first, SystemMessage) and additional_kwargs.get("context_compression"):
-        summary = str(getattr(first, "content", "") or "").strip()
-        if summary:
-            return f"{system_prompt}\n\n## 历史对话摘要\n{summary}", list(messages[1:])
-    return system_prompt, list(messages)
+def _merge_compression_summary_into_system_prompt(
+    system_prompt: str,
+    messages: list[Any],
+    *,
+    context_summary: str | None = None,
+) -> tuple[str, list[Any]]:
+    """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
+    cleaned_messages, legacy_summary = extract_legacy_context_summary(messages)
+    summary = merge_context_summaries(context_summary, legacy_summary)
+    if not summary:
+        return system_prompt, cleaned_messages
+    summary_message = build_runtime_context_summary_message(summary)
+    if summary_message is None:
+        return system_prompt, cleaned_messages
+    return system_prompt, [summary_message, *cleaned_messages]
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:
@@ -470,15 +580,6 @@ def _emit_context_usage(usage: dict[str, Any] | None) -> None:
         get_stream_writer()({"type": "token_usage", "usage": sanitize_context_usage_for_response(usage)})
     except Exception:
         logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
-
-
-def _build_request_messages(request: Any) -> list[BaseMessage]:
-    messages = []
-    system_message = getattr(request, "system_message", None)
-    if isinstance(system_message, BaseMessage):
-        messages.append(system_message)
-    messages.extend(message for message in list(getattr(request, "messages", None) or []) if isinstance(message, BaseMessage))
-    return messages
 
 
 def _request_model_name(request: Any) -> str | None:
@@ -496,6 +597,40 @@ def _request_context_compression(request: Any) -> dict[str, Any] | None:
         return None
     value = state.get("context_compression")
     return value if isinstance(value, dict) else None
+
+
+def _request_context_summary(request: Any) -> str | None:
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return None
+    summary = str(state.get("context_summary") or "").strip()
+    return summary or None
+
+
+def _now_epoch_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _stamp_response_timing(response: Any, *, started_at_ms: int, ended_at_ms: int) -> None:
+    """把模型调用起止时间（epoch 毫秒）盖进响应消息，随 checkpoint 持久化。
+
+    耗时由展示端相减得出；保留起止时间比只存时长信息更全（时间轴定位、间隔分析）。
+    """
+    message = _extract_response_message(response)
+    if message is None:
+        return
+    additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+    additional_kwargs["started_at_ms"] = started_at_ms
+    additional_kwargs["ended_at_ms"] = ended_at_ms
+    try:
+        message.additional_kwargs = additional_kwargs
+    except Exception:
+        logger.warning(
+            "模型调用起止时间写入响应消息失败: started_at_ms=%s ended_at_ms=%s",
+            started_at_ms,
+            ended_at_ms,
+            exc_info=True,
+        )
 
 
 def _merge_response_usage(record: dict[str, Any], response: Any) -> None:
@@ -599,11 +734,24 @@ def _extract_response_usage(message: AIMessage | None) -> tuple[int, int, int] |
     if message is None:
         return None
     usage = getattr(message, "usage_metadata", None)
-    if isinstance(usage, dict) and any(key in usage for key in ("input_tokens", "output_tokens", "total_tokens")):
-        input_tokens = _optional_non_negative_int(usage.get("input_tokens")) or 0
-        output_tokens = _optional_non_negative_int(usage.get("output_tokens")) or 0
-        total_tokens = _optional_non_negative_int(usage.get("total_tokens"))
-        return input_tokens, output_tokens, total_tokens if total_tokens is not None else input_tokens + output_tokens
+    usage_from_metadata = _usage_from_usage_metadata(usage)
+    if usage_from_metadata is not None:
+        return usage_from_metadata
+    return _usage_from_response_metadata(message)
+
+
+def _usage_from_usage_metadata(usage: Any) -> tuple[int, int, int] | None:
+    """从 usage_metadata dict 提取三元组；缺关键字段返回 None 交给 response_metadata 兜底。"""
+    if not (isinstance(usage, dict) and any(key in usage for key in ("input_tokens", "output_tokens", "total_tokens"))):
+        return None
+    input_tokens = _optional_non_negative_int(usage.get("input_tokens")) or 0
+    output_tokens = _optional_non_negative_int(usage.get("output_tokens")) or 0
+    total_tokens = _optional_non_negative_int(usage.get("total_tokens"))
+    return input_tokens, output_tokens, total_tokens if total_tokens is not None else input_tokens + output_tokens
+
+
+def _usage_from_response_metadata(message: AIMessage) -> tuple[int, int, int] | None:
+    """从 response_metadata 的 openai 风格 payload 提取三元组；全空返回 None。"""
     raw_usage = _response_metadata_usage(message)
     if raw_usage is None:
         return None
@@ -708,6 +856,19 @@ def _message_label(message_type: str, round_index: int) -> str:
         "tool": "工具结果",
     }
     return f"第 {round_index} 轮 · {labels.get(message_type, message_type or '消息')}"
+
+
+def _message_role(message: BaseMessage) -> str:
+    """将 LangChain 标准消息类映射为内部 token 明细角色。"""
+    if isinstance(message, SystemMessage):
+        return "system"
+    if isinstance(message, HumanMessage):
+        return "human"
+    if isinstance(message, AIMessage):
+        return "ai"
+    if isinstance(message, ToolMessage):
+        return "tool"
+    return "message"
 
 
 def _scale_tokens(tokens: int, scale: float) -> int:

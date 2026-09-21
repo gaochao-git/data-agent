@@ -1,13 +1,13 @@
 import asyncio
 from types import SimpleNamespace
 
-from apps.chat_data_app.services.query_result import (
+from apps.chat_data_app.services.sql_run.result import (
     build_query_result_payload,
     query_result_status,
     query_result_succeeded,
 )
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
-from apps.chat_data_app.services.query_task_service import QueryTaskService
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
+from apps.chat_data_app.services.sql_run.task_service import QueryTaskService
 
 
 def test_query_result_status_normalizes_legacy_success_and_cancelled_alias():
@@ -62,6 +62,41 @@ def test_build_query_result_payload_uses_member_errors_for_failed_result():
     assert payload["status"] == "failed"
     assert payload["error"] == "错误A；已停止"
     assert payload["total_count"] == 0
+
+
+def test_build_query_result_payload_running_wins_over_partial_success():
+    """任一成员仍在运行时聚合为 running，即使已有成员成功。"""
+    payload = build_query_result_payload(
+        sql="select 1",
+        member_results=[
+            {
+                "status": "succeeded",
+                "member_datasource_id": "m1",
+                "columns": ["a"],
+                "data": [{"a": 1}],
+                "total_count": 1,
+            },
+            {"status": "running", "member_datasource_id": "m2"},
+        ],
+    )
+
+    assert payload["status"] == "running"
+    assert payload["error"] == "部分执行对象仍在查询中"
+    assert payload["total_count"] == 1
+
+
+def test_build_query_result_payload_all_cancelled_reports_cancelled():
+    """全部成员取消时聚合为 cancelled，error 聚合成员错误。"""
+    payload = build_query_result_payload(
+        sql="select 1",
+        member_results=[
+            {"status": "cancelled", "member_datasource_id": "m1", "error": "已停止"},
+            {"status": "cancelled", "member_datasource_id": "m2", "error": ""},
+        ],
+    )
+
+    assert payload["status"] == "cancelled"
+    assert payload["error"] == "已停止"
 
 
 def test_build_sql_task_results_merges_execution_metadata_and_normalizes_status():
@@ -173,7 +208,7 @@ def test_cancel_query_executions_continues_when_one_execution_stops_with_error()
                 return await cancel_execution(execution, operator_name=operator_name)
             except Exception:
                 await update_execution(execution.execution_id, sql_status="kill_failed")
-                return {"execution_id": execution.execution_id, "status": "kill_failed", "success": False}
+                return {"execution_id": execution.execution_id, "status": "kill_failed"}
 
     service = QueryTaskService(
         query_history_service=HistoryService(),
@@ -186,7 +221,7 @@ def test_cancel_query_executions_continues_when_one_execution_stops_with_error()
     async def cancel_execution(execution, **_kwargs):
         if execution.execution_id == "exec_failed":
             raise RuntimeError("stop failed")
-        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+        return {"execution_id": execution.execution_id, "status": "cancelled"}
 
     async def update_execution(execution_id, **kwargs):
         updates.append((execution_id, kwargs))
@@ -246,7 +281,7 @@ def test_build_sql_task_results_falls_back_to_position_when_member_id_is_missing
     results = QueryTaskService.build_sql_task_results(
         {
             "sql": "select 1",
-            "results": [{"columns": ["a"], "data": [{"a": 1}], "total_count": 1, "success": True}],
+            "results": [{"columns": ["a"], "data": [{"a": 1}], "total_count": 1}],
         },
         [{"execution_id": "exec_1", "sql_status": "succeeded", "member_name": "默认库"}],
     )

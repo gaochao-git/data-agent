@@ -3,13 +3,17 @@ SQLAlchemy 数据模型定义
 """
 
 from datetime import datetime
+import json
 from typing import Optional
 
 from sqlalchemy import BigInteger, Integer, String, DateTime, SmallInteger, Text, Index, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
-from sqlalchemy import Column
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # SQLite 用 Integer（才能自增），MySQL 用 BigInteger
 AutoIncrementId = BigInteger().with_variant(Integer, "sqlite")
@@ -30,6 +34,7 @@ class UserThread(Base):
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     thread_title: Mapped[Optional[str]] = mapped_column(String(255), default="未命名会话")
     agent_id: Mapped[Optional[str]] = mapped_column(String(255))
+    datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     is_favorited: Mapped[int] = mapped_column(SmallInteger, default=0)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -38,6 +43,71 @@ class UserThread(Base):
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+
+class ChatDataConversationEvent(Base):
+    """ChatData 会话的追加式原始事件历史。"""
+    __tablename__ = "chat_data_conversation_event"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "event_key", name="uniq_conv_event_key"),
+        Index("idx_conv_event_seq", "conversation_id", "sequence_no"),
+        Index("idx_conv_event_turn", "conversation_id", "turn_id"),
+    )
+
+
+class ChatDataAgentInbox(Base):
+    """跨进程协调 ChatData 活跃运行和运行中追加消息。"""
+    __tablename__ = "chat_data_agent_inbox"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    record_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    queue_type: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="next-step",
+        server_default="next-step",
+        comment="队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理",
+    )
+    content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    consumed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    lease_expire_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("record_type", "message_id", name="uniq_agent_inbox_msg"),
+        Index("idx_agent_inbox_conv", "conversation_id", "user_id", "record_type", "status"),
+        Index("idx_agent_inbox_run", "run_id", "record_type", "status"),
+    )
 
 
 class UploadedFile(Base):
@@ -151,7 +221,6 @@ class SqlQueryHistory(Base):
 
     def to_dict(self):
         """转换为字典"""
-        import json
         result = {
             'id': self.id,
             'title': self.query_title,
@@ -168,7 +237,7 @@ class SqlQueryHistory(Base):
         if self.builder_config:
             try:
                 result['builder_config'] = json.loads(self.builder_config)
-            except:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 result['builder_config'] = None
         return result
 
@@ -203,7 +272,6 @@ class SqlQueryFavorite(Base):
 
     def to_dict(self):
         """转换为字典"""
-        import json
         result = {
             'id': self.id,
             'datasource_id': self.datasource_id,
@@ -223,7 +291,7 @@ class SqlQueryFavorite(Base):
         if self.builder_config:
             try:
                 result['builder_config'] = json.loads(self.builder_config)
-            except:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 result['builder_config'] = None
         return result
 
@@ -265,13 +333,15 @@ class ChatDataQueryTask(Base):
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("查询任务 result_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
                 result_payload = None
         request_payload = None
         if self.request_payload:
             try:
                 request_payload = json.loads(self.request_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("查询任务 request_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
                 request_payload = None
         return {
             "task_id": self.task_id,
@@ -339,7 +409,8 @@ class ChatDataQueryExecution(Base):
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
-            except Exception:
+            except Exception as exc:
+                logger.warning("SQL 执行明细 result_payload 解析 JSON 失败,按 None 返回: execution_id=%s error=%s", self.execution_id, exc)
                 result_payload = None
         return {
             "id": self.id,
@@ -411,14 +482,12 @@ class ChatDataSkill(Base):
     skill_title: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
     skill_desc: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
     skill_category: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-    skill_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="analyze", server_default="analyze")
     skill_source: Mapped[str] = mapped_column(String(20), nullable=False, default="user", server_default="user")
     visibility_type: Mapped[str] = mapped_column(String(20), nullable=False, default="private", server_default="private")
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
     skill_publish_status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft")
     current_skill_version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     owner_user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-    skill_root_dir: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
@@ -442,7 +511,6 @@ class ChatDataSkillVersion(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     skill_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     skill_version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    skill_version_dir: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
     version_publish_status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -639,6 +707,7 @@ class DatasourceTable(Base):
     table_desc: Mapped[Optional[str]] = mapped_column(String(128))
     table_business_desc: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     columns_json: Mapped[Optional[str]] = mapped_column(Text)
+    indexes_json: Mapped[Optional[str]] = mapped_column(Text)
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -696,6 +765,153 @@ class DatasourceColumnDict(Base):
     )
 
 
+class ChatDataAgentSchedule(Base):
+    """智能体定时任务定义（用户在会话里创建，到点自动执行一次智能问数）。"""
+
+    __tablename__ = "chat_data_agent_schedule"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # fixed-绑定指定会话（conversation_id 生效）；new_each_run-每次执行新建会话（conversation_id 为空）
+    conversation_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="fixed", server_default="fixed")
+    job_title: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    job_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    schedule_type: Mapped[str] = mapped_column(String(16), nullable=False, default="cron", server_default="cron")
+    cron_expr: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    plan_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    effective_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    next_trigger_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_trigger_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    options_json: Mapped[Optional[str]] = mapped_column(Text)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uniq_schedule_job_id"),
+        Index("idx_schedule_user", "user_id", "delete_flag"),
+        Index("idx_schedule_next_trigger", "enabled_flag", "delete_flag", "next_trigger_time"),
+    )
+
+    def to_dict(self):
+        """转换为前端字典。"""
+        return {
+            "job_id": self.job_id,
+            "user_id": self.user_id,
+            "create_by_name": self.create_by_name,
+            "conversation_id": self.conversation_id,
+            "conversation_mode": self.conversation_mode,
+            "title": self.job_title,
+            "prompt": self.job_prompt,
+            "schedule_type": self.schedule_type,
+            "cron_expr": self.cron_expr,
+            "plan_time": self.plan_time.isoformat() if self.plan_time else None,
+            "effective_end_time": self.effective_end_time.isoformat() if self.effective_end_time else None,
+            "enabled_flag": self.enabled_flag,
+            "next_trigger_time": self.next_trigger_time.isoformat() if self.next_trigger_time else None,
+            "last_trigger_time": self.last_trigger_time.isoformat() if self.last_trigger_time else None,
+            "datasource_id": self._options().get("datasource_id"),
+            "options": self._options(),
+            "create_time": self.create_time.isoformat() if self.create_time else None,
+            "update_time": self.update_time.isoformat() if self.update_time else None,
+        }
+
+    def _options(self) -> dict:
+        try:
+            value = json.loads(self.options_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+class ChatDataAgentScheduleRun(Base):
+    """智能体定时任务触发实例：每个计划触发时间一行，串联派发出的 Agent Run。"""
+
+    __tablename__ = "chat_data_agent_schedule_run"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    plan_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # pending-待派发 claimed-已抢占 dispatched-已提交 Agent Run
+    # succeeded/failed/cancelled-随 Run 终态收口 skipped-重试耗尽或窗口过期
+    trigger_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    trigger_type: Mapped[str] = mapped_column(String(16), nullable=False, default="schedule", server_default="schedule")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    owner_node: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    error_message: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    dispatched_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "plan_time", name="uniq_schedule_job_plan"),
+        Index("idx_schedule_run_scan", "trigger_status", "plan_time"),
+        Index("idx_schedule_run_job", "job_id", "create_time"),
+        Index("idx_schedule_run_user", "user_id", "trigger_status"),
+    )
+
+    def to_dict(self, run_status: str | None = None):
+        """转换为前端字典；run_status 为关联 Agent Run 的状态（可空）。"""
+        return {
+            "job_id": self.job_id,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "plan_time": self.plan_time.isoformat() if self.plan_time else None,
+            "status": self.trigger_status,
+            "trigger_type": self.trigger_type,
+            "run_id": self.run_id,
+            "run_status": run_status,
+            "error_message": self.error_message,
+            "claimed_time": self.claimed_time.isoformat() if self.claimed_time else None,
+            "dispatched_time": self.dispatched_time.isoformat() if self.dispatched_time else None,
+            "finished_time": self.finished_time.isoformat() if self.finished_time else None,
+            "create_time": self.create_time.isoformat() if self.create_time else None,
+        }
+
+
+class ChatDataAgentScheduleControl(Base):
+    """智能体定时任务全局控制表（固定单行 id=1）：后台一键暂停所有调度。"""
+
+    __tablename__ = "chat_data_schedule_control"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    paused_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    pause_reason: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    def to_dict(self):
+        """转换为前端字典。"""
+        return {
+            "paused_flag": self.paused_flag,
+            "pause_reason": self.pause_reason,
+            "update_time": self.update_time.isoformat() if self.update_time else None,
+            "update_by_name": self.update_by_name,
+        }
+
+
 class SemanticConfig(Base):
     """语义配置表"""
     __tablename__ = "semantic_config"
@@ -705,7 +921,7 @@ class SemanticConfig(Base):
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     semantic_config_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     semantic_config_desc: Mapped[Optional[str]] = mapped_column(String(128))
-    ontology_rules: Mapped[Optional[str]] = mapped_column(Text)
+    business_notes: Mapped[Optional[str]] = mapped_column(Text)
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
     metrics_json: Mapped[Optional[str]] = mapped_column(Text)
     dimensions_json: Mapped[Optional[str]] = mapped_column(Text)

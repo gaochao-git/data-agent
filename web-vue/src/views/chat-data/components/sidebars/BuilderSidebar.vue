@@ -99,6 +99,21 @@ const buildSemanticDimensionField = (dim: SemanticDimension) => ({
 })
 
 const buildSemanticMetricField = (metric: SemanticConfigItem['metrics'][number]) => {
+  // 派生/复合指标：无物理表字段与表达式，后端按 semanticName 从语义模型解析口径
+  if (metric.metric_kind === 'derived' || metric.metric_kind === 'composite') {
+    return {
+      table: '',
+      tableAlias: '',
+      tableLabel: '',
+      column: '',
+      semanticName: metric.name,
+      displayName: metric.name,
+      expression: '',
+      label: metric.name,
+      aggFunc: 'RAW',
+      metricKind: metric.metric_kind
+    }
+  }
   const meta = parseMetricDragMeta(metric)
   return {
     table: metric.table,
@@ -145,7 +160,7 @@ const handleDragEnd = () => {
 
       <div v-else-if="!semanticConfig" class="flex flex-col items-center justify-center gap-2 p-6 text-gray-400 text-xs">
         <i class="fa-solid fa-layer-group text-xl opacity-50"></i>
-        <span>请选择指标集</span>
+        <span>请选择语义模型</span>
       </div>
 
       <template v-else>

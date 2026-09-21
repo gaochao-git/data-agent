@@ -8,7 +8,6 @@ from datetime import datetime
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -18,6 +17,7 @@ from apps.chat_data_app.daos.datasource_dao import (
     _ORM_SESSION,
     DataSourceDao,
 )
+from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
 from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
 from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_member_identity,
@@ -25,7 +25,9 @@ from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_source_line,
     _format_time,
     _load_json,
+    _merge_table_indexes_for_sync,
     _normalize_column_dict,
+    _normalize_table_indexes_payload,
     _normalize_query_executor_type_for_parse,
     _parse_member_source_entry,
     _parse_member_source_entries,
@@ -66,6 +68,7 @@ def _table_model(group_id: str = "group_a", table_name: str = "orders", sort_no:
         table_desc="订单表",
         table_business_desc="业务订单主表",
         columns_json='[{"name":"id"}]',
+        indexes_json=None,
         sort_no=sort_no,
         delete_flag=0,
         create_time=None,
@@ -84,7 +87,7 @@ def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_
         group_id="group_a",
         semantic_config_name=name,
         semantic_config_desc="描述",
-        ontology_rules="业务规则",
+        business_notes="业务规则",
         enabled_flag=1,
         metrics_json='[{"name":"订单金额"}]',
         dimensions_json='[{"name":"城市"}]',
@@ -152,6 +155,19 @@ class _FakeExecuteResult:
     def scalars(self):
         return _FakeScalarResult(self._rows)
 
+    def mappings(self):
+        return _FakeScalarResult([
+            {
+                "semantic_config_id": row.semantic_config_id,
+                "semantic_config_name": row.semantic_config_name,
+                "semantic_config_desc": row.semantic_config_desc,
+                "enabled_flag": row.enabled_flag,
+                "metrics_json": row.metrics_json,
+                "dimensions_json": row.dimensions_json,
+            }
+            for row in self._rows
+        ])
+
 
 class _FakeOrmSession:
     def __init__(self, rows_by_table=None, executed=None):
@@ -204,9 +220,11 @@ class _FakeOrmSession:
     def _filter_datasource_table(self, sql: str, values: set):
         rows = list(self.rows_by_table.get("datasource_table", []))
         if "group_id = " in sql:
-            return [row for row in rows if row.group_id in values]
-        if "group_id IN " in sql:
-            return [row for row in rows if row.group_id in values]
+            rows = [row for row in rows if row.group_id in values]
+        elif "group_id IN " in sql:
+            rows = [row for row in rows if row.group_id in values]
+        if "table_names = " in sql or "table_names IN " in sql:
+            rows = [row for row in rows if row.table_names in values]
         return rows
 
     def _filter_table_group(self, sql: str, values: set):
@@ -247,7 +265,7 @@ def _patch_store_session(monkeypatch, rows_by_table=None, executed=None):
     async def fake_get_session():
         yield session
 
-    monkeypatch.setattr("apps.chat_data_app.daos.datasource_dao.get_session", fake_get_session)
+    monkeypatch.setattr("apps.chat_data_app.daos.dao_session.get_session", fake_get_session)
     return session
 
 
@@ -359,6 +377,78 @@ def test_map_group_row_and_member_sources_preserve_metadata():
     assert legacy["recommended_questions"] == []
 
 
+def test_table_indexes_normalization_preserves_legacy_and_manual_indexes():
+    columns = [
+        {"name": "id", "primary_key": True},
+        {"name": "code", "unique_key": True},
+        {"name": "email", "unique_key": True},
+        {"name": "status", "index_key": True},
+        {"name": "created_at", "index_key": True},
+    ]
+    legacy = _normalize_table_indexes_payload(None, columns)
+    assert legacy["physical"] == [
+        {"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]},
+        {"index_type": "unique", "index_name": "", "columns": ["code"]},
+        {"index_type": "unique", "index_name": "", "columns": ["email"]},
+        {"index_type": "secondary", "index_name": "", "columns": ["status"]},
+        {"index_type": "secondary", "index_name": "", "columns": ["created_at"]},
+    ]
+
+    existing = {
+        "physical": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
+        "manual": [{"index_type": "unique", "index_name": "uniq_code", "columns": ["code"]}],
+    }
+    merged = _merge_table_indexes_for_sync(
+        {
+            "columns": columns,
+            "primary_keys": [["id"]],
+            "unique_indexes": [{"name": "uniq_email", "columns": ["email"]}],
+            "indexes": [{"name": "idx_created_at", "columns": ["created_at"]}],
+        },
+        existing,
+    )
+    assert merged["physical"][2] == {
+        "index_type": "secondary",
+        "index_name": "idx_created_at",
+        "columns": ["created_at"],
+    }
+    assert merged["manual"] == existing["manual"]
+
+
+def test_datasource_dao_table_index_read_and_update_boundaries(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
+    table = _table_model()
+    table.columns_json = '[{"name":"id"},{"name":"status"}]'
+    table.indexes_json = json.dumps({
+        "physical": [{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}],
+        "manual": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
+    })
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_table": [table]}, executed=executed)
+    manual = [{"index_type": "unique", "index_name": "uniq_status", "columns": ["status"]}]
+
+    async def run_checks():
+        return (
+            await store.get_datasource_table_indexes_async("group_a", "orders"),
+            await store.get_datasource_table_indexes_async("group_a", "missing"),
+            await store.update_datasource_table_indexes_async("group_a", "orders", manual, update_by="u1", update_by_name="用户1"),
+            await store.update_datasource_table_indexes_async("", "orders", manual),
+        )
+
+    indexes, missing, saved, invalid = asyncio.run(run_checks())
+    assert indexes["physical"][0]["index_name"] == "PRIMARY"
+    assert indexes["manual"][0]["index_name"] == "idx_old"
+    assert missing is None
+    assert saved == manual
+    assert invalid is None
+    update_stmt = next(stmt for stmt in executed if str(stmt).lstrip().upper().startswith("UPDATE DATASOURCE_TABLE"))
+    params = update_stmt.compile().params
+    persisted = json.loads(next(value for key, value in params.items() if key.startswith("indexes_json")))
+    assert persisted["physical"] == indexes["physical"]
+    assert persisted["manual"] == manual
+    assert any("FOR UPDATE" in str(stmt).upper() for stmt in executed)
+
+
 def test_map_group_row_normalizes_malformed_recommended_questions():
     store = DataSourceDao.__new__(DataSourceDao)
     row = store._group_model_to_row(_group_model())
@@ -425,6 +515,8 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     assert by_name["group_name"] == "订单组"
     assert default["is_default"] is True
     assert tables[0]["columns"] == [{"name": "id"}]
+    assert tables[0]["primary_keys"] == []
+    assert tables[0]["manual_indexes"] == []
     assert member_ids == ["ORG_A", "ORG_B"]
     assert column_dict == {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
     assert asyncio.run(store.get_datasource_tables_by_group_id_async("")) == []
@@ -499,17 +591,15 @@ def test_datasource_dao_empty_defaults_and_write_short_circuits(monkeypatch):
     async def run_checks():
         return (
             await store.get_default_datasource_async(),
-            await store.get_semantic_configs_async("missing"),
             await store.update_datasource_table_business_desc_async("", "orders", "desc"),
             await store.update_datasource_table_business_desc_async("group_a", "", "desc"),
             await store.replace_column_dict_async("", "orders", "status", {"unit": "元"}),
             await store.replace_column_dict_async("group_a", "orders", "status", {}),
         )
 
-    default_ds, semantic_configs, empty_group_update, empty_table_update, invalid_dict, empty_dict = asyncio.run(run_checks())
+    default_ds, empty_group_update, empty_table_update, invalid_dict, empty_dict = asyncio.run(run_checks())
 
     assert default_ds is None
-    assert semantic_configs == []
     assert empty_group_update is None
     assert empty_table_update is None
     assert invalid_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
@@ -546,7 +636,7 @@ def test_datasource_dao_table_group_queries_deduplicate(monkeypatch):
 
 
 def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
-    store = DataSourceDao.__new__(DataSourceDao)
+    store = SemanticConfigDao.__new__(SemanticConfigDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [],
@@ -560,26 +650,34 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
 
     async def run_checks():
         return (
-            await store.get_semantic_configs_async("group_a"),
-            await store.get_semantic_configs_by_group_id_async("group_a", user_id="user_a"),
-            await store.get_semantic_config_by_group_id_async("group_a", "sc_public_b"),
-            await store.get_semantic_config_async("missing", "sc_public_b"),
+            await store.get_by_group_id_async("group_a"),
+            await store.get_by_group_id_async("group_a", user_id="user_a"),
+            await store.get_directory_by_group_id_async("group_a", user_id="user_a"),
+            await store.get_by_id_async("group_a", "sc_public_b"),
+            await store.get_by_id_async("missing", "sc_public_b"),
         )
 
-    configs, visible_configs, config, missing = asyncio.run(run_checks())
+    configs, visible_configs, directory, config, missing = asyncio.run(run_checks())
 
     assert [item["id"] for item in configs] == ["sc_public_b", "sc_public_a", "sc_private", "sc_hidden"]
     assert [item["id"] for item in visible_configs] == ["sc_public_b", "sc_public_a", "sc_private"]
+    assert directory == [
+        {"id": "sc_public_b", "name": "订单分析", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+        {"id": "sc_public_a", "name": "高规格", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+        {"id": "sc_private", "name": "个人订单", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+    ]
     assert config["name"] == "订单分析"
     assert config["metrics"] == [{"name": "订单金额"}]
     assert missing is None
-    assert asyncio.run(store.get_semantic_configs_by_group_id_async("")) == []
-    assert asyncio.run(store.get_semantic_config_by_group_id_async("", "sc_public")) is None
-    assert asyncio.run(store.get_semantic_config_by_group_id_async("group_a", "missing")) is None
+    assert asyncio.run(store.get_by_group_id_async("")) == []
+    assert asyncio.run(store.get_directory_by_group_id_async("")) == []
+    assert asyncio.run(store.get_by_id_async("", "sc_public")) is None
+    assert asyncio.run(store.get_by_id_async("group_a", "missing")) is None
 
 
 def test_store_write_methods_emit_orm_statements(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
+    semantic_store = SemanticConfigDao.__new__(SemanticConfigDao)
     executed = []
     _patch_store_session(monkeypatch, {"datasource_group": [_group_model()], "datasource_table": []}, executed=executed)
 
@@ -614,12 +712,29 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
         await store.replace_table_group_relations_async("", [{"table_group_name": "订单域", "table_names": ["orders"]}])
         await store.replace_table_group_relations_async("group_a", [{"table_group_name": "订单域", "table_names": ["orders", "orders", "items"]}, {"table_group_name": "", "table_names": ["x"]}], create_by="u7", update_by="u8")
         await store.soft_delete_group_async("group_a", update_by="u9")
-        assert await store.upsert_semantic_config_async("missing", {"id": "sc_missing"}) is False
-        assert await store.upsert_semantic_config_async("group_a", {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"}) is True
-        await store.soft_delete_semantic_config_async("sc_a", update_by="u10")
+        assert await semantic_store.upsert_async("", {"id": "sc_missing"}) is False
+        assert await semantic_store.upsert_many_async("group_a", [
+            {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"},
+            {"id": "sc_b", "name": "用户分析", "enabled": False, "dimensions": [{"name": "用户"}], "scope_type": "public"},
+        ]) is True
+        await semantic_store.soft_delete_async("sc_a", update_by="u10")
         assert saved_dict == {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
 
     asyncio.run(run_checks())
+
+    # 软删除语句必须：① where 带 delete_flag == 0（幂等，重复删除不二次改名）；
+    # ② 名字改成 concat(left(name,92),'__d',id,'_',日期)——delete_flag 只有两态，
+    # 「删除→同名重建→再删」会让两条记录都落到 (name, 1) 上，改名保证三元组唯一。
+    from sqlalchemy.sql.dml import Update as sa_Update
+
+    # soft_delete_async 是本测试最后发出的 semantic_config 写操作，取最后一条 update 断言
+    semantic_updates = [s for s in executed if isinstance(s, sa_Update) and s.table.name == "semantic_config"]
+    assert semantic_updates
+    delete_sql = str(semantic_updates[-1].compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "delete_flag = 0" in delete_sql
+    assert "concat(left(" in delete_sql
+    assert "'__d'" in delete_sql
+    assert "date_format(now()" in delete_sql
 
     sql_texts = [str(stmt) for stmt in executed]
     assert any("INSERT INTO datasource_group" in sql for sql in sql_texts)
@@ -632,6 +747,10 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
     assert sum("INSERT INTO datasource_column_dict" in sql for sql in sql_texts) == 1
     assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1
     assert any("INSERT INTO semantic_config" in sql for sql in sql_texts)
+    semantic_upserts = [sql for sql in sql_texts if re.search(r"INSERT INTO semantic_config\s", sql) is not None]
+    assert len(semantic_upserts) == 1
+    semantic_params = executed[sql_texts.index(semantic_upserts[0])].compile().params
+    assert {value for key, value in semantic_params.items() if key.startswith("semantic_config_id")} == {"sc_a", "sc_b"}
     assert any("UPDATE semantic_config" in sql for sql in sql_texts)
 
 
@@ -660,6 +779,7 @@ def test_attach_table_groups_short_circuits():
 
 def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
+    semantic_store = SemanticConfigDao.__new__(SemanticConfigDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [
@@ -675,8 +795,8 @@ def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
             await store._get_group_row_by_id_async(""),
             await store.get_group_member_datasource_ids_async("missing"),
             await store._get_group_tables_map_async(["group_a", ""]),
-            await store.get_semantic_config_async("missing", "sc_public"),
-            await store.get_semantic_config_async("group_a", "sc_public"),
+            await semantic_store.get_by_id_async("missing", "sc_public"),
+            await semantic_store.get_by_id_async("group_a", "sc_public"),
         )
 
     empty_group, missing_members, tables_map, missing_config, existing_config = asyncio.run(run_checks())
@@ -726,3 +846,88 @@ def test_update_datasource_group_all_optional_fields_and_duplicate_relations(mon
     sql_texts = [str(stmt) for stmt in executed]
     assert any("group_desc" in sql and "source_type" in sql and "template_source" in sql and "member_sources_text" in sql for sql in sql_texts)
     assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1
+
+
+# ============ 仅填空写字典（Ossie 导入闭环 P1-3） ============
+
+
+def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
+    """仅填空：现有值非空的字段保留原值，空缺字段用导入值填充并合并成一次 upsert。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": [
+        _column_dict_model(dict_json=json.dumps({
+            "enum_values": [{"value": "1", "label": "已有值"}],
+            "synonyms": [],
+            "storage_format": "",
+            "unit": "",
+        }, ensure_ascii=False)),
+    ]}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status",
+        {"enum_values": [{"value": "2", "label": "应忽略"}], "synonyms": ["付款"], "storage_format": "0/1", "unit": "元"},
+    ))
+
+    assert filled == ["synonyms", "storage_format", "unit"]
+    upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
+    assert len(upserts) == 1
+    merged = json.loads(upserts[0].compile().params["dict_json"])
+    assert merged["enum_values"] == [{"value": "1", "label": "已有值"}]
+    assert merged["synonyms"] == ["付款"]
+    assert merged["storage_format"] == "0/1"
+    assert merged["unit"] == "元"
+
+
+def test_fill_column_dict_creates_row_when_missing(monkeypatch):
+    """无存量行：导入值全部为「空缺」，整行新建并返回全部填充字段。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": []}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status", {"unit": "元"},
+        create_by="user_a", update_by="user_a", create_by_name="张三", update_by_name="张三",
+    ))
+
+    assert filled == ["unit"]
+    assert any("INSERT" in str(stmt).upper() for stmt in executed)
+
+
+def test_fill_column_dict_noop_when_all_fields_covered(monkeypatch):
+    """现有字典已全覆盖：不做任何写入，返回空清单。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": [
+        _column_dict_model(dict_json=json.dumps({
+            "enum_values": [{"value": "1", "label": "有效"}],
+            "synonyms": ["状态"],
+            "storage_format": "0/1",
+            "unit": "元",
+        }, ensure_ascii=False)),
+    ]}, executed=executed)
+
+    filled = asyncio.run(store.fill_column_dict_async(
+        "group_a", "orders", "status", {"enum_values": [{"value": "2", "label": "应忽略"}], "unit": "元"},
+    ))
+
+    assert filled == []
+    assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
+
+
+def test_fill_column_dict_short_circuits_on_invalid_args(monkeypatch):
+    """空键或空内容：直接短路返回空清单，不产生任何写入。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_column_dict": []}, executed=executed)
+
+    async def run_checks():
+        return (
+            await store.fill_column_dict_async("", "orders", "status", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "", "status", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "orders", "", {"unit": "元"}),
+            await store.fill_column_dict_async("group_a", "orders", "status", {}),
+        )
+
+    assert asyncio.run(run_checks()) == ([], [], [], [])
+    assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]

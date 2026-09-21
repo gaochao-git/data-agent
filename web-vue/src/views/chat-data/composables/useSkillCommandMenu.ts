@@ -2,14 +2,14 @@ import { computed, ref, unref, watch, type ComputedRef, type Ref } from 'vue'
 import { getSkills } from '../api'
 import type { SkillInfo } from '../types'
 
-type SkillAgent = 'query' | 'analyze'
 type ReactiveValue<T> = Ref<T> | ComputedRef<T>
+
+/** 消息/选择器共用的技能展示子集；SkillInfo 是其超集。 */
+export type SkillPick = Pick<SkillInfo, 'name' | 'title' | 'description'>
 
 interface UseSkillCommandMenuOptions {
   input: Ref<string>
   enabled: ReactiveValue<boolean>
-  agent: SkillAgent
-  maxItems?: number
   loadErrorText?: string
 }
 
@@ -21,7 +21,7 @@ const normalizeSkillSearchText = (skill: SkillInfo) => [
 ].map(item => String(item || '').toLowerCase()).join(' ')
 
 export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
-  const selectedSkill = ref<SkillInfo | null>(null)
+  const selectedSkills = ref<SkillPick[]>([])
   const commandSkills = ref<SkillInfo[]>([])
   const isCommandSkillLoading = ref(false)
   const isSkillCommandOpen = ref(false)
@@ -39,17 +39,17 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
     const result = keyword
       ? commandSkills.value.filter(skill => normalizeSkillSearchText(skill).includes(keyword))
       : commandSkills.value
-    return result.slice(0, options.maxItems || 8)
+    return result
   })
 
   const showSkillCommand = computed(() => isSkillCommandOpen.value && skillCommandKeyword.value !== null)
-  const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
+  const selectedSkillTitles = computed(() => selectedSkills.value.map(skill => skill.title || skill.name))
 
   const loadCommandSkills = async () => {
     if (commandSkills.value.length > 0 || isCommandSkillLoading.value) return
     isCommandSkillLoading.value = true
     try {
-      const response = await getSkills({ agent: options.agent })
+      const response = await getSkills({ scope: 'runtime' })
       commandSkills.value = response.data?.skills || []
     } catch (err) {
       commandSkills.value = []
@@ -70,13 +70,24 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
   }
 
   const selectCommandSkill = (skill: SkillInfo) => {
-    selectedSkill.value = skill
+    if (!selectedSkills.value.some(item => item.name === skill.name)) {
+      selectedSkills.value = [...selectedSkills.value, { name: skill.name, title: skill.title, description: skill.description }]
+    }
     options.input.value = options.input.value.replace(/^\/[^\s/]*\s?/, '')
     closeSkillCommand()
   }
 
-  const clearSelectedSkill = () => {
-    selectedSkill.value = null
+  /** 管理面板/引导场景的"钦定单个技能"：替换当前全部选择。 */
+  const replaceSelectedSkill = (skill: SkillPick) => {
+    selectedSkills.value = [{ name: skill.name, title: skill.title, description: skill.description }]
+  }
+
+  const removeSelectedSkill = (name: string) => {
+    selectedSkills.value = selectedSkills.value.filter(item => item.name !== name)
+  }
+
+  const clearSelectedSkills = () => {
+    selectedSkills.value = []
   }
 
   const handleSkillCommandKeyDown = (
@@ -125,8 +136,8 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
   })
 
   return {
-    selectedSkill,
-    selectedSkillTitle,
+    selectedSkills,
+    selectedSkillTitles,
     commandSkills,
     displayedCommandSkills,
     isCommandSkillLoading,
@@ -138,7 +149,9 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
     refreshCommandSkills,
     closeSkillCommand,
     selectCommandSkill,
-    clearSelectedSkill,
+    replaceSelectedSkill,
+    removeSelectedSkill,
+    clearSelectedSkills,
     handleSkillCommandKeyDown,
   }
 }

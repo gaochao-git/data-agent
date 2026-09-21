@@ -1,49 +1,79 @@
-fastapi
-uvicorn
-gunicorn
-uvicorn-worker
-PyMuPDF
-Pillow
-pdf2image
-requests
-pytest
-python-dotenv
-openpyxl
-xlrd
-httpx
-openai==2.32.0
-tiktoken
-PyJWT
-diskcache
-langgraph-checkpoint==4.0.2
+fastapi==0.121.3
+uvicorn==0.38.0
+gunicorn==26.0.0
+uvicorn-worker==0.4.0
+PyMuPDF==1.26.6
+markitdown[pdf,docx,pptx,xlsx]==0.1.7
+Pillow==12.3.0
+pdf2image==1.17.0
+requests==2.32.5
+redis==7.0.1
+pytest==9.0.1
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+python-dotenv==1.2.1
+openpyxl==3.1.5
+xlrd==2.0.2
+httpx==0.28.1
+openai==2.54.0
+tiktoken==0.12.0
+PyJWT==2.10.1
+diskcache==5.6.3
+langgraph-checkpoint==4.2.0
 langgraph-checkpoint-mysql==3.0.0
 langgraph-checkpoint-postgres==3.0.5
 langgraph-checkpoint-sqlite==3.0.3
 aiomysql==0.3.2
-aiosqlite>=0.19.0
-pyhive>=0.7.0
+aiosqlite==0.21.0
+pyhive==0.7.0
 sqlalchemy[asyncio]==2.0.45
 greenlet==3.3.0
-langchain==1.2.15
+langchain==1.4.0
+langchain-core==1.6.2
 langchain-experimental==0.4.1
-langgraph==1.1.9
-langchain-openai==1.2.1
+langgraph==1.2.11
+langchain-openai==1.6.0
 python-docx==1.2.0
-mammoth
-aiofiles
+mammoth==1.11.0
+aiofiles==25.1.0
 python-multipart==0.0.20
 gmssl==3.2.2
  # deepagents  # optional: not available on PyPI, skip for core server
-pandas
-a2a
-a2a-sdk
-sse-starlette
-strictyaml>=1.7.3
-click>=8.0
-mcp
-thrift
-thrift-sasl
-rdflib
-pyshacl
-opensandbox==0.1.9
+pandas==2.3.3
+a2a==0.44
+a2a-sdk==0.3.22
+sse-starlette==3.0.4
+strictyaml==1.7.3
+click==8.3.1
+mcp==1.27.0
+thrift==0.22.0
+thrift-sasl==0.4.3
+rdflib==7.6.0
+pyshacl==0.31.0
+opensandbox==0.1.15
 sqlglot==30.8.0
+# Apache Ossie has no PyPI release yet; the offline wheel below was built from
+# the pinned upstream commit 88e0011148283302c9a04cd0287e00e0b9d87354
+# (apache/ossie python/ subdirectory), so intranet hosts can install without
+# GitHub access. To upgrade: rebuild the wheel from the new pinned commit with
+#   pip wheel 'apache-ossie @ git+https://github.com/apache/ossie.git@<commit>#subdirectory=python' -w wheels/
+# and replace the file here.
+wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
+# numpy / onnxruntime are transitive deps of markitdown -> magika. They are
+# vendored as offline wheels because the intranet PyPI mirror (pypi.nucc.com)
+# times out on them, and their versions are pinned for CPU compatibility:
+#   - numpy is pinned to 1.26.4: numpy 2.0+ raises the manylinux wheel baseline
+#     to x86_V2 (AVX2), which the target intranet CPU does not support -- it
+#     fails at import with "Numpy was built with baseline optimizations:
+#     (x86_V2) but the machine doesn't support (x86_V2)". The 1.26.4
+#     manylinux_2_17 wheel only requires SSE2.
+#   - onnxruntime is pinned to 1.23.2 to match the combination verified in the
+#     local dev env (magika 0.6.3 / markitdown 0.1.7). It only ships
+#     manylinux_2_28+ variants, so the host needs glibc >= 2.28.
+# Both wheels target Linux x86_64 / CPython 3.12; regenerate for other
+# platforms with:
+#   pip download --no-deps --only-binary=:all: --platform manylinux2014_x86_64 \
+#     --python-version 312 --implementation cp -d wheels/ 'numpy==1.26.4'
+wheels/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+wheels/onnxruntime-1.23.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+jsonschema==4.26.0

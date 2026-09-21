@@ -142,11 +142,6 @@ export const normalizeChartType = (chartType: unknown): ChartType => {
   return 'table'
 }
 
-export const isEchartsChartType = (chartType: unknown) => {
-  const normalized = normalizeChartType(chartType)
-  return Boolean(CHART_TYPES.find(item => item.key === normalized)?.echarts)
-}
-
 export const supportsDualAxis = (chartType: unknown) => {
   const normalized = normalizeChartType(chartType)
   return Boolean(CHART_TYPES.find(item => item.key === normalized)?.supportsDualAxis)

@@ -8,7 +8,15 @@ tasks: []
 
 # Data Agent
 
-Data Agent 是面向数据查询和分析场景的智能问数项目，包含后端 FastAPI 服务与前端 Vue 应用。
+Data Agent 是面向数据查询与分析场景的智能问数项目，以指标语义层为核心，包含后端 FastAPI 服务与前端 Vue 应用。
+
+## 设计边界
+
+当前采用**指标语义层**路线（指标/维度/口径统一定义），暂不实现本体语义层（对象/事件/关系建模）。原因与演进条件：
+
+- 现阶段用户问题以标准化看数为主，指标层投入产出比最高；
+- 本体化需要为对象/事件/关系逐一绑定业务含义，建模产能约为指标层的数倍，行业也尚无标准化的落地范式；
+- 指标层可增量长出对象与事件；当归因/解释类问题占比显著上升时再演进。
 
 ## 项目结构
 
@@ -16,7 +24,7 @@ Data Agent 是面向数据查询和分析场景的智能问数项目，包含后
 data-agent/
 ├── server/      # 后端服务，FastAPI 入口为 server/main.py
 ├── web-vue/     # 前端应用，Vue 3 + Vite
-└── docs/        # 项目文档与历史说明
+└── AGENTS.md、后台管理/普通用户使用手册、系统内核链路手册（均在仓库根目录）
 ```
 
 ## 核心能力
@@ -28,6 +36,8 @@ data-agent/
 - SQL 执行、结果展示与历史会话
 - 智能分析与查询结果 artifact 管理
 - 看板配置与面板查询
+- 通过指标语义层统一口径，解决的是“这个数到底怎么算”的指标统一、口径复用和标准化问数问题，是把业务世界中的大量问题收敛成“指标 + 维度 + 条件 + 时间”的表达方式。
+
 
 ## 本地启动
 
@@ -56,12 +66,12 @@ npm run dev
 cd server
 pytest apps/chat_data_app/tests
 
-# 前端构建
+# 前端构建（含 vue-tsc 类型检查）
 cd web-vue
-npm run build-only
+npm run build
 ```
 
-说明：当前前端完整 `npm run build` 会执行 `vue-tsc`，可能暴露历史 TypeScript 类型问题；仅验证 Vite 打包可使用 `npm run build-only`。
+说明：`npm run build` 会同时执行 `vue-tsc` 类型检查与 Vite 打包，当前可完整通过；仅需快速验证打包时可用 `npm run build-only`。
 
 ## 远程仓库
 

@@ -9,14 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services import query_cache, query_runtime
+from apps.chat_data_app.services.sql_run import cache as query_cache, runtime as query_runtime
 
 
 def test_query_runtime_cache_identity_and_flags(monkeypatch):
@@ -452,6 +451,8 @@ def test_query_task_request_allows_builder_without_sql_and_requires_sql_otherwis
     assert builder.sql == []
     with pytest.raises(ValueError, match="SQL 至少包含一条有效语句"):
         QueryTaskCreateRequest(datasource_id="ds_a")
+    with pytest.raises(ValueError, match="Input should be 'sql' or 'builder'"):
+        QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"], query_type="agent")
 
 
 def test_persistent_query_task_result_payload_filters_http_members():
@@ -598,8 +599,9 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
     assert alarm_records[0][0][0] == "select 1; drop table orders"
     assert alarm_records[0][1]["execution_scope"] == "task_submit"
-    with pytest.raises(ValueError, match="查询结果最多返回"):
-        asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
+    # LIMIT 超限与语法错误同构：提交阶段放行，由执行期边界复检拦截并进结果面板
+    assert asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"})) is oversized_limit
+    assert alarm_records == [alarm_records[0]]  # 仅多语句一条报警
     with pytest.raises(ValueError, match="必须基于指标集"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
@@ -775,6 +777,7 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
             timeout,
             user_id,
             username=None,
+            datasource_id=None,
             remote_task_callback=None,
             db_connection_callback=None,
         ):
@@ -944,6 +947,7 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
             timeout,
             user_id,
             username=None,
+            datasource_id=None,
             remote_task_callback=None,
             db_connection_callback=None,
         ):
@@ -1034,7 +1038,7 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
     target = {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"}
 
     class FakeExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
             return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
         async def close(self):
@@ -1120,7 +1124,7 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     final_updates = []
 
     class FailingExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
             raise RuntimeError("executor failed")
 
         async def close(self):
@@ -1231,6 +1235,8 @@ class _SessionQueue:
 
 
 def _patch_query_runtime_session(monkeypatch, session):
+    # dao 层不再显式 commit，提交由 get_session 退出自动完成；
+    # fake session 观察不到自动提交，因此 commits 断言均为 0。
     @asynccontextmanager
     async def fake_get_session():
         yield session
@@ -1257,7 +1263,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     _patch_query_runtime_session(monkeypatch, bad_session)
     assert asyncio.run(query_cache.get_sql_result_cache({"cache_key": "bad"})) is None
     assert bad_cache.delete_flag == 1
-    assert bad_session.commits == 1
+    assert bad_session.commits == 0
 
     hit_cache = SimpleNamespace(
         result_payload=json.dumps({"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}),
@@ -1275,7 +1281,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     assert payload["cache_age_seconds"] >= 0
     assert payload["cache_expires_in_seconds"] >= 0
     assert hit_cache.hit_count == 3
-    assert hit_session.commits == 1
+    assert hit_session.commits == 0
 
 
 def test_update_query_execution_and_task_db_branches(monkeypatch):
@@ -1318,7 +1324,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     assert execution.error_message is None
     assert execution.started_time == started
     assert execution.finished_time == finished
-    assert execution_session.commits == 1
+    assert execution_session.commits == 0
 
     cancelled = SimpleNamespace(sql_status="cancelled")
     cancelled_session = _SessionQueue(_ScalarResult(cancelled))
@@ -1349,7 +1355,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     asyncio.run(query_runtime.update_query_execution("exec_optional"))
     assert optional_execution.sql_status == "pending"
     assert optional_execution.remote_task_id == "old_remote"
-    assert optional_execution_session.commits == 1
+    assert optional_execution_session.commits == 0
 
     task = SimpleNamespace(
         task_id="task_1",
@@ -1387,7 +1393,7 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     assert task.progress_text == "执行中"
     assert json.loads(task.result_payload) == {"success": True}
     assert task.error_message == ""
-    assert task_session.commits == 1
+    assert task_session.commits == 0
     assert task_session.refreshes == [task]
 
     cancelled_task = SimpleNamespace(**{**task.__dict__, "task_status": "cancelled"})
@@ -1403,12 +1409,58 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     optional_response = asyncio.run(query_runtime.update_query_task("task_optional"))
     assert optional_response["status"] == "pending"
     assert optional_task.progress_text == "old"
-    assert optional_task_session.commits == 1
+    assert optional_task_session.commits == 0
 
     missing_task_session = _SessionQueue(_ScalarResult(None))
     _patch_query_runtime_session(monkeypatch, missing_task_session)
     assert asyncio.run(query_runtime.update_query_task("missing")) is None
     assert missing_task_session.commits == 0
+
+
+def test_update_query_task_and_execution_lock_rows_for_update(monkeypatch):
+    """终态守卫的读取必须带 FOR UPDATE 行锁，防止取消与回写并发时终态被覆盖。"""
+
+    class _RecordingSession(_SessionQueue):
+        def __init__(self, *results):
+            super().__init__(*results)
+            self.statements = []
+
+        async def execute(self, stmt):
+            self.statements.append(stmt)
+            return await super().execute(stmt)
+
+    task = SimpleNamespace(
+        task_id="task_lock",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="pending",
+        progress_text=None,
+        request_payload="{}",
+        result_payload=None,
+        remote_task_payload=None,
+        error_message=None,
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="u1",
+        update_by="u1",
+        create_by_name="张三",
+        update_by_name="张三",
+    )
+    task_session = _RecordingSession(_ScalarResult(task))
+    _patch_query_runtime_session(monkeypatch, task_session)
+    asyncio.run(query_runtime.update_query_task("task_lock"))
+    assert task_session.statements, "update_query_task 应执行 SELECT"
+    assert "FOR UPDATE" in str(task_session.statements[0]).upper()
+
+    execution = SimpleNamespace(sql_status="pending", update_time=None)
+    execution_session = _RecordingSession(_ScalarResult(execution))
+    _patch_query_runtime_session(monkeypatch, execution_session)
+    asyncio.run(query_runtime.update_query_execution("exec_lock"))
+    assert execution_session.statements, "update_query_execution 应执行 SELECT"
+    assert "FOR UPDATE" in str(execution_session.statements[0]).upper()
 
 
 def test_update_query_execution_from_result_falls_back_to_started_finished(monkeypatch):
@@ -1436,7 +1488,7 @@ def test_update_query_execution_from_result_falls_back_to_started_finished(monke
     assert 4500 <= execution.execution_time_ms <= 5500
     assert execution.finished_time is not None
     assert json.loads(execution.result_payload)["execution_time_ms"] == execution.execution_time_ms
-    assert session.commits == 1
+    assert session.commits == 0
 
 
 def test_get_query_executions_applies_operator_fallbacks(monkeypatch):
@@ -1525,7 +1577,7 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
     final_updates = []
 
     class CallbackExecutor:
-        async def execute(self, sql, limit, timeout, user_id, remote_task_callback=None, db_connection_callback=None):
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
             execute_calls.append(sql)
             await remote_task_callback({"remote_task_id": "remote_no_targets"})
             await db_connection_callback({"db_connection_id": "conn_no_exec"})
@@ -1567,7 +1619,11 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
 
 def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
     class FakeExecutor:
-        async def execute(self, sql, limit, timeout, user_id):
+        def __init__(self):
+            self.received_datasource_ids = []
+
+        async def execute(self, sql, limit, timeout, user_id, datasource_id=None):
+            self.received_datasource_ids.append(datasource_id)
             return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
         async def close(self):
@@ -1586,7 +1642,8 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
 
     monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", cache_enabled)
     monkeypatch.setattr(query_cache, "get_sql_result_cache", cache_miss)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
+    executor_instance = FakeExecutor()
+    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: executor_instance)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
 
     result = asyncio.run(query_runtime.execute_sql_for_member(
@@ -1594,10 +1651,13 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
         sql="select 1",
         limit=10,
         timeout=None,
+        datasource_id="ds_group_1",
+        user_id="u_1",
     ))
 
     assert result["status"] == "succeeded"
     assert "success" not in result
+    assert executor_instance.received_datasource_ids == ["ds_group_1"]
 
 
 def test_run_sql_query_task_cancel_after_running(monkeypatch):

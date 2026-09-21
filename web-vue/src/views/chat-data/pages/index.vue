@@ -3,16 +3,20 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+// 会话 markdown 渲染样式（.conversation-markdown）：主对话与子智能体 trail 共用，
+// 全局注入但随本模块走，便于整个 chat-data 目录迁移到其它主项目。
+import '../styles/markdown.css'
+// z-index 层级变量（:root CSS 变量，本模块层级唯一事实来源，定义见文件头注释）
+import '../styles/z-index.css'
 import useUserStore from '@/store/modules/user'
-import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { BuilderDragFieldData, DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
-import SqlConversation from '../components/SqlConversation.vue'
-import AnalysisConversation from '../components/AnalysisConversation.vue'
+import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
+import Conversation from '../components/conversation/Conversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
 import type { BuilderConfig } from '../components/QuickQueries.vue'
@@ -24,10 +28,20 @@ import EditorSidebar from '../components/sidebars/EditorSidebar.vue'
 import DashboardEditor from '../components/Dashboard/DashboardEditor.vue'
 import SemanticConfigPanel from '../components/SemanticConfigPanel.vue'
 import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
+import AgentScheduleManager from '../components/AgentScheduleManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
-import { formatSemanticConfigOptionLabel } from '../utils'
+import {
+  formatSemanticConfigOptionLabel,
+  readLocalStorage,
+  rememberSidebarTab,
+  resolveSidebarTab,
+  writeLocalStorage,
+} from '../utils'
+import { buildExecutionTargets, isSameStringArray } from '../utils/executionTargets'
+import type { ConversationSortBy, ConversationViewMode } from '../utils/conversationHistory'
+import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -48,7 +62,7 @@ const DEFAULT_MODE_LABELS: Record<ViewMode, string> = {
   builder: '可视化查询',
   editor: 'SQL查询',
   dashboard: '数据看板',
-  metricConfig: '指标集配置',
+  metricConfig: '语义模型配置',
 }
 
 const resolveModeLabels = (): Record<ViewMode, string> => {
@@ -91,8 +105,15 @@ const adminDatasourceCache = ref<Record<string, DataSource>>({})
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
-const CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY = 'chat-data:conversation-semantic-config'
-const CONVERSATION_MODEL_STORAGE_KEY = 'chat-data:conversation-model'
+// 无数据源整页空态开关：2026-09-20 起按用户要求改为「页面常显、仅禁查询」——
+// 无数据源时仍展示侧栏/各模式页签（SQL 编辑框等场景需要），查询动作在各自入口被守卫拦截，
+// 数据源组切换位置显示「请先配置数据源组」。恢复整页空态：把本开关改回 true 即可（模板四处
+// isNoDatasourceEmptyPage 条件与空态块随之还原，无需其他改动）。
+const SHOW_NO_DATASOURCE_EMPTY_PAGE = false
+const isNoDatasourceEmptyPage = computed(() => noMatchedDatasource.value && SHOW_NO_DATASOURCE_EMPTY_PAGE)
+// storage key 统一 chatdata: 前缀;按用户隔离,避免共享浏览器多账号互相可见
+const semanticConfigStorageKey = () => `chatdata:conversation-semantic-config:${currentUser.value.id || 'anonymous'}`
+const conversationModelStorageKey = () => `chatdata:conversation-model:${currentUser.value.id || 'anonymous'}`
 
 const noMatchedDatasourceTitle = computed(() => {
   if (parentComponentName.value) {
@@ -107,17 +128,6 @@ const noMatchedDatasourceDesc = computed(() => {
   return '请在数据源管理中添加可用数据源'
 })
 
-const normalizeOrgCode = (value: unknown) => String(value || '').trim()
-
-const getMemberOrgCode = (member: NonNullable<DataSource['member_sources']>[number]) => {
-  return normalizeOrgCode(member.org_code)
-}
-
-const getDatasourceOrgCode = (datasource: DataSource) => {
-  const sourceConfig = datasource.source_config || {}
-  return normalizeOrgCode(sourceConfig.org_code)
-}
-
 // 后台管理弹窗
 const showAdminModal = ref(false)
 const canManageAdmin = computed(() => {
@@ -126,6 +136,18 @@ const canManageAdmin = computed(() => {
 })
 const canManageDatasource = canManageAdmin
 
+// 定时任务管理弹窗（用户侧，侧边栏入口）
+const showAgentScheduleModal = ref(false)
+const handleOpenAgentSchedules = () => {
+  showAgentScheduleModal.value = true
+}
+const handleOpenSkillManager = () => {
+  conversationRef.value?.openSkillManager()
+}
+const handleOpenScheduledConversation = (conversationId: string) => {
+  showAgentScheduleModal.value = false
+  void handleHistoryConversationSelect(conversationId)
+}
 const openDatasourceManager = () => {
   if (!canManageAdmin.value) return
   showAdminModal.value = true
@@ -259,11 +281,11 @@ const loadingDatasourceSchema = ref(false)
 
 // 侧边栏可见性
 const isSidebarVisible = ref(true)
-const sidebarBodyRef = ref<HTMLElement | null>(null)
-const sidebarCollapseTop = ref(15)
 
-// 侧边栏宽度拖拽调整
-const sidebarWidth = ref(280)
+// 侧边栏宽度拖拽调整（默认 320：会话项需容纳标题 + 时间 + 运行状态 + 收藏。
+// 竖排 Tab 轨道悬浮在侧栏右缘之外、侵入会话区 32px，因此不占用侧栏宽度，
+// 侧栏宽度即内容区宽度，与没有轨道时一致）
+const sidebarWidth = ref(320)
 const isResizingSidebar = ref(false)
 
 const startSidebarResize = (e: MouseEvent) => {
@@ -291,59 +313,50 @@ const startSidebarResize = (e: MouseEvent) => {
   document.addEventListener('mouseup', onUp, true)
 }
 
-// 侧边栏 Tab（公用）
-const activeSidebarTab = ref<string>('metrics')
-
+// 侧边栏 Tab（公用）：tab 选择记忆见 utils/sidebarTab
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
-    tabs.push({ key: 'metrics', label: '指标集', icon: 'fa-bullseye' })
+    tabs.push({ key: 'conversation', label: '对话历史', icon: 'fa-comments' })
+    tabs.push({ key: 'metrics', label: '语义模型', icon: 'fa-bullseye' })
   } else if (viewMode.value === 'dashboard') {
     tabs.push({ key: 'dashboard', label: '数据看板', icon: 'fa-chart-pie' })
   } else if (viewMode.value === 'builder') {
-    tabs.push({ key: 'tables', label: '指标集', icon: 'fa-database' })
+    tabs.push({ key: 'tables', label: '语义模型', icon: 'fa-database' })
   } else if (viewMode.value === 'editor') {
     tabs.push({ key: 'tables', label: '数据表', icon: 'fa-database' })
   }
   return tabs
 })
 
-// 计算侧边栏收起按钮垂直位置：跟随当前可见面板首个控件中心点
-const updateSidebarCollapseTop = async () => {
-  await nextTick()
-  const root = sidebarBodyRef.value
-  if (!root) return
-  const rootRect = root.getBoundingClientRect()
-  const btnHalfHeight = 10
-  const shellPaddingTop = 6
-  const baselineControlHeight = 28
-  const visibleShell = Array.from(root.querySelectorAll<HTMLElement>('.sidebar-unified-shell')).find((el) => {
-    if (!el.isConnected) return false
-    if (el.offsetParent === null) return false
-    const rect = el.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  }) || null
-  if (visibleShell) {
-    const shellRect = visibleShell.getBoundingClientRect()
-    const center = shellRect.top - rootRect.top + shellPaddingTop + baselineControlHeight / 2
-    sidebarCollapseTop.value = Math.max(6, Math.round(center - btnHalfHeight))
-    return
-  }
-  const candidates = Array.from(root.querySelectorAll<HTMLElement>('.sidebar-baseline-target'))
-  const target = candidates.find((el) => {
-    if (!el.isConnected) return false
-    if (el.offsetParent === null) return false
-    const rect = el.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  }) || null
-  if (!target) {
-    sidebarCollapseTop.value = 15
-    return
-  }
-  const targetRect = target.getBoundingClientRect()
-  const center = targetRect.top - rootRect.top + targetRect.height / 2
-  sidebarCollapseTop.value = Math.max(6, Math.round(center - btnHalfHeight))
-}
+const availableSidebarTabKeys = computed(() => sidebarTabs.value.map((tab) => tab.key))
+
+// 竖排 Tab 轨道：贴侧栏右缘、悬浮侵入会话区 32px（会话区左侧留白本来空着，正好利用）；
+// 折叠态下整条侧栏就是这个窄条，两种状态 Tab 垂直位置一致
+const showVerticalTabRail = computed(() => viewMode.value === 'conversation' && sidebarTabs.value.length > 1)
+
+// 收起按钮水平锚点：统一回到侧栏右缘的拖拽条线上（原版位置 right-[-10px]，按钮中心
+// 压在分隔条上）；轨道虽悬浮在右缘外 32px，但按钮 z-30 压过轨道 z-20，视觉不被遮挡。
+// 若之后想让按钮跟随轨道外缘，可改回 right-[-42px]（轨道 32px + 按钮半宽 10px）
+const collapseButtonOffsetClass = computed(() => 'right-[-10px]')
+
+const activeSidebarTab = ref<string>(
+  resolveSidebarTab(viewMode.value, availableSidebarTabKeys.value),
+)
+
+// 单点写入：点击切换、模式切换回落都经此记忆，避免遗漏写入点；
+// 无可用 tab 的模式（如语义模型配置，侧栏面板不消费 tab）不落记忆
+watch(
+  activeSidebarTab,
+  (tab) => {
+    if (availableSidebarTabKeys.value.length === 0) return
+    rememberSidebarTab(viewMode.value, tab)
+  },
+  { flush: 'sync' },
+)
+
+// 收起/展开按钮位置已固定在竖排轨道顶部（见模板 top-1），
+// 原先「跟随面板首个控件」的动态对齐逻辑随顶部分段 Tab 一并废弃（git 历史可找回）。
 
 // 看板编辑器状态
 const activeDashboardId = ref<string | null>(null)
@@ -390,20 +403,12 @@ watch(viewMode, () => {
   } else if (viewMode.value === 'metricConfig') {
     metricConfigMounted.value = true
   }
-  if (viewMode.value === 'conversation') {
-    activeSidebarTab.value = 'metrics'
-    return
-  }
+  // 切模式时恢复该模式记住的 tab（无记忆或记忆失效则回落该模式默认 tab），
+  // 各模式 tab 相互独立，避免在 A 模式的选择被 B 模式覆盖
+  activeSidebarTab.value = resolveSidebarTab(viewMode.value, availableSidebarTabKeys.value)
   if (viewMode.value === 'dashboard') {
-    activeSidebarTab.value = 'dashboard'
     ensureDefaultDashboard()
-    return
   }
-  if (viewMode.value === 'metricConfig') {
-    activeSidebarTab.value = 'metrics'
-    return
-  }
-  activeSidebarTab.value = 'tables'
 }, { immediate: true })
 
 // 打开看板编辑器
@@ -422,7 +427,6 @@ const handleDashboardCreatedFromConversation = (dashboard: Dashboard) => {
   dashboardMounted.value = true
   dashboardEditorMounted.value = true
   viewMode.value = 'dashboard'
-  activeSidebarTab.value = 'dashboard'
 }
 
 const handleDashboardsChange = (nextDashboards: Dashboard[]) => {
@@ -494,53 +498,24 @@ const handleCloseSemanticConfig = () => {
 }
 
 // 会话
-const conversations = ref<ConversationItem[]>([])
 const currentConversationId = ref<string | null>(null)
 const currentConversationTitle = ref<string>('新会话')
-const currentConversationAgentId = ref<'chat_data' | 'chat_data_data_analyze'>('chat_data')
 const currentConversationDatasourceId = ref<string | null>(null)
-const isLoadingConversations = ref(false)
-const isLoadingMoreConversations = ref(false)
-const hasMoreConversations = ref(false)
-const conversationPage = ref(1)
 const conversationPageSize = 20
-const conversationKey = ref(0) // 用于强制重新渲染 SqlConversation
-const showHistoryPopover = ref(false)
-const hasEnteredConversationOnce = ref(false)
-const conversationsLoaded = ref(false)
+const conversationKey = ref(0)
 const selectedConversationModelId = ref('')
 const conversationModelStorageUserKey = computed(() => currentUser.value.id || currentUser.value.name || 'default')
-let historyPopoverHideTimer: ReturnType<typeof setTimeout> | null = null
-let conversationLoadSeq = 0
-
-const openHistoryPopover = () => {
-  if (historyPopoverHideTimer) {
-    clearTimeout(historyPopoverHideTimer)
-    historyPopoverHideTimer = null
-  }
-  void ensureConversationsLoaded()
-  showHistoryPopover.value = true
-}
-
-const closeHistoryPopoverWithDelay = () => {
-  if (historyPopoverHideTimer) clearTimeout(historyPopoverHideTimer)
-  historyPopoverHideTimer = setTimeout(() => {
-    showHistoryPopover.value = false
-    historyPopoverHideTimer = null
-  }, 180)
-}
-
-const canShowNewConversationButton = computed(() => {
-  return hasEnteredConversationOnce.value || !!currentConversationId.value
-})
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
-const sqlConversationRef = ref<InstanceType<typeof SqlConversation> | null>(null)
-const analysisConversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
+const conversationRef = ref<InstanceType<typeof Conversation> | null>(null)
 
-const openAnalysisConsole = () => {
-  analysisConversationRef.value?.openConsolePanel()
+// 控制台面板可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
+// 右上角开关按钮的图标与提示都读它，不自己另存状态。
+const conversationConsoleVisible = ref(false)
+
+const toggleConversationConsole = () => {
+  conversationRef.value?.toggleConsolePanel()
 }
 
 // 加载数据源
@@ -586,94 +561,27 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
   }
 }
 
-const normalizeConversationResponse = (
-  payload: unknown,
-  fallbackAgentId: 'chat_data' | 'chat_data_data_analyze' = 'chat_data'
-): { items: ConversationItem[]; hasMore: boolean } => {
-  const payloadObj = payload as { conversations?: unknown[]; has_more?: boolean } | null
-  const rawList = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payloadObj?.conversations)
-      ? payloadObj.conversations
-      : []
-  const items: ConversationItem[] = rawList.map((raw) => {
-    const conv = raw as Record<string, any>
-    return {
-      id: conv.id || conv.conversation_id,
-      title: conv.title || conv.first_message_preview || '未命名会话',
-      created_at: conv.update_time || conv.create_time || conv.created_at || '',
-      updated_at: conv.update_time || conv.updated_at || conv.create_time || conv.created_at || '',
-      agent_id: conv.agent_id || fallbackAgentId,
-    }
-  }).filter((conv) => !!conv.id)
-  const hasMore = !Array.isArray(payload) && Boolean(payloadObj?.has_more)
-  return { items, hasMore }
-}
-
-// 加载会话列表
-const loadConversations = async (page = 1) => {
-  const agentId = currentConversationAgentId.value
-  const loadSeq = ++conversationLoadSeq
-  const isFirstPage = page === 1
-  if (isFirstPage) {
-    isLoadingConversations.value = true
-  } else {
-    isLoadingMoreConversations.value = true
-  }
-  try {
-    const res = await getConversations(agentId, undefined, { page, page_size: conversationPageSize })
-    if (loadSeq !== conversationLoadSeq || currentConversationAgentId.value !== agentId) return
-    const { items, hasMore }: { items: ConversationItem[]; hasMore: boolean } = res.status === 'success'
-      ? normalizeConversationResponse(res.data, agentId)
-      : { items: [], hasMore: false }
-    const merged = isFirstPage ? items : [...conversations.value, ...items]
-    const deduped = Array.from(new Map<string, ConversationItem>(merged.map(item => [item.id, item])).values())
-    conversations.value = deduped.sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
-    conversationPage.value = page
-    hasMoreConversations.value = hasMore
-    conversationsLoaded.value = true
-  } catch (err) {
-    if (loadSeq === conversationLoadSeq) {
-      console.error('加载会话失败:', err)
-    }
-  } finally {
-    if (loadSeq !== conversationLoadSeq) return
-    if (isFirstPage) {
-      isLoadingConversations.value = false
-    } else {
-      isLoadingMoreConversations.value = false
-    }
-  }
-}
-
-const ensureConversationsLoaded = async (force = false) => {
-  if (isLoadingConversations.value || isLoadingMoreConversations.value) return
-  if (!force && conversationsLoaded.value) return
-  if (force) {
-    conversationPage.value = 1
-    hasMoreConversations.value = false
-  }
-  await loadConversations(1)
-}
-
-const loadMoreConversations = async () => {
-  if (!conversationsLoaded.value || isLoadingConversations.value || isLoadingMoreConversations.value || !hasMoreConversations.value) return
-  await loadConversations(conversationPage.value + 1)
-}
-
 // 确保会话 ID 存在（懒创建模式，只在发送消息时才创建）
-const ensureConversationId = async (agentId: string = 'chat_data'): Promise<string | null> => {
-  const normalizedAgentId = agentId === 'chat_data_data_analyze' ? 'chat_data_data_analyze' : 'chat_data'
-  if (currentConversationId.value && currentConversationAgentId.value === normalizedAgentId) {
+const ensureConversationId = async (): Promise<string | null> => {
+  if (currentConversationId.value) {
     return currentConversationId.value
   }
   try {
-    const res = await createConversation({ agent_id: normalizedAgentId })
+    const res = await createConversation({ agent_id: 'chat_data' })
     if (res.status === 'success' && res.data?.id) {
       currentConversationId.value = res.data.id
-      currentConversationAgentId.value = normalizedAgentId
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = selectedDatasourceId.value || null
+      upsertHistoryConversation({
+        id: res.data.id,
+        title: '新会话',
+        agent_id: 'chat_data',
+        datasource_id: selectedDatasourceId.value || '',
+        create_time: res.data.create_time || new Date().toISOString(),
+        updated_at: res.data.create_time || new Date().toISOString(),
+        is_favorited: false,
+        run_status: null,
+      })
       return res.data.id
     }
   } catch (err) {
@@ -682,44 +590,57 @@ const ensureConversationId = async (agentId: string = 'chat_data'): Promise<stri
   return null
 }
 
-// 会话分组
-const groupedConversations = computed(() => {
-  if (conversations.value.length === 0) return []
+// 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺；排序：updated 最近更新（默认），created 创建时间
+const CONVERSATION_VIEW_MODE_KEY = 'chatdata:view-mode'
+const CONVERSATION_SORT_BY_KEY = 'chatdata:sort-by'
 
-  const now = new Date()
-  const groups: { label: string; items: ConversationItem[] }[] = []
-  const groupMap: Record<string, ConversationItem[]> = {}
+const conversationViewMode = ref<ConversationViewMode>(
+  readLocalStorage(CONVERSATION_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'grouped',
+)
+const conversationSortBy = ref<ConversationSortBy>(
+  readLocalStorage(CONVERSATION_SORT_BY_KEY) === 'created' ? 'created' : 'updated',
+)
 
-  const getGroupLabel = (dateStr: string): string => {
-    if (!dateStr) return '更早'
-    const date = new Date(dateStr.replace(' ', 'T'))
-    if (isNaN(date.getTime())) return '更早'
-
-    const diffMs = now.getTime() - date.getTime()
-    const diffDays = diffMs / (1000 * 60 * 60 * 24)
-
-    if (diffDays < 7) return '7天内'
-    if (diffDays < 30) return '30天内'
-    if (diffDays < 183) return '半年内'
-    return '更早'
-  }
-
-  for (const conv of conversations.value) {
-    const label = getGroupLabel(conv.created_at)
-    if (!groupMap[label]) groupMap[label] = []
-    groupMap[label].push(conv)
-  }
-
-  const order = ['7天内', '30天内', '半年内', '更早']
-  for (const label of order) {
-    const items = groupMap[label]
-    if (items && items.length > 0) {
-      groups.push({ label, items })
-    }
-  }
-
-  return groups
+const {
+  conversations,
+  groupedConversations,
+  isLoadingConversations,
+  isRefreshingConversations,
+  isLoadingMoreConversations,
+  hasMoreConversations,
+  ensureConversationsLoaded,
+  loadMoreConversations,
+  loadMoreConversationGroup,
+  updateConversationTitle: updateHistoryConversationTitle,
+  updateConversationRunStatus: updateHistoryConversationRunStatus,
+  upsertConversation: upsertHistoryConversation,
+  refreshAfterFavorite,
+  invalidateInactiveView,
+} = useConversationHistoryBrowser({
+  agentId: 'chat_data',
+  pageSize: conversationPageSize,
+  viewMode: conversationViewMode,
+  datasources: allDatasources,
+  sortBy: conversationSortBy,
 })
+
+const setConversationViewMode = (mode: ConversationViewMode) => {
+  if (conversationViewMode.value === mode) return
+  conversationViewMode.value = mode
+  writeLocalStorage(CONVERSATION_VIEW_MODE_KEY, mode)
+  void ensureConversationsLoaded()
+}
+
+const setConversationSortBy = (sortBy: ConversationSortBy) => {
+  if (conversationSortBy.value === sortBy) return
+  conversationSortBy.value = sortBy
+  writeLocalStorage(CONVERSATION_SORT_BY_KEY, sortBy)
+}
+
+// 手动刷新：强制重载当前视图首屏（ensureConversationsLoaded 内部保留旧数据展示，刷新期间不闪空态）
+const handleRefreshConversations = () => {
+  void ensureConversationsLoaded(true)
+}
 
 // 切换模式
 const changeMode = (mode: ViewMode) => {
@@ -739,23 +660,6 @@ const handleNewConversation = () => {
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
-}
-
-const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
-  if (currentConversationAgentId.value === agentId) return
-  currentConversationAgentId.value = agentId
-  currentConversationId.value = null
-  currentConversationTitle.value = '新会话'
-  currentConversationDatasourceId.value = null
-  conversationLoadSeq++
-  conversations.value = []
-  conversationsLoaded.value = false
-  conversationPage.value = 1
-  hasMoreConversations.value = false
-  isLoadingConversations.value = false
-  isLoadingMoreConversations.value = false
-  conversationKey.value++
-  void ensureConversationsLoaded(true)
 }
 
 const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
@@ -788,15 +692,18 @@ const selectConversation = async (id: string): Promise<boolean> => {
     }
   }
   currentConversationId.value = id
-  hasEnteredConversationOnce.value = true
   currentConversationTitle.value = conv?.title || '会话'
-  currentConversationAgentId.value = conv?.agent_id === 'chat_data_data_analyze' ? 'chat_data_data_analyze' : 'chat_data'
   currentConversationDatasourceId.value = conversationDatasourceId || null
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
 }
 
 const ensureConversationDatasource = async (): Promise<boolean> => {
+  // 无任何可用数据源：发送必被后端拒绝，这里提前拦下并说明原因
+  if (noMatchedDatasource.value) {
+    ElMessage.warning('请先配置数据源组')
+    return false
+  }
   const boundDatasourceId = currentConversationDatasourceId.value
   if (boundDatasourceId) {
     if (!datasources.value.some(datasource => datasource.id === boundDatasourceId)) {
@@ -821,36 +728,61 @@ const ensureConversationDatasource = async (): Promise<boolean> => {
 }
 
 const handleHistoryConversationSelect = async (id: string) => {
-  if (!await selectConversation(id)) return
-  showHistoryPopover.value = false
+  await selectConversation(id)
 }
 
-// 首条消息完成后的回调
-const handleFirstMessageComplete = async (convId: string) => {
-  hasEnteredConversationOnce.value = true
-  const boundDatasourceId = await loadConversationDatasourceId(convId)
+const handleUpdateConversationTitle = (conversationId: string, title: string) => {
+  updateHistoryConversationTitle(conversationId, title)
+  if (currentConversationId.value === conversationId) {
+    currentConversationTitle.value = title
+  }
+}
+
+const handleConversationRunStatusChanged = (
+  conversationId: string,
+  status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
+) => {
+  updateHistoryConversationRunStatus(conversationId, status)
+  if (status === null) {
+    // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
+    void ensureConversationsLoaded(true)
+  }
+}
+
+// 置顶会改变会话所属分组，成功后重载分组首屏，避免同一会话残留在旧目录。
+const handleToggleConversationFavorite = async (conversationId: string, isFavorited: boolean) => {
+  await refreshAfterFavorite(conversationId, isFavorited)
+}
+
+// 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
+const handleFirstMessageStarted = async (convId: string) => {
+  const datasourcePromise = loadConversationDatasourceId(convId)
+  const titlePromise = generateConversationTitle(convId)
+    .catch(error => {
+      console.error('生成标题失败:', error)
+      return null
+    })
+  const [boundDatasourceId, res] = await Promise.all([datasourcePromise, titlePromise])
+
   if (currentConversationId.value === convId && boundDatasourceId) {
     currentConversationDatasourceId.value = boundDatasourceId
   }
-  try {
-    // 生成会话标题
-    const res = await generateConversationTitle(convId)
-    if (res.status === 'success' && res.data?.title) {
-      const newTitle = res.data.title
-      // 更新当前会话标题
-      currentConversationTitle.value = newTitle
-      // 更新会话列表中的标题
-      const convIndex = conversations.value.findIndex(c => c.id === convId)
-      const conversation = convIndex >= 0 ? conversations.value[convIndex] : undefined
-      if (conversation) {
-        conversation.title = newTitle
-      }
-    }
-  } catch (error) {
-    console.error('生成标题失败:', error)
+  let generatedTitle = currentConversationTitle.value
+  if (res?.status === 'success' && res.data?.title) {
+    generatedTitle = res.data.title
+    if (currentConversationId.value === convId) currentConversationTitle.value = generatedTitle
+    updateHistoryConversationTitle(convId, generatedTitle)
   }
+
+  upsertHistoryConversation({
+    id: convId,
+    title: generatedTitle,
+    ...(boundDatasourceId ? { datasource_id: boundDatasourceId } : {}),
+    updated_at: new Date().toISOString(),
+  })
   // 刷新会话列表
-  ensureConversationsLoaded(true)
+  invalidateInactiveView()
+  void ensureConversationsLoaded(true)
 }
 
 // 数据源变更
@@ -861,7 +793,7 @@ const handleDatasourceChange = (dsId: string) => {
 const readConversationSemanticConfigSelection = (datasourceId: string) => {
   if (typeof window === 'undefined' || !datasourceId) return null
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY)
+    const raw = window.localStorage.getItem(semanticConfigStorageKey())
     if (!raw) return null
     const data = JSON.parse(raw) as Record<string, string>
     return String(data?.[datasourceId] || '').trim() || null
@@ -873,14 +805,14 @@ const readConversationSemanticConfigSelection = (datasourceId: string) => {
 const writeConversationSemanticConfigSelection = (datasourceId: string, configId: string | null) => {
   if (typeof window === 'undefined' || !datasourceId) return
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY)
+    const raw = window.localStorage.getItem(semanticConfigStorageKey())
     const data = raw ? JSON.parse(raw) as Record<string, string> : {}
     if (configId) {
       data[datasourceId] = configId
     } else {
       delete data[datasourceId]
     }
-    window.localStorage.setItem(CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY, JSON.stringify(data))
+    window.localStorage.setItem(semanticConfigStorageKey(), JSON.stringify(data))
   } catch (err) {
     // 本地存储不可用时保持当前页面内状态即可
   }
@@ -893,7 +825,7 @@ const getConversationModelStorageUserKey = () => {
 const readConversationModelSelection = () => {
   if (typeof window === 'undefined') return ''
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    const raw = window.localStorage.getItem(conversationModelStorageKey())
     if (!raw) return ''
     const data = JSON.parse(raw) as Record<string, string>
     return String(data?.[getConversationModelStorageUserKey()] || '').trim()
@@ -905,7 +837,7 @@ const readConversationModelSelection = () => {
 const writeConversationModelSelection = (modelId: string) => {
   if (typeof window === 'undefined') return
   try {
-    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    const raw = window.localStorage.getItem(conversationModelStorageKey())
     const data = raw ? JSON.parse(raw) as Record<string, string> : {}
     const userKey = getConversationModelStorageUserKey()
     const normalizedModelId = String(modelId || '').trim()
@@ -914,7 +846,7 @@ const writeConversationModelSelection = (modelId: string) => {
     } else {
       delete data[userKey]
     }
-    window.localStorage.setItem(CONVERSATION_MODEL_STORAGE_KEY, JSON.stringify(data))
+    window.localStorage.setItem(conversationModelStorageKey(), JSON.stringify(data))
   } catch (err) {
     // 本地存储不可用时保持当前页面内状态即可
   }
@@ -932,7 +864,7 @@ const loadSemanticConfigs = async () => {
     const res = await getSemanticConfigs(selectedDatasourceId.value)
     if (res.status === 'success') {
       semanticConfigs.value = res.data?.configs || []
-      if (selectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === selectedSemanticConfigId.value)) {
+      if (selectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === selectedSemanticConfigId.value && c.enabled)) {
         selectedSemanticConfigId.value = null
       }
       const savedConversationConfigId = readConversationSemanticConfigSelection(selectedDatasourceId.value)
@@ -982,11 +914,11 @@ const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
+    const { value } = await ElMessageBox.prompt('请输入语义模型名称', '新建语义模型', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入指标集名称',
+      inputPlaceholder: '请输入语义模型名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -1057,18 +989,18 @@ const resolveDatasourceType = (datasource: DataSource | null | undefined) => {
   return memberTypes.length === 1 ? memberTypes[0] : ''
 }
 
+const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
+const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
+
 const currentSemanticConfig = computed(() => {
   if (!selectedSemanticConfigId.value) return null
-  return semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value) || null
+  return enabledSemanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value) || null
 })
 
 const currentMetricSemanticConfig = computed(() => {
   if (!metricSelectedSemanticConfigId.value) return null
   return metricSemanticConfigs.value.find(cfg => cfg.id === metricSelectedSemanticConfigId.value) || null
 })
-
-const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
-const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
 
 const getSemanticConfigIndex = (config: SemanticConfigItem) => {
   return semanticConfigs.value.findIndex(item => item.id === config.id)
@@ -1113,8 +1045,8 @@ const ensureStructuredViewSemanticConfig = () => {
     return
   }
   if (viewMode.value !== 'builder') return
-  if (selectedSemanticConfigId.value && semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value)) return
-  selectedSemanticConfigId.value = enabledSemanticConfigs.value[0]?.id || semanticConfigs.value[0]?.id || null
+  if (selectedSemanticConfigId.value && enabledSemanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value)) return
+  selectedSemanticConfigId.value = enabledSemanticConfigs.value[0]?.id || null
 }
 
 const conversationSidebarBootstrapLoading = computed(() => {
@@ -1124,35 +1056,9 @@ const conversationSidebarBootstrapLoading = computed(() => {
   return false
 })
 
-const buildExecutionTargets = (datasource: DataSource | null): ExecutionTargetOption[] => {
-  const members = datasource?.member_sources || []
-  if (members.length > 0) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: getMemberOrgCode(member),
-        source_type: member.source_type || datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!datasource?.id) return []
-  return [{
-    member_datasource_id: datasource.template_datasource_id || datasource.id,
-    org_code: getDatasourceOrgCode(datasource),
-    source_type: datasource.source_type || '',
-    host: datasource.source_config?.host as string | undefined,
-    port: datasource.source_config?.port as number | undefined,
-    database: datasource.source_config?.database as string | undefined,
-    label: datasource.group_name || datasource.id,
-  }]
-}
-
-const executionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
+const executionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: currentDatasource.value, fallbackId: currentDatasource.value?.id })
+))
 const selectedMemberDatasourceIds = ref<string[]>([])
 const conversationMemberDatasourceIds = ref<string[]>([])
 
@@ -1182,11 +1088,6 @@ const resolveSelectedExecutionTargetIds = (
   }
 
   return [availableIds[0]!]
-}
-
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
 }
 
 const syncSelectedExecutionTargets = () => {
@@ -1248,14 +1149,32 @@ const draftDatasource = computed(() => {
   return datasources.value.find(ds => ds.id === datasourceId) || null
 })
 
-const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(draftDatasource.value))
+const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: draftDatasource.value, fallbackId: draftDatasource.value?.id })
+))
 
 const canChangeDraftDatasource = computed(() => {
   if (datasources.value.length <= 1) return false
   return !isConversationContextMode.value || !currentConversationDatasourceId.value
 })
 
+// 数据源组下拉被禁用时的原因提示：禁用控件若不说明原因，用户会误以为是故障；
+// 两条禁用路径（仅一个数据源组 / 对话已绑定数据源）原因不同，分开给文案
+const datasourceSelectLockReason = computed(() => {
+  if (!showContextSelectorDialog.value) return ''
+  if (datasources.value.length <= 1) return '当前仅有一个数据源组，无可切换项'
+  if (isConversationContextMode.value && currentConversationDatasourceId.value) {
+    return '对话已绑定当前数据源组，会话内不支持切换；如需使用其他数据源组，请新建会话'
+  }
+  return ''
+})
+
 const openContextSelector = () => {
+  // 无数据源：不打开选择器（无可选项），提示原因；管理员可走旁边齿轮入口配置
+  if (noMatchedDatasource.value) {
+    ElMessage.warning(noMatchedDatasourceDesc.value)
+    return
+  }
   draftSelectedDatasourceId.value = selectedDatasourceId.value || resolveDefaultDatasourceId(datasources.value)
   draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
   draftDefaultAllExecutionTargets.value = isConversationContextMode.value
@@ -1305,12 +1224,14 @@ const handleConfirmContextSelector = () => {
 }
 
 const currentContextSummary = computed(() => {
+  // 无数据源：数据源组位置直接提示待配置（页面常显方案下这是主要提示位）
+  if (noMatchedDatasource.value) return '请先配置数据源组'
   const datasourceName = currentDatasource.value?.group_name || '暂无数据源'
   return `${datasourceName} / ${selectedExecutionTargetSummary.value}`
 })
 
 const showSidebarContextBar = computed(() => {
-  return datasources.value.length > 0 || executionTargets.value.length > 0
+  return noMatchedDatasource.value || datasources.value.length > 0 || executionTargets.value.length > 0
 })
 
 const showSidebarFooter = computed(() => {
@@ -1352,16 +1273,17 @@ watch(selectedConversationModelId, (modelId) => {
 })
 
 watch(
-  [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|'), () => metricSemanticConfigs.value.map(cfg => cfg.id).join('|')],
+  [viewMode, () => semanticConfigs.value.map(cfg => `${cfg.id}:${Number(cfg.enabled)}`).join('|'), () => metricSemanticConfigs.value.map(cfg => cfg.id).join('|')],
   ensureStructuredViewSemanticConfig,
   { immediate: true }
 )
 
 watch(
   [selectedDatasourceId, viewMode, activeSidebarTab],
-  ([datasourceId, mode, sidebarTab]) => {
+  ([datasourceId, mode]) => {
     if (!datasourceId) return
-    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || (mode === 'conversation' && sidebarTab === 'metrics')) {
+    // conversation 模式下「语义模型」面板与「对话」面板共存（v-show），切换 tab 不能省掉 schema 加载
+    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || mode === 'conversation') {
       void loadDatasourceSchema(datasourceId)
     }
   },
@@ -1373,14 +1295,6 @@ watch(
   ([datasourceId, semanticPanelOpen]) => {
     if (!semanticPanelOpen || !datasourceId) return
     void loadDatasourceSchema(datasourceId)
-  },
-  { immediate: true }
-)
-
-watch(
-  [viewMode, activeSidebarTab, isSidebarVisible, selectedDatasourceId, selectedSemanticConfigId, conversationSelectedSemanticConfigId],
-  () => {
-    updateSidebarCollapseTop()
   },
   { immediate: true }
 )
@@ -1433,8 +1347,8 @@ const handleInsertColumn = (tableName: string, columnName: string) => {
 }
 
 const handleFillSemanticQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
-  if (viewMode.value !== 'conversation' || currentConversationAgentId.value !== 'chat_data') return
-  sqlConversationRef.value?.fillSemanticFieldQuestion(payload)
+  if (viewMode.value !== 'conversation') return
+  conversationRef.value?.fillSemanticFieldQuestion(payload)
 }
 
 const handleConversationDatasetSelected = (configId: string | null) => {
@@ -1442,15 +1356,39 @@ const handleConversationDatasetSelected = (configId: string | null) => {
   writeConversationSemanticConfigSelection(selectedDatasourceId.value, configId)
 }
 
+const handleBuilderSemanticConfigSelected = (configId: string) => {
+  const normalizedId = String(configId || '').trim()
+  if (!enabledSemanticConfigs.value.some(config => config.id === normalizedId)) return
+  selectedSemanticConfigId.value = normalizedId
+}
+
 const handleConversationSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
   const selectedId = String(payload.semantic_config_id || '').trim()
   if (!selectedId || !payload.user_selected) return
-  if (!semanticConfigs.value.some(config => config.id === selectedId)) return
+  if (!enabledSemanticConfigs.value.some(config => config.id === selectedId)) return
   conversationSelectedSemanticConfigId.value = selectedId
   writeConversationSemanticConfigSelection(selectedDatasourceId.value, selectedId)
 }
 
+// storage key 统一前缀改造后的一次性迁移：清掉历史版本的孤儿键，
+// 避免旧键里上一个账号的数据永久残留在浏览器
+const LEGACY_STORAGE_KEYS = [
+  'chat-data:conversation-semantic-config',
+  'chat-data:conversation-model',
+  'chatdata-conversation-view-mode',
+  'chat_data_sql_ai_conversation_history',
+]
+const cleanupLegacyStorageKeys = () => {
+  try {
+    LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key))
+    sessionStorage.removeItem('chatdata-active-run-conversation')
+  } catch {
+    // storage 不可用（如宿主禁用）时清理失败无影响
+  }
+}
+
 onMounted(async () => {
+  cleanupLegacyStorageKeys()
   // 确保主系统用户信息已加载，后端统一从主系统认证中解析当前用户。
   let userId = String(currentUser.value.id || '').trim()
   let userName = String(currentUser.value.name || '').trim()
@@ -1466,16 +1404,6 @@ onMounted(async () => {
   await loadDatasources()
   void ensureConversationsLoaded()
   // 不立即创建会话，等发送第一条消息时才创建
-  window.addEventListener('resize', updateSidebarCollapseTop)
-  updateSidebarCollapseTop()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', updateSidebarCollapseTop)
-  if (historyPopoverHideTimer) {
-    clearTimeout(historyPopoverHideTimer)
-    historyPopoverHideTimer = null
-  }
 })
 </script>
 
@@ -1487,8 +1415,8 @@ onUnmounted(() => {
     <!-- 根节点必须是单个真实 DOM 元素（不能在 template 直下放注释或组件，否则编译成 Fragment 根，宿主项目 transition(mode="out-in") + keep-alive 路由出口会导致页面切换卡死），注释与 el-config-provider 均须置于根 div 内 -->
     <!-- 高度 = 视口 - 主项目头部(导航栏50+标签栏32=82px)，按实际调整 -->
     <el-config-provider :locale="zhCn">
-    <!-- 未匹配数据源提示 -->
-    <div v-if="noMatchedDatasource" class="flex-1 flex items-center justify-center">
+    <!-- 未匹配数据源整页空态（默认关闭，见 SHOW_NO_DATASOURCE_EMPTY_PAGE 注释；页面改为常显+入口守卫） -->
+    <div v-if="isNoDatasourceEmptyPage" class="flex-1 flex items-center justify-center">
       <div class="text-center text-gray-400">
         <i class="fa-solid fa-database text-4xl mb-4 block"></i>
         <p class="text-sm">{{ noMatchedDatasourceTitle }}</p>
@@ -1505,7 +1433,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 顶部工具栏 -->
-    <div v-if="!noMatchedDatasource" class="h-10 px-5 flex items-end bg-[#EEF1F5] border-b border-[#B8C1CE]">
+    <div v-if="!isNoDatasourceEmptyPage" class="h-10 px-5 flex items-end bg-[#EEF1F5] border-b border-[#B8C1CE]">
       <div class="flex items-center justify-between w-full min-w-0">
         <div class="mode-trapezoid shrink-0">
           <button
@@ -1526,60 +1454,44 @@ onUnmounted(() => {
         <div class="relative shrink-0 flex items-center gap-2">
           <button
             v-if="viewMode === 'conversation'"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
-            title="历史会话"
-            @mouseenter="openHistoryPopover"
-            @mouseleave="closeHistoryPopoverWithDelay"
-            @click.stop="showHistoryPopover = !showHistoryPopover"
+            class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
+            :title="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
+            :aria-label="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
+            :aria-expanded="conversationConsoleVisible"
+            data-conversation-console-toggle="true"
+            @click="toggleConversationConsole"
           >
-            <i class="fa-solid fa-clock-rotate-left text-[12px]"></i>
-          </button>
-          <button
-            v-if="viewMode === 'conversation' && canShowNewConversationButton"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-700 text-sm cursor-pointer shadow-sm hover:bg-slate-50"
-            title="新对话"
-            @click="handleNewConversation"
-          >
-            <i class="fa-solid fa-circle-plus text-[13px]"></i>
-          </button>
-          <button
-            v-if="viewMode === 'conversation' && currentConversationAgentId === 'chat_data_data_analyze'"
-            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
-            title="控制台"
-            @click="openAnalysisConsole"
-          >
-            <i class="fa-solid fa-terminal text-[12px]"></i>
-          </button>
-
-          <div
-            v-if="showHistoryPopover"
-            class="absolute right-0 top-full mt-2 z-[140] w-[360px] max-h-[70vh] bg-white border border-slate-200 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.12)] overflow-hidden"
-            @mouseenter="openHistoryPopover"
-            @mouseleave="closeHistoryPopoverWithDelay"
-          >
-            <div class="px-4 py-3 border-b border-slate-100 text-base font-semibold text-slate-800">历史对话</div>
-            <div class="h-[calc(70vh-56px)] min-h-[260px]">
-              <ConversationSidebar
-                active-tab="conversation"
-                :grouped-conversations="groupedConversations"
-                :current-conversation-id="currentConversationId"
-                :is-loading="isLoadingConversations"
-                :is-loading-more="isLoadingMoreConversations"
-                :has-more="hasMoreConversations"
-                :show-new-conversation-button="false"
-                :hide-management="!!parentComponentName"
-                @select-conversation="handleHistoryConversationSelect"
-                @new-conversation="handleNewConversation"
-                @load-more-conversations="loadMoreConversations"
+            <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板近正方、细描边，
+                 箭头为线性 chevron（非实心三角），展开时朝左、收起时朝右。 -->
+            <svg class="h-[18px] w-[18px]" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+              <line x1="5.9" y1="1.75" x2="5.9" y2="14.25" stroke="currentColor" stroke-width="1.2" />
+              <path
+                v-if="conversationConsoleVisible"
+                d="M9.9 5.6 7.5 8l2.4 2.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
               />
-            </div>
-          </div>
+              <path
+                v-else
+                d="M7.5 5.6 9.9 8l-2.4 2.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
-    <div v-if="!noMatchedDatasource && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
+    <!-- 语义模型配置：全宽内容区，不占用左侧栏空间 -->
+    <div v-if="!isNoDatasourceEmptyPage && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
         <select
@@ -1591,7 +1503,7 @@ onUnmounted(() => {
             {{ ds.group_name }}
           </option>
         </select>
-        <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
+        <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
         <el-select
           v-model="metricSelectedSemanticConfigId"
           class="min-w-0 flex-1"
@@ -1599,9 +1511,9 @@ onUnmounted(() => {
           :loading="loadingMetricSemanticConfigs"
           :disabled="loadingMetricSemanticConfigs || metricSemanticConfigs.length === 0"
           :title="currentMetricSemanticConfig ? formatMetricSemanticConfigLabel(currentMetricSemanticConfig) : ''"
-          placeholder="请选择指标集"
+          placeholder="请选择语义模型"
           loading-text="加载中"
-          no-data-text="暂无指标集"
+          no-data-text="暂无语义模型"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
         >
@@ -1615,7 +1527,7 @@ onUnmounted(() => {
         </el-select>
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg border-none bg-blue-500 text-white text-[13px] transition-all hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建指标集"
+          title="新建语义模型"
           :disabled="!selectedDatasourceId || creatingMetricConfig"
           @click="handleCreateMetricConfig"
         >
@@ -1644,124 +1556,224 @@ onUnmounted(() => {
     </div>
 
     <!-- 下方内容区（82px 头部 + 48px 工具栏 = 130px） -->
-    <div v-if="!noMatchedDatasource" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
+    <div v-if="!isNoDatasourceEmptyPage" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
       <!-- 左侧：公用侧边栏 -->
-      <!-- 折叠态：窄条 -->
-      <div v-if="!isSidebarVisible" class="flex flex-col items-center gap-1 pt-3 pb-3 bg-white border-r border-slate-200 shrink-0 w-12">
+      <!-- 折叠态：窄条（32px）。与展开态右缘悬浮轨道同构：按钮悬挂在条外缘顶部（top-1），
+           Tab 从 pt-8 起——两种状态下 Tab 的垂直位置完全一致（横向跟随侧栏边界） -->
+      <div v-if="!isSidebarVisible" class="relative flex flex-col items-stretch gap-1 bg-white border-r border-slate-200 shrink-0 w-8 pt-8 pb-3">
+        <button
+          type="button"
+          class="absolute right-[-10px] top-1 z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 hover:text-gray-600 hover:border-slate-300"
+          title="展开侧边栏"
+          @click="isSidebarVisible = true"
+        >
+          <i class="fa-solid fa-chevron-right text-[10px]"></i>
+        </button>
         <div
           v-for="tab in sidebarTabs"
           :key="tab.key"
           :class="[
-            'writing-vertical text-xs py-3 px-1 rounded-md cursor-pointer transition-all duration-200 select-none',
+            'writing-vertical w-full text-xs py-3 px-1 cursor-pointer transition-all duration-200 select-none',
             activeSidebarTab === tab.key ? 'text-blue-500 font-medium bg-blue-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
           ]"
           @click="activeSidebarTab = tab.key; isSidebarVisible = true"
         >{{ tab.label }}</div>
       </div>
       <!-- 展开态 -->
-      <div v-show="isSidebarVisible" class="relative flex flex-col bg-slate-50 border-r border-slate-200 shrink-0" :style="{ width: `${sidebarWidth}px` }">
-        <!-- 侧边栏内容 -->
-        <div ref="sidebarBodyRef" class="flex-1 overflow-hidden flex flex-col bg-white min-h-0">
-          <!-- 收起侧边栏 -->
-          <button
-            class="absolute right-[-10px] z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 shrink-0 hover:text-gray-600 hover:border-slate-300"
-            :style="{ top: `${sidebarCollapseTop}px` }"
-            data-collapse-btn="true"
-            title="收起侧边栏"
-            @click="isSidebarVisible = false"
-          >
-            <i class="fa-solid fa-chevron-left text-[10px]"></i>
-          </button>
+      <!-- 布局与折叠态对应：竖排 Tab 轨道贴侧栏右缘、悬浮侵入会话区 32px（不占侧栏宽度，
+           会话区左侧留白正好利用）；收起/展开按钮悬挂在轨道外缘顶部（top-1），Tab 从 pt-8
+           起排——两种状态下 Tab 的垂直位置完全一致，横向跟随侧栏边界移动。
+           旧版顶部分段 Tab 按约定隐藏保留（见下方注释块），恢复方法见其注释。 -->
+      <div v-show="isSidebarVisible" class="relative flex bg-slate-50 border-r border-slate-200 shrink-0" :style="{ width: `${sidebarWidth}px` }">
+        <!-- 收起侧边栏（统一压在右缘拖拽条线上） -->
+        <button
+          type="button"
+          class="absolute top-1 z-30 w-5 h-5 flex items-center justify-center rounded-full border border-slate-200 bg-white text-gray-400 shadow-sm cursor-pointer transition-all duration-200 hover:text-gray-600 hover:border-slate-300"
+          :class="collapseButtonOffsetClass"
+          data-collapse-btn="true"
+          title="收起侧边栏"
+          @click="isSidebarVisible = false"
+        >
+          <i class="fa-solid fa-chevron-left text-[10px]"></i>
+        </button>
 
-          <!-- 看板（懒挂载，避免首屏无关请求） -->
-          <div v-if="dashboardMounted" v-show="activeSidebarTab === 'dashboard'" class="sidebar-unified-shell h-full">
-            <DashboardPanel
-              :selected-dashboard-id="activeDashboardId"
-              :dashboards="dashboards"
-              :loading="loadingDefaultDashboard"
-              :current-user-id="currentUser.id"
-              @open-dashboard="handleOpenDashboard"
-              @dashboards-change="handleDashboardsChange"
-            />
-          </div>
+        <!-- 左列：面板内容 + 底部上下文栏 -->
+        <div class="flex min-w-0 flex-1 flex-col">
+          <!-- 侧边栏内容 -->
+          <div class="flex-1 overflow-hidden flex flex-col bg-white min-h-0">
 
-          <!-- 智能问数：指标 / 会话 -->
-          <template v-if="viewMode === 'conversation'">
-            <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
-              <ConversationSidebar
-                active-tab="metrics"
-                :datasource-id="selectedDatasourceId"
-                :semantic-configs="enabledSemanticConfigs"
-                :loading-configs="loadingSemanticConfigs"
-                :bootstrap-loading="conversationSidebarBootstrapLoading"
-                :selected-dataset-id="conversationSemanticConfigId"
-                :tables="currentDatasource?.ds_tables || []"
-                :hide-management="!!parentComponentName"
-                @select-dataset="handleConversationDatasetSelected"
-                @refresh-semantic-configs="loadSemanticConfigs"
-                @fill-question="handleFillSemanticQuestion"
+            <!-- 旧版顶部分段 Tab（2026-09-12 起被右缘竖排轨道取代，按「只隐藏不删除」约定保留；
+                 恢复方法：删除「右缘竖排 Tab 轨道」块、把本内容列改回与底部栏平级的直接子节点、
+                 展开态容器改回 flex-col，再取消本注释块）：仅智能问数模式有多个 tab（对话历史 / 语义模型）
+            <div
+              v-if="viewMode === 'conversation' && sidebarTabs.length > 1"
+              class="shrink-0 border-b border-slate-200 bg-white px-3 py-2"
+            >
+              <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+                <button
+                  v-for="tab in sidebarTabs"
+                  :key="tab.key"
+                  type="button"
+                  class="flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[13px] transition-colors"
+                  :class="activeSidebarTab === tab.key
+                    ? 'bg-white font-medium text-[#165DFF] shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'"
+                  @click="activeSidebarTab = tab.key"
+                >
+                  <i :class="['fa-solid', tab.icon]" class="text-[11px]"></i>
+                  <span>{{ tab.label }}</span>
+                </button>
+              </div>
+            </div>
+            -->
+
+            <!-- 看板（懒挂载，避免首屏无关请求） -->
+            <div v-if="dashboardMounted" v-show="activeSidebarTab === 'dashboard'" class="sidebar-unified-shell h-full">
+              <DashboardPanel
+                :selected-dashboard-id="activeDashboardId"
+                :dashboards="dashboards"
+                :loading="loadingDefaultDashboard"
+                :current-user-id="currentUser.id"
+                @open-dashboard="handleOpenDashboard"
+                @dashboards-change="handleDashboardsChange"
               />
             </div>
-          </template>
 
-          <!-- 辅助查询：数据表 -->
-          <div v-show="viewMode === 'builder' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
-            <BuilderSidebar
-              :datasource="currentDatasource"
-              :semantic-config="currentSemanticConfig"
-              :semantic-configs="semanticConfigs"
-              :selected-dataset-id="selectedSemanticConfigId"
-              :tables="currentDatasource?.ds_tables || []"
-              :loading="loadingSemanticConfigs"
-              @drag-start="handleBuilderDragStart"
-              @drag-end="handleBuilderDragEnd"
-              @add-dimension="handleBuilderAddDimension"
-              @add-metric="handleBuilderAddMetric"
-              @dataset-change="(id: string) => selectedSemanticConfigId = id"
-              @refresh-semantic-configs="loadSemanticConfigs"
-            />
+            <!-- 智能问数：对话 / 语义模型 -->
+            <template v-if="viewMode === 'conversation'">
+              <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
+                <ConversationSidebar
+                  active-tab="conversation"
+                  :grouped-conversations="groupedConversations"
+                  :current-conversation-id="currentConversationId"
+                  :is-loading="isLoadingConversations"
+                  :is-refreshing="isRefreshingConversations"
+                  :is-loading-more="isLoadingMoreConversations"
+                  :has-more="hasMoreConversations"
+                  :conversation-view-mode="conversationViewMode"
+                  :conversation-sort-by="conversationSortBy"
+                  :hide-management="!!parentComponentName"
+                  @select-conversation="handleHistoryConversationSelect"
+                  @new-conversation="handleNewConversation"
+                  @load-more-conversations="loadMoreConversations"
+                  @load-more-conversation-group="loadMoreConversationGroup"
+                  @update-conversation-title="handleUpdateConversationTitle"
+                  @toggle-conversation-favorite="handleToggleConversationFavorite"
+                  @update-conversation-view-mode="setConversationViewMode"
+                  @update-conversation-sort-by="setConversationSortBy"
+                  @refresh-conversations="handleRefreshConversations"
+                  @open-agent-schedules="handleOpenAgentSchedules"
+                  @open-skill-manager="handleOpenSkillManager"
+                />
+              </div>
+              <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
+                <ConversationSidebar
+                  active-tab="metrics"
+                  :datasource-id="selectedDatasourceId"
+                  :semantic-configs="enabledSemanticConfigs"
+                  :loading-configs="loadingSemanticConfigs"
+                  :bootstrap-loading="conversationSidebarBootstrapLoading"
+                  :selected-dataset-id="conversationSemanticConfigId"
+                  :tables="currentDatasource?.ds_tables || []"
+                  :hide-management="!!parentComponentName"
+                  @select-dataset="handleConversationDatasetSelected"
+                  @refresh-semantic-configs="loadSemanticConfigs"
+                  @fill-question="handleFillSemanticQuestion"
+                />
+              </div>
+            </template>
+
+            <!-- 辅助查询：数据表 -->
+            <div v-show="viewMode === 'builder' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
+              <BuilderSidebar
+                :datasource="currentDatasource"
+                :semantic-config="currentSemanticConfig"
+                :semantic-configs="enabledSemanticConfigs"
+                :selected-dataset-id="selectedSemanticConfigId"
+                :tables="currentDatasource?.ds_tables || []"
+                :loading="loadingSemanticConfigs"
+                @drag-start="handleBuilderDragStart"
+                @drag-end="handleBuilderDragEnd"
+                @add-dimension="handleBuilderAddDimension"
+                @add-metric="handleBuilderAddMetric"
+                @dataset-change="handleBuilderSemanticConfigSelected"
+                @refresh-semantic-configs="loadSemanticConfigs"
+              />
+            </div>
+
+            <!-- SQL查询：数据表 -->
+            <div v-show="viewMode === 'editor' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
+              <EditorSidebar
+                :datasource="currentDatasource"
+                :loading="loadingDatasources"
+                @insert-table="handleInsertTable"
+                @insert-column="handleInsertColumn"
+              />
+            </div>
           </div>
 
-          <!-- SQL查询：数据表 -->
-          <div v-show="viewMode === 'editor' && activeSidebarTab === 'tables'" class="sidebar-unified-shell h-full">
-            <EditorSidebar
-              :datasource="currentDatasource"
-              :loading="loadingDatasources"
-              @insert-table="handleInsertTable"
-              @insert-column="handleInsertColumn"
-            />
+          <!-- 底部：统一上下文选择 / 数据源组管理
+               两者并存时并成一体控件组（外框统一圆角/描边/阴影，中间 1px 分隔），
+               避免两个各自带边框的独立按钮并排产生割裂感 -->
+          <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
+            <div
+              class="flex items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+              :class="showSidebarContextBar ? 'min-w-0 flex-1' : 'ml-auto shrink-0'"
+            >
+              <button
+                v-if="showSidebarContextBar"
+                class="flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-slate-50"
+                :title="currentContextSummary"
+                @click="openContextSelector"
+              >
+                <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-800">{{ currentContextSummary }}</span>
+                <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0"></i>
+              </button>
+              <!-- 显式分隔线（不用 divide-x：此项目 Tailwind 下未生成边框宽度） -->
+              <span
+                v-if="showSidebarContextBar && canManageDatasource"
+                class="w-px shrink-0 bg-slate-200"
+              ></span>
+              <button
+                v-if="canManageDatasource"
+                class="flex h-9 w-9 shrink-0 items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                title="后台管理"
+                @click="openDatasourceManager"
+              >
+                <i class="fa-solid fa-cog text-xs"></i>
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- 底部：统一上下文选择 / 数据源组管理 -->
-        <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
-          <div class="flex items-center gap-2 min-w-0">
-            <button
-              v-if="showSidebarContextBar"
-              class="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 h-9 text-left shadow-sm transition-all hover:bg-slate-50"
-              :title="currentContextSummary"
-              @click="openContextSelector"
-            >
-              <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-800">{{ currentContextSummary }}</span>
-              <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 shrink-0"></i>
-            </button>
-            <button
-              v-if="canManageDatasource"
-              class="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 shadow-sm hover:bg-slate-100 hover:text-slate-600 transition-all"
-              :class="showSidebarContextBar ? '' : 'ml-auto'"
-              title="后台管理"
-              @click="openDatasourceManager"
-            >
-              <i class="fa-solid fa-cog text-xs"></i>
-            </button>
-          </div>
+        <!-- 右缘竖排 Tab 轨道：悬浮在侧栏右缘之外、侵入会话区 32px，与折叠态窄条同构
+             （按钮下方 pt-8 起排，垂直位置一致）；仅智能问数模式有多个 tab。
+             容器完全透明、无边框无阴影——只是两个文字标签浮在会话区留白上，
+             hover/选中时才出现背景，避免读成一条白条。
+             容器 pointer-events-none + z-40：① Tab 块（pointer-events-auto）压过拖拽条 z-30，
+             最左 8px 与拖拽条重叠处点得中；② 轨道空白区不再拦截会话区点击（此前整条 32px
+             全高都在挡主区） -->
+        <div
+          v-if="showVerticalTabRail"
+          class="pointer-events-none absolute right-[-32px] top-0 z-40 flex h-full w-8 flex-col items-stretch gap-1 pt-8 pb-3"
+        >
+          <div
+            v-for="tab in sidebarTabs"
+            :key="tab.key"
+            :class="[
+              'writing-vertical w-full pointer-events-auto text-xs py-3 px-1 cursor-pointer transition-all duration-200 select-none',
+              activeSidebarTab === tab.key ? 'text-blue-500 font-medium bg-blue-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+            ]"
+            :title="tab.label"
+            @click="activeSidebarTab = tab.key"
+          >{{ tab.label }}</div>
         </div>
       </div>
 
-      <!-- 侧边栏拖动分隔条 -->
+      <!-- 侧边栏拖动分隔条（z-30 压过悬浮 Tab 轨道，保证右缘 8px 仍可拖拽调宽） -->
       <div
         v-show="isSidebarVisible"
-        class="w-2 cursor-col-resize flex items-center justify-center transition-colors duration-150 shrink-0 hover:bg-blue-50 group relative"
+        class="w-2 cursor-col-resize flex items-center justify-center transition-colors duration-150 shrink-0 hover:bg-blue-50 group relative z-30"
         :class="isResizingSidebar ? 'bg-blue-50' : ''"
         @mousedown="startSidebarResize"
       >
@@ -1792,44 +1804,11 @@ onUnmounted(() => {
           <div v-show="viewMode === 'conversation'" class="absolute inset-0 overflow-hidden">
             <div class="h-full flex min-h-0">
               <div class="flex-1 min-w-0 min-h-0">
-                <SqlConversation
-                  v-if="currentConversationAgentId === 'chat_data'"
-                  ref="sqlConversationRef"
-                  :key="conversationKey"
-                  :datasources="datasources"
-                  :datasource="currentDatasource"
-                  :conversation-id="currentConversationId"
-                  :conversation-title="currentConversationTitle"
-                  :conversation-agent-id="currentConversationAgentId"
-                  :selected-datasource-id="selectedDatasourceId"
-                  :semantic-config-id="conversationSemanticConfigId"
-                  :semantic-config-selection="conversationSemanticConfigSelection"
-                  :semantic-configs="enabledSemanticConfigs"
-                  :ensure-conversation-id="ensureConversationId"
-                  :ensure-conversation-datasource="ensureConversationDatasource"
-                  :execution-targets="executionTargets"
-                  :execution-target-multiple="true"
-                  :selected-member-datasource-ids="conversationMemberDatasourceIds"
-                  v-model:selected-model-id="selectedConversationModelId"
-                  hide-header
-                  hide-datasource-selector
-                  hide-execution-target-selector
-                  hide-sidebar
-                  class="h-full"
-                  @first-message-complete="handleFirstMessageComplete"
-                  @datasource-change="handleDatasourceChange"
-                  @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
-                  @agent-change="handleAgentChange"
-                  @dashboard-created="handleDashboardCreatedFromConversation"
-                  @semantic-config-selected="handleConversationSemanticConfigSelected"
-                />
-                <AnalysisConversation
-                  v-else
-                  ref="analysisConversationRef"
+                <Conversation
+                  ref="conversationRef"
                   :key="conversationKey"
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"
-                  :conversation-agent-id="currentConversationAgentId"
                   :selected-datasource-id="selectedDatasourceId"
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
@@ -1840,8 +1819,9 @@ onUnmounted(() => {
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   v-model:selected-model-id="selectedConversationModelId"
                   class="h-full"
-                  @first-message-complete="handleFirstMessageComplete"
-                  @agent-change="handleAgentChange"
+                  @first-message-started="handleFirstMessageStarted"
+                  @run-status-changed="handleConversationRunStatusChanged"
+                  @console-visibility-changed="conversationConsoleVisible = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"
@@ -1859,7 +1839,7 @@ onUnmounted(() => {
               :datasources="datasources"
               :semantic-config-id="selectedSemanticConfigId"
               :semantic-config="currentSemanticConfig"
-              :semantic-configs="semanticConfigs"
+              :semantic-configs="enabledSemanticConfigs"
               :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
               :execution-targets="executionTargets"
               :execution-target-multiple="true"
@@ -1870,7 +1850,7 @@ onUnmounted(() => {
               hide-sidebar
               class="h-full"
               @datasource-change="handleDatasourceChange"
-              @semantic-config-change="(id: string) => selectedSemanticConfigId = id"
+              @semantic-config-change="handleBuilderSemanticConfigSelected"
               @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
             />
           </div>
@@ -1903,7 +1883,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 语义配置页面（整页） -->
-    <div v-if="isSemanticConfigPanelOpen" class="absolute inset-0 z-[2050] bg-[#F5F7FA]">
+    <div v-if="isSemanticConfigPanelOpen" class="absolute inset-0 z-[var(--z-page-overlay)] bg-[#F5F7FA]">
       <SemanticConfigPanel
         :datasource-id="semanticConfigDatasourceId"
         :datasource-name="semanticConfigDatasource?.group_name || ''"
@@ -1932,6 +1912,13 @@ onUnmounted(() => {
               :label="ds.group_name || ds.id"
             />
           </el-select>
+          <div
+            v-if="datasourceSelectLockReason"
+            class="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500"
+          >
+            <i class="fa-solid fa-circle-info mt-0.5 shrink-0 text-[11px]"></i>
+            <span>{{ datasourceSelectLockReason }}</span>
+          </div>
         </div>
 
         <div>
@@ -1975,6 +1962,13 @@ onUnmounted(() => {
       v-model="showAdminModal"
       @datasources-updated="handleAdminDatasourcesUpdated"
       @open-semantic-config="handleOpenSemanticConfig"
+    />
+
+    <AgentScheduleManager
+      v-model="showAgentScheduleModal"
+      :conversation-id="currentConversationId || ''"
+      :datasource-id="selectedDatasourceId || ''"
+      @open-conversation="handleOpenScheduledConversation"
     />
     </el-config-provider>
   </div>
@@ -2090,11 +2084,23 @@ body.is-resizing {
 }
 
 .chatdata-message-box-overlay {
-  z-index: 20000 !important;
+  z-index: var(--z-messagebox-legacy-overlay) !important;
 }
 
 .chatdata-message-box {
-  z-index: 20001 !important;
+  z-index: var(--z-messagebox-legacy-box) !important;
+}
+
+/*
+ * Element Plus MessageBox 全局层级修复（本文件 style 非 scoped，规则随 chat-data 目录走）。
+ * 根因：语义配置等整页容器 z-index 高达 2050（var(--z-page-overlay)，见 styles/z-index.css），
+ * 而 MessageBox 默认 z-index 从 ~2001 起动态分配，整层弹窗（含遮罩）会被压在整页容器之下，
+ * 表现为"点了删除不弹窗"。这里对 MessageBox 遮罩层（.el-overlay.is-message-box，EP 专属类，
+ * 不影响 dialog/drawer）统一提到 20010，高于全部业务层级；各调用点无需再逐个传
+ * customClass: 'chatdata-message-box'。
+ */
+.el-overlay.is-message-box {
+  z-index: var(--z-messagebox-overlay) !important;
 }
 
 </style>

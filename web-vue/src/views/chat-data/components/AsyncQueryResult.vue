@@ -8,26 +8,15 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
-import { getSafeNumericColumns, isQueryFailed, stripAnsiErrorText } from '../utils'
+import type { ToolQueryResult } from '../types/query'
+import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryStatus, stripAnsiErrorText } from '../utils'
+import { Z_INDEX } from '../utils/zIndex'
 
-interface QueryResult {
-  status?: string | null
-  sql?: string
-  query_mode?: string
-  confidence?: number | string
-  semantic_config_id?: string
-  semantic_config_name?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-  member_datasource_id?: string
-  member_name?: string
-}
+/**
+ * 组件解析的单成员查询结果 = 共享工具结果形状（types/query.ts 的
+ * ToolQueryResult，含 agent 工具注入的 query_mode 等扩展字段）。
+ */
+type AsyncQueryResultData = ToolQueryResult
 
 interface SemanticParams {
   metrics?: string[]
@@ -67,6 +56,11 @@ interface Props {
   metricsFirst?: boolean
   allowFullscreen?: boolean
   initialViewMode?: ViewMode
+  /**
+   * 图表撑满内容区高度（h-full 而非固定 h-80）。
+   * 仅全屏弹窗内的实例开启：普通消息卡里固定 320px，全屏里应随视口撑满。
+   */
+  fillChartHeight?: boolean
 }
 
 defineOptions({
@@ -82,7 +76,8 @@ const props = withDefaults(defineProps<Props>(), {
   showIndex: false,
   autoWrap: false,
   metricsFirst: false,
-  allowFullscreen: true
+  allowFullscreen: true,
+  fillChartHeight: false
 })
 const attrs = useAttrs()
 const rootClass = computed(() => [
@@ -124,9 +119,9 @@ watch(showChartMenu, (val) => {
 })
 
 // 解析查询结果
-const parseResult = computed<{ result: QueryResult | null; error: string | null }>(() => {
+const parseResult = computed<{ result: AsyncQueryResultData | null; error: string | null }>(() => {
   try {
-    return { result: JSON.parse(props.resultData) as QueryResult, error: null }
+    return { result: JSON.parse(props.resultData) as AsyncQueryResultData, error: null }
   } catch {
     return { result: null, error: '无法解析查询结果' }
   }
@@ -136,6 +131,10 @@ const activeResult = computed(() => parseResult.value.result)
 const parseError = computed(() => parseResult.value.error)
 const activeErrorText = computed(() => stripAnsiErrorText(activeResult.value?.error, '查询失败'))
 const activeFailed = computed(() => isQueryFailed(activeResult.value))
+const activeSucceeded = computed(() => isQuerySucceeded(activeResult.value))
+const activeFailureLabel = computed(() => (
+  normalizeQueryStatus(activeResult.value) === 'cancelled' ? '已取消' : '失败'
+))
 const errorExpanded = ref(false)
 const errorSummary = computed(() => activeErrorText.value.split(/\r?\n/, 1)[0] || '查询失败')
 
@@ -230,19 +229,17 @@ const formatExecutionSeconds = (value?: number | null): string => {
   return `${(ms / 1000).toFixed(2)}秒`
 }
 
-const confidenceText = computed(() => {
-  const value = activeResult.value?.confidence
-  if (value === null || value === undefined || value === '') return ''
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return String(value)
-  const percent = numeric <= 1 ? numeric * 100 : numeric
-  return `${Math.round(percent)}%`
+const queryModeBadge = computed(() => {
+  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
+  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL'
+  if (mode === 'sql' || mode === 'nl2sql') return 'SQL'
+  return ''
 })
 
 const queryModeTitle = computed(() => {
   const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
-  if (mode === 'dsl2sql') return '语义查询'
-  if (mode === 'nl2sql') return '直接 SQL 查询'
+  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL 模式（语义层编译）'
+  if (mode === 'sql' || mode === 'nl2sql') return 'SQL 模式'
   return ''
 })
 
@@ -455,6 +452,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           :x-field="visualization?.x_field"
           :y-field="visualization?.y_field"
           :numeric-columns="numericColumns"
+          :fill-height="fillChartHeight"
         />
       </div>
 
@@ -462,17 +460,27 @@ const getDimensionKey = (dim: string | { name: string }): string => {
       <div class="shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 border-t border-black/[0.04] bg-gradient-to-br from-slate-50 to-slate-100">
         <!-- 左侧：状态信息 -->
         <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <span class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-emerald-500 bg-gradient-to-br from-emerald-500/12 to-emerald-500/6">
+          <span
+            v-if="activeSucceeded"
+            class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-emerald-500 bg-gradient-to-br from-emerald-500/12 to-emerald-500/6"
+          >
             <i class="fa-solid fa-circle-check text-[10px]"></i>
             成功
+          </span>
+          <span
+            v-else-if="activeFailed"
+            class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-red-600 bg-red-100"
+          >
+            <i class="fa-solid fa-circle-exclamation text-[10px]"></i>
+            {{ activeFailureLabel }}
           </span>
           <span v-if="activeResult?.execution_time_ms != null" class="shrink-0 whitespace-nowrap text-xs text-gray-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             {{ formatExecutionSeconds(activeResult.execution_time_ms) }}
           </span>
-          <span v-if="activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
+          <span v-if="activeSucceeded && activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             共 {{ activeResult.total_count }} 条
           </span>
-          <span v-if="activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
+          <span v-if="activeSucceeded && activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
             缓存结果
           </span>
           <span
@@ -483,11 +491,11 @@ const getDimensionKey = (dim: string | { name: string }): string => {
             {{ semanticConfigLabel }}
           </span>
           <span
-            v-if="confidenceText"
+            v-if="queryModeBadge"
             class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded"
             :title="queryModeTitle"
           >
-            置信度 {{ confidenceText }}
+            {{ queryModeBadge }}
           </span>
           <span v-if="isTruncated" class="shrink-0 whitespace-nowrap text-xs text-amber-600">
             已按前端上限展示前 {{ frontMaxRows }} 条
@@ -496,7 +504,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
         <!-- 中间：翻页器 -->
         <div
-          v-if="paginationEnabled && viewMode === 'table' && limitedData.length > 0"
+          v-if="activeSucceeded && paginationEnabled && viewMode === 'table' && limitedData.length > 0"
           class="flex shrink-0 flex-wrap items-center gap-1.5 text-xs text-gray-600"
         >
           <button
@@ -535,7 +543,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           </button>
 
           <!-- 视图切换下拉 -->
-          <div class="relative">
+          <div v-if="activeSucceeded" class="relative">
             <button
               ref="viewBtnRef"
               class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center gap-1.5 border border-transparent rounded-md bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-[11px] cursor-pointer transition-all duration-200 shadow-[0_1px_4px_rgba(31,130,217,0.3)]"
@@ -548,7 +556,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
             <!-- 下拉菜单（使用 Teleport 避免被裁剪） -->
             <Teleport to="body">
-              <div v-if="showChartMenu" class="fixed inset-0 z-[9999] pointer-events-none">
+              <div v-if="showChartMenu" class="fixed inset-0 z-[var(--z-fullscreen-layer)] pointer-events-none">
                 <div class="fixed inset-0 pointer-events-auto" @click="showChartMenu = false"></div>
                 <div
                   ref="chartMenuRef"
@@ -578,7 +586,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
           <!-- 保存按钮 -->
           <button
-            v-if="activeResult?.sql || sql"
+            v-if="activeSucceeded && (activeResult?.sql || sql)"
             class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center border border-black/10 rounded-md bg-white text-gray-600 text-[11px] cursor-pointer transition-all duration-200 hover:border-[#1f82d9]/40 hover:bg-gradient-to-br hover:from-[#1f82d9]/10 hover:to-[#1f82d9]/5 hover:text-[#1f82d9]"
             title="保存到看板"
             @click="handleSave"
@@ -596,7 +604,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
     width="calc(100vw - 48px)"
     top="24px"
     append-to-body
-    :z-index="3900"
+    :z-index="Z_INDEX.DIALOG_FULLSCREEN"
     :show-close="false"
     :close-on-click-modal="true"
     class="query-result-fullscreen-dialog"
@@ -636,6 +644,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :auto-wrap="autoWrap"
         :metrics-first="metricsFirst"
         :allow-fullscreen="false"
+        :fill-chart-height="true"
         :initial-view-mode="viewMode"
       />
     </div>

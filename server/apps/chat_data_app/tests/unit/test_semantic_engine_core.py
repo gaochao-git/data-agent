@@ -4,34 +4,27 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic_dialect import (
+from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import (
     DialectRegistry,
     HiveDialect,
     MySQLDialect,
-    PostgreSQLDialect,
     SQLDialect,
     get_dialect,
 )
-from apps.chat_data_app.services.semantic_formatter import (
+from apps.chat_data_app.services.semantic.core.formatter import (
     format_error_message,
     format_params_for_display,
     format_sql_for_display,
 )
-from apps.chat_data_app.services.semantic_json_parser import (
-    JSONParseError,
-    parse_llm_json,
-    safe_get,
-    safe_get_dict,
-    safe_get_list,
-)
-from apps.chat_data_app.services.semantic_input_validator import InputValidator
-from apps.chat_data_app.services.sql_parser import (
+from apps.chat_data_app.services.semantic.core.input_validator import InputValidator
+from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
+from apps.chat_data_app.services.sql_run.parser import (
     _is_query_sql,
     _parse_sql,
     _split_sql_statements,
@@ -40,31 +33,7 @@ from apps.chat_data_app.services.sql_parser import (
     extract_top_level_limit_count,
     prepare_sql_for_execution,
 )
-import apps.chat_data_app.services.sql_parser as sql_parser
-
-
-def test_json_parser_handles_llm_formats_and_safe_getters():
-    assert parse_llm_json('{"metrics":["订单数"]}') == {"metrics": ["订单数"]}
-    assert parse_llm_json('```json\n{"a": 1}\n```') == {"a": 1}
-    assert parse_llm_json("说明：{'a': 1,}") == {"a": 1}
-    assert parse_llm_json("不是 json") == {}
-    with pytest.raises(JSONParseError):
-        parse_llm_json("", strict=True)
-
-    data = {"items": [1], "obj": {"a": 1}, "name": "订单"}
-    assert safe_get(data, "name") == "订单"
-    assert safe_get("bad", "name", "默认") == "默认"
-    assert safe_get_list(data, "items") == [1]
-    assert safe_get_list(data, "obj") == []
-    assert safe_get_dict(data, "obj") == {"a": 1}
-    assert safe_get_dict(data, "items") == {}
-
-
-def test_json_parser_strict_and_fix_failure_branches():
-    assert parse_llm_json("```json\n{bad}\n```") == {}
-    assert parse_llm_json("说明 {a: 1, b: 2}") == {"a": 1, "b": 2}
-    with pytest.raises(JSONParseError):
-        parse_llm_json("not json", strict=True)
+import apps.chat_data_app.services.sql_run.parser as sql_parser
 
 
 def test_formatter_outputs_display_text_and_truncates_sql():
@@ -92,9 +61,7 @@ def test_formatter_outputs_display_text_and_truncates_sql():
 def test_sql_dialects_cover_common_functions_and_registry_errors():
     mysql = get_dialect("mysql")
     hive = get_dialect("hive")
-    pg = get_dialect("postgresql")
 
-    assert mysql.quote_string("a'b") == "'a''b'"
     assert mysql.current_date() == "CURRENT_DATE()"
     assert mysql.current_timestamp() == "NOW()"
     assert mysql.date_add("dt", 1, "day") == "DATE_ADD(dt, INTERVAL 1 DAY)"
@@ -108,7 +75,6 @@ def test_sql_dialects_cover_common_functions_and_registry_errors():
     assert mysql.coalesce("a", "b") == "COALESCE(a, b)"
     assert mysql.ifnull("a", "0") == "IFNULL(a, 0)"
 
-    assert hive.quote_string("a'b") == "'a\\'b'"
     assert hive.date_add("dt", 1, "day") == "DATE_ADD(dt, 1)"
     assert hive.date_add("dt", 1, "month") == "(dt + INTERVAL 1 MONTH)"
     assert hive.date_sub("dt", 1, "day") == "DATE_SUB(dt, 1)"
@@ -116,29 +82,23 @@ def test_sql_dialects_cover_common_functions_and_registry_errors():
     assert hive.substring("name", 1, 3) == "SUBSTR(name, 1, 3)"
     assert hive.ifnull("a", "0") == "NVL(a, 0)"
 
-    assert pg.quote_identifier("order") == '"order"'
-    assert pg.format_date("dt", "week") == "TO_CHAR(dt, 'IYYY-IW')"
-    assert pg.format_date("dt", "unknown") == "dt"
-    assert pg.date_add("dt", 1, "day") == "(dt + INTERVAL '1 day')"
-    assert pg.date_sub("dt", 1, "day") == "(dt - INTERVAL '1 day')"
-    assert pg.date_diff("start_dt", "end_dt") == "(end_dt::date - start_dt::date)"
-    assert pg.concat("a", "b", "c") == "a || b || c"
-    assert pg.limit_offset(10, 20) == "LIMIT 10 OFFSET 20"
-    assert pg.ifnull("a", "0") == "COALESCE(a, 0)"
     assert DialectRegistry.has("mysql") is True
     assert "hive" in DialectRegistry.list()
 
-    custom_pg = PostgreSQLDialect()
-    DialectRegistry.register(custom_pg)
-    assert DialectRegistry.get("postgresql") is custom_pg
-    with pytest.raises(ValueError, match="未知的 SQL 方言"):
-        DialectRegistry.get("oracle")
+    class CustomDialect(MySQLDialect):
+        name = "custom"
+
+    custom = CustomDialect()
+    DialectRegistry.register(custom)
+    assert DialectRegistry.get("custom") is custom
+    for unsupported in ("oracle", "postgresql"):
+        with pytest.raises(ValueError, match="未知的 SQL 方言"):
+            DialectRegistry.get(unsupported)
 
 
 def test_sql_dialects_cover_all_builtin_function_variants():
     mysql = MySQLDialect()
     hive = HiveDialect()
-    pg = PostgreSQLDialect()
 
     assert mysql.format_date("dt", "year") == "DATE_FORMAT(dt, '%Y')"
     assert mysql.format_date("dt", "quarter") == "CONCAT(YEAR(dt), '-Q', QUARTER(dt))"
@@ -164,22 +124,7 @@ def test_sql_dialects_cover_all_builtin_function_variants():
     assert hive.limit_offset(10, 5) == "LIMIT 5, 10"
     assert hive.coalesce("a", "b") == "COALESCE(a, b)"
 
-    assert pg.quote_string("a'b") == "'a''b'"
-    assert pg.current_date() == "CURRENT_DATE"
-    assert pg.current_timestamp() == "NOW()"
-    assert pg.format_date("dt", "year") == "TO_CHAR(dt, 'YYYY')"
-    assert pg.format_date("dt", "quarter") == "TO_CHAR(dt, 'YYYY-\"Q\"Q')"
-    assert pg.format_date("dt", "month") == "TO_CHAR(dt, 'YYYY-MM')"
-    assert pg.format_date("dt", "day") == "DATE(dt)"
-    assert pg.format_date("dt", "hour") == "TO_CHAR(dt, 'YYYY-MM-DD HH24:00')"
-    assert pg.format_date("dt", "minute") == "TO_CHAR(dt, 'YYYY-MM-DD HH24:MI')"
-    assert pg.substring("name", 1, 3) == "SUBSTRING(name FROM 1 FOR 3)"
-    assert pg.count_distinct("user_id") == "COUNT(DISTINCT user_id)"
-    assert pg.limit_offset(10) == "LIMIT 10"
-    assert pg.coalesce("a", "b") == "COALESCE(a, b)"
-
     assert SQLDialect.quote_identifier(object(), "x") is None
-    assert SQLDialect.quote_string(object(), "x") is None
     assert SQLDialect.format_date(object(), "dt", "day") is None
     assert SQLDialect.current_date(object()) is None
     assert SQLDialect.current_timestamp(object()) is None
@@ -202,6 +147,7 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
             "下单时间": {"name": "下单时间"},
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
+            "受限状态": {"name": "受限状态", "allowed_operators": ["=", "IN"]},
         },
     )
 
@@ -221,6 +167,13 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     assert "value_type 仅支持" in validator.validate_filters([{"dimension": "下单时间", "operator": "IN", "value": ["today"], "value_type": []}])[1]
     assert validator.validate_filters([{"dimension": "订单状态", "operator": "LIKE", "value": "pa"}])[1] is None
     assert "操作符 'DROP TABLE'" in validator.validate_filters([{"dimension": "订单状态", "operator": "DROP TABLE", "value": "paid"}])[1]
+    assert validator.validate_filters([{"dimension": "受限状态", "operator": "in", "value": ["paid"]}])[1] is None
+    assert "不允许操作符 'LIKE'" in validator.validate_filters([{"dimension": "受限状态", "operator": "LIKE", "value": "paid"}])[1]
+    assert "不允许操作符 '>'" in validator.validate_filters([{
+        "left": {"type": "dimension", "name": "受限状态"},
+        "operator": ">",
+        "right": {"type": "literal", "value": "paid"},
+    }])[1]
     structured_filters, structured_err = validator.validate_filters([
         {
             "left": {"type": "dimension", "name": "出金金额"},
@@ -365,7 +318,7 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
     assert "left 只支持 dimension" in validator.validate_filters([
         {"left": {"type": "literal", "value": "x"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
     ])[1]
-    assert "不支持字段 rightExpression, valueType" in validator.validate_filters([
+    assert "不能混用" in validator.validate_filters([
         {
             "left": {"type": "dimension", "name": "出金金额"},
             "operator": ">",
@@ -374,6 +327,31 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
             "rightExpression": "1 + 1",
         }
     ])[1]
+    free_expression, err = validator.validate_filters([
+        {
+            "dimension": "出金金额",
+            "operator": ">",
+            "valueType": "expression",
+            "rightExpression": "1 + 1",
+        }
+    ])
+    assert err is None
+    assert free_expression[0]["rightExpression"] == "1 + 1"
+    assert "必须同时使用" in validator.validate_filters([
+        {"dimension": "出金金额", "operator": ">", "rightExpression": "1 + 1"}
+    ])[1]
+    assert "非空字符串" in validator.validate_filters([
+        {"dimension": "出金金额", "operator": ">", "valueType": "expression", "rightExpression": ""}
+    ])[1]
+    for unsafe_expression in ("1; DROP TABLE orders", "1 -- comment", "DELETE FROM orders"):
+        assert "只允许单条只读 SQL 表达式" in validator.validate_filters([
+            {
+                "dimension": "出金金额",
+                "operator": ">",
+                "valueType": "expression",
+                "rightExpression": unsafe_expression,
+            }
+        ])[1]
     assert "过滤条件中的维度 '未知维度' 不存在" in validator.validate_filters([
         {"left": {"type": "dimension", "name": "未知维度"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
     ])[1]
@@ -417,6 +395,85 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
         {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": "unknown"}}
     ])[1]
     assert validator._is_zero_literal("not-number") is False
+
+
+def test_compile_semantic_ai_dsl_is_the_shared_compile_facade():
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config == {"id": "model"}
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["指标"]
+            assert kwargs["limit"] == 25
+            assert kwargs["offset"] == 3
+            return {"success": True, "sql": " SELECT 1 ", "warnings": ["warning"]}
+
+    result = compile_semantic_ai_dsl(
+        {"id": "model"},
+        {"metrics": ["指标"]},
+        options=SemanticCompileOptions(max_rows=25, offset=3),
+        generator_cls=FakeGenerator,
+    )
+
+    assert result == {"success": True, "sql": "SELECT 1", "error": None, "warnings": ["warning"]}
+    assert compile_semantic_ai_dsl(None, {})["error"] == "语义模型必须是对象"
+    assert compile_semantic_ai_dsl({}, []) ["error"] == "语义 DSL 必须是对象"
+
+
+@pytest.mark.asyncio
+async def test_semantic_model_repository_keeps_runtime_and_full_modes_distinct():
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "id": datasource_id,
+                "source_type": "hive",
+                "semantic_configs": [{"id": "full", "enabled": True, "tables": ["stale"]}],
+            }
+
+        async def get_runtime_semantic_config_async(self, datasource_id, config_id):
+            return {
+                "id": config_id,
+                "enabled": True,
+                "relationships": [{"left_table": "a", "right_table": "b"}],
+            }
+
+        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+            return [{"id": "full", "enabled": True, "tables": ["stale"]}]
+
+        async def get_cached_schema_async(self, datasource_id):
+            return [{"name": "orders"}]
+
+    manager = FakeManager()
+
+    class FakeSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await manager.get_runtime_semantic_config_async(datasource_id, config_id)
+
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return (await manager.get_semantic_configs_async(datasource_id, user_id))[0]
+
+    semantic_service = FakeSemanticService()
+    runtime = await load_semantic_model("ds", "runtime", mode="runtime", manager=manager, semantic_service=semantic_service)
+    full = await load_semantic_model("ds", "full", mode="full", manager=manager, semantic_service=semantic_service)
+
+    assert runtime["source_type"] == "hive"
+    assert runtime["joins"] == runtime["relationships"]
+    assert "tables" not in runtime
+    assert full["tables"] == [{"name": "orders"}]
+
+
+@pytest.mark.asyncio
+async def test_semantic_model_repository_validates_mode_and_availability():
+    class MissingManager:
+        async def get_datasource_async(self, datasource_id):
+            return None
+
+    with pytest.raises(ValueError, match="缺少语义模型ID"):
+        await load_semantic_model("ds", None, manager=MissingManager())
+    with pytest.raises(ValueError, match="不支持的语义模型加载模式"):
+        await load_semantic_model("ds", "cfg", mode="bad", manager=MissingManager())
+    with pytest.raises(ValueError, match="数据源不存在"):
+        await load_semantic_model("ds", "cfg", manager=MissingManager())
 
 
 def test_input_validator_logical_type_filter_values():
@@ -503,7 +560,7 @@ def test_sql_parser_prepare_handles_empty_invalid_and_commands(monkeypatch):
     def fake_parse_sql(*_args, **_kwargs):
         raise RuntimeError("parse boom")
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", fake_parse_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", fake_parse_sql)
     result = prepare_sql_for_execution("select * from", "mysql")
     assert result.success is False
     assert result.error == "parse boom"
@@ -524,14 +581,14 @@ def test_sql_parser_parse_empty_expression_branches(monkeypatch):
     class BadLimitExpression:
         args = {"limit": BadLimit()}
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [])
     assert prepare_sql_for_execution("select 1", "mysql").error == "SQL 解析失败"
     assert extract_top_level_limit_count("select 1", "mysql") is None
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()])
     assert "注释移除后为空" in prepare_sql_for_execution("select 1", "mysql").error
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()])
     assert extract_top_level_limit_count("select * from orders limit bad", "mysql") is None
 
 

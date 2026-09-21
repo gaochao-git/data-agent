@@ -4,63 +4,37 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
-from ..services.skill_service import skill_service
-from .dependencies import _current_user_names, _get_current_user, _optional_current_user
+from ..agent.skills.skill_service import skill_service
+from .dependencies import _current_user_names, _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 技能"], responses=JSON_API_RESPONSES)
 
 @router.get("/skills")
-async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None, agent: Optional[str] = None):
+async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None):
     """获取可用专家技能列表。"""
     try:
-        user = _optional_current_user(request)
-        user_id = str(getattr(user, "user_id", "") or "").strip()
+        user = _get_current_user(request)
+        user_id = str(user.user_id).strip()
         normalized_scope = str(scope or "all").strip().lower()
-        if normalized_scope not in {"all", "favorites", "mine", "system"}:
+        if normalized_scope not in {"all", "favorites", "mine", "system", "runtime"}:
             normalized_scope = "all"
-        normalized_agent = str(agent or "").strip().lower()
-        if normalized_agent not in {"query", "analyze"}:
-            normalized_agent = ""
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user), agent=normalized_agent)
+        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user))
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取技能列表失败: %s", e, exc_info=True)
         return business_response(msg="获取技能列表失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_LIST_FAILED, status="error")
-
-
-@router.get("/skills/mine")
-async def list_my_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None):
-    """获取我的技能。"""
-    try:
-        user = _get_current_user(request)
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=str(user.user_id), scope="mine", user_names=_current_user_names(user))
-        return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("获取我的技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取我的技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_MINE_LIST_FAILED, status="error")
-
-
-@router.get("/skills/favorites")
-async def list_favorite_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None):
-    """获取收藏技能。"""
-    try:
-        user = _get_current_user(request)
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=str(user.user_id), scope="favorites", user_names=_current_user_names(user))
-        return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("获取收藏技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FAVORITE_LIST_FAILED, status="error")
 
 
 @router.post("/skills")
@@ -223,6 +197,44 @@ async def read_skill_version_file(skill_id: str, version_no: int, dir_name: str,
         return business_response(msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error")
 
 
+@router.get("/skills/{skill_id}/versions/{version_no}/files/raw", responses=BINARY_RESPONSES)
+async def read_skill_version_file_raw(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+    """读取技能版本文件的原始字节（图片/PDF 等二进制预览，前端以 blob 方式消费）。"""
+    try:
+        user = _get_current_user(request)
+        content, content_type = await skill_service.read_skill_version_file_raw_async(skill_id, version_no, dir_name, file_path, str(user.user_id))
+        return Response(content=content, media_type=content_type)
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        logger.error("读取技能版本原始文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error")
+
+
+@router.get("/skills/{skill_id}/versions/{version_no}/files/office-preview")
+async def render_skill_office_preview(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+    """渲染技能版本目录 Office 文件 HTML 预览（复用主对话工作区 OfficeCLI 引擎）。"""
+    try:
+        user = _get_current_user(request)
+        preview = await skill_service.render_skill_office_preview_async(skill_id, version_no, dir_name, file_path, str(user.user_id))
+        return business_response(data=preview, msg="获取成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        # OfficeCLI 未安装 / 转换失败统一降级：前端展示「当前环境不能预览 Office 文件」兜底文案，
+        # reason 形状与主对话 render_conversation_workspace_office_preview_api 一致。
+        logger.error("技能 Office 预览失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(data={"available": False, "reason": "preview_failed"}, msg="Office 预览暂不可用")
+
+
 @router.put("/skills/{skill_id}/versions/{version_no}/files")
 async def save_skill_version_file(skill_id: str, version_no: int, payload: SkillFileUpsertRequest, request: Request):
     """保存用户技能版本固定目录文件。"""
@@ -239,6 +251,25 @@ async def save_skill_version_file(skill_id: str, version_no: int, payload: Skill
     except Exception as e:
         logger.error("保存技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
         return business_response(msg="保存技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED, status="error")
+
+
+@router.post("/skills/{skill_id}/versions/{version_no}/files/upload")
+async def upload_skill_version_file(skill_id: str, version_no: int, request: Request, file: UploadFile = File(...), dir_name: str = Form(...)):
+    """上传文件到用户技能草稿版本固定目录（references / assets）。"""
+    try:
+        user = _get_current_user(request)
+        # 直接传 UploadFile 流式落盘（service 内分块读 + 边写边限长），不在内存整读
+        file_data = await skill_service.upload_skill_version_file_async(skill_id, version_no, dir_name, getattr(file, "filename", "") or "", file, str(user.user_id), operator_name=str(user.username or ""))
+        return business_response(data=file_data, msg="上传成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_INVALID, status="error")
+    except Exception as e:
+        logger.error("上传技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
+        return business_response(msg="上传技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED, status="error")
 
 
 @router.delete("/skills/{skill_id}/versions/{version_no}/files")
@@ -307,39 +338,18 @@ async def unfavorite_skill(skill_id: str, request: Request):
         return business_response(msg="取消收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED, status="error")
 
 
-@router.post("/skills/sync-system")
-async def sync_system_skills(request: Request):
-    """同步系统内置技能到数据库。"""
-    try:
-        user = _optional_current_user(request)
-        operator = str(getattr(user, "user_id", "") or "system")
-        operator_name = str(getattr(user, "username", "") or "")
-        return business_response(data=await skill_service.sync_builtin_skills_async(operator=operator, operator_name=operator_name), msg="同步成功")
-    except Exception as e:
-        logger.error("同步系统技能失败: %s", e, exc_info=True)
-        return business_response(msg="同步系统技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_SYNC_FAILED, status="error")
-
-
-@router.post("/skills/reload")
-async def reload_skills():
-    """刷新专家技能元数据缓存。"""
-    try:
-        return business_response(data=await skill_service.reload_async(), msg="刷新成功")
-    except Exception as e:
-        logger.error("刷新技能缓存失败: %s", e, exc_info=True)
-        return business_response(msg="刷新技能缓存失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_RELOAD_FAILED, status="error")
-
-
 @router.get("/skills/{skill_name}")
 async def get_skill(skill_name: str, request: Request):
     """获取专家技能详情。"""
     try:
-        user = _optional_current_user(request)
-        user_id = str(getattr(user, "user_id", "") or "").strip()
+        user = _get_current_user(request)
+        user_id = str(user.user_id).strip()
         skill = await skill_service.get_skill_async(skill_name, include_draft=True, user_id=user_id, user_names=_current_user_names(user))
         if not skill:
             return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=skill, msg="获取成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取技能详情失败: skill_name=%s error=%s", skill_name, e, exc_info=True)
         return business_response(msg="获取技能详情失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_DETAIL_FAILED, status="error")

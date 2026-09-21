@@ -4,54 +4,87 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstance } from 'vue'
-import { getSemanticConfigs } from '../../api'
-import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { ElMessage } from 'element-plus'
+import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
+import type {
+  ConversationGroupView,
+  ConversationItem,
+  SemanticConfigItem,
+  SemanticDimension,
+  SemanticMetric,
+  TableInfo,
+} from '../../types'
 import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
+import { findColumnDict, type FieldTooltipSection } from '../../utils/fieldDict'
 import {
-  buildFieldDictSection,
-  createTooltipSection,
-  extractMetricFieldName as extractMetricSourceFieldName,
-  findColumnDict,
-  type FieldTooltipSection
-} from '../../utils/fieldDict'
+  buildDimensionTooltip as sharedBuildDimensionTooltip,
+  buildMetricTooltip as sharedBuildMetricTooltip,
+  metricIconColorClass,
+  type SemanticTooltipContext,
+} from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
+import { formatDateTimeValue, formatRelativeConversationTime } from '../../utils'
+import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
+import type { ConversationSortBy, ConversationViewMode } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
-interface ConversationItem {
-  id: string
-  title: string
-  created_at: string
+const getRunStatusLabel = (status: ConversationItem['run_status']): string => {
+  if (status === 'pending') return '排队中'
+  if (status === 'active') return '运行中'
+  if (status === 'waiting_user') return '等待回答'
+  if (status === 'cancelling') return '停止中'
+  return ''
 }
 
-interface ConversationGroup {
-  label: string
-  items: ConversationItem[]
+const getRunStatusClass = (status: ConversationItem['run_status']): string => {
+  if (status === 'waiting_user') return 'text-amber-500'
+  if (status === 'cancelling') return 'text-slate-400'
+  return 'text-blue-500'
 }
 
-const CONVERSATION_ICON_POOL = [
-  { icon: 'fa-comment-dots', color: '#B3DBD2' }, // 普通对话
-  { icon: 'fa-chart-line', color: '#B3DBD2' },   // 聚合查询
-  { icon: 'fa-table', color: '#B3DBD2' },        // 明细查询
-] as const
+const getConversationTimeText = (conv: ConversationItem): string => (
+  formatRelativeConversationTime(conv.updated_at || conv.create_time)
+)
 
-const getConversationIconMeta = (conversationId: string | undefined) => {
-  const id = conversationId || ''
-  let hash = 0
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+// 宽侧栏（容器 ≥380px）显示完整时间，便于精确对比会话先后；解析失败返回空串由 CSS 档位自然隐藏
+const getConversationFullTimeText = (conv: ConversationItem): string => (
+  formatDateTimeValue(conv.updated_at || conv.create_time)
+)
+
+// 复制会话 ID：排查定时任务绑定关系等场景用；非 https 环境降级 execCommand
+const copyConversationId = async (conversationId: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(conversationId)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = conversationId
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success('会话 ID 已复制')
+  } catch (err) {
+    console.error('复制会话 ID 失败:', err)
+    ElMessage.error('复制失败，请手动复制')
   }
-  return CONVERSATION_ICON_POOL[hash % CONVERSATION_ICON_POOL.length] || CONVERSATION_ICON_POOL[0]
 }
 
 interface Props {
   activeTab: 'metrics' | 'conversation'
-  groupedConversations?: ConversationGroup[]
+  groupedConversations?: ConversationGroupView[]
   currentConversationId?: string | null
   isLoading?: boolean
+  isRefreshing?: boolean
   isLoadingMore?: boolean
   hasMore?: boolean
   showNewConversationButton?: boolean
+  conversationViewMode?: 'grouped' | 'flat'
+  conversationSortBy?: ConversationSortBy
   datasourceId?: string
   semanticConfigs?: SemanticConfigItem[]
   tables?: TableInfo[]
@@ -65,9 +98,12 @@ const props = withDefaults(defineProps<Props>(), {
   groupedConversations: () => [],
   currentConversationId: null,
   isLoading: false,
+  isRefreshing: false,
   isLoadingMore: false,
   hasMore: false,
   showNewConversationButton: true,
+  conversationViewMode: 'grouped',
+  conversationSortBy: 'updated',
   datasourceId: '',
   semanticConfigs: undefined,
   tables: () => [],
@@ -81,10 +117,75 @@ const emit = defineEmits<{
   selectConversation: [conversationId: string]
   newConversation: []
   loadMoreConversations: []
+  loadMoreConversationGroup: [groupKey: string]
+  updateConversationTitle: [conversationId: string, title: string]
+  toggleConversationFavorite: [conversationId: string, isFavorited: boolean]
+  updateConversationViewMode: [mode: ConversationViewMode]
+  updateConversationSortBy: [sortBy: ConversationSortBy]
+  refreshConversations: []
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
+  openAgentSchedules: []
+  openSkillManager: []
 }>()
+
+// 每次打开历史弹窗时全部展开；稳定 key 仅用于本次打开期间的折叠状态。
+const collapsedGroups = ref<Set<string>>(new Set())
+
+const isConversationGroupCollapsed = (key: string): boolean => collapsedGroups.value.has(key)
+
+const toggleConversationGroup = (key: string) => {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  collapsedGroups.value = next
+}
+
+// 会话搜索：本地过滤已加载的会话（按标题模糊匹配，不区分大小写）。
+// 仅过滤客户端已有数据，不触发额外的服务端查询——如需搜索更早的会话，仍走各分组底部的「加载更多」。
+const conversationSearchKeyword = ref('')
+const hasConversationSearch = computed(() => conversationSearchKeyword.value.trim().length > 0)
+
+const filteredConversationGroups = computed<ConversationGroupView[]>(() => {
+  const keyword = conversationSearchKeyword.value.trim().toLowerCase()
+  if (!keyword) return props.groupedConversations
+  return props.groupedConversations
+    .map(group => ({
+      ...group,
+      items: group.items.filter(conv => (conv.title || '').toLowerCase().includes(keyword)),
+    }))
+    .filter(group => group.items.length > 0)
+})
+
+// 视图设置弹层：分组方式（按数据源分组 / 单列表）+ 排序方式（最近更新 / 创建时间）。
+// 选中即向父组件上抛并关闭弹层；持久化与列表重载由父组件负责。
+const viewSettingsVisible = ref(false)
+const toggleViewSettings = () => {
+  viewSettingsVisible.value = !viewSettingsVisible.value
+}
+const closeViewSettings = () => {
+  viewSettingsVisible.value = false
+}
+const groupingOptions: Array<{ value: ConversationViewMode; label: string }> = [
+  { value: 'grouped', label: '按数据源分组' },
+  { value: 'flat', label: '单列表' },
+]
+const sortOptions: Array<{ value: ConversationSortBy; label: string }> = [
+  { value: 'updated', label: '最近更新' },
+  { value: 'created', label: '创建时间' },
+]
+const selectGrouping = (mode: ConversationViewMode) => {
+  emit('updateConversationViewMode', mode)
+  closeViewSettings()
+}
+const selectSorting = (sortBy: ConversationSortBy) => {
+  emit('updateConversationSortBy', sortBy)
+  closeViewSettings()
+}
 
 // 指标集列表
 const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
@@ -115,7 +216,7 @@ const tooltipState = reactive({
   sections: [] as FieldTooltipSection[],
 })
 const { getColumnDict, loadTablesColumnDicts, resetColumnDictCache } = useColumnDictCache()
-let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
+let tooltipHideTimer: number | null = null
 
 const clearTooltipHideTimer = () => {
   if (!tooltipHideTimer) return
@@ -163,7 +264,7 @@ const filteredSemanticConfigs = computed(() => {
 })
 
 const getSmartSelectionSummary = () => {
-  return `${semanticConfigs.value.length}指标集/${semanticConfigTableCount.value}表`
+  return `${semanticConfigs.value.length}语义模型/${semanticConfigTableCount.value}表`
 }
 
 const getConfigSummary = (config: SemanticConfigItem) => {
@@ -185,7 +286,7 @@ const getConfigScopeLabel = (config: SemanticConfigItem) => {
 }
 
 const getConfigScopeTitle = (config: SemanticConfigItem) => {
-  return `${getConfigScopeLabel(config)}指标集`
+  return `${getConfigScopeLabel(config)}语义模型`
 }
 
 const getConfigSelectCircleClass = (config: SemanticConfigItem) => {
@@ -300,10 +401,125 @@ const selectedConfigId = ref<string | null>(null)
 const expandedConfigIds = ref<Set<string>>(new Set())
 
 const handleConversationScroll = (event: Event) => {
-  if (!props.hasMore || props.isLoading || props.isLoadingMore) return
+  if (props.conversationViewMode !== 'flat') return
   const target = event.currentTarget as HTMLElement
-  if (target.scrollHeight - target.scrollTop - target.clientHeight <= 80) {
+  if (shouldLoadMoreConversations({
+    hasMore: props.hasMore,
+    isLoading: props.isLoading || props.isRefreshing,
+    isLoadingMore: props.isLoadingMore,
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+    clientHeight: target.clientHeight,
+  })) {
     emit('loadMoreConversations')
+  }
+}
+
+const handleConversationGroupScroll = (group: ConversationGroupView, event: Event) => {
+  const target = event.currentTarget as HTMLElement
+  if (shouldLoadMoreConversations({
+    hasMore: Boolean(group.has_more),
+    isLoading: false,
+    isLoadingMore: Boolean(group.is_loading_more),
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+    clientHeight: target.clientHeight,
+  })) {
+    emit('loadMoreConversationGroup', group.key)
+  }
+}
+
+// 会话标题编辑状态
+const editingConversationId = ref<string | null>(null)
+const editingTitle = ref('')
+const editingInputRef = ref<HTMLInputElement | null>(null)
+const isSavingTitle = ref(false)
+
+// 会话置顶（收藏）切换状态
+const favoritingId = ref<string | null>(null)
+
+// v-for 内的字符串 ref 会被 Vue 3 收集为数组，改用函数 ref 确保拿到单个 DOM 元素
+const setEditingInputRef = (el: Element | ComponentPublicInstance | null) => {
+  editingInputRef.value = (el as HTMLInputElement) || null
+}
+
+const startEditConversationTitle = (conv: ConversationItem, event: MouseEvent) => {
+  event.stopPropagation()
+  editingConversationId.value = conv.id
+  editingTitle.value = conv.title || ''
+  void nextTick(() => {
+    editingInputRef.value?.focus()
+    editingInputRef.value?.select()
+  })
+}
+
+const cancelEditConversationTitle = () => {
+  editingConversationId.value = null
+  editingTitle.value = ''
+}
+
+const confirmEditConversationTitle = async (convId: string) => {
+  const newTitle = editingTitle.value.trim()
+  if (!newTitle || isSavingTitle.value) {
+    cancelEditConversationTitle()
+    return
+  }
+
+  // 找到当前显示标题以判断是否变化
+  const currentTitle = props.groupedConversations
+    .flatMap(g => g.items)
+    .find(c => c.id === convId)?.title
+
+  if (newTitle === currentTitle) {
+    cancelEditConversationTitle()
+    return
+  }
+
+  isSavingTitle.value = true
+  try {
+    const res = await apiUpdateConversationTitle(convId, newTitle)
+    if (res.status === 'success') {
+      // 后端会截断标题长度，以返回值为准回显，避免前后端不一致
+      emit('updateConversationTitle', convId, res.data?.title ?? newTitle)
+      cancelEditConversationTitle()
+    } else {
+      // 保存失败时保持编辑状态，方便用户重试或取消
+      editingInputRef.value?.focus()
+    }
+  } catch (err) {
+    console.error('更新会话标题失败:', err)
+    editingInputRef.value?.focus()
+  } finally {
+    isSavingTitle.value = false
+  }
+}
+
+const handleEditTitleKeydown = (convId: string, event: KeyboardEvent) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    void confirmEditConversationTitle(convId)
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelEditConversationTitle()
+  }
+}
+
+// 切换会话置顶（复用后端 is_favorited 收藏能力，置顶 = 收藏并排序到顶部）
+const toggleConversationFavoriteState = async (conv: ConversationItem) => {
+  if (favoritingId.value === conv.id) return
+  favoritingId.value = conv.id
+  try {
+    const res = await apiToggleConversationFavorite(conv.id)
+    if (res.status === 'success') {
+      const isFavorited = Boolean(res.data?.is_favorited)
+      emit('toggleConversationFavorite', conv.id, isFavorited)
+    }
+  } catch (err) {
+    console.error('切换置顶状态失败:', err)
+  } finally {
+    favoritingId.value = null
   }
 }
 
@@ -379,82 +595,15 @@ const getDimensionIconType = (dimension: SemanticDimension): 'string' | 'number'
   return 'string'
 }
 
-const buildMetadataSupplementSection = (metadataSupplement?: string) => {
-  const content = String(metadataSupplement || '').trim()
-  if (!content) return null
-  return createTooltipSection('元数据补充', content
-    .split(/\n+/)
-    .map(item => item.trim())
-    .filter(Boolean))
-}
+const tooltipContext = (): SemanticTooltipContext => ({
+  tables: props.tables,
+  resolveColumnDict: (tableName, columnName) =>
+    getColumnDict(props.datasourceId, tableName || '', columnName || '')
+    || findColumnDict(props.tables, tableName, columnName),
+})
 
-const getTableDescription = (tableName?: string) => {
-  if (!tableName) return '-'
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.description || '-'
-}
-
-const getTableBusinessDesc = (tableName?: string) => {
-  if (!tableName) return ''
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.business_desc || ''
-}
-
-const buildTableBusinessDescLines = (tableName?: string) => {
-  const businessDesc = getTableBusinessDesc(tableName)
-  return businessDesc ? [`表业务说明：${businessDesc}`] : []
-}
-
-const getTableRoleLabel = (table?: string, alias?: string) => {
-  const tableName = String(table || '').trim()
-  const tableAlias = String(alias || tableName).trim()
-  if (!tableName) return tableAlias || '-'
-  if (!tableAlias || tableAlias === tableName) return tableName
-  return `${tableAlias}（${tableName}）`
-}
-
-const buildDimensionTooltip = (dimension: SemanticDimension) => {
-  const expression = dimension.expression || `\`${dimension.column}\``
-  const fieldDict = getColumnDict(props.datasourceId, dimension.table, dimension.column)
-    || findColumnDict(props.tables, dimension.table, dimension.column)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(dimension.table, dimension.table_alias)}`,
-      `数据表备注：${getTableDescription(dimension.table)}`,
-      ...buildTableBusinessDescLines(dimension.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${dimension.name || '-'}`,
-      `字段名称：${dimension.column || '-'}`,
-      `表达式：${expression}`,
-      dimension.description ? `描述：${dimension.description}` : '',
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(dimension.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
-
-const buildMetricTooltip = (metric: SemanticMetric) => {
-  const expression = metric.expression || ''
-  const fieldName = extractMetricSourceFieldName(metric)
-  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
-    || findColumnDict(props.tables, metric.table, fieldName)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-      `数据表备注：${getTableDescription(metric.table)}`,
-      ...buildTableBusinessDescLines(metric.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${metric.name || '-'}`,
-      `字段名称：${fieldName || '-'}`,
-      `表达式：${expression || '-'}`,
-      metric.description ? `描述：${metric.description}` : '',
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(metric.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
+const buildDimensionTooltip = (dimension: SemanticDimension) => sharedBuildDimensionTooltip(dimension, tooltipContext())
+const buildMetricTooltip = (metric: SemanticMetric) => sharedBuildMetricTooltip(metric, tooltipContext())
 
 const handleFillMetric = (metric: SemanticMetric) => {
   emit('fillQuestion', { fieldName: metric.name, fieldType: 'metric' })
@@ -502,52 +651,245 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full overflow-hidden">
+  <div class="conversation-tab-root flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ==================== 会话 Tab ==================== -->
     <template v-if="activeTab === 'conversation'">
-      <!-- 新建会话按钮 -->
-      <div v-if="showNewConversationButton" class="p-4">
+      <!-- 会话操作区：主流纵向按钮组（新建任务 / 技能管理 / 定时任务） -->
+      <div class="flex shrink-0 flex-col gap-0.5 px-3 pb-2 pt-2">
         <button
-          class="w-[82%] mx-auto flex items-center justify-center gap-2 px-5 py-3 border-none rounded-lg bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-sm font-medium cursor-pointer transition-all duration-200 shadow-[0_2px_8px_rgba(31,130,217,0.3)] hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(31,130,217,0.4)]"
+          v-if="showNewConversationButton"
+          type="button"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
           @click="emit('newConversation')"
         >
-          <i class="fa-solid fa-plus"></i>
-          <span>新建会话</span>
+          <i class="fa-solid fa-plus w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">新建任务</span>
         </button>
+        <button
+          type="button"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
+          @click="emit('openSkillManager')"
+        >
+          <i class="fa-solid fa-wand-magic-sparkles w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">技能管理</span>
+        </button>
+        <button
+          type="button"
+          class="flex h-8 items-center gap-2.5 rounded-md px-2 text-xs text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
+          @click="emit('openAgentSchedules')"
+        >
+          <i class="fa-regular fa-clock w-3.5 shrink-0 text-center text-[11px]"></i>
+          <span class="conversation-toolbar-btn-text flex-1 text-left">定时任务</span>
+        </button>
+      </div>
+      <div class="mx-3 shrink-0 border-t border-slate-100"></div>
+
+      <!-- 会话工具栏：搜索 + 刷新 + 视图设置 -->
+      <div class="flex shrink-0 items-center gap-2 px-3 py-2">
+        <div class="relative min-w-0 flex-1">
+          <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
+          <input
+            v-model="conversationSearchKeyword"
+            type="text"
+            placeholder="搜索任务"
+            class="h-7 w-full rounded-md border border-slate-200 bg-white pl-6 pr-2 text-xs text-gray-700 outline-none transition-colors placeholder:text-slate-400 focus:border-[#1f82d9]/50"
+          />
+        </div>
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9] disabled:cursor-not-allowed disabled:opacity-60"
+          title="刷新列表"
+          data-testid="conversation-refresh"
+          :disabled="props.isLoading || props.isRefreshing"
+          @click="emit('refreshConversations')"
+        >
+          <i class="fa-solid fa-rotate-right text-[10px]" :class="{ 'fa-spin': props.isLoading || props.isRefreshing }"></i>
+        </button>
+        <div class="relative shrink-0">
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+            :class="viewSettingsVisible ? 'border-[#1f82d9]/40 text-[#1f82d9]' : ''"
+            title="设置列表分组与排序"
+            aria-label="设置列表分组与排序"
+            data-testid="conversation-view-settings"
+            @click="toggleViewSettings"
+          >
+            <i class="fa-solid fa-sliders text-[10px]"></i>
+          </button>
+          <!-- 半透明遮罩兜底点击外部关闭；面板 absolute 挂在按钮容器下，右对齐不溢出侧栏 -->
+          <div v-if="viewSettingsVisible" class="fixed inset-0 z-30" @click="closeViewSettings"></div>
+          <div
+            v-if="viewSettingsVisible"
+            data-testid="conversation-view-settings-panel"
+            class="absolute right-0 top-full z-40 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1.5 shadow-lg"
+          >
+            <div class="px-3 pb-1 pt-1.5 text-[11px] text-slate-400">分组方式</div>
+            <button
+              v-for="option in groupingOptions"
+              :key="option.value"
+              type="button"
+              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 transition-colors hover:bg-slate-50"
+              @click="selectGrouping(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <i v-if="props.conversationViewMode === option.value" class="fa-solid fa-check text-[11px] text-[#1f82d9]"></i>
+            </button>
+            <div class="mx-3 my-1 border-t border-slate-100"></div>
+            <div class="px-3 pb-1 pt-1.5 text-[11px] text-slate-400">排序方式</div>
+            <button
+              v-for="option in sortOptions"
+              :key="option.value"
+              type="button"
+              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 transition-colors hover:bg-slate-50"
+              @click="selectSorting(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <i v-if="props.conversationSortBy === option.value" class="fa-solid fa-check text-[11px] text-[#1f82d9]"></i>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 会话列表 -->
-      <div class="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+      <div data-testid="conversation-scroll" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
         <div v-if="isLoading" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
           <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
           <span>加载历史会话...</span>
         </div>
 
-        <div v-else-if="groupedConversations.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
-          <i class="fa-regular fa-message text-2xl opacity-50"></i>
-          <span>暂无会话</span>
+        <div v-else-if="filteredConversationGroups.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+          <i :class="['text-2xl opacity-50', hasConversationSearch ? 'fa-regular fa-face-frown' : 'fa-regular fa-message']"></i>
+          <span>{{ hasConversationSearch ? '未找到匹配的任务' : '暂无会话' }}</span>
         </div>
 
         <template v-else>
-          <template v-for="group in groupedConversations" :key="group.label">
-            <div class="mb-2">
-              <div class="py-2 text-xs text-gray-400 font-medium uppercase tracking-wide">{{ group.label }}</div>
-              <div
-                v-for="conv in group.items"
-                :key="conv.id"
-                class="flex items-center gap-2 py-3 cursor-pointer transition-all duration-150"
-                :class="currentConversationId === conv.id ? 'text-blue-500 font-medium' : 'text-gray-800 hover:text-blue-500'"
-                @click="emit('selectConversation', conv.id)"
+          <template v-for="group in filteredConversationGroups" :key="group.key">
+            <div class="mb-1">
+              <button
+                v-if="group.label"
+                type="button"
+                class="flex w-full items-center gap-1.5 rounded-md px-1.5 py-2 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                @click="toggleConversationGroup(group.key)"
               >
                 <i
-                  :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
-                  :style="{ color: getConversationIconMeta(conv.id).color }"
+                  class="fa-solid fa-chevron-down shrink-0 text-[9px] text-gray-400 transition-transform duration-150"
+                  :class="{ '-rotate-90': isConversationGroupCollapsed(group.key) }"
                 ></i>
-                <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
-              </div>
+                <i
+                  class="fa-solid shrink-0 text-[11px] text-amber-400"
+                  :class="isConversationGroupCollapsed(group.key) ? 'fa-folder' : 'fa-folder-open'"
+                ></i>
+                <span class="min-w-0 flex-1 truncate text-left">{{ group.label }}</span>
+              </button>
+              <template v-if="!group.label || !isConversationGroupCollapsed(group.key) || hasConversationSearch">
+                <div
+                  class="conversation-group-items scrollbar-thin scrollbar-thumb-black/10"
+                  :class="group.label ? 'ml-[18px] border-l border-slate-200 pl-3' : ''"
+                  :style="group.label && (group.has_more || group.items.length > 8) ? { maxHeight: '320px', overflowY: 'auto' } : undefined"
+                  @scroll="handleConversationGroupScroll(group, $event)"
+                >
+                  <div
+                    v-for="conv in group.items"
+                    :key="conv.id"
+                    class="group flex items-center gap-2 rounded-md py-2.5 cursor-pointer transition-all duration-150"
+                    :class="[
+                      group.label ? 'px-2' : 'px-1',
+                      currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50',
+                    ]"
+                    @click="emit('selectConversation', conv.id)"
+                  >
+                    <!-- 标题编辑态 -->
+                    <template v-if="editingConversationId === conv.id">
+                      <input
+                        :ref="setEditingInputRef"
+                        v-model="editingTitle"
+                        type="text"
+                        class="flex-1 min-w-0 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none text-gray-800 leading-relaxed"
+                        :disabled="isSavingTitle"
+                        placeholder="输入新标题"
+                        @click.stop
+                        @keydown="handleEditTitleKeydown(conv.id, $event)"
+                        @blur="confirmEditConversationTitle(conv.id)"
+                      />
+                    </template>
+
+                    <!-- 标题展示态 -->
+                    <template v-else>
+                      <span
+                        v-if="getRunStatusLabel(conv.run_status)"
+                        :class="['flex shrink-0 items-center gap-1 text-[11px]', getRunStatusClass(conv.run_status)]"
+                        :title="getRunStatusLabel(conv.run_status)"
+                      >
+                        <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
+                      </span>
+                      <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
+                      <!-- 右侧固定角色区：时间展示随侧栏宽度三档切换（容器查询，拖拽侧栏即时生效）——
+                           <260px 隐藏时间；260-379px 相对时间；≥380px 完整时间（角色区同步加宽容纳 19 字符）。
+                           hover 淡出时间、淡入置顶/编辑按钮，两态共用同一固定宽度容器，互不挤占、不跳动。
+                           置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
+                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[52px] shrink-0 @min-[380px]:w-[132px]">
+                        <span
+                          data-testid="conversation-time"
+                          class="conversation-time-text absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
+                          :title="conv.updated_at || conv.create_time"
+                        >
+                          <span data-testid="conversation-time-short" class="hidden @min-[260px]:block @min-[380px]:hidden">{{ getConversationTimeText(conv) }}</span>
+                          <span data-testid="conversation-time-full" class="hidden @min-[380px]:block">{{ getConversationFullTimeText(conv) }}</span>
+                        </span>
+                        <div
+                          data-testid="conversation-actions"
+                          class="absolute inset-y-0 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                        >
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded transition-colors duration-150"
+                            :class="conv.is_favorited
+                              ? 'text-amber-500 hover:bg-amber-100 hover:text-amber-600'
+                              : 'text-gray-400 hover:bg-blue-100 hover:text-blue-600'"
+                            :title="conv.is_favorited ? '取消置顶' : '置顶'"
+                            :disabled="favoritingId === conv.id"
+                            @click.stop="toggleConversationFavoriteState(conv)"
+                          >
+                            <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded text-gray-400 transition-colors duration-150 hover:bg-blue-100 hover:text-blue-600"
+                            title="复制会话 ID"
+                            @click.stop="copyConversationId(conv.id)"
+                          >
+                            <i class="fa-regular fa-copy text-[10px]"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded text-gray-400 transition-colors duration-150 hover:bg-blue-100 hover:text-blue-600"
+                            title="修改标题"
+                            @click.stop="startEditConversationTitle(conv, $event)"
+                          >
+                            <i class="fa-solid fa-pen text-[10px]"></i>
+                          </button>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                  <div v-if="group.is_loading_more" class="flex items-center justify-center gap-2 py-2 text-xs text-gray-400">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <span>加载更多...</span>
+                  </div>
+                  <button
+                    v-else-if="group.has_more"
+                    type="button"
+                    class="flex h-8 w-full items-center justify-center text-xs text-slate-400 transition-colors hover:text-[#1f82d9]"
+                    @click="emit('loadMoreConversationGroup', group.key)"
+                  >
+                    加载更多
+                  </button>
+                </div>
+              </template>
             </div>
           </template>
-          <div v-if="isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">
+          <div v-if="conversationViewMode === 'flat' && isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">
             <i class="fa-solid fa-spinner fa-spin"></i>
             <span>加载更多...</span>
           </div>
@@ -565,7 +907,7 @@ onUnmounted(() => {
 
       <div v-else-if="semanticConfigs.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
         <i class="fa-solid fa-database text-2xl opacity-50"></i>
-        <span>暂无指标集</span>
+        <span>暂无语义模型</span>
       </div>
 
       <div v-else class="semantic-config-list flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">
@@ -575,7 +917,7 @@ onUnmounted(() => {
             <input
               v-model="configSearchKeyword"
               class="h-full min-w-0 flex-1 border-none bg-transparent p-0 text-[12px] text-[#1D2129] outline-none placeholder:text-[#A8ABB2]"
-              placeholder="搜索指标集、维度、指标"
+        placeholder="搜索语义模型、维度、指标"
             />
             <button
               v-if="configSearchKeyword"
@@ -594,7 +936,7 @@ onUnmounted(() => {
             'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
             selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
           ]"
-          :title="`智能选择指标集：可用指标集 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
+          :title="`智能选择语义模型：可用语义模型 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
           @click="handleSelectConfig(null)"
         >
           <span
@@ -602,14 +944,14 @@ onUnmounted(() => {
               'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px]',
               selectedConfigId === null ? 'border-[#165DFF] bg-[#165DFF] text-white' : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
             ]"
-            title="使用智能选择指标集提问"
+            title="使用智能选择语义模型提问"
           >
             <i class="fa-solid fa-check"></i>
           </span>
-          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
+          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择语义模型</span>
           <span
             class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
-            :title="`可用指标集：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
+            :title="`可用语义模型：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
           >
             {{ getSmartSelectionSummary() }}
           </span>
@@ -617,7 +959,7 @@ onUnmounted(() => {
             type="button"
             class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#5B5C60] transition-colors hover:bg-[#E8F3FF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="isLoadingConfigs"
-            title="刷新指标集"
+            title="刷新语义模型"
             @click.stop="loadSemanticConfigs"
           >
             <i :class="['fa-solid fa-rotate-right text-[10px]', isLoadingConfigs ? 'fa-spin' : '']"></i>
@@ -628,7 +970,7 @@ onUnmounted(() => {
           v-if="filteredSemanticConfigs.length === 0"
           class="px-4 py-5 text-center text-[12px] text-[#A8ABB2]"
         >
-          未找到匹配的指标集
+          未找到匹配的语义模型
         </div>
 
         <div v-for="config in filteredSemanticConfigs" :key="config.id" class="mb-0.5">
@@ -647,7 +989,7 @@ onUnmounted(() => {
                 'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px] transition-all duration-150',
                 getConfigSelectCircleClass(config)
               ]"
-              :title="`${selectedConfigId === config.id ? '当前提问使用该指标集' : '使用该指标集提问'}（${getConfigScopeTitle(config)}）`"
+              :title="`${selectedConfigId === config.id ? '当前提问使用该语义模型' : '使用该语义模型提问'}（${getConfigScopeTitle(config)}）`"
               @click.stop="handleSelectConfig(selectedConfigId === config.id ? null : config.id)"
             >
               <i class="fa-solid fa-check"></i>
@@ -751,7 +1093,7 @@ onUnmounted(() => {
                     @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
                     @mouseleave="hideTooltip"
                   >
-                    <FieldTypeIcon type="number" class="mr-1.5 text-[#7C3AED]" />
+                    <FieldTypeIcon type="number" :class="['mr-1.5', metricIconColorClass(metric)]" />
                     <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
                     <button
                       type="button"
@@ -778,7 +1120,7 @@ onUnmounted(() => {
   <Teleport to="body">
     <div
       v-if="tooltipState.visible"
-      class="fixed max-w-[420px] px-3 py-2 bg-[#373839] border border-white/15 rounded text-white text-[12px] z-[10000] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_6px_16px_rgba(0,0,0,0.2)] select-text cursor-text"
+      class="fixed max-w-[420px] px-3 py-2 bg-[#373839] border border-white/15 rounded text-white text-[12px] z-[var(--z-floating-tip)] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_6px_16px_rgba(0,0,0,0.2)] select-text cursor-text"
       :style="{ left: tooltipState.x + 'px', top: tooltipState.y + 'px' }"
       @mouseenter="keepTooltipVisible"
       @mouseleave="hideTooltipNow"
@@ -798,6 +1140,35 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 会话 Tab 作为容器查询上下文：侧栏拖窄时按宽度分级降级，
+   优先级「保标题 > 保时间」。
+   工具栏（新建任务 / 技能管理 / 定时任务）文字始终显示；刷新与视图设置为纯图标按钮：
+   侧栏最窄宽度也放得下，需要让位时由「搜索任务」输入框动态伸缩（flex-1 + min-w-0）。 */
+.conversation-tab-root {
+  container-type: inline-size;
+}
+
+/* 窄侧栏（< 300px）：先让出时间占的 52px 给会话标题，
+   标题能多显示约 3~4 个汉字；hover 的置顶/编辑按钮仍在（absolute 临时盖在标题右端） */
+@container (max-width: 299px) {
+  .conversation-role-zone {
+    width: 0;
+  }
+
+  .conversation-time-text {
+    display: none;
+  }
+}
+
+/* 更窄（< 260px）时只留图标的历史降级已停用：按钮文字不再随宽度隐藏，
+   宽度压力全部交给搜索框。如需恢复「窄侧栏只留图标」，取消下面规则注释即可。
+@container (max-width: 259px) {
+  .conversation-toolbar-btn-text {
+    display: none;
+  }
+}
+*/
+
 .semantic-config-list {
   container-type: inline-size;
 }

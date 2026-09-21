@@ -5,19 +5,20 @@ import json
 import logging
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError, ModelTimeoutError
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
-from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.routers import data_analyze_workspace, dependencies
-from apps.chat_data_app.services import data_analyze_workspace as data_analyze_workspace_service
-from apps.chat_data_app.services import semantic_common
+from apps.chat_data_app.routers import conversation_workspace, dependencies
+from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_service
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
+from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
@@ -102,31 +103,97 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is True
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
 
+    # langchain-core 标准模型异常族:连接/超时类型直判命中;嵌在异常链里同样命中;
+    # 非连接类(如限流)不误报。
+    assert alarm_module.is_llm_connection_exception(ModelConnectionError("vllm unreachable")) is True
+    wrapped = RuntimeError("agent run failed")
+    wrapped.__cause__ = ModelTimeoutError("first token timed out")
+    assert alarm_module.is_llm_connection_exception(wrapped) is True
+    assert alarm_module.is_llm_connection_exception(ModelRateLimitError("429")) is False
 
-def test_authenticate_request_success_and_error_branches(monkeypatch):
+    # 大模型异常大类：连接失败与首 token 超时共用 LLM_EXCEPTION，细分落在 error_code。
+    llm_records = records[3:]
+    assert len(llm_records) == 1
+    assert llm_records[0][1]["extra"]["alarm_id"] == "LLM_EXCEPTION"
+    assert llm_records[0][1]["extra"]["error_code"] == alarm_module.LLM_FAIL_CONNECTION
+
+    alarm_module.emit_llm_first_token_timeout_alarm(elapsed_ms=61000, threshold_seconds=60)
+    timeout_record = records[-1][1]["extra"]
+    assert timeout_record["alarm_id"] == "LLM_EXCEPTION"
+    assert timeout_record["error_code"] == alarm_module.LLM_FAIL_FIRST_TOKEN_TIMEOUT
+
+
+def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
+    """外部依赖与平台自身接口异常共用 API_CALL_EXCEPTION，细分落在 error_code。"""
+    records = []
+    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+
+    alarm_module.emit_external_api_alarm("hive-gateway", TimeoutError("timed out"), method="POST", url="http://x/y")
+    alarm_module.emit_api_call_exception_path = None
+    alarm_module.emit_api_call_alarm("/chat/stream", ValueError("boom"), method="GET")
+
+    external_extra = records[0][1]["extra"]
+    assert external_extra["alarm_id"] == "API_CALL_EXCEPTION"
+    assert external_extra["error_code"] == alarm_module.API_FAIL_EXTERNAL
+    internal_extra = records[1][1]["extra"]
+    assert internal_extra["alarm_id"] == "API_CALL_EXCEPTION"
+    assert internal_extra["error_code"] == alarm_module.API_FAIL_INTERNAL
+
+
+def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
+    """alarm_id 固定为 OMS 契约值，细分原因落在 error_code。"""
+    records = []
+    warnings = []
+    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+    monkeypatch.setattr(alarm_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
+
+    cases = [
+        ("一次只能执行一条 SQL，请拆分后分别执行", None, alarm_module.SQL_BLOCK_MULTI_STATEMENT),
+        ("只允许执行以下类型的 SQL: SELECT, SHOW", None, alarm_module.SQL_BLOCK_TYPE_NOT_ALLOWED),
+        # 显式传入的 reason_code 优先于推断。
+        ("任意文案", "CUSTOM_CODE", "CUSTOM_CODE"),
+    ]
+    for reason, reason_code, expected in cases:
+        records.clear()
+        alarm_module.emit_dangerous_sql_alarm("select 1", reason, reason_code=reason_code)
+        extra = records[0][1]["extra"]
+        assert extra["alarm_id"] == "DANGEROUS_SQL_BLOCKED"
+        assert extra["error_code"] == expected
+
+    # 解析失败等普通校验失败不算高危：不发 DANGEROUS_SQL_BLOCKED，仅记 warning。
+    for reason in ("SQL 解析失败", "SQL 为空", 'Expecting "(" ...'):
+        records.clear()
+        warnings.clear()
+        alarm_module.emit_dangerous_sql_alarm("select 1", reason)
+        assert records == []
+        assert len(warnings) == 1
+
+
+def test_service_token_and_forwarded_user_auth_branches(monkeypatch):
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "")
     with pytest.raises(auth.AuthenticationError, match="service token"):
-        auth.authenticate_request(SimpleNamespace(headers={}))
+        auth.validate_service_token(None)
 
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "secret")
     with pytest.raises(auth.AuthenticationError, match="service token"):
-        auth.authenticate_request(SimpleNamespace(headers={auth.SERVICE_AUTH_HEADER: "bad"}))
+        auth.validate_service_token("bad")
 
     with pytest.raises(auth.AuthenticationError, match="forwarded user"):
-        auth.authenticate_request(SimpleNamespace(headers={auth.SERVICE_AUTH_HEADER: "secret"}))
+        auth.get_forwarded_user(SimpleNamespace(headers={}))
 
     headers = {
         auth.SERVICE_AUTH_HEADER: "secret",
         auth.SERVICE_USER_ID_HEADER: "u1",
         auth.SERVICE_USERNAME_HEADER: "å¼ ä¸\u0089",
     }
-    user = auth.authenticate_request(SimpleNamespace(headers=headers))
+    auth.validate_service_token(headers[auth.SERVICE_AUTH_HEADER])
+    user = auth.get_forwarded_user(SimpleNamespace(headers=headers))
     assert user.user_id == "u1"
     assert user.username == "张三"
     assert auth._normalize_header_text(" plain ") == "plain"
 
 
-def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
+def test_llm_get_llm_kwargs(monkeypatch):
     captured = {}
 
     def fake_init_chat_model(**kwargs):
@@ -134,8 +201,6 @@ def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
         return SimpleNamespace(model=kwargs["model"])
 
     monkeypatch.setattr(llm, "init_chat_model", fake_init_chat_model)
-    token_count = llm.count_tokens(None, [HumanMessage(content="12345678"), HumanMessage(content="")], tools=[{"name": "t"}])
-    assert token_count == 60
 
     model = llm.get_llm(
         model="model-a",
@@ -334,7 +399,7 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
         DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
     )
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class FakeContext:
         def __init__(self, conn_string):
@@ -402,7 +467,7 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class Context:
         async def __aenter__(self):
@@ -539,11 +604,12 @@ def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monke
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     with pytest.raises(ValueError, match="所有 checkpoint 库节点均不可用"):
         asyncio.run(checkpoint.select_available_checkpointer_endpoint())
     assert alarm_records[0][0][0] == "checkpoint库启动探测失败"
+    assert alarm_records[0][1]["reason_code"] == alarm_module.DB_FAIL_CHECKPOINT
 
 
 def test_database_session_commit_rollback_and_info(monkeypatch):
@@ -611,6 +677,33 @@ def test_database_session_commit_rollback_and_info(monkeypatch):
 
     asyncio.run(database.close_database())
     assert fake_engine.disposed is True
+
+
+def test_create_engine_uses_bounded_recyclable_pool(monkeypatch):
+    captured = {}
+
+    class FakeEngine:
+        pass
+
+    def fake_create_async_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return FakeEngine()
+
+    monkeypatch.setattr(database, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(database, "get_database_url", lambda: "mysql://test")
+
+    engine = database.create_engine()
+
+    assert isinstance(engine, FakeEngine)
+    assert captured["kwargs"] == {
+        "pool_size": database.DB_POOL_SIZE,
+        "max_overflow": database.DB_MAX_OVERFLOW,
+        "pool_timeout": database.DB_POOL_TIMEOUT_SECONDS,
+        "pool_recycle": database.DB_POOL_RECYCLE_SECONDS,
+        "pool_pre_ping": True,
+        "echo": False,
+    }
 
 
 def test_database_dispose_and_close_noop_branches(monkeypatch):
@@ -689,6 +782,7 @@ def test_database_startup_probe_failure_writes_alarm(monkeypatch):
         asyncio.run(database.select_available_database_endpoint())
 
     assert alarm_records[0][0][0] == "业务库启动探测失败"
+    assert alarm_records[0][1]["reason_code"] == alarm_module.DB_FAIL_CHATDATA
     assert alarm_records[0][1]["ext1"] == {"endpoints": ["127.0.0.1:3306", "127.0.0.2:3307"]}
 
 
@@ -1180,14 +1274,14 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
 
-    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="用户"))
     with pytest.raises(dependencies.HTTPException, match="Missing user_id"):
         dependencies._get_current_user(SimpleNamespace(headers={}))
 
-    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
     assert dependencies._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
 
-    assert semantic_common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
+    assert build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
 
     for field, value, message in [
         ("org_name", " ", "org_name"),
@@ -1283,123 +1377,153 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
             return root
 
     monkeypatch.setattr(loader, "_metadata_cache", None)
-    monkeypatch.setattr(loader.Path, "__file__", str(root / "loader.py"), raising=False)
-    monkeypatch.setattr(loader, "__file__", str(root / "loader.py"), raising=False)
+    monkeypatch.setattr(loader, "system_skills_root", lambda: root)
     metadata = loader.load_metadata()
     assert "good" in metadata
     assert "hidden" not in metadata
     assert "bad" not in metadata
     prompt = loader.format_skills_prompt([{"name": "good", "title": "G", "description": "A&B", "domain": "d", "category": "c"}])
     assert "&amp;" in prompt
-    minimal_prompt = loader.format_skills_prompt([{"name": "plain", "title": "Plain", "description": "desc"}])
-    assert "<domain>" not in minimal_prompt
-    assert "<category>" not in minimal_prompt
+    # 提示词只保留 name/skill_file/title/description，domain/category 不再注入（匹配规则只按 name/title/description）
+    assert "<domain>" not in prompt
+    assert "<category>" not in prompt
 
 
-@pytest.mark.asyncio
-async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
-    user = SimpleNamespace(user_id="u1", username="用户1")
-    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
-    monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: user)
-    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda conversation_id, user_id: asyncio.sleep(0, result=conversation_id == "conv_ok"))
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path / conversation_id)})
-    monkeypatch.setattr(data_analyze_workspace, "list_workspace_files_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result=[{"path": "a.txt"}]))
-    monkeypatch.setattr(data_analyze_workspace, "read_workspace_file_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result={"content": "hello"}))
-
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("denied", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv_ok", SimpleNamespace()))["data"]["files"] == [{"path": "a.txt"}]
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("denied", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv_ok", "a.txt", SimpleNamespace()))["data"]["content"] == "hello"
-
-    skill_dir = tmp_path / "conv_ok" / "workspace" / "skill-a"
-    monkeypatch.setattr(data_analyze_workspace, "resolve_workspace_path", lambda root, path: (tmp_path / "conv_ok" / path).resolve())
-    monkeypatch.setattr(data_analyze_workspace.skill_service, "import_user_skill_from_directory_async", lambda path, user_id, operator_name="": asyncio.sleep(0, result={"path": str(path), "user_id": user_id, "operator_name": operator_name}))
-    imported = _payload(await data_analyze_workspace.import_data_analyze_workspace_skill(
-        "conv_ok",
-        SkillImportFromWorkspaceRequest(skill_dir_path="workspace/skill-a"),
-        SimpleNamespace(),
-    ))
-    assert imported["data"]["path"] == str(skill_dir.resolve())
-    assert imported["data"]["operator_name"] == "用户1"
-
-    outside = _payload(await data_analyze_workspace.import_data_analyze_workspace_skill(
-        "conv_ok",
-        SkillImportFromWorkspaceRequest(skill_dir_path="../outside"),
-        SimpleNamespace(),
-    ))
-    assert outside["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID
-
-
-@pytest.mark.asyncio
-async def test_data_analyze_workspace_exception_branches(monkeypatch):
-    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
-    monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
-    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(ValueError("bad workspace")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(RuntimeError("disk down")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
-    assert _payload(await data_analyze_workspace.import_data_analyze_workspace_skill("conv", SkillImportFromWorkspaceRequest(skill_dir_path="workspace/a"), SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED
-
-    class FakeConversationDao:
-        async def exists_user_agent_thread(self, conversation_id, user_id, agent_id):
-            return conversation_id == "conv" and user_id == "u1" and agent_id == semantic_common.DATA_ANALYZE_AGENT_ID
-
-    monkeypatch.setattr(data_analyze_workspace_service, "conversation_dao", FakeConversationDao())
-    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("conv", "u1") is True
-    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("", "u1") is False
-
-
-def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
+def test_calculator_extra_branches():
     assert calculator._format_decimal(calculator.Decimal("1.2300")) == "1.23"
     assert calculator._calculate_item({"expression": ""})["error"] == "expression 不能为空"
     assert calculator._calculate_item({"expression": "1/0"})["error"] == "除数不能为 0"
     assert calculator._calculate_item({"expression": "(1+2)", "decimal_places": 0})["result"] == "3"
 
-    payload = {
-        "name": "skill-a",
-        "title": "技能A",
-        "visible_path": "/runtime/skill-a",
-        "references": ["guide"],
-        "scripts": ["run.py"],
-        "assets": ["a.png"],
-        "skill_md": "# Skill",
-    }
-    assert "runtime_path=/runtime/skill-a" in skill_load.format_skill_load_result(payload)
 
-    skill_dir = tmp_path / "skill-a"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text("# Skill A", encoding="utf-8")
-    (skill_dir / "references").mkdir()
-    (skill_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
-    (skill_dir / "scripts").mkdir()
-    (skill_dir / "scripts" / "run.py").write_text("print(1)", encoding="utf-8")
-    (skill_dir / "assets").mkdir()
-    (skill_dir / "assets" / "a.png").write_bytes(b"png")
+def test_api_logging_pure_helper_branches():
+    assert api_logging_module._client_ip({}, {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}) == "1.2.3.4"
+    assert api_logging_module._client_ip({"client": None}, {}) == ""
+    assert api_logging_module._client_ip({"client": ("10.0.0.1", 80)}, {}) == "10.0.0.1"
 
-    monkeypatch.setattr(skill_load, "resolve_skill_name", lambda name: name.strip())
-    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result={"path": str(skill_dir / "SKILL.md"), "title": "技能A", "description": "描述"}))
-    built, source_dir = asyncio.run(skill_load._build_skill_payload_async(" skill-a ", user_id="u1"))
-    assert source_dir == skill_dir
-    assert built["references"] == ["guide"]
-    assert built["scripts"] == ["run.py"]
-    assert built["assets"] == ["a.png"]
+    # 同名（大小写不敏感）多枚举头：替换首个、跳过其余；无匹配时追加到末尾
+    duplicate = [(b"a", b"1"), (b"A", b"2"), (b"b", b"3")]
+    assert api_logging_module._upsert_header(duplicate, b"a", b"9") == [(b"a", b"9"), (b"b", b"3")]
+    assert api_logging_module._upsert_header([(b"b", b"3")], b"a", b"9") == [(b"b", b"3"), (b"a", b"9")]
 
-    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result=None))
-    with pytest.raises(ValueError, match="技能不存在"):
-        asyncio.run(skill_load._build_skill_payload_async("missing"))
+    assert api_logging_module._is_streaming_response("text/event-stream; charset=utf-8", "") is True
+    assert api_logging_module._is_streaming_response("application/json", 'attachment; filename="a.pdf"') is True
+    assert api_logging_module._is_streaming_response("application/pdf", "") is True
+    assert api_logging_module._is_streaming_response("application/json", "") is False
 
-    tool = skill_load.create_skill_load_tool(str(tmp_path), user_id="u1")
-    monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=(dict(built), skill_dir)))
-    monkeypatch.setattr(skill_load, "upload_skill_directory_to_sandbox", lambda **_kwargs: asyncio.sleep(0, result="/sandbox/skill-a"))
-    result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
-    assert "runtime_path=/sandbox/skill-a" in result
+    assert api_logging_module._access_ext1("1.2.3.4", None) == "client_ip:1.2.3.4"
+    assert api_logging_module._access_ext1("", "u1") == "client_ip:-;user:u1"
 
-    async def raise_payload(*_args, **_kwargs):
-        raise RuntimeError("load failed")
 
-    monkeypatch.setattr(skill_load, "_build_skill_payload_async", raise_payload)
-    assert "skill_load 执行失败: load failed" in asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
+def test_api_logging_response_state_double_log_guard():
+    state = api_logging_module._ResponseLogState("r1", "GET", "/p", {}, "1.2.3.4", None, time.time())
+    state.log_response()
+    state.log_response()
+    state.log_error(RuntimeError("late"))
+    assert state.response_logged is True
+
+
+@pytest.mark.asyncio
+async def test_api_access_log_middleware_non_http_scope_passthrough():
+    called = []
+
+    async def app(scope, receive, send):
+        called.append(scope["type"])
+
+    middleware = api_logging_module.APIAccessLogMiddleware(app)
+    await middleware({"type": "websocket"}, None, None)
+    assert called == ["websocket"]
+
+
+def test_checkpoint_sqlite_context_exit_closes_connection():
+    class FakeConn:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    conn = FakeConn()
+    ctx = checkpoint._SqliteCheckpointerContext("/tmp/unused.db")
+    ctx.conn = conn
+    assert asyncio.run(ctx.__aexit__(None, None, None)) is False
+    assert conn.closed is True
+
+
+def test_checkpoint_failover_all_endpoints_fail_raises_last_connection_error(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+
+    class Context:
+        async def __aenter__(self):
+            raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+
+        async def __aexit__(self, *_args):
+            return False
+
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: Context())
+    with pytest.raises(OperationalError):
+        asyncio.run(context.__aenter__())
+    # 两个端点各失败一次后选择器绕回首个节点
+    assert selector.current().label() == "127.0.0.1:3306"
+
+
+def test_checkpoint_failover_without_endpoints_reports_missing_config(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", SimpleNamespace(endpoints=[]))
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: None)
+    with pytest.raises(RuntimeError, match="未配置可用节点"):
+        asyncio.run(context.__aenter__())
+
+
+def test_checkpoint_failover_exit_without_enter_returns_false():
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: None)
+    assert asyncio.run(context.__aexit__(None, None, None)) is False
+
+
+def test_checkpoint_advance_endpoint_without_selector_raises(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        checkpoint._advance_checkpointer_endpoint(SimpleNamespace(label=lambda: "h:p"), RuntimeError("x"))
+
+
+def test_checkpoint_build_factory_without_selector_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=object))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pw")
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        checkpoint._build_mysql_checkpointer_context_factory()
+
+
+def test_checkpoint_probe_reraises_non_connection_error():
+    class BadContext:
+        async def __aenter__(self):
+            raise RuntimeError("not a connection error")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    endpoint = SimpleNamespace(label=lambda: "h:p")
+    with pytest.raises(RuntimeError, match="not a connection error"):
+        asyncio.run(checkpoint._probe_mysql_checkpointer_endpoint(endpoint, lambda _endpoint: BadContext()))
+
+
+def test_checkpoint_select_endpoint_without_selector_raises(monkeypatch):
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    with pytest.raises(ValueError, match="CHECKPOINTER_HOST"):
+        asyncio.run(checkpoint.select_available_checkpointer_endpoint())
+
+
+def test_setup_checkpointer_unknown_type_skips_probe_and_initializes(monkeypatch):
+    events = []
+    monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
+    monkeypatch.setattr("utils.database.init_database", lambda: asyncio.sleep(0, result=events.append(("init", None))))
+    asyncio.run(checkpoint.setup_checkpointer())
+    assert events == [("init", None)]
+
+
+def test_checkpoint_info_mysql_without_selector(monkeypatch):
+    monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", None)
+    info = checkpoint.get_checkpoint_info()
+    assert info["type"] == "mysql"
+    assert info["endpoints"] == []

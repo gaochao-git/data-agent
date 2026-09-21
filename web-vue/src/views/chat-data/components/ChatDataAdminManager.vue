@@ -7,6 +7,7 @@ import { computed, nextTick, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import DataSourceManager from './DataSourceManager.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
+import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
 
@@ -20,9 +21,10 @@ const emit = defineEmits<{
   'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'sqlHistory'>('datasource')
+const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
+const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
 const loadingAdminDatasourceOptions = ref(false)
@@ -35,6 +37,7 @@ const visible = computed({
 const tabs = [
   { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
   { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
+  { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
 ] as const
 
 const openDatasourceGroupModal = () => {
@@ -65,8 +68,13 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'sqlHistory') => {
+const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule') => {
   activeTab.value = tab
+  if (tab === 'schedule') {
+    await nextTick()
+    schedulePanelRef.value?.ensureLoaded()
+    return
+  }
   if (tab !== 'sqlHistory') return
   await loadAdminDatasourceOptions()
   await nextTick()
@@ -122,6 +130,11 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory') => {
         ref="sqlHistoryRef"
         class="h-full"
         :datasources="adminDatasourceOptions"
+      />
+      <AgentScheduleAdminPanel
+        v-show="activeTab === 'schedule'"
+        ref="schedulePanelRef"
+        class="h-full"
       />
     </div>
   </el-dialog>

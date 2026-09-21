@@ -6,8 +6,9 @@
 
 当前模块范围：
 - 后端应用：`server/apps/chat_data_app/`
-- 对话与 LangGraph 通用能力：`server/utils/lang_util/`
-- 上传文件服务：`server/utils/file_service/`
+- 智能体核心域：`server/apps/chat_data_app/agent/`（data_agent 装配、tools/ 工具、middleware/ 中间件、workspace/ 会话工作区、prompts/ 提示词、run/ 运行时服务、skills/ 技能、context/ 上下文预算；各子包带 README）
+- 对话与 LLM/LangGraph 通用能力：`server/utils/`（`llm.py` 模型创建、`llm_json.py` 模型输出 JSON 解析、`conversation.py` 会话管理、`checkpoint.py` 检查点）
+- 上传文件服务：`server/apps/chat_data_app/services/agent_run/uploaded_file_service.py`
 - 前端页面：`web-vue/src/views/chat-data/`
 - 前端路由入口：`web-vue/src/router/index.ts`
 
@@ -55,7 +56,7 @@
 ### 4.1 核心链路治理
 
 - 智能问数、可视化查询、SQL 查询、看板等共享能力必须复用统一后端结果结构、前端类型和通用组件，不允许在各入口重复拼装一套相似但字段口径不同的逻辑。
-- 多执行对象查询结果统一以 `results[]` 表达，每个成员结果至少保持 `member_datasource_id`、`member_name`、`success`、`status`、`sql`、`columns`、`data`、`total_count`、`execution_time_ms`、`error` 等字段口径一致；新增字段要同步后端返回、前端 API 类型、页面消费和测试。
+- 多执行对象查询结果统一以 `results[]` 表达，每个成员结果至少保持 `member_datasource_id`、`member_name`、`status`、`sql`、`columns`、`data`、`total_count`、`execution_time_ms`、`error` 等字段口径一致；成员成功与否由 `status` 单一表达（`succeeded`/`failed`/`cancelled`/`running`），不使用 `success` 布尔字段；新增字段要同步后端返回、前端 API 类型、页面消费和测试。
 - 查询结果展示统一走共享结果组件；如果智能问数、可视化查询、SQL 查询需要新增展示能力，应扩展共享组件和共享类型，而不是在某个入口单独实现 Tab、状态栏、保存到看板、结果解析等逻辑。
 - `member_name` 用于用户可见展示；`member_datasource_id` 用于执行对象定位、保存到看板、历史回放、权限校验和必要的 hover 详情，不要在各入口自行拼接成不同的可见标题格式。
 - 修改查询执行、结果展示、保存到看板、多数据源执行、历史 SQL 等核心链路时，必须同时 review 后端路由/服务、前端 API/types、智能问数、可视化查询、SQL 查询和看板消费侧，确保字段、状态、执行对象和错误处理口径一致。
@@ -74,7 +75,7 @@
 - AI 生成代码后必须主动搜索重复实现、越层调用、裸错误码、直接事务提交、旧兼容残留、接口字段口径漂移等治理问题。
 - 修改核心链路时必须补充或更新对应测试；只靠手工页面验证不算完成。
 - 如果用户中断或回滚后继续讨论，应先确认最新意图和工作区状态，不要把上一轮半成品当成已完成结论继续扩大改动。
-- 单个文件不要超过2000行
+- 单个文件后端不要超过2000行，前端不超过3000行
 - 拆分 Vue SFC 时不要把外部 `import type` 的 Props 类型直接用于 `defineProps<T>()` / `withDefaults(defineProps<T>(), ...)`；ChatData 会被嵌入到未安装 `typescript` 的内网宿主项目，外部类型会触发 `@vue/compiler-sfc` 加载 TypeScript 并导致编译失败。需要跨文件复用 props 类型时，优先使用运行时 `defineProps({ ... })` 配合 `PropType`，或把 `defineProps` 所需类型保持在当前 `.vue` 文件内。
 
 ### 4.4 代码治理底线
@@ -85,10 +86,16 @@
 - 新代码中 routers 和 daos 不主动 `commit()`；普通事务由 services 编排，database 的 `get_session()` 负责提交/回滚机制。确需分阶段提交时，只能在 service 中显式处理并说明原因。
 - 新增或调整功能必须保持清晰分层，外部系统访问放 adapter/client；涉及智能问数、可视化查询、SQL 查询、看板等共享链路时，必须同步检查所有消费侧和必要测试，避免只修一个入口导致口径漂移。
 
+### 4.5 前端层级（z-index）规范
+
+- 跨组件层级的 z-index 一律引用 `web-vue/src/views/chat-data/styles/z-index.css` 中的 `--z-*` CSS 变量（模块内唯一事实来源，随 chat-data 目录拷贝）：样式表写 `z-index: var(--z-*)`，Tailwind 类写 `z-[var(--z-*)]`；EP 组件的 `:z-index` prop 只接受 number，使用 `web-vue/src/views/chat-data/utils/zIndex.ts` 的 `Z_INDEX` 常量镜像，改值必须与 z-index.css 两处同步。
+- 2000~2999 是 Element Plus PopupManager 的动态分配区（首个弹层 2001 起递增）：业务整页容器若落在该区间之上，必须同步把依赖的 EP 弹层显式抬高，否则弹窗（含遮罩）会被压在容器之下（参考 `pages/index.vue` 的 MessageBox 修复注释与 `.el-overlay.is-message-box` 规则）。
+- 组件内部相对排序的小层级（1~320，如 sticky 表头、局部浮层）不纳入变量管理，直接写数字；新增跨组件层级时必须先在 z-index.css 归位到对应分层再引用，禁止直接写魔法数字。
+
 ## 5. 目录与文件约定
 
 ### 5.1 不要随意改动
-- 运行产物/缓存：`DATA_ROOT/`、`server/logs/`、`web-vue/dist/`
+- 运行产物/缓存：`CHAT_DATA_HOME/`（默认 `chat_data/`，见 `utils/storage_paths.py`）、`server/logs/`、`web-vue/dist/`
 - 依赖目录：`web-vue/node_modules/`、`server/venv/`、`__pycache__/`
 - 环境文件：`.env`、`*.local`、密钥配置
 - 系统文件：`.DS_Store`

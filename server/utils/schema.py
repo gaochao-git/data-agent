@@ -4,6 +4,8 @@ LangGraph 公共数据库表结构定义
 业务表统一使用 MySQL
 """
 
+import os
+
 # ============ MySQL 表结构 ============
 
 MYSQL_USER_THREADS_TABLE = """
@@ -13,6 +15,7 @@ CREATE TABLE `user_threads` (
   `thread_id` varchar(255) NOT NULL COMMENT '会话ID',
   `thread_title` varchar(255) DEFAULT '未命名会话' COMMENT '会话标题',
   `agent_id` varchar(255) DEFAULT NULL COMMENT '智能体ID',
+  `datasource_id` varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID',
   `is_favorited` tinyint DEFAULT '0' COMMENT '是否收藏: 0-否, 1-是',
   `delete_flag` tinyint DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -24,9 +27,64 @@ CREATE TABLE `user_threads` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_thread_id` (`thread_id`),
   KEY `idx_user_id` (`user_id`),
-  KEY `idx_agent_id` (`agent_id`)
+  KEY `idx_agent_id` (`agent_id`),
+  KEY `idx_thread_history` (`user_id`,`agent_id`,`delete_flag`,`update_time`,`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8mb4 COMMENT='用户会话表'
 """
+
+MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE = """
+CREATE TABLE `chat_data_conversation_event` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
+  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
+  `turn_id` varchar(64) NOT NULL DEFAULT '' COMMENT '用户轮次ID',
+  `sequence_no` bigint(20) NOT NULL COMMENT '会话内严格递增事件序号',
+  `event_key` varchar(255) NOT NULL COMMENT '幂等事件键',
+  `event_type` varchar(32) NOT NULL COMMENT '事件类型',
+  `payload` mediumtext NOT NULL COMMENT '事件JSON文本',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_conv_event_key` (`conversation_id`, `event_key`),
+  KEY `idx_conv_event_seq` (`conversation_id`, `sequence_no`),
+  KEY `idx_conv_event_turn` (`conversation_id`, `turn_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData会话原始事件历史';
+"""
+
+MYSQL_CHAT_DATA_AGENT_INBOX_TABLE = """
+CREATE TABLE `chat_data_agent_inbox` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
+  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
+  `run_id` varchar(64) NOT NULL COMMENT '运行ID',
+  `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
+  `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
+  `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
+  `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
+  `content` mediumtext NOT NULL COMMENT '追加消息内容，运行记录为空',
+  `status` varchar(16) NOT NULL COMMENT '运行或消息状态',
+  `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',
+  `consumed_time` datetime DEFAULT NULL COMMENT '消息注入时间',
+  `lease_expire_time` datetime DEFAULT NULL COMMENT '领取租约过期时间',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`, `message_id`),
+  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `status`),
+  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
+"""
+
 
 MYSQL_UPLOADED_FILES_TABLE = """
 CREATE TABLE `uploaded_files` (
@@ -248,7 +306,7 @@ CREATE TABLE `semantic_config` (
   `group_id` varchar(128) NOT NULL COMMENT '所属数据源ID',
   `semantic_config_name` varchar(128) NOT NULL COMMENT '语义配置名称',
   `semantic_config_desc` varchar(128) DEFAULT NULL COMMENT '描述',
-  `ontology_rules` text COMMENT '本体规则/业务规则',
+  `business_notes` text COMMENT '业务说明/业务知识',
   `enabled_flag` tinyint NOT NULL DEFAULT '1' COMMENT '是否启用: 0-否, 1-是',
   `metrics_json` text COMMENT '指标配置JSON',
   `dimensions_json` text COMMENT '维度配置JSON',
@@ -264,6 +322,10 @@ CREATE TABLE `semantic_config` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_semantic_config_id` (`semantic_config_id`),
+  -- 同组内模型名唯一（软删除墓碑会改名释放原名，见 SemanticConfigDao._DELETED_NAME_EXPR）。
+  -- 与 next_version.md 的手工迁移保持同名同列序，新环境建表即有 DB 兜底，
+  -- 堵住「事务外取冲突快照、事务内落库」TOCTOU 窗口内的并发同名重复创建。
+  UNIQUE KEY `uniq_group_id_config_name_delete_flag` (`group_id`, `semantic_config_name`, `delete_flag`),
   KEY `idx_group_id` (`group_id`),
   KEY `idx_semantic_config_name` (`semantic_config_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='语义配置表';
@@ -478,6 +540,8 @@ CREATE TABLE `chat_data_eval_run_case` (
 
 MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
+    MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,
+    MYSQL_CHAT_DATA_AGENT_INBOX_TABLE,
     MYSQL_UPLOADED_FILES_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_PANEL_TABLE,
@@ -499,8 +563,6 @@ MYSQL_TABLES = [
 
 
 # ============ 兼容接口 ============
-
-import os
 
 def _get_database_type() -> str:
     """获取业务表数据库类型。"""

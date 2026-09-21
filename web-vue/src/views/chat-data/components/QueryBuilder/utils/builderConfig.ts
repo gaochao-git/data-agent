@@ -20,6 +20,47 @@ const getTableAlias = (item: { table?: string; tableAlias?: string; alias?: stri
   String(item.tableAlias || item.alias || item.table || '').trim()
 )
 
+const FILTER_OPERATORS_WITHOUT_VALUE = new Set(['IS NULL', 'IS NOT NULL', 'EMPTY STRING'])
+const LIST_FILTER_OPERATORS = new Set(['IN', 'NOT IN'])
+
+const hasFilterValue = (value: unknown) => {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  return true
+}
+
+const getFilterLabel = (filter: FilterCondition) => (
+  String(filter.displayName || filter.semanticName || filter.column || '筛选条件').trim()
+)
+
+const getFilterValidationError = (filter: FilterCondition): string | null => {
+  const operator = String(filter.operator || '=').trim().toUpperCase()
+  if (FILTER_OPERATORS_WITHOUT_VALUE.has(operator)) return null
+
+  const label = getFilterLabel(filter)
+  const valueType = filter.valueType || 'literal'
+  if (valueType === 'field_ref') {
+    const complete = String(filter.rightTable || '').trim() && String(filter.rightColumn || '').trim()
+    return complete ? null : `筛选条件“${label}”请选择右侧字段`
+  }
+  if (valueType === 'expression') {
+    return String(filter.rightExpression || '').trim() ? null : `筛选条件“${label}”请输入表达式`
+  }
+  if (operator === 'BETWEEN') {
+    const complete = Array.isArray(filter.value) && filter.value.length === 2 && filter.value.every(hasFilterValue)
+    return complete ? null : `筛选条件“${label}”请输入完整的起止值`
+  }
+  if (LIST_FILTER_OPERATORS.has(operator)) {
+    const complete = Array.isArray(filter.value) && filter.value.length > 0 && filter.value.every(hasFilterValue)
+    return complete ? null : `筛选条件“${label}”请至少输入一个有效值`
+  }
+  return hasFilterValue(filter.value) ? null : `筛选条件“${label}”请输入筛选值`
+}
+
+export const getBuilderFilterValidationError = (filters: FilterCondition[]): string | null => (
+  filters.map(getFilterValidationError).find((message): message is string => Boolean(message)) || null
+)
+
 const serializeFilterCondition = (filter: FilterCondition) => ({
   id: filter.id,
   table: filter.table,

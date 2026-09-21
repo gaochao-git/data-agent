@@ -2,8 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import ResultTabs from './ResultTabs.vue'
-import { getConversationArtifact } from '../api'
+import { getConversationQueryResult } from '../api'
 import type { ChartType } from '../chartTypes'
+import type { ToolQueryResult } from '../types/query'
 import { isQuerySucceeded } from '../utils'
 
 interface SemanticParams {
@@ -23,27 +24,15 @@ interface VisualizationConfig {
   y_field?: string
 }
 
-interface QueryResult {
-  status?: string | null
-  sql?: string
-  query_mode?: string
-  confidence?: number | string
-  semantic_config_id?: string
-  semantic_config_name?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-  member_datasource_id?: string
-  member_name?: string
-  results?: QueryResult[]
-  artifact_id?: string
+/**
+ * 面板解析的单成员/信封结果：工具结果共享形状（ToolQueryResult）之上，
+ * 追加信封特有字段（多成员 results[]、结果句柄 result_id/meta）。
+ */
+type PanelMemberResult = ToolQueryResult & {
+  results?: PanelMemberResult[]
+  result_id?: string
   meta?: {
-    artifact_id?: string
+    result_id?: string
     [key: string]: unknown
   }
 }
@@ -85,6 +74,7 @@ interface Props {
   allowFullscreen?: boolean
   initialViewMode?: ViewMode
   activeIndex?: number
+  conversationId?: string | null
 }
 
 defineOptions({
@@ -110,13 +100,13 @@ const emit = defineEmits<{
 }>()
 
 const activeIndex = ref(0)
-const artifactResult = ref<QueryResult | null>(null)
-const artifactLoading = ref(false)
-const artifactError = ref('')
+const offloadedResult = ref<PanelMemberResult | null>(null)
+const offloadedResultLoading = ref(false)
+const offloadedResultError = ref('')
 
 /** 内联结果可能是统一响应包裹：data 字段里嵌套完整结果对象 */
-type InlineQueryResult = Omit<QueryResult, 'data'> & {
-  data?: QueryResult | Record<string, unknown>[]
+type InlineQueryResult = Omit<PanelMemberResult, 'data'> & {
+  data?: PanelMemberResult | Record<string, unknown>[]
 }
 
 const parseInlineResult = (raw: string | null | undefined): { result: InlineQueryResult | null; error: string | null } => {
@@ -129,22 +119,22 @@ const parseInlineResult = (raw: string | null | undefined): { result: InlineQuer
 }
 
 const inlineParse = computed(() => parseInlineResult(props.resultData))
-const artifactId = computed(() => String(
-  inlineParse.value.result?.artifact_id ||
-  inlineParse.value.result?.meta?.artifact_id ||
+const resultId = computed(() => String(
+  inlineParse.value.result?.result_id ||
+  inlineParse.value.result?.meta?.result_id ||
   ''
 ).trim())
-const panelResult = computed<QueryResult | null>(() => {
-  if (artifactResult.value) return artifactResult.value
+const panelResult = computed<PanelMemberResult | null>(() => {
+  if (offloadedResult.value) return offloadedResult.value
   const parsed = inlineParse.value.result
   if (!parsed) return null
   const envelopeData = parsed.data
   if (envelopeData && !Array.isArray(envelopeData)) return envelopeData
-  return parsed as QueryResult
+  return parsed as PanelMemberResult
 })
 const parseError = computed(() => inlineParse.value.error)
 
-const resultToData = (result: QueryResult) => JSON.stringify(result)
+const resultToData = (result: PanelMemberResult) => JSON.stringify(result)
 const getMemberFullTitle = (item: Pick<QueryResultPanelItem, 'memberName' | 'memberDatasourceId'> | null | undefined) => {
   const memberName = String(item?.memberName || '').trim()
   const memberDatasourceId = String(item?.memberDatasourceId || '').trim()
@@ -177,7 +167,6 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
         ...item,
         sql: item.sql || result.sql,
         query_mode: item.query_mode || result.query_mode,
-        confidence: item.confidence ?? result.confidence,
         semantic_config_id: item.semantic_config_id || result.semantic_config_id,
         semantic_config_name: item.semantic_config_name || result.semantic_config_name,
       }),
@@ -252,25 +241,27 @@ watch(
 )
 
 watch(
-  artifactId,
-  async (id) => {
-    artifactResult.value = null
-    artifactError.value = ''
-    if (!id || props.items.length > 0) {
-      artifactLoading.value = false
+  () => `${resultId.value}:${String(props.conversationId || '').trim()}`,
+  async () => {
+    const id = resultId.value
+    const conversationId = String(props.conversationId || '').trim()
+    offloadedResult.value = null
+    offloadedResultError.value = ''
+    if (!id || !conversationId || props.items.length > 0) {
+      offloadedResultLoading.value = false
       return
     }
-    artifactLoading.value = true
+    offloadedResultLoading.value = true
     try {
-      const response = await getConversationArtifact<QueryResult>(id)
-      if (id !== artifactId.value) return
-      artifactResult.value = response.data || null
-      if (!artifactResult.value) artifactError.value = '查询结果详情为空'
+      const response = await getConversationQueryResult<PanelMemberResult>(conversationId, id)
+      if (id !== resultId.value || conversationId !== String(props.conversationId || '').trim()) return
+      offloadedResult.value = response.data || null
+      if (!offloadedResult.value) offloadedResultError.value = '查询结果详情为空'
     } catch (error) {
-      if (id !== artifactId.value) return
-      artifactError.value = error instanceof Error ? error.message : '加载查询结果详情失败'
+      if (id !== resultId.value || conversationId !== String(props.conversationId || '').trim()) return
+      offloadedResultError.value = error instanceof Error ? error.message : '加载查询结果详情失败'
     } finally {
-      if (id === artifactId.value) artifactLoading.value = false
+      if (id === resultId.value && conversationId === String(props.conversationId || '').trim()) offloadedResultLoading.value = false
     }
   },
   { immediate: true }
@@ -284,14 +275,14 @@ watch(
       <span>{{ parseError }}</span>
     </div>
 
-    <div v-else-if="artifactLoading" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-gray-500 bg-gradient-to-br from-slate-50 to-slate-100">
+    <div v-else-if="offloadedResultLoading" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-gray-500 bg-gradient-to-br from-slate-50 to-slate-100">
       <i class="fa-solid fa-spinner fa-spin text-2xl text-[#1f82d9]"></i>
       <span>正在加载查询结果详情...</span>
     </div>
 
-    <div v-else-if="artifactError" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
+    <div v-else-if="offloadedResultError" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
       <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
-      <span>{{ artifactError }}</span>
+      <span>{{ offloadedResultError }}</span>
     </div>
 
     <template v-else>

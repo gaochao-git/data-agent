@@ -65,6 +65,8 @@ export interface AggregationField {
   expression?: string
   label: string
   func: 'RAW' | 'COUNT' | 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT_DISTINCT'
+  // 逻辑口径指标（派生/复合）：无函数概念，后端按 semanticName 解析
+  metricKind?: 'derived' | 'composite'
 }
 
 export interface FilterCondition {

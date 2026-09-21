@@ -399,11 +399,16 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
       </template>
     </div>
 
+    <!-- 表计数（底部状态栏） -->
+    <div v-if="datasource && !loading" class="py-1 text-center text-[11px] text-[#939495] border-t border-[#f0f1f3]">
+      {{ searchText.trim() ? `匹配 ${filteredTables.length} 张，共 ${datasource?.ds_tables?.length ?? 0} 张表` : `共 ${datasource?.ds_tables?.length ?? 0} 张表` }}
+    </div>
+
     <!-- Tooltip（右侧弹出） -->
     <Teleport to="body">
       <div
         v-if="tooltipState.visible"
-        class="fixed max-w-[420px] px-3 py-2 bg-[#373839] rounded text-white text-[12px] z-[10000] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_4px_10px_rgba(0,0,0,0.15)] overflow-visible select-text cursor-text"
+        class="fixed max-w-[420px] px-3 py-2 bg-[#373839] rounded text-white text-[12px] z-[var(--z-floating-tip)] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_4px_10px_rgba(0,0,0,0.15)] overflow-visible select-text cursor-text"
         :style="{ left: tooltipState.x + 'px', top: tooltipState.y + 'px' }"
         @mouseenter="keepTooltipVisible"
         @mouseleave="hideTooltipNow"

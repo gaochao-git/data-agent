@@ -6,6 +6,7 @@ SQLAlchemy 数据库引擎和会话管理
 
 import os
 from contextlib import asynccontextmanager
+from threading import RLock
 from typing import AsyncGenerator
 
 from sqlalchemy import text
@@ -14,7 +15,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
 from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
-from utils.alarm import emit_database_connection_alarm
+from utils.alarm import DB_FAIL_CHATDATA, emit_database_connection_alarm
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +38,13 @@ MYSQL_DB = _get_env("FXCJG_DB")
 MYSQL_USER = _get_env("FXCJG_DB_USER")
 MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST)
 _endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS)
+
+# 业务库连接池按进程创建。当前生产默认 4 个 worker，因此总连接上限为
+# 4 * (10 + 20)；Run、事件持久化和普通 API 共用这组连接。
+DB_POOL_SIZE = 10
+DB_MAX_OVERFLOW = 20
+DB_POOL_TIMEOUT_SECONDS = 10
+DB_POOL_RECYCLE_SECONDS = 1800
 
 
 def _get_mysql_password() -> str:
@@ -66,7 +74,10 @@ def create_engine() -> AsyncEngine:
     """创建异步数据库引擎"""
     return create_async_engine(
         get_database_url(),
-        poolclass=NullPool,
+        pool_size=DB_POOL_SIZE,
+        max_overflow=DB_MAX_OVERFLOW,
+        pool_timeout=DB_POOL_TIMEOUT_SECONDS,
+        pool_recycle=DB_POOL_RECYCLE_SECONDS,
         pool_pre_ping=True,
         echo=False,
     )
@@ -80,10 +91,14 @@ def _is_connection_error(err: Exception) -> bool:
 async def _dispose_engine() -> None:
     """关闭当前数据库引擎并清空会话工厂。"""
     global _engine, _session_factory
-    if _engine is not None:
-        await _engine.dispose()
-    _engine = None
-    _session_factory = None
+    # 先摘除全局引用，再等待 dispose。等待期间新请求会创建并使用新引擎，
+    # 不会和正在释放的旧连接池共享状态。
+    with _engine_state_lock:
+        engine = _engine
+        _engine = None
+        _session_factory = None
+    if engine is not None:
+        await engine.dispose()
 
 
 async def _failover_database_endpoint(failed_endpoint, reason: Exception | None = None) -> None:
@@ -147,6 +162,7 @@ async def select_available_database_endpoint() -> None:
             return
     emit_database_connection_alarm(
         "业务库启动探测失败",
+        reason_code=DB_FAIL_CHATDATA,
         ext1={"endpoints": _endpoint_selector.labels()},
     )
     raise ValueError("所有业务库节点均不可用")
@@ -155,26 +171,29 @@ async def select_available_database_endpoint() -> None:
 # 全局引擎和会话工厂
 _engine: AsyncEngine = None
 _session_factory: async_sessionmaker[AsyncSession] = None
+_engine_state_lock = RLock()
 
 
 def get_engine() -> AsyncEngine:
     """获取数据库引擎（单例）"""
     global _engine
-    if _engine is None:
-        _engine = create_engine()
-    return _engine
+    with _engine_state_lock:
+        if _engine is None:
+            _engine = create_engine()
+        return _engine
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """获取会话工厂（单例）"""
     global _session_factory
-    if _session_factory is None:
-        _session_factory = async_sessionmaker(
-            bind=get_engine(),
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
-    return _session_factory
+    with _engine_state_lock:
+        if _session_factory is None:
+            _session_factory = async_sessionmaker(
+                bind=get_engine(),
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+        return _session_factory
 
 
 @asynccontextmanager
@@ -209,11 +228,10 @@ async def init_database():
 
 async def close_database():
     """关闭数据库连接"""
-    global _engine, _session_factory
-    if _engine:
-        await _engine.dispose()
-        _engine = None
-        _session_factory = None
+    with _engine_state_lock:
+        has_engine = _engine is not None
+    if has_engine:
+        await _dispose_engine()
         logger.info("数据库连接已关闭")
 
 

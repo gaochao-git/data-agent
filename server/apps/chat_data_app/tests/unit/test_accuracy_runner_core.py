@@ -1,15 +1,11 @@
-import asyncio
 import json
 import os
 import sys
-from datetime import datetime
-from types import SimpleNamespace
 
 import pytest
 from starlette.responses import StreamingResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -156,12 +152,13 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert runner.parse_sse_data('{"ok": true}') == {"ok": True}
     assert runner.parse_sse_data("plain text") == "plain text"
     assert runner.parse_tool_content("") == {}
-    assert runner.parse_tool_content("[dsl2sql_tool]") == {}
-    assert runner.parse_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select 1"})) == {"sql": "select 1"}
-    assert runner.parse_tool_content("[semantic_query_tool]\n[]") == {}
+    assert runner.parse_tool_content("[data_analyzing_tool]") == {}
+    assert runner.parse_tool_content("[data_analyzing_tool]\n" + json.dumps({"sql": "select 1"})) == {"sql": "select 1"}
+    assert runner.parse_tool_content("[data_analyzing_tool]\n[]") == {}
+    assert runner.parse_tool_content("[]") == {}
     assert runner.extract_sql_from_tool_content("") == ""
-    assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select json"})) == "select json"
-    assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n```sql\nselect * from orders\n```") == "select * from orders"
+    assert runner.extract_sql_from_tool_content("[data_analyzing_tool]\n" + json.dumps({"sql": "select json"})) == "select json"
+    assert runner.extract_sql_from_tool_content("[data_analyzing_tool]\n```sql\nselect * from orders\n```") == "select * from orders"
     assert runner.extract_sql_from_tool_content("with t as (select 1) select * from t") == "with t as (select 1) select * from t"
     assert runner.extract_sql_from_tool_content("执行失败") == ""
     assert runner.extract_error_from_event("message", {"error": "x"}) == ""
@@ -171,7 +168,7 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     state = {"current_event": "message", "data_lines": [], "error": ""}
     traces: list[ToolTrace] = []
     runner.consume_sse_line(line="event: tool", state=state, tool_traces=traces)
-    runner.consume_sse_line(line='data: {"tool_name":"dsl2sql_tool","status":"done","args":{"metrics":["订单数"]},"content":"select 1"}', state=state, tool_traces=traces)
+    runner.consume_sse_line(line='data: {"tool_name":"data_analyzing_tool","status":"done","args":{"action":"validate_dsl","action_payload":{"metrics":["订单数"]}},"content":"select 1"}', state=state, tool_traces=traces)
     runner.consume_sse_line(line="", state=state, tool_traces=traces)
     runner.consume_sse_line(line="event: error", state=state, tool_traces=traces)
     runner.consume_sse_line(line='data: {"error":"模型失败"}', state=state, tool_traces=traces)
@@ -179,8 +176,8 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     runner.flush_sse_event(state=state, tool_traces=traces)
     runner.flush_sse_event(state={"current_event": "", "data_lines": []}, tool_traces=traces)
 
-    assert traces[0].name == "dsl2sql_tool"
-    assert traces[0].args == {"metrics": ["订单数"]}
+    assert traces[0].name == "data_analyzing_tool"
+    assert traces[0].args == {"action": "validate_dsl", "action_payload": {"metrics": ["订单数"]}}
     assert state["error"] == "模型失败"
 
     dsl = runner.normalize_pagination_values({"limit": " 10 ", "offset": "05", "keep": " 7a "})
@@ -191,21 +188,21 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
 
 def test_dsl2sql_payload_selection_and_execution_summary():
     trace_from_json = ToolTrace(
-        name="dsl2sql_tool",
+        name="data_analyzing_tool",
         status="done",
         args={"metrics": ["订单数"], "limit": 5},
-        content="[dsl2sql_tool]\n" + json.dumps({"success": True, "sql": "select count(*) from orders"}),
+        content="[data_analyzing_tool]\n" + json.dumps({"success": True, "sql": "select count(*) from orders"}),
     )
     trace_from_text = ToolTrace(
-        name="dsl2sql_tool",
+        name="data_analyzing_tool",
         status="done",
         args={"dsl": {"metrics": ["销售额"]}},
-        content="[dsl2sql_tool]\n```sql\nselect sum(amount) from orders\n```",
+        content="[data_analyzing_tool]\n```sql\nselect sum(amount) from orders\n```",
     )
     other_trace = ToolTrace(
-        name="semantic_query_tool",
+        name="data_analyzing_tool",
         status="done",
-        content="[semantic_query_tool]\n" + json.dumps({"success": False}),
+        content=json.dumps({"status": "failed"}),
     )
 
     payload = runner.build_dsl2sql_payload(trace_from_json)
@@ -213,10 +210,10 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     assert payload["sql"] == "select count(*) from orders"
     assert runner.build_dsl_from_tool_args("bad") == {}
 
-    empty_payload = runner.build_dsl2sql_payload(ToolTrace(name="dsl2sql_tool", status="done", args={}, content="not sql"))
+    empty_payload = runner.build_dsl2sql_payload(ToolTrace(name="data_analyzing_tool", status="done", args={}, content="not sql"))
     assert empty_payload == {}
 
-    json_without_dsl = ToolTrace(name="dsl2sql_tool", status="done", args={}, content=json.dumps({"success": True}))
+    json_without_dsl = ToolTrace(name="data_analyzing_tool", status="done", args={}, content=json.dumps({"success": True}))
     assert runner.build_dsl2sql_payload(json_without_dsl) == {"success": True}
 
     text_payload = runner.build_dsl2sql_payload(trace_from_text)
@@ -228,8 +225,8 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     assert selected_trace is trace_from_text
     assert selected_payload["dsl"] == {"metrics": ["销售额"]}
     no_trace, no_payload = runner.choose_final_dsl2sql_trace([
-        ToolTrace(name="semantic_query_tool", status="done", content=json.dumps({"success": True})),
-        ToolTrace(name="dsl2sql_tool", status="done", content="bad"),
+        ToolTrace(name="calculator_tool", status="done", content=json.dumps({"success": True})),
+        ToolTrace(name="data_analyzing_tool", status="done", content="bad"),
     ])
     assert no_trace is None
     assert no_payload == {}
@@ -240,7 +237,7 @@ def test_dsl2sql_payload_selection_and_execution_summary():
 def test_dsl2sql_payload_can_fill_sql_when_extractor_returns_value(monkeypatch):
     monkeypatch.setattr(runner, "extract_sql_from_tool_content", lambda _content: "select patched")
     payload = runner.build_dsl2sql_payload(ToolTrace(
-        name="dsl2sql_tool",
+        name="data_analyzing_tool",
         status="done",
         args={},
         content=json.dumps({"success": True}),
@@ -258,62 +255,24 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
         assert user_id == "tester"
 
         async def body():
-            payload = {"tool_name": "dsl2sql_tool", "status": "done", "content": "select 1"}
+            payload = {"tool_name": "data_analyzing_tool", "status": "done", "content": "select 1"}
             yield f"event: tool\ndata: {json.dumps(payload)}\n\n".encode("utf-8")
 
         return StreamingResponse(body(), media_type="text/event-stream")
 
-    import apps.chat_data_app.handlers as handlers
+    import apps.chat_data_app.agent_stream as agent_stream
 
-    monkeypatch.setattr(handlers, "sql_completion_handler", fake_sql_handler)
-    monkeypatch.setattr(handlers, "data_analyze_completion_handler", fake_sql_handler)
-    monkeypatch.setattr(
-        "apps.chat_data_app.services.feature_gate.ensure_agent_available_for_internal_run",
-        lambda _agent_id: None,
-    )
+    monkeypatch.setattr(agent_stream, "sql_completion_handler", fake_sql_handler)
 
     traces, error = await runner.consume_internal_completion(
         conversation_id="conv_1",
-        agent_id="chat_data",
         query="查订单",
         options={"datasource_id": "ds_a"},
         user_id="tester",
     )
 
-    assert traces[0].name == "dsl2sql_tool"
+    assert traces[0].name == "data_analyzing_tool"
     assert error == ""
-
-    analyze_traces, analyze_error = await runner.consume_internal_completion(
-        conversation_id="conv_1",
-        agent_id="chat_data_data_analyze",
-        query="查订单",
-        options={"datasource_id": "ds_a"},
-        user_id="tester",
-    )
-    assert analyze_traces[0].name == "dsl2sql_tool"
-    assert analyze_error == ""
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.services.feature_gate.ensure_agent_available_for_internal_run",
-        lambda _agent_id: (_ for _ in ()).throw(ValueError("智能分析功能暂未开放")),
-    )
-    with pytest.raises(ValueError, match="智能分析功能暂未开放"):
-        await runner.consume_internal_completion(
-            conversation_id="conv_1",
-            agent_id="chat_data_data_analyze",
-            query="查订单",
-            options={"datasource_id": "ds_a"},
-            user_id="tester",
-        )
-
-    with pytest.raises(ValueError, match="不支持的评测 Agent"):
-        await runner.consume_internal_completion(
-            conversation_id="conv_1",
-            agent_id="unknown",
-            query="查订单",
-            options={},
-            user_id="tester",
-        )
 
 
 @pytest.mark.asyncio
@@ -333,19 +292,17 @@ async def test_compile_and_execute_local_branches(monkeypatch):
     def fake_clean_dsl(dsl, semantic_config):
         return dsl, ["warning"]
 
-    import apps.chat_data_app.services.dashboard_spec_service as dashboard_spec_service
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
-    import apps.chat_data_app.services.semantic_query_service as semantic_query_service
+    import apps.chat_data_app.services.dashboard.spec_service as dashboard_spec_service
+    import apps.chat_data_app.services.semantic.run.semantic_query_service as semantic_query_service
 
     monkeypatch.setattr(dashboard_spec_service, "get_dashboard_spec_semantic_config", fake_get_config)
     monkeypatch.setattr(dashboard_spec_service, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_clean_dsl)
-    monkeypatch.setattr(generator_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     compiled = await runner.compile_dsl_locally(
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl={"metrics": ["销售额"]},
-        user_query="查销售额",
     )
     assert compiled["success"] is True
     assert compiled["warnings"] == ["warning"]
@@ -354,7 +311,6 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl={"compare": {"type": "yoy"}},
-        user_query="查同比",
     )
     assert compare_result["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare_result["error"]
@@ -363,7 +319,6 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_config_id="sc_a",
         dsl=None,
-        user_query="查",
     )
     assert invalid_result["success"] is False
     assert "未捕获到可编译 DSL" in invalid_result["error"]
@@ -384,7 +339,7 @@ async def test_run_live_case_report_and_event_iteration(monkeypatch):
             "dsl": _case()["gold_dsl"],
             "sql": _case()["gold_sql"],
         }
-        return [ToolTrace(name="dsl2sql_tool", status="done", content="[dsl2sql_tool]\n" + json.dumps(payload, ensure_ascii=False))], ""
+        return [ToolTrace(name="data_analyzing_tool", status="done", content="[data_analyzing_tool]\n" + json.dumps(payload, ensure_ascii=False))], ""
 
     async def fake_compile(**_kwargs):
         return {"success": True, "sql": _case()["gold_sql"], "error": ""}
@@ -412,7 +367,7 @@ async def test_run_live_case_report_and_event_iteration(monkeypatch):
     assert result.sql_score["sql_exact_match"] is True
 
     payload = runner.live_result_to_dict(result, include_traces=True)
-    assert payload["tool_traces"][0]["name"] == "dsl2sql_tool"
+    assert payload["tool_traces"][0]["name"] == "data_analyzing_tool"
 
     report = runner.build_live_report([result], include_traces=False)
     assert report["summary"]["semantic_accuracy"] == 1.0
@@ -432,7 +387,7 @@ async def test_run_live_case_compile_and_execute_failure_branches(monkeypatch):
     async def fake_consume(**kwargs):
         assert kwargs["options"]["model_id"] == "model_a"
         payload = {"success": True, "dsl": _case()["gold_dsl"], "sql": "select from tool"}
-        return [ToolTrace(name="dsl2sql_tool", status="done", content=json.dumps(payload, ensure_ascii=False))], ""
+        return [ToolTrace(name="data_analyzing_tool", status="done", content=json.dumps(payload, ensure_ascii=False))], ""
 
     async def compile_failed(**_kwargs):
         return {"success": False, "sql": "", "error": "compile failed"}

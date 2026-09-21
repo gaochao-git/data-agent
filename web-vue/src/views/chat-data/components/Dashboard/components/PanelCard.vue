@@ -5,12 +5,14 @@
  */
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import { CHART_COLORS } from '../../../utils/chartOptionBuilder'
 import { Codemirror } from 'vue-codemirror'
 import { sql } from '@codemirror/lang-sql'
 import { EditorView } from '@codemirror/view'
 import { ElMessage } from 'element-plus'
 import type { Panel, PanelData } from '../../../api/dashboard'
 import type { DataSource, ExecutionTargetOption } from '../../../types'
+import { buildExecutionTargets } from '../../../utils/executionTargets'
 import { CHART_TYPE_HELP_TEXT } from '../../../chartTypes'
 import type { ThemeConfig } from '../constants'
 import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
@@ -169,35 +171,11 @@ const editState = reactive({
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => {
   const datasource = currentDatasource.value
-  if (!datasource) {
-    return props.panel.member_datasource_id
-      ? [{ member_datasource_id: props.panel.member_datasource_id, label: props.panel.member_datasource_id }]
-      : []
-  }
-
-  const members = datasource.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || datasource.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-
-  const fallbackId = datasource.template_datasource_id || props.panel.member_datasource_id || datasource.id
-  if (!fallbackId) return []
-  return [{
-    member_datasource_id: fallbackId,
-    label: datasource.group_name || fallbackId,
-    source_type: datasource.source_type || '',
-  }]
+  // 兜底 ID：优先模板数据源，其次面板已保存的执行对象，最后数据源 ID；无数据源时仅用面板已保存的执行对象
+  const fallbackId = datasource
+    ? datasource.template_datasource_id || props.panel.member_datasource_id || datasource.id
+    : props.panel.member_datasource_id
+  return buildExecutionTargets({ datasource, fallbackId })
 })
 
 const allExecutionTargetIds = computed<string[]>(() => executionTargets.value
@@ -357,7 +335,12 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handlePanelFullscreenChange)
 })
 
-const themeChartPalette = computed(() => props.theme.chartPalette?.length ? props.theme.chartPalette : ['#1677FF', '#36CFC9', '#52C41A', '#FAAD14', '#F5222D'])
+const themeChartPalette = computed(() => {
+  // 主题色板在前、标准 12 色板续后（去重）：主题视觉不变，10+ 曲线不再循环撞色。
+  const themeColors = props.theme.chartPalette?.length ? props.theme.chartPalette : ['#1677FF', '#36CFC9', '#52C41A', '#FAAD14', '#F5222D']
+  const extra = CHART_COLORS.filter(color => !themeColors.some(existing => existing.toLowerCase() === color.toLowerCase()))
+  return [...themeColors, ...extra]
+})
 const defaultAccentColor = computed(() => themeChartPalette.value[0] || props.theme.accentColor || '#1677FF')
 const isLightTheme = computed(() => props.theme.cardBg === '#ffffff')
 

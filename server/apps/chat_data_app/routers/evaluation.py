@@ -9,20 +9,20 @@ import time
 import uuid
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status as http_status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
-from ..services.semantic_json_parser import parse_llm_json
-from ..services.datasource_manager import get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager
 from ..services.evaluation_service import (
     EvaluationService,
     accuracy_bp,
@@ -38,13 +38,15 @@ from ..services.evaluation_service import (
     scene_case_set_id,
     validate_eval_case_ids,
 )
-from ..services.feature_gate import ensure_agent_available, feature_disabled_error_code
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
-from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload, is_time_logical_dimension
+from ..services.semantic.run.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
+from ..services.semantic.core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
-router = APIRouter()
+from . import JSON_API_RESPONSES, SSE_RESPONSES
+
+router = APIRouter(tags=["ChatData 语义评估"], responses=JSON_API_RESPONSES)
 ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
 ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
 SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND
@@ -57,12 +59,9 @@ def _build_evaluation_service() -> EvaluationService:
 
 def _evaluation_http_exception_code(exc: HTTPException) -> int:
     """评测路由 HTTPException 固定业务码映射。"""
-    if exc.status_code == 404:
+    if exc.status_code == http_status.HTTP_404_NOT_FOUND:
         return SEMANTIC_CONFIG_NOT_FOUND_CODE
-    feature_code = feature_disabled_error_code(exc)
-    if feature_code is not None:
-        return feature_code
-    return chatdata_http_exception_error_code(exc.status_code)
+    return chatdata_http_exception_business_code(exc.status_code)
 
 
 def _sanitize_scene_segment(value: str, fallback: str) -> str:
@@ -137,17 +136,29 @@ def _time_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [item for item in _dimension_items(config) if is_time_logical_dimension(item)]
 
 
+def _dimension_match_text(item: Dict[str, Any]) -> str:
+    """提取维度字段的匹配文本（小写）。"""
+    return str(item.get("name") or item.get("field_name") or item.get("column") or "").lower()
+
+
+def _dimension_matches_any_token(item: Dict[str, Any], tokens: Sequence[str]) -> bool:
+    """判断维度字段文本是否包含任一关键词。"""
+    text = _dimension_match_text(item)
+    return any(token in text for token in tokens)
+
+
 def _categorical_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     blocked_tokens = ("id", "编号", "号码", "邮箱", "email", "phone", "手机")
+    candidate_tokens = ("状态", "分类", "类型", "名称", "status", "category", "type", "name")
     candidates = [item for item in _dimension_items(config) if not is_time_logical_dimension(item)]
     preferred = [
         item for item in candidates
         if str(item.get("allowed_values") or "").strip()
-        or any(token in str(item.get("name") or item.get("field_name") or item.get("column") or "").lower() for token in ("状态", "分类", "类型", "名称", "status", "category", "type", "name"))
+        or _dimension_matches_any_token(item, candidate_tokens)
     ]
     return [
         item for item in (preferred or candidates)
-        if not any(token in str(item.get("name") or item.get("field_name") or item.get("column") or "").lower() for token in blocked_tokens)
+        if not _dimension_matches_any_token(item, blocked_tokens)
     ]
 
 
@@ -393,6 +404,19 @@ def _looks_like_sql(text: str) -> bool:
     return bool(re.search(r"^\s*(select|with)\b", normalized) or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL))
 
 
+async def _invoke_evaluation_draft_llm(prompt: str, config_id: str):
+    """调用评测用例草稿生成模型，失败时上报连接报警。"""
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
+    try:
+        return await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
+        )
+        raise
+
+
 async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], payload: AccuracyEvaluationDraftCaseRequest) -> Dict[str, Any]:
     """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
     user_input = str(payload.hint or "").strip()
@@ -407,17 +431,9 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         nl_example=nl_example,
         business_domain=business_domain,
         existing_questions=payload.existing_questions,
-        semantic_config_payload=_semantic_config_prompt_payload(config),
+        semantic_config_payload=config,
     )
-    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
-        )
-        raise
+    response = await _invoke_evaluation_draft_llm(prompt, config_id)
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
     if not isinstance(parsed, dict) or not parsed.get("nl") or not isinstance(parsed.get("gold_dsl"), dict):
@@ -441,9 +457,7 @@ async def _build_accuracy_runner_args(payload: AccuracyEvaluationRunRequest, cur
 
     if not payload.datasource_id or not payload.semantic_config_id:
         raise ValueError("评测需要指定数据源和指标集")
-    ensure_agent_available(payload.agent_id)
     return AccuracyRunConfig(
-        agent_id=payload.agent_id,
         query_mode=payload.query_mode,
         model_id=payload.model_id,
         datasource_id=payload.datasource_id,
@@ -490,6 +504,18 @@ async def _run_accuracy_evaluation_payload(payload: AccuracyEvaluationRunRequest
     return report
 
 
+async def _persist_accuracy_event_record(run_id: str, event: Dict[str, Any], operator_id: str, operator_name: str) -> None:
+    """按事件类型落库评测运行记录；其他事件类型忽略。"""
+    event_name = str(event.get("event") or "")
+    if event_name == "case_result":
+        await _upsert_eval_run_case_record(run_id, str(event.get("id") or ""), event.get("result") or {}, operator_id=operator_id, operator_name=operator_name)
+    elif event_name == "progress":
+        await _update_eval_run_record(run_id, status="running", summary=event.get("summary") or {})
+    elif event_name == "done":
+        report = event.get("report") or {}
+        await _update_eval_run_record(run_id, status="succeeded", summary=report.get("summary") or {})
+
+
 async def _iter_accuracy_evaluation_sse(payload: AccuracyEvaluationRunRequest, request: Request, current_user: Any):
     """生成准确率评测 SSE 数据。"""
     from ..evaluate.accuracy.runner import iter_accuracy_evaluation_events
@@ -502,14 +528,7 @@ async def _iter_accuracy_evaluation_sse(payload: AccuracyEvaluationRunRequest, r
         user_id = str(getattr(current_user, "user_id", "") or "").strip()
         username = str(getattr(current_user, "username", "") or "").strip()
         async for event in iter_accuracy_evaluation_events(args, cases):
-            event_name = str(event.get("event") or "")
-            if event_name == "case_result":
-                await _upsert_eval_run_case_record(run_id, str(event.get("id") or ""), event.get("result") or {}, operator_id=user_id, operator_name=username)
-            elif event_name == "progress":
-                await _update_eval_run_record(run_id, status="running", summary=event.get("summary") or {})
-            elif event_name == "done":
-                report = event.get("report") or {}
-                await _update_eval_run_record(run_id, status="succeeded", summary=report.get("summary") or {})
+            await _persist_accuracy_event_record(run_id, event, user_id, username)
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     except asyncio.CancelledError:
         await _update_eval_run_record(run_id, status="cancelled", error_message="评测已停止")
@@ -591,31 +610,13 @@ async def _ensure_evaluation_semantic_permission(
     admin_manage: bool = False,
 ) -> Dict[str, Any]:
     """评测入口按指标集维护权限校验。"""
-    ds_manager = get_datasource_manager()
-    config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+    config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
     if not config:
-        raise HTTPException(status_code=404, detail=f"语义配置不存在: {config_id}")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=f"语义配置不存在: {config_id}")
     user_id = str(getattr(current_user, "user_id", "") or "").strip()
-    if not _can_mutate_semantic_config(config, user_id, admin_manage):
-        raise HTTPException(status_code=403, detail="无权限操作该指标集")
+    if not can_mutate_semantic_config(config, user_id, admin_manage):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权限操作该指标集")
     return config
-
-
-async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False):
-    """运行智能问数准确率评测。"""
-    try:
-        current_user = _get_current_user(request)
-        await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
-        ensure_agent_available(payload.agent_id)
-        report = await _run_accuracy_evaluation_payload(payload, request, current_user)
-        return business_response(data=report, msg="评测完成")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except Exception as e:
-        logger.error("智能问数准确率评测失败: %s", e, exc_info=True)
-        return business_response(msg=f"评测失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_RUN_FAILED, status="error")
 
 
 async def _accuracy_error_stream(message: str):
@@ -627,7 +628,6 @@ async def _run_accuracy_evaluation_stream_route(payload: AccuracyEvaluationRunRe
     try:
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
-        ensure_agent_available(payload.agent_id)
     except (HTTPException, ValueError) as e:
         message = str(getattr(e, "detail", None) or e)
         return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")
@@ -685,26 +685,13 @@ async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Reques
         return business_response(msg="获取评测历史详情失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
 
 
-@router.post("/evaluations/accuracy/run")
-async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
-    """运行个人指标集准确率评测。"""
-    return await _run_accuracy_evaluation_route(payload, request, admin_manage=False)
-
-
-@router.post("/admin/evaluations/accuracy/run")
-async def run_admin_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
-    """后台运行公共指标集准确率评测。"""
-    _get_current_user(request)
-    return await _run_accuracy_evaluation_route(payload, request, admin_manage=True)
-
-
-@router.post("/evaluations/accuracy/run-stream")
+@router.post("/evaluations/accuracy/run-stream", responses=SSE_RESPONSES)
 async def run_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
     """流式运行个人指标集准确率评测，逐条返回用例结果。"""
     return await _run_accuracy_evaluation_stream_route(payload, request, admin_manage=False)
 
 
-@router.post("/admin/evaluations/accuracy/run-stream")
+@router.post("/admin/evaluations/accuracy/run-stream", responses=SSE_RESPONSES)
 async def run_admin_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
     """后台流式运行公共指标集准确率评测，逐条返回用例结果。"""
     try:
@@ -776,7 +763,6 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
         dsl=cloned.get("gold_dsl"),
-        user_query=str(cloned.get("nl") or ""),
     )
     cloned["gold_sql"] = str(compile_result.get("sql") or "")
     if not compile_result.get("success"):

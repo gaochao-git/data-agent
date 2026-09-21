@@ -6,11 +6,30 @@ import type { ChartType } from '../chartTypes'
 export type { MemberQueryResult, QueryResult } from './query'
 
 // 表信息
+export interface TableIndex {
+  name: string
+  columns: string[]
+  source?: 'physical' | 'manual'
+}
+
+export type DatasourceTableIndexType = 'primary' | 'unique' | 'secondary'
+
+export interface DatasourceTableIndexItem {
+  index_type: DatasourceTableIndexType
+  index_name: string
+  columns: string[]
+  source?: 'manual'
+}
+
 export interface TableInfo {
   table_name: string
   description: string
   business_desc?: string
   columns: ColumnInfo[]
+  primary_keys?: string[][]
+  unique_indexes?: TableIndex[]
+  indexes?: TableIndex[]
+  manual_indexes?: DatasourceTableIndexItem[]
   groups?: Array<{
     table_group_name: string
   }>
@@ -34,6 +53,8 @@ export interface ColumnInfo {
   hive_type?: string
   description: string
   primary_key?: boolean
+  unique_key?: boolean
+  index_key?: boolean
   nullable?: boolean
   column_dict?: DatasourceColumnDictInfo
 }
@@ -89,7 +110,6 @@ export interface SkillInfo {
   description?: string
   domain?: string
   category?: string
-  skill_scope?: 'query' | 'analyze' | 'all'
   output_type?: string
   input_schema?: Record<string, unknown>
   source?: 'system' | 'user'
@@ -108,7 +128,6 @@ export interface SkillInfo {
   create_time?: string
   update_time?: string
   references?: string[]
-  scripts?: string[]
   assets?: string[]
 }
 
@@ -126,11 +145,20 @@ export interface SkillVersionInfo {
   update_time?: string
 }
 
+/** 模型思考能力声明（来自服务端 models.json 注册表，经 /config 下发）。 */
+export interface ChatDataModelThinking {
+  mode: 'none' | 'optional' | 'forced'
+  efforts: string[]
+  default_on: boolean
+  default_effort: string | null
+}
+
 export interface ChatDataModelOption {
   id: string
   label: string
   value: string
   is_default?: boolean
+  thinking?: ChatDataModelThinking
 }
 
 // 表选择信息
@@ -190,27 +218,14 @@ export interface ChatDataTokenUsage {
   total_tokens?: number
   context_window?: number
   max_output_tokens?: number
-  input_budget_tokens?: number
-  input_budget_trigger_ratio?: number
+  hard_input_limit_tokens?: number
+  hard_input_guard_ratio?: number
+  hard_input_guard_tokens?: number
+  compression_trigger_tokens?: number
+  compression_trigger_ratio?: number
+  compression_target_tokens?: number
   estimated?: boolean
   context_compression?: ChatDataContextCompressionInfo | null
-  llm_calls?: Array<{
-    index: number
-    model?: string | null
-    input_tokens: number
-    message_tokens?: number
-    tool_schema_tokens?: number
-    overhead_tokens?: number
-    output_tokens?: number
-    actual_input_tokens?: number
-    cached_input_tokens?: number
-    actual_total_tokens?: number
-    total_tokens?: number
-    estimated?: boolean
-    message_count?: number
-    context_compression?: ChatDataContextCompressionInfo | null
-    breakdown?: ChatDataTokenUsageBreakdown[]
-  }>
   breakdown?: ChatDataTokenUsageBreakdown[]
 }
 
@@ -222,9 +237,32 @@ export interface ChatDataContextCompressionInfo {
   estimated_cleared_tokens?: number
   threshold_tokens?: number
   trigger_ratio?: number
+  hard_input_limit_tokens?: number
+  hard_input_guard_ratio?: number
+  hard_input_guard_tokens?: number
+  compression_target_tokens?: number
+  static_input_tokens?: number
   compressed_messages?: number
   summary_chars?: number
+  hard_limit_enforced?: boolean
+  hard_limit_dropped_messages?: number
+  hard_limit_summary_dropped?: boolean
+  hard_limit_user_message_truncated?: boolean
   compression_skipped_reason?: string
+  legacy_summary_migrated?: boolean
+}
+
+export interface ChatDataContextCompressionEvent {
+  id: string
+  phase?: 'started' | 'completed'
+  compressing?: boolean
+  turn_id?: string
+  anchor_message_id?: string
+  timestamp?: string
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
 }
 
 export interface ChatDataMessageEndPayload {
@@ -240,9 +278,17 @@ export interface ChatDataTokenUsageBreakdown {
   role?: string
   round?: number
   message_index?: number
+  /** 后端消息 id，前端凭它从已加载的会话消息中取正文（payload 不再携带 content） */
+  message_id?: string | null
+  /** ToolMessage 对应的 tool_call_id，用于在 assistant.toolCalls 中反查工具结果 */
+  tool_call_id?: string | null
+  /** 执行开始/结束时间（epoch 毫秒）：AI 行为模型调用、工具行为工具执行，其余行无值；耗时由两者相减得出 */
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
   estimated?: boolean
   content?: string
   description?: string
+  redacted?: boolean
   children?: ChatDataTokenUsageBreakdown[]
 }
 
@@ -263,6 +309,9 @@ export interface LangGraphMessage {
   // 后端在流式模式下累积的完整工具参数
   accumulated_args?: Record<string, unknown>
   timestamp?: string
+  // 工具消息的执行起止时间（epoch 毫秒，build_tool_message_payload 提升为顶层字段）
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
 }
 
 export interface ThinkingSegment {
@@ -287,15 +336,38 @@ export interface SemanticConfigSelectionInfo {
 export interface ConversationItem {
   id: string
   title: string
-  created_at: string
+  create_time: string
   updated_at?: string
   agent_id?: string
+  datasource_id?: string
+  is_favorited?: boolean
+  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+}
+
+export interface ConversationGroupPage {
+  key: string
+  datasource_id?: string | null
+  conversations: ConversationItem[]
+  page: number
+  page_size: number
+  has_more: boolean
+  next_cursor?: string | null
+}
+
+export interface ConversationGroupView {
+  key: string
+  label: string
+  items: ConversationItem[]
+  page?: number
+  has_more?: boolean
+  next_cursor?: string | null
+  is_loading_more?: boolean
 }
 
 // 消息
 export interface Message {
   id: string
-  role: 'user' | 'assistant' | 'tool'
+  role: 'user' | 'assistant' | 'tool' | 'context_compression'
   content: string
   timestamp?: Date
   result?: unknown
@@ -304,12 +376,27 @@ export interface Message {
   segments?: MessageSegment[]
   error?: string
   isStreaming?: boolean
+  turnId?: string
   dashboardSpec?: DashboardSpecPayload
   semanticConfigSelection?: SemanticConfigSelectionInfo
-  skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
+  skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
+  // 用户消息附带的文件信息（上传文件或超长输入转文件）
+  attachments?: MessageAttachment[]
   // tool 消息专用字段
   toolCallId?: string
   toolName?: string
+  contextCompression?: ChatDataContextCompressionEvent
+}
+
+// 用户消息附件（文件卡片展示用）
+export interface MessageAttachment {
+  file_id: string
+  filename: string
+  file_type?: string
+  file_size?: number
+  // 已链接到工作区后的可访问路径（用于点击查看）
+  parsed_path?: string
+  original_path?: string
 }
 
 export interface DashboardSpecPayload {
@@ -318,10 +405,11 @@ export interface DashboardSpecPayload {
   writable_card_count?: number
   datasource_id?: string | null
   semantic_config_id?: string | null
+  semantic_config_ids?: string[]
   conversation_id?: string | null
 }
 
-// 语义参数（从 dsl2sql_tool 提取）
+// 语义参数（从 data_analyzing_tool 的 action_payload 提取）
 export interface SemanticParams {
   metrics?: string[]
   // dimensions 可以是字符串或对象（带 time_grain）
@@ -354,14 +442,55 @@ export interface ToolCallInfo {
   tool_name: string
   args: Record<string, unknown>
   result?: string
+  progressMessage?: string
+  progress?: number
+  // file_write / file_edit 流式生成时的实时行数（工具执行中由 tool_progress 事件推送）
+  contentLines?: number
+  // file_edit 整段替换口径下的被移除行数（old_content，由 tool_progress 事件推送）
+  removedLines?: number
+  // 流式提取的调用意图（args 未解析前由 tool_progress 事件提前推送，长耗时工具执行中即可展示）
+  streamingIntent?: string
   status: 'generating' | 'running' | 'completed' | 'error'
   // 关联的渲染内容
   renderId?: string
   renderType?: 'queryResult' | 'chart'
   // 图表推荐
   visualization?: VisualizationConfig
-  // 语义参数（从关联的 dsl2sql_tool 获取）
+  // 语义参数（从关联的 data_analyzing_tool 获取）
   semanticParams?: SemanticParams
+  // 工具执行起止时间（epoch 毫秒，后端 ToolTimingMiddleware 盖章）：耗时由两者相减得出
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
+  // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
+  subagentTrail?: SubagentTrailItem[]
+  // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
+  // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
+  subagentContextUsage?: SubagentContextUsage
+}
+
+/** 子智能体上下文用量快照（percent 相对子图预算告警线，≥100 表示已注入收尾告警）。 */
+export interface SubagentContextUsage {
+  used_tokens: number
+  threshold_tokens: number
+  percent: number
+}
+
+/** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
+export interface SubagentTrailItem {
+  kind: 'tool' | 'message'
+  /** tool：tool_call_id；message：message_id */
+  id: string
+  // 工具条目
+  tool_name?: string
+  args?: Record<string, unknown>
+  result?: string
+  status?: 'running' | 'completed' | 'error'
+  // 文本条目
+  content?: string
+  truncated?: boolean
+  // 思考过程（流式增量拼接；默认收起，仅流式进行中露尾部预览）
+  thinking?: string
+  thinkingTruncated?: boolean
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -401,38 +530,6 @@ export interface SqlHistoryItem {
   }> | null
 }
 
-// 看板
-export interface Dashboard {
-  id: string
-  name: string
-  description?: string
-  user_id: string
-  datasource_id?: string
-  theme: 'light' | 'dark'
-  background_id?: string
-  is_public: boolean
-  can_manage?: boolean
-  panels?: Panel[]
-  create_time: string
-  update_time: string
-}
-
-// 面板
-export interface Panel {
-  id: string
-  dashboard_id: string
-  name: string
-  sql: string
-  chart_type: ChartType
-  chart_config?: Record<string, unknown>
-  layout: { i: string; x: number; y: number; w: number; h: number }
-  refresh_interval?: number
-  source_thread_id?: string
-  datasource_id?: string
-  create_time: string
-  update_time: string
-}
-
 // 视图模式
 export type ViewMode = 'conversation' | 'builder' | 'editor' | 'dashboard' | 'metricConfig'
 export type ChatDataModeLabels = Record<Exclude<ViewMode, 'metricConfig'>, string> & Partial<Record<'metricConfig', string>>
@@ -444,6 +541,7 @@ export interface ChatDataSqlChangePayload {
 }
 
 // 对外嵌入配置（ChatDataDialog / ChatDataFloat 统一使用）
+// 嵌入前提：宿主项目需已安装并注册 vue-router 与 pinia（页面使用 useRoute 与 user store）
 export interface ChatDataOptions {
   /** 调用方组件/模块名称，用于标识来源 */
   parentComponentName?: string
@@ -469,10 +567,36 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'inbox_admitted' | 'question_requested' | 'run_restarted' | 'error' | 'done' | 'dashboard_spec'
+
+export interface UserQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface UserQuestionItem {
+  id: string
+  question: string
+  header?: string
+  options: UserQuestionOption[]
+  multi_select: boolean
+}
+
+export interface PendingUserQuestion {
+  question_id: string
+  turn_id?: string
+  questions: UserQuestionItem[]
+}
+
+export interface UserQuestionAnswer {
+  id: string
+  selected: string[]
+  custom: string
+  skipped?: boolean
+}
 
 // 工具状态
-export type ToolStatus = 'running' | 'completed'
+export type ToolStatus = 'running' | 'completed' | 'error'
 
 // 工具事件数据
 export interface ToolEventData {
@@ -483,9 +607,55 @@ export interface ToolEventData {
   result?: string
   message?: string
   timestamp?: string
+  // 执行起止时间（epoch 毫秒）：tool_started 只带 started_at_ms，结果事件两者都带
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
+}
+
+export interface ToolLifecycleEventData extends ToolEventData {
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage'
+  progress?: number
+  accumulated_args?: Record<string, unknown>
+  content?: string
+  // 子智能体内部过程事件：所属 task 工具调用的 ID（前端据此嵌套展示）
+  parent_tool_call_id?: string
+  // 子智能体中间文本输出的稳定 ID（message 条目去重）
+  message_id?: string
+  // 内层结果超长截断标记
+  truncated?: boolean
+  // 流式增量（subagent_message_delta / subagent_thinking_delta）
+  delta?: string
+  // 完整消息已通过增量流出：收敛时前端只补截断标记，不覆盖内容
+  streamed?: boolean
+  // tool_progress：file_write/file_edit 流式生成时的实时行数
+  content_lines?: number
+  // tool_progress：file_edit 整段替换口径下的被移除行数（old_content）
+  removed_lines?: number
+  // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
+  intent?: string
+  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
+  used_tokens?: number
+  threshold_tokens?: number
+  percent?: number
 }
 
 // 语义层配置
+// 派生指标的统计周期；kind 为 between 时使用 start/end，last_n_days 时使用 n
+export interface DerivedMetricPeriod {
+  kind: 'today' | 'yesterday' | 'last_n_days' | 'this_week' | 'this_month' | 'between'
+  n?: number
+  start?: string
+  end?: string
+  time_dimension: string
+}
+
+// 派生指标的修饰词过滤（值支持 IN/BETWEEN 的数组形态）
+export interface DerivedMetricFilter {
+  dimension: string
+  operator?: string
+  value?: string | number | boolean | Array<string | number>
+}
+
 export interface SemanticMetric {
   name: string
   field_name?: string
@@ -496,6 +666,13 @@ export interface SemanticMetric {
   filter?: string
   description?: string
   metadata_supplement?: string
+  // 派生指标：原子指标 + 固定周期 + 修饰词；配置后 expression/table 由基础指标决定
+  metric_kind?: 'derived' | 'composite'
+  base_metric?: string
+  period?: DerivedMetricPeriod
+  filters?: DerivedMetricFilter[]
+  // 复合指标：{指标名} 占位公式（如 "{销售额} / {订单数}"）；配置后 expression/table 由成员指标决定
+  formula?: string
 }
 
 export interface SemanticDimension {
@@ -532,7 +709,7 @@ export interface SemanticConfigItem {
   id: string
   name: string
   description?: string
-  ontology_rules?: string
+  business_notes?: string
   scope_type?: 'public' | 'private'
   can_manage?: boolean
   enabled: boolean
@@ -624,13 +801,15 @@ export interface MetricExpandOption {
   selected: boolean
 }
 
-// 语义配置-新增字段表单
+// 语义配置-新增字段表单；mode 为 derived/composite 时（派生/复合指标）不使用物理表/字段，口径由 baseMetric+period+filters 或 formula 决定
 export interface AddFieldForm {
   tableAlias: string
   column: string
   fieldName: string
+  // 原子指标模式：聚合表达式（如 SUM(`amount`)）；字段名由系统自动生成
+  expression?: string
   displayName: string
-  mode: 'dimension' | 'metric'
+  mode: 'dimension' | 'metric' | 'derived' | 'composite'
 }
 
 // 语义配置-新增字段弹窗的表选项
@@ -653,4 +832,87 @@ export interface BuilderDragFieldData {
   displayName?: string
   aggFunc?: string
   type?: string
+  // 逻辑口径指标（派生/复合）：无物理表字段，后端按 semanticName 解析
+  metricKind?: 'derived' | 'composite'
+}
+
+// ============ 智能体定时任务 ============
+
+// 定时任务定义（用户侧 / 后台通用）
+export interface AgentScheduleItem {
+  job_id: string
+  user_id: string
+  create_by_name?: string
+  conversation_id: string
+  conversation_mode: 'fixed' | 'new_each_run'
+  conversation_title?: string | null
+  title: string
+  prompt: string
+  schedule_type: 'cron' | 'once'
+  cron_expr: string
+  plan_time: string | null
+  effective_end_time: string | null
+  enabled_flag: number
+  next_trigger_time: string | null
+  last_trigger_time: string | null
+  datasource_id?: string | null
+  options?: Record<string, unknown> | null
+  create_time: string | null
+  update_time: string | null
+  // 后台列表附带的执行统计
+  total_count?: number
+  succeeded_count?: number
+  failed_count?: number
+  cancelled_count?: number
+  skipped_count?: number
+  last_plan_time?: string | null
+  last_run_status?: string | null
+  last_run_time?: string | null
+}
+
+// 定时任务执行历史条目
+export interface AgentScheduleRunItem {
+  job_id: string
+  user_id: string
+  conversation_id: string
+  plan_time: string | null
+  status: 'pending' | 'claimed' | 'dispatched' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+  trigger_type: 'schedule' | 'manual'
+  run_id: string
+  run_status: string | null
+  error_message: string
+  claimed_time: string | null
+  dispatched_time: string | null
+  finished_time: string | null
+  create_time: string | null
+}
+
+// 后台全局概览统计
+export interface AgentScheduleOverview {
+  paused_flag: number
+  pause_reason: string
+  control_update_time: string | null
+  total_jobs: number
+  enabled_jobs: number
+  total_runs: number
+  succeeded_runs: number
+  failed_runs: number
+  cancelled_runs: number
+  skipped_runs: number
+  running_runs: number
+  runs_last_24h: number
+}
+
+// 定时任务创建/编辑载荷
+export interface AgentSchedulePayload {
+  title: string
+  prompt: string
+  conversation_id?: string
+  conversation_mode?: 'fixed' | 'new_each_run'
+  schedule_type: 'cron' | 'once'
+  cron_expr?: string
+  plan_time?: string | null
+  effective_end_time?: string | null
+  datasource_id?: string | null
+  options?: Record<string, unknown>
 }

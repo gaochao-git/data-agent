@@ -132,14 +132,16 @@ service.interceptors.response.use(
   },
   (error) => {
     console.log('err' + error)
-    let { message } = error
-    if (message === 'Network Error') {
+    const responseMessage = error.response?.data?.msg || error.response?.data?.message
+    let message = responseMessage || error.message || '请求失败'
+    if (!responseMessage && message === 'Network Error') {
       message = '后端接口连接异常'
-    } else if (message.includes('timeout')) {
+    } else if (!responseMessage && message.includes('timeout')) {
       message = '系统接口请求超时'
-    } else if (message.includes('Request failed with status code')) {
+    } else if (!responseMessage && message.includes('Request failed with status code')) {
       message = '系统接口' + message.substr(message.length - 3) + '异常'
     }
+    error.message = message
     ElMessage({ message: message, type: 'error', duration: 5 * 1000 })
     return Promise.reject(error)
   }

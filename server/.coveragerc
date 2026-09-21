@@ -1,10 +1,8 @@
 [run]
 branch = True
 omit =
-    apps/chat_data_app/code_no_use_bak/*
     apps/chat_data_app/tests/*
 
 [report]
 omit =
-    apps/chat_data_app/code_no_use_bak/*
     apps/chat_data_app/tests/*

@@ -3,6 +3,7 @@ import { computed, toRef, watch } from 'vue'
 import { useSemanticEvaluation, type EvaluationCaseRunRow } from '../../composables/useSemanticEvaluation'
 import type { AccuracyEvaluationRunCaseHistoryItem, AccuracyEvaluationRunHistoryItem } from '../../api'
 import type { SemanticConfigItem } from '../../types'
+import { Z_INDEX } from '../../utils/zIndex'
 
 const props = defineProps<{
   datasourceId: string
@@ -85,7 +86,7 @@ const {
   adminMode: toRef(props, 'adminMode'),
 })
 
-const drawerTitle = computed(() => props.config?.name || '当前指标集')
+const drawerTitle = computed(() => props.config?.name || '当前语义模型')
 
 watch(visible, async (next) => {
   if (!next) return
@@ -96,7 +97,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
 </script>
 
 <template>
-  <el-drawer v-model="visible" class="chatdata-evaluation-drawer" direction="ltr" size="82%" :with-header="false" append-to-body :z-index="4200">
+  <el-drawer v-model="visible" class="chatdata-evaluation-drawer" direction="ltr" size="82%" :with-header="false" append-to-body :z-index="Z_INDEX.DRAWER">
     <div class="h-full min-h-0 bg-[#f5f7fb] flex flex-col">
       <div class="h-12 px-4 border-b border-gray-200 bg-white flex items-center justify-between shrink-0">
         <div class="min-w-0">
@@ -119,7 +120,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
           ]"
         />
         <div class="py-2 text-xs text-gray-500">
-          每个指标集需先维护专属测试集：根据当前指标/维度生成草稿 → 校对并保存 → 再跑接口链路评测。
+          每个语义模型需先维护专属测试集：根据当前指标/维度生成草稿 → 校对并保存 → 再跑接口链路评测。
           <span v-if="evaluationCasesDirty" class="text-amber-600 ml-1">（有未保存修改）</span>
         </div>
       </div>
@@ -182,7 +183,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
             </el-table-column>
           </el-table>
           <div v-if="!evaluationCasesLoading && evaluationCases.length === 0" class="py-16 text-center text-sm text-gray-400">
-            当前指标集还没有测试集。请点击「生成测试集草稿」，系统会按本指标集的指标、维度和表关系自动生成评测用例并生成标准 SQL。
+            当前语义模型还没有测试集。请点击「生成测试集草稿」，系统会按本语义模型的指标、维度和表关系自动生成评测用例并生成标准 SQL。
           </div>
         </div>
 
@@ -576,7 +577,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
     </div>
   </el-drawer>
 
-  <el-dialog v-model="showCaseEditorDialog" width="720px" title="编辑评测用例" append-to-body :z-index="4300">
+  <el-dialog v-model="showCaseEditorDialog" width="720px" title="编辑评测用例" append-to-body :z-index="Z_INDEX.DIALOG_NESTED">
     <el-form label-position="top" size="small">
       <div class="grid grid-cols-2 gap-3">
         <el-form-item label="用例 ID">

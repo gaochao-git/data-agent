@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-MAX_READ_LIMIT = 1000
-DEFAULT_READ_LIMIT = 500
+MAX_READ_LIMIT = 500
+DEFAULT_READ_LIMIT = 200
 MAX_GLOB_RESULTS = 500
 MAX_GREP_RESULTS = 200
 MAX_GREP_FILE_BYTES = 2 * 1024 * 1024
@@ -49,6 +49,15 @@ def format_lines(lines: list[str], start_line: int) -> str:
 
 def json_dumps(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def tool_result_payload(tool_name: str, payload: Any) -> str:
+    """工具层统一的文本结果序列化：``"[tool_name]\\n" + json_dumps(payload)``。
+
+    所有需要输出 ``[工具名]\\n{JSON}`` 格式的工具必须复用本函数，
+    不要再各自定义 ``_json_result`` / ``_tool_result`` 样板。
+    """
+    return f"[{tool_name}]\n" + json_dumps(payload)
 
 
 def normalize_json_like_payload(value: Any) -> Any:

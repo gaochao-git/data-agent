@@ -5,6 +5,7 @@
 ```text
 tests/
 ├── README.md
+├── generate_openapi.py  # 从真实 FastAPI app 导出接口契约
 ├── unit/   # 单元测试：函数、编译器、服务逻辑，不依赖真实 HTTP 服务
 └── api/    # API 契约测试：走 FastAPI 路由，外部依赖 mock，开发环境手动执行
 ```
@@ -35,6 +36,17 @@ python -m coverage report -m --sort=miss
 cd server
 pytest apps/chat_data_app/tests/api -q
 ```
+
+## OpenAPI 接口契约快照
+
+`api/openapi.json` 是从真实 `main.app` 导出的当前接口契约，用于查看接口规模、审查接口变更，并作为后续 API 测试覆盖清单的权威输入。新增、删除或调整接口后必须重新生成并提交快照：
+
+```bash
+cd server
+python apps/chat_data_app/tests/generate_openapi.py
+```
+
+在 CI 中重新生成后执行 `git diff --exit-code apps/chat_data_app/tests/api/openapi.json`，可防止代码接口已变更但契约快照未更新。
 
 ## 准确率评测
 

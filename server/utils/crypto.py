@@ -3,11 +3,12 @@
 
 提供对敏感数据（如密码）的加密和解密功能
 使用 SM4 国密算法（CBC 模式，PKCS7 填充由 gmssl 自动处理）
+
+命令行加解密入口见 scripts/crypto.py（自动加载 conf/.env-<env>，支持 key/decrypt-env）。
 """
 
 import os
 import base64
-import sys
 from typing import Optional
 
 from gmssl.sm4 import CryptSM4, SM4_ENCRYPT, SM4_DECRYPT
@@ -88,7 +89,7 @@ def decrypt_password(encrypted_password: str) -> str:
     # 解析格式：base64(iv):base64(ciphertext)
     parts = encrypted_password.split(":")
     if len(parts) != 2:
-        raise ValueError("密码格式错误，应为 base64(iv):base64(ciphertext)，请使用 python -m utils.crypto encrypt 加密")
+        raise ValueError("密码格式错误，应为 base64(iv):base64(ciphertext)，请使用 python scripts/crypto.py encrypt 加密")
 
     try:
         iv = base64.b64decode(parts[0], validate=True)
@@ -120,30 +121,3 @@ def decrypt_env_value(name: str, *, required: bool = False) -> str:
         return decrypt_password(encrypted_value)
     except ValueError as exc:
         raise ValueError(f"{name} 配置错误: {exc}") from exc
-
-
-# ============ 命令行工具 ============
-
-def main(argv: Optional[list[str]] = None) -> None:
-    """命令行入口。"""
-    args = list(sys.argv if argv is None else argv)
-    if len(args) < 3 or args[1].lower() not in ("encrypt", "decrypt"):
-        print("用法:")
-        print("  加密: python -m utils.crypto encrypt <密码>")
-        print("  解密: python -m utils.crypto decrypt <密文>")
-        print("注意: 需要设置环境变量 ENCRYPT_KEY")
-        sys.exit(1)
-
-    try:
-        cmd = args[1].lower()
-        if cmd == "encrypt":
-            print(encrypt_password(args[2]))
-        else:
-            print(decrypt_password(args[2]))
-    except ValueError as e:
-        print(f"错误: {e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

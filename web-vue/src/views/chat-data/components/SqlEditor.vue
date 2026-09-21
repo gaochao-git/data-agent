@@ -7,9 +7,10 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import MarkdownIt from 'markdown-it'
 import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
+import { useModelOptions } from '../composables/useModelOptions'
 import { useQueryTask } from '../composables/useQueryTask'
+import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
@@ -17,14 +18,20 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
-import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded } from '../utils'
+import ChatInputBox from './ChatInputBox.vue'
+import ModelPicker from './ModelPicker.vue'
+import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded, renderMarkdown } from '../utils'
+import useUserStore from '@/store/modules/user'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
+import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../utils/executionTargets'
+import { parseSseChunk } from '../utils/sse'
+import { isAbortError } from '../utils/abort'
 
-const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
-const renderMarkdown = (text: string) => md.render(text)
 const { submitSqlTask } = useQueryTask()
+// 当前查询任务轮询的取消通道:组件卸载时中止,避免销毁后仍继续轮询/写状态
+let queryTaskAbortController: AbortController | null = null
 const SQL_ASSIST_AGENT_ID = 'chat_data_sql_assist'
 const isMacPlatform = /Mac|iPhone|iPad|iPod/i.test(globalThis.navigator?.platform || '')
 const primaryShortcutLabel = isMacPlatform ? '⌘' : 'Ctrl'
@@ -76,7 +83,9 @@ type AiConversationRecord = {
   messages: AiChatMessage[]
 }
 
-const AI_CONVERSATION_HISTORY_KEY = 'chat_data_sql_ai_conversation_history'
+// storage key 统一 chatdata: 前缀,按数据源 + 用户隔离(共享浏览器多账号不互相可见)
+const aiConversationHistoryKey = () =>
+  `chatdata:sql-ai-history:${props.datasourceId || 'default'}:${String(userStore.id || '').trim() || 'anonymous'}`
 const AI_CONVERSATION_HISTORY_LIMIT = 50
 
 const splitAiMessageSegments = (content: string): AiMessageSegment[] => {
@@ -106,39 +115,22 @@ const splitAiMessageSegments = (content: string): AiMessageSegment[] => {
   return segments.length ? segments : [{ type: 'markdown', content }]
 }
 
+/**
+ * 字节级分帧与字段解析收敛到共享 parseSseChunk(唯一实现),本组件只保留
+ * 自身的事件类型体系:该接口仅区分 error 与默认 message 两类事件。
+ * 多行 data 语义与共享实现一致(按规范 "\n" 连接),与旧实现相同,无行为变化。
+ */
 function parseSSEEvents(buffer: string): {
   events: Array<{ event: SqlEditorSSEEventType; data: string }>
   remaining: string
 } {
-  const events: Array<{ event: SqlEditorSSEEventType; data: string }> = []
-  const blocks = buffer.split('\n\n')
-  const remaining = blocks.pop() || ''
-
-  for (const block of blocks) {
-    if (!block.trim()) continue
-
-    const lines = block.split('\n')
-    let eventType: SqlEditorSSEEventType = 'message'
-    const dataLines: string[] = []
-
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        const rawType = line.substring(6).trim()
-        if (rawType === 'error') {
-          eventType = 'error'
-        }
-      } else if (line.startsWith('data:')) {
-        dataLines.push(line.substring(5).trim())
-      }
-    }
-
-    const dataStr = dataLines.join('\n')
-    if (dataStr) {
-      events.push({ event: eventType, data: dataStr })
-    }
+  const { events, rest } = parseSseChunk(buffer)
+  return {
+    events: events
+      .filter(item => Boolean(item.data))
+      .map(item => ({ event: item.event === 'error' ? 'error' : 'message', data: item.data })),
+    remaining: rest,
   }
-
-  return { events, remaining }
 }
 
 interface TableInfo {
@@ -196,6 +188,7 @@ const props = withDefaults(defineProps<Props>(), {
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false
 })
+const userStore = useUserStore()
 const attrs = useAttrs()
 
 // 表结构面板（搜索/展开/悬浮标题，与 QueryBuilder 共享逻辑）
@@ -474,37 +467,15 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
     sql: result.sql,
     memberDatasourceId: result.memberDatasourceId,
     memberName: result.memberName,
-    status: result.error ? 'error' : 'success',
+    status: isQuerySucceeded(result) ? 'success' : 'error',
   }))
 )
 const queryHistoryRefreshKey = ref(0)
 
-const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
-  const members = props.datasource?.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || props.datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!props.datasourceId) return []
-  return [{
-    member_datasource_id: props.datasource?.template_datasource_id || props.datasourceId,
-    source_type: props.datasource?.source_type || '',
-    host: props.datasource?.source_config?.host,
-    port: props.datasource?.source_config?.port,
-    database: props.datasource?.source_config?.database,
-    label: props.datasource?.group_name || props.datasourceId,
-  }]
-})
+// 本地兜底执行对象选项：优先使用父级传入的 executionTargets
+const localExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: props.datasource, fallbackId: props.datasourceId })
+))
 
 const emit = defineEmits<{
   'update:selectedMemberDatasourceIds': [value: string[]]
@@ -512,17 +483,10 @@ const emit = defineEmits<{
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => props.executionTargets ?? localExecutionTargets.value)
 const internalSelectedMemberDatasourceIds = ref<string[]>([])
-const normalizeSelectedMemberDatasourceIds = (value: string[]) => (
-  props.executionTargetMultiple ? value : value.slice(0, 1)
-)
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
-}
 const selectedMemberDatasourceIds = computed({
   get: () => props.selectedMemberDatasourceIds ?? internalSelectedMemberDatasourceIds.value,
   set: (value: string[]) => {
-    const normalizedValue = normalizeSelectedMemberDatasourceIds(value)
+    const normalizedValue = normalizeSelectedMemberDatasourceIds(value, props.executionTargetMultiple)
     if (props.selectedMemberDatasourceIds !== undefined) {
       if (isSameStringArray(normalizedValue, props.selectedMemberDatasourceIds)) return
       emit('update:selectedMemberDatasourceIds', normalizedValue)
@@ -541,7 +505,7 @@ const syncSelectedExecutionTargets = () => {
   }
   const retainedIds = selectedMemberDatasourceIds.value.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
-    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds)
+    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds, props.executionTargetMultiple)
     return
   }
   const templateId = props.datasource?.template_datasource_id
@@ -859,7 +823,7 @@ const handleCancelHistoryItem = async (item: SqlHistoryItem) => {
       ElMessage.error(response.msg || '停止失败')
       return
     }
-    if (response.data?.success === false || response.data?.status === 'kill_failed') {
+    if (response.data?.status === 'kill_failed') {
       ElMessage.warning(response.data?.message || '本条 SQL 停止失败')
     } else {
       ElMessage.success('已提交停止本条 SQL 请求')
@@ -910,22 +874,15 @@ const handleCancelAllRunningHistory = async () => {
   }
 }
 
-// 保存到看板
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = chartType
-  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel()
 
 // 编辑器引用
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -946,7 +903,18 @@ const showAiPanel = ref(false)
 const aiQuery = ref('')
 const isAiGenerating = ref(false)
 const aiMessages = ref<AiChatMessage[]>([])
-const aiInputRef = ref<HTMLInputElement | null>(null)
+const aiInputRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
+// AI 生成模型选择：与主对话口径一致，模型必选并回填默认模型
+const aiModelId = ref('')
+const aiEnableDeepThinking = ref<boolean | null>(null)
+const aiThinkingEffort = ref<string | null>(null)
+const { modelOptions, defaultModelId, load: loadModelOptions } = useModelOptions()
+// 模型加载完成后回填默认模型；选中模型失效（配置变更）时同样回退
+watch(defaultModelId, (id) => {
+  if (id && !modelOptions.value.some(model => model.id === aiModelId.value)) {
+    aiModelId.value = id
+  }
+})
 const aiOutputRef = ref<HTMLDivElement | null>(null)
 const isAiOutputNearBottom = ref(true)
 let abortController: AbortController | null = null
@@ -964,7 +932,7 @@ const aiConversationBackendReady = ref(false)
 
 const readAiConversationHistory = (): AiConversationRecord[] => {
   try {
-    const raw = localStorage.getItem(AI_CONVERSATION_HISTORY_KEY)
+    const raw = localStorage.getItem(aiConversationHistoryKey())
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -977,7 +945,7 @@ const readAiConversationHistory = (): AiConversationRecord[] => {
 
 const writeAiConversationHistory = (items: AiConversationRecord[]) => {
   try {
-    localStorage.setItem(AI_CONVERSATION_HISTORY_KEY, JSON.stringify(items.slice(0, AI_CONVERSATION_HISTORY_LIMIT)))
+    localStorage.setItem(aiConversationHistoryKey(), JSON.stringify(items.slice(0, AI_CONVERSATION_HISTORY_LIMIT)))
   } catch (err) {
     console.error('保存 AI 辅助历史对话失败:', err)
   }
@@ -1131,7 +1099,7 @@ const loadAiConversationHistoryItems = async (page = 1) => {
     isLoadingMoreAiConversationHistory.value = true
   }
   try {
-    const response = await getConversations(SQL_ASSIST_AGENT_ID, undefined, {
+    const response = await getConversations(SQL_ASSIST_AGENT_ID, {
       page,
       page_size: aiConversationHistoryPageSize,
     })
@@ -1476,6 +1444,9 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
   executionTime.value = null
 
   const startTime = Date.now()
+  // 每次执行创建独立取消通道,供组件卸载时中止本次轮询
+  const taskController = new AbortController()
+  queryTaskAbortController = taskController
   try {
     const task = await submitSqlTask({
       datasource_id: props.datasourceId,
@@ -1486,6 +1457,7 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
       skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
     }, {
       returnTerminalTask: true,
+      signal: taskController.signal,
       onProgress: (taskStatus) => {
         executingTaskText.value = taskStatus.progress_text || '执行中...'
         executingTaskId.value = taskStatus.task_id
@@ -1539,16 +1511,19 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
     })
     results.value = nextResults
   } catch (err) {
-    results.value = [{
-      sql: sqlText,
-      status: 'failed',
-      columns: [],
-      data: [],
-      total_count: 0,
-      execution_time_ms: Date.now() - startTime,
-      error: err instanceof Error ? err.message : '执行失败',
-      title: '结果1',
-    }]
+    // 组件卸载触发的轮询取消不属于查询失败,不向结果区写错误,避免已销毁组件仍弹错误提示
+    if (!isAbortError(err)) {
+      results.value = [{
+        sql: sqlText,
+        status: 'failed',
+        columns: [],
+        data: [],
+        total_count: 0,
+        execution_time_ms: Date.now() - startTime,
+        error: err instanceof Error ? err.message : '执行失败',
+        title: '结果1',
+      }]
+    }
   }
 
   executing.value = false
@@ -1779,6 +1754,9 @@ const handleAiGenerate = async () => {
       member_datasource_ids: selectedMemberDatasourceIds.value,
       session_id: aiSessionId.value,
       conversation_id: conversationId,
+      model_id: aiModelId.value || undefined,
+      enable_thinking: aiEnableDeepThinking.value ?? undefined,
+      thinking_effort: aiThinkingEffort.value ?? undefined,
     }, abortController.signal)
 
     if (aiGenerationSeq.value !== generationSeq) return
@@ -2005,6 +1983,7 @@ watch(showAiPanel, (show) => {
 
 onMounted(() => {
   loadRuntimeConfig()
+  loadModelOptions()
   document.addEventListener('click', handleDocumentClick)
   document.addEventListener('mousemove', onMouseMove)
   document.addEventListener('mouseup', onMouseUp)
@@ -2019,6 +1998,9 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onMouseUp)
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', handleWindowResize)
+  // 卸载时中止进行中的查询任务轮询(AbortError 由调用方静默处理)
+  queryTaskAbortController?.abort()
+  queryTaskAbortController = null
 })
 
 // 暴露方法
@@ -2365,40 +2347,33 @@ defineExpose({
             </template>
           </div>
 
-          <!-- AI 输入区域 -->
+          <!-- AI 输入区域：与主对话共用输入壳与模型选择 -->
           <div class="p-3 bg-[#FAFAFA] border-t border-black/[0.06]">
-            <div class="flex items-center gap-2 px-3 py-2 rounded-[20px] bg-white border border-black/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-              <input
-                ref="aiInputRef"
-                v-model="aiQuery"
-                type="text"
-                placeholder="描述你想查询的数据..."
-                class="flex-1 border-none bg-transparent text-[13px] outline-none text-gray-900 placeholder:text-gray-400"
-                @keydown.enter.prevent="!isAiGenerating && handleAiGenerate()"
-              />
-              <button
-                v-if="isAiGenerating"
-                type="button"
-                class="relative w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200 animate-breathe hover:scale-105 active:scale-95"
-                title="停止生成"
-                @click="handleStopGenerate"
-              >
-                <i class="fa-solid fa-stop"></i>
-                <span class="absolute inset-0 rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] opacity-40 animate-ping"></span>
-              </button>
-              <button
-                v-else
-                type="button"
-                :class="[
-                  'w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200',
-                  !aiQuery.trim() ? 'bg-gray-200 shadow-none cursor-not-allowed text-gray-400' : 'hover:scale-105 active:scale-95'
-                ]"
-                :disabled="!aiQuery.trim()"
-                @click="handleAiGenerate"
-              >
-                <i class="fa-solid fa-arrow-up"></i>
-              </button>
-            </div>
+            <ChatInputBox
+              ref="aiInputRef"
+              v-model:input="aiQuery"
+              placeholder="描述你想查询的数据..."
+              :is-generating="isAiGenerating"
+              :can-submit="!!aiQuery.trim()"
+              submit-title="生成 SQL (Enter)"
+              :max-height="120"
+              :maxlength="4000"
+              @submit="!isAiGenerating && handleAiGenerate()"
+              @stop="handleStopGenerate"
+            >
+              <template #actions>
+                <ModelPicker
+                  :selected-model="aiModelId"
+                  :model-options="modelOptions"
+                  :enable-deep-thinking="aiEnableDeepThinking"
+                  :thinking-effort="aiThinkingEffort"
+                  :is-generating="isAiGenerating"
+                  @update:selected-model="aiModelId = $event"
+                  @update:enable-deep-thinking="aiEnableDeepThinking = $event"
+                  @update:thinking-effort="aiThinkingEffort = $event"
+                />
+              </template>
+            </ChatInputBox>
           </div>
         </div>
 	      </div>
@@ -2887,7 +2862,7 @@ defineExpose({
 
 .sql-context-menu {
   position: fixed;
-  z-index: 4600;
+  z-index: var(--z-context-menu);
   width: 260px;
   max-height: 360px;
   overflow-y: auto;

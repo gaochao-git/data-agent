@@ -13,7 +13,7 @@ from apps.chat_data_app.routers.query_favorites import (
     update_query_favorite,
 )
 from apps.chat_data_app.schema import QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest
-from apps.chat_data_app.services import query_providers
+from apps.chat_data_app.services.sql_run import providers as query_providers
 
 
 class _FakeExecuteResult:

@@ -28,8 +28,6 @@ server/venv/
 server/env/
 server/.venv/
 
-docs/ai标记图/
-
 # Python 包管理
 *.egg-info/
 dist/
@@ -38,6 +36,7 @@ build/
 
 # Python 测试
 .pytest_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
@@ -53,49 +52,14 @@ coverage.xml
 .dmypy.json
 dmypy.json
 
-# 上传文件 - 忽略所有上传内容
-server/upload/*
-server/uploads/*
-!server/uploads/.gitkeep
-server/uploads/complaint-analysis-uploaded/
-!server/uploads/images/
-!server/uploads/images/.gitkeep
-!server/uploads/texts/
-!server/uploads/texts/.gitkeep
-!server/uploads/original/
-server/uploads/images/*
-!server/uploads/images/.gitkeep
-server/uploads/texts/*
-!server/uploads/texts/.gitkeep
-server/uploads/original/*
-!server/uploads/original/.gitkeep
-server/legal_case_intelligence/data/*
-
 # Python 日志
 *.log
 *.pid
 
-# ===== Node.js 前端 (web/) =====
-# 依赖
-web/node_modules/
-vue-chat-web/node_modules/
-
-# 构建输出
-web/dist/
-web/dist-ssr/
-web/build/
-
-# 日志文件
-web/logs
-web/*.log
-web/npm-debug.log*
-web/yarn-debug.log*
-web/yarn-error.log*
-web/pnpm-debug.log*
-web/lerna-debug.log*
-
+# ===== Node.js 前端 (web-vue/) =====
 # 环境变量
-web/*.local
+web-vue/.env
+"web-vue/.claude/"
 
 # ===== 其他 =====
 # 临时文件
@@ -113,55 +77,22 @@ temp/
 *.tar.gz
 *.rar
 
+# 环境与配置
 server/.env
-server/conf/
-web/.env
-web-vue/.env
-web-vue-demo/.env
-server/utils/lang_util/checkpoints.db*
-server/apps/sql_generator_app/data/artifacts/*
-web/.*
+server/conf/*
+# 模型注册表按供应商分文件、不含密钥，作为模板入库；切换供应商改 .env-{env} 里的指针
+!server/conf/models*.json
 
-server/apps/inspection_app/checkpoint/checkpoints.db
-web/--silent
-web/非现场离线标记图&效果图/*
+# 测试产物
 server/apps/chat_data_app/tests/reports/*
 server/apps/chat_data_app/tests/logs/*
-"web-vue/.claude/" 
-
-proxy/.mvn/*
-proxy/mvnw
-proxy/mvnw.cmd
-
-# demo环境
-server-demo/.env
-server-demo/utils/lang_util/checkpoints.db*
-server-demo/apps/sql_generator_app/data/artifacts/*
-server-demo/apps/chat_data_app/tests/reports/*
-server-demo/apps/chat_data_app/tests/logs/*
-server-demo/upload/*
-server-demo/apps/inspection_app/checkpoint/checkpoints.db
-server-demo/upload/*
-server-demo/uploads/*
-!server-demo/uploads/.gitkeep
-server-demo/uploads/complaint-analysis-uploaded/
-!server-demo/uploads/images/
-!server-demo/uploads/images/.gitkeep
-!server-demo/uploads/texts/
-!server-demo/uploads/texts/.gitkeep
-!server-demo/uploads/original/
-server-demo/uploads/images/*
-!server-demo/uploads/images/.gitkeep
-server-demo/uploads/texts/*
-!server-demo/uploads/texts/.gitkeep
-server-demo/uploads/original/*
-!server-demo/uploads/original/.gitkeep
-server-demo/legal_case_intelligence/data/*
-web-vue-demo/.claude/*
-
-logs/*
-server/start.sh
-server/coverage.json
 server/coverage.xml
+
+# 运行日志
+logs/*
+server/logs/
+
+# 工作区与数据
 /.workbuddy/
 /chat_data/
+/server/.pytest-tmp/

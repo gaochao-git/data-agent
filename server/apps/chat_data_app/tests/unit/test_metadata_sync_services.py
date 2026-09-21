@@ -6,15 +6,17 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import hive_sync, mysql_sync, query_metadata
-from apps.chat_data_app.services.hive_sync import HiveSyncService
-from apps.chat_data_app.services.mysql_sync import MySQLSyncService
+from apps.chat_data_app.services.datasource import metadata as datasource_metadata
+from apps.chat_data_app.services.dashboard import query_metadata
+from apps.chat_data_app.services.datasource.metadata import HiveSyncService, MySQLSyncService
+
+hive_sync = datasource_metadata
+mysql_sync = datasource_metadata
 from utils.models import ChatDataQueryTask, SqlQueryHistory
 
 
@@ -45,14 +47,14 @@ def test_hive_identifier_validation_and_socket_timeout():
             self.timeout_ms = value
 
     transport = Transport()
-    hive_sync._apply_socket_timeout(transport, 3)
+    hive_sync.apply_hive_socket_timeout(transport, 3)
 
     assert transport.timeout_ms == 3000
     assert transport.handle.timeout == 3
     assert transport.nested_timeout_ms == 3000
 
-    hive_sync._apply_socket_timeout(None, 3)
-    hive_sync._apply_socket_timeout(transport, 0)
+    hive_sync.apply_hive_socket_timeout(None, 3)
+    hive_sync.apply_hive_socket_timeout(transport, 0)
 
 
 def test_hive_socket_timeout_ignores_nested_transport_failures():
@@ -68,7 +70,7 @@ def test_hive_socket_timeout_ignores_nested_transport_failures():
         def setTimeout(self, _value):
             raise RuntimeError("transport fail")
 
-    hive_sync._apply_socket_timeout(BadTransport(), 2)
+    hive_sync.apply_hive_socket_timeout(BadTransport(), 2)
 
 
 def test_hive_socket_timeout_skips_none_nested_and_handle_fallbacks():
@@ -79,7 +81,7 @@ def test_hive_socket_timeout_skips_none_nested_and_handle_fallbacks():
             self.handle = SimpleNamespace(settimeout=lambda value: setattr(self, "handle_timeout", value))
 
     transport = Transport()
-    hive_sync._apply_socket_timeout(transport, 5)
+    hive_sync.apply_hive_socket_timeout(transport, 5)
     assert transport.handle_timeout == 5
 
 
@@ -288,7 +290,10 @@ async def test_mysql_sync_positive_int_env_and_empty_schema_rows(monkeypatch):
 
     connections = [
         AsyncMySQLConnection([]),
-        AsyncMySQLConnection([{"TABLE_NAME": "orders", "TABLE_COMMENT": "订单表", "COLUMN_NAME": ""}]),
+        AsyncMySQLConnection(
+            [{"TABLE_NAME": "orders", "TABLE_COMMENT": "订单表", "COLUMN_NAME": ""}],
+            [],
+        ),
     ]
 
     async def fake_connect(**_kwargs):
@@ -300,7 +305,14 @@ async def test_mysql_sync_positive_int_env_and_empty_schema_rows(monkeypatch):
     service = MySQLSyncService("localhost", database="demo")
     assert await service.get_full_schema_async() == []
     assert await service.get_full_schema_async() == [
-        {"table_name": "orders", "description": "订单表", "columns": []}
+        {
+            "table_name": "orders",
+            "description": "订单表",
+            "columns": [],
+            "primary_keys": [],
+            "unique_indexes": [],
+            "indexes": [],
+        }
     ]
 
 
@@ -343,9 +355,12 @@ def test_lang_util_model_to_dict_json_branches():
 
 
 class AsyncCursor:
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, rows, index_rows=None):
+        self.result_sets = [rows]
+        if index_rows is not None:
+            self.result_sets.append(index_rows)
         self.executed = []
+        self.fetch_index = 0
 
     async def __aenter__(self):
         return self
@@ -357,15 +372,19 @@ class AsyncCursor:
         self.executed.append((sql, params))
 
     async def fetchall(self):
-        return self.rows
+        if self.fetch_index >= len(self.result_sets):
+            return []
+        rows = self.result_sets[self.fetch_index]
+        self.fetch_index += 1
+        return rows
 
 
 class AsyncMySQLConnection:
-    def __init__(self, rows):
+    def __init__(self, rows, index_rows=None):
         self.rows = rows
         self.closed = False
         self.ensure_closed_called = False
-        self.cursor_obj = AsyncCursor(rows)
+        self.cursor_obj = AsyncCursor(rows, index_rows)
 
     def cursor(self, _cursor_type):
         return self.cursor_obj
@@ -408,11 +427,16 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
             "COLUMN_KEY": "UNI",
             "IS_NULLABLE": "NO",
         },
+    ], [
+        {"TABLE_NAME": "orders", "INDEX_NAME": "PRIMARY", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 2, "COLUMN_NAME": "amount"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "idx_amount", "NON_UNIQUE": 1, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "amount"},
     ])
     connections = [table_conn, schema_conn]
 
     async def fake_connect(**kwargs):
-        assert kwargs["connect_timeout"] == mysql_sync.CONNECT_TIMEOUT_SECONDS
+        assert kwargs["connect_timeout"] == mysql_sync.MYSQL_CONNECT_TIMEOUT_SECONDS
         return connections.pop(0)
 
     monkeypatch.setattr(mysql_sync.aiomysql, "connect", fake_connect)
@@ -447,6 +471,9 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
                 "nullable": True,
             },
         ],
+        "primary_keys": [["order_id"]],
+        "unique_indexes": [{"name": "uniq_order_amount", "columns": ["order_id", "amount"]}],
+        "indexes": [{"name": "idx_amount", "columns": ["amount"]}],
     }]
     assert table_conn.closed is True
     assert schema_conn.ensure_closed_called is True

@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import { listDashboards, addPanel, createDashboard, generatePanelName, type Dashboard } from '../api/dashboard'
 import { CHART_TYPES, CHART_TYPE_HELP_TEXT, normalizeChartType, type ChartType } from '../chartTypes'
 import type { ExecutionTargetOption } from '../types'
+import { Z_INDEX } from '../utils/zIndex'
 
 interface Props {
   visible: boolean
@@ -22,6 +23,8 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   hideSql?: boolean
   hideChartType?: boolean
+  /** 会话内图表当前的字段映射；保存到面板后由 PanelCard.inferFields 优先采用。 */
+  encoding?: { xField?: string; yFields?: string[] }
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -170,7 +173,14 @@ const handleSave = async () => {
     })
     const selectedIds = canUseMultiSource.value ? selectedMemberDatasourceIds.value : selectedMemberDatasourceIds.value.slice(0, 1)
     const { multiSource: _oldMultiSource, ...baseChartConfig } = props.chartConfig || {}
+    const encodingConfig: Record<string, unknown> = {}
+    if (props.encoding?.xField) encodingConfig.xField = props.encoding.xField
+    if (props.encoding?.yFields?.length) {
+      encodingConfig.yField = props.encoding.yFields[0]
+      if (props.encoding.yFields[1]) encodingConfig.yField2 = props.encoding.yFields[1]
+    }
     const chartConfig = {
+      ...encodingConfig,
       ...baseChartConfig,
       ...(selectedIds.length > 1
         ? { multiSource: { enabled: true, memberDatasourceIds: selectedIds } }
@@ -218,7 +228,7 @@ const handleClose = () => {
 </script>
 
 <template>
-  <el-dialog :model-value="visible" title="保存到看板" width="720px" append-to-body :z-index="4000" @close="handleClose">
+  <el-dialog :model-value="visible" title="保存到看板" width="720px" append-to-body :z-index="Z_INDEX.DIALOG" @close="handleClose">
     <!-- 选择看板 -->
     <div class="mb-4 last:mb-0">
       <label class="block text-sm font-medium text-gray-700 mb-2">目标看板</label>

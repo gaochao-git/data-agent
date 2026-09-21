@@ -5,6 +5,8 @@
 
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
+import { parseSseChunk } from '../utils/sse'
+import { abortableSleep, createAbortError } from '../utils/abort'
 import type { ChartType } from '../chartTypes'
 import type { MemberQueryResult } from '../types'
 
@@ -92,18 +94,6 @@ interface DashboardBatchTaskResult {
     payload?: PanelData
     error?: string
   }>
-}
-
-function parseSSEBlocks(buffer: string): {
-  events: string[]
-  remaining: string
-} {
-  const blocks = buffer.split('\n\n')
-  const remaining = blocks.pop() || ''
-  return {
-    events: blocks.map(block => block.trim()).filter(Boolean),
-    remaining,
-  }
 }
 
 // ============ Dashboard API ============
@@ -264,7 +254,8 @@ export async function updateLayout(
 export async function executePanel(
   dashboardId: string,
   panelId: string,
-  memberDatasourceId?: string
+  memberDatasourceId?: string,
+  signal?: AbortSignal
 ): Promise<PanelData> {
   const createResp = await request({
     url: `/agents/api/chatdata/dashboards/${dashboardId}/query-tasks`,
@@ -276,7 +267,7 @@ export async function executePanel(
   })
   const taskId = createResp.data?.task_id as string
   const pollIntervalMs = Number(createResp.data?.poll_interval_ms || 1500)
-  const task = await waitForDashboardTask<DashboardBatchTaskResult>(taskId, pollIntervalMs)
+  const task = await waitForDashboardTask<DashboardBatchTaskResult>(taskId, pollIntervalMs, undefined, signal)
   const entry = task.result?.results?.[panelId]
   if (!entry) {
     throw new Error('面板任务无返回结果')
@@ -289,14 +280,20 @@ export async function executePanel(
 
 /**
  * 轮询任务状态
+ * @param signal 取消信号:组件卸载等场景中止轮询,抛出 AbortError 由调用方静默处理
  */
 async function waitForDashboardTask<T = unknown>(
   taskId: string,
   pollIntervalMs = 1500,
-  onProgress?: (task: QueryTaskStatusResult<T>) => void
+  onProgress?: (task: QueryTaskStatusResult<T>) => void,
+  signal?: AbortSignal
 ): Promise<QueryTaskStatusResult<T>> {
   const startedAt = Date.now()
   while (true) {
+    // 每轮发起查询前先响应取消,避免组件卸载后仍发起下一次状态查询
+    if (signal?.aborted) {
+      throw createAbortError()
+    }
     const resp = await request({
       url: `/agents/api/chatdata/query-tasks/${taskId}`,
       method: 'get',
@@ -312,7 +309,8 @@ async function waitForDashboardTask<T = unknown>(
     if (Date.now() - startedAt > 15 * 60 * 1000) {
       throw new Error('任务执行超时，请稍后重试')
     }
-    await new Promise(resolve => window.setTimeout(resolve, Math.max(500, pollIntervalMs)))
+    // sleep 可被取消信号打断,卸载后不再空等一个完整轮询间隔
+    await abortableSleep(Math.max(500, pollIntervalMs), signal)
   }
 }
 
@@ -399,16 +397,12 @@ export async function executePanelsBatch(
     }
 
     buffer += decoder.decode(value, { stream: true })
-    const { events, remaining } = parseSSEBlocks(buffer)
-    buffer = remaining
+    // 分帧与字段解析复用共享 parseSseChunk;多行 data 由旧实现的"无分隔符累加"
+    // 改为规范的 "\n" 连接,不再黏行(本接口 data 均为单行 JSON,正常链路无影响)。
+    const { events, rest } = parseSseChunk(buffer)
+    buffer = rest
 
-    for (const block of events) {
-      let dataStr = ''
-      for (const line of block.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        dataStr += line.slice(5).trim()
-      }
-
+    for (const { data: dataStr } of events) {
       if (!dataStr) continue
       if (dataStr === '[DONE]') {
         streamCompleted = true

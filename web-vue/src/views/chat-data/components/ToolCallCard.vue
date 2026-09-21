@@ -9,8 +9,10 @@ import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { getToolDisplayName } from '../utils/toolDisplay'
+import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
+import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import FileDiffViewer from './FileDiffViewer.vue'
+import { useSaveToPanel } from '../composables/useSaveToPanel'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -23,6 +25,7 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
+  conversationId?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -38,22 +41,15 @@ const emit = defineEmits<{
   select: []
 }>()
 
-// 保存到看板弹窗
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = chartType
-  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel()
 
 
 // 折叠状态
@@ -78,11 +74,17 @@ const PARAM_LABELS: Record<string, string> = {
   skill_name: '技能名称',
   reference_names: '参考文档',
   file_path: '文件路径',
+  command_args: '命令参数',
+  intent: '执行意图',
   source_path: '源路径',
   target_path: '目标路径',
-  semantic_config_id: '指标集ID',
+  destination_path: '目标路径',
+  semantic_config_id: '语义模型ID',
   content: '内容',
   mode: '写入模式',
+  max_depth: '最大深度',
+  recursive: '递归删除',
+  detail: '详细信息',
   pattern: '关键词',
   path: '路径',
   glob: '文件匹配',
@@ -92,19 +94,22 @@ const PARAM_LABELS: Record<string, string> = {
   dashboard_spec: '看板规格',
   query: '用户问题',
   user_query: '用户问题',
+  operation: '操作',
+  field_type: '字段类型',
   datasource_id: '数据源',
   member_datasource_id: '执行机构',
-  member_datasource_ids: '执行机构'
+  member_datasource_ids: '执行机构',
+  subagent_type: '子智能体类型'
 }
 
-type SemanticSelectionResult = {
-  success?: boolean
-  directory?: boolean
-  semantic_config_ids?: string[]
-  semantic_configs?: Record<string, Record<string, unknown>>
-  semantic_config_directory?: Array<Record<string, unknown>>
-  message?: string
+// 个别工具的参数名与通用语义冲突（如 task 的 description 是「任务书」，
+// 不代表所有工具的 description 都该这么显示），按工具维度覆盖全局表。
+const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
+  task: { description: '任务书' }
 }
+
+const paramLabel = (key: string): string =>
+  TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
 
 // DSL 参数标签颜色
 const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
@@ -122,17 +127,9 @@ const isRunning = computed(() => props.toolCall.status === 'generating' || props
 const isCompleted = computed(() => props.toolCall.status === 'completed')
 const isError = computed(() => props.toolCall.status === 'error')
 
-const normalizeVisiblePath = (path: unknown): string => {
-  return String(path || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-}
-
-const getFileName = (path: unknown): string => {
-  const normalizedPath = normalizeVisiblePath(path)
-  return normalizedPath.split('/').filter(Boolean).pop() || normalizedPath
-}
+// 工具执行耗时与起止时间（格式化逻辑在 utils/toolDisplay 共享）
+const durationText = computed(() => formatToolDuration(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
+const timingTitle = computed(() => formatToolTimingText(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
 
 const getResultField = (field: string): string => {
   const result = String(props.toolCall.result || '')
@@ -141,27 +138,54 @@ const getResultField = (field: string): string => {
 }
 
 const compactDescription = computed(() => {
+  // 流式 intent：args 未解析完成时由 tool_progress 提前推送，长耗时工具执行中即可展示目的
   const args = props.toolCall.args || {}
-  if (props.toolCall.tool_name === 'file_read') {
-    return getFileName(args.file_path || args.path)
-  }
-  if (props.toolCall.tool_name === 'file_edit') {
-    return getFileName(args.file_path || args.path)
-  }
-  if (props.toolCall.tool_name === 'skill_load') {
-    return String(args.skill_name || args.name || getResultField('runtime_path') || '').trim()
-  }
-  if (props.toolCall.tool_name === 'semantic_query_tool') {
-    return normalizeVisiblePath(args.save_as)
-  }
-  return ''
+  const intent = compactInlineText(args.intent, 80) || props.toolCall.streamingIntent || ''
+  if (intent) return intent
+  return getToolTechnicalDescription(props.toolCall.tool_name, args)
 })
 
 const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
+const visibleError = computed(() => getQueryResultError(props.toolCall.result) || String(props.toolCall.result || '执行失败'))
 
-// 是否可以保存到看板（semantic_query_tool 完成且查询结果包含内部生成的 SQL）
+// 合并后的数据分析工具
+const isDataAnalyzingTool = computed(() => props.toolCall.tool_name === 'data_analyzing_tool')
+const executeQueryAction = computed(() => (props.toolCall.args || {})?.action === 'execute_query')
+
+// file_write / file_edit 流式生成时的实时行数显示（对标 WorkBuddy 的 "+N -M"）；
+// -M 为 file_edit 整段替换口径（old_content 行数），仅在大于 0 时展示
+const isLineCountTool = computed(() =>
+  props.toolCall.tool_name === 'file_write' || props.toolCall.tool_name === 'file_edit',
+)
+
+// file_diff：解析结果仅用于「查看 Diff」按钮入口与 offload 提示；+N -M 统计只在弹层内展示
+const isFileDiffTool = computed(() => props.toolCall.tool_name === 'file_diff')
+
+const fileDiffPayload = computed(() =>
+  parseFileDiffResult(props.toolCall.tool_name, props.toolCall.status, props.toolCall.result),
+)
+const fileDiffOffloaded = computed(() =>
+  isFileDiffOffloaded(props.toolCall.tool_name, props.toolCall.status, props.toolCall.result),
+)
+const diffViewerVisible = ref(false)
+
+const addedLinesText = computed(() => {
+  if (!isLineCountTool.value) return ''
+  const lines = props.toolCall.contentLines
+  if (lines == null) return ''
+  return `+${lines}`
+})
+const removedLinesText = computed(() => {
+  if (!isLineCountTool.value) return ''
+  const lines = props.toolCall.removedLines
+  if (lines == null || lines <= 0) return ''
+  return `-${lines}`
+})
+
+// 是否可以保存到看板（查询执行完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
-  return props.toolCall.tool_name === 'semantic_query_tool' &&
+  return isDataAnalyzingTool.value &&
+    executeQueryAction.value &&
     props.toolCall.status === 'completed' &&
     Boolean(generatedSql.value)
 })
@@ -205,17 +229,35 @@ function isEmptyParamValue(value: unknown): boolean {
 
 function buildSemanticDslParam(args: Record<string, unknown>): Record<string, unknown> | null {
   if (Object.prototype.hasOwnProperty.call(args, 'dsl')) return null
-  if (props.toolCall.tool_name !== 'dsl2sql_tool' && props.toolCall.tool_name !== 'semantic_query_tool') return null
+  if (isDataAnalyzingTool.value) {
+    // 合并工具只有单条校验与执行查询展示查询 DSL；看板批量校验的 dsl 是完整规格，不展开
+    if (args.action !== 'validate_dsl' && args.action !== 'execute_query') return null
+  } else {
+    return null
+  }
   return extractSemanticDslFromArgs(args)
 }
 
 // 过滤要展示的参数
 type DisplayParam = [key: string, value: unknown]
 
+interface TodoItem { content: string; status: 'pending' | 'in_progress' | 'completed' }
+const isWriteTodos = computed(() => props.toolCall.tool_name === 'write_todos')
+const todoItems = computed<TodoItem[]>(() => {
+  if (!isWriteTodos.value) return []
+  const todos = (props.toolCall.args || {})?.todos
+  return Array.isArray(todos)
+    ? todos.filter(item => item && typeof item.content === 'string').map(item => ({
+        content: String(item.content),
+        status: item.status === 'completed' || item.status === 'in_progress' ? item.status : 'pending',
+      }))
+    : []
+})
+
 const displayParams = computed<DisplayParam[]>(() => {
   const args = props.toolCall.args || {}
   const entries: DisplayParam[] = Object.entries(args).filter(([key, value]) => {
-    if (key === 'visualization') return false
+    if (key === 'visualization' || (props.toolCall.tool_name === 'write_todos' && key === 'todos')) return false
     if (value === null || value === undefined) return false
     if (Array.isArray(value) && value.length === 0) return false
     if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0) return false
@@ -223,7 +265,7 @@ const displayParams = computed<DisplayParam[]>(() => {
   })
   const semanticDsl = buildSemanticDslParam(args)
   if (semanticDsl && !isEmptyParamValue(semanticDsl)) entries.push(['dsl', semanticDsl])
-  if (props.toolCall.tool_name === 'dsl2sql_tool' || props.toolCall.tool_name === 'semantic_query_tool') {
+  if (isDataAnalyzingTool.value) {
     const queryArgs = Object.fromEntries(entries)
     return Object.keys(queryArgs).length > 0 ? [['query_params', queryArgs]] : []
   }
@@ -296,47 +338,6 @@ function cleanResult(result: string): string {
     .trim()
 }
 
-function parseSemanticSelectionResult(result?: string): SemanticSelectionResult | null {
-  if (props.toolCall.tool_name !== 'select_semantic_config_tool') return null
-  const cleaned = cleanResult(String(result || '')).replace(/^\[select_semantic_config_tool\]\s*/, '').trim()
-  if (!cleaned) return null
-  try {
-    return JSON.parse(cleaned) as SemanticSelectionResult
-  } catch {
-    return null
-  }
-}
-
-const semanticSelectionResult = computed(() => parseSemanticSelectionResult(props.toolCall.result))
-const semanticSelectionRawJson = computed(() => {
-  if (!semanticSelectionResult.value) return ''
-  return cleanResult(String(props.toolCall.result || '')).trim()
-})
-const semanticSelectionConfigs = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result) return []
-  const configs = result.semantic_configs || {}
-  const ids = Array.isArray(result.semantic_config_ids) ? result.semantic_config_ids : []
-  if (result.directory) {
-    return (result.semantic_config_directory || []).map((config) => ({
-      id: String(config.id || '').trim(),
-      name: String(config.name || config.id || '').trim(),
-    })).filter(config => config.id)
-  }
-  return ids.map((id) => ({
-    id: String(id || '').trim(),
-    name: String(configs[id]?.name || id).trim(),
-  })).filter(config => config.id)
-})
-const semanticSelectionHeader = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result) return ''
-  if (result.directory) return '当前可见指标集'
-  return semanticSelectionConfigs.value.length > 0
-    ? `检索到 ${semanticSelectionConfigs.value.length} 个相关指标集`
-    : '未检索到相关指标集'
-})
-
 type ResultPart = { type: 'text' | 'sql' | 'json'; content: string }
 
 function formatQueryResultJson(result: string): string {
@@ -346,8 +347,8 @@ function formatQueryResultJson(result: string): string {
 
 // 解析结果内容，将 SQL 代码块、JSON 与普通文本分离
 function parseResultContent(result: string): ResultPart[] {
-  if (props.toolCall.tool_name === 'select_semantic_config_tool' && semanticSelectionResult.value) return []
-  if (props.toolCall.tool_name === 'semantic_query_tool' && !props.renderQueryResultPreview) {
+  const isQueryResultTool = isDataAnalyzingTool.value && executeQueryAction.value
+  if (isQueryResultTool && !props.renderQueryResultPreview) {
     const jsonText = formatQueryResultJson(result)
     if (jsonText) return [{ type: 'json', content: jsonText }]
   }
@@ -470,10 +471,17 @@ function getSqlTokenClass(type: string): string {
     @click="emit('select')"
   >
     <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
-    <span class="min-w-0 truncate" :title="toolCall.tool_name">
-      <span class="font-semibold">{{ displayName }}</span>
-      <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
+    <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
+      <span class="shrink-0 font-semibold">{{ displayName }}</span>
+      <span v-if="addedLinesText" class="ml-1.5 shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
+      <span v-if="removedLinesText" class="ml-1 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
+      <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
     </span>
+    <span
+      v-if="durationText"
+      class="shrink-0 font-mono text-[11px] text-slate-400 transition-colors duration-200 group-hover:text-slate-600"
+      :title="timingTitle"
+    >{{ durationText }}</span>
     <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
     <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
   </div>
@@ -495,6 +503,14 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-wrench"></i>
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
+        <span v-if="addedLinesText" class="shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
+        <span v-if="removedLinesText" class="ml-0 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
+        <span v-if="compactDescription" class="min-w-0 truncate font-mono text-[11px] font-normal text-slate-400">{{ compactDescription }}</span>
+        <span
+          v-if="durationText"
+          class="shrink-0 rounded bg-black/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-gray-400"
+          :title="timingTitle"
+        >{{ durationText }}</span>
         <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
       </div>
       <div class="flex shrink-0 items-center gap-2">
@@ -507,6 +523,21 @@ function getSqlTokenClass(type: string): string {
 
     <!-- 内容区 -->
     <div v-if="isExpanded" class="min-w-0 px-3.5 py-2.5 border-t border-black/[0.04] bg-black/[0.02]">
+      <!-- 任务计划步骤列表（write_todos 专用） -->
+      <div v-if="isWriteTodos && todoItems.length > 0" class="mb-3 last:mb-0">
+        <div class="flex flex-col gap-1.5 p-3 rounded-lg bg-white border border-black/[0.06]">
+          <div v-for="(item, idx) in todoItems" :key="idx" class="flex items-center gap-2 text-[13px]">
+            <i v-if="item.status === 'completed'" class="fa-solid fa-circle-check text-emerald-500 text-xs shrink-0"></i>
+            <i v-else-if="item.status === 'in_progress'" class="fa-solid fa-spinner fa-spin text-[#1677FF] text-xs shrink-0"></i>
+            <span v-else class="h-3 w-3 shrink-0 rounded-full border border-dashed border-slate-300"></span>
+            <span :class="[
+              item.status === 'completed' ? 'text-slate-400 line-through' : '',
+              item.status === 'in_progress' ? 'text-slate-800 font-medium' : '',
+              item.status === 'pending' ? 'text-slate-500' : '',
+            ]" class="truncate">{{ item.content }}</span>
+          </div>
+        </div>
+      </div>
       <!-- 参数区（可折叠） -->
       <div v-if="displayParams.length > 0" class="mb-3 last:mb-0">
         <button
@@ -524,7 +555,7 @@ function getSqlTokenClass(type: string): string {
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
               <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="paramLabel(key)">{{ paramLabel(key) }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -542,7 +573,7 @@ function getSqlTokenClass(type: string): string {
               <!-- 代码块类型 -->
               <div v-else-if="needsCodeBlock(key, value)" class="mb-3 last:mb-0">
                 <div class="mb-1.5 flex items-center gap-2">
-                  <div class="max-w-[160px] shrink-0 truncate text-xs text-gray-400" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</div>
+                  <div class="max-w-[160px] shrink-0 truncate text-xs text-gray-400" :title="paramLabel(key)">{{ paramLabel(key) }}</div>
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 border-none bg-transparent p-0 text-[11px] text-gray-400 cursor-pointer hover:text-gray-600"
@@ -557,7 +588,7 @@ function getSqlTokenClass(type: string): string {
               </div>
               <!-- 普通类型 -->
               <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="paramLabel(key)">{{ paramLabel(key) }}</span>
                 <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>
@@ -571,37 +602,31 @@ function getSqlTokenClass(type: string): string {
         <span>执行中...</span>
       </div>
       <div v-else-if="toolCall.status === 'completed' && (toolCall.result || toolCall.renderId)" class="mb-3 last:mb-0">
-        <button
-          class="flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-gray-700"
-          @click="resultsExpanded = !resultsExpanded"
-        >
-          <i
-            class="fa-solid fa-chevron-right text-[10px] transition-transform duration-200"
-            :class="{ 'rotate-90': resultsExpanded }"
-          ></i>
-          <span>结果</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            class="flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-gray-700"
+            @click="resultsExpanded = !resultsExpanded"
+          >
+            <i
+              class="fa-solid fa-chevron-right text-[10px] transition-transform duration-200"
+              :class="{ 'rotate-90': resultsExpanded }"
+            ></i>
+            <span>结果</span>
+          </button>
+          <!-- file_diff：独立按钮打开对比查看器，不改动结果的通用展示 -->
+          <button
+            v-if="isFileDiffTool && fileDiffPayload"
+            class="flex items-center gap-1 text-xs font-medium text-[#1f82d9] bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-[#1668b3]"
+            @click="diffViewerVisible = true"
+          >
+            <i class="fa-solid fa-table-columns text-[10px]"></i>
+            <span>查看 Diff</span>
+          </button>
+        </div>
         <div v-if="resultsExpanded" class="mt-2">
-          <!-- 指标集选择结果 -->
-          <div v-if="semanticSelectionResult" class="min-w-0 p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
-            <div class="flex items-center gap-2 font-medium text-slate-800">
-              <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
-              <span>{{ semanticSelectionHeader }}</span>
-            </div>
-            <div v-if="semanticSelectionConfigs.length" class="mt-2 flex flex-wrap gap-1.5">
-              <span
-                v-for="config in semanticSelectionConfigs"
-                :key="config.id"
-                class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
-                :title="config.id"
-              >
-                {{ config.name || config.id }}
-              </span>
-            </div>
-            <div v-if="semanticSelectionRawJson" class="mt-3">
-              <div class="mb-1.5 text-xs text-slate-500">模型实际接收内容</div>
-              <pre class="max-h-[32rem] max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-slate-700 m-0">{{ semanticSelectionRawJson }}</pre>
-            </div>
+          <!-- file_diff 结果过大被卸载时的友好提示（此时无法解析 diff） -->
+          <div v-if="isFileDiffTool && fileDiffOffloaded" class="mb-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-600">
+            对比结果过大已保存到工作区；可让智能体用 file_read 分段查看 diff 明细。
           </div>
           <!-- 文本结果 -->
           <div v-if="toolCall.result && parseResultContent(toolCall.result).length > 0" class="min-w-0 p-3 rounded-lg bg-white border border-black/[0.06] mb-2 last:mb-0">
@@ -629,6 +654,7 @@ function getSqlTokenClass(type: string): string {
             <QueryResultPanel
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"
+              :conversation-id="conversationId"
               :sql="generatedSql"
               :semantic-params="toolCall.semanticParams"
               :on-view-analysis="onViewAnalysis"
@@ -656,7 +682,7 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-triangle-exclamation"></i>
           <span>错误</span>
         </div>
-        <div class="text-sm text-red-600">{{ toolCall.result }}</div>
+        <div class="text-sm text-red-600 whitespace-pre-wrap break-words">{{ visibleError }}</div>
       </div>
     </div>
 
@@ -670,6 +696,13 @@ function getSqlTokenClass(type: string): string {
       :member-datasource-id="saveMemberDatasourceId"
       :member-datasource-ids="saveMemberDatasourceIds"
       :execution-targets="executionTargets"
+    />
+
+    <!-- file_diff 对比查看器弹层 -->
+    <FileDiffViewer
+      v-model:visible="diffViewerVisible"
+      :payload="fileDiffPayload"
+      :conversation-id="conversationId || ''"
     />
   </div>
 </template>

@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -23,8 +22,9 @@ from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import query_history as query_history_routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services import dashboard_runtime, query_cache, query_providers, query_runtime
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
+from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
 
 
@@ -429,7 +429,7 @@ def test_get_query_history_filters_by_executed_time_range(route_db):
 
 
 def test_query_history_accepts_url_encoded_datetime():
-    from apps.chat_data_app.services.query_history_service import QueryHistoryService
+    from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 
     assert QueryHistoryService.parse_history_time("2026-07-06%2010%3A37%3A58") == datetime(2026, 7, 6, 10, 37, 58)
 
@@ -725,7 +725,7 @@ def test_cancel_running_query_history_continues_when_failure_status_update_fails
         if execution.execution_id == "ex_u1_ds1_pending":
             raise RuntimeError("stop failed")
         cancelled_ids.append(execution.execution_id)
-        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+        return {"execution_id": execution.execution_id, "status": "cancelled"}
 
     async def failing_update(execution_id, **_kwargs):
         if execution_id == "ex_u1_ds1_pending":
@@ -802,7 +802,7 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
     asyncio.run(_seed_http_query_history(route_db))
 
     async def fake_fetch(*_args, **_kwargs):
-        return {"status": "failed", "success": False, "error": "结果文件已清理"}
+        return {"status": "failed", "error": "结果文件已清理"}
 
     response = asyncio.run(query_history_routes.get_query_history_result(
         "ex_http",
@@ -1257,7 +1257,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     closed = []
 
     class CallbackExecutor:
-        async def execute(self, sql, limit=100, timeout=None, user_id=None, username=None, remote_task_callback=None, db_connection_callback=None):
+        async def execute(self, sql, limit=100, timeout=None, user_id=None, username=None, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
             assert username == "测试用户"
             assert user_id == "u1"
             await remote_task_callback({"remote_task_id": "remote_1", "source_type": "Hive"})

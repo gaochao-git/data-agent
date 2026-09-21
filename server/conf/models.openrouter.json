@@ -1,0 +1,15 @@
+[
+  {
+    "id": "stealth/union-alpha",
+    "temperature": 0.2,
+    "context_window": 256000,
+    "max_output_tokens": 32000,
+    "vlm": true,
+    "thinking": {
+      "mode": "forced",
+      "dialect": "openrouter",
+      "efforts": ["low", "medium", "high"],
+      "default_effort": "high"
+    }
+  }
+]

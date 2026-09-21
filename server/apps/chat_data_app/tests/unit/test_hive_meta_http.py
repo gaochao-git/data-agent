@@ -1,17 +1,18 @@
 import os
 import sys
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import hive_meta_http
-from apps.chat_data_app.services.hive_meta_http import _build_payload
+from apps.chat_data_app.services.datasource import credentials as datasource_credentials
+from apps.chat_data_app.services.datasource import metadata as hive_meta_http
+from apps.chat_data_app.services.datasource.metadata import _build_payload
 
 
 def test_hive_meta_payload_uses_internal_org_fields():
@@ -309,19 +310,24 @@ async def test_hive_meta_post_json_uses_http_client(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             calls.append("exit")
 
-        async def post(self, url, json, headers):
-            calls.append(("post", url, json, headers))
+        async def post(self, url, json):
+            calls.append(("post", url, json))
             return FakeResponse()
 
-    monkeypatch.setattr(hive_meta_http.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(hive_meta_http, "HTTP_AUTH_TOKEN", "secret")
     monkeypatch.setattr(hive_meta_http, "META_TIMEOUT_SECONDS", 12)
 
     result = await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})
 
     assert result == {"tables": []}
-    assert calls[0] == ("init", {"verify": False, "timeout": 12})
-    assert calls[2] == ("post", "http://meta/tables", {"org_code": "org_1"}, {"Content-Type": "application/json", "Authorization": "Bearer secret"})
+    # 构造层：verify 单点 + timeout + headers；post 层只带 json 载荷
+    assert calls[0] == ("init", {
+        "verify": False,
+        "timeout": 12,
+        "headers": {"Content-Type": "application/json", "Authorization": "Bearer secret"},
+    })
+    assert calls[2] == ("post", "http://meta/tables", {"org_code": "org_1"})
     assert "raise_for_status" in calls
 
 
@@ -346,12 +352,12 @@ async def test_hive_meta_post_json_passes_verify_tls_switch(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def post(self, url, json, headers):
+        async def post(self, url, json):
             return FakeResponse()
 
-    monkeypatch.setattr(hive_meta_http.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(hive_meta_http, "HTTP_AUTH_TOKEN", "secret")
-    monkeypatch.setattr(hive_meta_http, "HTTP_VERIFY_TLS", True)
+    monkeypatch.setattr(datasource_credentials, "HTTP_VERIFY_TLS", True)
 
     await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})
 
@@ -372,10 +378,10 @@ async def test_hive_meta_post_json_failure_writes_external_api_alarm(monkeypatch
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def post(self, url, json, headers):
+        async def post(self, url, json):
             raise RuntimeError("meta down")
 
-    monkeypatch.setattr(hive_meta_http.httpx, "AsyncClient", ErrorClient)
+    monkeypatch.setattr(httpx, "AsyncClient", ErrorClient)
     monkeypatch.setattr(hive_meta_http, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
 
     with pytest.raises(RuntimeError, match="meta down"):

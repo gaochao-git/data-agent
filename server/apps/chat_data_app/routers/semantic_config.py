@@ -3,93 +3,94 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
 
 from utils.error_codes import ErrorCode
-from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from utils.response import business_response
-from ..agent import get_chat_data_graph
-from ..agent.analyze_data_agent import get_data_analyze_graph
-from ..agent.prompts.dim_metric_auto_prefill import (
-    build_auto_prefill_knowledge_prompt,
-    build_metric_recommendation_prompt,
-)
+from ..agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from ..schema import (
-    SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
+    SemanticOssieImportRequest,
     SemanticPrefillRequest,
 )
-from ..services.semantic_json_parser import parse_llm_json
-from ..services.datasource_manager import get_datasource_manager
-from ..services.file_text_extractor import extract_text_from_file_bytes
+from ..daos.dao_session import transaction_scope
+from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic_history_learning_service import (
+from ..services.semantic.run.semantic_history_learning_service import (
     SemanticHistoryLearningService,
-    _compact_history_conversation_messages,
     _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
     _history_belongs_to_config as _service_history_belongs_to_config,
+    _load_history_conversation_context,
     build_semantic_history_learning_service,
 )
-from ..services.semantic_common import (
-    AGENT_ID,
-    DATA_ANALYZE_AGENT_ID,
-    _can_mutate_semantic_config,
-    _is_private_semantic_config_owner,
-    _is_public_semantic_config,
+from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist
+from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
+from ..services.semantic.run.semantic_config_service import (
+    can_mutate_semantic_config,
+    get_semantic_config_service,
+    is_private_semantic_config_owner,
+    is_public_semantic_config,
+    load_semantic_physical_columns as _load_physical_columns,
+    prepare_ossie_import_models,
+    validate_semantic_config_for_save,
 )
-from ..services.semantic_config_validator import validate_semantic_config_for_save
-from ..services.sql_parser import extract_physical_tables
+from ..services.semantic.run.chat_data_ossie_importer import plan_column_dict_fills
+from ..services.sql_run.parser import extract_physical_tables
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+from . import JSON_API_RESPONSES
 
-SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE = 10 * 1024 * 1024
-SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH = 20000
+router = APIRouter(tags=["ChatData 语义模型"], responses=JSON_API_RESPONSES)
+
 PREFILL_MAX_RECOMMENDED_METRICS = 10
 PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
 PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
 
 
+class _OssieImportWriteError(Exception):
+    """Ossie 导入落库失败：用于触发整批回滚，并携带面向用户的具体原因。"""
+
+
 def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
     """普通用户只能管理自己创建的个人指标集。"""
-    return _is_private_semantic_config_owner(config, user_id)
+    return is_private_semantic_config_owner(config, user_id)
 
 
 def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False) -> Dict[str, Any]:
     """补充指标集权限字段。"""
     item = dict(config or {})
     item["scope_type"] = item.get("scope_type") or "public"
-    item["can_manage"] = _can_mutate_semantic_config(item, user_id, admin_manage)
+    item["can_manage"] = can_mutate_semantic_config(item, user_id, admin_manage)
     return item
 
 
-async def _get_semantic_configs_for_user(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_semantic_configs_for_user(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
     """读取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
-    configs = await ds_manager.get_semantic_configs_async(datasource_id, user_id)
+    configs = await semantic_service.get_configs_async(datasource_id, user_id)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
 
 
-async def _get_my_semantic_configs(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_my_semantic_configs(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
     """读取普通维护页可维护的个人指标集。"""
-    configs = await ds_manager.get_semantic_configs_async(datasource_id, user_id)
-    return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or []) if _is_private_semantic_config_owner(config, user_id)]
+    configs = await semantic_service.get_configs_async(datasource_id, user_id)
+    return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or []) if is_private_semantic_config_owner(config, user_id)]
 
 
-async def _get_admin_semantic_configs(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_admin_semantic_configs(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
     """读取后台维护页可维护的公共指标集。"""
-    configs = await ds_manager.get_semantic_configs_async(datasource_id)
-    return [_with_semantic_config_permissions(config, user_id, username, admin_manage=True) for config in (configs or []) if _is_public_semantic_config(config)]
+    configs = await semantic_service.get_configs_async(datasource_id)
+    return [_with_semantic_config_permissions(config, user_id, username, admin_manage=True) for config in (configs or []) if is_public_semantic_config(config)]
 
 
 def _quote_identifier(name: str) -> str:
@@ -120,31 +121,6 @@ def _history_belongs_to_config(
         source_type,
         table_parser=_history_table_parser,
     )
-
-
-async def _load_history_conversation_context(conversation_id: str) -> Optional[Dict[str, Any]]:
-    """读取智能问数对话上下文，用于历史学习。"""
-    normalized_id = str(conversation_id or "").strip()
-    if not normalized_id:
-        return None
-    try:
-        agent_id = await conversation.get_agent_id("", normalized_id)
-        if agent_id == DATA_ANALYZE_AGENT_ID:
-            graph_getter = get_data_analyze_graph
-        elif agent_id == AGENT_ID:
-            graph_getter = get_chat_data_graph
-        else:
-            logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
-            return None
-        detail = await conversation.get_detail("", normalized_id, graph_getter, get_checkpointer)
-        messages = (detail or {}).get("messages") if isinstance(detail, dict) else []
-        if not isinstance(messages, list):
-            return None
-        context = _compact_history_conversation_messages(messages)
-        return context if context.get("user_turns") else None
-    except Exception as err:
-        logger.warning("读取历史学习对话上下文失败: conversation_id=%s error=%s", normalized_id, err, exc_info=True)
-        return None
 
 
 async def _generate_history_learning_suggestions_by_llm(
@@ -237,76 +213,19 @@ def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str,
     return items
 
 
-def _normalize_prefill_item(item: Dict) -> Optional[Dict]:
-    """标准化 LLM 预填项。"""
-    table_name = (item.get("table") or "").strip()
-    column_name = (item.get("column") or "").strip()
-    if not table_name or not column_name:
-        return None
-    role = str(item.get("role") or "").strip().lower()
-    if role not in ("metric", "dimension"):
-        if item.get("is_metric") is True:
-            role = "metric"
-        elif item.get("is_dimension") is True:
-            role = "dimension"
-        else:
-            return None
-
-    return {
-        "table": table_name,
-        "column": column_name,
-        "role": role,
-        "expression": _quote_identifier(column_name),
-    }
-
-
-def _normalize_prefill_table_model_type(table_model_type: Any) -> str:
-    """标准化自动预填的表建模类型。"""
-    normalized = str(table_model_type or "detail").strip().lower()
-    return normalized if normalized in {"detail", "aggregated"} else "detail"
-
-
-def _filter_prefill_knowledge(raw_knowledge: Any, generate_business_flow: bool = False) -> Dict[str, str]:
-    """只保留本次请求允许生成的业务知识。"""
-    if not isinstance(raw_knowledge, dict):
-        return {}
-    knowledge: Dict[str, str] = {}
-    if generate_business_flow:
-        business_flow = str(raw_knowledge.get("business_flow") or "").strip()
-        if business_flow:
-            knowledge["business_flow"] = business_flow
-    return knowledge
-
-
-def _normalize_prefill_knowledge(parsed: Dict[str, Any], generate_business_flow: bool = False) -> Dict[str, str]:
-    """标准化自动预填生成的业务知识。"""
-    raw_knowledge = parsed.get("knowledge") if isinstance(parsed, dict) else None
-    return _filter_prefill_knowledge(raw_knowledge, generate_business_flow)
-
-
-def _parse_prefill_response(content: str, generate_business_flow: bool = False) -> Dict[str, Any]:
-    """解析自动预填模型返回。"""
-    parsed = parse_llm_json(str(content))
-    raw_fields = parsed.get("fields", []) if isinstance(parsed, dict) else []
-    normalized_map = {}
-    if isinstance(raw_fields, list):
-        for item in raw_fields:
-            if not isinstance(item, dict):
-                continue
-            normalized = _normalize_prefill_item(item)
-            if not normalized:
-                continue
-            key = f"{normalized['table']}.{normalized['column']}"
-            normalized_map[key] = normalized
-    return {
-        "fields": normalized_map,
-        "knowledge": _normalize_prefill_knowledge(parsed, generate_business_flow),
-    }
-
-
-def _parse_prefill_fields(content: str) -> Dict[str, Dict]:
-    """解析自动预填模型返回字段。"""
-    return _parse_prefill_response(content).get("fields", {})
+def _build_prefill_columns(table: Dict) -> List[Dict[str, str]]:
+    """构造单张表的紧凑字段列表。"""
+    columns = []
+    for col in table.get("columns", []) or []:
+        col_name = str(col.get("name") or "").strip()
+        if not col_name:
+            continue
+        columns.append({
+            "name": col_name,
+            "type": col.get("mysql_type") or col.get("hive_type") or col.get("type") or "",
+            "description": col.get("description") or "",
+        })
+    return columns
 
 
 def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
@@ -318,22 +237,29 @@ def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
         if not table_name or table_name in seen_tables:
             continue
         seen_tables.add(table_name)
-        columns = []
-        for col in table.get("columns", []) or []:
-            col_name = str(col.get("name") or "").strip()
-            if not col_name:
-                continue
-            columns.append({
-                "name": col_name,
-                "type": col.get("mysql_type") or col.get("hive_type") or col.get("type") or "",
-                "description": col.get("description") or "",
-            })
         table_payload.append({
             "table": table_name,
             "description": table.get("description") or "",
-            "columns": columns,
+            "columns": _build_prefill_columns(table),
         })
     return table_payload
+
+
+def _build_table_columns_index(table_payload: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+    """构建物理表字段名索引，供预填解析校验使用。"""
+    return {
+        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
+        for table in table_payload
+        if table.get("table")
+    }
+
+
+def _resolve_prefill_alias_map(
+    table_payload: List[Dict[str, Any]],
+    table_alias_map: Optional[Dict[str, List[str]]] = None,
+) -> Dict[str, List[str]]:
+    """解析表别名映射，缺省回退为表名自身。"""
+    return table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
 
 
 def _parse_prefill_dimension_name_map(parsed: Dict[str, Any], table_payload: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -341,11 +267,7 @@ def _parse_prefill_dimension_name_map(parsed: Dict[str, Any], table_payload: Lis
     raw_fields = parsed.get("fields", []) if isinstance(parsed, dict) else []
     if not isinstance(raw_fields, list):
         return {}
-    table_columns = {
-        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
-        for table in table_payload
-        if table.get("table")
-    }
+    table_columns = _build_table_columns_index(table_payload)
     name_map: Dict[str, str] = {}
     for item in raw_fields:
         if not isinstance(item, dict):
@@ -365,7 +287,7 @@ def _build_prefill_dimension_fields(
 ) -> List[Dict[str, str]]:
     """将物理字段全部作为维度预填。"""
     fields: List[Dict[str, str]] = []
-    alias_map = table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
+    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
     name_map = dimension_name_map or {}
     for table in table_payload:
         table_name = table.get("table", "")
@@ -389,6 +311,52 @@ def _build_prefill_dimension_fields(
     return fields
 
 
+def _resolve_metric_candidate(item: Any, table_columns: Dict[str, Set[str]]) -> Optional[Tuple[str, str, str]]:
+    """提取并校验单条推荐指标的 (表, 字段, 聚合) 三元组；非法时返回 None。"""
+    if not isinstance(item, dict):
+        return None
+    table_name = str(item.get("table") or "").strip()
+    column_name = str(item.get("column") or item.get("source_column") or "").strip()
+    agg = str(item.get("agg") or "").strip().upper()
+    if table_name not in table_columns or column_name not in table_columns[table_name] or agg not in PREFILL_ALLOWED_METRIC_AGGS:
+        return None
+    return table_name, column_name, agg
+
+
+def _build_metric_entry(item: Dict[str, Any], table_name: str, column_name: str, agg: str) -> Dict[str, str]:
+    """构造单条原子指标条目（不含表别名）。"""
+    fallback_name = f"{column_name}_{agg.lower()}"
+    return {
+        "table": table_name,
+        "table_alias": "",
+        "column": column_name,
+        "source_column": column_name,
+        "role": "metric",
+        "field_name": str(item.get("field_name") or fallback_name).strip() or fallback_name,
+        "name": _normalize_prefill_display_name(item.get("name"), column_name),
+        "agg": agg,
+        "expression": f"{agg}({_quote_identifier(column_name)})",
+    }
+
+
+def _append_metric_entries(
+    normalized: List[Dict[str, str]],
+    item: Dict[str, Any],
+    table_name: str,
+    column_name: str,
+    agg: str,
+    aliases: List[str],
+    max_metrics: int,
+) -> bool:
+    """按表别名展开指标条目；达到数量上限时返回 True。"""
+    entry = _build_metric_entry(item, table_name, column_name, agg)
+    for table_alias in aliases:
+        normalized.append(dict(entry, table_alias=table_alias))
+        if len(normalized) >= max_metrics:
+            return True
+    return False
+
+
 def _parse_metric_items(
     parsed: Dict[str, Any],
     table_payload: List[Dict[str, Any]],
@@ -399,43 +367,21 @@ def _parse_metric_items(
     raw_metrics = parsed.get("metrics", []) if isinstance(parsed, dict) else []
     if not isinstance(raw_metrics, list):
         return []
-    table_columns = {
-        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
-        for table in table_payload
-        if table.get("table")
-    }
-    alias_map = table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
+    table_columns = _build_table_columns_index(table_payload)
+    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
     normalized: List[Dict[str, str]] = []
     seen: Set[str] = set()
     for item in raw_metrics:
-        if not isinstance(item, dict):
+        candidate = _resolve_metric_candidate(item, table_columns)
+        if candidate is None:
             continue
-        table_name = str(item.get("table") or "").strip()
-        column_name = str(item.get("column") or item.get("source_column") or "").strip()
-        agg = str(item.get("agg") or "").strip().upper()
-        if table_name not in table_columns or column_name not in table_columns[table_name] or agg not in PREFILL_ALLOWED_METRIC_AGGS:
-            continue
+        table_name, column_name, agg = candidate
         key = f"{table_name}.{column_name}.{agg}"
         if key in seen:
             continue
         seen.add(key)
-        expression = f"{agg}({_quote_identifier(column_name)})"
         aliases = alias_map.get(table_name) or [table_name]
-        for table_alias in aliases:
-            normalized.append({
-                "table": table_name,
-                "table_alias": table_alias,
-                "column": column_name,
-                "source_column": column_name,
-                "role": "metric",
-                "field_name": str(item.get("field_name") or f"{column_name}_{agg.lower()}").strip() or f"{column_name}_{agg.lower()}",
-                "name": _normalize_prefill_display_name(item.get("name"), column_name),
-                "agg": agg,
-                "expression": expression,
-            })
-            if len(normalized) >= max_metrics:
-                break
-        if len(normalized) >= max_metrics:
+        if _append_metric_entries(normalized, item, table_name, column_name, agg, aliases, max_metrics):
             break
     return _dedupe_prefill_display_names(normalized)
 
@@ -490,62 +436,17 @@ async def _call_metric_recommendation_llm(
     return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
 
 
-async def _call_prefill_llm(prompt: str, generate_business_flow: bool = False) -> Dict[str, Any]:
-    """调用大模型并解析自动预填字段。"""
-    llm = get_chat_data_llm(streaming=False, max_tokens=4000)
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "semantic_prefill"},
-        )
-        raise
-    content = response.content if hasattr(response, "content") else str(response)
-    return _parse_prefill_response(str(content), generate_business_flow)
-
-
-def _prefill_knowledge_missing(knowledge: Dict[str, str], generate_business_flow: bool = False) -> bool:
-    """判断哪些业务知识仍需生成。"""
-    need_business_flow = bool(generate_business_flow and not str((knowledge or {}).get("business_flow") or "").strip())
-    return need_business_flow
-
-
-async def _fill_missing_prefill_knowledge(
-    *,
-    table_payload: List[Dict],
-    knowledge: Dict[str, str],
-    generate_business_flow: bool,
-) -> Dict[str, str]:
-    """补问大模型生成缺失的业务知识。"""
-    knowledge = _filter_prefill_knowledge(knowledge, generate_business_flow)
-    need_business_flow = _prefill_knowledge_missing(knowledge, generate_business_flow)
-    if not need_business_flow:
-        return knowledge
-    prompt = build_auto_prefill_knowledge_prompt(
-        table_payload=table_payload,
-        generate_business_flow=need_business_flow,
-    )
-    result = await _call_prefill_llm(prompt, need_business_flow)
-    filled = dict(knowledge or {})
-    filled.update(result.get("knowledge", {}))
-    return _filter_prefill_knowledge(filled, generate_business_flow)
-
-
 async def _prefill_by_llm(
     tables: List[Dict],
-    table_model_type: str = "detail",
-    generate_business_flow: bool = False,
     business_context: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """预填字段角色：物理字段全维度，大模型只推荐少量原子指标。"""
+    """优化字段显示名称，并推荐少量高置信度原子指标。"""
     if not tables:
-        return {"fields": [], "knowledge": {}}
-    _normalize_prefill_table_model_type(table_model_type)
+        return {"fields": []}
     table_alias_map = _build_prefill_alias_map(tables)
     table_payload = _build_prefill_table_payload(tables)
     if not table_payload:
-        return {"fields": [], "knowledge": {}}
+        return {"fields": []}
     fields = _build_prefill_dimension_fields(table_payload, table_alias_map)
     try:
         recommendation = await _call_metric_recommendation_llm(
@@ -562,21 +463,7 @@ async def _prefill_by_llm(
     except Exception as e:
         logger.warning("自动预填调用大模型失败: %s", e)
         metric_fields = []
-    return {"fields": _dedupe_prefill_display_names(fields + metric_fields), "knowledge": {}}
-
-
-def _resolve_prefill_tables(datasource: Dict, selected_tables: List[str]) -> List[Dict]:
-    """根据勾选的表名过滤待预填表结构。"""
-    selected = set(selected_tables or [])
-    target_tables = []
-    for table in datasource.get("ds_tables", []) or []:
-        table_name = table.get("table_name")
-        if not table_name:
-            continue
-        if selected and table_name not in selected:
-            continue
-        target_tables.append(table)
-    return target_tables
+    return {"fields": _dedupe_prefill_display_names(fields + metric_fields)}
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs")
@@ -590,7 +477,7 @@ async def list_semantic_configs(datasource_id: str, request: Request):
         if not await ds_manager.has_datasource_async(datasource_id):
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        configs = await _get_semantic_configs_for_user(ds_manager, datasource_id, user_id, username)
+        configs = await _get_semantic_configs_for_user(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取语义配置列表失败: {str(e)}", exc_info=True)
@@ -608,7 +495,7 @@ async def list_my_semantic_configs(datasource_id: str, request: Request):
         if not await ds_manager.has_datasource_async(datasource_id):
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        configs = await _get_my_semantic_configs(ds_manager, datasource_id, user_id, username)
+        configs = await _get_my_semantic_configs(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取个人语义配置列表失败: {str(e)}", exc_info=True)
@@ -626,7 +513,7 @@ async def list_admin_semantic_configs(datasource_id: str, request: Request):
         if not await ds_manager.has_datasource_async(datasource_id):
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        configs = await _get_admin_semantic_configs(ds_manager, datasource_id, user_id, username)
+        configs = await _get_admin_semantic_configs(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取后台语义配置列表失败: {str(e)}", exc_info=True)
@@ -653,19 +540,27 @@ async def _create_semantic_config_with_scope(
 
         metrics = [m.model_dump() for m in payload.metrics]
         dimensions = [d.model_dump() for d in payload.dimensions]
-        validation_error = await validate_semantic_config_for_save(ds_manager, datasource_id, datasource, metrics, dimensions)
+        relationships = [r.model_dump() for r in payload.relationships]
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            metrics,
+            dimensions,
+            relationships,
+        )
         if validation_error:
             return business_response(msg=validation_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
 
-        config = await ds_manager.create_semantic_config_async(
+        config = await get_semantic_config_service().create_async(
             datasource_id=datasource_id,
             name=payload.name,
             description=payload.description,
-            ontology_rules=payload.ontology_rules,
+            business_notes=payload.business_notes,
             enabled=payload.enabled,
             metrics=metrics,
             dimensions=dimensions,
-            relationships=[r.model_dump() for r in payload.relationships],
+            relationships=relationships,
             scope_type=scope_type,
             create_by=user_id,
             create_by_name=username,
@@ -693,79 +588,254 @@ async def create_admin_semantic_config(datasource_id: str, payload: SemanticConf
     return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
 
 
-async def _auto_prefill_semantic_fields_route(
-    datasource_id: str,
-    config_id: str,
-    payload: SemanticAutoPrefillRequest,
-    request: Request,
-    *,
-    admin_manage: bool = False,
-):
-    """按规则自动预填维度/指标/表达式。"""
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/generate-basic")
+async def generate_admin_basic_semantic_configs(datasource_id: str, request: Request):
+    """后台按物理表批量创建禁用的公共基础模型。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        result = await get_semantic_config_service().generate_basic_public_single_table_configs_async(
+            datasource_id,
+            create_by=user_id,
+            create_by_name=username,
+        )
+        logger.info(
+            "后台批量生成公共基础语义模型: datasource_id=%s created=%s skipped=%s failed=%s",
+            datasource_id,
+            result["created"],
+            result["skipped"],
+            result["failed"],
+        )
+        return business_response(data=result, msg="基础模型生成完成")
+    except ValueError as e:
+        datasource_missing = str(e).startswith("数据源不存在")
+        code = ErrorCode.CHATDATA_NOT_FOUND if datasource_missing else ErrorCode.CHATDATA_VALIDATION_FAILED
+        msg = "数据源不存在" if datasource_missing else "生成参数校验失败"
+        logger.warning("批量生成基础语义模型参数校验失败: datasource_id=%s error=%s", datasource_id, e)
+        return business_response(msg=msg, code=code, status="error")
+    except Exception as e:
+        logger.error("批量生成基础语义模型失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(msg="生成失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+async def _prepare_ossie_import(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """Ossie 导入公共前置：鉴权、数据源校验，校验核心委托 service 层共享实现。
+
+    校验口径（解析 / 请求内重名 / 同名冲突标注 / 逐模型物理校验）统一在
+    services.semantic_config_service.prepare_ossie_import_models，与 check_yaml
+    工具共用同一套实现；本函数只做 HTTP 错误形态转换。
+    """
+    current_user = _get_current_user(request)
+    user_id = str(current_user.user_id)
+    ds_manager = get_datasource_manager()
+    datasource = await ds_manager.get_datasource_async(datasource_id)
+    if not datasource:
+        return None, business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    try:
+        imports, duplicate_error = await prepare_ossie_import_models(
+            ds_manager,
+            datasource,
+            datasource_id,
+            payload.yaml_content,
+            semantic_service=get_semantic_config_service(),
+            user_id=user_id,
+        )
+    except ValueError as e:
+        logger.warning("Ossie 文档解析失败: datasource_id=%s error=%s", datasource_id, e)
+        return None, business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    if duplicate_error:
+        return None, business_response(msg=duplicate_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    return imports, None
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import/preview")
+async def preview_admin_ossie_semantic_import(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """解析 Ossie 语义模型 YAML 并预览导入结果：逐模型返回映射草稿、警告与阻断问题，不落库。
+
+    可导入的模型同时附带质量检查报告（quality 字段），导入前即可看到优化空间。
+    """
+    try:
+        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
+        if error is not None:
+            return error
+        physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
+        checker = get_semantic_quality_checker()
+        # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
+        existing_column_dicts = await get_semantic_config_service().get_column_dicts_async(datasource_id)
+        models = []
+        for item in imports:
+            model = item.to_preview_payload()
+            dict_fill_plan = plan_column_dict_fills(item, existing_column_dicts)
+            model["column_dict_fill_plan"] = dict_fill_plan
+            findings = None
+            if item.importable:
+                # 质量检查输入与 check_yaml 工具完全一致（enabled 仅占位，不参与检查项）
+                report = checker.check_config(
+                    {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
+                    physical_columns=physical_columns,
+                )
+                # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
+                findings = report.to_payload()["findings"]
+                model["quality"] = {"findings": findings}
+            model["checklist"] = build_model_checklist(
+                item,
+                validation_error=item.validation_error,
+                quality_findings=findings,
+                inventory_available=physical_columns is not None,
+                dict_fill_plan=dict_fill_plan,
+            )
+            models.append(model)
+        importable_count = sum(1 for item in imports if item.importable)
+        return business_response(
+            data={"models": models, "total": len(models), "importable": importable_count},
+            msg="解析完成",
+        )
+    except Exception as e:
+        logger.error(f"Ossie 导入预览失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+def _collect_modeled_tables(configs: List[Dict[str, Any]]) -> set:
+    """汇总所有配置引用过的物理表名：指标/维度的 table，以及关系两侧表名。"""
+    modeled_tables: set = set()
+    for config in configs:
+        for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+            if isinstance(item, dict) and item.get("table"):
+                modeled_tables.add(str(item["table"]).strip())
+        for relationship in config.get("relationships") or []:
+            if isinstance(relationship, dict):
+                for key in ("left_table", "right_table"):
+                    value = str(relationship.get(key) or "").strip()
+                    if value:
+                        modeled_tables.add(value)
+    return modeled_tables
+
+
+@router.get("/admin/datasources/{datasource_id}/semantic-configs/quality-check")
+async def check_admin_semantic_config_quality(
+    datasource_id: str,
+    request: Request,
+):
+    """对数据源下公共语义配置执行质量检查：逐配置返回评分与问题清单，并给出数据源级汇总。
+
+    与后台维护页口径一致，只检公共配置（is_public_semantic_config），
+    不触碰、不透出任何用户私有配置的元信息。
+    """
+    try:
+        _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
-        if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
-        target_tables = _resolve_prefill_tables(datasource, payload.selected_tables)
+        service = get_semantic_config_service()
+        configs = [
+            config
+            for config in (await service.get_configs_async(datasource_id) or [])
+            if is_public_semantic_config(config)
+        ]
+        physical_columns = await _load_physical_columns(ds_manager, datasource_id)
+        checker = get_semantic_quality_checker()
+        reports = [checker.check_config(config, physical_columns=physical_columns).to_payload() for config in configs]
 
-        prefill_result = await _prefill_by_llm(
-            target_tables,
-            payload.table_model_type,
-            payload.generate_business_flow,
-            payload.business_context or "",
-        )
-        if prefill_result is None:
-            return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-        fields = prefill_result.get("fields", [])
-
-        return business_response(data={"fields": fields, "total": len(fields), "knowledge": prefill_result.get("knowledge", {})}, msg="自动预填完成")
+        modeled_tables = _collect_modeled_tables(configs)
+        inventory_tables = {table for table, _column in physical_columns} if physical_columns is not None else set()
+        unmodeled_tables = sorted(inventory_tables - modeled_tables)
+        avg_score = round(sum(report["score"] for report in reports) / len(reports)) if reports else 100
+        overall = {
+            "config_count": len(reports),
+            "avg_score": avg_score,
+            "grade": grade_for_score(avg_score),
+            "table_total": len(inventory_tables),
+            "table_modeled": len(inventory_tables & modeled_tables),
+            "unmodeled_tables": unmodeled_tables[:10],
+            "unmodeled_table_count": len(unmodeled_tables),
+            "inventory_available": physical_columns is not None,
+        }
+        return business_response(data={"configs": reports, "overall": overall}, msg="质量检查完成")
     except Exception as e:
-        logger.error(f"自动预填字段失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        logger.error(f"语义质量检查失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="语义质量检查失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
-async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
-    """按个人指标集自动预填维度/指标/表达式。"""
-    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=False)
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import")
+async def import_admin_ossie_semantic_configs(
+    datasource_id: str,
+    payload: SemanticOssieImportRequest,
+    request: Request,
+):
+    """导入 Ossie 语义模型 YAML 为禁用状态的公共语义配置草稿；任一模型存在阻断问题时整体不创建。
 
-
-@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
-async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
-    """后台按公共指标集自动预填维度/指标/表达式。"""
-    _get_current_user(request)
-    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
-
-
-@router.post("/semantic/prefill/context-file")
-async def semantic_prefill_context_file(file: UploadFile = File(...)):
-    """解析自动预填业务补充文件，不持久化文件。"""
+    同名冲突由 conflict_actions 决定：replace=覆盖同名公共配置内容（保留 config_id，
+    强制禁用）；skip=跳过该模型；缺省按 skip 处理。同名但不可操作的配置
+    （如他人私有配置）一律强制跳过，不允许 replace。
+    整批落库在同一事务内完成：任一模型写入失败即整体回滚，不留半批草稿。
+    """
     try:
-        data = await file.read()
-        if len(data) > SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE:
-            return business_response(msg="文件大小不能超过 10MB", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
-        text = extract_text_from_file_bytes(file.filename or "", data).strip()
-        return business_response(
-            data={
-                "filename": file.filename or "",
-                "size": len(data),
-                "text": text[:SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH],
-            },
-            msg="解析成功",
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        conflict_actions, action_error = _normalize_conflict_actions(payload)
+        if action_error:
+            return business_response(
+                msg=action_error,
+                code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+                status="error",
+            )
+        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
+        if error is not None:
+            return error
+        if any(not item.importable for item in imports):
+            return business_response(
+                msg="存在无法导入的模型，请根据各模型的 errors 清单修复后重试",
+                code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+                data={"models": [item.to_preview_payload() for item in imports]},
+                status="error",
+            )
+        semantic_service = get_semantic_config_service()
+        ds_manager = get_datasource_manager()
+        # 整批落库放进同一事务：任一模型写入失败即整体回滚，避免留下半批草稿
+        # （接口对外语义是「全有或全无」）。字典仅填空写入也在同一事务内，
+        # 模型与字典要么一起落库、要么一起回滚。
+        try:
+            async with transaction_scope():
+                created, replaced, skipped = await _persist_ossie_imports(
+                    imports,
+                    conflict_actions,
+                    semantic_service,
+                    ds_manager,
+                    datasource_id,
+                    user_id,
+                    username,
+                )
+        except _OssieImportWriteError as e:
+            logger.error("Ossie 导入写入失败，已回滚: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        except ValueError as e:
+            logger.warning("Ossie 导入内容校验失败，已回滚: datasource_id=%s error=%s", datasource_id, e)
+            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+        logger.info(
+            "Ossie 导入草稿: datasource_id=%s created=%s replaced=%s skipped=%s",
+            datasource_id,
+            [item["config_id"] for item in created],
+            [item["config_id"] for item in replaced],
+            [item["name"] for item in skipped],
         )
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+        return business_response(
+            data={"created": created, "replaced": replaced, "skipped": skipped},
+            msg="导入成功，配置为禁用状态，请人工确认后启用",
+        )
     except Exception as e:
-        logger.error("解析自动预填业务补充文件失败: %s", e, exc_info=True)
-        return business_response(msg=f"解析失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        logger.error(f"Ossie 导入失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
+        return business_response(msg="Ossie 导入失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):
@@ -778,27 +848,149 @@ async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Requ
         if not datasource:
             return business_response(msg=f"数据源不存在: {payload.datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        config = await ds_manager.get_semantic_config_async(payload.datasource_id, payload.config_id)
+        config = await get_semantic_config_service().get_config_async(payload.datasource_id, payload.config_id)
         if not config:
             return business_response(msg=f"语义配置不存在: {payload.config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(config, user_id, admin_manage):
+        if not can_mutate_semantic_config(config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
         target_tables = [table.model_dump() for table in payload.tables]
         prefill_result = await _prefill_by_llm(
             target_tables,
-            payload.table_model_type,
-            payload.generate_business_flow,
             payload.business_context or "",
         )
         if prefill_result is None:
             return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
         fields = prefill_result.get("fields", [])
 
-        return business_response(data={"fields": fields, "total": len(fields), "knowledge": prefill_result.get("knowledge", {})}, msg="自动预填完成")
+        return business_response(data={"fields": fields, "total": len(fields)}, msg="自动预填完成")
     except Exception as e:
         logger.error(f"语义字段预填失败: {str(e)}", exc_info=True)
         return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Dict[str, str], Optional[str]]:
+    """归一化 conflict_actions 为「模型名 -> 小写动作」。
+
+    存在 replace/skip 之外的动作时返回错误文案，调用方据此直接回错误响应。
+    """
+    actions = {
+        str(name).strip(): str(action).strip().lower()
+        for name, action in (payload.conflict_actions or {}).items()
+    }
+    invalid_actions = sorted({action for action in actions.values() if action not in {"replace", "skip"}})
+    if invalid_actions:
+        return actions, f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}"
+    return actions, None
+
+
+async def _persist_one_ossie_model(
+    item: Any,
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
+    if item.conflict_locked:
+        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+        # 也不透出其 config_id 等元信息
+        return "skipped", {"name": item.name, "reason": "存在同名配置且无操作权限，已忽略"}
+    if not item.existing_config:
+        config = await semantic_service.create_async(
+            datasource_id=datasource_id,
+            scope_type="public",
+            create_by=user_id,
+            create_by_name=username,
+            **item.to_config_payload(),
+        )
+        if not config:
+            raise _OssieImportWriteError(f"创建配置失败: {item.name}")
+        return "created", {"config_id": config.get("id"), "name": config.get("name")}
+
+    existing_config_id = str(item.existing_config["config_id"])
+    if conflict_actions.get(item.name, "skip") != "replace":
+        return "skipped", {
+            "name": item.name,
+            "config_id": existing_config_id,
+            "reason": "同名配置已存在，未导入",
+        }
+    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
+    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    config = await semantic_service.update_async(
+        datasource_id,
+        existing_config_id,
+        description=item.description or "",
+        business_notes=item.business_notes or "",
+        metrics=item.metrics,
+        dimensions=item.dimensions,
+        relationships=item.relationships,
+        update_by=user_id,
+        update_by_name=username,
+    )
+    if not config:
+        raise _OssieImportWriteError(f"更新配置失败: {item.name}")
+    return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
+
+
+async def _fill_ossie_column_dicts(
+    item: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> List[Dict[str, Any]]:
+    """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
+
+    只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
+    「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
+    """
+    filled: List[Dict[str, Any]] = []
+    for entry in item.column_dicts:
+        fields = await ds_manager.fill_column_dict_async(
+            datasource_id,
+            entry["table"],
+            entry["column"],
+            entry["dict"],
+            operator=user_id,
+            operator_name=username,
+        )
+        if fields is None:
+            raise _OssieImportWriteError(f"写入数据字典失败: {entry['table']}.{entry['column']}（物理字段不存在）")
+        if fields:
+            filled.append({"table": entry["table"], "column": entry["column"], "fields": fields})
+    return filled
+
+
+async def _persist_ossie_imports(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
+
+    created/replaced 的模型随后在同一事务内执行字典仅填空写入，
+    实际填充明细挂在各自 payload 的 column_dict_filled 上。
+    """
+    created: List[Dict[str, Any]] = []
+    replaced: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    buckets = {"created": created, "replaced": replaced, "skipped": skipped}
+    for item in imports:
+        kind, payload = await _persist_one_ossie_model(
+            item, conflict_actions, semantic_service, datasource_id, user_id, username
+        )
+        if kind in ("created", "replaced") and item.column_dicts:
+            payload["column_dict_filled"] = await _fill_ossie_column_dicts(
+                item, ds_manager, datasource_id, user_id, username,
+            )
+        buckets[kind].append(payload)
+    return created, replaced, skipped
 
 
 @router.post("/semantic/prefill")
@@ -830,10 +1022,10 @@ async def _learn_semantic_config_from_history_route(
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+        config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
         if not config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(config, user_id, admin_manage):
+        if not can_mutate_semantic_config(config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
         data = await _build_history_learning_service().learn(
@@ -849,7 +1041,7 @@ async def _learn_semantic_config_from_history_route(
         )
         return business_response(data=data, msg="学习完成")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
     except Exception as e:
@@ -880,6 +1072,24 @@ async def learn_admin_semantic_config_from_history(
     return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
+_SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "business_notes", "enabled")
+_SEMANTIC_UPDATE_LIST_FIELDS = ("metrics", "dimensions", "relationships")
+
+
+def _build_semantic_update_kwargs(payload: SemanticConfigUpdateRequest) -> Dict[str, Any]:
+    """将更新请求转换为语义配置更新参数；None 字段不参与更新。"""
+    update_kwargs: Dict[str, Any] = {}
+    for field in _SEMANTIC_UPDATE_PLAIN_FIELDS:
+        value = getattr(payload, field)
+        if value is not None:
+            update_kwargs[field] = value
+    for field in _SEMANTIC_UPDATE_LIST_FIELDS:
+        items = getattr(payload, field)
+        if items is not None:
+            update_kwargs[field] = [item.model_dump() for item in items]
+    return update_kwargs
+
+
 async def _update_semantic_config(
     datasource_id: str,
     config_id: str,
@@ -897,35 +1107,30 @@ async def _update_semantic_config(
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+        semantic_service = get_semantic_config_service()
+        current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+        if not can_mutate_semantic_config(current_config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
-        update_kwargs = {}
-        if payload.name is not None:
-            update_kwargs["name"] = payload.name
-        if payload.description is not None:
-            update_kwargs["description"] = payload.description
-        if payload.ontology_rules is not None:
-            update_kwargs["ontology_rules"] = payload.ontology_rules
-        if payload.enabled is not None:
-            update_kwargs["enabled"] = payload.enabled
-        if payload.metrics is not None:
-            update_kwargs["metrics"] = [m.model_dump() for m in payload.metrics]
-        if payload.dimensions is not None:
-            update_kwargs["dimensions"] = [d.model_dump() for d in payload.dimensions]
-        if payload.relationships is not None:
-            update_kwargs["relationships"] = [r.model_dump() for r in payload.relationships]
+        update_kwargs = _build_semantic_update_kwargs(payload)
 
         merged_metrics = update_kwargs.get("metrics", current_config.get("metrics", []))
         merged_dimensions = update_kwargs.get("dimensions", current_config.get("dimensions", []))
-        validation_error = await validate_semantic_config_for_save(ds_manager, datasource_id, datasource, merged_metrics, merged_dimensions)
+        merged_relationships = update_kwargs.get("relationships", current_config.get("relationships", []))
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            merged_metrics,
+            merged_dimensions,
+            merged_relationships,
+        )
         if validation_error:
             return business_response(msg=validation_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
 
-        config = await ds_manager.update_semantic_config_async(
+        config = await semantic_service.update_async(
             datasource_id=datasource_id,
             config_id=config_id,
             update_by=user_id,
@@ -948,14 +1153,14 @@ async def _delete_semantic_config(datasource_id: str, config_id: str, request: R
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(getattr(current_user, "username", "") or "")
-        ds_manager = get_datasource_manager()
-        current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+        semantic_service = get_semantic_config_service()
+        current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+        if not can_mutate_semantic_config(current_config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
-        success = await ds_manager.delete_semantic_config_async(datasource_id, config_id, update_by=user_id, update_by_name=username)
+        success = await semantic_service.delete_async(datasource_id, config_id, update_by=user_id, update_by_name=username)
         if not success:
             return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
@@ -972,14 +1177,14 @@ async def _toggle_semantic_config(datasource_id: str, config_id: str, enabled: b
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(getattr(current_user, "username", "") or "")
-        ds_manager = get_datasource_manager()
-        current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+        semantic_service = get_semantic_config_service()
+        current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+        if not can_mutate_semantic_config(current_config, user_id, admin_manage):
             return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
 
-        config = await ds_manager.update_semantic_config_async(
+        config = await semantic_service.update_async(
             datasource_id=datasource_id,
             config_id=config_id,
             enabled=enabled,

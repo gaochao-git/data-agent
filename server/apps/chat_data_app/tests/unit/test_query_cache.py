@@ -1,6 +1,6 @@
 import asyncio
 
-from apps.chat_data_app.services import query_cache
+from apps.chat_data_app.services.sql_run import cache as query_cache
 
 
 def test_query_cache_identity_and_status_helpers():

@@ -2,7 +2,7 @@
 
 ## 概述
 
-ChatData（智能问数）是一个 Vue 3 功能模块，提供面向语义指标集的自然语言问数能力。模块包含四类核心能力：智能问数、辅助查询（可视化构建）、SQL 查询（代码编辑器）和数据看板。
+ChatData（智能问数）是一个 Vue 3 功能模块，提供面向语义模型的自然语言问数能力。模块包含四类核心能力：智能问数、辅助查询（可视化构建）、SQL 查询（代码编辑器）和数据看板。
 
 本模块基于 **RuoYi-Vue3** 前端框架规范开发，可直接集成到 RuoYi 项目中。
 
@@ -45,7 +45,7 @@ ChatData（智能问数）是一个 Vue 3 功能模块，提供面向语义指�
 │       ├── assets/
 │       ├── components/
 │       ├── composables/
-│       ├── styles/
+│       ├── styles/          # 含 markdown.css（会话 markdown 渲染样式）与 z-index.css（模块层级变量，均由 pages/index.vue 内引入，无需主项目接线）
 │       ├── types/
 │       ├── utils/          # 包含 auth.js、mapRegistry.ts、parseContent.ts、sqlFormatter.ts
 │       └── views/

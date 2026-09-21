@@ -30,8 +30,11 @@ def get_local_ips() -> tuple[str, ...]:
     try:
         hostname = socket.gethostname()
         ips.extend(socket.gethostbyname_ex(hostname)[2])
-    except Exception:
-        pass
+    except Exception as exc:
+        # 主机名解析失败不影响主流程,仅保留本地环回/首选 IP;此处函数内导入是因为
+        # utils.logger 头部反向引用了本模块,文件头导入会形成循环依赖。
+        from utils.logger import get_logger
+        get_logger(__name__).warning("解析本机 hostname 对应 IP 列表失败,仅保留本地环回/首选 IP: %s", exc)
     return tuple(dict.fromkeys(ip for ip in ips if ip))
 
 

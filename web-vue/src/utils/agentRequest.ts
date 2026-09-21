@@ -19,7 +19,7 @@ service.interceptors.request.use(
     return config
   },
   (error) => {
-    console.log(error)
+    console.error('请求拦截器错误:', error)
     return Promise.reject(error)
   }
 )
@@ -47,7 +47,7 @@ service.interceptors.response.use(
     return res.data
   },
   (error) => {
-    console.log('err:', error)
+    console.error('响应错误:', error)
     let message = '请求失败'
 
     if (error.response) {

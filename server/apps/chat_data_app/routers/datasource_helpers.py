@@ -5,9 +5,112 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from ..services.semantic_common import _build_table_columns_map
+from utils.error_codes import ErrorCode
+from utils.response import business_response
+
+from ..services.semantic.core.common import build_table_columns_map
+from ..services.semantic.core.query_plan import is_composite_metric, is_derived_metric
 
 SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
+
+
+async def _get_datasource_column_dict_response(
+    datasource_manager: Any,
+    datasource_id: str,
+    table_name: str,
+    column_name: str,
+):
+    """构造单字段字典读取响应，供普通与后台权限入口复用。"""
+    column_dict = await datasource_manager.get_column_dict_async(datasource_id, table_name, column_name)
+    if column_dict is None:
+        return business_response(
+            msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}",
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+        )
+    return business_response(
+        data={
+            "datasource_id": datasource_id,
+            "table_name": table_name,
+            "column_name": column_name,
+            "dict": column_dict,
+        },
+        msg="获取成功",
+    )
+
+
+async def _get_datasource_table_column_dicts_response(
+    datasource_manager: Any,
+    datasource_id: str,
+    table_name: str,
+):
+    """构造表字段字典读取响应，供普通与后台权限入口复用。"""
+    column_dicts = await datasource_manager.get_table_column_dicts_async(datasource_id, table_name)
+    if column_dicts is None:
+        return business_response(
+            msg=f"数据源或表不存在: {datasource_id}/{table_name}",
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+        )
+    return business_response(
+        data={
+            "datasource_id": datasource_id,
+            "table_name": table_name,
+            "dicts": column_dicts,
+        },
+        msg="获取成功",
+    )
+
+
+def _validate_source_item_params(
+    normalized_host: str,
+    normalized_database: str,
+    normalized_org_name: str,
+    normalized_org_code: str,
+    normalized_executor_type: str,
+    port: Optional[int],
+) -> Optional[str]:
+    """校验数据源连接项参数，返回错误信息；None 表示通过。"""
+    if not normalized_org_name:
+        return "机构名称不能为空"
+    if not normalized_org_code:
+        return "机构编码不能为空"
+    if normalized_executor_type not in {"direct", "http"}:
+        return f"不支持的查询执行方式: {normalized_executor_type}"
+    if not normalized_database:
+        return "数据库名不能为空"
+    if normalized_executor_type == "direct" and not normalized_host:
+        return "数据源连接信息不完整"
+    if normalized_executor_type == "http" and (normalized_host or port is not None):
+        return "HTTP 模式只填写数据库名，不填写 IP 和端口"
+    return None
+
+
+def _build_source_item_result(
+    source_type: str,
+    normalized_host: str,
+    port: Optional[int],
+    normalized_database: str,
+    normalized_org_name: str,
+    normalized_org_code: str,
+    normalized_executor_type: str,
+) -> Dict[str, Any]:
+    """按执行方式构造标准化数据源连接项。"""
+    if normalized_executor_type == "direct":
+        result = {
+            "host": normalized_host,
+            "port": int(port or SOURCE_DEFAULT_PORTS[source_type]),
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
+    else:
+        result = {
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
+    result["org_name"] = normalized_org_name
+    result["org_code"] = normalized_org_code
+    return result
 
 
 def _normalize_source_item(
@@ -25,33 +128,25 @@ def _normalize_source_item(
     normalized_org_name = str(org_name or "").strip()
     normalized_org_code = str(org_code or "").strip()
     normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
-    if not normalized_org_name:
-        raise ValueError("机构名称不能为空")
-    if not normalized_org_code:
-        raise ValueError("机构编码不能为空")
-    if normalized_executor_type not in {"direct", "http"}:
-        raise ValueError(f"不支持的查询执行方式: {normalized_executor_type}")
-    if not normalized_database:
-        raise ValueError("数据库名不能为空")
-    if normalized_executor_type == "direct" and not normalized_host:
-        raise ValueError("数据源连接信息不完整")
-    if normalized_executor_type == "http" and (normalized_host or port is not None):
-        raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
-    if normalized_executor_type == "direct":
-        result = {
-            "host": normalized_host,
-            "port": int(port or SOURCE_DEFAULT_PORTS[source_type]),
-            "database": normalized_database,
-            "query_executor_type": normalized_executor_type,
-        }
-    else:
-        result = {
-            "database": normalized_database,
-            "query_executor_type": normalized_executor_type,
-        }
-    result["org_name"] = normalized_org_name
-    result["org_code"] = normalized_org_code
-    return result
+    validation_error = _validate_source_item_params(
+        normalized_host,
+        normalized_database,
+        normalized_org_name,
+        normalized_org_code,
+        normalized_executor_type,
+        port,
+    )
+    if validation_error:
+        raise ValueError(validation_error)
+    return _build_source_item_result(
+        source_type,
+        normalized_host,
+        port,
+        normalized_database,
+        normalized_org_name,
+        normalized_org_code,
+        normalized_executor_type,
+    )
 
 
 def _column_type_label(column: Dict[str, Any]) -> str:
@@ -79,6 +174,22 @@ def _schema_health_issue(level: str, issue_type: str, message: str, target: str)
     return {"level": level, "type": issue_type, "message": message, "target": target}
 
 
+def _collect_column_schema_issues(
+    cached_columns: Dict[str, str],
+    physical_columns: Dict[str, str],
+    table_name: str,
+    issues: List[Dict[str, Any]],
+) -> None:
+    """收集单表字段级结构差异（缺失与类型变化）。"""
+    for column_name in sorted(set(cached_columns) - set(physical_columns)):
+        issues.append(_schema_health_issue("error", "physical_column_removed", f"物理库已不存在字段: {table_name}.{column_name}", f"column:{table_name}.{column_name}"))
+    for column_name in sorted(set(cached_columns) & set(physical_columns)):
+        cached_type = cached_columns[column_name]
+        physical_type = physical_columns[column_name]
+        if cached_type and physical_type and cached_type != physical_type:
+            issues.append(_schema_health_issue("warning", "physical_column_type_changed", f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}", f"column:{table_name}.{column_name}"))
+
+
 def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
     """校验缓存表结构是否仍存在于真实物理表结构中。"""
     cached_schema = _build_table_schema_map(cached_tables)
@@ -89,15 +200,7 @@ def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tab
         issues.append(_schema_health_issue("error", "physical_table_removed", f"物理库已不存在表: {table_name}", f"table:{table_name}"))
 
     for table_name in sorted(set(cached_schema) & set(physical_schema)):
-        cached_columns = cached_schema[table_name]
-        physical_columns = physical_schema[table_name]
-        for column_name in sorted(set(cached_columns) - set(physical_columns)):
-            issues.append(_schema_health_issue("error", "physical_column_removed", f"物理库已不存在字段: {table_name}.{column_name}", f"column:{table_name}.{column_name}"))
-        for column_name in sorted(set(cached_columns) & set(physical_columns)):
-            cached_type = cached_columns[column_name]
-            physical_type = physical_columns[column_name]
-            if cached_type and physical_type and cached_type != physical_type:
-                issues.append(_schema_health_issue("warning", "physical_column_type_changed", f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}", f"column:{table_name}.{column_name}"))
+        _collect_column_schema_issues(cached_schema[table_name], physical_schema[table_name], table_name, issues)
 
     status = "invalid" if any(item["level"] == "error" for item in issues) else "warning" if issues else "ok"
     return {
@@ -218,6 +321,9 @@ def _validate_semantic_metric_health(
 ) -> List[Dict[str, Any]]:
     """校验单个语义指标是否匹配物理表。"""
     metric_name = metric.get("name") or metric.get("field_name") or ""
+    # 派生/复合指标不直接携带物理引用：派生复用基础指标，复合口径由成员表达式决定，与 config_validator 口径一致
+    if is_derived_metric(metric) or is_composite_metric(metric):
+        return []
     table_name = metric.get("table")
     expression = str(metric.get("expression") or "").strip()
     target = f"metric:{metric_name}"
@@ -265,7 +371,7 @@ def _validate_semantic_relationship_health(
 
 def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str, Any]:
     """校验单个指标集是否仍匹配当前物理表结构。"""
-    table_columns_map = _build_table_columns_map(datasource)
+    table_columns_map = build_table_columns_map(datasource)
     issues: List[Dict[str, Any]] = []
     if not table_columns_map:
         issues.append(_semantic_health_issue("error", "missing_schema", "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存", "datasource", config))

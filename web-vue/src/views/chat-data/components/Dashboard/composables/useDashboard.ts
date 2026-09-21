@@ -25,6 +25,7 @@ import {
   type ThemeType,
   type PanelDataStateMap,
 } from '../constants'
+import { isAbortError } from '../../../utils/abort'
 
 export function useDashboard(
   dashboardId: string,
@@ -37,6 +38,8 @@ export function useDashboard(
   const panelDataState = ref<PanelDataStateMap>({})
   const selectedBgId = ref('monitor-midnight-cyan')
   let batchLoadController: AbortController | null = null
+  // 单面板任务轮询的取消通道：组件卸载时中止，避免销毁后仍继续轮询任务状态
+  const panelTaskController = new AbortController()
 
   // 派生状态
   const currentTheme = computed<ThemeType>(() => getThemeTypeByBackgroundId(selectedBgId.value))
@@ -98,7 +101,7 @@ export function useDashboard(
     }
     primePanelLoadingState(panelIds)
     void loadAllPanelData(panelIds, buildPanelMemberDatasourceIds(panelIds)).catch((err) => {
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isAbortError(err)) {
         return
       }
       console.error('后台加载看板面板失败:', err)
@@ -193,7 +196,7 @@ export function useDashboard(
         failed: summary.failed + invalidPanelIds.length,
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isAbortError(err)) {
         return { total: 0, succeeded: 0, failed: 0 }
       }
       console.error('批量加载面板失败:', err)
@@ -234,7 +237,7 @@ export function useDashboard(
     }
 
     try {
-      const data = await executePanel(dashboardId, panelId, memberDatasourceId)
+      const data = await executePanel(dashboardId, panelId, memberDatasourceId, panelTaskController.signal)
       panelDataState.value[panelId] = {
         data,
         loading: false,
@@ -242,6 +245,10 @@ export function useDashboard(
       }
       return true
     } catch (err: any) {
+      // 组件卸载触发的轮询取消不属于面板执行失败，不再向已销毁的看板写错误状态
+      if (isAbortError(err)) {
+        return false
+      }
       panelDataState.value[panelId] = {
         data: null,
         loading: false,
@@ -418,6 +425,8 @@ export function useDashboard(
   onUnmounted(() => {
     batchLoadController?.abort()
     batchLoadController = null
+    // 单面板 executePanel 内部的任务轮询同样需要随卸载中止
+    panelTaskController.abort()
   })
 
   return {

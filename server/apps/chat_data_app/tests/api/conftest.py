@@ -11,7 +11,7 @@ SERVER_ROOT = Path(__file__).resolve().parents[4]
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
+os.environ.setdefault("CHAT_DATA_HOME", "/tmp/fxcjg_test_data/chat_data")
 os.environ["ENCRYPT_KEY"] = "00112233445566778899aabbccddeeff"
 os.environ["SERVICE_AUTH_TOKEN"] = "qP+o6uU+z1wAYeHWi7ODmQ==:CIvqkqQXRoZf69isR8yD2PKhVNUQwM9ahic5sA1UGW0="
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -24,7 +24,14 @@ from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
-from apps.chat_data_app.services import query_providers  # noqa: E402
+from apps.chat_data_app.routers import evaluation as evaluation_routes  # noqa: E402
+from apps.chat_data_app.routers import semantic_config as semantic_config_routes  # noqa: E402
+from apps.chat_data_app.services.dashboard import spec_service as dashboard_spec_service  # noqa: E402
+from apps.chat_data_app.services.sql_run import providers as query_providers  # noqa: E402
+from apps.chat_data_app.services.semantic.run import (  # noqa: E402
+    semantic_model_repository,
+    semantic_query_service,
+)
 from utils.crypto import decrypt_env_value  # noqa: E402
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
@@ -55,21 +62,32 @@ def client():
         yield test_client
 
 
+def _patch_test_services(monkeypatch, manager):
+    semantic_service = FakeSemanticConfigService(manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(evaluation_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(evaluation_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_query_service, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_model_repository, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(dashboard_spec_service, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(dashboard_spec_service, "get_semantic_config_service", lambda: semantic_service)
+    return semantic_service
+
+
 @pytest.fixture()
 def patch_datasource_manager(monkeypatch):
-    def _patch(manager):
-        monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
-        monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
-        monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
-
-    return _patch
+    return lambda manager: _patch_test_services(monkeypatch, manager)
 
 
 class FakeDatasourceManager:
     def __init__(self):
-        self.created_semantic_kwargs = None
-        self.updated_semantic_kwargs = None
-        self.deleted_config_id = None
         self.replaced_table_groups = None
         self.replaced_table_groups_operator = None
         self.replaced_column_dict = None
@@ -143,6 +161,9 @@ class FakeDatasourceManager:
     async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
         return await self.get_all_datasources_async(include_tables=include_tables)
 
+    async def can_access_datasource_async(self, datasource_id: str, user_id: str = "", username: str = ""):
+        return datasource_id in self.datasources
+
     async def has_datasource_async(self, datasource_id: str):
         return datasource_id in self.datasources
 
@@ -173,53 +194,6 @@ class FakeDatasourceManager:
 
     async def get_live_schema_async(self, datasource_id: str, table_names=None, **_kwargs):
         return await self.get_cached_schema_async(datasource_id, table_names=table_names)
-
-    async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
-        configs = list((self.datasources.get(datasource_id) or {}).get("semantic_configs") or [])
-        normalized_user_id = str(user_id or "").strip()
-        if not normalized_user_id:
-            return configs
-        return [
-            config for config in configs
-            if config.get("scope_type", "public") == "public"
-            or (
-                config.get("scope_type") == "private"
-                and str(config.get("create_by") or "").strip() == normalized_user_id
-            )
-        ]
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
-        for config in await self.get_semantic_configs_async(datasource_id, user_id):
-            if config.get("id") == config_id:
-                return dict(config)
-        return None
-
-    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
-        return await self.get_semantic_config_async(datasource_id, config_id, user_id)
-
-    async def create_semantic_config_async(self, **kwargs):
-        self.created_semantic_kwargs = dict(kwargs)
-        config = {
-            "id": "cfg_new",
-            "scope_type": kwargs.get("scope_type"),
-            "create_by": kwargs.get("create_by"),
-            **kwargs,
-        }
-        self.datasources[kwargs["datasource_id"]]["semantic_configs"].append(config)
-        return config
-
-    async def update_semantic_config_async(self, **kwargs):
-        self.updated_semantic_kwargs = dict(kwargs)
-        config = await self.get_semantic_config_async(kwargs["datasource_id"], kwargs["config_id"])
-        if not config:
-            return None
-        config.update({key: value for key, value in kwargs.items() if key not in {"datasource_id", "config_id"}})
-        config["id"] = kwargs["config_id"]
-        return config
-
-    async def delete_semantic_config_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = ""):
-        self.deleted_config_id = config_id
-        return bool(await self.get_semantic_config_async(datasource_id, config_id))
 
     async def update_datasource_async(self, datasource_id: str, **kwargs):
         datasource = self.datasources.get(datasource_id)
@@ -261,6 +235,20 @@ class FakeDatasourceManager:
                 return {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
         return None
 
+    async def get_table_column_dicts_async(self, datasource_id: str, table_name: str):
+        datasource = self.datasources.get(datasource_id)
+        if not datasource:
+            return None
+        table = next((item for item in datasource.get("ds_tables") or [] if item.get("table_name") == table_name), None)
+        if table is None:
+            return None
+        result = {}
+        for column in table.get("columns") or []:
+            column_dict = await self.get_column_dict_async(datasource_id, table_name, column.get("name") or "")
+            if column_dict and any(column_dict.get(key) for key in ("enum_values", "storage_format", "unit")):
+                result[column.get("name") or ""] = column_dict
+        return result
+
     async def replace_column_dict_async(self, datasource_id: str, table_name: str, column_name: str, column_dict, operator: str = "", operator_name: str = ""):
         current_dict = await self.get_column_dict_async(datasource_id, table_name, column_name)
         if current_dict is None:
@@ -294,6 +282,90 @@ class FakeDatasourceManager:
         self.deleted_datasource_id = datasource_id
         self.delete_update_by = update_by
         return True
+
+
+class FakeSemanticConfigService:
+    """API 测试使用的独立语义配置服务，底层复用同一份内存数据。"""
+
+    def __init__(self, datasource_manager: FakeDatasourceManager):
+        self.datasource_manager = datasource_manager
+        self.created_kwargs = None
+        self.updated_kwargs = None
+        self.deleted_config_id = None
+
+    def _all_configs(self, datasource_id: str):
+        return (self.datasource_manager.datasources.get(datasource_id) or {}).get("semantic_configs") or []
+
+    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+        configs = self._all_configs(datasource_id)
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return [dict(config) for config in configs]
+        return [
+            dict(config)
+            for config in configs
+            if config.get("scope_type", "public") == "public"
+            or (
+                config.get("scope_type") == "private"
+                and str(config.get("create_by") or "").strip() == normalized_user_id
+            )
+        ]
+
+    async def get_directory_async(self, datasource_id: str, user_id: str = ""):
+        return [
+            {
+                "id": config.get("id"),
+                "name": config.get("name") or "",
+                "description": config.get("description") or "",
+                "enabled": config.get("enabled", True),
+                "metrics_total": len(config.get("metrics") or []),
+                "dimensions_total": len(config.get("dimensions") or []),
+            }
+            for config in await self.get_configs_async(datasource_id, user_id)
+        ]
+
+    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        for config in await self.get_configs_async(datasource_id, user_id):
+            if config.get("id") == config_id:
+                return config
+        return None
+
+    async def get_runtime_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        return await self.get_config_async(datasource_id, config_id, user_id)
+
+    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = ""):
+        return await self.get_configs_async(datasource_id, user_id)
+
+    async def create_async(self, datasource_id: str, **kwargs):
+        self.created_kwargs = {"datasource_id": datasource_id, **kwargs}
+        config = {"id": "cfg_new", **kwargs}
+        self._all_configs(datasource_id).append(config)
+        return dict(config)
+
+    async def generate_basic_public_single_table_configs_async(self, datasource_id: str, **kwargs):
+        self.created_kwargs = {"datasource_id": datasource_id, **kwargs}
+        return {
+            "created": 1,
+            "skipped": 0,
+            "failed": 0,
+            "items": [{
+                "table": "orders",
+                "status": "created",
+                "semantic_config_id": "cfg_basic_orders",
+            }],
+        }
+
+    async def update_async(self, datasource_id: str, config_id: str, **kwargs):
+        self.updated_kwargs = {"datasource_id": datasource_id, "config_id": config_id, **kwargs}
+        for config in self._all_configs(datasource_id):
+            if config.get("id") == config_id:
+                config.update(kwargs)
+                return dict(config)
+        return None
+
+    async def delete_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = ""):
+        self.deleted_config_id = config_id
+        return any(config.get("id") == config_id for config in self._all_configs(datasource_id))
 
 
 class FakeDashboardService:
@@ -399,8 +471,10 @@ class FakeDashboardService:
 
 
 @pytest.fixture()
-def fake_datasource_manager():
-    return FakeDatasourceManager()
+def fake_datasource_manager(monkeypatch):
+    manager = FakeDatasourceManager()
+    _patch_test_services(monkeypatch, manager)
+    return manager
 
 
 @pytest.fixture()
@@ -436,3 +510,44 @@ def sample_query_task():
 @pytest.fixture()
 def fake_user():
     return SimpleNamespace(user_id="user_a", username="测试用户")
+
+
+# 模型注册表 fail-fast 后，API 测试未显式配置时提供默认清单
+import json as _json  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_models_registry(monkeypatch, tmp_path):
+    monkeypatch.delenv("CHAT_DATA_MODEL", raising=False)
+    if str(os.getenv("CHAT_DATA_MODELS_FILE") or "").strip():
+        yield
+        return
+    path = tmp_path / "default_models.json"
+    path.write_text(_json.dumps([
+        {"id": "gpt-4o-mini", "temperature": 0.2, "context_window": 128000, "vlm": False,
+         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
+        {"id": "stealth/ox-alpha", "temperature": 0.2, "context_window": 256000, "vlm": True,
+         "thinking": {"mode": "forced", "dialect": "openrouter",
+                      "efforts": ["low", "medium", "high"], "default_effort": "high"}},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_db_workspace_date(monkeypatch):
+    """API 契约测试不连真实业务库：工作区日期解析打桩为回退当前日期。
+
+    与单元测试 conftest 同口径：仅覆盖 agent_run_support / 路由 / 上传服务三个导入方，
+    会话归属等已有各自的 fake/monkeypatch 通道。
+    """
+    from apps.chat_data_app.routers import conversation_workspace as cw_routes
+    from apps.chat_data_app.services.agent_run import uploaded_file_service
+    import apps.chat_data_app.agent_run_support as agent_run_support_module
+
+    async def _stub_date(conversation_id, *, user_id):
+        return None
+
+    monkeypatch.setattr(agent_run_support_module, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(cw_routes, "get_conversation_created_date", _stub_date)
+    monkeypatch.setattr(uploaded_file_service, "get_conversation_created_date", _stub_date)

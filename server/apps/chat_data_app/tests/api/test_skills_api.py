@@ -18,7 +18,7 @@ class FakeSkillService:
         self.favorite_state = None
 
     async def list_skills_async(self, **kwargs):
-        return [{"skill_id": "skill_a", "skill_name": "analysis", "scope": kwargs.get("scope"), "agent": kwargs.get("agent", "")}]
+        return [{"skill_id": "skill_a", "skill_name": "analysis", "scope": kwargs.get("scope")}]
 
     async def get_skill_async(self, skill_name, **kwargs):
         if skill_name != "analysis":
@@ -67,23 +67,16 @@ class FakeSkillService:
     async def rollback_user_skill_async(self, skill_id, version_no, user_id, operator_name=""):
         return {"skill_id": skill_id, "version_no": version_no, "user_id": user_id, "status": "rolled_back"}
 
-    async def sync_builtin_skills_async(self, operator="system", operator_name=""):
-        return {"operator": operator, "synced": 2}
-
-    async def reload_async(self):
-        return {"reloaded": True}
-
 
 def test_list_and_get_skills_api_contract(client, auth_headers, monkeypatch):
     fake_service = FakeSkillService()
     monkeypatch.setattr(skills_routes, "skill_service", fake_service)
 
-    list_response = client.get("/api/chatdata/skills", params={"scope": "mine", "agent": "query"}, headers=auth_headers)
+    list_response = client.get("/api/chatdata/skills", params={"scope": "mine"}, headers=auth_headers)
     detail_response = client.get("/api/chatdata/skills/analysis", headers=auth_headers)
 
     assert list_response.status_code == 200
     assert list_response.json()["data"]["skills"][0]["scope"] == "mine"
-    assert list_response.json()["data"]["skills"][0]["agent"] == "query"
     assert detail_response.status_code == 200
     assert detail_response.json()["data"]["skill_name"] == "analysis"
 
@@ -156,7 +149,7 @@ def test_skill_publish_favorite_and_versions_api_contract(client, auth_headers, 
     assert unfavorite_response.json()["data"]["favorite"] is False
 
 
-def test_skill_version_file_sync_and_reload_api_contract(client, auth_headers, monkeypatch):
+def test_skill_version_file_sync_api_contract(client, auth_headers, monkeypatch):
     fake_service = FakeSkillService()
     monkeypatch.setattr(skills_routes, "skill_service", fake_service)
 
@@ -176,8 +169,6 @@ def test_skill_version_file_sync_and_reload_api_contract(client, auth_headers, m
         params={"dir_name": "references", "file_path": "a.md"},
         headers=auth_headers,
     )
-    sync_response = client.post("/api/chatdata/skills/sync-system", headers=auth_headers)
-    reload_response = client.post("/api/chatdata/skills/reload", headers=auth_headers)
 
     assert files_response.status_code == 200
     assert files_response.json()["data"]["files"][0]["file_path"] == "references/a.md"
@@ -187,10 +178,6 @@ def test_skill_version_file_sync_and_reload_api_contract(client, auth_headers, m
     assert save_response.json()["data"]["content"] == "# New"
     assert delete_response.status_code == 200
     assert delete_response.json()["data"]["deleted"] is True
-    assert sync_response.status_code == 200
-    assert sync_response.json()["data"]["operator"] == "user_a"
-    assert reload_response.status_code == 200
-    assert reload_response.json()["data"]["reloaded"] is True
 
 
 def test_skills_api_error_mapping(client, auth_headers, monkeypatch):
@@ -295,56 +282,34 @@ class RaisingSkillService(FakeSkillService):
     async def favorite_skill_async(self, skill_id, user_id, favorite, operator_name=""):
         raise self.error
 
-    async def sync_builtin_skills_async(self, operator="system", operator_name=""):
-        raise self.error
-
-    async def reload_async(self):
-        raise self.error
-
-
-def test_skill_list_scopes_and_optional_user_fallback(monkeypatch):
+def test_skill_list_scopes_require_user(monkeypatch):
     fake_service = FakeSkillService()
     captured = []
 
     async def fake_list_skills_async(**kwargs):
         captured.append(kwargs)
-        return [{"skill_id": "skill_a", "scope": kwargs["scope"], "agent": kwargs.get("agent", "")}]
+        return [{"skill_id": "skill_a", "scope": kwargs["scope"]}]
 
     fake_service.list_skills_async = fake_list_skills_async
     monkeypatch.setattr(skills_routes, "skill_service", fake_service)
-    monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: None)
+    monkeypatch.setattr(skills_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="张三"))
 
     invalid_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, scope="bad")))
-    system_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, search="s", category="c", scope="system", agent="analyze")))
-    invalid_agent = _response_payload(asyncio.run(skills_routes.list_skills(None, agent="bad")))
+    system_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, search="s", category="c", scope="system")))
+    runtime_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, scope="runtime")))
 
     assert invalid_scope["data"]["skills"][0]["scope"] == "all"
     assert system_scope["data"]["skills"][0]["scope"] == "system"
-    assert system_scope["data"]["skills"][0]["agent"] == "analyze"
-    assert invalid_agent["data"]["skills"][0]["agent"] == ""
-    assert captured[0]["user_id"] == ""
+    assert runtime_scope["data"]["skills"][0]["scope"] == "runtime"
+    assert captured[0]["user_id"] == "u1"
     assert captured[1]["search"] == "s"
     assert captured[1]["category"] == "c"
-
-
-def test_skill_mine_and_favorites_routes(monkeypatch):
-    fake_service = FakeSkillService()
-    monkeypatch.setattr(skills_routes, "skill_service", fake_service)
-    monkeypatch.setattr(skills_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="张三"))
-
-    mine = _response_payload(asyncio.run(skills_routes.list_my_skills(None)))
-    favorites = _response_payload(asyncio.run(skills_routes.list_favorite_skills(None)))
-
-    assert mine["data"]["skills"][0]["scope"] == "mine"
-    assert favorites["data"]["skills"][0]["scope"] == "favorites"
 
 
 @pytest.mark.parametrize(
     ("route_call", "expected_code"),
     [
         (lambda: skills_routes.list_skills(None), ErrorCode.CHATDATA_SKILL_LIST_FAILED),
-        (lambda: skills_routes.list_my_skills(None), ErrorCode.CHATDATA_SKILL_MINE_LIST_FAILED),
-        (lambda: skills_routes.list_favorite_skills(None), ErrorCode.CHATDATA_SKILL_FAVORITE_LIST_FAILED),
         (lambda: skills_routes.create_user_skill(
             SkillCreateRequest(skill_name="my-skill", skill_title="标题", skill_desc="", skill_category="custom", visibility_type="private", content=""),
             None,
@@ -371,15 +336,12 @@ def test_skill_mine_and_favorites_routes(monkeypatch):
         (lambda: skills_routes.rollback_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_ROLLBACK_FAILED),
         (lambda: skills_routes.favorite_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_FAVORITE_FAILED),
         (lambda: skills_routes.unfavorite_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED),
-        (lambda: skills_routes.sync_system_skills(None), ErrorCode.CHATDATA_SKILL_SYNC_FAILED),
-        (lambda: skills_routes.reload_skills(), ErrorCode.CHATDATA_SKILL_RELOAD_FAILED),
         (lambda: skills_routes.get_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_DETAIL_FAILED),
     ],
 )
 def test_skill_routes_generic_error_mapping(route_call, expected_code, monkeypatch):
     monkeypatch.setattr(skills_routes, "skill_service", RaisingSkillService(RuntimeError("boom")))
     monkeypatch.setattr(skills_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="张三"))
-    monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="u1", username="张三"))
 
     payload = _response_payload(asyncio.run(route_call()))
 
@@ -462,4 +424,4 @@ def test_skill_routes_raise_auth_http_exception(monkeypatch):
     monkeypatch.setattr(skills_routes, "_get_current_user", raise_auth)
 
     with pytest.raises(HTTPException):
-        asyncio.run(skills_routes.list_my_skills(None))
+        asyncio.run(skills_routes.list_skills(None, scope="mine"))

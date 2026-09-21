@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
+from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -26,12 +27,15 @@ from apps.chat_data_app.routers import datasource_public as datasource_public_ro
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
-from apps.chat_data_app.services import dashboard_runtime, dashboard_spec_service, query_cache, query_providers, query_runtime
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime, spec_service as dashboard_spec_service
+from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from apps.chat_data_app.routers.datasource_admin import (
     clear_default_datasource,
     create_datasource_group,
     delete_datasource,
+    get_admin_datasource_column_dict,
+    get_admin_datasource_table_column_dicts,
     get_admin_datasources,
     generate_datasource_column_dict,
     get_datasource_table_groups,
@@ -61,13 +65,13 @@ from apps.chat_data_app.schema import (
     DatasourceColumnDictUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
+    DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
     ExecuteSqlRequest,
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
     PanelCreateRequest,
     PanelUpdateRequest,
-    PanelExecuteRequest,
     QuickSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
@@ -76,9 +80,15 @@ from apps.chat_data_app.schema import (
 
 
 @pytest.fixture(autouse=True)
-def mirror_dashboard_service():
+def mirror_dashboard_service(monkeypatch):
     previous = dashboard_runtime.get_dashboard_service
     dashboard_runtime.get_dashboard_service = lambda: dashboard_routes.get_dashboard_service()
+
+    async def ignore_event_write(**_kwargs):
+        return None
+
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", ignore_event_write)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", ignore_event_write)
     yield
     dashboard_runtime.get_dashboard_service = previous
 
@@ -169,6 +179,9 @@ class _FakeDatasourceManager:
     async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
         return self.get_all_datasources(include_tables=include_tables)
 
+    async def can_access_datasource_async(self, datasource_id: str, user_id: str = "", username: str = ""):
+        return datasource_id in self.datasources
+
     def get_datasource(self, datasource_id: str):
         item = self.datasources.get(datasource_id)
         return copy.deepcopy(item) if item else None
@@ -181,22 +194,6 @@ class _FakeDatasourceManager:
 
     async def has_datasource_async(self, datasource_id: str):
         return self.has_datasource(datasource_id)
-
-    def get_semantic_configs(self, datasource_id: str):
-        item = self.datasources.get(datasource_id)
-        return copy.deepcopy(item.get("semantic_configs") or []) if item else []
-
-    async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
-        return self.get_semantic_configs(datasource_id)
-
-    def get_semantic_config(self, datasource_id: str, config_id: str):
-        for item in self.get_semantic_configs(datasource_id):
-            if item.get("id") == config_id or item.get("semantic_config_id") == config_id:
-                return item
-        return None
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str):
-        return self.get_semantic_config(datasource_id, config_id)
 
     def get_datasource_by_group_name(self, name: str):
         for item in self.datasources.values():
@@ -579,7 +576,7 @@ class _FakeExecutor:
     def __init__(self, datasource: dict):
         self.datasource = datasource
 
-    async def execute(self, sql: str, limit: int = 100, timeout: int = 30, user_id: str | None = None):
+    async def execute(self, sql: str, limit: int = 100, timeout: int = 30, user_id: str | None = None, datasource_id: str | None = None):
         member_name = self.datasource.get("member_name") or self.datasource.get("member_datasource_id")
         if self.datasource.get("member_datasource_id") == "phy_error":
             return {
@@ -824,13 +821,36 @@ def _mock_authenticated_user(monkeypatch, user_id: str = "10001", username: str 
     )
 
 
+class _FakeSemanticConfigService:
+    def __init__(self, manager):
+        self.manager = manager
+
+    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+        datasource = self.manager.datasources.get(datasource_id) or {}
+        return copy.deepcopy(datasource.get("semantic_configs") or [])
+
+    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        for config in await self.get_configs_async(datasource_id, user_id):
+            if config.get("id") == config_id or config.get("semantic_config_id") == config_id:
+                return config
+        return None
+
+    async def get_runtime_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        return await self.get_config_async(datasource_id, config_id, user_id)
+
+
 def _mock_datasource_manager(monkeypatch, manager):
-    """让主路由、数据源路由和运行时服务共用同一个 fake manager。"""
+    """让路由和运行时服务共用同一组数据源、语义配置 fake。"""
+    semantic_service = _FakeSemanticConfigService(manager)
     monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(query_execution_routes, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    return semantic_service
 
 
 def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
@@ -866,7 +886,6 @@ def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
 
 
 def test_get_datasources_returns_group_datasource_list(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -880,7 +899,6 @@ def test_get_datasources_returns_group_datasource_list(monkeypatch):
 
 
 def test_get_datasources_supports_lightweight_mode(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -923,7 +941,6 @@ def test_get_admin_datasources_uses_unfiltered_list(monkeypatch):
 
 
 def test_get_datasources_does_not_build_display_name_from_current_user(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -941,6 +958,7 @@ def test_get_datasources_does_not_build_display_name_from_current_user(monkeypat
 def test_quick_sql_endpoint_returns_errors_for_missing_tables_and_conversation(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[]))
 
     no_tables_response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
@@ -987,7 +1005,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    captured = {}
+    captured = {"persisted_users": [], "persisted_turns": []}
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["source_type"] = "hive"
     _mock_datasource_manager(monkeypatch, manager)
@@ -1004,6 +1022,15 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
 
     monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", fake_create_sql_assist_agent)
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
+
+    async def persist_user_message(**kwargs):
+        captured["persisted_users"].append(kwargs)
+
+    async def persist_turn(**kwargs):
+        captured["persisted_turns"].append(kwargs)
+
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", persist_user_message)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", persist_turn)
 
     from apps.chat_data_app import agent as agent_module
 
@@ -1024,6 +1051,13 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     assert '"sql": "SELECT 1"' in text
     assert captured["sql_dialect"] == "hive"
     assert captured["tables_ddl_info"] == "CREATE TABLE orders(id bigint)"
+    persisted_user = captured["persisted_users"][0]
+    persisted_turn = captured["persisted_turns"][0]
+    assert persisted_user["user_id"] == "sql_user"
+    assert persisted_user["operator_name"] == "SQL用户"
+    assert persisted_turn["turn_id"] == persisted_user["message"].id
+    assert persisted_turn["messages"][0] is persisted_user["message"]
+    assert persisted_turn["messages"][1].content == "```sql\nSELECT 1\n```"
 
 
 def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch):
@@ -1043,6 +1077,7 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
             return False
 
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
@@ -1062,6 +1097,77 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
     ), None))
 
     assert '"sql": "SELECT 2"' in "".join(_collect_stream_chunks_sync(response))
+
+
+def test_quick_sql_persists_partial_assistant_output_after_model_failure(monkeypatch):
+    captured = {"turns": []}
+    _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
+
+    async def fake_context(_payload, **_kwargs):
+        return "mysql", "CREATE TABLE orders(id bigint)", None
+
+    async def fake_ensure(_payload, _user_id):
+        return None
+
+    async def fake_stream(*_args, **_kwargs):
+        yield "SELECT "
+        raise RuntimeError("model interrupted")
+
+    async def persist_user_message(**_kwargs):
+        return None
+
+    async def persist_turn(**kwargs):
+        captured["turns"].append(kwargs)
+
+    monkeypatch.setattr(query_execution_routes, "_load_quick_sql_context", fake_context)
+    monkeypatch.setattr(query_execution_routes, "_ensure_sql_assist_conversation", fake_ensure)
+    monkeypatch.setattr(query_execution_routes, "_stream_sql_assist_chunks", fake_stream)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", persist_user_message)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", persist_turn)
+    _mock_authenticated_user(monkeypatch)
+
+    response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
+        query="生成 SQL",
+        datasource_id="ds_a",
+        conversation_id="conv_partial",
+    ), None))
+    text = "".join(_collect_stream_chunks_sync(response))
+
+    assert '"content": "SELECT "' in text
+    assert "model interrupted" in text
+    assert len(captured["turns"]) == 1
+    persisted = captured["turns"][0]
+    assert persisted["messages"][1].content == "SELECT "
+    assert persisted["messages"][1].id == f"{persisted['turn_id']}:assistant"
+
+
+def test_quick_sql_partial_persistence_finishes_when_stream_is_cancelled(monkeypatch):
+    async def run_case():
+        started = asyncio.Event()
+        release = asyncio.Event()
+        completed = []
+
+        async def delayed_persist(**_kwargs):
+            started.set()
+            await release.wait()
+            completed.append(True)
+
+        monkeypatch.setattr(query_execution_routes, "_persist_quick_sql_assistant_turn", delayed_persist)
+        task = asyncio.create_task(query_execution_routes._persist_quick_sql_assistant_turn_shielded(
+            conversation_id="conv_cancelled",
+            user_id="user_a",
+            username="用户A",
+            user_message=HumanMessage(content="生成 SQL", id="turn-1"),
+            content="SELECT ",
+        ))
+        await started.wait()
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert completed == [True]
+
+    asyncio.run(run_case())
 
 
 def test_quick_sql_endpoint_rejects_foreign_conversation_and_streams_errors(monkeypatch):
@@ -1157,7 +1263,7 @@ def test_quick_sql_endpoint_creates_new_owned_conversation(monkeypatch):
     text = "".join(_collect_stream_chunks_sync(response))
 
     assert '"sql": "SELECT 3"' in text
-    assert created[-1] == ("", routes.SQL_ASSIST_AGENT_ID, "conv_new", "sql_user")
+    assert created[-1] == (routes.SQL_ASSIST_AGENT_ID, "conv_new", "sql_user")
 
 
 def test_list_semantic_configs_uses_lightweight_existence_check(monkeypatch):
@@ -1177,8 +1283,14 @@ def test_list_semantic_configs_uses_lightweight_existence_check(monkeypatch):
 
     manager.get_datasource_async = _get_datasource
     manager.has_datasource_async = _has_datasource
-    manager.get_semantic_configs_async = _get_semantic_configs
-    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    _mock_datasource_manager(monkeypatch, manager)
+
+    class LightweightSemanticService:
+        async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+            calls.append(("get_semantic_configs", datasource_id))
+            return [{"semantic_config_id": "cfg_1"}]
+
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: LightweightSemanticService())
     _mock_authenticated_user(monkeypatch)
 
     resp = asyncio.run(semantic_config_routes.list_semantic_configs("ds_a", SimpleNamespace()))
@@ -1376,29 +1488,27 @@ def test_datasource_semantic_health_reports_physical_schema_drift(monkeypatch):
     assert "physical_table_added" not in schema_issue_types
 
 
-def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
+def test_semantic_prefill_passes_tables_and_business_context_to_llm(monkeypatch):
     from apps.chat_data_app.schema import SemanticPrefillRequest
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["semantic_configs"] = [{"id": "sc_a", "name": "订单分析", "scope_type": "private", "create_by": "u1"}]
-    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    _mock_datasource_manager(monkeypatch, manager)
     monkeypatch.setattr(semantic_config_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1"))
 
     captured = {}
 
-    async def _fake_prefill(tables, table_model_type="detail", generate_business_flow=False, business_context=""):
+    async def _fake_prefill(tables, business_context=""):
         captured["tables"] = tables
-        captured["table_model_type"] = table_model_type
-        captured["generate_business_flow"] = generate_business_flow
         captured["business_context"] = business_context
-        return {"fields": [{"table": "orders", "column": "amount_sum", "role": "metric", "expression": "`amount_sum`"}], "knowledge": {}}
+        return {"fields": [{"table": "orders", "column": "amount_sum", "role": "metric", "expression": "`amount_sum`"}]}
 
     monkeypatch.setattr(semantic_config_routes, "_prefill_by_llm", _fake_prefill)
 
     resp = asyncio.run(semantic_config_routes.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="sc_a",
-        table_model_type="aggregated",
+        business_context="销售额用于经营分析",
         tables=[{
             "table_name": "orders",
             "columns": [{"name": "amount_sum", "type": "decimal", "description": "销售额合计"}],
@@ -1407,8 +1517,8 @@ def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
     data = _payload(resp)
 
     assert data["status"] == "success"
-    assert captured["table_model_type"] == "aggregated"
     assert captured["tables"][0]["table_name"] == "orders"
+    assert captured["business_context"] == "销售额用于经营分析"
 
 
 def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
@@ -1434,7 +1544,7 @@ def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
             {"name": "order_id", "type": "bigint"},
             {"name": "amount", "type": "decimal"},
         ],
-    }], "detail"))
+    }]))
 
     assert captured["table_payload"][0]["table"] == "orders"
     assert result["fields"] == [
@@ -1554,7 +1664,8 @@ def test_get_query_task_returns_task_status(monkeypatch):
 def test_get_sql_batch_task_keeps_pending_status_before_statement_results_exist(monkeypatch):
     """首轮轮询不能将尚未初始化的批次结果误判为失败。"""
     _mock_authenticated_user(monkeypatch)
-    task_data = {"task_id": "task_batch_001"}
+    # 生产创建任务时 request_payload 必填（含 user_id），归属校验依赖它
+    task_data = {"task_id": "task_batch_001", "request_payload": json.dumps({"user_id": "10001"})}
     response_data = {
         "task_id": "task_batch_001",
         "task_type": "sql_batch",
@@ -1687,7 +1798,7 @@ def test_cancel_query_task_stops_remote_execution(monkeypatch):
 
     async def fake_stop(remote_task_id: str, source_type: str = "hive", **kwargs):
         stopped.append((remote_task_id, source_type, kwargs))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     async def fake_update_execution(execution_id: str, **kwargs):
         updates.append(("execution", execution_id, kwargs))
@@ -1808,7 +1919,7 @@ def test_cancel_query_task_kills_mysql_execution(monkeypatch):
 
     async def fake_kill(target: dict, connection_id: str):
         killed.append((target, connection_id))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[execution]))
@@ -1847,7 +1958,7 @@ def test_cancel_query_execution_waits_for_mysql_connection_id(monkeypatch):
 
     async def fake_kill(target: dict, connection_id: str):
         killed.append((target, connection_id))
-        return {"success": True}
+        return {"status": "succeeded", "error": None}
 
     async def fake_update_execution(execution_id: str, **kwargs):
         updated.append((execution_id, kwargs))
@@ -1888,7 +1999,6 @@ def test_cancel_query_execution_running_without_target_marks_kill_failed(monkeyp
     result = asyncio.run(query_providers.query_task_service.cancel_query_execution(execution))
 
     assert result["status"] == "kill_failed"
-    assert result["success"] is False
     assert updated[-1][1]["sql_status"] == "kill_failed"
 
 
@@ -2007,7 +2117,6 @@ def test_run_sql_query_task_skips_result_payload_for_all_http_targets(monkeypatc
 
 
 def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
-    from apps.chat_data_app import routes
 
     cache_item = SimpleNamespace(
         result_payload=json.dumps({
@@ -2054,7 +2163,8 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
     assert result["execution_time_ms"] == 7
     assert result["total_count"] == 1
     assert cache_item.hit_count == 1
-    assert session.committed is True
+    # 命中后回写 hit_count 的提交由 get_session 退出自动完成，fake session 观察不到
+    assert session.committed is False
 
 
 def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
@@ -2084,7 +2194,6 @@ def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
 
 
 def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
     async def fake_build_result(_request, query_task_id=None, execution_map=None, **_kwargs):
@@ -2132,7 +2241,6 @@ def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
 
 
 def test_run_sql_query_task_marks_failed_on_unhandled_execute_error(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
 
@@ -2185,50 +2293,7 @@ def test_add_panel_persists_member_datasource_id(monkeypatch):
     assert service.panels[data["data"]["id"]]["member_datasource_id"] == "phy_b"
 
 
-def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    _mock_authenticated_user(monkeypatch)
-
-    captured = {}
-
-    async def fake_create_task_record(**kwargs):
-        captured["kwargs"] = kwargs
-        return {
-            "task_id": "panel_task_001",
-            "task_type": "dashboard_batch",
-            "status": "pending",
-        }
-
-    def fake_schedule(task_id: str):
-        captured["task_id"] = task_id
-
-    monkeypatch.setattr(query_providers.query_task_service, "create_task_record", fake_create_task_record)
-    monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", fake_schedule)
-
-    resp = asyncio.run(dashboard_routes.create_panel_query_task(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="phy_b"),
-    ))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["task_id"] == "panel_task_001"
-    assert captured["kwargs"]["task_type"] == "dashboard_batch"
-    assert captured["kwargs"]["request_payload"]["panel_ids"] == ["panel_a"]
-    assert captured["kwargs"]["request_payload"]["panel_member_datasource_ids"]["panel_a"] == "phy_b"
-    assert captured["kwargs"]["request_payload"]["panel_execution_plan"]["panel_a"] == {
-        "mode": "single",
-        "member_datasource_ids": ["phy_b"],
-        "primary_member_datasource_id": "phy_b",
-    }
-    assert captured["task_id"] == "panel_task_001"
-
-
 def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
 
@@ -2269,7 +2334,6 @@ def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monke
 
 
 def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["member_sources"] = [
@@ -2301,7 +2365,6 @@ def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
 
 
 def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["member_sources"] = [
@@ -2331,7 +2394,6 @@ def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypat
 
 
 def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = _mock_query_tracking(monkeypatch)
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
@@ -2429,7 +2491,7 @@ def test_create_dashboard_from_spec_creates_dashboard_and_panels(monkeypatch):
             metric = (kwargs.get("metrics") or ["cnt"])[0]
             return {"success": True, "sql": f"select 1 as `{metric}`"}
 
-    monkeypatch.setattr(dashboard_spec_service, "SemanticSQLGenerator", FakeSqlGenerator)
+    monkeypatch.setattr(dashboard_spec_service, "SemanticAIQueryAdapter", FakeSqlGenerator)
 
     request = DashboardFromSpecRequest(
         datasource_id="ds_a",
@@ -2529,31 +2591,13 @@ def test_update_layout_only_updates_current_dashboard_panels(monkeypatch):
     assert "layout" not in service.panels["panel_c"]
 
 
-def test_execution_target_context_contains_selected_members(monkeypatch):
-    from apps.chat_data_app import handlers
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "投诉举报1", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "投诉举报2", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    monkeypatch.setattr(handlers, "get_datasource_manager", lambda: manager)
-
-    targets = asyncio.run(handlers._get_execution_targets_async("ds_a", ["phy_a", "phy_b"]))
-    info = handlers._append_user_selected_execution_targets_to_context("", targets, ["phy_a", "phy_b"])
-
-    assert "当前用户已选择的执行对象数据源" in info
-    assert "投诉举报1" in info
-    assert "投诉举报2" in info
-
-
 def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
-    from apps.chat_data_app import routes
 
     async def _fake_get_all_tables(_datasource_id):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
@@ -2562,7 +2606,7 @@ def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
         query="有多少个用户",
         datasource_id="ds_a",
         member_datasource_ids=["phy_b"],
-    )))
+    ), SimpleNamespace()))
     chunks = asyncio.run(_collect_stream_chunks(response))
     content = "".join(chunks)
 
@@ -2591,7 +2635,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
 
-    async def _fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def _fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         captured["agent_id"] = agent_id
         captured["conversation_id"] = conversation_id
         captured["user_id"] = user_id
@@ -2608,6 +2652,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", _fake_get_or_create_conversation)
@@ -2624,7 +2669,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         datasource_id="ds_a",
         member_datasource_ids=["phy_b"],
         conversation_id="conv_sql_assist",
-    )))
+    ), SimpleNamespace()))
     chunks = asyncio.run(_collect_stream_chunks(response))
     content = "".join(chunks)
 
@@ -2640,7 +2685,6 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
 
 
 def test_update_datasource_meta_rejects_duplicate_name(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -2679,7 +2723,6 @@ def test_update_datasource_meta_success_missing_blank_and_late_missing(monkeypat
 
 
 def test_update_mapped_modules_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="mapper_1")
@@ -2693,7 +2736,6 @@ def test_update_mapped_modules_persists(monkeypatch):
 
 
 def test_get_datasource_table_groups(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -2706,7 +2748,6 @@ def test_get_datasource_table_groups(monkeypatch):
 
 
 def test_update_datasource_table_groups_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="group_maintainer")
@@ -2727,7 +2768,6 @@ def test_update_datasource_table_groups_persists(monkeypatch):
 
 
 def test_update_datasource_table_business_desc_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="table_maintainer", username="表维护人")
@@ -2743,7 +2783,6 @@ def test_update_datasource_table_business_desc_persists(monkeypatch):
 
 
 def test_datasource_column_dict_get_and_save(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
@@ -2782,20 +2821,23 @@ def test_datasource_column_dict_get_and_save(monkeypatch):
 
 
 def test_datasource_column_dict_not_found_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
     _mock_datasource_manager(monkeypatch, manager)
 
     get_resp = asyncio.run(get_datasource_column_dict("ds_a", "t_a", "missing", SimpleNamespace()))
+    admin_get_resp = asyncio.run(get_admin_datasource_column_dict("ds_a", "t_a", "missing", SimpleNamespace()))
     save_resp = asyncio.run(update_datasource_column_dict("ds_a", "t_a", "missing", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace()))
     list_resp = asyncio.run(get_datasource_table_column_dicts("ds_a", "missing", SimpleNamespace()))
+    admin_list_resp = asyncio.run(get_admin_datasource_table_column_dicts("ds_a", "missing", SimpleNamespace()))
     gen_resp = asyncio.run(generate_datasource_column_dict("ds_a", "t_a", "missing", DatasourceColumnDictGenerateRequest(text="无"), SimpleNamespace()))
 
     assert _payload(get_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(admin_get_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(save_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(list_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(admin_list_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(gen_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
@@ -2826,7 +2868,6 @@ def test_parse_column_dict_generate_response_normalizes_invalid_items():
 
 
 def test_generate_datasource_column_dict_uses_llm(monkeypatch):
-    from apps.chat_data_app import routes
 
     class _FakeLlm:
         async def ainvoke(self, messages):
@@ -2851,7 +2892,6 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
 
 
 def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatch):
-    from apps.chat_data_app import routes
 
     class _FakeLlm:
         async def ainvoke(self, messages):
@@ -3087,6 +3127,52 @@ def test_datasource_update_missing_and_exception_branches(monkeypatch):
     assert _payload(asyncio.run(datasource_admin_routes.clear_default_datasource("ds_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
 
+def test_datasource_table_index_routes_success_and_errors(monkeypatch):
+    calls = []
+
+    class IndexManager:
+        async def get_table_indexes_async(self, datasource_id, table_name):
+            calls.append(("get", datasource_id, table_name))
+            if datasource_id == "missing":
+                return None
+            if datasource_id == "crash":
+                raise RuntimeError("database details")
+            return [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}]
+
+        async def replace_table_indexes_async(self, datasource_id, table_name, indexes, operator="", operator_name=""):
+            calls.append(("put", datasource_id, table_name, indexes, operator, operator_name))
+            if datasource_id == "missing":
+                return None
+            if datasource_id == "invalid":
+                raise ValueError("普通索引名称必须以 idx_ 开头")
+            if datasource_id == "crash":
+                raise RuntimeError("database details")
+            return indexes
+
+    monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: IndexManager())
+    _mock_authenticated_user(monkeypatch, user_id="u1", username="用户1")
+    body = DatasourceTableIndexesUpdateRequest(indexes=[{
+        "index_type": "secondary", "index_name": "idx_status", "columns": ["status"]
+    }])
+
+    get_ok = _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("ds_a", "orders", SimpleNamespace())))
+    put_ok = _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("ds_a", "orders", body, SimpleNamespace())))
+    assert get_ok["data"]["indexes"][0]["index_name"] == "idx_status"
+    assert put_ok["data"]["indexes"][0]["columns"] == ["status"]
+    assert calls[-1][-2:] == ("u1", "用户1")
+
+    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("missing", "orders", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("missing", "orders", body, SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("invalid", "orders", body, SimpleNamespace())))["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+
+    get_crash = _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("crash", "orders", SimpleNamespace())))
+    put_crash = _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("crash", "orders", body, SimpleNamespace())))
+    assert get_crash["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert put_crash["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert "database details" not in get_crash["msg"]
+    assert "database details" not in put_crash["msg"]
+
+
 def test_create_and_update_datasource_group_validation_branches(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -3197,6 +3283,11 @@ def test_delete_datasource_error_branches(monkeypatch):
 
 def test_get_schema_and_db_tables_error_branches(monkeypatch):
     class SchemaManager:
+        async def can_access_datasource_async(self, datasource_id, *, user_id, username):
+            assert user_id == "u1"
+            assert username == "用户1"
+            return True
+
         async def get_cached_schema_async(self, datasource_id, table_names=None):
             if datasource_id == "value":
                 raise ValueError("bad datasource")
@@ -3268,20 +3359,24 @@ def test_query_favorite_exception_branches(monkeypatch):
 
 def test_task_endpoint_auth_and_error_branches(monkeypatch):
     monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")))
-    create_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
-    get_resp = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
-    cancel_resp = asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
-    assert _payload(create_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert _payload(get_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert _payload(cancel_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    with pytest.raises(HTTPException) as create_error:
+        asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
+    assert create_error.value.status_code == 401
+    with pytest.raises(HTTPException) as get_error:
+        asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
+    assert get_error.value.status_code == 401
+    with pytest.raises(HTTPException) as cancel_error:
+        asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
+    assert cancel_error.value.status_code == 401
 
     _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result=None))
     assert _payload(asyncio.run(query_execution_routes.get_query_task("missing", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result={"task_id": "task_001"}))
     monkeypatch.setattr(query_runtime, "build_query_task_response_data", lambda _task_data: (_ for _ in ()).throw(query_execution_routes.HTTPException(status_code=418, detail="teapot")))
-    http_error = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
-    assert _payload(http_error)["code"] == 500
+    with pytest.raises(HTTPException) as http_error:
+        asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
+    assert http_error.value.status_code == 418
     monkeypatch.setattr(query_runtime, "build_query_task_response_data", lambda _task_data: (_ for _ in ()).throw(RuntimeError("boom")))
     assert _payload(asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
@@ -3362,7 +3457,7 @@ def test_cancel_query_task_missing_final_partial_and_http_error(monkeypatch):
         "request_payload": json.dumps({"user_id": "10001"}),
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[running]))
-    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "kill_failed", "success": False}))
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "kill_failed"}))
     updates = []
     monkeypatch.setattr(query_providers.query_task_service, "update_query_task", lambda task_id, **kwargs: asyncio.sleep(0, result=updates.append((task_id, kwargs))))
     partial = _payload(asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace())))
@@ -3370,8 +3465,9 @@ def test_cancel_query_task_missing_final_partial_and_http_error(monkeypatch):
     assert updates[-1][1]["progress_text"] == "部分停止失败"
 
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: (_ for _ in ()).throw(query_execution_routes.HTTPException(status_code=409, detail="busy")))
-    http_resp = asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace()))
-    assert _payload(http_resp)["code"] == 409
+    with pytest.raises(HTTPException) as http_error:
+        asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace()))
+    assert http_error.value.status_code == 409
 
 
 def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch):
@@ -3388,7 +3484,7 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
         "request_payload": json.dumps({"user_id": "10001", "operator_name": "任务用户"}),
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[pending_without_user]))
-    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "cancelled", "success": True}))
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0, result={"status": "cancelled"}))
     updates = []
     monkeypatch.setattr(query_providers.query_task_service, "update_query_task", lambda task_id, **kwargs: asyncio.sleep(0, result=updates.append((task_id, kwargs))))
 
@@ -3407,8 +3503,9 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
         "request_payload": "{}",
     }))
     monkeypatch.setattr(query_providers.query_history_service, "get_execution_models", lambda _task_id: asyncio.sleep(0, result=[no_owner_pending]))
+    # owner 信息缺失按数据异常 fail-close：任何人都不允许停止
     no_owner_response = asyncio.run(query_execution_routes.cancel_query_task("task_no_owner", SimpleNamespace()))
-    assert _payload(no_owner_response)["data"]["status"] == "cancelled"
+    assert _payload(no_owner_response)["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
 
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: (_ for _ in ()).throw(RuntimeError("cancel crashed")))
     failed = asyncio.run(query_execution_routes.cancel_query_task("task_payload_owner", SimpleNamespace()))
@@ -3523,8 +3620,9 @@ def test_compile_semantic_builder_sql_endpoint_error_branches(monkeypatch):
         "_get_current_user",
         lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")),
     )
-    unauthenticated = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
-    assert _payload(unauthenticated)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    with pytest.raises(HTTPException) as auth_error:
+        asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
+    assert auth_error.value.status_code == 401
 
     _mock_authenticated_user(monkeypatch, user_id="other_user")
 
@@ -3559,7 +3657,6 @@ def test_compile_semantic_builder_sql_endpoint_error_branches(monkeypatch):
 
 
 def test_create_datasource_group_from_template_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1", username="创建人1")
@@ -3631,7 +3728,6 @@ def test_create_datasource_group_saves_config_without_loading_tables(monkeypatch
 
 
 def test_update_datasource_group_config_updates_group_members(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1", username="维护人1")
@@ -3752,7 +3848,6 @@ def test_sync_datasource_group_metadata_updates_cached_tables(monkeypatch):
 
 
 def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1")
@@ -3790,7 +3885,6 @@ def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch
 
 
 def test_update_datasource_group_config_errors_for_missing_duplicate_and_invalid_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1")
@@ -3828,7 +3922,6 @@ def test_update_datasource_group_config_errors_for_missing_duplicate_and_invalid
 
 
 def test_datasource_table_group_and_default_error_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch)
@@ -3982,7 +4075,6 @@ def test_get_db_tables_uses_manager_for_direct_http_and_error_branches(monkeypat
 
 
 def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["ds_tables"] = [
@@ -4052,7 +4144,6 @@ def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypat
 
 
 def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["unsupported"] = {
@@ -4080,7 +4171,6 @@ def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
 
 
 def test_set_and_clear_default_datasource(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="default_operator")
@@ -4101,7 +4191,6 @@ def test_set_and_clear_default_datasource(monkeypatch):
 
 
 def test_delete_datasource_removes_only_current_group(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="delete_operator")
@@ -4189,7 +4278,6 @@ def test_routes_schema_identifier_helpers_cover_edges():
 
 
 def test_routes_remote_history_helpers_cover_success_failure_and_default_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     started = datetime(2026, 6, 29, 16, 57, 45)
     finished = datetime(2026, 6, 29, 16, 57, 50)
@@ -4281,7 +4369,6 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
 
 
 def test_routes_live_remote_sql_result_status_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     async def fake_fetch(remote_task_id, _source_type, **_kwargs):
         return {
@@ -4391,12 +4478,12 @@ def test_sql_batch_status_keeps_cancelled_task_terminal_with_pending_statements(
 
 
 def test_routes_task_owner_and_cancel_status_helpers():
-    from apps.chat_data_app import routes
 
     assert QueryHistoryService.task_user_id({"request_payload": "{bad", "create_by": " creator "}) == "creator"
     assert QueryHistoryService.task_user_id({"request_payload": json.dumps({"user_id": " payload_user "})}) == "payload_user"
     assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "") is False
-    assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "u1") is True
+    # owner 信息缺失按数据异常 fail-close 拒绝，不再对任意用户放行
+    assert query_providers.query_task_service.is_query_task_owned_by_user({}, [], "u1") is False
     assert query_providers.query_task_service.is_query_task_owned_by_user({"request_payload": json.dumps({"user_id": "u2"})}, [], "u1") is False
     assert query_providers.query_task_service.is_query_task_owned_by_user({}, [{"user_id": "", "create_by": "u1"}], "u1") is True
     assert QueryHistoryService.task_operator_name({"request_payload": "{bad"}) == ""
@@ -4418,7 +4505,6 @@ def test_routes_task_owner_and_cancel_status_helpers():
 
 
 def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     no_wait = SimpleNamespace(
         execution_id="ex_done",
@@ -4448,7 +4534,6 @@ def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
     assert done_result == {
         "execution_id": "ex_succeeded",
         "status": "succeeded",
-        "success": True,
         "message": "无需停止",
     }
 
@@ -4470,7 +4555,6 @@ def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
 
 
 def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypatch):
-    from apps.chat_data_app import routes
 
     _mock_authenticated_user(monkeypatch)
 
@@ -4494,6 +4578,8 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
     _mock_datasource_manager(monkeypatch, DictCrashManager())
     assert _payload(asyncio.run(datasource_public_routes.get_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_public_routes.get_datasource_table_column_dicts("ds_a", "t_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_admin_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_admin_datasource_table_column_dicts("ds_a", "t_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_admin_routes.update_datasource_column_dict("ds_a", "t_a", "status", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
     class GenerateManager(_FakeDatasourceManager):
@@ -4559,7 +4645,7 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
         raise RuntimeError("resolve failed")
 
     monkeypatch.setattr(query_providers.query_task_service, "resolve_execution_target", resolve_error)
-    monkeypatch.setattr(query_providers.query_task_service, "stop_http_query_task", lambda *args, **kwargs: asyncio.sleep(0, result={"success": True}))
+    monkeypatch.setattr(query_providers.query_task_service, "stop_http_query_task", lambda *args, **kwargs: asyncio.sleep(0, result={"status": "succeeded", "error": None}))
     monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", lambda *args, **kwargs: asyncio.sleep(0, result=None))
     http_cancel = asyncio.run(query_providers.query_task_service.cancel_query_execution(SimpleNamespace(
         execution_id="ex_http",

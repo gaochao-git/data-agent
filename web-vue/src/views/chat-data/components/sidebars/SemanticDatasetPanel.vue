@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
-import type { SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
+import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import { findColumnDict, type FieldTooltipSection } from '../../utils/fieldDict'
 import {
-  buildFieldDictSection,
-  createTooltipSection,
-  extractMetricFieldName as extractMetricSourceFieldName,
-  findColumnDict,
-  type FieldTooltipSection
-} from '../../utils/fieldDict'
+  buildDimensionTooltip as sharedBuildDimensionTooltip,
+  buildMetricTooltip as sharedBuildMetricTooltip,
+  isLogicalMetric,
+  metricIconColorClass,
+  type SemanticTooltipContext,
+} from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 
 interface Props {
@@ -128,96 +129,20 @@ const getDimensionType = (dim: SemanticDimension): 'string' | 'number' | 'date' 
   return 'string'
 }
 
-const extractFieldName = (expression?: string) => {
-  const expr = (expression || '').trim()
-  if (!expr) return '-'
-  const inner = expr.match(/\((.*)\)/)?.[1] || expr
-  const cleaned = inner.replace(/DISTINCT/ig, '').replace(/`/g, '').trim()
-  if (!cleaned) return '-'
-  const first = cleaned.split(',')[0]?.trim() || ''
-  const parts = first.split('.')
-  return parts[parts.length - 1] || '-'
-}
+const tooltipContext = (): SemanticTooltipContext => ({
+  tables: props.tables,
+  resolveColumnDict: (tableName, columnName) =>
+    getColumnDict(props.datasourceId, tableName || '', columnName || '')
+    || findColumnDict(props.tables, tableName, columnName),
+})
 
-const getTableDescription = (tableName?: string) => {
-  if (!tableName) return '-'
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.description || '-'
-}
-
-const getTableBusinessDesc = (tableName?: string) => {
-  if (!tableName) return ''
-  const table = props.tables.find(item => item.table_name === tableName)
-  return table?.business_desc || ''
-}
-
-const buildTableBusinessDescLines = (tableName?: string) => {
-  const businessDesc = getTableBusinessDesc(tableName)
-  return businessDesc ? [`表业务说明：${businessDesc}`] : []
-}
-
-const getTableRoleLabel = (table?: string, alias?: string) => {
-  const tableName = String(table || '').trim()
-  const tableAlias = String(alias || tableName).trim()
-  if (!tableName) return tableAlias || '-'
-  if (!tableAlias || tableAlias === tableName) return tableName
-  return `${tableAlias}（${tableName}）`
-}
+const buildDimensionTooltip = (dim: SemanticDimension) => sharedBuildDimensionTooltip(dim, tooltipContext())
+const buildMetricTooltip = (metric: SemanticMetric) => sharedBuildMetricTooltip(metric, tooltipContext())
 
 const handleFillQuestion = (fieldName: string | undefined, fieldType: 'dimension' | 'metric') => {
   const normalizedName = String(fieldName || '').trim()
   if (!normalizedName) return
   emit('fillQuestion', { fieldName: normalizedName, fieldType })
-}
-
-const buildMetadataSupplementSection = (metadataSupplement?: string) => {
-  const content = String(metadataSupplement || '').trim()
-  if (!content) return null
-  return createTooltipSection('元数据补充', content
-    .split(/\n+/)
-    .map(item => item.trim())
-    .filter(Boolean))
-}
-
-const buildDimensionTooltip = (dim: SemanticDimension) => {
-  const expression = dim.expression || `\`${dim.column}\``
-  const fieldDict = getColumnDict(props.datasourceId, dim.table, dim.column)
-    || findColumnDict(props.tables, dim.table, dim.column)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(dim.table, dim.table_alias)}`,
-      `数据表备注：${getTableDescription(dim.table)}`,
-      ...buildTableBusinessDescLines(dim.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${dim.name || '-'}`,
-      `字段名称：${dim.column || '-'}`,
-      `表达式：${expression}`,
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(dim.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
-}
-
-const buildMetricTooltip = (metric: SemanticConfigItem['metrics'][number]) => {
-  const expression = metric.expression || ''
-  const fieldName = extractMetricSourceFieldName(metric)
-  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
-    || findColumnDict(props.tables, metric.table, fieldName)
-  return [
-    createTooltipSection('表信息', [
-      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-      `数据表备注：${getTableDescription(metric.table)}`,
-      ...buildTableBusinessDescLines(metric.table),
-    ]),
-    createTooltipSection('字段信息', [
-      `显示名称：${metric.name || '-'}`,
-      `字段名称：${fieldName || extractFieldName(expression)}`,
-      `表达式：${expression || '-'}`,
-    ]),
-    buildFieldDictSection(fieldDict),
-    buildMetadataSupplementSection(metric.metadata_supplement),
-  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const filteredDimensions = computed(() => {
@@ -268,7 +193,7 @@ const currentDatasetValue = computed(() => {
 })
 
 const currentDatasetName = computed(() => {
-  return availableSemanticConfigs.value.find(cfg => cfg.id === currentDatasetValue.value)?.name || '请选择指标集'
+  return availableSemanticConfigs.value.find(cfg => cfg.id === currentDatasetValue.value)?.name || '请选择语义模型'
 })
 
 const toggleDatasetDropdown = () => {
@@ -338,7 +263,7 @@ onUnmounted(() => {
           <input
             v-model.trim="datasetKeyword"
             type="text"
-            placeholder="搜索指标集"
+            placeholder="搜索语义模型"
             class="mb-1 h-[28px] w-full rounded border border-[#DDE1E8] bg-white px-2 text-[12px] text-[#21252C] outline-none focus:border-[#165DFF] placeholder:text-[#93949580]"
           />
           <div class="max-h-[190px] overflow-y-auto">
@@ -357,7 +282,7 @@ onUnmounted(() => {
               <span v-else class="w-3 shrink-0"></span>
               <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{{ cfg.name }}</span>
             </button>
-            <div v-if="filteredSemanticConfigs.length === 0" class="px-2 py-2 text-[12px] text-[#9CA3AF]">无匹配指标集</div>
+            <div v-if="filteredSemanticConfigs.length === 0" class="px-2 py-2 text-[12px] text-[#9CA3AF]">无匹配语义模型</div>
           </div>
         </div>
       </div>
@@ -365,7 +290,7 @@ onUnmounted(() => {
         type="button"
         class="ml-1 h-[28px] w-[28px] shrink-0 rounded border border-[#DDE1E8] bg-white text-[#5B5C60] transition-colors hover:border-[#165DFF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
         :disabled="loading"
-        title="刷新指标集"
+        title="刷新语义模型"
         @click="emit('refresh')"
       >
         <i :class="['fa-solid fa-rotate-right text-[12px]', loading ? 'fa-spin' : '']"></i>
@@ -437,14 +362,17 @@ onUnmounted(() => {
           <div
             v-for="metric in filteredMetrics"
             :key="`metric-${metric.table_alias || metric.table}-${metric.name}`"
-            class="group flex items-center gap-2 h-[28px] px-2 rounded cursor-grab transition-colors duration-100 hover:bg-[#f0f1f3] active:cursor-grabbing"
-            draggable="true"
+            :class="[
+              'group flex items-center gap-2 h-[28px] px-2 rounded transition-colors duration-100 hover:bg-[#f0f1f3]',
+              isLogicalMetric(metric) ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'
+            ]"
+            :draggable="!isLogicalMetric(metric)"
             @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
             @mouseleave="hideTooltip"
-            @dragstart="emit('dragMetric', metric, $event)"
+            @dragstart="!isLogicalMetric(metric) && emit('dragMetric', metric, $event)"
             @dragend="emit('dragEnd')"
           >
-            <FieldTypeIcon type="number" class="text-[#165DFF] mr-1.5 shrink-0" />
+            <FieldTypeIcon type="number" :class="['mr-1.5 shrink-0', metricIconColorClass(metric)]" />
             <span class="min-w-0 flex-1 text-xs text-[#21252C] overflow-hidden text-ellipsis whitespace-nowrap">
               {{ metric.name }}
             </span>
@@ -452,7 +380,7 @@ onUnmounted(() => {
               type="button"
               draggable="false"
               class="ml-1 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
-              title="填充查询问题"
+              :title="isLogicalMetric(metric) ? '插入到指标区' : '填充查询问题'"
               @mousedown.stop
               @click.stop="handleFillQuestion(metric.name, 'metric')"
             >
@@ -467,7 +395,7 @@ onUnmounted(() => {
   <Teleport to="body">
     <div
       v-if="tooltipState.visible"
-      class="fixed max-w-[420px] px-3 py-2 bg-[#373839] border border-white/15 rounded text-white text-[12px] z-[10000] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_6px_16px_rgba(0,0,0,0.2)] select-text cursor-text"
+      class="fixed max-w-[420px] px-3 py-2 bg-[#373839] border border-white/15 rounded text-white text-[12px] z-[var(--z-floating-tip)] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_6px_16px_rgba(0,0,0,0.2)] select-text cursor-text"
       :style="{ left: tooltipState.x + 'px', top: tooltipState.y + 'px' }"
       @mouseenter="keepTooltipVisible"
       @mouseleave="hideTooltipNow"

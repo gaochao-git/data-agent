@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHistoryMessages } from '../useConversationHistory'
+import { buildHistoryMessages, buildHistoryMessagesFromEvents } from '../useConversationHistory'
 
 describe('buildHistoryMessages', () => {
   it('preserves thinking, tool calls, and final text in their original order', () => {
@@ -9,21 +9,21 @@ describe('buildHistoryMessages', () => {
         id: 'assistant-1',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'tool-select', name: 'select_semantic_config_tool', args: {} }],
+        tool_calls: [{ id: 'tool-select', name: 'file_grep', args: {} }],
       },
       { id: 'tool-result-1', role: 'tool', tool_call_id: 'tool-select', content: '已选择指标集' },
       {
         id: 'assistant-2',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'tool-sql', name: 'dsl2sql_tool', args: {} }],
+        tool_calls: [{ id: 'tool-sql', name: 'data_analyzing_tool', args: {} }],
       },
       { id: 'tool-result-2', role: 'tool', tool_call_id: 'tool-sql', content: 'SELECT * FROM order_items' },
       {
         id: 'assistant-3',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'tool-query', name: 'semantic_query_tool', args: {} }],
+        tool_calls: [{ id: 'tool-query', name: 'data_analyzing_tool', args: {} }],
       },
       { id: 'tool-result-3', role: 'tool', tool_call_id: 'tool-query', content: '{"success": true}' },
       { id: 'assistant-4', role: 'assistant', content: '已查询到 100 条订单明细。' },
@@ -61,7 +61,7 @@ describe('buildHistoryMessages', () => {
         id: 'assistant-2',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'tool-query', name: 'semantic_query_tool', args: {} }],
+        tool_calls: [{ id: 'tool-query', name: 'data_analyzing_tool', args: {} }],
       },
       { id: 'tool-result-2', role: 'tool', tool_call_id: 'tool-query', content: '{"success": true}' },
       { id: 'assistant-3', role: 'assistant', content: '第二个回答。' },
@@ -83,5 +83,175 @@ describe('buildHistoryMessages', () => {
       { type: 'toolCall', toolCallId: 'tool-query' },
       { type: 'text', content: '第二个回答。' },
     ])
+  })
+
+  it('replays persisted history events by sequence instead of guessing thought positions', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '查询订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'reasoning', payload: { id: 'thinking-1', content: '先选择指标集' } },
+      {
+        sequence_no: 3,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: { id: 'assistant-1', content: '', tool_calls: [{ id: 'tool-1', name: 'file_grep', args: {} }] },
+      },
+      { sequence_no: 4, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'tool-result-1', tool_call_id: 'tool-1', content: '已选择订单指标集' } },
+      { sequence_no: 5, turn_id: 'turn-1', event_type: 'reasoning', payload: { id: 'thinking-2', content: '继续生成 SQL' } },
+      {
+        sequence_no: 6,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: { id: 'assistant-2', content: '', tool_calls: [{ id: 'tool-2', name: 'data_analyzing_tool', args: {} }] },
+      },
+      { sequence_no: 7, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'tool-result-2', tool_call_id: 'tool-2', content: 'SELECT * FROM orders' } },
+      { sequence_no: 8, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-3', content: '查询已完成。' } },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.turnId).toBe('turn-1')
+    expect(messages[1]!.segments).toEqual([
+      { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+      { type: 'toolCall', toolCallId: 'tool-1' },
+      { type: 'thinkingSegment', thinkingSegmentId: 'thinking-2' },
+      { type: 'toolCall', toolCallId: 'tool-2' },
+      { type: 'text', content: '查询已完成。' },
+    ])
+    expect(messages[1]!.toolCalls?.map(tool => tool.result)).toEqual([
+      '已选择订单指标集',
+      'SELECT * FROM orders',
+    ])
+  })
+
+  it('keeps assistant text before a tool call stored in the same AI message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '生成报告' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: {
+          id: 'assistant-1',
+          content: '为了生成报告，我需要您确认以下问题：',
+          tool_calls: [{ id: 'ask-1', name: 'ask_user_question', args: {} }],
+        },
+      },
+    ])
+
+    expect(messages[1]!.segments).toEqual([
+      { type: 'text', content: '为了生成报告，我需要您确认以下问题：' },
+      { type: 'toolCall', toolCallId: 'ask-1' },
+    ])
+  })
+
+  it('replays context compression as a standalone timeline marker', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '继续分析' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'context_compression', payload: {
+        id: 'context-compression-1',
+        timestamp: '2026-07-29 10:00:00',
+        estimated_tokens_before: 70000,
+        estimated_tokens_after: 21000,
+        estimated_cleared_tokens: 49000,
+        compressed_messages: 12,
+      } },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已完成' } },
+    ])
+
+    expect(messages.map(message => message.role)).toEqual(['user', 'context_compression', 'assistant'])
+    expect(messages[1]!.turnId).toBe('turn-1')
+    expect(messages[2]!.turnId).toBe('turn-1')
+    expect(messages[1]!.contextCompression).toMatchObject({
+      id: 'context-compression-1',
+      estimated_cleared_tokens: 49000,
+    })
+  })
+})
+
+describe('subagent trail replay', () => {
+  const trail = [
+    { kind: 'message', id: 'm1', content: '开始计算', truncated: false, thinking: '需要精确计算', thinkingTruncated: false },
+    { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, result: '2', status: 'completed' },
+  ]
+
+  it('restores subagent trail from history events onto the task tool call', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '算一下 1+1' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: { description: '算 1+1', subagent_type: 'data-explore' } }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '1 + 1 = 2', subagent_trail: trail },
+      },
+      {
+        sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-2', role: 'assistant', content: '答案是 2。' },
+      },
+    ])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    const taskCall = assistant.toolCalls?.find(tool => tool.tool_call_id === 'task-1')
+    expect(taskCall?.subagentTrail).toEqual(trail)
+    // 普通工具不受影响
+    expect(assistant.toolCalls).toHaveLength(1)
+  })
+
+  it('restores subagent trail from the legacy messages path', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '算一下 1+1' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'task-1', name: 'task', args: {} }],
+      },
+      { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', content: '1 + 1 = 2', subagent_trail: trail },
+      { id: 'assistant-2', role: 'assistant', content: '答案是 2。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    expect(assistant.toolCalls?.[0]?.subagentTrail).toEqual(trail)
+  })
+
+  it('drops invalid trail entries instead of failing the whole replay', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '分析' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'task-1', name: 'task', args: {} }],
+      },
+      {
+        id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', content: '结论',
+        subagent_trail: [
+          null,
+          { kind: 'message', id: '' },
+          { kind: 'message', id: 'm1', content: '', thinking: '' },
+          { kind: 'unknown', id: 'x' },
+          { kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: 'bad-args', status: 'weird' },
+          { kind: 'message', id: 'm2', content: '有效文本', truncated: 'yes' },
+        ],
+      },
+      { id: 'assistant-2', role: 'assistant', content: '结论。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    const restored = assistant.toolCalls?.[0]?.subagentTrail
+    expect(restored).toHaveLength(2)
+    expect(restored?.[0]).toEqual({ kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: {}, result: '', status: 'completed' })
+    expect(restored?.[1]).toEqual({ kind: 'message', id: 'm2', content: '有效文本', truncated: false, thinking: '', thinkingTruncated: false })
+  })
+
+  it('leaves subagentTrail undefined when the payload carries none', () => {
+    const messages = buildHistoryMessages([
+      { id: 'user-1', role: 'user', content: '查数据' },
+      {
+        id: 'assistant-1', role: 'assistant', content: '',
+        tool_calls: [{ id: 'tool-query', name: 'data_analyzing_tool', args: {} }],
+      },
+      { id: 'tool-result-1', role: 'tool', tool_call_id: 'tool-query', content: '{"success": true}' },
+      { id: 'assistant-2', role: 'assistant', content: '完成。' },
+    ], [])
+
+    const assistant = messages.find(message => message.role === 'assistant')!
+    expect(assistant.toolCalls?.[0]?.subagentTrail).toBeUndefined()
   })
 })

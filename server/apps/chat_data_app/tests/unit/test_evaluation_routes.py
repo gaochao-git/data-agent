@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -21,7 +20,6 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from apps.chat_data_app.services.evaluation_service import build_evaluation_service
-from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE
 from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
 
@@ -303,8 +301,7 @@ def test_eval_run_payload_formatters_include_summary_and_case_defaults():
     assert case_payload["semantic_accuracy"] == 1
 
 
-def test_build_accuracy_runner_args_validates_scene(monkeypatch):
-    monkeypatch.setattr(evaluation, "ensure_agent_available", lambda _agent_id: None)
+def test_build_accuracy_runner_args_validates_scene():
 
     payload = AccuracyEvaluationRunRequest(
         datasource_id="ds_a",
@@ -320,36 +317,17 @@ def test_build_accuracy_runner_args_validates_scene(monkeypatch):
 
     args = asyncio.run(evaluation._build_accuracy_runner_args(payload, SimpleNamespace(user_id="u1")))
 
-    assert args.agent_id == "chat_data"
     assert args.datasource_id == "ds_a"
     assert args.semantic_config_id == "cfg_a"
     assert args.case_id == ["case_1"]
     assert args.limit == 5
 
-    analyze_args = asyncio.run(evaluation._build_accuracy_runner_args(
+    with pytest.raises(ValueError, match="agent_id"):
         AccuracyEvaluationRunRequest(
             datasource_id="ds_a",
             semantic_config_id="cfg_a",
-            agent_id="chat_data_data_analyze",
-        ),
-        SimpleNamespace(user_id="u1"),
-    ))
-    assert analyze_args.agent_id == "chat_data_data_analyze"
-
-    def raise_disabled(_agent_id):
-        raise evaluation.HTTPException(status_code=403, detail="智能分析功能暂未开放")
-
-    monkeypatch.setattr(evaluation, "ensure_agent_available", raise_disabled)
-    with pytest.raises(evaluation.HTTPException) as exc_info:
-        asyncio.run(evaluation._build_accuracy_runner_args(
-            AccuracyEvaluationRunRequest(
-                datasource_id="ds_a",
-                semantic_config_id="cfg_a",
-                agent_id="chat_data_data_analyze",
-            ),
-            SimpleNamespace(user_id="u1"),
-        ))
-    assert exc_info.value.status_code == 403
+            agent_id="unsupported_agent",
+        )
 
 
 def test_generate_draft_case_by_llm_handles_nl_and_sql(monkeypatch):
@@ -632,29 +610,6 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
     assert missing_payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_accuracy_routes_error_mapping(monkeypatch):
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
-
-    async def raise_value_error(_payload, _request, _current_user):
-        raise ValueError("测试集为空")
-
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", raise_value_error)
-    value_response = asyncio.run(evaluation.run_accuracy_evaluation(AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None))
-
-    async def raise_runtime_error(_payload, _request, _current_user):
-        raise RuntimeError("llm down")
-
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", raise_runtime_error)
-    runtime_response = asyncio.run(evaluation.run_accuracy_evaluation(AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None))
-
-    value_payload = json.loads(value_response.body.decode("utf-8"))
-    runtime_payload = json.loads(runtime_response.body.decode("utf-8"))
-
-    assert value_payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert runtime_payload["code"] == ErrorCode.CHATDATA_EVALUATION_RUN_FAILED
-
-
 def test_run_accuracy_stream_returns_auth_error(monkeypatch):
     from fastapi import HTTPException
 
@@ -723,7 +678,7 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
             }
 
     class FakeManager:
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             if config_id == "cfg_public":
                 return {"id": config_id, "scope_type": "public", "create_by": "admin"}
             if config_id == "cfg_private":
@@ -732,7 +687,7 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
 
     request = SimpleNamespace()
     monkeypatch.setattr(evaluation, "_build_evaluation_service", lambda: FakeEvaluationService())
-    monkeypatch.setattr(evaluation, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
 
     normal_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
@@ -780,27 +735,12 @@ def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
         return {"summary": {"total": payload.limit}, "user": current_user.username}
 
     monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", fake_run)
-    success_response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a", limit=3),
-        None,
-    ))
     stream_response = asyncio.run(evaluation.run_accuracy_evaluation_stream(
         AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
         None,
     ))
 
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: (_ for _ in ()).throw(HTTPException(status_code=403, detail="无权限")))
-    auth_response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        None,
-    ))
-
-    success_payload = _json_body(success_response)
-    auth_payload = _json_body(auth_response)
-
-    assert success_payload["msg"] == "评测完成"
-    assert success_payload["data"]["summary"]["total"] == 3
-    assert auth_payload["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
     assert stream_response.media_type == "text/event-stream"
     assert stream_response.headers["Cache-Control"] == "no-cache"
 
@@ -906,34 +846,6 @@ def test_run_accuracy_evaluation_payload_success_and_failure(monkeypatch):
     assert any(call[0] == "update" and call[2].get("status") == "failed" for call in calls)
 
 
-def test_run_accuracy_evaluation_route_rejects_disabled_agent(monkeypatch):
-    async def fake_permission(*_args, **_kwargs):
-        return {"id": "cfg_a"}
-
-    async def fake_run(*_args, **_kwargs):
-        raise AssertionError("disabled agent should be rejected before running evaluation")
-
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", fake_permission)
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", fake_run)
-    monkeypatch.setattr(
-        evaluation,
-        "ensure_agent_available",
-        lambda _agent_id: (_ for _ in ()).throw(evaluation.HTTPException(status_code=403, detail="智能分析功能暂未开放")),
-    )
-
-    response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(
-            datasource_id="ds_a",
-            semantic_config_id="cfg_a",
-            agent_id="chat_data_data_analyze",
-        ),
-        None,
-    ))
-
-    assert json.loads(response.body.decode("utf-8"))["code"] == DATA_ANALYZE_DISABLED_CODE
-
-
 def test_accuracy_sse_iter_handles_cancelled(monkeypatch):
     updates = []
 
@@ -1005,7 +917,7 @@ def test_compile_scene_case_gold_sql_success_and_error(monkeypatch):
 
 def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
     class FakeManager:
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             if config_id == "missing":
                 return None
             if config_id == "boom":
@@ -1031,7 +943,7 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
             "business_domain": "订单分析",
         }
 
-    monkeypatch.setattr(evaluation, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
     monkeypatch.setattr(evaluation, "_compile_scene_case_gold_sql", fake_compile)
     monkeypatch.setattr(evaluation, "_generate_draft_case_by_llm", fake_generate)

@@ -4,43 +4,126 @@ import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage
+import pytest
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessageChunk, ToolMessageChunk
+from langgraph.checkpoint.memory import InMemorySaver
 
-from apps.chat_data_app import routes
-from apps.chat_data_app.services import semantic_builder_compiler, semantic_tools
-from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
+from apps.chat_data_app.agent.tools import data_analyzing
+from apps.chat_data_app import agent_run_support
+from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
+from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
+from apps.chat_data_app.agent.run.agent_inbox_service import ClaimedAgentMessages
 
 
-class FakeMessageChunk:
-    def __init__(
-        self,
-        *,
-        content="",
-        msg_type="ai",
-        tool_calls=None,
-        tool_call_chunks=None,
-        tool_call_id="",
-        name="",
-    ):
-        self.content = content
-        self.type = msg_type
-        self.tool_calls = tool_calls or []
-        self.tool_call_chunks = tool_call_chunks or []
-        self.tool_call_id = tool_call_id
-        self.name = name
+@pytest.fixture(autouse=True)
+def _stub_conversation_event_writes(monkeypatch):
+    handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
+    run_contexts = {}
+    event_queues = {}
+    event_sequences = {}
 
-    def model_dump(self):
-        data = {"content": self.content, "type": self.type}
-        if self.tool_calls:
-            data["tool_calls"] = self.tool_calls
-        if self.tool_call_chunks:
-            data["tool_call_chunks"] = self.tool_call_chunks
-        if self.tool_call_id:
-            data["tool_call_id"] = self.tool_call_id
-        if self.name:
-            data["name"] = self.name
-        return data
+    async def noop_event_write(**_kwargs):
+        return None
+
+    monkeypatch.setattr(handler_module.conversation_event_service, "persist_user_message", noop_event_write)
+    monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
+
+    # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”。
+    async def noop_prematerialize(**_kwargs):
+        return {"total": 0, "failed_ids": []}
+
+    monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", noop_prematerialize)
+
+    async def start_run(*_args, **_kwargs):
+        runtime_context = _args[3] if len(_args) > 3 else _kwargs.get("runtime_context") or {}
+        run_contexts["run-test"] = runtime_context
+        return "run-test", []
+
+    async def no_messages(*_args, **_kwargs):
+        return ClaimedAgentMessages("run-test", [])
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def stream(*, run_id, last_event_id="0-0", is_disconnected=None):
+        _ = last_event_id, is_disconnected
+        queue = event_queues.setdefault(run_id, asyncio.Queue())
+        while True:
+            payload = await queue.get()
+            event_sequences[run_id] = event_sequences.get(run_id, 0) + 1
+            yield {
+                "stream_id": f"test-{event_sequences[run_id]}-0",
+                "payload": payload,
+            }
+            if payload.startswith("event: done\n"):
+                return
+
+    def submit(*, run_id, conversation_id, user_id, operator_name):
+        async def run():
+            queue = event_queues.setdefault(run_id, asyncio.Queue())
+            context = run_contexts[run_id]
+            # 对齐 Runtime 契约：生成器只产事实，结构化 done 由消费方（Runtime）收口发布。
+            status = "finished"
+            try:
+                async for payload in handler_module._generate_chat_data_stream(
+                    thread_id=conversation_id,
+                    user_query=context.get("query") or "",
+                    datasource_id=context.get("datasource_id"),
+                    user_id=user_id,
+                    username=operator_name,
+                    member_datasource_ids=context.get("member_datasource_ids") or [],
+                    semantic_config_id=context.get("semantic_config_id"),
+                    request=None,
+                    model_id=context.get("model_id"),
+                    semantic_config_selection=context.get("semantic_config_selection"),
+                    enable_thinking=context.get("enable_thinking"),
+                    skill_names=context.get("skill_names") or [],
+                    options=context.get("options") or {},
+                    file_ids=context.get("file_ids") or [],
+                    run_id=run_id,
+                    owner_token="test-owner",
+                    adopted_messages=[],
+                ):
+                    if payload.startswith("event: question_requested"):
+                        status = "waiting_user"
+                    await queue.put(payload)
+            except Exception:
+                status = "failed"
+            await queue.put(handler_module._format_sse("done", {"status": status}))
+
+        asyncio.create_task(run())
+
+    monkeypatch.setattr(handler_module.agent_inbox_service, "start_run", start_run)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_messages", no_messages)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "mark_consumed", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "finish_run", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "complete_run", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "assert_run_owner", noop)
+    monkeypatch.setattr(handler_module.agent_run_runtime, "submit", submit)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "stream", stream)
+
+
+def FakeMessageChunk(
+    *,
+    content="",
+    msg_type="ai",
+    tool_calls=None,
+    tool_call_chunks=None,
+    tool_call_id="",
+    name="",
+):
+    """测试工厂：返回真实 LangChain 消息 Chunk。"""
+    if msg_type == "human":
+        return HumanMessageChunk(content=content)
+    if msg_type == "tool":
+        return ToolMessageChunk(content=content, tool_call_id=tool_call_id, name=name or None)
+    normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
+    return AIMessageChunk(
+        content=content,
+        tool_calls=normalized_tool_calls,
+        tool_call_chunks=tool_call_chunks or [],
+    )
 
 
 class FakeGraph:
@@ -59,22 +142,30 @@ class FakeGraph:
 
 @asynccontextmanager
 async def fake_checkpointer():
-    yield None
+    yield InMemorySaver()
 
 
 def _patch_completion_dependencies(monkeypatch, graph):
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+    async def fake_get_agent_id(conversation_id, user_id=None):
         return "chat_data" if conversation_id.startswith("conv_") else None
 
-    async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         return conversation_id
 
+    async def fake_get_datasource_id(_conversation_id, _user_id):
+        return None
+
+    async def fake_resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
+        return requested_datasource_id
+
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", fake_get_datasource_id)
+    monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "create_chat_data_agent", lambda **_kwargs: graph)
+    monkeypatch.setattr(handler_module, "create_data_agent", lambda *_args, **_kwargs: graph)
 
 
 def _post_completion(client, auth_headers, conversation_id, query, options=None):
@@ -93,14 +184,15 @@ def _tool_event_contents(stream_text: str) -> list[str]:
     """解析 SSE 工具事件中的原始工具结果。"""
     contents = []
     for event in stream_text.split("\n\n"):
-        if not event.startswith("event: tool\n"):
+        event_without_id = event.removeprefix(event.split("\n", 1)[0] + "\n") if event.startswith("id: ") else event
+        if not event_without_id.startswith("event: tool\n"):
             continue
-        payload = json.loads(event.split("data: ", 1)[1])
+        payload = json.loads(event_without_id.split("data: ", 1)[1])
         contents.append(str(payload.get("content") or ""))
     return contents
 
 
-def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
+def test_completion_api_streams_multi_tool_result_passthrough(client, auth_headers, monkeypatch):
     payload = {
         "success": True,
         "semantic_config_ids": ["cfg_order", "cfg_user"],
@@ -112,7 +204,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     graph = FakeGraph([
         (
             FakeMessageChunk(
-                tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}],
+                tool_calls=[{"id": "call_select", "name": "file_grep"}],
             ),
             {"langgraph_node": "model"},
         ),
@@ -121,7 +213,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
                 tool_call_chunks=[
                     {
                         "id": "call_select",
-                        "name": "select_semantic_config_tool",
+                        "name": "file_grep",
                         "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
                     }
                 ],
@@ -130,10 +222,10 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
         ),
         (
             FakeMessageChunk(
-                content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="select_semantic_config_tool",
+                name="file_grep",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -157,14 +249,14 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     assert "cfg_user" in text
     assert "已分别查询订单金额和用户数。" in text
     assert "event: message_end" in text
-    assert text.rstrip().endswith("data: [DONE]")
+    assert text.rstrip().endswith('"status": "finished"}')
 
     assert "mode" not in graph.initial_state
     assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
     assert graph.initial_state["messages"][0].additional_kwargs["timestamp"]
 
 
-def test_completion_api_streams_single_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
+def test_completion_api_streams_single_tool_result_passthrough(client, auth_headers, monkeypatch):
     payload = {
         "success": True,
         "semantic_config_ids": ["cfg_order"],
@@ -174,15 +266,15 @@ def test_completion_api_streams_single_semantic_retrieval_tool_result(client, au
     }
     graph = FakeGraph([
         (
-            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]),
+            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "file_grep"}]),
             {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
-                content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="select_semantic_config_tool",
+                name="file_grep",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -244,15 +336,16 @@ class ToolCallingLLM:
                 content="",
                 tool_calls=[{
                     "id": "call_dsl",
-                    "name": "dsl2sql_tool",
-                    "args": self.tool_args,
+                    "name": "data_analyzing_tool",
+                    "args": {"action": "validate_dsl", "action_payload": self.tool_args},
                 }],
             )
         return AIMessage(content="已生成 SQL。")
 
 
-def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, auth_headers, monkeypatch):
+def test_completion_api_runs_real_validate_dsl_action_with_structured_having(client, auth_headers, monkeypatch):
     manager = FakeDatasourceManager()
+    semantic_service = FakeSemanticConfigService(manager)
     datasource = manager.datasources["ds_a"]
     datasource["ds_tables"].append({
         "table_name": "order_items",
@@ -300,29 +393,37 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     }
     fake_llm = ToolCallingLLM(tool_args)
 
-    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+    async def fake_get_agent_id(conversation_id, user_id=None):
         return "chat_data" if conversation_id.startswith("conv_") else None
 
-    async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+    async def fake_get_or_create_conversation(agent_id, conversation_id, user_id):
         return conversation_id
+
+    async def fake_get_datasource_id(_conversation_id, _user_id):
+        return None
+
+    async def fake_resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
+        return requested_datasource_id
 
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", fake_get_datasource_id)
+    monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda **_kwargs: asyncio.sleep(0, result=""))
-    monkeypatch.setattr(handler_module, "get_datasource_manager", lambda: manager)
-    for module in (semantic_builder_compiler, semantic_tools):
+    for module in (semantic_query_service, semantic_conversation_context, semantic_model_repository):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
-    for module_name in (
-        "apps.chat_data_app.agent.chat_data_agent",
-        "server.apps.chat_data_app.agent.chat_data_agent",
-        "apps.chat_data_app.agent.agent_runtime",
-        "server.apps.chat_data_app.agent.agent_runtime",
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None:
-            monkeypatch.setattr(module, "create_streaming_chat_model", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
+
+    async def fake_load_semantic_model(*_args, **kwargs):
+        assert kwargs["mode"] == "full"
+        return dict(config)
+
+    monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_load_semantic_model)
+    from apps.chat_data_app.agent import data_agent
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda *_args, **_kwargs: fake_llm)
 
     response = _post_completion(
         client,
@@ -335,7 +436,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     assert response.status_code == 200
     text = response.text
     assert "event: tool" in text
-    assert "dsl2sql_tool" in text
+    assert "data_analyzing_tool" in text
     assert "LEFT JOIN order_items" in text
     assert "HAVING SUM(orders.out_amount) > (SUM(order_items.amount) * 10)" in text
     assert "已生成 SQL。" in text

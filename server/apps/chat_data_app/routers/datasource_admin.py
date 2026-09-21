@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from utils.response import business_response
 
 from ..schema import (
@@ -23,21 +24,26 @@ from ..schema import (
     DatasourceGroupUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
+    DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
 )
-from ..services.semantic_json_parser import parse_llm_json
-from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
+from ..services.datasource.manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
+from ..services.semantic.run.semantic_config_service import get_semantic_config_service
 from .dependencies import _get_current_user
 from .datasource_helpers import (
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
+    _get_datasource_column_dict_response,
+    _get_datasource_table_column_dicts_response,
     _merge_health_status,
     _normalize_source_item,
 )
 
 logger = get_logger(__name__)
-router = APIRouter()
+from . import JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 数据源管理（Admin）"], responses=JSON_API_RESPONSES)
 
 
 def _selected_table_names(raw_table_names: List[str]) -> List[str]:
@@ -314,7 +320,7 @@ async def get_datasource_semantic_health(datasource_id: str, request: Request):
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        configs = await ds_manager.get_semantic_configs_async(datasource_id)
+        configs = await get_semantic_config_service().get_configs_async(datasource_id)
         schema_health = None
         if datasource.get("source_type") in ("mysql", "hive"):
             try:
@@ -420,6 +426,55 @@ async def update_datasource_column_dict(datasource_id: str, table_name: str, col
         return business_response(msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
+async def get_admin_datasource_column_dict(datasource_id: str, table_name: str, column_name: str, request: Request):
+    """获取后台数据源字段数据字典。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        return await _get_datasource_column_dict_response(ds_manager, datasource_id, table_name, column_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "后台获取字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s",
+            datasource_id,
+            table_name,
+            column_name,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg=f"获取失败: {str(e)}",
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
+            status="error",
+        )
+
+
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/column-dicts")
+async def get_admin_datasource_table_column_dicts(datasource_id: str, table_name: str, request: Request):
+    """批量获取后台数据源单张表已维护字段数据字典。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        return await _get_datasource_table_column_dicts_response(ds_manager, datasource_id, table_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "后台批量获取字段数据字典失败: datasource_id=%s table_name=%s error=%s",
+            datasource_id,
+            table_name,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg=f"获取失败: {str(e)}",
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
+            status="error",
+        )
+
+
 def _build_column_dict_generate_prompt(table_name: str, column_name: str, column: Dict[str, Any], text: str) -> str:
     """构造字段数据字典生成提示词。"""
     payload = {
@@ -443,6 +498,24 @@ def _build_column_dict_generate_prompt(table_name: str, column_name: str, column
     )
 
 
+def _parse_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
+    """解析字段枚举候选值列表，去重并截断长度。"""
+    enum_values: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    if not isinstance(raw_enums, list):
+        return enum_values
+    for item in raw_enums:
+        if not isinstance(item, dict):
+            continue
+        enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
+        enum_label = str(item.get("label") or item.get("enum_label") or "").strip()[:255]
+        if not enum_value or enum_value in seen:
+            continue
+        seen.add(enum_value)
+        enum_values.append({"value": enum_value, "label": enum_label})
+    return enum_values
+
+
 def _parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     """解析字段数据字典生成模型返回。"""
     parsed = parse_llm_json(str(content or ""), strict=False)
@@ -450,24 +523,44 @@ def _parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     if not isinstance(raw_dict, dict):
         raw_dict = {}
     raw_enums = raw_dict.get("enum_values") or raw_dict.get("enums") or []
-    enum_values: List[Dict[str, str]] = []
-    seen: Set[str] = set()
-    if isinstance(raw_enums, list):
-        for item in raw_enums:
-            if not isinstance(item, dict):
-                continue
-            enum_value = str(item.get("value") or item.get("enum_value") or "").strip()[:128]
-            enum_label = str(item.get("label") or item.get("enum_label") or "").strip()[:255]
-            if not enum_value or enum_value in seen:
-                continue
-            seen.add(enum_value)
-            enum_values.append({"value": enum_value, "label": enum_label})
     return {
-        "enum_values": enum_values[:100],
+        "enum_values": _parse_column_enum_values(raw_enums)[:100],
         "synonyms": [],
         "storage_format": "",
         "unit": str(raw_dict.get("unit") or "").strip()[:100],
     }
+
+
+def _find_datasource_column(datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
+    """在数据源表结构中定位指定字段。"""
+    target_column = None
+    for table in (datasource or {}).get("ds_tables") or []:
+        if str(table.get("table_name") or "").strip() != table_name:
+            continue
+        for column in table.get("columns") or []:
+            if str(column.get("name") or "").strip() == column_name:
+                target_column = column
+                break
+    return target_column
+
+
+async def _invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: str, column_name: str):
+    """调用字段数据字典生成模型，失败时上报连接报警。"""
+    llm = get_chat_data_llm(streaming=False, max_tokens=1200)
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={
+                "purpose": "datasource_column_dict_generate",
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "column_name": column_name,
+            },
+        )
+        raise
+    return response.content if hasattr(response, "content") else str(response)
 
 
 @router.post("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict/generate")
@@ -477,32 +570,11 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
         _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
-        target_column = None
-        for table in (datasource or {}).get("ds_tables") or []:
-            if str(table.get("table_name") or "").strip() != table_name:
-                continue
-            for column in table.get("columns") or []:
-                if str(column.get("name") or "").strip() == column_name:
-                    target_column = column
-                    break
+        target_column = _find_datasource_column(datasource, table_name, column_name)
         if not datasource or target_column is None:
             return business_response(msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
-        llm = get_chat_data_llm(streaming=False, max_tokens=1200)
-        try:
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-        except Exception as exc:
-            emit_llm_connection_alarm_if_needed(
-                exc,
-                ext1={
-                    "purpose": "datasource_column_dict_generate",
-                    "datasource_id": datasource_id,
-                    "table_name": table_name,
-                    "column_name": column_name,
-                },
-            )
-            raise
-        content = response.content if hasattr(response, "content") else str(response)
+        content = await _invoke_column_dict_llm(prompt, datasource_id, table_name, column_name)
         column_dict = _parse_column_dict_generate_response(str(content))
         return business_response(
             data={
@@ -518,6 +590,70 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
     except Exception as e:
         logger.error("生成字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s", datasource_id, table_name, column_name, e, exc_info=True)
         return business_response(msg=f"生成失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
+async def get_datasource_table_indexes(datasource_id: str, table_name: str, request: Request):
+    """获取数据源表的手动索引配置。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        indexes = await ds_manager.get_table_indexes_async(datasource_id, table_name)
+        if indexes is None:
+            return business_response(
+                msg=f"数据源或数据表不存在: {datasource_id}/{table_name}",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+            )
+        return business_response(
+            data={
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "indexes": indexes,
+            },
+            msg="获取成功"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取表索引配置失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
+        return business_response(msg="获取表索引配置失败，请稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.put("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
+async def update_datasource_table_indexes(datasource_id: str, table_name: str, body: DatasourceTableIndexesUpdateRequest, request: Request):
+    """覆盖保存数据源表的手动索引配置。"""
+    try:
+        current_user = _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        saved = await ds_manager.replace_table_indexes_async(
+            datasource_id,
+            table_name,
+            [item.model_dump() for item in body.indexes],
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        if saved is None:
+            return business_response(
+                msg=f"数据源或数据表不存在: {datasource_id}/{table_name}",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+            )
+        return business_response(
+            data={
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "indexes": saved,
+            },
+            msg="保存成功"
+        )
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("保存表索引配置失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
+        return business_response(msg="保存表索引配置失败，请稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
 @router.post("/admin/datasources/{datasource_id}/set-default")

@@ -21,7 +21,7 @@
  *     </template>
  *   </ChatDataFloat>
  */
-import { ref, computed, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import ChatDataPage from './index.vue'
 import type { ChatDataOptions } from '../types'
 
@@ -156,6 +156,16 @@ const toggleMaximize = () => {
 // --- 拖动逻辑 ---
 const isDragging = ref(false)
 
+// 卸载兜底:拖拽/缩放进行到一半组件被卸载时,残留的 document 监听由这里回收
+let activeDragCleanup: (() => void) | null = null
+const registerDragCleanup = (cleanup: () => void) => {
+  activeDragCleanup = cleanup
+}
+onUnmounted(() => {
+  activeDragCleanup?.()
+  activeDragCleanup = null
+})
+
 const startDrag = (e: MouseEvent) => {
   if (isMaximized.value) return
   e.preventDefault()
@@ -177,6 +187,10 @@ const startDrag = (e: MouseEvent) => {
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
+  registerDragCleanup(() => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  })
 }
 
 // --- 缩放逻辑 ---
@@ -221,6 +235,10 @@ const startResize = (dir: ResizeDir, e: MouseEvent) => {
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
+  registerDragCleanup(() => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  })
 }
 
 // 窗口样式
@@ -293,7 +311,7 @@ const windowStyle = computed(() => ({
 /* === 悬浮按钮 === */
 .chatdata-fab {
   position: fixed;
-  z-index: 1501;
+  z-index: var(--z-chatdata-fab);
   width: 52px;
   height: 52px;
   border-radius: 50%;
@@ -314,7 +332,7 @@ const windowStyle = computed(() => ({
 /* === 悬浮窗口 === */
 .chatdata-float-window {
   position: fixed;
-  z-index: 3000;
+  z-index: var(--z-chatdata-float-window);
   display: flex;
   flex-direction: column;
   background: #fff;

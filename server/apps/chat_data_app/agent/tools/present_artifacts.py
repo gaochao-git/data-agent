@@ -1,4 +1,4 @@
-"""DataAnalyze present_artifacts tool."""
+"""ChatData present_artifacts tool."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_artifact_payload
-from .common import json_dumps
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
+from .common import tool_result_payload
 
 logger = get_logger(__name__)
 
@@ -30,13 +30,24 @@ def _artifact_display_name(file_path: str) -> str:
 def _artifact_mime_type(file_path: str, artifact_type: str) -> str:
     if artifact_type in {"chart_spec", "dashboard_spec"}:
         return "application/json"
+    if artifact_type in {"skill", "markdown"}:
+        return "text/markdown"
+    if artifact_type == "yaml":
+        return "application/yaml"
     guessed, _ = mimetypes.guess_type(str(file_path or ""))
     return guessed or "application/octet-stream"
 
 
 def _presentation_artifact_payload(artifact: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    for key in ("file_path", "artifact_type", "renderer", "artifact_version"):
+    for key in (
+        "file_path",
+        "artifact_type",
+        "renderer",
+        "artifact_version",
+        "skill_title",
+        "description",
+    ):
         value = artifact.get(key)
         if value is not None:
             payload[key] = value
@@ -47,15 +58,19 @@ def _presentation_artifact_payload(artifact: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def create_present_artifacts_tool(execution_session_ref: SandboxExecutionSessionRef | None = None):
-    @tool("present_artifacts")
-    async def present_artifacts(files: list[str]) -> str:
+def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntime):
+    @tool("present_artifacts", parse_docstring=True)
+    async def present_artifacts(files: list[str], intent: str = "") -> str:
         """
         将 outputs 中已经生成的最终产物显式呈现给用户。
 
-        - files: 需要展示的文件路径列表，只能传 `/mnt/user-data/outputs/...` 或 `outputs/...`。
-        - 支持图表、看板、表格、文档、表格文件、PDF、图片等已注册产物类型。
+        - 支持图表、看板、技能、Markdown、自包含 HTML 页面、表格、文档、演示文稿、PDF、图片等已注册产物类型。
+        - 技能只能传 /mnt/user-data/outputs/<skill-name>/SKILL.md，frontmatter 的 name 必须与目录名一致。
         - workspace 中间文件不会被展示。
+
+        Args:
+            files: 需要展示的文件路径列表，只能传 `/mnt/user-data/outputs/...`。
+            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         artifacts: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
@@ -64,7 +79,7 @@ def create_present_artifacts_tool(execution_session_ref: SandboxExecutionSession
             if not path:
                 continue
             try:
-                artifact = await sandbox_artifact_payload(session_ref=execution_session_ref, file_path=path)
+                artifact = await workspace_runtime.artifact_payload(file_path=path)
             except Exception as exc:
                 logger.error("present_artifacts 校验产物失败: path=%s error=%s", path, exc, exc_info=True)
                 errors.append({"file_path": path, "error": str(exc)})
@@ -78,6 +93,6 @@ def create_present_artifacts_tool(execution_session_ref: SandboxExecutionSession
             "artifact_count": len(artifacts),
             "errors": errors,
         }
-        return "[present_artifacts]\n" + json_dumps(payload)
+        return tool_result_payload("present_artifacts", payload)
 
     return present_artifacts

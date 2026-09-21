@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
+import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../../composables/useTableSchemaPanel'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import QuickQueries, { type BuilderConfig, type BuilderFilterNode } from '../QuickQueries.vue'
@@ -32,6 +33,7 @@ import type {
   ExecutionTargetOption,
 } from '../../types'
 import { isQuerySucceeded } from '../../utils'
+import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../../utils/executionTargets'
 import type {
   AggregationField,
   ColumnInfo,
@@ -69,8 +71,9 @@ import {
 } from './utils/advancedFilterTree'
 import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
-import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
+import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
+import { isAbortError } from '../../utils/abort'
 
 const props = defineProps({
   datasourceId: { type: String, required: true },
@@ -90,6 +93,8 @@ const props = defineProps({
 })
 const attrs = useAttrs()
 const { submitSqlTask } = useQueryTask()
+// 当前查询任务轮询的取消通道：组件卸载时中止，避免销毁后仍继续轮询/写状态
+let queryTaskAbortController: AbortController | null = null
 
 const emit = defineEmits<{
   datasourceChange: [dsId: string]
@@ -194,46 +199,17 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   }))
 )
 
-const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
-  const members = props.datasource?.member_sources || []
-  if (members.length) {
-    return members
-      .filter(member => member.member_datasource_id)
-      .map(member => ({
-        member_datasource_id: String(member.member_datasource_id),
-        org_name: member.org_name || '',
-        org_code: member.org_code || '',
-        source_type: member.source_type || props.datasource?.source_type || '',
-        host: member.host,
-        port: member.port,
-        database: member.database,
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
-      }))
-  }
-  if (!props.datasourceId) return []
-  return [{
-    member_datasource_id: props.datasource?.template_datasource_id || props.datasourceId,
-    source_type: props.datasource?.source_type || '',
-    host: props.datasource?.source_config?.host,
-    port: props.datasource?.source_config?.port,
-    database: props.datasource?.source_config?.database,
-    label: props.datasource?.group_name || props.datasourceId,
-  }]
-})
+// 本地兜底执行对象选项：优先使用父级传入的 executionTargets
+const localExecutionTargets = computed<ExecutionTargetOption[]>(() => (
+  buildExecutionTargets({ datasource: props.datasource, fallbackId: props.datasourceId })
+))
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => props.executionTargets ?? localExecutionTargets.value)
 const internalSelectedMemberDatasourceIds = ref<string[]>([])
-const normalizeSelectedMemberDatasourceIds = (value: string[]) => (
-  props.executionTargetMultiple ? value : value.slice(0, 1)
-)
-const isSameStringArray = (left: string[], right: string[]) => {
-  if (left.length !== right.length) return false
-  return left.every((item, index) => item === right[index])
-}
 const selectedMemberDatasourceIds = computed({
   get: () => props.selectedMemberDatasourceIds ?? internalSelectedMemberDatasourceIds.value,
   set: (value: string[]) => {
-    const normalizedValue = normalizeSelectedMemberDatasourceIds(value)
+    const normalizedValue = normalizeSelectedMemberDatasourceIds(value, props.executionTargetMultiple)
     if (props.selectedMemberDatasourceIds !== undefined) {
       if (isSameStringArray(normalizedValue, props.selectedMemberDatasourceIds)) return
       emit('update:selectedMemberDatasourceIds', normalizedValue)
@@ -252,7 +228,7 @@ const syncSelectedExecutionTargets = () => {
   }
   const retainedIds = selectedMemberDatasourceIds.value.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
-    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds)
+    selectedMemberDatasourceIds.value = normalizeSelectedMemberDatasourceIds(retainedIds, props.executionTargetMultiple)
     return
   }
   const templateId = props.datasource?.template_datasource_id
@@ -285,7 +261,7 @@ const hasRawResult = computed(() => !!rawResultData.value)
 
 const ensureSemanticConfigSelected = () => {
   if (hasSemanticConfigSelected.value) return true
-  ElMessage.warning('请先选择指标集')
+  ElMessage.warning('请先选择语义模型')
   return false
 }
 
@@ -334,22 +310,18 @@ const favoriteContent = ref('')
 const favoriteBuilderConfig = ref<Record<string, unknown> | null>(null)
 const pendingFavoriteBuilderConfig = ref<BuilderConfig | null>(null)
 
-// 保存到看板
-const showSaveModal = ref(false)
-const saveSql = ref('')
-const saveChartType = ref<ChartType>('table')
-const saveMemberDatasourceId = ref('')
-const saveMemberDatasourceIds = ref<string[]>([])
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
-  saveSql.value = sql
-  saveChartType.value = (chartType as ChartType) || selectedChartType.value
-  saveMemberDatasourceId.value = String(memberDatasourceId || resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId || '').trim()
-  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
-  saveMemberDatasourceIds.value = executedMemberIds.length > 1
-    ? executedMemberIds
-    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
-  showSaveModal.value = true
-}
+// 保存到看板：共享弹窗状态与打开逻辑（chartType 回退当前图表类型、执行对象回退当前结果页签）
+const {
+  showSaveModal,
+  saveSql,
+  saveChartType,
+  saveMemberDatasourceId,
+  saveMemberDatasourceIds,
+  handleSaveToDashboard,
+} = useSaveToPanel({
+  getFallbackChartType: () => selectedChartType.value,
+  getFallbackMemberDatasourceId: () => resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId,
+})
 
 // 拖动调整高度
 const configPanelRef = ref<HTMLDivElement | null>(null)
@@ -398,8 +370,10 @@ const isRawAggFunc = (func?: string) => normalizeAggFunc(func) === 'RAW'
 
 const getAggregationModeState = (excludeAggId?: string) => {
   const list = excludeAggId ? aggregations.value.filter(item => item.id !== excludeAggId) : aggregations.value
-  const hasRaw = list.some(item => isRawAggFunc(item.func))
-  const hasAgg = list.some(item => !isRawAggFunc(item.func))
+  // 派生/复合指标为逻辑口径，不参与 RAW/聚合模式约束
+  const physical = list.filter(item => !isLogicalAggregation(item))
+  const hasRaw = physical.some(item => isRawAggFunc(item.func))
+  const hasAgg = physical.some(item => !isRawAggFunc(item.func))
   return { hasRaw, hasAgg }
 }
 
@@ -543,6 +517,13 @@ const validateQueryPagination = () => {
     return false
   }
   return true
+}
+
+const validateBuilderFilters = () => {
+  const message = getBuilderFilterValidationError(filters.value)
+  if (!message) return true
+  ElMessage.warning(message)
+  return false
 }
 
 // 运算符选项
@@ -1126,11 +1107,16 @@ const canConnectTableInSemanticMode = (target: string | { table?: string; tableA
 }
 
 const addFieldToDimension = (field: BuilderDragFieldData) => {
-  const { table, column, label, aggFunc, expression, displayName, semanticName } = field
+  const { table, column, label, aggFunc, expression, displayName, semanticName, metricKind } = field
+  // 派生/复合指标是纯逻辑口径，不支持作为维度
+  if (metricKind === 'derived' || metricKind === 'composite') {
+    ElMessage.warning('扩展指标不支持作为维度，请拖入指标区')
+    return
+  }
   const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
     return
   }
   // 支持指标 -> 维度：自动转换为非聚合字段
@@ -1167,19 +1153,37 @@ const addFieldToDimension = (field: BuilderDragFieldData) => {
 }
 
 const addFieldToAggregation = (field: BuilderDragFieldData) => {
-  const { table, column, label, aggFunc, displayName, expression, semanticName } = field
+  const { table, column, label, aggFunc, displayName, expression, semanticName, metricKind } = field
+  const isLogicalMetric = metricKind === 'derived' || metricKind === 'composite'
   const tableAlias = getTableAlias(field)
-  if (!table || !column) return
-  if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
-    return
+  // 派生/复合指标按 semanticName 交给后端解析，无物理表字段
+  if (!isLogicalMetric) {
+    if (!table || !column) return
+    if (!canConnectTableInSemanticMode({ table, tableAlias })) {
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
+      return
+    }
   }
-  const targetFunc = (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })) as AggregationField['func']
+  const targetFunc = (isLogicalMetric ? 'RAW' : (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type }))) as AggregationField['func']
   if (!canUseAggregationFunc(targetFunc)) {
     showAggregationModeConflictMessage(targetFunc)
     return
   }
-  if (!aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, table, column) && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
+  // 去重 key 必须基于条目自身判定逻辑/物理，不能读拖拽 field 的闭包，
+  // 否则第二个逻辑指标（或 RAW 物理指标）会被误判为已存在而静默跳过
+  const isLogicalAggregationItem = (item: { table?: string; column?: string; semanticName?: string; metricKind?: string }) =>
+    item.metricKind === 'derived' || item.metricKind === 'composite' ||
+    (!item.table && !item.column && !!item.semanticName)
+  const dedupKey = (item: { tableAlias?: string; table?: string; column?: string; semanticName?: string; displayName?: string; metricKind?: string }) => {
+    if (isLogicalAggregationItem(item)) {
+      return `logical:${item.semanticName || item.displayName}`
+    }
+    return buildFieldKey(item.tableAlias, item.table || '', item.column || '')
+  }
+  const currentKey = isLogicalMetric
+    ? `logical:${semanticName || displayName}`
+    : buildFieldKey(tableAlias, table, column)
+  if (!aggregations.value.find(a => dedupKey(a) === currentKey && a.func === targetFunc && (a.expression || '') === (expression || ''))) {
     aggregations.value.push({
       id: `${Date.now()}`,
       table,
@@ -1189,7 +1193,8 @@ const addFieldToAggregation = (field: BuilderDragFieldData) => {
       displayName,
       expression,
       label: label || column,
-      func: targetFunc
+      func: targetFunc,
+      metricKind
     })
   }
 }
@@ -1418,6 +1423,14 @@ const getDimensionDisplayName = (d: DimensionField) => {
 
 const getMetricDisplayName = (a: AggregationField) => {
   return stripFieldPrefix(a.displayName || a.label || a.column) || a.column
+}
+
+const isLogicalAggregation = (a: AggregationField) => a.metricKind === 'derived' || a.metricKind === 'composite'
+
+// 逻辑口径指标（派生/复合）没有聚合函数概念，chip 显示不带函数前缀
+const formatMetricChipLabel = (a: AggregationField) => {
+  const name = getMetricDisplayName(a)
+  return isLogicalAggregation(a) ? name : `${getAggFuncLabel(a.func)}(${name})`
 }
 
 const getAggFuncLabel = (func?: string) => {
@@ -1700,7 +1713,7 @@ const getFilterFieldLabel = (f: FilterCondition) => {
     const matchedAgg = f.aggId
       ? aggregations.value.find(a => a.id === f.aggId)
       : aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(f.tableAlias, f.table, f.column) && a.func === f.aggFunc)
-    if (matchedAgg) return `${getAggFuncLabel(matchedAgg.func)}(${getMetricDisplayName(matchedAgg)})`
+    if (matchedAgg) return formatMetricChipLabel(matchedAgg)
     const funcLabel = getAggFuncLabel(f.aggFunc)
     if ((f.displayName || '').trim()) return `${funcLabel}(${stripFieldPrefix(f.displayName)})`
     return `${funcLabel || '指标'}(${f.column})`
@@ -2027,7 +2040,7 @@ const handleDropToFilter = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2063,7 +2076,7 @@ const handleDropToOrder = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2113,6 +2126,9 @@ const openFavoriteModal = () => {
   if (!validateQueryPagination()) {
     return
   }
+  if (!validateBuilderFilters()) {
+    return
+  }
   const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
   if (!builderConfigPayload.mainTable) {
     ElMessage.warning('请先配置可视化查询')
@@ -2151,6 +2167,9 @@ const compileCurrentBuilderSql = async (
   semanticConfigId: string = props.semanticConfigId as string,
   force = false,
 ): Promise<string> => {
+  if (!validateBuilderFilters()) {
+    return ''
+  }
   if (!validateQueryPagination()) {
     return ''
   }
@@ -2238,6 +2257,9 @@ const executeQuery = async () => {
   if (!validateQueryPagination()) {
     return
   }
+  if (!validateBuilderFilters()) {
+    return
+  }
   executing.value = true
   executingTaskText.value = '任务创建中...'
   executingTaskId.value = ''
@@ -2246,6 +2268,9 @@ const executeQuery = async () => {
   executedSql.value = ''
   resultTabs.value = []
   activeResultTabIndex.value = 0
+  // 每次执行创建独立取消通道，供组件卸载时中止本次轮询
+  const taskController = new AbortController()
+  queryTaskAbortController = taskController
   try {
     const datasourceId = props.datasourceId
     const semanticConfigId = props.semanticConfigId as string
@@ -2263,6 +2288,7 @@ const executeQuery = async () => {
       skip_query_cache: shouldSkipQueryCache,
     }, {
       returnTerminalTask: true,
+      signal: taskController.signal,
       onProgress: (taskStatus) => {
         executingTaskText.value = taskStatus.progress_text || '执行中...'
         executingTaskId.value = taskStatus.task_id
@@ -2322,18 +2348,21 @@ const executeQuery = async () => {
       }]
     }
   } catch (err) {
-    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
-    const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
-    rawResultData.value = JSON.stringify({
-      status: 'failed',
-      error: message
-    })
-    resultTabs.value = [{
-      title: '结果1',
-      rawResultData: rawResultData.value,
-      executedSql: '',
-      status: 'error',
-    }]
+    // 组件卸载触发的轮询取消不属于查询失败，不向结果区写错误，避免已销毁组件仍弹错误提示
+    if (!isAbortError(err)) {
+      const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
+      const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
+      rawResultData.value = JSON.stringify({
+        status: 'failed',
+        error: message
+      })
+      resultTabs.value = [{
+        title: '结果1',
+        rawResultData: rawResultData.value,
+        executedSql: '',
+        status: 'error',
+      }]
+    }
   } finally {
     executing.value = false
     executingTaskText.value = ''
@@ -2471,7 +2500,7 @@ const handleQuickBuilderConfig = (config: BuilderConfig) => {
 
   if (!isAvailableSemanticConfig(targetConfigId)) {
     const configName = getBuilderSemanticConfigName(config) || targetConfigId
-    ElMessage.warning(`收藏关联的指标集不可用：${configName}`)
+    ElMessage.warning(`收藏关联的语义模型不可用：${configName}`)
     return
   }
 
@@ -2543,6 +2572,11 @@ const loadBuilderConfig = (config: BuilderConfig) => {
     aggregations.value = config.aggregations.map(a => {
       const tableLabel = tables.value.find(t => t.table_name === a.table)?.description || a.table
       const colLabel = a.alias || a.column
+      // 收藏配置未持久化 metricKind，按 semanticName 从语义模型反查回填
+      const semanticMetric = a.semanticName
+        ? props.semanticConfig?.metrics?.find(m => m.name === a.semanticName)
+        : undefined
+      const metricKind = semanticMetric?.metric_kind as AggregationField['metricKind'] | undefined
       return {
         id: a.id || `${Date.now()}-${Math.random()}`,
         table: a.table,
@@ -2552,7 +2586,8 @@ const loadBuilderConfig = (config: BuilderConfig) => {
         displayName: a.alias || a.column,
         expression: a.expression,
         label: `${tableLabel}.${colLabel}`,
-        func: a.func
+        func: a.func,
+        metricKind
       }
     })
   }
@@ -2620,13 +2655,10 @@ const filterAndOrderFieldsGrouped = computed(() => {
   if (aggregations.value.length > 0) {
     groups.push({
       groupLabel: '聚合过滤字段 (HAVING)',
-      fields: aggregations.value.map(a => {
-        const funcLabel = aggFunctions.find(f => f.value === a.func)?.label || a.func
-        return {
-          value: `AGGID:${a.id}`,
-          label: `${funcLabel}(${getMetricDisplayName(a)})`
-        }
-      })
+      fields: aggregations.value.map(a => ({
+        value: `AGGID:${a.id}`,
+        label: formatMetricChipLabel(a)
+      }))
     })
   }
   return groups
@@ -2707,10 +2739,9 @@ const advancedDimensionFieldsGrouped = computed(() => {
 const advancedMetricFieldsGrouped = computed(() => {
   const merged = new Map<string, FieldPickerOption>()
   aggregations.value.forEach((a) => {
-    const funcLabel = getAggFuncLabel(a.func)
     merged.set(`AGGID:${a.id}`, {
       value: `AGGID:${a.id}`,
-      label: `${funcLabel}(${getMetricDisplayName(a)})`
+      label: formatMetricChipLabel(a)
     })
   })
   semanticMetricFilterFields.value.forEach((field) => {
@@ -2793,11 +2824,11 @@ const getOrderFieldValue = (o: OrderByField) => {
 const getOrderFieldLabel = (o: OrderByField) => {
   if (o.aggId) {
     const agg = aggregations.value.find(a => a.id === o.aggId)
-    if (agg) return `${getAggFuncLabel(agg.func)}(${getMetricDisplayName(agg)})`
+    if (agg) return formatMetricChipLabel(agg)
   }
   if (o.aggFunc) {
-    const agg = aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(o.tableAlias, o.table, o.column) && a.func === o.aggFunc)
-    if (agg) return `${getAggFuncLabel(agg.func)}(${getMetricDisplayName(agg)})`
+    const agg = aggregations.value.find(a => (isLogicalAggregation(a) ? a.semanticName === o.semanticName : buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(o.tableAlias, o.table, o.column) && a.func === o.aggFunc))
+    if (agg) return formatMetricChipLabel(agg)
     return `${getAggFuncLabel(o.aggFunc)}(${o.column})`
   }
   const dim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(o.tableAlias, o.table, o.column))
@@ -2926,10 +2957,15 @@ watch(filters, (list) => {
 watch([() => props.semanticConfig, tables, dimensions, aggregations, filters, orderBy], ([semanticConfig]) => {
   if (!semanticConfig) return
   const used = new Set<string>()
-  dimensions.value.forEach(d => used.add(getTableAlias(d)))
-  aggregations.value.forEach(a => used.add(getTableAlias(a)))
-  filters.value.forEach(f => used.add(getTableAlias(f)))
-  orderBy.value.forEach(o => used.add(getTableAlias(o)))
+  // 逻辑指标（派生/复合）无物理表别名，跳过空别名避免污染已选表推导
+  const addUsedAlias = (item: { tableAlias?: string; table?: string }) => {
+    const alias = getTableAlias(item)
+    if (alias) used.add(alias)
+  }
+  dimensions.value.forEach(addUsedAlias)
+  aggregations.value.forEach(addUsedAlias)
+  filters.value.forEach(addUsedAlias)
+  orderBy.value.forEach(addUsedAlias)
   selectedTables.value = buildSemanticSelectedTables(semanticConfig, tables.value, used)
 }, { deep: true, immediate: true })
 
@@ -2972,6 +3008,9 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('mousemove', onMouseMove)
   document.removeEventListener('mouseup', onMouseUp)
+  // 卸载时中止进行中的查询任务轮询（AbortError 由调用方静默处理）
+  queryTaskAbortController?.abort()
+  queryTaskAbortController = null
 })
 
 // 暴露方法给父组件
@@ -3185,13 +3224,25 @@ defineExpose({
             <div class="flex-1 flex items-center gap-1.5 flex-wrap min-h-[28px]">
               <template v-if="aggregations.length > 0">
                 <span v-for="(a, index) in aggregations" :key="a.id" class="inline-flex items-center h-[24px] px-2 rounded-[10px] bg-[#ebf1ff] text-[#2e2f32] hover:bg-[#dce5ff] transition-colors shrink-0">
-                  <span class="relative inline-flex items-center cursor-pointer shrink-0">
-                    <IconCaretDown class="mr-1 text-[#3772ff]" />
-                    <span class="text-[12px]">{{ aggFunctions.find(f => f.value === a.func)?.label }}</span>
-                    <select :value="a.func" class="absolute inset-0 opacity-0 cursor-pointer" @click.stop @change="handleAggregationFuncChange(a, ($event.target as HTMLSelectElement).value)">
-                      <option v-for="opt in aggFunctions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </select>
-                  </span><span class="text-[12px]">({{ getMetricDisplayName(a) }})</span>
+                  <template v-if="isLogicalAggregation(a)">
+                    <span class="text-[12px]">{{ getMetricDisplayName(a) }}</span>
+                    <span
+                      class="ml-1 px-1.5 h-[16px] inline-flex items-center rounded text-[10px] text-white"
+                      :class="a.metricKind === 'composite' ? 'bg-[#7c5cd6]' : 'bg-[#3772ff]'"
+                      :title="a.metricKind === 'composite' ? '复合指标：由多个指标四则运算得出' : '派生指标：基础指标 + 统计周期 + 过滤'"
+                    >
+                      {{ a.metricKind === 'composite' ? '复合' : '派生' }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="relative inline-flex items-center cursor-pointer shrink-0">
+                      <IconCaretDown class="mr-1 text-[#3772ff]" />
+                      <span class="text-[12px]">{{ aggFunctions.find(f => f.value === a.func)?.label }}</span>
+                      <select :value="a.func" class="absolute inset-0 opacity-0 cursor-pointer" @click.stop @change="handleAggregationFuncChange(a, ($event.target as HTMLSelectElement).value)">
+                        <option v-for="opt in aggFunctions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                      </select>
+                    </span><span class="text-[12px]">({{ getMetricDisplayName(a) }})</span>
+                  </template>
                   <button class="ml-1 text-[#2e2f3250] hover:text-[#2e2f32] transition-colors" @click.stop="removeAggregation(index)">
                     <IconClose />
                   </button>
@@ -3945,7 +3996,7 @@ defineExpose({
   <Teleport to="body">
     <div
       v-if="atState.dropdownVisible && atInputRef"
-      class="fixed z-[10000] w-[220px] max-h-[260px] bg-white border border-[#e3e5eb] rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] overflow-hidden"
+      class="fixed z-[var(--z-floating-tip)] w-[220px] max-h-[260px] bg-white border border-[#e3e5eb] rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.12)] overflow-hidden"
       :style="{
         left: (atInputRef.getBoundingClientRect().left) + 'px',
         top: (atInputRef.getBoundingClientRect().bottom + 4) + 'px'
