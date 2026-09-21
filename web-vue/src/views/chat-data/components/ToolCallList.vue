@@ -331,21 +331,23 @@ watch(
           <span class="shrink-0">子智能体执行过程</span>
           <template v-if="runningToolName(tc)">
             <i class="fa-solid fa-spinner fa-spin shrink-0 text-[10px]"></i>
-            <span class="min-w-0 truncate text-[11px] font-normal text-[#1f82d9]/80">正在执行：{{ runningToolName(tc) }}</span>
+            <span class="min-w-0 flex-1 truncate text-[11px] font-normal text-[#1f82d9]/80">正在执行：{{ runningToolName(tc) }}</span>
           </template>
           <!-- 上下文用量徽标：subagent_context_usage 事件实时更新，最终值随
                task 结果持久化、历史回放还原；≥100% 表示已注入预算收尾告警 -->
-          <span
-            v-if="tc.subagentContextUsage"
-            class="shrink-0 rounded-full px-1.5 py-px text-[10px] leading-4 font-normal"
-            :class="tc.subagentContextUsage.percent >= 100
-              ? 'bg-amber-100 text-amber-700'
-              : 'bg-[#1f82d9]/10 text-[#1f82d9]/80'"
-          >上下文 {{ tc.subagentContextUsage.percent }}%</span>
-          <i
-            class="fa-solid fa-chevron-right ml-auto shrink-0 text-[9px] text-[#1f82d9]/60 transition-transform duration-200"
-            :class="{ 'rotate-90': !isChainCollapsed(tc) }"
-          ></i>
+          <span class="ml-auto flex shrink-0 items-center gap-1.5">
+            <span
+              v-if="tc.subagentContextUsage"
+              class="subagent-context-badge rounded-full px-1.5 py-px text-[10px] leading-4 font-normal tabular-nums"
+              :class="tc.subagentContextUsage.percent >= 100
+                ? 'bg-amber-100 text-amber-700'
+                : 'bg-[#1f82d9]/10 text-[#1f82d9]/80'"
+            >上下文 <span class="inline-block min-w-[3ch] text-right">{{ tc.subagentContextUsage.percent }}</span>%</span>
+            <i
+              class="fa-solid fa-chevron-right shrink-0 text-[9px] text-[#1f82d9]/60 transition-transform duration-200"
+              :class="{ 'rotate-90': !isChainCollapsed(tc) }"
+            ></i>
+          </span>
         </button>
         <div
           v-if="!isChainCollapsed(tc)"

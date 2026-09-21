@@ -117,13 +117,13 @@ describe('ToolCallList', () => {
     })
 
     const normal = mountWithUsage(6)
-    const normalBadge = normal.find('.subagent-chain-toggle span:nth-of-type(2)')
+    const normalBadge = normal.find('.subagent-context-badge')
     expect(normal.text()).toContain('上下文 6%')
     expect(normalBadge.classes()).not.toContain('bg-amber-100')
 
     // ≥100% 表示已注入预算收尾告警，徽标转警示色
     const alerted = mountWithUsage(100)
-    const alertedBadge = alerted.find('.subagent-chain-toggle span:nth-of-type(2)')
+    const alertedBadge = alerted.find('.subagent-context-badge')
     expect(alerted.text()).toContain('上下文 100%')
     expect(alertedBadge.classes()).toContain('bg-amber-100')
   })
