@@ -258,6 +258,10 @@ class ConversationWorkspaceRuntime:
         """Write system-owned semantic model files through the active backend."""
         return await semantic_model_workspace_service.write_files(self, entries)
 
+    async def delete_internal_text_files(self, *, path: str) -> dict[str, Any]:
+        """Delete one system-owned semantic model file through the active backend."""
+        return await semantic_model_workspace_service.delete_files(self, path=path)
+
     async def replace_text_file(
         self,
         *,

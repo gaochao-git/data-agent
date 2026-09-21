@@ -158,7 +158,7 @@ async def test_import_route_rolls_back_when_replace_write_fails(monkeypatch):
 
     payload = SimpleNamespace(conflict_actions={"产品分类模型": "replace"})
     resp = await semantic_config.import_admin_ossie_semantic_configs("ds_a", payload, _REQUEST)
-    assert "更新草稿失败" in _body(resp)["msg"]
+    assert "更新配置失败" in _body(resp)["msg"]
 
 
 # ---------------------------------------------------------------- 历史学习：权限拒绝

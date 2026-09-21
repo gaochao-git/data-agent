@@ -124,6 +124,22 @@ export function isWorkspaceFileDownloadable(relativePath: string | null | undefi
 }
 
 /**
+ * 支持打包下载的顶层目录。
+ *
+ * 用户拍板（2026-09-19）先只放开 outputs：它是「智能体产出」的汇聚地，是打包下载
+ * 的真实诉求；workspace 是过程中间文件、uploads 内容用户本就有原件，暂不放开。
+ * 后端 archive 接口按 WORKSPACE_DIR_NAMES 白名单校验目录名，但打包内容仍走
+ * list_workspace_files 的可见清单——系统结果目录（query_result / .tool-offload）
+ * 即便在 outputs 下也不会进包，与单文件下载同一防泄漏口径。
+ */
+export const ARCHIVE_DOWNLOADABLE_DIRECTORIES: readonly string[] = ['outputs']
+
+/** 判断顶层目录是否提供打包下载入口。 */
+export function isWorkspaceDirectoryArchiveDownloadable(directoryName: string | null | undefined): boolean {
+  return ARCHIVE_DOWNLOADABLE_DIRECTORIES.includes(String(directoryName || ''))
+}
+
+/**
  * 判断工作区文件是否提供删除入口。
  *
  * 目前与下载共用同一组排除目录，但语义独立：下载被拦是防泄漏，删除被拦是保审计留存。

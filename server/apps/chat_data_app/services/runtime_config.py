@@ -27,6 +27,26 @@ def read_positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def read_optional_positive_int_env(name: str) -> int | None:
+    """读取可选的正整数环境变量；未设置返回 None，非法时告警并按未设置处理。
+
+    与 read_positive_int_env 的差异：允许「不配置」是合法语义（调用方自行决定
+    回退口径），因此默认值由调用方持有，这里只负责解析与非法值告警。
+    """
+    raw_value = str(os.getenv(name) or "").strip()
+    if not raw_value:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("环境变量 %s=%r 不是合法整数，忽略该覆盖配置", name, raw_value)
+        return None
+    if value < 1:
+        logger.warning("环境变量 %s=%s 小于 1，忽略该覆盖配置", name, value)
+        return None
+    return value
+
+
 def read_bool_env(name: str, default: bool = False) -> bool:
     """读取布尔环境变量，仅接受 true/false（大小写不敏感），非法值直接报错。
 
@@ -77,6 +97,10 @@ QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECON
 # （Office 转出 HTML 的字符上限，12MB，独立配置）是两回事。
 TEXT_PREVIEW_MAX_MB = read_positive_int_env("CHAT_DATA_TEXT_PREVIEW_MAX_MB", 5)
 OFFICE_PREVIEW_SOURCE_MAX_MB = read_positive_int_env("CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB", 50)
+# 会话工作区目录打包下载的压缩包大小上限（MB）：限的是 zip 产物字节而非源文件总大小
+# （压缩率不可控，限源大小无法预测产物；用户拍板 2026-09-19 限压缩后大小）。默认 50。
+# 消费者为 conversation_workspace 的目录打包下载，打包过程中边写边计量、超限即中止。
+WORKSPACE_ARCHIVE_MAX_MB = read_positive_int_env("CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB", 50)
 DEFAULT_CONTEXT_WINDOW = 128000
 
 # ---- 单一 ChatData Agent 运行配置 ----
@@ -125,6 +149,32 @@ if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "lo
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHAT_DATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
 CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
+
+
+def read_optional_positive_ratio_env(name: str, *, maximum: float) -> float | None:
+    """读取可选的正比例 env（0 < value <= maximum）：无效配置直接拒启，不静默回退。"""
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必须是 0 到 {maximum} 之间的数字") from exc
+    if not math.isfinite(value) or value <= 0 or value > maximum:
+        raise RuntimeError(f"{name} 必须大于 0 且不超过 {maximum}，当前值: {value}")
+    return value
+
+
+# 子智能体预算告警线的可选覆盖（上下文窗口比例）：不设置时与主图压缩触发阈值
+# 同源（同一 ContextBudget.compression_trigger_tokens = 窗口 × TRIGGER_RATIO）；
+# 设置后仅覆盖子图告警线 = 窗口 × 该比例（不超过硬限），主图与子图压缩均不受
+# 影响。与压缩线同用比例口径，换模型/调窗口后配置不失真。主要用于压测/调试——
+# 设 0.05 之类的小值让告警线先于压缩线触发，肉眼验证「预算告警 → 提前收尾」
+# 链路，测完删除该 env 即恢复同源口径。
+SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO = read_optional_positive_ratio_env(
+    "CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO",
+    maximum=CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO,
+)
 
 
 def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum: float) -> float:

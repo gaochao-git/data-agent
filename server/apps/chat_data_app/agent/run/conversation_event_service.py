@@ -772,6 +772,10 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
     trail = (getattr(message, "additional_kwargs", None) or {}).get("subagent_trail")
     if isinstance(trail, list) and trail:
         payload["subagent_trail"] = trail
+    # 子图上下文用量快照（最后一次估算）：历史回放时 task 卡片标题行还原用量徽标。
+    context_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_context_usage")
+    if isinstance(context_usage, dict) and context_usage:
+        payload["subagent_context_usage"] = context_usage
     return payload
 
 

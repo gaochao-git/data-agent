@@ -1496,6 +1496,34 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
         ))
 
 
+def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
+    root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
+    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    sandbox.remote_kinds[stale] = "file"
+    sandbox.remote_files[stale] = b"stale"
+
+    # 策略层先拒：内部通道只允许 semantic 下的 YAML
+    with pytest.raises(ValueError, match="内部语义模型写入"):
+        asyncio.run(workspace_execution.sandbox_delete_internal_text_file(
+            session_ref=_ref(session), path="/mnt/user-data/workspace/plain.yaml",
+        ))
+    result = asyncio.run(workspace_execution.sandbox_delete_internal_text_file(
+        session_ref=_ref(session), path=stale,
+    ))
+    assert result == {"path": stale, "type": "file"}
+    assert stale not in sandbox.remote_kinds
+    assert stale not in sandbox.remote_files
+
+    no_deleter_sandbox = FakeSandbox()
+    no_deleter_sandbox.remote_kinds[stale] = "file"
+    no_deleter_sandbox.files.delete_files = None
+    no_deleter = _make_session(no_deleter_sandbox, root)
+    with pytest.raises(ValueError, match="files.delete_files"):
+        asyncio.run(workspace_execution.sandbox_delete_internal_text_file(
+            session_ref=_ref(no_deleter), path=stale,
+        ))
+
+
 def test_sandbox_replace_text_file(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     target = "/mnt/user-data/workspace/a.txt"

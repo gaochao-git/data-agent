@@ -23,6 +23,7 @@ from apps.chat_data_app.agent.workspace.workspace_execution import (
     sandbox_copy_path,
     sandbox_create_dir,
     sandbox_delete_path,
+    sandbox_delete_internal_text_file,
     sandbox_grep_text,
     sandbox_list_dir,
     sandbox_move_path,
@@ -107,6 +108,17 @@ class SandboxWorkspaceBackend:
         return await sandbox_write_internal_text_files(
             session_ref=await self._session_ref(runtime),
             entries=entries,
+        )
+
+    async def delete_internal_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_delete_internal_text_file(
+            session_ref=await self._session_ref(runtime),
+            path=path,
         )
 
     async def write_tool_result(

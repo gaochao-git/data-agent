@@ -26,7 +26,8 @@ export interface ChatDataRuntimeOptions {
 interface Props {
   input: string
   placeholder: string
-  selectedSkillTitle?: string
+  /** 已选技能列表（title 展示、name 用于单项移除）。 */
+  selectedSkills?: Array<{ name: string; title?: string }>
   selectedModel: string
   modelOptions: ModelOption[]
   /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
@@ -45,7 +46,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  selectedSkillTitle: '',
+  selectedSkills: () => [],
   inputFocused: false,
   showSkillButton: true,
   submitTitle: '发送 (Enter)',
@@ -60,7 +61,7 @@ const plusMenuOpen = ref(false)
 const emit = defineEmits<{
   submit: []
   stop: []
-  clearSkill: []
+  clearSkill: [name: string]
   openSkillManager: []
   uploadFile: []
   pasteFiles: [files: File[]]
@@ -171,15 +172,18 @@ onBeforeUnmount(() => {
     @blur="emit('blur')"
   >
     <template #prepend>
-      <div
-        v-if="selectedSkillTitle"
-        class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
-      >
-        <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-        <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
-        <button type="button" class="text-blue-400 hover:text-blue-700" @click="emit('clearSkill')">
-          <i class="fa-solid fa-xmark text-[10px]"></i>
-        </button>
+      <div v-if="props.selectedSkills.length" class="mb-2 flex flex-wrap items-center gap-1.5">
+        <div
+          v-for="skill in props.selectedSkills"
+          :key="skill.name"
+          class="flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
+        >
+          <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
+          <span class="max-w-[140px] truncate">{{ skill.title || skill.name }}</span>
+          <button type="button" class="text-blue-400 hover:text-blue-700" @click="emit('clearSkill', skill.name)">
+            <i class="fa-solid fa-xmark text-[10px]"></i>
+          </button>
+        </div>
       </div>
     </template>
 

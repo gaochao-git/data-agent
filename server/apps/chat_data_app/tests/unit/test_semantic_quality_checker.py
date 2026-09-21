@@ -200,6 +200,80 @@ def test_duplicate_metric_expression():
     assert finding is not None and "销售额副本" in finding.message
 
 
+def test_duplicate_names_within_namespace():
+    config = _good_config()
+    config["metrics"].append(dict(config["metrics"][0], expression="SUM(orders.other)"))
+    config["dimensions"].append(dict(config["dimensions"][0], column="other_time"))
+    report = get_semantic_quality_checker().check_config(config)
+    finding = _find(report, "CON_NAME_DUPLICATE")
+    assert finding is not None and finding.severity == "warning"
+    assert "指标:销售额" in finding.targets
+    assert "维度:下单时间" in finding.targets
+
+
+def test_cross_namespace_same_name_not_flagged():
+    """指标与维度是两个命名空间（引用目标不同），跨空间同名不判。"""
+    config = _good_config()
+    config["metrics"][0]["name"] = "同名对象"
+    config["dimensions"][0]["name"] = "同名对象"
+    # 同步派生/复合指标的引用，避免引入无关 finding
+    config["metrics"][2]["base_metric"] = "同名对象"
+    config["metrics"][3]["formula"] = "{同名对象} / {订单数}"
+    config["metrics"][2]["filters"] = [{"dimension": "同名对象", "operator": "=", "value": "已支付"}]
+    report = get_semantic_quality_checker().check_config(config)
+    assert _find(report, "CON_NAME_DUPLICATE") is None
+
+
+def test_relationship_key_uncovered():
+    config = _good_config()
+    config["tables"] = [
+        {"table": "users", "primary_keys": [["tenant_id"]]},
+        {"table": "orders", "primary_keys": [["order_id"]]},
+    ]
+    # users 声明主键 tenant_id，join 只带 id → 未覆盖
+    report = get_semantic_quality_checker().check_config(config)
+    finding = _find(report, "CON_RELATIONSHIP_KEY_UNCOVERED")
+    assert finding is not None and finding.severity == "warning"
+    assert finding.targets == ["orders->users"]
+
+    # 覆盖任一声明键（含超集）即通过：改为唯一索引声明 id + join 带上 id
+    config2 = _good_config()
+    config2["tables"] = [
+        {"table": "users", "unique_indexes": [{"columns": ["id"]}], "manual_indexes": [
+            {"index_type": "unique", "columns": ["id", "tenant_id"]},
+        ]},
+    ]
+    report2 = get_semantic_quality_checker().check_config(config2)
+    assert _find(report2, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
+
+    # 复合键超集：join 列包含键的全部列即可
+    config3 = _good_config()
+    config3["tables"] = [{"table": "users", "primary_keys": [["id", "tenant_id"]]}]
+    config3["relationships"][0]["join_conditions"] = [
+        {"left_column": "user_id", "right_column": "id"},
+        {"left_column": "tenant_id", "right_column": "tenant_id"},
+    ]
+    report3 = get_semantic_quality_checker().check_config(config3)
+    assert _find(report3, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
+
+
+def test_relationship_key_coverage_skipped_cases():
+    """many_to_many 两端都不是键、表无声明键、无 tables 元数据时均跳过。"""
+    config = _good_config()
+    config["tables"] = [{"table": "users", "primary_keys": [["tenant_id"]]}]
+    config["relationships"][0]["relationship_type"] = "many_to_many"
+    report = get_semantic_quality_checker().check_config(config)
+    assert _find(report, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
+
+    config2 = _good_config()
+    config2["tables"] = [{"table": "orders", "primary_keys": [["order_id"]]}]  # users 无声明
+    report2 = get_semantic_quality_checker().check_config(config2)
+    assert _find(report2, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
+
+    report3 = get_semantic_quality_checker().check_config(_good_config())
+    assert _find(report3, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
+
+
 def test_relationship_self_duplicate_and_unreferenced_table():
     config = _good_config()
     config["relationships"].append({

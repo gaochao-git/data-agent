@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import os
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, status as http_status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
 from ..services.agent_run.conversation_workspace import (
+    WorkspaceArchiveTooLargeError,
     WorkspaceFileDeleteConflictError,
+    archive_conversation_workspace_directory,
     can_access_conversation_workspace,
     delete_conversation_workspace_file as delete_workspace_file_for_conversation,
     ensure_conversation_workspace,
@@ -23,6 +27,7 @@ from ..services.agent_run.conversation_workspace import (
     read_conversation_workspace_raw_file,
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
+    WORKSPACE_DIR_NAMES,
 )
 from ..agent.skills.skill_service import skill_service
 from .dependencies import _get_current_user
@@ -173,6 +178,56 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
             code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED,
             status="error",
         )
+
+
+@router.get(
+    "/conversations/{conversation_id}/workspace-files/archive",
+    operation_id="download_conversation_workspace_archive",
+    responses=BINARY_RESPONSES,
+)
+async def download_conversation_workspace_archive(
+    conversation_id: str, directory: str, request: Request
+):
+    """把会话工作区的单个顶层目录（当前仅放开 outputs）打包为 zip 下载。
+
+    内容与权限口径复用文件列表的白名单（见 service 层注释）；大小限制针对 zip
+    产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。
+    临时 zip 通过 BackgroundTask 在响应发送后删除。
+    """
+    normalized_directory = str(directory or "").strip()
+    try:
+        current_user = _get_current_user(request)
+        if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
+            return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if normalized_directory not in WORKSPACE_DIR_NAMES:
+            return business_response(
+                msg=f"目录不支持打包: {normalized_directory}",
+                code=ErrorCode.CHATDATA_BAD_REQUEST,
+                status="error",
+            )
+        payload = await archive_conversation_workspace_directory(
+            conversation_id, user_id=str(current_user.user_id), directory=normalized_directory
+        )
+        filename = str(payload["filename"])
+        ascii_fallback = filename.encode("ascii", "ignore").decode("ascii") or "archive.zip"
+        disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
+        return FileResponse(
+            path=payload["temp_path"],
+            media_type="application/zip",
+            headers={"Content-Disposition": disposition},
+            background=BackgroundTask(os.unlink, payload["temp_path"]),
+        )
+    except HTTPException:
+        raise
+    except WorkspaceArchiveTooLargeError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except FileNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error("打包下载工作区目录失败: conversation_id=%s directory=%s error=%s", conversation_id, directory, e, exc_info=True)
+        return business_response(msg="打包下载失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
 
 
 @router.get(

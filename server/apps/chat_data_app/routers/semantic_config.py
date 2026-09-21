@@ -44,6 +44,7 @@ from ..services.semantic.run.semantic_config_service import (
     prepare_ossie_import_models,
     validate_semantic_config_for_save,
 )
+from ..services.semantic.run.chat_data_ossie_importer import plan_column_dict_fills
 from ..services.sql_run.parser import extract_physical_tables
 from .dependencies import _get_current_user
 
@@ -668,12 +669,16 @@ async def preview_admin_ossie_semantic_import(
             return error
         physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
         checker = get_semantic_quality_checker()
+        # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
+        existing_column_dicts = await get_semantic_config_service().get_column_dicts_async(datasource_id)
         models = []
         for item in imports:
             model = item.to_preview_payload()
+            dict_fill_plan = plan_column_dict_fills(item, existing_column_dicts)
+            model["column_dict_fill_plan"] = dict_fill_plan
             findings = None
             if item.importable:
-                # 质量检查输入与 check_yaml 工具完全一致：草稿态（enabled=False、公共口径）
+                # 质量检查输入与 check_yaml 工具完全一致（enabled 仅占位，不参与检查项）
                 report = checker.check_config(
                     {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
                     physical_columns=physical_columns,
@@ -686,6 +691,7 @@ async def preview_admin_ossie_semantic_import(
                 validation_error=item.validation_error,
                 quality_findings=findings,
                 inventory_available=physical_columns is not None,
+                dict_fill_plan=dict_fill_plan,
             )
             models.append(model)
         importable_count = sum(1 for item in imports if item.importable)
@@ -795,14 +801,17 @@ async def import_admin_ossie_semantic_configs(
                 status="error",
             )
         semantic_service = get_semantic_config_service()
+        ds_manager = get_datasource_manager()
         # 整批落库放进同一事务：任一模型写入失败即整体回滚，避免留下半批草稿
-        # （接口对外语义是「全有或全无」）。
+        # （接口对外语义是「全有或全无」）。字典仅填空写入也在同一事务内，
+        # 模型与字典要么一起落库、要么一起回滚。
         try:
             async with transaction_scope():
                 created, replaced, skipped = await _persist_ossie_imports(
                     imports,
                     conflict_actions,
                     semantic_service,
+                    ds_manager,
                     datasource_id,
                     user_id,
                     username,
@@ -891,14 +900,13 @@ async def _persist_one_ossie_model(
     if not item.existing_config:
         config = await semantic_service.create_async(
             datasource_id=datasource_id,
-            enabled=False,
             scope_type="public",
             create_by=user_id,
             create_by_name=username,
             **item.to_config_payload(),
         )
         if not config:
-            raise _OssieImportWriteError(f"创建草稿失败: {item.name}")
+            raise _OssieImportWriteError(f"创建配置失败: {item.name}")
         return "created", {"config_id": config.get("id"), "name": config.get("name")}
 
     existing_config_id = str(item.existing_config["config_id"])
@@ -908,8 +916,8 @@ async def _persist_one_ossie_model(
             "config_id": existing_config_id,
             "reason": "同名配置已存在，未导入",
         }
-    # 替换：保留原 config_id，全量覆盖内容并强制禁用（description/business_notes
-    # 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
+    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
     config = await semantic_service.update_async(
         datasource_id,
         existing_config_id,
@@ -918,24 +926,57 @@ async def _persist_one_ossie_model(
         metrics=item.metrics,
         dimensions=item.dimensions,
         relationships=item.relationships,
-        enabled=False,
         update_by=user_id,
         update_by_name=username,
     )
     if not config:
-        raise _OssieImportWriteError(f"更新草稿失败: {item.name}")
+        raise _OssieImportWriteError(f"更新配置失败: {item.name}")
     return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
+
+
+async def _fill_ossie_column_dicts(
+    item: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> List[Dict[str, Any]]:
+    """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
+
+    只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
+    「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
+    """
+    filled: List[Dict[str, Any]] = []
+    for entry in item.column_dicts:
+        fields = await ds_manager.fill_column_dict_async(
+            datasource_id,
+            entry["table"],
+            entry["column"],
+            entry["dict"],
+            operator=user_id,
+            operator_name=username,
+        )
+        if fields is None:
+            raise _OssieImportWriteError(f"写入数据字典失败: {entry['table']}.{entry['column']}（物理字段不存在）")
+        if fields:
+            filled.append({"table": entry["table"], "column": entry["column"], "fields": fields})
+    return filled
 
 
 async def _persist_ossie_imports(
     imports: List[Any],
     conflict_actions: Dict[str, str],
     semantic_service: Any,
+    ds_manager: Any,
     datasource_id: str,
     user_id: str,
     username: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。"""
+    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
+
+    created/replaced 的模型随后在同一事务内执行字典仅填空写入，
+    实际填充明细挂在各自 payload 的 column_dict_filled 上。
+    """
     created: List[Dict[str, Any]] = []
     replaced: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -944,6 +985,10 @@ async def _persist_ossie_imports(
         kind, payload = await _persist_one_ossie_model(
             item, conflict_actions, semantic_service, datasource_id, user_id, username
         )
+        if kind in ("created", "replaced") and item.column_dicts:
+            payload["column_dict_filled"] = await _fill_ossie_column_dicts(
+                item, ds_manager, datasource_id, user_id, username,
+            )
         buckets[kind].append(payload)
     return created, replaced, skipped
 

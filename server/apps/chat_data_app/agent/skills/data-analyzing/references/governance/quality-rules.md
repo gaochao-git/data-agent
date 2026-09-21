@@ -43,10 +43,12 @@
 | 编码 | 严重度 | 判定 |
 |------|--------|------|
 | CON_DUPLICATE_METRIC_EXPRESSION | info | 多个原子指标使用相同表达式（重复口径） |
+| CON_NAME_DUPLICATE | warning | 指标内 / 维度内存在重名（指标与维度跨命名空间同名不判；对齐 Ossie 唯一名检查） |
 | CON_RELATIONSHIP_DUPLICATE | warning | 同一对表、同一组关联字段重复定义关系 |
 | CON_RELATIONSHIP_SELF | info | 关系左右为同一张表 |
 | CON_RELATIONSHIP_TABLE_UNREFERENCED | warning | 关系引用的表没有任何维度或指标建模 |
 | CON_RELATIONSHIP_CYCLE | warning | 表关系图存在环（A→B→A 这类循环依赖） |
+| CON_RELATIONSHIP_KEY_UNCOVERED | warning | one 端（right_table）的 join 列未覆盖该表在 tables 元数据中声明的 primary/unique key（对齐 Ossie 的 to_columns/声明键覆盖检查；覆盖任一声明键即可，表无声明键或 many_to_many 跳过） |
 
 ### 文档完备性 documentation
 
@@ -55,6 +57,49 @@
 | DOC_METRIC_NO_DESCRIPTION | info | 指标缺少 description |
 | DOC_DIMENSION_NO_DESCRIPTION | info | 维度缺少 description |
 | DOC_NO_BUSINESS_NOTES | info | 模型缺少 ai_context（业务说明） |
+
+## 修复指引
+
+findings 只回答「哪里有问题」。修复前先按三档判断「能不能自己改」：可直接修的按
+references/governance/yaml-authoring.md 对应小节在拷贝件上 file_edit 局部修改（最小 diff）；
+标准写法直接照抄 references/governance/model-template.md 的骨架；
+标「问用户」的，口径确认后才落字；「只提示」的止步于报告与建议。
+
+注意：关联字段为空或左右数量不一致、缺 from/to 数据集等属**导入闸门错误**，不会进入质量
+报告，出现时按 yaml-authoring.md 修正后重跑 check_yaml 即可。
+
+### 可直接修（确定性修复）
+
+| 编码 | 修法 |
+|------|------|
+| DOC_METRIC_NO_DESCRIPTION / DOC_DIMENSION_NO_DESCRIPTION | 补 description：写清统计对象、口径、周期、是否去重/过滤，不写空话 |
+| DOC_NO_BUSINESS_NOTES | 补模型 ai_context；内容结构参考 Ossie 规范推荐字段（instructions 使用说明 / synonyms 同义词 / examples 示例问题） |
+| PROV_METRIC_MISSING_TABLE / PROV_DIMENSION_MISSING_TABLE | 补 CHAT_DATA 扩展声明归属表；多 dataset 模型禁止省略 |
+| PROV_DIMENSION_MISSING_COLUMN | 维度补 column（推荐显式声明，不要依赖单 dataset 推断） |
+| EXE_DERIVED_BASE_MISSING | base_metric 改成同模型内已存在的指标名；基础指标本身缺失时先走差距对话，不要硬指 |
+| EXE_COMPOSITE_FORMULA_MISSING | 补 formula，成员用 {指标名} 花括号引用；禁止用代入后的 SQL 表达式反推 |
+| EXE_COMPOSITE_UNRESOLVED | formula 中未知片段改成已存在的指标名或数字/运算符 |
+| CON_RELATIONSHIP_DUPLICATE / CON_RELATIONSHIP_SELF | 删除重复或自环的关系行，保留声明方向完整的一条 |
+
+### 需问用户（业务口径，确认后再改）
+
+| 编码 | 要问什么 |
+|------|----------|
+| COV_NO_METRICS / COV_NO_DIMENSIONS | 该主题需要哪些聚合口径 / 按什么看数（公式、周期、过滤）；一次只问最关键的一个 |
+| EXE_UNKNOWN_COLUMN | 物理列名是写错还是表结构变了：先查数据源 schema，确认不了再问用户，不猜列名 |
+| EXE_DERIVED_NO_CONSTRAINT | 时间窗 / 过滤的具体口径（确认后补 period 或 filters，改法本身是机械的） |
+| CON_NAME_DUPLICATE | 重名对象哪个是真口径、如何改名；改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |
+| CON_DUPLICATE_METRIC_EXPRESSION | 两个同表达式指标保留哪个，保留者的口径描述 |
+| COV_DUPLICATE_DIMENSION_COLUMN | 同一物理列保留哪个维度建模（另一个删除或换列） |
+| CON_RELATIONSHIP_KEY_UNCOVERED | join 列与声明键不一致：是 join 配错还是键元数据过时；确认后改 join 列，或提示用户在数据源侧更新键信息 |
+
+### 只提示不修（信息项 / 需更大动作）
+
+| 编码 | 说明 |
+|------|------|
+| COV_UNMODELED_COLUMNS | 未建模列是扩展机会，走差距对话决定是否补建模，不当缺陷硬修 |
+| CON_RELATIONSHIP_TABLE_UNREFERENCED | 可能是关系多余，也可能是建模不全；结合业务判断，不擅自删 |
+| CON_RELATIONSHIP_CYCLE | 拆环涉及业务关联路径，先在报告里给方案，用户确认后再动手 |
 
 ## 报告格式
 

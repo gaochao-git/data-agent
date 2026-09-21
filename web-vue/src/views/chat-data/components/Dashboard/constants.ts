@@ -5,6 +5,7 @@
 export const DASHBOARD_BACKGROUNDS = [
   { id: 'monitor-deep-gold', src: '', name: '深邃蓝', theme: 'monitor-deep-gold' },
   { id: 'monitor-midnight-cyan', src: '', name: '极夜黑 x 青', theme: 'monitor-midnight-cyan' },
+  { id: 'monitor-forest-emerald', src: '', name: '暗林绿 x 翠', theme: 'monitor-forest-emerald' },
   { id: 'monitor-space-violet', src: '', name: '石墨黑', theme: 'monitor-space-violet' },
   { id: 'light01', src: '', name: '简约白', theme: 'light' },
   { id: 'light02', src: '', name: '淡雅灰', theme: 'light' },
@@ -12,7 +13,7 @@ export const DASHBOARD_BACKGROUNDS = [
 ] as const
 
 // 主题类型
-export type ThemeType = 'dark' | 'light' | 'monitor-deep-gold' | 'monitor-midnight-cyan' | 'monitor-space-violet'
+export type ThemeType = 'dark' | 'light' | 'monitor-deep-gold' | 'monitor-midnight-cyan' | 'monitor-forest-emerald' | 'monitor-space-violet'
 
 // 主题配置接口
 export interface ThemeConfig {
@@ -162,6 +163,33 @@ export const THEMES: Record<ThemeType, ThemeConfig> = {
     cardBg: '#0d0d1e',
     chartPalette: ['#00e5ff', '#36CFC9', '#00dc75', '#ffdc3d', '#ff3d00'],
   },
+  'monitor-forest-emerald': {
+    pageBg: '#040e09',
+    panelBg: 'rgba(7, 21, 16, 0.88)',
+    panelBorder: 'rgba(46, 204, 138, 0.32)',
+    panelHeaderBg: 'rgba(5, 18, 13, 0.7)',
+    titleColor: '#52d68a',
+    textColor: '#dff8ea',
+    textMuted: '#6e907d',
+    accentColor: '#2ecc8a',
+    accentGlow: 'rgba(46, 204, 138, 0.14)',
+    decorLine: 'linear-gradient(90deg, transparent, #2ecc8a 18%, #52d68a 62%, transparent)',
+    chartTooltipBg: 'rgba(4, 14, 9, 0.95)',
+    chartTooltipBorder: 'rgba(46, 204, 138, 0.42)',
+    chartTooltipText: '#e8fff1',
+    chartAxisText: '#6f8f7c',
+    chartGridLine: 'rgba(91, 139, 112, 0.18)',
+    tableHeaderBg: 'rgba(8, 28, 20, 0.94)',
+    tableRowHover: 'rgba(46, 204, 138, 0.08)',
+    tableBorder: 'rgba(46, 204, 138, 0.15)',
+    buttonBg: 'rgba(46, 204, 138, 0.12)',
+    buttonHover: 'rgba(46, 204, 138, 0.22)',
+    buttonText: '#52d68a',
+    emptyBorder: 'rgba(46, 204, 138, 0.32)',
+    emptyBg: 'rgba(7, 21, 16, 0.5)',
+    cardBg: '#071510',
+    chartPalette: ['#2ecc8a', '#52d68a', '#f7c331', '#ef5350', '#4fc3f7'],
+  },
   'monitor-space-violet': {
     // 石墨黑主题（id 保持 monitor-space-violet 兼容已保存看板）：中性灰黑 + 冷白强调，无紫。
     pageBg: '#0d0f14',
@@ -202,6 +230,7 @@ export const LIGHT_BACKGROUNDS: Record<string, string> = {
 export const MONITOR_BACKGROUNDS: Record<string, string> = {
   'monitor-deep-gold': 'radial-gradient(circle at 78% 8%, rgba(96,165,250,0.09), transparent 26%), linear-gradient(180deg, rgba(9,14,26,0.98), rgba(14,21,38,0.98)), repeating-linear-gradient(0deg, rgba(122,143,171,0.05) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(122,143,171,0.04) 0 1px, transparent 1px 36px)',
   'monitor-midnight-cyan': 'radial-gradient(circle at 74% 10%, rgba(0,229,255,0.10), transparent 24%), linear-gradient(180deg, rgba(8,10,18,0.98), rgba(13,15,28,0.98)), repeating-linear-gradient(0deg, rgba(0,229,255,0.05) 0 1px, transparent 1px 34px), repeating-linear-gradient(90deg, rgba(0,229,255,0.04) 0 1px, transparent 1px 34px)',
+  'monitor-forest-emerald': 'radial-gradient(circle at 72% 12%, rgba(46,204,138,0.12), transparent 30%), linear-gradient(90deg, rgba(4,14,9,0.98), rgba(7,21,16,0.98)), repeating-linear-gradient(0deg, rgba(82,214,138,0.06) 0 1px, transparent 1px 38px), repeating-linear-gradient(90deg, rgba(82,214,138,0.05) 0 1px, transparent 1px 38px)',
   'monitor-space-violet': 'radial-gradient(circle at 76% 10%, rgba(148,197,255,0.06), transparent 26%), linear-gradient(180deg, rgba(13,15,20,0.98), rgba(19,22,30,0.98)), repeating-linear-gradient(0deg, rgba(148,163,184,0.04) 0 1px, transparent 1px 36px), repeating-linear-gradient(90deg, rgba(148,163,184,0.04) 0 1px, transparent 1px 36px)',
 }
 

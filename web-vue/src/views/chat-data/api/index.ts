@@ -911,6 +911,21 @@ export function getConversationWorkspaceRawFile(conversationId: string, path: st
   }) as unknown as Promise<Blob>
 }
 
+/**
+ * 打包下载会话工作区顶层目录（当前仅 outputs），返回 zip Blob。
+ * 业务错误（超过压缩包大小上限 / 目录为空 / 无权访问）以 HTTP 200 + JSON 体返回，
+ * 调用方需检查 blob.type 后自行解析 msg 提示。
+ */
+export function getConversationWorkspaceArchive(conversationId: string, directory: string): Promise<Blob> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/archive`,
+    method: 'get',
+    params: { directory },
+    responseType: 'blob',
+    timeout: 120000,
+  }) as unknown as Promise<Blob>
+}
+
 export interface ConversationWorkspaceOfficeHtmlPreview {
   available: boolean
   reason?: string
@@ -1062,8 +1077,8 @@ export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise
 
 /** 校验清单单行：{group, name, status, message}，由后端从既有判定结果确定性映射 */
 export interface OssieChecklistRow {
-  /** 检查分组：schema（OSSI 校验）/ mapping（结构映射）/ physical（物理校验）/ quality（质量规则） */
-  group: 'schema' | 'mapping' | 'physical' | 'quality'
+  /** 检查分组：schema（OSSI 校验）/ mapping（结构映射）/ physical（物理校验）/ quality（质量规则）/ dict（数据字典仅填空） */
+  group: 'schema' | 'mapping' | 'physical' | 'quality' | 'dict'
   name: string
   /** pass=通过 warn=警告（不阻断） fail=未通过（阻断导入） skip=跳过（未执行） */
   status: 'pass' | 'warn' | 'fail' | 'skip'
@@ -1136,7 +1151,7 @@ export interface OssieImportCreatedItem {
 
 export interface OssieImportData {
   created: OssieImportCreatedItem[]
-  /** 替换的同名配置：保留原 config_id 全量覆盖内容并强制禁用 */
+  /** 替换的同名配置：保留原 config_id 全量覆盖内容，启用状态保持不变 */
   replaced?: OssieImportCreatedItem[]
   /** 因同名冲突被跳过的模型：无操作权限的同名配置（他人私有）不带 config_id，故为可选 */
   skipped?: Array<{ name: string; config_id?: string; reason: string }>
@@ -1156,8 +1171,8 @@ export function previewAdminOssieSemanticImport(
 }
 
 /**
- * 导入 Ossie 语义模型：逐模型创建禁用的公共草稿配置（全有或全无）。
- * conflictActions：模型名 → replace（覆盖同名配置内容，强制禁用）/ skip（跳过）；
+ * 导入 Ossie 语义模型：逐模型创建公共配置（全有或全无），新模型默认启用。
+ * conflictActions：模型名 → replace（覆盖同名配置内容，启用状态保持不变）/ skip（跳过）；
  * 同名冲突缺省按 skip 处理。
  */
 export function importAdminOssieSemanticConfigs(

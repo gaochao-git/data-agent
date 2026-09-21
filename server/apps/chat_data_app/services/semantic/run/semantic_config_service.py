@@ -12,7 +12,11 @@ from utils.logger import get_logger
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
-from .chat_data_ossie_importer import OssieSemanticModelImport, OssieToChatDataImporter
+from .chat_data_ossie_importer import (
+    OssieSemanticModelImport,
+    OssieToChatDataImporter,
+    extract_metric_source_column,
+)
 
 logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -153,15 +157,8 @@ class SemanticConfigService:
 
     @staticmethod
     def _extract_metric_source_column(metric: Dict[str, Any]) -> str:
-        expression = str(metric.get("expression") or "").strip()
-        match = re.match(r"^(?:COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(?:DISTINCT\s+)?`?([^`(),\s]+)`?\s*\)$", expression, re.IGNORECASE)
-        if match:
-            return match.group(1).split(".")[-1].strip("`")
-        match = re.match(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$", expression)
-        if match:
-            return match.group(1).split(".")[-1].strip("`")
-        field_name = str(metric.get("field") or "").strip()
-        return field_name.split(".")[-1].strip("`") if field_name else ""
+        """委托 importer 模块的同名实现（导出标注与导入回填定位同一物理列）。"""
+        return extract_metric_source_column(metric)
 
     @staticmethod
     def _format_column_dict_supplement(column_dict: Dict[str, Any]) -> str:
@@ -240,12 +237,59 @@ class SemanticConfigService:
         return metric
 
     @classmethod
+    def _column_dict_key(cls, item: Dict[str, Any], *, metric: bool) -> tuple[str, str]:
+        """条目的字典定位键 (table, column)；与运行时合并使用同一口径。"""
+        table = str(item.get("table") or "").strip()
+        if metric:
+            return table, cls._extract_metric_source_column(item)
+        return table, str(item.get("column") or item.get("field_name") or "").strip()
+
+    @classmethod
+    def annotate_export_column_dicts(
+        cls,
+        config: Dict[str, Any],
+        column_dicts: Dict[tuple[str, str], Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """导出专用：把命中的字段字典原文挂到各条目的 ``_column_dict`` 键（返回副本，不改原配置）。
+
+        供物化导出链路把字典四项（enum_values/synonyms/storage_format/unit）写入
+        Ossie CHAT_DATA 扩展，导入侧据此按「仅填空」策略回写字典，形成闭环；
+        只在导出副本上挂载，运行时查询配置不受影响。
+        """
+        if not (config and column_dicts):
+            return config
+        result = dict(config)
+        result["dimensions"] = [
+            cls._with_export_column_dict(raw, column_dicts, metric=False)
+            for raw in result.get("dimensions") or []
+        ]
+        result["metrics"] = [
+            cls._with_export_column_dict(raw, column_dicts, metric=True)
+            for raw in result.get("metrics") or []
+        ]
+        return result
+
+    @classmethod
+    def _with_export_column_dict(
+        cls,
+        raw_item: Dict[str, Any],
+        column_dicts: Dict[tuple[str, str], Dict[str, Any]],
+        *,
+        metric: bool,
+    ) -> Dict[str, Any]:
+        item = dict(raw_item or {})
+        column_dict = column_dicts.get(cls._column_dict_key(item, metric=metric))
+        if column_dict:
+            item["_column_dict"] = column_dict
+        return item
+
+    @classmethod
     def _merge_column_dict(cls, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]) -> Dict[str, Any]:
         result = dict(config or {})
         dimensions = []
         for raw_dimension in result.get("dimensions") or []:
             dimension = dict(raw_dimension or {})
-            key = (str(dimension.get("table") or "").strip(), str(dimension.get("column") or dimension.get("field_name") or "").strip())
+            key = cls._column_dict_key(dimension, metric=False)
             column_dict = column_dicts.get(key)
             if column_dict:
                 dimension = cls._merge_dimension_column_dict(dimension, column_dict)
@@ -314,10 +358,10 @@ class SemanticConfigService:
         入参 configs 来自 ``get_by_group_id_async``（只含 delete_flag == 0 的活跃记录），
         这是刻意的：软删除会把 semantic_config_name 改写为 ``原名__d<id>_<日期>``
         （见 dao._DELETED_NAME_EXPR），墓碑不再占用原名，因此「删掉旧模型再建同名」
-        不会撞上墓碑行，判重只需覆盖活跃记录。实际生效的唯一索引是两列
-        ``(group_id, semantic_config_name)``；upsert 的 ON DUPLICATE KEY UPDATE
-        仅作并发兜底，同名活跃记录应在此处被 ValueError 拦截，而不是落到
-        IntegrityError。
+        不会撞上墓碑行，判重只需覆盖活跃记录。实际生效的唯一索引是三列
+        ``(group_id, semantic_config_name, delete_flag)``（生产 2026-09-19 核对）；
+        upsert 的 ON DUPLICATE KEY UPDATE 仅作并发兜底，同名活跃记录应在此处被
+        ValueError 拦截，而不是落到 IntegrityError。
         """
         normalized_name = str(name or "").strip()
         if not normalized_name:

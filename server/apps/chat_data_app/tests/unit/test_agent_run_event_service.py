@@ -3,7 +3,7 @@ import json
 import pytest
 
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
-from apps.chat_data_app.agent.run.agent_run_event_service import AgentRunEventService
+from apps.chat_data_app.agent.run.agent_run_event_service import AgentRunEventService, format_terminal_done
 from apps.chat_data_app.agent.run.redis_event_bus import RedisRunOwnerMismatchError
 
 
@@ -329,3 +329,224 @@ async def test_stream_keeps_waiting_while_run_is_active(monkeypatch):
     events = [event async for event in service.stream(run_id="run-1")]
 
     assert [event["event_type"] for event in events] == ["done"]
+
+
+def test_format_terminal_done_maps_succeeded_and_normalizes_unknown():
+    succeeded = format_terminal_done("succeeded", "run-9")
+    assert '"status": "finished"' in succeeded
+    assert '"next_run_id": "run-9"' in succeeded
+
+    weird = format_terminal_done("weird")
+    assert '"status": "failed"' in weird
+    assert "next_run_id" not in weird
+
+    blank = format_terminal_done("finished", "   ")
+    assert '"status": "finished"' in blank
+    assert "next_run_id" not in blank
+
+
+@pytest.mark.asyncio
+async def test_wait_for_done_skips_durable_check_between_polls(monkeypatch):
+    class MessageBus:
+        async def latest_run_event(self, _run_id):
+            return {"event_type": "message"}
+
+    async def no_sleep(_seconds):
+        return None
+
+    service = AgentRunEventService(bus=MessageBus(), inbox_dao=_InboxDao(content={}))
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
+        lambda: _Session(),
+    )
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.QUESTION_DONE_DURABLE_POLL_SECONDS",
+        10.0,
+    )
+
+    assert await service.wait_for_done("run-1", timeout=0.05) is False
+
+
+@pytest.mark.asyncio
+async def test_read_run_events_logs_failure_once_and_recovery():
+    class FlakyBus:
+        def __init__(self):
+            self.calls = 0
+
+        async def read_run(self, _run_id, _cursor):
+            self.calls += 1
+            if self.calls in (1, 3):
+                raise ConnectionError("redis down")
+            return [{
+                "stream_id": "1740000000001-0",
+                "event_type": "message",
+                "sequence_no": "1",
+                "payload": "event: message\ndata: {}\n\n",
+            }]
+
+    service = AgentRunEventService(bus=FlakyBus())
+
+    first = await service._read_run_events("run-1", "0-0", was_unavailable=False)
+    assert first == ([], False, True)
+
+    second = await service._read_run_events("run-1", "0-0", was_unavailable=True)
+    assert second[1] is True
+    assert second[2] is False
+    assert len(second[0]) == 1
+
+    third = await service._read_run_events("run-1", "0-0", was_unavailable=True)
+    assert third == ([], False, True)
+
+
+@pytest.mark.asyncio
+async def test_wait_between_polls_sleeps_when_stream_missing(monkeypatch):
+    class NoStreamBus:
+        async def run_stream_exists(self, _run_id):
+            return False
+
+    service = AgentRunEventService(bus=NoStreamBus())
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", fake_sleep)
+
+    await service._wait_between_polls("run-1", False)
+    await service._wait_between_polls("run-1", True)
+
+    assert sleeps == [0.5, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_stream_returns_immediately_when_client_disconnected():
+    service = AgentRunEventService(bus=_Bus())
+
+    async def disconnected():
+        return True
+
+    events = [event async for event in service.stream(run_id="run-1", is_disconnected=disconnected)]
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_stream_continues_after_non_done_events_and_skips_failed_snapshot(monkeypatch):
+    class MessageThenEmptyBus:
+        def __init__(self):
+            self.reads = 0
+
+        async def read_run(self, _run_id, _cursor):
+            self.reads += 1
+            if self.reads == 1:
+                return [{
+                    "stream_id": "1740000000001-0",
+                    "event_type": "message",
+                    "sequence_no": "1",
+                    "payload": "event: message\ndata: {}\n\n",
+                }]
+            return []
+
+    class BoomDao:
+        async def get_run_by_id(self, _session, _run_id):
+            raise RuntimeError("db down")
+
+    service = AgentRunEventService(bus=MessageThenEmptyBus(), inbox_dao=BoomDao())
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
+        lambda: _Session(),
+    )
+    disconnect_calls = 0
+
+    async def disconnected():
+        nonlocal disconnect_calls
+        disconnect_calls += 1
+        return disconnect_calls >= 3
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
+
+    events = [event async for event in service.stream(run_id="run-1", is_disconnected=disconnected)]
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "message"
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_silently_when_snapshot_missing_after_grace(monkeypatch):
+    class ExpiredBus:
+        async def read_run(self, _run_id, _cursor):
+            return []
+
+        async def run_stream_exists(self, _run_id):
+            return False
+
+    class MissingRowDao:
+        async def get_run_by_id(self, _session, _run_id):
+            return None
+
+    service = AgentRunEventService(bus=ExpiredBus(), inbox_dao=MissingRowDao())
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.get_session", lambda: _Session())
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.TERMINAL_PERSISTENCE_GRACE_SECONDS",
+        0.0,
+    )
+
+    events = [event async for event in service.stream(run_id="run-1")]
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_stream_waits_within_grace_before_fallback(monkeypatch):
+    class ExpiredBus:
+        async def read_run(self, _run_id, _cursor):
+            return []
+
+        async def run_stream_exists(self, _run_id):
+            return False
+
+    service = AgentRunEventService(bus=ExpiredBus(), inbox_dao=_InboxDao(content={}, status="finished"))
+    disconnect_calls = 0
+
+    async def disconnected():
+        nonlocal disconnect_calls
+        disconnect_calls += 1
+        return disconnect_calls >= 3
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.get_session", lambda: _Session())
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.TERMINAL_PERSISTENCE_GRACE_SECONDS",
+        10.0,
+    )
+
+    events = [event async for event in service.stream(run_id="run-1", is_disconnected=disconnected)]
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_get_run_snapshot_returns_none_for_missing_row(monkeypatch):
+    class MissingRowDao:
+        async def get_run_by_id(self, _session, _run_id):
+            return None
+
+    service = AgentRunEventService(bus=_Bus(), inbox_dao=MissingRowDao())
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
+        lambda: _Session(),
+    )
+
+    assert await service._get_run_snapshot("run-1") is None

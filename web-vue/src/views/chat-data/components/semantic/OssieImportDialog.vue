@@ -146,6 +146,7 @@ const groupLabels: Record<OssieChecklistRow['group'], string> = {
   mapping: '② 结构映射',
   physical: '③ 物理校验',
   quality: '④ 质量规则',
+  dict: '⑤ 数据字典',
 }
 
 /** 清单行按分组插入组头，供表格逐行渲染 */
@@ -303,7 +304,7 @@ const IMPORT_MODE_LABELS: Record<'replace' | 'new' | 'skip', string> = {
 
 /** 模式徽章的悬浮说明：覆盖后果写在 title 里（原底部「（覆盖现有配置）」文案合并于此） */
 const IMPORT_MODE_TITLES: Record<'replace' | 'new' | 'skip', string> = {
-  replace: '替换会覆盖同名现有配置的内容并强制禁用（保留配置 ID），提交前会再确认一次',
+  replace: '替换会覆盖同名现有配置的内容，启用状态保持不变（保留配置 ID），提交前会再确认一次',
   new: '不存在同名配置，导入后新建',
   skip: '同名配置无法操作，导入时将忽略该部分模型',
 }
@@ -537,7 +538,7 @@ const reportImportResult = ({ created, replaced, skipped }: FileImportResult) =>
     skipped ? `忽略 ${skipped}` : '',
   ].filter(Boolean)
   if (created + replaced > 0) {
-    ElMessage.success(`导入完成（${parts.join(' · ')}），配置为默认禁用，请人工复核后启用`)
+    ElMessage.success(`导入完成（${parts.join(' · ')}）`)
   } else if (skipped > 0) {
     ElMessage.info('全部模型因同名冲突被忽略，未做任何变更')
   }
@@ -594,7 +595,7 @@ const confirmImport = () => {
     return
   }
   ElMessageBox.confirm(
-    `将覆盖 ${replaceCount.value} 个同名现有配置的内容，并强制为禁用状态（保留配置 ID）。确认继续导入？`,
+    `将覆盖 ${replaceCount.value} 个同名现有配置的内容，启用状态保持不变（保留配置 ID）。确认继续导入？`,
     '确认替换现有配置',
     { type: 'warning', confirmButtonText: '继续导入', cancelButtonText: '取消' },
   ).then(() => handleImport()).catch(() => {})
@@ -684,9 +685,7 @@ const diffExistingFor = (muid: string) => {
   >
     <div class="space-y-3">
       <div class="text-xs leading-5 text-gray-500">
-        上传 Ossie 语义模型 YAML 文件，模型校验通过后创建
-        <span class="text-orange-500 font-medium">默认禁用</span>
-        的草稿配置，需人工复核后启用。
+        上传 Ossie 语义模型 YAML 文件，模型校验通过后导入：新模型直接启用，同名替换保留原配置的启用状态。
       </div>
 
       <div class="flex items-center gap-2">

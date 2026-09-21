@@ -129,6 +129,10 @@ class StubBackend:
         self.calls.append(("write_internal_text_files", kwargs))
         return []
 
+    async def delete_internal_text_files(self, runtime, **kwargs):
+        self.calls.append(("delete_internal_text_files", kwargs))
+        return {"path": kwargs["path"], "type": "file"}
+
     async def run_command(self, runtime, **kwargs):
         self.calls.append(("run_command", kwargs))
         return (0, "", "")
@@ -228,6 +232,9 @@ async def test_runtime_delegates_directory_and_preview_operations(tmp_path, monk
         file_path="/mnt/user-data/workspace/a.txt", old_content="a", new_content="b",
     ) == {"replaced": True}
     assert await runtime.write_internal_text_files(entries=[("/mnt/user-data/workspace/semantic/m.yaml", "a: 1")]) == []
+    assert await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/semantic/m.yaml") == {
+        "path": "/mnt/user-data/workspace/semantic/m.yaml", "type": "file",
+    }
     assert await runtime.grep_text(
         path="/mnt/user-data/workspace", patterns=["x"], glob="**/*", max_results=5, max_chars=100,
     ) == {"matches": []}
@@ -235,7 +242,7 @@ async def test_runtime_delegates_directory_and_preview_operations(tmp_path, monk
     assert called == [
         "list_dir", "create_dir", "delete_path", "move_path", "copy_path",
         "search_files", "read_text_file", "write_text_file", "replace_text_file",
-        "write_internal_text_files", "grep_text",
+        "write_internal_text_files", "delete_internal_text_files", "grep_text",
     ]
 
 

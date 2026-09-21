@@ -27,10 +27,10 @@ class _FakeRuntime:
             raise FileNotFoundError(f"目录不存在: {path}")
         return [{"type": "file", "path": f} for f in children]
 
-    async def delete_path(self, *, path, recursive, expected_type):
+    async def delete_internal_text_files(self, *, path):
         self.deleted.append(path)
         self.files.discard(path)
-        return {"path": path}
+        return {"path": path, "type": "file"}
 
 
 class _FakeDatasourceManager:
@@ -368,6 +368,38 @@ def test_prune_stale_survives_list_dir_failure(monkeypatch):
     assert runtime.deleted == []
 
 
+def test_prune_stale_survives_delete_failure(monkeypatch):
+    """删除通道被拒（如后端不支持）时只告警，不中断物化。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager([_config("sc_keep")]),
+    )
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+
+    class _BlockedDeleteRuntime(_FakeRuntime):
+        async def delete_internal_text_files(self, *, path):
+            raise ValueError("语义模型残留清理被后端拒绝")
+
+    runtime = _BlockedDeleteRuntime()
+    runtime.files.add(stale)
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=["sc_keep"],
+        prune_stale=True,
+    ))
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert runtime.deleted == []
+
+
 def test_safe_file_name_semantics_and_collisions():
     # 中文名保留，id 后缀保唯一
     name = semantic_materializer._safe_file_name({"id": "sc_20260116115442_907669", "name": "订单模型"})
@@ -386,3 +418,24 @@ def test_safe_file_name_semantics_and_collisions():
     long_name = "很" * 60
     truncated = semantic_materializer._safe_file_name({"id": "sc_z_55555555", "name": long_name})
     assert truncated == f"{'很' * 40}__55555555.yaml"
+
+
+def test_materializer_annotates_column_dicts_into_conversion_input(monkeypatch):
+    """字典四项闭环（导出侧）：渲染前把命中字典标注进转换副本，进缓存键；原配置不被污染。"""
+    semantic_materializer._YAML_CACHE.clear()
+    config = _config()
+    config["dimensions"][0].update({"table": "orders", "column": "city"})
+    manager = _FakeDatasourceManager([config])
+    manager.column_dicts = {("orders", "city"): {"unit": "个"}}
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: manager)
+    captured = []
+
+    def fake_convert(self, config, *, source_type=""):
+        captured.append(config)
+        return f"semantic_model: {config['id']}\n"
+
+    monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
+    _materialize(_FakeRuntime())
+
+    assert captured[0]["dimensions"][0]["_column_dict"] == {"unit": "个"}
+    assert "_column_dict" not in config["dimensions"][0]

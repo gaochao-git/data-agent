@@ -14,6 +14,13 @@ class SemanticModelWorkspaceBackend(Protocol):
         entries: list[tuple[str, str]],
     ) -> list[dict[str, Any]]: ...
 
+    async def delete_internal_text_files(
+        self,
+        runtime: Any,
+        *,
+        path: str,
+    ) -> dict[str, Any]: ...
+
 
 @runtime_checkable
 class ToolResultWorkspaceBackend(Protocol):
@@ -69,6 +76,19 @@ class SemanticModelWorkspaceService:
             return []
         backend = _require_capability(runtime, SemanticModelWorkspaceBackend, "语义模型物料化")
         return await backend.write_internal_text_files(runtime, entries=normalized)
+
+    async def delete_files(
+        self,
+        runtime: Any,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        """删除一个系统托管的语义模型文件（停用/删除模型的残留清理）。"""
+        normalized_path = str(path or "").strip()
+        if not normalized_path:
+            raise ValueError("语义模型删除路径不能为空")
+        backend = _require_capability(runtime, SemanticModelWorkspaceBackend, "语义模型残留清理")
+        return await backend.delete_internal_text_files(runtime, path=normalized_path)
 
 
 class WorkspaceToolResultService:

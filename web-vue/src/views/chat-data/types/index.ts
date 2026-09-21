@@ -383,7 +383,7 @@ export interface Message {
   turnId?: string
   dashboardSpec?: DashboardSpecPayload
   semanticConfigSelection?: SemanticConfigSelectionInfo
-  skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
+  skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]
   // tool 消息专用字段
@@ -469,6 +469,16 @@ export interface ToolCallInfo {
   ended_at_ms?: number | null
   // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
   subagentTrail?: SubagentTrailItem[]
+  // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
+  // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
+  subagentContextUsage?: SubagentContextUsage
+}
+
+/** 子智能体上下文用量快照（percent 相对子图预算告警线，≥100 表示已注入收尾告警）。 */
+export interface SubagentContextUsage {
+  used_tokens: number
+  threshold_tokens: number
+  percent: number
 }
 
 /** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
@@ -563,7 +573,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'inbox_admitted' | 'question_requested' | 'run_restarted' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'inbox_admitted' | 'question_requested' | 'run_restarted' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -611,7 +621,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -631,6 +641,10 @@ export interface ToolLifecycleEventData extends ToolEventData {
   removed_lines?: number
   // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
   intent?: string
+  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
+  used_tokens?: number
+  threshold_tokens?: number
+  percent?: number
 }
 
 // 语义层配置
