@@ -1631,6 +1631,8 @@ async def _run_chat_data_agent_stream(
                     model_id=model_id,
                     enable_thinking=enable_thinking,
                     thinking_effort=thinking_effort,
+                    available_skills_xml=available_skills_xml,
+                    datasource_group_context=prompt_context["datasource_group_context"],
                 ),
                 workspace_runtime=workspace_runtime,
                 run_controls=AgentRunControls(

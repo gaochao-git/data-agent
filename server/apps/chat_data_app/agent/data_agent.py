@@ -90,6 +90,13 @@ class ModelInvocationConfig:
     model_id: str | None = None
     enable_thinking: bool | None = None
     thinking_effort: str | None = None
+    # 会话技能清单（<available_skills> XML，agent_stream 每轮构建）。
+    # 归「模型怎么调」组：目录本是系统提示的一部分，子智能体与主智能体一致继承。
+    available_skills_xml: str | None = None
+    # 会话数据源组上下文（含「当前用户已选择的执行对象数据源」成员清单）。
+    # 归「模型怎么调」组：查询工具要求模型显式传 member_datasource_ids，
+    # 子智能体与主智能体一致继承该清单。
+    datasource_group_context: str | None = None
 
 
 def assemble_tools(
@@ -128,8 +135,8 @@ PLAN_SUBAGENT_DESCRIPTION = (
     "报告类任务按办公技能 report-workflow 产出需求说明、样式清单与大纲。"
     "只规划不执行，计划写入会话工作区，只回传计划路径与步骤清单。"
     "适合多步骤报告、跨数据源综合分析等先规划后执行的任务。"
-    "子智能体看不到 available_skills 技能清单：任务与本轮可用技能（尤其用户自定义技能）"
-    "相关时，必须在任务书中写明技能名称与 skill_file 路径，否则无从读取。"
+    "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
+    "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
 
 
@@ -148,6 +155,8 @@ def build_subagent_middleware(
     model,
     model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
+    available_skills_xml: str | None = None,
+    datasource_group_context: str | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -155,6 +164,11 @@ def build_subagent_middleware(
     运行在隔离上下文中；data-explore 额外扣除全部写操作工具保持只读。
     ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
+    ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
+    system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
+    ``datasource_group_context`` 与主智能体同一会话数据源组上下文（含已选
+    执行对象成员清单）：查询工具要求模型显式传 member_datasource_ids，
+    清单不进子图提示词则查询派发无从得知合法 ID；未传或为空则不注入。
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -168,6 +182,8 @@ def build_subagent_middleware(
             ),
             model=model,
             model_id=model_id,
+            available_skills_xml=available_skills_xml or "",
+            datasource_group_context=datasource_group_context or "",
         ))
     if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
@@ -180,6 +196,8 @@ def build_subagent_middleware(
             ),
             model=model,
             model_id=model_id,
+            available_skills_xml=available_skills_xml or "",
+            datasource_group_context=datasource_group_context or "",
         ))
     if not specs:
         return None
@@ -241,7 +259,9 @@ def create_data_agent(
         llm_factory=get_chat_data_llm,
     )
     subagent_middleware = build_subagent_middleware(
-        options, tools, model=model, model_id=model_id, run_controls=run_controls
+        options, tools, model=model, model_id=model_id, run_controls=run_controls,
+        available_skills_xml=invocation.available_skills_xml,
+        datasource_group_context=invocation.datasource_group_context,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
