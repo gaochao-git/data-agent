@@ -24,17 +24,17 @@ from apps.chat_data_app.agent.plugins.installer import (  # noqa: E402
     uninstall_plugin,
 )
 from apps.chat_data_app.agent.plugins.loader import (  # noqa: E402
-    PLUGIN_DISABLED_MARKER,
     clear_metadata_cache,
     enabled_plugin_mcp_servers,
     enabled_plugin_skill_sources,
     load_plugins_metadata,
-    set_plugin_enabled,
+    refresh_plugin_state,
 )
 from apps.chat_data_app.agent.plugins.manifest import (  # noqa: E402
     PluginManifestError,
     parse_plugin_manifest,
 )
+from apps.chat_data_app.services import plugin_service  # noqa: E402
 
 VALID_MANIFEST = {
     "name": "ops-readonly",
@@ -50,6 +50,7 @@ def _plugin_root(tmp_path, monkeypatch):
     root = tmp_path / "plugins"
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: root)
     monkeypatch.setattr(plugin_installer, "plugin_dir", lambda name, chat_data_home=None: root / name)
+    monkeypatch.setattr(plugin_loader, "_enabled_state", None)
     clear_metadata_cache()
     yield root
     clear_metadata_cache()
@@ -211,34 +212,33 @@ def _install_default_plugin():
     }))
 
 
-def test_load_plugins_metadata_and_disable_toggle():
+def _set_enabled_snapshot(names):
+    plugin_loader._enabled_state = frozenset(names)
+
+
+def test_load_plugins_metadata_reflects_db_enabled_snapshot():
     _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
     metadata = load_plugins_metadata()
     assert set(metadata) == {"ops-readonly"}
     assert metadata["ops-readonly"].enabled is True
 
-    assert set_plugin_enabled("ops-readonly", enabled=False) is True
+    _set_enabled_snapshot(set())
     assert load_plugins_metadata()["ops-readonly"].enabled is False
-    assert (plugin_loader.plugins_root() / "ops-readonly" / PLUGIN_DISABLED_MARKER).exists()
-
-    assert set_plugin_enabled("ops-readonly", enabled=True) is True
-    assert load_plugins_metadata()["ops-readonly"].enabled is True
 
 
-def test_set_plugin_enabled_missing_returns_false():
-    assert set_plugin_enabled("ghost", enabled=False) is False
-
-
-def test_set_plugin_enabled_rejects_bad_name():
-    with pytest.raises(PluginManifestError):
-        set_plugin_enabled("../escape", enabled=False)
+def test_load_plugins_metadata_disabled_when_never_refreshed():
+    # 未成功刷新（_enabled_state is None）→ 全部禁用，fail-closed，不读到未确认的启用态
+    _install_default_plugin()
+    assert load_plugins_metadata()["ops-readonly"].enabled is False
 
 
 def test_enabled_views_exclude_disabled_plugins():
     _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
     assert enabled_plugin_skill_sources()
     assert enabled_plugin_mcp_servers()
-    set_plugin_enabled("ops-readonly", enabled=False)
+    _set_enabled_snapshot(set())
     assert enabled_plugin_skill_sources() == []
     assert enabled_plugin_mcp_servers() == []
 
@@ -250,3 +250,125 @@ def test_plugin_loader_skips_dir_name_mismatch():
     (target / "plugin.json").write_text(json.dumps(VALID_MANIFEST, ensure_ascii=False), encoding="utf-8")
     clear_metadata_cache()
     assert load_plugins_metadata() == {}
+
+
+# ============ refresh_plugin_state（DB 快照刷新）============
+
+
+@pytest.mark.asyncio
+async def test_refresh_plugin_state_populates_from_dao(monkeypatch):
+    class _Dao:
+        async def list_enabled_names(self):
+            return {"ops-readonly"}
+
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    await refresh_plugin_state()
+    assert plugin_loader._enabled_state == frozenset({"ops-readonly"})
+
+
+@pytest.mark.asyncio
+async def test_refresh_plugin_state_fail_closed_on_db_error(monkeypatch):
+    class _Dao:
+        async def list_enabled_names(self):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    plugin_loader._enabled_state = frozenset({"stale"})
+    await refresh_plugin_state()
+    # DB 读失败：清空快照、不兜底旧值
+    assert plugin_loader._enabled_state == frozenset()
+
+
+# ============ service 编排（install / 启停 / 卸载）============
+
+
+@pytest.mark.asyncio
+async def test_service_install_writes_db_and_refreshes(monkeypatch):
+    calls = {}
+
+    class _ServiceDao:
+        async def upsert_installed(self, **kw):
+            calls["upsert"] = kw
+
+    class _RefreshDao:
+        async def list_enabled_names(self):
+            return {"ops-readonly"}
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _ServiceDao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _RefreshDao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    manifest = await plugin_service.install_plugin(
+        _build_zip(VALID_MANIFEST), operator_id="u1", operator_name="张三",
+    )
+    assert manifest.name == "ops-readonly"
+    assert calls["upsert"]["plugin_name"] == "ops-readonly"
+    assert calls["upsert"]["operator_id"] == "u1"
+    assert calls["upsert"]["operator_name"] == "张三"
+    # 安装后快照刷新：插件已启用
+    assert plugin_loader._enabled_state == frozenset({"ops-readonly"})
+
+
+@pytest.mark.asyncio
+async def test_service_install_rolls_back_files_when_db_write_fails(monkeypatch):
+    class _FailingDao:
+        async def upsert_installed(self, **kw):
+            raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _FailingDao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    with pytest.raises(RuntimeError):
+        await plugin_service.install_plugin(
+            _build_zip(VALID_MANIFEST), operator_id="u1", operator_name="张三",
+        )
+    # DB 写失败 → 已解包目录被回滚删除
+    assert not (plugin_loader.plugins_root() / "ops-readonly").exists()
+
+
+@pytest.mark.asyncio
+async def test_service_set_enabled_calls_dao_and_refreshes(monkeypatch):
+    seen = {}
+
+    class _Dao:
+        async def set_enabled(self, **kw):
+            seen.update(kw)
+            return True
+
+        async def list_enabled_names(self):
+            return set()
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    ok = await plugin_service.set_plugin_enabled(
+        "ops-readonly", enabled=False, operator_id="u1", operator_name="张三",
+    )
+    assert ok is True
+    assert seen["plugin_name"] == "ops-readonly"
+    assert seen["enabled"] is False
+    assert seen["operator_id"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_service_uninstall_removes_files_and_marks_deleted(monkeypatch):
+    _install_default_plugin()
+    seen = {}
+
+    class _Dao:
+        async def mark_deleted(self, **kw):
+            seen.update(kw)
+            return True
+
+        async def list_enabled_names(self):
+            return set()
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    manifest = await plugin_service.uninstall_plugin("ops-readonly", operator_id="u1", operator_name="张三")
+    assert manifest.name == "ops-readonly"
+    assert seen["plugin_name"] == "ops-readonly"
+    assert not (plugin_loader.plugins_root() / "ops-readonly").exists()

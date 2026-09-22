@@ -935,3 +935,28 @@ class SemanticConfig(Base):
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+
+class ChatDataPlugin(Base):
+    """ChatData 插件状态表：启停以本表为唯一真值（替代磁盘 .disabled 标记）。"""
+    __tablename__ = "chat_data_plugin"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    version: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    manifest_text: Mapped[Optional[str]] = mapped_column(Text)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint('plugin_name', name='uniq_plugin_name'),
+        Index('idx_plugin_enabled_delete', 'enabled_flag', 'delete_flag'),
+    )

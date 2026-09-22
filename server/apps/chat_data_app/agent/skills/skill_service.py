@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
 from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
-from ..plugins.loader import enabled_plugin_skill_sources
+from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
 from apps.chat_data_app.daos.skill_dao import SkillDao
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     WORKSPACE_OFFICE_SOURCE_MAX_BYTES,
@@ -434,6 +434,7 @@ class SkillService:
         return not (keyword and keyword not in searchable)
 
     async def list_skills_async(self, search: Optional[str] = None, category: Optional[str] = None, user_id: str = "", scope: str = "all", user_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        await refresh_plugin_state()
         db_rows = await self._safe_db_skills_async(user_id=user_id)
         keyword = str(search or "").strip().lower()
         normalized_category = str(category or "").strip()
@@ -467,6 +468,7 @@ class SkillService:
         可见集合 = 系统技能 + 当前用户自己的当前版本 + 他人 ``visibility_type=global``
         的当前版本。``uniq_skill_name`` 保证名称全局唯一，调用方据此构建扁平快照。
         """
+        await refresh_plugin_state()
         out: list[tuple[str, Path]] = []
         system_root = physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
         system_metadata = await asyncio.to_thread(load_metadata)

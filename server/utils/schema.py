@@ -395,6 +395,38 @@ CREATE TABLE `chat_data_query_execution` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData SQL执行记录表';
 """
 
+# 插件状态表：启停以本表为唯一真值（替代磁盘 .disabled）。
+# 设计依据（勿轻易改动）：
+# - 生产 DB 账号无 DELETE 权限，卸载只能 UPDATE delete_flag=1 软删，绝不物理删行；
+#   插件文件目录可物理删除（磁盘侧），与本表解耦。
+# - 采用【单列 UNIQUE(plugin_name) + 复活】模型：一个插件名永远只保留一行，靠
+#   delete_flag 在 0/1 间翻转，使 install→uninstall→reinstall→… 无限循环都不撞唯一索引。
+#   重建走 dao.upsert_installed：先按 plugin_name 查（不过滤 delete_flag），命中墓碑行则
+#   复活（delete_flag=0、enabled=1），否则 insert。
+# - 切勿改成 UNIQUE(plugin_name, delete_flag) 复合唯一：那是"每次重建插新行"的模型，
+#   第二次卸载会把新行置 delete_flag=1 而与旧墓碑 (name,1) 冲突直接崩。
+MYSQL_CHAT_DATA_PLUGIN_TABLE = """
+CREATE TABLE `chat_data_plugin` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `plugin_name` varchar(64) NOT NULL DEFAULT '' COMMENT '插件名(目录名/资源id)',
+  `version` varchar(32) NOT NULL DEFAULT '' COMMENT '插件版本',
+  `display_name` varchar(64) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description` varchar(500) NOT NULL DEFAULT '' COMMENT '描述',
+  `enabled_flag` tinyint NOT NULL DEFAULT '1' COMMENT '启用标识: 0-禁用, 1-启用',
+  `manifest_text` text COMMENT 'plugin.json 原文(JSON文本)',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_plugin_name` (`plugin_name`),
+  KEY `idx_plugin_enabled_delete` (`enabled_flag`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 插件状态表';
+"""
+
 MYSQL_CHAT_DATA_SQL_RESULT_CACHE_TABLE = """
 CREATE TABLE `chat_data_sql_result_cache` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -559,6 +591,7 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_EVAL_CASE_TABLE,
     MYSQL_CHAT_DATA_EVAL_RUN_TABLE,
     MYSQL_CHAT_DATA_EVAL_RUN_CASE_TABLE,
+    MYSQL_CHAT_DATA_PLUGIN_TABLE,
 ]
 
 

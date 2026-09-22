@@ -2219,6 +2219,12 @@ def test_list_runtime_skill_sources_async_includes_enabled_plugin_skills(monkeyp
 
     plugins_home = _install_plugin_skill(tmp_path)
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
+
+    class _FakeDao:
+        async def list_enabled_names(self):
+            return {"ops-readonly"}
+
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _FakeDao())
     plugin_loader.clear_metadata_cache()
     try:
         sources = asyncio.run(skill_service_module.skill_service.list_runtime_skill_sources_async("u1"))
@@ -2255,6 +2261,12 @@ def test_list_runtime_skill_sources_async_skips_conflicting_plugin_skill_name(mo
 
     plugins_home = _install_plugin_skill(tmp_path, skill_name="demo-sys")
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
+
+    class _FakeDao:
+        async def list_enabled_names(self):
+            return {"ops-readonly"}
+
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _FakeDao())
     plugin_loader.clear_metadata_cache()
     try:
         sources = asyncio.run(skill_service_module.skill_service.list_runtime_skill_sources_async("u1"))

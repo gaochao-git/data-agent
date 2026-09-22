@@ -19,7 +19,7 @@ from .loader import (
     load_plugins_metadata,
     plugin_dir,
     plugins_root,
-    set_plugin_enabled,
+    refresh_plugin_state,
 )
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
@@ -46,6 +46,6 @@ __all__ = [
     "parse_plugin_manifest",
     "plugin_dir",
     "plugins_root",
-    "set_plugin_enabled",
+    "refresh_plugin_state",
     "uninstall_plugin",
 ]

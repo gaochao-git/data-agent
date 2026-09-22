@@ -1,9 +1,12 @@
 """插件目录扫描与运行期视图。
 
-磁盘布局：``CHAT_DATA_HOME/plugins/<name>/``，目录下必有 ``plugin.json``；
-禁用通过目录内标记文件 ``.disabled`` 表达（管理员手动放置同样生效）。
-元数据带进程级缓存；安装/启停/卸载接口负责在变更后清缓存，让下一轮
-装配与新会话快照拿到最新插件视图。
+磁盘布局：``CHAT_DATA_HOME/plugins/<name>/``，目录下必有 ``plugin.json``。
+
+启停状态以 DB 表 ``chat_data_plugin`` 为唯一真值（不再用磁盘 ``.disabled`` 标记）：
+本模块维护一份进程内 ``_enabled_state`` 快照，由 :func:`refresh_plugin_state` 从 DB
+异步刷新；每个需要插件状态的入口（会话装配、技能快照、管理端列表）先 await 刷新，
+同步读取方（``enabled_plugins`` 等）消费该快照。DB 读失败按不可用处理（快照清空、
+fail-closed），不兜底旧值。磁盘缓存只存内容（manifest+目录），启停在读取时叠加。
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from typing import Any
 
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
+from apps.chat_data_app.daos.plugin_dao import PluginDao
 
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
@@ -25,7 +29,6 @@ from .manifest import (
 logger = get_logger(__name__)
 
 PLUGINS_DIR_NAME = "plugins"
-PLUGIN_DISABLED_MARKER = ".disabled"
 
 
 def plugins_root(chat_data_home: str | None = None) -> Path:
@@ -55,25 +58,42 @@ class PluginMetadata:
         }
 
 
-_metadata_cache: dict[str, PluginMetadata] | None = None
+# 磁盘内容缓存（manifest+目录），与启停解耦；启停来自 _enabled_state。
+_disk_cache: dict[str, tuple[PluginManifest, Path]] | None = None
+# DB 启停快照：None 表示本进程尚未成功刷新；frozenset() 表示已刷新且无启用项。
+_enabled_state: frozenset[str] | None = None
 
 
 def clear_metadata_cache() -> None:
-    """清理插件元数据缓存（安装/启停/卸载后必须调用）。"""
-    global _metadata_cache
-    _metadata_cache = None
+    """清理磁盘内容缓存（安装/卸载后调用，让下一轮扫描看到新目录）。"""
+    global _disk_cache
+    _disk_cache = None
 
 
-def load_plugins_metadata(*, force_refresh: bool = False) -> dict[str, PluginMetadata]:
-    """扫描插件目录，返回 ``{插件名: 元数据}``（带进程级缓存）。
+async def refresh_plugin_state() -> None:
+    """从 DB 刷新插件启停快照。
 
-    单个插件 manifest 损坏只告警跳过，不影响其他插件。
+    读失败即视为不可用：快照清空、当轮所有插件按禁用处理（fail-closed，不兜底旧值），
+    并记录真实错误。调用方在会话装配、技能快照、管理端列表等入口先 await 本函数。
     """
-    global _metadata_cache
-    if _metadata_cache is not None and not force_refresh:
-        return _metadata_cache
+    global _enabled_state
+    try:
+        _enabled_state = frozenset(await PluginDao().list_enabled_names())
+    except Exception as err:
+        logger.error("刷新插件启停状态失败，本轮所有插件按不可用处理: %s", err, exc_info=True)
+        _enabled_state = frozenset()
+
+
+def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, tuple[PluginManifest, Path]]:
+    """扫描插件目录，返回 ``{插件名: (manifest, 目录)}``（带进程级磁盘缓存）。
+
+    单个插件 manifest 损坏、目录名与 manifest.name 不一致、或为符号链接，只告警跳过。
+    """
+    global _disk_cache
+    if _disk_cache is not None and not force_refresh:
+        return _disk_cache
     root = plugins_root()
-    metadata: dict[str, PluginMetadata] = {}
+    found: dict[str, tuple[PluginManifest, Path]] = {}
     if root.is_dir():
         for entry in sorted(root.iterdir()):
             if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
@@ -90,17 +110,26 @@ def load_plugins_metadata(*, force_refresh: bool = False) -> dict[str, PluginMet
                     manifest.name,
                 )
                 continue
-            metadata[manifest.name] = PluginMetadata(
-                manifest=manifest,
-                dir=entry,
-                enabled=not (entry / PLUGIN_DISABLED_MARKER).exists(),
-            )
-    _metadata_cache = metadata
-    return metadata
+            found[manifest.name] = (manifest, entry)
+    _disk_cache = found
+    return found
+
+
+def load_plugins_metadata(*, force_refresh: bool = False) -> dict[str, PluginMetadata]:
+    """返回 ``{插件名: 元数据}``，启停标志叠加自 DB 快照 ``_enabled_state``。
+
+    未成功刷新（``_enabled_state is None``）时按全部禁用处理，避免读到未经 DB 确认的
+    启用态；调用方应先 :func:`refresh_plugin_state`。
+    """
+    enabled = _enabled_state if _enabled_state is not None else frozenset()
+    return {
+        name: PluginMetadata(manifest=manifest, dir=directory, enabled=name in enabled)
+        for name, (manifest, directory) in _scan_disk_plugins(force_refresh=force_refresh).items()
+    }
 
 
 def enabled_plugins() -> list[PluginMetadata]:
-    """当前已启用的插件列表。"""
+    """当前已启用（磁盘存在且 DB 标记启用）的插件列表。"""
     return [item for item in load_plugins_metadata().values() if item.enabled]
 
 
@@ -129,28 +158,9 @@ def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
     return entries
 
 
-def set_plugin_enabled(name: str, *, enabled: bool, chat_data_home: str | None = None) -> bool:
-    """启用/禁用插件（写/删 ``.disabled`` 标记）；插件不存在返回 False。"""
-    from .manifest import PLUGIN_NAME_PATTERN
-
-    if not PLUGIN_NAME_PATTERN.fullmatch(name):
-        raise PluginManifestError(f"插件名非法: {name!r}")
-    target = plugin_dir(name, chat_data_home)
-    if not target.is_dir() or target.is_symlink():
-        return False
-    marker = target / PLUGIN_DISABLED_MARKER
-    if enabled:
-        if marker.exists():
-            marker.unlink()
-    else:
-        marker.write_text("", encoding="utf-8")
-    clear_metadata_cache()
-    return True
-
-
 __all__ = [
     "PLUGINS_DIR_NAME",
-    "PLUGIN_DISABLED_MARKER",
+    "PLUGIN_MANIFEST_FILENAME",
     "PluginMetadata",
     "clear_metadata_cache",
     "enabled_plugin_mcp_servers",
@@ -159,6 +169,5 @@ __all__ = [
     "load_plugins_metadata",
     "plugin_dir",
     "plugins_root",
-    "set_plugin_enabled",
-    PLUGIN_MANIFEST_FILENAME,
+    "refresh_plugin_state",
 ]

@@ -14,6 +14,7 @@ import pytest
 from apps.chat_data_app.agent.plugins import installer as plugin_installer
 from apps.chat_data_app.agent.plugins import loader as plugin_loader
 from apps.chat_data_app.agent.plugins.loader import clear_metadata_cache
+from apps.chat_data_app.services import plugin_service
 from utils.error_codes import ErrorCode
 
 
@@ -25,6 +26,38 @@ def plugin_root(tmp_path, monkeypatch):
     clear_metadata_cache()
     yield root
     clear_metadata_cache()
+
+
+@pytest.fixture(autouse=True)
+def _fake_plugin_db(monkeypatch):
+    """内存假 DB：以 dict 模拟 chat_data_plugin，路由生命周期测试不触真实库。"""
+    store: dict[str, dict] = {}
+
+    class _FakeDao:
+        async def list_enabled_names(self):
+            return {n for n, v in store.items() if v["enabled"] and not v["deleted"]}
+
+        async def upsert_installed(self, *, plugin_name, **_kw):
+            store[plugin_name] = {"enabled": True, "deleted": False}
+
+        async def set_enabled(self, *, plugin_name, enabled, **_kw):
+            row = store.get(plugin_name)
+            if not row or row["deleted"]:
+                return False
+            row["enabled"] = bool(enabled)
+            return True
+
+        async def mark_deleted(self, *, plugin_name, **_kw):
+            row = store.get(plugin_name)
+            if not row or row["deleted"]:
+                return False
+            row["deleted"] = True
+            row["enabled"] = False
+            return True
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _FakeDao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _FakeDao())
+    yield store
 
 
 def _plugin_zip(name="ops-readonly", skill="fault-analysis"):
@@ -61,7 +94,8 @@ def test_plugin_routes_full_lifecycle(client, auth_headers, plugin_root: Path):
     )
     assert disable_response.status_code == 200
     assert disable_response.json()["data"]["enabled"] is False
-    assert (plugin_root / "ops-readonly" / ".disabled").exists()
+    after_disable = client.get("/api/chatdata/admin/plugins", headers=auth_headers).json()["data"]["plugins"]
+    assert after_disable[0]["enabled"] is False
 
     enable_response = client.put(
         "/api/chatdata/admin/plugins/ops-readonly/enabled",
@@ -117,11 +151,11 @@ def test_plugin_enable_invalid_name_returns_manifest_invalid(client, auth_header
 
 def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_root, monkeypatch):
     """安装/启停/卸载成功后必须重置 MCP 工具管理器单例，避免 TTL 缓存延迟新装配感知。"""
-    from apps.chat_data_app.routers import plugins as plugins_routes
+    from apps.chat_data_app.services import plugin_service as plugin_service_mod
 
     reset_calls = []
     monkeypatch.setattr(
-        plugins_routes, "reset_mcp_tool_manager", lambda: reset_calls.append("reset") or None
+        plugin_service_mod, "reset_mcp_tool_manager", lambda: reset_calls.append("reset") or None
     )
 
     installed = client.post(

@@ -26,6 +26,7 @@ from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_toke
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 from .services import conversation_service as conversation
+from .agent.plugins.loader import refresh_plugin_state
 from .agent import (
     create_data_agent,
     AgentRunControls,
@@ -1569,6 +1570,7 @@ async def _run_chat_data_agent_stream(
             )
             callbacks.model_snapshot_writer = model_snapshot_writer
 
+            await refresh_plugin_state()
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
