@@ -1,5 +1,4 @@
 import os
-import sys
 from pathlib import Path
 import uvicorn
 from contextlib import asynccontextmanager
@@ -18,6 +17,7 @@ print(f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files
 from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
+from utils.sqlite_compat import apply_sqlite_compat  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app.agent.context.context_budget import validate_context_budget_startup_config  # noqa: E402
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime  # noqa: E402
@@ -25,13 +25,8 @@ from apps.chat_data_app.agent.run.agent_schedule_runtime import agent_schedule_r
 from utils.checkpoint import setup_checkpointer  # noqa: E402
 
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
-# 用 pysqlite3 替换 sqlite3，解决 deterministic=True 在旧 SQLite 上报错的问题
-# pysqlite3-binary 自带新版 SQLite，aiosqlite 底层会使用被替换的 sqlite3 模块
-try:
-    import pysqlite3
-    sys.modules["sqlite3"] = pysqlite3
-except ImportError:
-    pass  # macOS 等平台无法安装 pysqlite3-binary，使用系统自带的 sqlite3
+# 用 pysqlite3 替换 sqlite3，解决 deterministic=True 在旧编译 Python 上报错的问题
+apply_sqlite_compat()
 
 logger = get_logger(__name__)
 
