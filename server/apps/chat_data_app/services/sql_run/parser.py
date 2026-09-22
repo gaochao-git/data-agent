@@ -56,15 +56,27 @@ def _parse_sql(sql: str, source_type: str | None = None):
     return expressions
 
 
+def _strip_comment_next_index(text: str, i: int, char: str, next_char: str, result: list[str]) -> int | None:
+    """判定并吞掉注释，返回新的扫描索引；无注释返回 None。"""
+    if char == "-" and next_char == "-":
+        return _consume_validation_line_comment(text, i, search_offset=2, result=result)
+    if char == "#":
+        return _consume_validation_line_comment(text, i, search_offset=1, result=result)
+    if char == "/" and next_char == "*":
+        return _consume_validation_block_comment(text, i, result)
+    return None
+
+
 def _strip_comments_by_scan(sql: str) -> str:
     """删除真实 SQL 注释，保留字符串和反引号内的注释符。"""
     text = str(sql or "")
     result: list[str] = []
     in_quote = ""
     i = 0
-    while i < len(text):
+    n = len(text)
+    while i < n:
         char = text[i]
-        next_char = text[i + 1] if i + 1 < len(text) else ""
+        next_char = text[i + 1] if i + 1 < n else ""
         if in_quote:
             i, in_quote = _consume_quoted_char(text, i, in_quote, result)
             continue
@@ -73,18 +85,23 @@ def _strip_comments_by_scan(sql: str) -> str:
             result.append(char)
             i += 1
             continue
-        if char == "-" and next_char == "-":
-            i = _consume_validation_line_comment(text, i, search_offset=2, result=result)
-            continue
-        if char == "#":
-            i = _consume_validation_line_comment(text, i, search_offset=1, result=result)
-            continue
-        if char == "/" and next_char == "*":
-            i = _consume_validation_block_comment(text, i, result)
+        consumed = _strip_comment_next_index(text, i, char, next_char, result)
+        if consumed is not None:
+            i = consumed
             continue
         result.append(char)
         i += 1
     return "".join(result)
+
+
+def _char_at(text: str, index: int) -> str:
+    """越界安全的单字符取值。"""
+    return text[index] if index < len(text) else ""
+
+
+def _is_validation_block_comment_start(text: str, i: int) -> bool:
+    """判断 i 处是否为块注释起始 ``/*``。"""
+    return text[i] == "/" and _char_at(text, i + 1) == "*"
 
 
 def _is_validation_dash_comment(text: str, index: int, dialect: str) -> bool:
@@ -121,7 +138,7 @@ def _strip_comments_for_validation(sql: str, source_type: str | None = None) -> 
         if char == "#" and dialect == "mysql":
             i = _consume_validation_line_comment(text, i, search_offset=1, result=result)
             continue
-        if char == "/" and (text[i + 1] if i + 1 < len(text) else "") == "*":
+        if _is_validation_block_comment_start(text, i):
             i = _consume_validation_block_comment(text, i, result)
             continue
         result.append(char)
@@ -168,29 +185,35 @@ def _is_query_sql(sql: str) -> bool:
     return normalized.startswith("select ") or normalized.startswith("with ")
 
 
+def _consume_split_quoted_char(text: str, i: int, in_quote: str, current: list[str]) -> tuple[int, str]:
+    """处理 _split_sql_statements 引号内字符，返回 (新索引, 引号状态)。"""
+    char = text[i]
+    next_char = text[i + 1] if i + 1 < len(text) else ""
+    current.append(char)
+    if char == "\\":
+        if i + 1 < len(text):
+            current.append(next_char)
+            return i + 2, in_quote
+        return i + 1, in_quote
+    if char == in_quote:
+        if in_quote == "'" and next_char == "'":
+            current.append("'")
+            return i + 2, in_quote
+        return i + 1, ""
+    return i + 1, in_quote
+
+
 def _split_sql_statements(sql: str) -> list[str]:
     """按非字符串位置的分号拆分 SQL。"""
     statements: list[str] = []
     current: list[str] = []
     in_quote = ""
     i = 0
-    while i < len(sql):
+    n = len(sql)
+    while i < n:
         char = sql[i]
-        next_char = sql[i + 1] if i + 1 < len(sql) else ""
         if in_quote:
-            current.append(char)
-            if char == "\\":
-                if i + 1 < len(sql):
-                    current.append(next_char)
-                    i += 2
-                    continue
-            elif char == in_quote:
-                if in_quote == "'" and next_char == "'":
-                    current.append(next_char)
-                    i += 2
-                    continue
-                in_quote = ""
-            i += 1
+            i, in_quote = _consume_split_quoted_char(sql, i, in_quote, current)
             continue
         if char in {"'", '"', "`"}:
             in_quote = char
@@ -339,6 +362,24 @@ def extract_top_level_limit_count(sql: str, source_type: str | None = None) -> i
         return None
 
 
+def _collect_physical_tables_from_expression(expression, tables: Set[str]) -> None:
+    """从单条 SQL 表达式中收集物理表名，排除 CTE 名称，写入 tables。"""
+    from sqlglot import exp
+
+    cte_names = {
+        str(cte.alias_or_name or "").strip().lower()
+        for cte in expression.find_all(exp.CTE)
+        if str(cte.alias_or_name or "").strip()
+    }
+    for table in expression.find_all(exp.Table):
+        table_name = str(table.name or "").strip()
+        if not table_name:
+            continue
+        if table_name.lower() in cte_names:
+            continue
+        tables.add(table_name)
+
+
 def extract_physical_tables(sql: str, source_type: str | None = None) -> SqlParseResult:
     """提取 SQL 涉及的物理表名，排除 CTE 名称。"""
     text = str(sql or "").strip()
@@ -354,17 +395,6 @@ def extract_physical_tables(sql: str, source_type: str | None = None) -> SqlPars
 
     tables: Set[str] = set()
     for expression in expressions:
-        cte_names = {
-            str(cte.alias_or_name or "").strip().lower()
-            for cte in expression.find_all(exp.CTE)
-            if str(cte.alias_or_name or "").strip()
-        }
-        for table in expression.find_all(exp.Table):
-            table_name = str(table.name or "").strip()
-            if not table_name:
-                continue
-            if table_name.lower() in cte_names:
-                continue
-            tables.add(table_name)
+        _collect_physical_tables_from_expression(expression, tables)
 
     return SqlParseResult(success=True, tables=tables)

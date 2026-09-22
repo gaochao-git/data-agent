@@ -37,6 +37,33 @@ def _resolve_turn_outcome(stream_adapter: Any) -> tuple[str, Any]:
     return "completed", None
 
 
+async def _stream_turn_wait_user_persistence(user_persistence_task: asyncio.Task | None) -> None:
+    if user_persistence_task is not None:
+        await user_persistence_task
+
+
+async def _stream_turn_finalize_now(finalize_resources: ResourceFinalizer | None, success: bool) -> bool:
+    if finalize_resources is not None:
+        await finalize_resources(success)
+        return True
+    return False
+
+
+async def _maybe_invoke_interrupt_hook(on_interrupt: AsyncInterruptHook | None, interrupt_payload: Any) -> None:
+    if on_interrupt is not None:
+        await on_interrupt(interrupt_payload)
+
+
+async def _maybe_invoke_disconnect_hook(on_disconnect: AsyncHook | None) -> None:
+    if on_disconnect is not None:
+        await on_disconnect()
+
+
+async def _await_user_persistence_safely(user_persistence_task: asyncio.Task | None) -> None:
+    if user_persistence_task is not None:
+        await asyncio.gather(user_persistence_task, return_exceptions=True)
+
+
 async def stream_agent_turn(
     *,
     stream_adapter: Any,
@@ -64,58 +91,45 @@ async def stream_agent_turn(
     resources_finalized = False
     user_persistence_task: asyncio.Task | None = None
 
-    async def wait_user_persistence() -> None:
-        if user_persistence_task is not None:
-            await user_persistence_task
-
-    async def finalize_now(success: bool) -> None:
-        nonlocal resources_finalized
-        if finalize_resources is not None:
-            await finalize_resources(success)
-            resources_finalized = True
-
     try:
         # The user message is already visible in the local UI. Persist it in
         # parallel with Agent startup, but wait before final history is saved
         # so the durable event order remains user -> assistant/tool events.
         user_persistence_task = asyncio.create_task(persist_user_message())
         if before_stream is not None and not await before_stream():
-            await wait_user_persistence()
+            await _stream_turn_wait_user_persistence(user_persistence_task)
             return
 
         async for sse_event in stream_adapter.stream_events():
             yield sse_event
 
-        await wait_user_persistence()
+        await _stream_turn_wait_user_persistence(user_persistence_task)
         end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
         await _run_optional_hook(after_finish)
         await persist_turn_history()
         await _run_optional_hook(after_stream)
         outcome, interrupt_payload = _resolve_turn_outcome(stream_adapter)
         if outcome == "interrupt":
-            if on_interrupt is not None:
-                await on_interrupt(interrupt_payload)
-            await finalize_now(True)
+            await _maybe_invoke_interrupt_hook(on_interrupt, interrupt_payload)
+            resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
             yield format_sse("question_requested", interrupt_payload)
             # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
             return
         if outcome == "disconnected":
-            if on_disconnect is not None:
-                await on_disconnect()
-            await finalize_now(True)
+            await _maybe_invoke_disconnect_hook(on_disconnect)
+            resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
             return
-        await finalize_now(True)
+        resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
         if after_turn is not None:
             await after_turn()
         yield format_sse("message_end", end_payload)
         # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
         await _abort_user_persistence(user_persistence_task)
-        await finalize_now(cleanup_success_on_cancel)
+        resources_finalized = await _stream_turn_finalize_now(finalize_resources, cleanup_success_on_cancel)
         raise
     except Exception:
-        if user_persistence_task is not None:
-            await asyncio.gather(user_persistence_task, return_exceptions=True)
+        await _await_user_persistence_safely(user_persistence_task)
         await persist_partial_history()
         raise
     finally:

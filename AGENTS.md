@@ -38,6 +38,8 @@
 - 前端完整检查：`cd web-vue && npm run build`
 - 后端条件覆盖率和行覆盖率要求大于95%
 - sonar代码复杂度要控制复杂度不能大于15，控制好for循环、if-else、except分支复杂度，已有的可以不改，新的功能代码一定要控制
+- 单个方法的参数不能大于13
+- 复杂度权威口径是 SonarQube Cognitive Complexity（S3776），与 radon 圈复杂度不是同一度量（radon 数决策点，Sonar 按嵌套加罚），radon 全绿不代表 Sonar 达标；本地按 Sonar 口径手动扫描：`cd server && python apps/chat_data_app/tests/scan_cognitive_complexity.py`（纯标准库，支持 `--target`/`--threshold`/`--top`）
 
 ## 4. 代码风格
 

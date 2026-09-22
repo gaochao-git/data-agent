@@ -274,26 +274,33 @@ def _normalize_http_execution_time_ms(payload: Dict[str, Any], result_payload: D
     return None
 
 
+def _parse_start_time_from_source(source: Any) -> Optional[datetime]:
+    """从单个数据源字典解析开始时间；无法解析返回 None。"""
+    if not isinstance(source, dict):
+        return None
+    raw_value = source.get("startTime") or source.get("started_time") or source.get("start_time")
+    if isinstance(raw_value, datetime):
+        return raw_value
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def _parse_http_start_time(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Optional[datetime]:
     """解析远端开始时间，业务接口格式为 yyyy-MM-dd HH:mm:ss。"""
     for source in (result_payload, _extract_remote_data(payload), payload):
-        if not isinstance(source, dict):
-            continue
-        raw_value = source.get("startTime") or source.get("started_time") or source.get("start_time")
-        if isinstance(raw_value, datetime):
-            return raw_value
-        text = str(raw_value or "").strip()
-        if not text:
-            continue
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                return datetime.strptime(text[:19], fmt)
-            except ValueError:
-                continue
-        try:
-            return datetime.fromisoformat(text)
-        except ValueError:
-            continue
+        parsed = _parse_start_time_from_source(source)
+        if parsed is not None:
+            return parsed
     return None
 
 
@@ -313,19 +320,27 @@ def _build_http_execution_times(payload: Dict[str, Any], result_payload: Dict[st
     }
 
 
+def _normalize_http_column_item(item: Any) -> str | None:
+    """标准化单个远端列项；无法归一化为有效列名返回 None。"""
+    if isinstance(item, str):
+        normalized = item.strip()
+        if normalized:
+            return normalized
+    elif isinstance(item, dict):
+        normalized = str(item.get("name") or item.get("column_name") or "").strip()
+        if normalized:
+            return normalized
+    return None
+
+
 def _normalize_http_columns(raw_columns: Any, rows: list[dict[str, Any]]) -> list[str]:
     """标准化远端返回的列结构。"""
     if isinstance(raw_columns, list):
         result: list[str] = []
         for item in raw_columns:
-            if isinstance(item, str):
-                normalized = item.strip()
-                if normalized:
-                    result.append(normalized)
-            elif isinstance(item, dict):
-                normalized = str(item.get("name") or item.get("column_name") or "").strip()
-                if normalized:
-                    result.append(normalized)
+            normalized = _normalize_http_column_item(item)
+            if normalized:
+                result.append(normalized)
         if result:
             return result
     if rows:
@@ -378,23 +393,29 @@ def _should_auto_add_limit(sql: str, source_type: Optional[str] = None) -> bool:
     return _get_sql_operation_type(normalized_sql, source_type=source_type) == "SELECT"
 
 
+def _consume_comment_scan_quote(line: str, i: int, in_quote: Optional[str]) -> tuple[int, Optional[str]]:
+    """处理 _line_has_comment_marker 引号内字符，返回 (新索引, 引号状态)。"""
+    char = line[i]
+    next_char = line[i + 1] if i + 1 < len(line) else ""
+    if char == "\\":
+        return i + 2, in_quote
+    if char == in_quote:
+        if in_quote == "'" and next_char == "'":
+            return i + 2, in_quote
+        return i + 1, None
+    return i + 1, in_quote
+
+
 def _line_has_comment_marker(line: str) -> bool:
     """判断单行非字符串位置是否存在 -- 注释。"""
     in_quote: Optional[str] = None
     i = 0
-    while i < len(line):
+    n = len(line)
+    while i < n:
         char = line[i]
-        next_char = line[i + 1] if i + 1 < len(line) else ""
+        next_char = line[i + 1] if i + 1 < n else ""
         if in_quote:
-            if char == "\\":
-                i += 2
-                continue
-            if char == in_quote:
-                if in_quote == "'" and next_char == "'":
-                    i += 2
-                    continue
-                in_quote = None
-            i += 1
+            i, in_quote = _consume_comment_scan_quote(line, i, in_quote)
             continue
         if char in {"'", '"', "`"}:
             in_quote = char

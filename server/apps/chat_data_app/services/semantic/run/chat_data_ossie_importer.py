@@ -26,6 +26,9 @@ from pydantic import ValidationError
 
 from ..core.common import LOGICAL_TYPE_VALUES, normalize_relationship_type
 from .semantic_quality_checker import RULES as _QUALITY_RULES
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 CHAT_DATA_VENDOR_NAME = "CHAT_DATA"
 _ANSI_SQL_DIALECT = "ANSI_SQL"
@@ -137,7 +140,15 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
     try:
         data = yaml.safe_load(yaml_content)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Ossie 文档不是合法的 YAML: {exc}") from exc
+        # str(YAMLError) 会回显源 yaml 出错行片段，不直接透出；只保留定位信息。
+        # 服务端日志记录原始异常（含出错行片段），便于排查。
+        logger.warning("Ossie YAML 解析失败（原始异常）: %s", exc)
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            raise ValueError(
+                f"Ossie 文档 YAML 语法错误（第 {mark.line + 1} 行第 {mark.column + 1} 列）"
+            ) from exc
+        raise ValueError("Ossie 文档不是合法的 YAML") from exc
     if not isinstance(data, dict):
         raise ValueError("Ossie 文档必须是 YAML 映射（顶层为 version / semantic_model）")
     # yaml 会把 version: 1.0 解析成 float，而 OSI schema 要求字符串，做一次容错
@@ -150,6 +161,26 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
         first_error = exc.errors()[0]
         location = ".".join(str(part) for part in first_error.get("loc", []))
         raise ValueError(f"Ossie 文档结构校验失败（{location}）: {first_error.get('msg')}") from exc
+
+
+def _normalize_one_item_datatype(item: Any) -> None:
+    """归一单个 semantic 条目（指标/维度字段）的 datatype 别名（仅接受确定映射）。"""
+    if not isinstance(item, dict):
+        return
+    raw = item.get("datatype")
+    if not isinstance(raw, str):
+        return
+    mapped = _OSSIE_DATATYPE_ALIASES.get(raw.strip().lower())
+    if mapped:
+        item["datatype"] = mapped
+
+
+def _normalize_item_list_datatypes(items: Any) -> None:
+    """归一一个条目列表（metrics[] 或 datasets[].fields[]）内各条目的 datatype 别名。"""
+    if not isinstance(items, list):
+        return
+    for item in items:
+        _normalize_one_item_datatype(item)
 
 
 def _normalize_ossie_datatypes(data: Dict[str, Any]) -> None:
@@ -169,17 +200,7 @@ def _normalize_ossie_datatypes(data: Dict[str, Any]) -> None:
         if isinstance(datasets, list):
             item_lists.extend(dataset.get("fields") for dataset in datasets if isinstance(dataset, dict))
         for items in item_lists:
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                raw = item.get("datatype")
-                if not isinstance(raw, str):
-                    continue
-                mapped = _OSSIE_DATATYPE_ALIASES.get(raw.strip().lower())
-                if mapped:
-                    item["datatype"] = mapped
+            _normalize_item_list_datatypes(items)
 
 
 def _optional_str(value: Any) -> Optional[str]:

@@ -66,6 +66,11 @@ def _extract_history_task_conversation_id(payload: Dict[str, Any]) -> str:
     return str((payload or {}).get("conversation_id") or "").strip()
 
 
+def _history_row_query_type(task: Any) -> str:
+    """取学习样本行的查询类型（任务缺失时回退空串），统一小写去空白。"""
+    return str((task.query_type if task else "") or "").strip().lower()
+
+
 def _history_message_text(content: Any) -> str:
     """提取对话消息可读文本。"""
     if isinstance(content, str):
@@ -136,6 +141,34 @@ def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_err
     })
 
 
+def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns: List[Dict[str, str]]) -> None:
+    """非 tool_calls 的 assistant 发言裁剪后登记。"""
+    if (msg or {}).get("tool_calls"):
+        return
+    assistant_turns.append({"content": text[:500], "timestamp": timestamp})
+
+
+def _compact_one_history_message(
+    msg: Any,
+    user_turns: List[Dict[str, str]],
+    assistant_turns: List[Dict[str, str]],
+    tool_errors: List[Dict[str, str]],
+    negative_feedback: List[str],
+) -> None:
+    """裁剪单条对话消息，按角色登记到对应收集列表。"""
+    text = _history_message_text((msg or {}).get("content"))
+    if not text:
+        return
+    role = str((msg or {}).get("role") or "").strip()
+    timestamp = str((msg or {}).get("timestamp") or "").strip()
+    if role == "user":
+        _collect_user_turn(text, timestamp, user_turns, negative_feedback)
+    elif role == "assistant":
+        _append_assistant_turn(msg, text, timestamp, assistant_turns)
+    elif role == "tool" and _is_history_tool_error_message(text):
+        _collect_tool_error(msg, text, timestamp, tool_errors)
+
+
 def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """裁剪智能问数对话上下文，保留用户意图、反馈和工具错误。"""
     user_turns: List[Dict[str, str]] = []
@@ -143,18 +176,7 @@ def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Di
     tool_errors: List[Dict[str, str]] = []
     negative_feedback: List[str] = []
     for msg in messages or []:
-        role = str((msg or {}).get("role") or "").strip()
-        text = _history_message_text((msg or {}).get("content"))
-        if not text:
-            continue
-        timestamp = str((msg or {}).get("timestamp") or "").strip()
-        if role == "user":
-            _collect_user_turn(text, timestamp, user_turns, negative_feedback)
-        elif role == "assistant":
-            if not (msg or {}).get("tool_calls"):
-                assistant_turns.append({"content": text[:500], "timestamp": timestamp})
-        elif role == "tool" and _is_history_tool_error_message(text):
-            _collect_tool_error(msg, text, timestamp, tool_errors)
+        _compact_one_history_message(msg, user_turns, assistant_turns, tool_errors, negative_feedback)
     return {
         "user_turns": user_turns[-6:],
         "assistant_turns": assistant_turns[-3:],
@@ -730,7 +752,7 @@ class SemanticHistoryLearningService:
         context_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         for execution, task in rows:
             task_payload = _parse_json_object(task.request_payload if task else None)
-            query_type = str((task.query_type if task else "") or "").strip().lower()
+            query_type = _history_row_query_type(task)
             if not self._should_consider_source(query_type, source_set, skipped, source_stats):
                 continue
             matched, skip_reason, history_tables, skip_detail = self.history_matcher(

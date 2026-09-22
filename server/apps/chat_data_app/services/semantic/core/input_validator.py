@@ -149,6 +149,16 @@ class InputValidator:
 
         return validated_filters, None
 
+    def _validate_tree_filter_children(self, children: Any, node_label: str) -> Optional[str]:
+        """递归校验树形过滤的子节点列表；任一子节点非法即返回其错误文案。"""
+        if not isinstance(children, list):
+            return f"错误：{node_label} 节点的值必须是数组"
+        for child in children:
+            err = self._validate_tree_filter(child)
+            if err:
+                return err
+        return None
+
     def _validate_tree_filter(self, filter_node: Dict) -> Optional[str]:
         """
         递归验证树形过滤条件
@@ -164,27 +174,38 @@ class InputValidator:
 
         # OR 节点
         if 'or' in filter_node:
-            children = filter_node['or']
-            if not isinstance(children, list):
-                return "错误：'or' 节点的值必须是数组"
-            for child in children:
-                err = self._validate_tree_filter(child)
-                if err:
-                    return err
-            return None
+            return self._validate_tree_filter_children(filter_node['or'], "'or'")
 
         # AND 节点
         if 'and' in filter_node:
-            children = filter_node['and']
-            if not isinstance(children, list):
-                return "错误：'and' 节点的值必须是数组"
-            for child in children:
-                err = self._validate_tree_filter(child)
-                if err:
-                    return err
-            return None
+            return self._validate_tree_filter_children(filter_node['and'], "'and'")
 
         err = self._validate_filter_leaf(filter_node)
+        if err:
+            return err
+        return None
+
+    def _validate_dimension_filter_leaf(self, filter_node: Dict) -> Optional[str]:
+        """验证维度过滤叶子（'dimension' 分支），返回错误文案或 None。"""
+        dim_name = filter_node.get('dimension')
+        if dim_name not in self.dimensions_map:
+            return f"错误：过滤条件中的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+        operator = str(filter_node.get('operator', '=')).upper()
+        if operator not in FILTER_OPERATORS:
+            return f"错误：过滤条件操作符 '{operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
+        err = self.validate_dimension_operator(dim_name, operator)
+        if err:
+            return err
+        err = self._validate_free_right_expression(filter_node)
+        if err:
+            return err
+        err = self._validate_filter_value_type(filter_node)
+        if err:
+            return err
+        err = self._validate_filter_logical_value(dim_name, filter_node)
+        if err:
+            return err
+        err = self._validate_filter_allowed_value(filter_node)
         if err:
             return err
         return None
@@ -201,28 +222,7 @@ class InputValidator:
                 return "错误：结构化 left/right 与自由 rightExpression 不能混用"
             return self._validate_expression_filter(filter_node)
         if 'dimension' in filter_node:
-            dim_name = filter_node.get('dimension')
-            if dim_name not in self.dimensions_map:
-                return f"错误：过滤条件中的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
-            operator = str(filter_node.get('operator', '=')).upper()
-            if operator not in FILTER_OPERATORS:
-                return f"错误：过滤条件操作符 '{operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
-            err = self.validate_dimension_operator(dim_name, operator)
-            if err:
-                return err
-            err = self._validate_free_right_expression(filter_node)
-            if err:
-                return err
-            err = self._validate_filter_value_type(filter_node)
-            if err:
-                return err
-            err = self._validate_filter_logical_value(dim_name, filter_node)
-            if err:
-                return err
-            err = self._validate_filter_allowed_value(filter_node)
-            if err:
-                return err
-            return None
+            return self._validate_dimension_filter_leaf(filter_node)
         return "错误：无效的过滤条件格式，必须是叶子节点或 and/or 组合节点"
 
     @staticmethod
@@ -592,6 +592,31 @@ class InputValidator:
         mapping = (dim_config or {}).get('mapping')
         return bool(isinstance(mapping, dict) and mapping and InputValidator._should_validate_allowed_values(dim_config))
 
+    def _validate_expression_having_item(self, h: Dict) -> Tuple[Optional[Dict], Optional[str]]:
+        """校验结构化表达式 HAVING 条目，返回 (条目, 错误文案)。"""
+        if {'valueType', 'rightExpression'} & set(h.keys()):
+            return None, "错误：结构化 left/right 与自由 rightExpression 不能混用"
+        err = self._validate_expression_having(h)
+        if err:
+            return None, err
+        return h, None
+
+    def _validate_having_item(self, h: Dict) -> Tuple[Optional[Dict], Optional[str]]:
+        """校验单个 HAVING 条目，返回 (条目或 None, 错误文案或 None)。"""
+        if not isinstance(h, dict):
+            return None, "错误：HAVING 条件格式错误，必须是对象"
+        if self._is_expression_having(h):
+            return self._validate_expression_having_item(h)
+        metric_name = h.get('metric')
+        if metric_name and metric_name in self.metrics_map:
+            err = self._validate_free_right_expression(h)
+            if err:
+                return None, err
+            return h, None
+        if metric_name:
+            return None, f"错误：HAVING 条件中的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
+        return None, None
+
     def validate_having(self, having: List[Dict]) -> Tuple[List[Dict], Optional[str]]:
         """
         验证 HAVING 过滤条件
@@ -604,25 +629,11 @@ class InputValidator:
         """
         validated_having = []
         for h in having:
-            if not isinstance(h, dict):
-                return [], "错误：HAVING 条件格式错误，必须是对象"
-            if self._is_expression_having(h):
-                if {'valueType', 'rightExpression'} & set(h.keys()):
-                    return [], "错误：结构化 left/right 与自由 rightExpression 不能混用"
-                err = self._validate_expression_having(h)
-                if err:
-                    return [], err
-                validated_having.append(h)
-                continue
-            metric_name = h.get('metric')
-            if metric_name and metric_name in self.metrics_map:
-                err = self._validate_free_right_expression(h)
-                if err:
-                    return [], err
-                validated_having.append(h)
-            elif metric_name:
-                return [], f"错误：HAVING 条件中的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
-
+            entry, err = self._validate_having_item(h)
+            if err:
+                return [], err
+            if entry is not None:
+                validated_having.append(entry)
         return validated_having, None
 
     @staticmethod

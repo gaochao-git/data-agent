@@ -310,9 +310,9 @@ class QueryTaskService:
             return None
         return cls.normalize_sql_task_results(execution_views, {})
 
-    @classmethod
-    def build_sql_task_execution_result_views(cls, executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """将执行记录转换为可并入成员结果的轻量字段。"""
+    @staticmethod
+    def _build_execution_result_view(execution: Any) -> Dict[str, Any]:
+        """把单条执行记录转换为可并入成员结果的轻量字段。"""
         result_fields = (
             "execution_id",
             "member_datasource_id",
@@ -323,30 +323,37 @@ class QueryTaskService:
             "started_time",
             "finished_time",
         )
-        views: List[Dict[str, Any]] = []
-        for execution in executions or []:
-            source = execution if isinstance(execution, dict) else execution.to_dict()
-            view = {field: source.get(field) for field in result_fields if field in source}
-            if source.get("sql_status"):
-                view["status"] = source.get("sql_status")
-            execution_sql = source.get("query") or source.get("sql_text")
-            if execution_sql:
-                view["sql"] = execution_sql
-            if source.get("execution_time_ms") is not None:
-                view["execution_time_ms"] = source.get("execution_time_ms")
-            if source.get("result_row_count") is not None:
-                view["total_count"] = source.get("result_row_count")
-            if source.get("error_message"):
-                view["error"] = source.get("error_message")
-            execution_payload = source.get("result_payload")
-            if isinstance(execution_payload, dict):
-                cls.fill_sql_task_execution_payload_defaults(view, execution_payload)
-            view.setdefault("columns", [])
-            view.setdefault("data", [])
-            view.setdefault("total_count", 0)
-            view.setdefault("error", None)
-            views.append(view)
-        return views
+        source = execution if isinstance(execution, dict) else execution.to_dict()
+        view: Dict[str, Any] = {
+            field: source.get(field) for field in result_fields if field in source
+        }
+        if source.get("sql_status"):
+            view["status"] = source.get("sql_status")
+        execution_sql = source.get("query") or source.get("sql_text")
+        if execution_sql:
+            view["sql"] = execution_sql
+        if source.get("execution_time_ms") is not None:
+            view["execution_time_ms"] = source.get("execution_time_ms")
+        if source.get("result_row_count") is not None:
+            view["total_count"] = source.get("result_row_count")
+        if source.get("error_message"):
+            view["error"] = source.get("error_message")
+        execution_payload = source.get("result_payload")
+        if isinstance(execution_payload, dict):
+            QueryTaskService.fill_sql_task_execution_payload_defaults(view, execution_payload)
+        view.setdefault("columns", [])
+        view.setdefault("data", [])
+        view.setdefault("total_count", 0)
+        view.setdefault("error", None)
+        return view
+
+    @classmethod
+    def build_sql_task_execution_result_views(cls, executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """将执行记录转换为可并入成员结果的轻量字段。"""
+        return [
+            QueryTaskService._build_execution_result_view(execution)
+            for execution in (executions or [])
+        ]
 
     @staticmethod
     def fill_sql_task_execution_payload_defaults(view: Dict[str, Any], execution_payload: Dict[str, Any]) -> None:
@@ -384,6 +391,20 @@ class QueryTaskService:
         return None
 
     @staticmethod
+    def _merge_execution_view_field(merged: Dict[str, Any], field: str, value: Any) -> None:
+        """把单条执行视图字段合并到成员结果，遵循「已有值优先」原则。"""
+        if field == "status":
+            if not merged.get("status"):
+                merged["status"] = value
+            return
+        if field in {"member_datasource_id", "member_name", "sql"}:
+            if not merged.get(field):
+                merged[field] = value
+            return
+        if field not in merged or merged.get(field) is None:
+            merged[field] = value
+
+    @staticmethod
     def merge_sql_task_result_execution(
         result: Dict[str, Any],
         execution_view: Optional[Dict[str, Any]],
@@ -392,16 +413,7 @@ class QueryTaskService:
         merged = dict(result or {})
         if execution_view:
             for field, value in execution_view.items():
-                if field == "status":
-                    if not merged.get("status"):
-                        merged["status"] = value
-                    continue
-                if field in {"member_datasource_id", "member_name", "sql"}:
-                    if not merged.get(field):
-                        merged[field] = value
-                    continue
-                if field not in merged or merged.get(field) is None:
-                    merged[field] = value
+                QueryTaskService._merge_execution_view_field(merged, field, value)
         merged.setdefault("columns", [])
         merged.setdefault("data", [])
         merged["total_count"] = int(merged.get("total_count") or 0)
@@ -676,32 +688,38 @@ class QueryTaskService:
         return statements
 
     @staticmethod
+    def _cancel_pending_member_result(member_result: Dict[str, Any]) -> Dict[str, Any]:
+        """把在途成员结果标记为已停止，已完成结果原样保留。"""
+        next_member_result = dict(member_result or {})
+        if query_result_status(next_member_result) in {"pending", "running"}:
+            next_member_result["status"] = "cancelled"
+            next_member_result["error"] = next_member_result.get("error") or "已人工取消"
+        return next_member_result
+
+    @staticmethod
     def mark_pending_sql_batch_statements_cancelled(statements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """父任务收到停止信号后，查询接口即时把未完成 SQL 显示为已停止。"""
         for statement in statements:
             member_results = list(statement.get("results") or [])
-            if member_results:
-                next_member_results = []
-                for member_result in member_results:
-                    next_member_result = dict(member_result or {})
-                    if query_result_status(next_member_result) in {"pending", "running"}:
-                        next_member_result["status"] = "cancelled"
-                        next_member_result["error"] = next_member_result.get("error") or "已人工取消"
-                    next_member_results.append(next_member_result)
-                aggregated = build_query_result_payload(
-                    sql=str(statement.get("sql") or ""),
-                    member_results=next_member_results,
-                    fallback_error=statement.get("error"),
-                )
-                statement.update({
-                    "status": aggregated["status"],
-                    "error": aggregated["error"],
-                    "results": aggregated["results"],
-                })
+            if not member_results:
+                if query_result_status(statement) in {"pending", "running"}:
+                    statement["status"] = "cancelled"
+                    statement["error"] = statement.get("error") or "已人工取消"
                 continue
-            if query_result_status(statement) in {"pending", "running"}:
-                statement["status"] = "cancelled"
-                statement["error"] = statement.get("error") or "已人工取消"
+            next_member_results = [
+                QueryTaskService._cancel_pending_member_result(member_result)
+                for member_result in member_results
+            ]
+            aggregated = build_query_result_payload(
+                sql=str(statement.get("sql") or ""),
+                member_results=next_member_results,
+                fallback_error=statement.get("error"),
+            )
+            statement.update({
+                "status": aggregated["status"],
+                "error": aggregated["error"],
+                "results": aggregated["results"],
+            })
         return statements
 
     @staticmethod

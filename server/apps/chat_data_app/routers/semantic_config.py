@@ -173,41 +173,54 @@ def _build_prefill_alias_map(tables: List[Dict]) -> Dict[str, List[str]]:
     return alias_map
 
 
-def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """自动预填字段重名时追加表角色前缀。"""
+def _build_prefixed_prefill_name(table_alias: str, name: str) -> str:
+    """重名字段追加表角色前缀；超长时按预算截断别名。"""
+    alias = re.sub(r"[`\"'“”‘’、/\\|()（）\[\]【】{}<>《》.!！?？~@#$%^&*+=-]", "", str(table_alias or "").strip())
+    alias = re.sub(r"\s+", "", alias)
+    if not alias:
+        return name
+    candidate = _normalize_prefill_display_name(f"{alias}_{name}", name)
+    if len(f"{alias}_{name}") <= PREFILL_DISPLAY_NAME_MAX_LENGTH:
+        return candidate
+    budget = PREFILL_DISPLAY_NAME_MAX_LENGTH - len(name) - 1
+    if budget <= 0:
+        return name[:PREFILL_DISPLAY_NAME_MAX_LENGTH]
+    alias_parts = [part for part in alias.split("_") if part]
+    alias_part = alias_parts[-1] if alias_parts and len(alias_parts[-1]) >= 2 else alias
+    return _normalize_prefill_display_name(f"{alias_part[:budget]}_{name}", name)
 
-    def build_prefixed_name(table_alias: str, name: str) -> str:
-        alias = re.sub(r"[`\"'“”‘’、/\\|()（）\[\]【】{}<>《》.!！?？~@#$%^&*+=-]", "", str(table_alias or "").strip())
-        alias = re.sub(r"\s+", "", alias)
-        if not alias:
-            return name
-        candidate = _normalize_prefill_display_name(f"{alias}_{name}", name)
-        if len(f"{alias}_{name}") <= PREFILL_DISPLAY_NAME_MAX_LENGTH:
-            return candidate
-        budget = PREFILL_DISPLAY_NAME_MAX_LENGTH - len(name) - 1
-        if budget <= 0:
-            return name[:PREFILL_DISPLAY_NAME_MAX_LENGTH]
-        alias_parts = [part for part in alias.split("_") if part]
-        alias_part = alias_parts[-1] if alias_parts and len(alias_parts[-1]) >= 2 else alias
-        return _normalize_prefill_display_name(f"{alias_part[:budget]}_{name}", name)
 
+def _count_prefill_name_occurrences(items: List[Dict[str, str]]) -> Dict[str, int]:
+    """统计自动预填字段名出现次数。"""
     name_counts: Dict[str, int] = {}
     for item in items:
         name = str(item.get("name") or "").strip()
         if name:
             name_counts[name] = name_counts.get(name, 0) + 1
+    return name_counts
+
+
+def _resolve_prefill_unique_name(name: str, used_names: Set[str]) -> str:
+    """重名时追加自增数字后缀，保证展示名唯一。"""
+    candidate = name
+    index = 2
+    while candidate in used_names:
+        suffix = str(index)
+        candidate = f"{name[:max(PREFILL_DISPLAY_NAME_MAX_LENGTH - len(suffix), 1)]}{suffix}"
+        index += 1
+    return candidate
+
+
+def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """自动预填字段重名时追加表角色前缀。"""
+    name_counts = _count_prefill_name_occurrences(items)
     used_names: Set[str] = set()
     for item in items:
         name = str(item.get("name") or "").strip()
         table_alias = str(item.get("table_alias") or item.get("table") or "").strip()
         if name_counts.get(name, 0) > 1 and table_alias:
-            name = build_prefixed_name(table_alias, name)
-        candidate = name
-        index = 2
-        while candidate in used_names:
-            suffix = str(index)
-            candidate = f"{name[:max(PREFILL_DISPLAY_NAME_MAX_LENGTH - len(suffix), 1)]}{suffix}"
-            index += 1
+            name = _build_prefixed_prefill_name(table_alias, name)
+        candidate = _resolve_prefill_unique_name(name, used_names)
         item["name"] = candidate
         used_names.add(candidate)
     return items
@@ -704,19 +717,33 @@ async def preview_admin_ossie_semantic_import(
         return business_response(msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
+def _collect_metric_dimension_tables(config: Dict[str, Any]) -> set:
+    """收集单个配置中指标/维度引用的物理表名。"""
+    tables: set = set()
+    for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+        if isinstance(item, dict) and item.get("table"):
+            tables.add(str(item["table"]).strip())
+    return tables
+
+
+def _collect_relationship_tables(config: Dict[str, Any]) -> set:
+    """收集单个配置中关系两侧引用的物理表名。"""
+    tables: set = set()
+    for relationship in config.get("relationships") or []:
+        if isinstance(relationship, dict):
+            for key in ("left_table", "right_table"):
+                value = str(relationship.get(key) or "").strip()
+                if value:
+                    tables.add(value)
+    return tables
+
+
 def _collect_modeled_tables(configs: List[Dict[str, Any]]) -> set:
     """汇总所有配置引用过的物理表名：指标/维度的 table，以及关系两侧表名。"""
     modeled_tables: set = set()
     for config in configs:
-        for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
-            if isinstance(item, dict) and item.get("table"):
-                modeled_tables.add(str(item["table"]).strip())
-        for relationship in config.get("relationships") or []:
-            if isinstance(relationship, dict):
-                for key in ("left_table", "right_table"):
-                    value = str(relationship.get(key) or "").strip()
-                    if value:
-                        modeled_tables.add(value)
+        modeled_tables.update(_collect_metric_dimension_tables(config))
+        modeled_tables.update(_collect_relationship_tables(config))
     return modeled_tables
 
 

@@ -70,20 +70,31 @@ def _embedded_property_indices(args: list[str]) -> set[int]:
     return indices
 
 
+_FILE_PATH_SUBCOMMANDS = {"view", "get", "query", "validate", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}
+
+
+def _file_path_command_file_indices(subcommand: str, args: list[str]) -> set[int] | None:
+    """解析以「文件路径」为第二参数的子命令组；不属于该组返回 None。参数不足时报错。"""
+    if subcommand not in _FILE_PATH_SUBCOMMANDS:
+        return None
+    if len(args) < 2:
+        raise ValueError(f"officecli {subcommand} 缺少文件路径")
+    if _looks_like_selector(args[1]):
+        raise ValueError(
+            f"officecli {subcommand} 缺少文件路径：第二个参数 {args[1]} 是文档选择器。"
+            "正确格式为 [子命令, 文件路径, 选择器]，例如 [\"get\","
+            " \"/mnt/user-data/workspace/报告.docx\", \"/body/p[1]\"]。"
+        )
+    return {1}
+
+
 def _officecli_file_indices(subcommand: str, args: list[str]) -> set[int]:
     """按子命令语义解析文件路径参数下标；参数不足时报错。"""
+    path_command_indices = _file_path_command_file_indices(subcommand, args)
+    if path_command_indices is not None:
+        return path_command_indices
     file_indices: set[int] = set()
-    if subcommand in {"view", "get", "query", "validate", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}:
-        if len(args) < 2:
-            raise ValueError(f"officecli {subcommand} 缺少文件路径")
-        if _looks_like_selector(args[1]):
-            raise ValueError(
-                f"officecli {subcommand} 缺少文件路径：第二个参数 {args[1]} 是文档选择器。"
-                "正确格式为 [子命令, 文件路径, 选择器]，例如 [\"get\","
-                " \"/mnt/user-data/workspace/报告.docx\", \"/body/p[1]\"]。"
-            )
-        file_indices.add(1)
-    elif subcommand == "dump":
+    if subcommand == "dump":
         if len(args) < 2:
             raise ValueError("officecli dump 缺少文件路径")
         file_indices.add(1)

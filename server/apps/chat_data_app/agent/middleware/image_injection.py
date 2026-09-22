@@ -86,6 +86,34 @@ def create_image_injection_middleware(
     return image_injection_middleware
 
 
+def _user_upload_requests(message: Any) -> list[tuple[str, str]]:
+    """从用户消息的 ``vision_attachments`` 标记收集上传图片请求。"""
+    requests: list[tuple[str, str]] = []
+    marked = (getattr(message, "additional_kwargs", None) or {}).get(VISION_ATTACHMENTS_KEY)
+    if isinstance(marked, list):
+        for path in marked:
+            if isinstance(path, str) and path.strip():
+                requests.append((USER_UPLOAD_SOURCE, path.strip()))
+    return requests
+
+
+def _collect_message_image_requests(
+    message: Any,
+    paths_by_call_id: dict[str, str],
+) -> list[tuple[str, str]]:
+    """收集单条消息的待注入图片请求 ``(source, path)``。"""
+    if isinstance(message, HumanMessage):
+        return _user_upload_requests(message)
+    if (
+        isinstance(message, ToolMessage)
+        and str(getattr(message, "name", "") or "") == READ_IMAGE_TOOL_NAME
+        and getattr(message, "status", None) != "error"
+    ):
+        path = paths_by_call_id.get(str(message.tool_call_id or "")) or ""
+        return [(READ_IMAGE_TOOL_NAME, path)]
+    return []
+
+
 def _collect_pending_image_requests(messages: list[Any]) -> list[tuple[str, str]]:
     """按消息序（旧→新）收集待注入图片请求 ``(source, path)``。
 
@@ -97,21 +125,17 @@ def _collect_pending_image_requests(messages: list[Any]) -> list[tuple[str, str]
     paths_by_call_id = _tool_file_paths_by_call_id(messages)
     requests: list[tuple[str, str]] = []
     for message in messages:
-        if isinstance(message, HumanMessage):
-            marked = (getattr(message, "additional_kwargs", None) or {}).get(VISION_ATTACHMENTS_KEY)
-            if isinstance(marked, list):
-                for path in marked:
-                    if isinstance(path, str) and path.strip():
-                        requests.append((USER_UPLOAD_SOURCE, path.strip()))
-            continue
-        if (
-            isinstance(message, ToolMessage)
-            and str(getattr(message, "name", "") or "") == READ_IMAGE_TOOL_NAME
-            and getattr(message, "status", None) != "error"
-        ):
-            path = paths_by_call_id.get(str(message.tool_call_id or "")) or ""
-            requests.append((READ_IMAGE_TOOL_NAME, path))
+        requests.extend(_collect_message_image_requests(message, paths_by_call_id))
     return requests
+
+
+def _tool_file_path_for_call(tool_call: Any) -> str:
+    """反查单个 tool_call 的 read_image file_path 参数（解析失败返回空串）。"""
+    if not isinstance(tool_call, dict) or not tool_call.get("id"):
+        return ""
+    args = tool_call.get("args")
+    file_path = str(args.get("file_path") or "").strip() if isinstance(args, dict) else ""
+    return file_path
 
 
 def _tool_file_paths_by_call_id(messages: list[Any]) -> dict[str, str]:
@@ -121,12 +145,9 @@ def _tool_file_paths_by_call_id(messages: list[Any]) -> dict[str, str]:
         if not isinstance(message, AIMessage):
             continue
         for tool_call in getattr(message, "tool_calls", None) or []:
-            if not isinstance(tool_call, dict) or not tool_call.get("id"):
-                continue
-            args = tool_call.get("args")
-            file_path = str(args.get("file_path") or "").strip() if isinstance(args, dict) else ""
-            if file_path:
-                args_by_call_id[str(tool_call["id"])] = file_path
+            path = _tool_file_path_for_call(tool_call)
+            if path:
+                args_by_call_id[str(tool_call["id"])] = path
     return args_by_call_id
 
 

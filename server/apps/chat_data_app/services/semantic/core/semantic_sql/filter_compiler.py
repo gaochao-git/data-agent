@@ -42,27 +42,40 @@ def _is_numeric_literal(value: Any) -> bool:
         return False
 
 
+def _scan_parenthesis_char(
+    char: str,
+    escaped: bool,
+    in_single: bool,
+    in_double: bool,
+    balance: int,
+) -> Tuple[bool, bool, bool, int]:
+    """按字符推进括号/引号扫描状态；字符串内的内容一律不计入括号。"""
+    if escaped:
+        return in_single, in_double, False, balance
+    if char == "\\":
+        return in_single, in_double, True, balance
+    if char == "'" and not in_double:
+        return (not in_single), in_double, escaped, balance
+    if char == '"' and not in_single:
+        return in_single, (not in_double), escaped, balance
+    if in_single or in_double:
+        return in_single, in_double, escaped, balance
+    if char == "(":
+        return in_single, in_double, escaped, balance + 1
+    if char == ")":
+        return in_single, in_double, escaped, balance - 1
+    return in_single, in_double, escaped, balance
+
+
 def _has_balanced_parentheses(expression: str) -> bool:
     balance = 0
     in_single = in_double = escaped = False
     for char in expression:
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char == "'" and not in_double:
-            in_single = not in_single
-        elif char == '"' and not in_single:
-            in_double = not in_double
-        elif not in_single and not in_double:
-            if char == "(":
-                balance += 1
-            elif char == ")":
-                balance -= 1
-                if balance < 0:
-                    return False
+        in_single, in_double, escaped, balance = _scan_parenthesis_char(
+            char, escaped, in_single, in_double, balance,
+        )
+        if balance < 0:
+            return False
     return balance == 0 and not in_single and not in_double
 
 

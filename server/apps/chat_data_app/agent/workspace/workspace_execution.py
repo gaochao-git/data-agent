@@ -1485,6 +1485,36 @@ async def sandbox_read_text_file(
         return result
 
 
+async def _build_sandbox_list_entry(
+    session: SandboxExecutionSession,
+    entry: Any,
+    target_prefix: str,
+) -> dict[str, Any] | None:
+    """构造单条目录列举条目；非本目录前缀或 symlink 时跳过（返回 None）。"""
+    entry_path = str(getattr(entry, "path", "") or "")
+    entry_type = _sandbox_entry_type(entry)
+    if not entry_path.startswith(target_prefix) or entry_type == "symlink":
+        return None
+    is_dir = await _sandbox_path_kind(
+        session=session,
+        path=entry_path,
+        entry=entry,
+    ) == "dir"
+    modified_at = getattr(entry, "modified_at", None)
+    mtime = (
+        modified_at.strftime("%Y-%m-%d %H:%M")
+        if hasattr(modified_at, "strftime")
+        else str(modified_at or "")
+    )
+    visible_path = sandbox_path_to_visible(entry_path)
+    return {
+        "type": "dir" if is_dir else "file",
+        "path": visible_path + ("/" if is_dir else ""),
+        "size": "-" if is_dir else int(getattr(entry, "size", 0) or 0),
+        "mtime": mtime,
+    }
+
+
 async def sandbox_list_dir(
     *,
     session_ref: SandboxExecutionSessionRef,
@@ -1509,31 +1539,10 @@ async def sandbox_list_dir(
         target_prefix = f"{target.rstrip('/')}/"
         entries: list[dict[str, Any]] = []
         for entry in raw_entries:
-            entry_path = str(getattr(entry, "path", "") or "")
-            entry_type = _sandbox_entry_type(entry)
-            if (
-                not entry_path.startswith(target_prefix)
-                or entry_type == "symlink"
-            ):
+            built = await _build_sandbox_list_entry(session, entry, target_prefix)
+            if built is None:
                 continue
-            is_dir = await _sandbox_path_kind(
-                session=session,
-                path=entry_path,
-                entry=entry,
-            ) == "dir"
-            modified_at = getattr(entry, "modified_at", None)
-            mtime = (
-                modified_at.strftime("%Y-%m-%d %H:%M")
-                if hasattr(modified_at, "strftime")
-                else str(modified_at or "")
-            )
-            visible_path = sandbox_path_to_visible(entry_path)
-            entries.append({
-                "type": "dir" if is_dir else "file",
-                "path": visible_path + ("/" if is_dir else ""),
-                "size": "-" if is_dir else int(getattr(entry, "size", 0) or 0),
-                "mtime": mtime,
-            })
+            entries.append(built)
         return sorted(entries, key=lambda item: (item["type"] == "file", item["path"]))[:500]
 
 
@@ -1766,6 +1775,34 @@ def build_rg_command_str(
     return " ".join(parts)
 
 
+def _parse_rg_match(
+    line: str,
+    normalized_target: str,
+    prefix: str,
+    prefix_len: int,
+) -> tuple[str, Any, str] | None:
+    """解析单行 ``rg --json`` 输出；非 match / 无效路径 / 缺行号时返回 None。"""
+    try:
+        data = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if data.get("type") != "match":
+        return None
+    pdata = data.get("data") or {}
+    file_path = (pdata.get("path") or {}).get("text") or ""
+    if file_path == normalized_target:
+        file_rel = ""
+    elif file_path.startswith(prefix):
+        file_rel = file_path[prefix_len:]
+    else:
+        return None
+    line_no = pdata.get("line_number")
+    if line_no is None:
+        return None
+    content = ((pdata.get("lines") or {}).get("text") or "").rstrip("\n")[:MAX_FILE_READ_LINE_CHARS]
+    return file_rel, line_no, content
+
+
 def parse_rg_output(
     stdout: str,
     target: str,
@@ -1790,24 +1827,10 @@ def parse_rg_output(
         if len(matches) >= max_results:
             has_more = True
             break
-        try:
-            data = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+        parsed = _parse_rg_match(line, normalized_target, prefix, prefix_len)
+        if parsed is None:
             continue
-        if data.get("type") != "match":
-            continue
-        pdata = data.get("data") or {}
-        file_path = (pdata.get("path") or {}).get("text") or ""
-        if file_path == normalized_target:
-            file_rel = ""
-        elif file_path.startswith(prefix):
-            file_rel = file_path[prefix_len:]
-        else:
-            continue
-        line_no = pdata.get("line_number")
-        if line_no is None:
-            continue
-        content = ((pdata.get("lines") or {}).get("text") or "").rstrip("\n")[:MAX_FILE_READ_LINE_CHARS]
+        file_rel, line_no, content = parsed
         line_cost = len(content) + (1 if matches else 0)
         if body_chars + line_cost > max_chars:
             has_more = True

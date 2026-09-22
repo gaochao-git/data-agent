@@ -129,12 +129,313 @@ def _validate_filename_pattern(pattern: str, *, field_name: str) -> str:
     return normalized
 
 
+# ---------------------------------------------------------------------------
+# 各文件工具的实现函数。工具注册闭包只做参数透传，保持工厂认知复杂度达标
+# （Sonar S3776 ≤15）；模型可见的工具名、docstring 与输出格式均不变。
+# ---------------------------------------------------------------------------
+
+
+async def _file_read_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    file_path: str,
+    offset: int,
+    limit: int,
+) -> str:
+    if offset < 0:
+        raise ValueError("offset 必须大于等于 0")
+    if limit < 1 or limit > MAX_READ_LIMIT:
+        raise ValueError(f"limit 必须在 1-{MAX_READ_LIMIT} 之间")
+    result = await workspace_runtime.read_text_file(
+        file_path=file_path,
+        offset=offset,
+        limit=limit,
+        max_chars=FILE_READ_MAX_CHARS,
+    )
+    visible_path = str(result.get("path") or file_path)
+    if not result.get("exists"):
+        return f"文件不存在: {file_path}"
+    if result.get("is_dir"):
+        return f"目标是目录，不是文件: {file_path}"
+    if result.get("is_binary"):
+        return f"暂不支持以文本方式读取二进制文件: {visible_path}"
+    if result.get("empty"):
+        total_lines_text = result.get("total_lines")
+        if total_lines_text is None:
+            total_lines_text = "unknown"
+        return f"[file_read]\nfile_path={visible_path}\nstatus=empty\ntotal_lines={total_lines_text}\n"
+    if result.get("offset_out_of_range"):
+        return _file_read_offset_error(result, offset)
+    lines = [str(item) for item in result.get("lines") or []]
+    return _format_file_read_result(result, visible_path=visible_path, offset=offset, limit=limit, lines=lines)
+
+
+def _file_read_offset_error(result: dict, offset: int) -> str:
+    total_lines = result.get("total_lines")
+    if total_lines is None:
+        return f"offset {offset} 超出文件可读范围（总行数统计失败）"
+    return f"offset {offset} 超出文件总行数（共 {total_lines} 行）"
+
+
+def _format_file_read_result(
+    result: dict,
+    *,
+    visible_path: str,
+    offset: int,
+    limit: int,
+    lines: list[str],
+) -> str:
+    total_lines = result.get("total_lines")
+    start_line = int(result.get("start_line") or offset + 1)
+    end_line = int(result.get("end_line") or offset + len(lines))
+    truncated_lines = [
+        item for item in result.get("truncated_lines") or [] if isinstance(item, dict)
+    ]
+    truncated_text = ",".join(str(item.get("line_number")) for item in truncated_lines)
+    next_offset = result.get("next_offset")
+    next_offset_text = f"\nnext_offset={next_offset}" if next_offset is not None else ""
+    truncated_text = f"\ntruncated=true\ntruncated_lines={truncated_text}" if truncated_text else ""
+    return (
+        "[file_read]\n"
+        f"file_path={visible_path}\n"
+        f"offset={offset}\nlimit={limit}\nstart_line={start_line}\nend_line={end_line}\n"
+        f"total_lines={total_lines if total_lines is not None else 'unknown'}\n"
+        f"has_more={'true' if result.get('has_more') else 'false'}"
+        f"{next_offset_text}{truncated_text}\n\n"
+        f"{format_lines(lines, start_line)}"
+    )
+
+
+async def _file_edit_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    file_path: str,
+    old_content: Any,
+    new_content: Any,
+) -> str:
+    if not isinstance(old_content, str) or not old_content:
+        raise ValueError("old_content 必须是非空字符串；请先用 file_read 读取文件后传入待替换的完整原文")
+    text = new_content if isinstance(new_content, str) else json_dumps(new_content)
+    if text == old_content:
+        raise ValueError("old_content 与 new_content 相同，不会产生任何修改；请检查 new_content 是否为期望的新内容")
+    payload = await workspace_runtime.replace_text_file(
+        file_path=file_path,
+        old_content=old_content,
+        new_content=text,
+    )
+    return tool_result_payload("file_edit", payload)
+
+
+async def _file_write_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    file_path: str,
+    content: Any,
+) -> str:
+    text = content if isinstance(content, str) else json_dumps(content)
+    payload = await workspace_runtime.write_text_file(
+        file_path=file_path,
+        content=text,
+        mode="overwrite",
+    )
+    return tool_result_payload("file_write", payload)
+
+
+async def _file_move_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    source_path: str,
+    destination_path: str,
+) -> str:
+    payload = await workspace_runtime.move_path(
+        source_path=source_path,
+        destination_path=destination_path,
+    )
+    return tool_result_payload("file_move", payload)
+
+
+async def _file_copy_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    source_path: str,
+    destination_path: str,
+) -> str:
+    payload = await workspace_runtime.copy_path(
+        source_path=source_path,
+        destination_path=destination_path,
+    )
+    return tool_result_payload("file_copy", payload)
+
+
+async def _file_delete_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    file_path: str,
+) -> str:
+    payload = await workspace_runtime.delete_path(
+        path=file_path,
+        recursive=False,
+        expected_type="file",
+    )
+    return tool_result_payload("file_delete", payload)
+
+
+async def _file_glob_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    pattern: str,
+    path: str,
+    max_results: int,
+) -> str:
+    normalized_pattern = _validate_filename_pattern(pattern, field_name="pattern")
+    if max_results < 1 or max_results > MAX_GLOB_RESULTS:
+        raise ValueError(f"max_results 必须在 1-{MAX_GLOB_RESULTS} 之间")
+    entries = await workspace_runtime.search_files(
+        path=str(path or "/mnt/user-data/workspace").strip(),
+        pattern=normalized_pattern,
+        max_results=max_results,
+    )
+    payload = {
+        "path": str(path or "/mnt/user-data/workspace").strip(),
+        "pattern": normalized_pattern,
+        "count": len(entries),
+        "entries": entries,
+    }
+    return tool_result_payload("file_glob", payload)
+
+
+async def _file_grep_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    pattern: str,
+    path: str,
+    glob: str,
+    max_results: int,
+) -> str:
+    patterns = [p for p in str(pattern or "").split("|") if p]
+    if not patterns:
+        raise ValueError("pattern 不能为空")
+    normalized_glob = _validate_relative_glob(glob, field_name="glob")
+    if max_results < 1 or max_results > MAX_GREP_RESULTS:
+        raise ValueError(f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间")
+    result = await workspace_runtime.grep_text(
+        path=str(path or "/mnt/user-data/workspace").strip(),
+        patterns=patterns,
+        glob=normalized_glob,
+        max_results=max_results,
+        max_chars=FILE_READ_MAX_CHARS,
+    )
+    payload = {
+        "path": str(path or "/mnt/user-data/workspace").strip(),
+        "pattern": pattern,
+        "glob": normalized_glob,
+        "count": len(result.get("matches") or []),
+        "has_more": bool(result.get("has_more")),
+        "skipped_binary": int(result.get("skipped_binary") or 0),
+        "skipped_large": int(result.get("skipped_large") or 0),
+        "matches": result.get("matches") or [],
+    }
+    return tool_result_payload("file_grep", payload)
+
+
+def _count_diff_lines(diff_lines: list[str]) -> tuple[int, int]:
+    """统计 unified diff 的新增/删除行数，口径与前端 splitFileDiffLines 一致。"""
+    in_hunk = False
+    added = 0
+    removed = 0
+    for line in diff_lines:
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    return added, removed
+
+
+async def _file_diff_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    file_a: str,
+    file_b: str,
+) -> str:
+    text_a = await read_text_file_full(workspace_runtime, file_a)
+    text_b = await read_text_file_full(workspace_runtime, file_b)
+    if text_a == text_b:
+        return tool_result_payload("file_diff", {
+            "file_a": str(file_a),
+            "file_b": str(file_b),
+            "status": "identical",
+            "added_lines": 0,
+            "removed_lines": 0,
+            "message": "两个文件内容完全一致",
+        })
+    lines_a = text_a.splitlines()
+    lines_b = text_b.splitlines()
+    diff_lines = list(difflib.unified_diff(
+        lines_a, lines_b,
+        fromfile=str(file_a), tofile=str(file_b), lineterm="",
+    ))
+    # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
+    # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
+    added, removed = _count_diff_lines(diff_lines)
+    return tool_result_payload("file_diff", {
+        "file_a": str(file_a),
+        "file_b": str(file_b),
+        "status": "changed",
+        "added_lines": added,
+        "removed_lines": removed,
+        "diff": "\n".join(diff_lines),
+    })
+
+
+async def _dir_list_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    path: str,
+    max_depth: int,
+) -> str:
+    if max_depth < 1 or max_depth > 5:
+        raise ValueError("max_depth 必须在 1-5 之间")
+    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
+    entries = await workspace_runtime.list_dir(path=raw, max_depth=max_depth)
+    if not entries:
+        return f"[dir_list]\npath={raw}\nis_dir=true\ncount=0\n(空目录)"
+    lines = ["[dir_list]", f"path={raw}", "is_dir=true", f"count={len(entries)}", ""]
+    for item in entries:
+        lines.append(
+            f"type={item['type']}  path={item['path']}  "
+            f"size={item['size']}  mtime={item['mtime']}"
+        )
+    return "\n".join(lines)
+
+
+async def _dir_delete_impl(
+    workspace_runtime: ConversationWorkspaceRuntime,
+    *,
+    path: str,
+    recursive: bool,
+) -> str:
+    payload = await workspace_runtime.delete_path(
+        path=path,
+        recursive=recursive,
+        expected_type="dir",
+    )
+    return tool_result_payload("dir_delete", payload)
+
+
 def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> list:
     """Build the single model-visible filesystem toolset for one conversation.
 
     All filesystem access is delegated to ``ConversationWorkspaceRuntime``. The
     runtime selects the local or OpenSandbox backend, while this module keeps
     names, argument validation, output format, and user-facing policy uniform.
+
+    各工具的执行逻辑在模块级 ``_*_impl`` 函数中；闭包只做参数透传，
+    保证本工厂的 Sonar 认知复杂度 ≤15。
     """
 
     @tool("file_read", parse_docstring=True)
@@ -157,49 +458,8 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             limit: 本次最多读取的源行数，默认 200、最大 500。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        if offset < 0:
-            raise ValueError("offset 必须大于等于 0")
-        if limit < 1 or limit > MAX_READ_LIMIT:
-            raise ValueError(f"limit 必须在 1-{MAX_READ_LIMIT} 之间")
-        result = await workspace_runtime.read_text_file(
-            file_path=file_path,
-            offset=offset,
-            limit=limit,
-            max_chars=FILE_READ_MAX_CHARS,
-        )
-        visible_path = str(result.get("path") or file_path)
-        if not result.get("exists"):
-            return f"文件不存在: {file_path}"
-        if result.get("is_dir"):
-            return f"目标是目录，不是文件: {file_path}"
-        if result.get("is_binary"):
-            return f"暂不支持以文本方式读取二进制文件: {visible_path}"
-        lines = [str(item) for item in result.get("lines") or []]
-        total_lines = result.get("total_lines")
-        if result.get("empty"):
-            total_lines_text = total_lines if total_lines is not None else "unknown"
-            return f"[file_read]\nfile_path={visible_path}\nstatus=empty\ntotal_lines={total_lines_text}\n"
-        if result.get("offset_out_of_range"):
-            if total_lines is None:
-                return f"offset {offset} 超出文件可读范围（总行数统计失败）"
-            return f"offset {offset} 超出文件总行数（共 {total_lines} 行）"
-        start_line = int(result.get("start_line") or offset + 1)
-        end_line = int(result.get("end_line") or offset + len(lines))
-        truncated_lines = [
-            item for item in result.get("truncated_lines") or [] if isinstance(item, dict)
-        ]
-        truncated_text = ",".join(str(item.get("line_number")) for item in truncated_lines)
-        next_offset = result.get("next_offset")
-        next_offset_text = f"\nnext_offset={next_offset}" if next_offset is not None else ""
-        truncated_text = f"\ntruncated=true\ntruncated_lines={truncated_text}" if truncated_text else ""
-        return (
-            "[file_read]\n"
-            f"file_path={visible_path}\n"
-            f"offset={offset}\nlimit={limit}\nstart_line={start_line}\nend_line={end_line}\n"
-            f"total_lines={total_lines if total_lines is not None else 'unknown'}\n"
-            f"has_more={'true' if result.get('has_more') else 'false'}"
-            f"{next_offset_text}{truncated_text}\n\n"
-            f"{format_lines(lines, start_line)}"
+        return await _file_read_impl(
+            workspace_runtime, file_path=file_path, offset=offset, limit=limit
         )
 
     @tool("file_edit", parse_docstring=True)
@@ -223,17 +483,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             new_content: 替换后的新内容；非字符串值会序列化为 JSON 文本写入。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        if not isinstance(old_content, str) or not old_content:
-            raise ValueError("old_content 必须是非空字符串；请先用 file_read 读取文件后传入待替换的完整原文")
-        text = new_content if isinstance(new_content, str) else json_dumps(new_content)
-        if text == old_content:
-            raise ValueError("old_content 与 new_content 相同，不会产生任何修改；请检查 new_content 是否为期望的新内容")
-        payload = await workspace_runtime.replace_text_file(
-            file_path=file_path,
-            old_content=old_content,
-            new_content=text,
+        return await _file_edit_impl(
+            workspace_runtime, file_path=file_path, old_content=old_content, new_content=new_content
         )
-        return tool_result_payload("file_edit", payload)
 
     @tool("file_write", parse_docstring=True)
     async def file_write(
@@ -254,13 +506,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             content: 文件完整内容；非字符串值会序列化为 JSON 文本写入。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        text = content if isinstance(content, str) else json_dumps(content)
-        payload = await workspace_runtime.write_text_file(
-            file_path=file_path,
-            content=text,
-            mode="overwrite",
-        )
-        return tool_result_payload("file_write", payload)
+        return await _file_write_impl(workspace_runtime, file_path=file_path, content=content)
 
     @tool("file_move", parse_docstring=True)
     async def file_move(source_path: str, destination_path: str, intent: str = "") -> str:
@@ -271,11 +517,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             destination_path: 目标路径，不得已存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        payload = await workspace_runtime.move_path(
-            source_path=source_path,
-            destination_path=destination_path,
+        return await _file_move_impl(
+            workspace_runtime, source_path=source_path, destination_path=destination_path
         )
-        return tool_result_payload("file_move", payload)
 
     @tool("file_copy", parse_docstring=True)
     async def file_copy(source_path: str, destination_path: str, intent: str = "") -> str:
@@ -286,11 +530,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             destination_path: 目标文件路径，不得已存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        payload = await workspace_runtime.copy_path(
-            source_path=source_path,
-            destination_path=destination_path,
+        return await _file_copy_impl(
+            workspace_runtime, source_path=source_path, destination_path=destination_path
         )
-        return tool_result_payload("file_copy", payload)
 
     @tool("file_delete", parse_docstring=True)
     async def file_delete(file_path: str, intent: str = "") -> str:
@@ -300,12 +542,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             file_path: 要删除的文件路径。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        payload = await workspace_runtime.delete_path(
-            path=file_path,
-            recursive=False,
-            expected_type="file",
-        )
-        return tool_result_payload("file_delete", payload)
+        return await _file_delete_impl(workspace_runtime, file_path=file_path)
 
     @tool("file_glob", parse_docstring=True)
     async def file_glob(
@@ -322,21 +559,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             max_results: 最多返回的匹配项数，范围 1-500。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        normalized_pattern = _validate_filename_pattern(pattern, field_name="pattern")
-        if max_results < 1 or max_results > MAX_GLOB_RESULTS:
-            raise ValueError(f"max_results 必须在 1-{MAX_GLOB_RESULTS} 之间")
-        entries = await workspace_runtime.search_files(
-            path=str(path or "/mnt/user-data/workspace").strip(),
-            pattern=normalized_pattern,
-            max_results=max_results,
+        return await _file_glob_impl(
+            workspace_runtime, pattern=pattern, path=path, max_results=max_results
         )
-        payload = {
-            "path": str(path or "/mnt/user-data/workspace").strip(),
-            "pattern": normalized_pattern,
-            "count": len(entries),
-            "entries": entries,
-        }
-        return tool_result_payload("file_glob", payload)
 
     @tool("file_grep", parse_docstring=True)
     async def file_grep(
@@ -358,30 +583,9 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             max_results: 最多返回的匹配条数，范围 1-200。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        patterns = [p for p in str(pattern or "").split("|") if p]
-        if not patterns:
-            raise ValueError("pattern 不能为空")
-        normalized_glob = _validate_relative_glob(glob, field_name="glob")
-        if max_results < 1 or max_results > MAX_GREP_RESULTS:
-            raise ValueError(f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间")
-        result = await workspace_runtime.grep_text(
-            path=str(path or "/mnt/user-data/workspace").strip(),
-            patterns=patterns,
-            glob=normalized_glob,
-            max_results=max_results,
-            max_chars=FILE_READ_MAX_CHARS,
+        return await _file_grep_impl(
+            workspace_runtime, pattern=pattern, path=path, glob=glob, max_results=max_results
         )
-        payload = {
-            "path": str(path or "/mnt/user-data/workspace").strip(),
-            "pattern": pattern,
-            "glob": normalized_glob,
-            "count": len(result.get("matches") or []),
-            "has_more": bool(result.get("has_more")),
-            "skipped_binary": int(result.get("skipped_binary") or 0),
-            "skipped_large": int(result.get("skipped_large") or 0),
-            "matches": result.get("matches") or [],
-        }
-        return tool_result_payload("file_grep", payload)
 
     @tool("file_diff", parse_docstring=True)
     async def file_diff(file_a: str, file_b: str, intent: str = "") -> str:
@@ -399,46 +603,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             file_b: 对比文件路径（diff 的 to 侧）。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        text_a = await read_text_file_full(workspace_runtime, file_a)
-        text_b = await read_text_file_full(workspace_runtime, file_b)
-        if text_a == text_b:
-            return tool_result_payload("file_diff", {
-                "file_a": str(file_a),
-                "file_b": str(file_b),
-                "status": "identical",
-                "added_lines": 0,
-                "removed_lines": 0,
-                "message": "两个文件内容完全一致",
-            })
-        lines_a = text_a.splitlines()
-        lines_b = text_b.splitlines()
-        diff_lines = list(difflib.unified_diff(
-            lines_a, lines_b,
-            fromfile=str(file_a), tofile=str(file_b), lineterm="",
-        ))
-        # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
-        # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
-        in_hunk = False
-        added = 0
-        removed = 0
-        for line in diff_lines:
-            if line.startswith("@@"):
-                in_hunk = True
-                continue
-            if not in_hunk:
-                continue
-            if line.startswith("+"):
-                added += 1
-            elif line.startswith("-"):
-                removed += 1
-        return tool_result_payload("file_diff", {
-            "file_a": str(file_a),
-            "file_b": str(file_b),
-            "status": "changed",
-            "added_lines": added,
-            "removed_lines": removed,
-            "diff": "\n".join(diff_lines),
-        })
+        return await _file_diff_impl(workspace_runtime, file_a=file_a, file_b=file_b)
 
     @tool("dir_create", parse_docstring=True)
     async def dir_create(path: str, intent: str = "") -> str:
@@ -462,19 +627,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             max_depth: 递归列出的最大深度，范围 1-5，默认 2。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        if max_depth < 1 or max_depth > 5:
-            raise ValueError("max_depth 必须在 1-5 之间")
-        raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
-        entries = await workspace_runtime.list_dir(path=raw, max_depth=max_depth)
-        if not entries:
-            return f"[dir_list]\npath={raw}\nis_dir=true\ncount=0\n(空目录)"
-        lines = ["[dir_list]", f"path={raw}", "is_dir=true", f"count={len(entries)}", ""]
-        for item in entries:
-            lines.append(
-                f"type={item['type']}  path={item['path']}  "
-                f"size={item['size']}  mtime={item['mtime']}"
-            )
-        return "\n".join(lines)
+        return await _dir_list_impl(workspace_runtime, path=path, max_depth=max_depth)
 
     @tool("dir_delete", parse_docstring=True)
     async def dir_delete(path: str, recursive: bool = False, intent: str = "") -> str:
@@ -485,12 +638,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             recursive: 是否递归删除非空目录，默认 false。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        payload = await workspace_runtime.delete_path(
-            path=path,
-            recursive=recursive,
-            expected_type="dir",
-        )
-        return tool_result_payload("dir_delete", payload)
+        return await _dir_delete_impl(workspace_runtime, path=path, recursive=recursive)
 
     return [
         file_read,

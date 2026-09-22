@@ -35,6 +35,11 @@ TERMINAL_STATUSES = {
 }
 
 
+def _batch_reached_done(events: list) -> bool:
+    """事件批次中是否包含 done 终止事件。"""
+    return any(event.get("event_type") == "done" for event in events)
+
+
 def format_terminal_done(status: str, next_run_id: str | None = None) -> str:
     """把 Run 权威状态编码为 SSE done；done 只在后端收口完成后产生。"""
     status = str(status or "failed")
@@ -128,6 +133,16 @@ class AgentRunEventService:
         terminal_event = await self._get_terminal_event(run_id)
         return str((terminal_event or {}).get("stream_id") or "") or "0-0"
 
+    async def _wait_for_done_durable_check(self, run_id: str, now: float) -> tuple[bool, float]:
+        """到达 durable 轮询阈值时查 inbox 终止记录，返回 (是否命中, 下一轮阈值)。"""
+        try:
+            terminal_event = await self._get_terminal_event(run_id)
+            if terminal_event is not None:
+                return True, now + QUESTION_DONE_DURABLE_POLL_SECONDS
+        except Exception:
+            logger.warning("等待问题 Run 终止事件时 inbox 查询失败: run_id=%s", run_id, exc_info=True)
+        return False, now + QUESTION_DONE_DURABLE_POLL_SECONDS
+
     async def wait_for_done(self, run_id: str, timeout: float = QUESTION_DONE_WAIT_SECONDS) -> bool:
         """Wait briefly for the interrupt segment's terminal SSE event."""
         loop = asyncio.get_running_loop()
@@ -143,13 +158,9 @@ class AgentRunEventService:
                 return True
             now = loop.time()
             if now >= next_durable_check:
-                try:
-                    terminal_event = await self._get_terminal_event(run_id)
-                    if terminal_event is not None:
-                        return True
-                except Exception:
-                    logger.warning("等待问题 Run 终止事件时 inbox 查询失败: run_id=%s", run_id, exc_info=True)
-                next_durable_check = now + QUESTION_DONE_DURABLE_POLL_SECONDS
+                found, next_durable_check = await self._wait_for_done_durable_check(run_id, now)
+                if found:
+                    return True
             if now >= deadline:
                 return False
             await asyncio.sleep(0.05)
@@ -216,40 +227,78 @@ class AgentRunEventService:
         Redis Stream 是唯一的可重放事件源。流已过期（超过 TTL）时不补偿
         中间过程：订阅在 Run 终态后结束，刷新页面走会话历史回放最终结果。
         """
-        cursor = last_event_id or "0-0"
+        cursor = self._normalize_cursor(last_event_id)
         redis_unavailable = False
         terminal_detected_at: float | None = None
         while True:
-            if is_disconnected and await is_disconnected():
+            if await self._client_disconnected(is_disconnected):
                 return
             events, stream_exists, redis_unavailable = await self._read_run_events(
                 run_id, cursor, was_unavailable=redis_unavailable
             )
             if events:
                 terminal_detected_at = None
+                done_reached = _batch_reached_done(events)
                 for event in events:
                     cursor = event["stream_id"]
                     yield event
-                    if event.get("event_type") == "done":
-                        return
+                if done_reached:
+                    return
                 continue
             await self._wait_between_polls(run_id, stream_exists)
             snapshot, loaded = await self._load_snapshot_with_retry(run_id)
-            if not loaded:
-                continue
-            if snapshot is None or snapshot["status"] in TERMINAL_STATUSES:
-                # inbox 终态先于 done 事件发布提交；宽限期内继续读流，
-                # 等待终止事件到达后再结束订阅。
-                now = asyncio.get_running_loop().time()
-                if terminal_detected_at is None:
-                    terminal_detected_at = now
-                if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
-                    if snapshot is not None:
-                        yield self._terminal_fallback_event(run_id, cursor, snapshot)
-                    return
-                await asyncio.sleep(0.2)
-                continue
-            terminal_detected_at = None
+            stop, terminal_detected_at, fallback = await self._terminal_grace_action(
+                run_id, cursor, snapshot, loaded, terminal_detected_at
+            )
+            for terminal_event in self._terminal_events(stop, fallback):
+                yield terminal_event
+            if stop:
+                return
+
+    @staticmethod
+    def _normalize_cursor(last_event_id: str) -> str:
+        return last_event_id or "0-0"
+
+    @staticmethod
+    async def _client_disconnected(is_disconnected) -> bool:
+        """与原内联写法一致：未传回调时不短路触发额外逻辑。"""
+        return bool(is_disconnected) and bool(await is_disconnected())
+
+    @staticmethod
+    def _terminal_events(stop: bool, fallback: dict | None):
+        """终态兜底事件迭代器：非停止或无兜底事件时不产出。"""
+        if stop and fallback is not None:
+            yield fallback
+
+    async def _terminal_grace_action(
+        self,
+        run_id: str,
+        cursor: str,
+        snapshot: dict | None,
+        loaded: bool,
+        terminal_detected_at: float | None,
+    ) -> tuple[bool, float | None, dict | None]:
+        """终态宽限判定，返回 (是否结束订阅, 新的 terminal_detected_at, 兜底事件)。
+
+        inbox 终态先于 done 事件发布提交；宽限期内继续读流（内部 sleep 0.2），
+        等待终止事件到达后再结束订阅。快照非终态时重置检测时间戳。
+        """
+        if not loaded:
+            return False, terminal_detected_at, None
+        if snapshot is None or snapshot["status"] in TERMINAL_STATUSES:
+            now = asyncio.get_running_loop().time()
+            if terminal_detected_at is None:
+                terminal_detected_at = now
+            if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
+                fallback = (
+                    self._terminal_fallback_event(run_id, cursor, snapshot)
+                    if snapshot is not None
+                    else None
+                )
+                return True, terminal_detected_at, fallback
+            await asyncio.sleep(0.2)
+            return False, terminal_detected_at, None
+        return False, None, None
 
     async def _get_terminal_event(self, run_id: str) -> dict | None:
         """读取 inbox Run 行记录的终止事件游标（done 发布成功后写入）。"""

@@ -21,6 +21,22 @@ def message_tool_call_ids(message: BaseMessage) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def _collect_ai_group_result_ids(
+    messages: list[BaseMessage],
+    index: int,
+    call_ids: tuple[str, ...],
+) -> tuple[set[str], int]:
+    """扫描 AI 工具调用组的连续 ToolMessage，返回 (命中的 result_ids, 越过后的索引)。"""
+    result_ids: set[str] = set()
+    next_index = index + 1
+    while next_index < len(messages) and isinstance(messages[next_index], ToolMessage):
+        tool_call_id = str(getattr(messages[next_index], "tool_call_id", "") or "").strip()
+        if tool_call_id in call_ids:
+            result_ids.add(tool_call_id)
+        next_index += 1
+    return result_ids, next_index
+
+
 def complete_message_boundaries(messages: list[BaseMessage]) -> list[int]:
     """Return prefixes that do not end inside a tool-call group.
 
@@ -36,13 +52,7 @@ def complete_message_boundaries(messages: list[BaseMessage]) -> list[int]:
             if not call_ids:
                 index += 1
                 continue
-            result_ids: set[str] = set()
-            next_index = index + 1
-            while next_index < len(messages) and isinstance(messages[next_index], ToolMessage):
-                tool_call_id = str(getattr(messages[next_index], "tool_call_id", "") or "").strip()
-                if tool_call_id in call_ids:
-                    result_ids.add(tool_call_id)
-                next_index += 1
+            result_ids, next_index = _collect_ai_group_result_ids(messages, index, call_ids)
             if result_ids == set(call_ids):
                 boundaries.append(next_index)
                 index = next_index

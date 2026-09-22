@@ -201,30 +201,42 @@ class MySQLSyncService:
         return stats_by_table
 
     @staticmethod
+    def _build_index_groups(stats_list: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """将统计行按索引名分组，返回 {index_name: {non_unique, columns}}。"""
+        by_index: Dict[str, Dict[str, Any]] = {}
+        for s in stats_list:
+            index_name = s["index_name"]
+            if not index_name or not s["column_name"]:
+                continue
+            if index_name not in by_index:
+                by_index[index_name] = {"non_unique": s["non_unique"], "columns": []}
+            by_index[index_name]["columns"].append((s["seq"], s["column_name"]))
+        return by_index
+
+    @staticmethod
+    def _classify_index_groups(by_index: Dict[str, Dict[str, Any]]):
+        """把分组后的索引拆成主键 / 唯一索引 / 普通索引三类。"""
+        primary_keys: List[List[str]] = []
+        unique_indexes: List[Dict[str, Any]] = []
+        indexes: List[Dict[str, Any]] = []
+        for index_name, info in by_index.items():
+            columns = [col for _, col in sorted(info["columns"])]
+            if index_name == "PRIMARY":
+                primary_keys.append(columns)
+            elif not info["non_unique"]:
+                unique_indexes.append({"name": index_name, "columns": columns})
+            else:
+                indexes.append({"name": index_name, "columns": columns})
+        return primary_keys, unique_indexes, indexes
+
+    @staticmethod
     def _apply_index_stats(tables_by_name: Dict[str, Dict[str, Any]], stats_by_table: Dict[str, List[Dict[str, Any]]]) -> None:
         for table_name, stats_list in stats_by_table.items():
             table = tables_by_name.get(table_name)
             if table is None:
                 continue
-            by_index: Dict[str, Dict[str, Any]] = {}
-            for s in stats_list:
-                index_name = s["index_name"]
-                if not index_name or not s["column_name"]:
-                    continue
-                if index_name not in by_index:
-                    by_index[index_name] = {"non_unique": s["non_unique"], "columns": []}
-                by_index[index_name]["columns"].append((s["seq"], s["column_name"]))
-            primary_keys: List[List[str]] = []
-            unique_indexes: List[Dict[str, Any]] = []
-            indexes: List[Dict[str, Any]] = []
-            for index_name, info in by_index.items():
-                columns = [col for _, col in sorted(info["columns"])]
-                if index_name == "PRIMARY":
-                    primary_keys.append(columns)
-                elif not info["non_unique"]:
-                    unique_indexes.append({"name": index_name, "columns": columns})
-                else:
-                    indexes.append({"name": index_name, "columns": columns})
+            by_index = MySQLSyncService._build_index_groups(stats_list)
+            primary_keys, unique_indexes, indexes = MySQLSyncService._classify_index_groups(by_index)
             table["primary_keys"] = primary_keys
             table["unique_indexes"] = unique_indexes
             table["indexes"] = indexes

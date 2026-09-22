@@ -267,6 +267,19 @@ def resolve_derived_metric(
     return dict(base_cfg), derived_metric_filter_leaves(cfg, dimensions_map, now=now)
 
 
+def _append_derived_metric_filter_part(parts: List[str], item: Any) -> None:
+    """把派生指标的单个修饰词过滤翻译成人类可读片段并追加到 parts。"""
+    dimension = normalize_text((item or {}).get("dimension"))
+    operator = normalize_text((item or {}).get("operator")) or "="
+    value = (item or {}).get("value")
+    if isinstance(value, list):
+        value_text = "、".join(str(entry) for entry in value)
+    else:
+        value_text = str(value or "")
+    if dimension:
+        parts.append(f"{dimension}{operator}{value_text}")
+
+
 def derived_metric_verbalization(metric_cfg: Dict[str, Any]) -> str:
     """派生指标的人类可读口径描述，供指标集摘要（AI 检索）与 Ossie 导出使用。"""
     cfg = metric_cfg or {}
@@ -278,16 +291,27 @@ def derived_metric_verbalization(metric_cfg: Dict[str, Any]) -> str:
     if period:
         parts.append(_describe_period(period))
     for item in cfg.get("filters") or []:
-        dimension = normalize_text((item or {}).get("dimension"))
-        operator = normalize_text((item or {}).get("operator")) or "="
-        value = (item or {}).get("value")
-        if isinstance(value, list):
-            value_text = "、".join(str(entry) for entry in value)
-        else:
-            value_text = str(value or "")
-        if dimension:
-            parts.append(f"{dimension}{operator}{value_text}")
+        _append_derived_metric_filter_part(parts, item)
     return " · ".join(parts)
+
+
+def _resolve_composite_member(
+    name: Any,
+    ref: str,
+    member_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """校验单个复合指标成员并返回其编译形态 {name, expression, table}；配置无效抛 ValueError。"""
+    if is_composite_metric(member_cfg):
+        raise ValueError(f"复合指标 '{name}' 不能引用其他复合指标: {ref}")
+    if is_derived_metric(member_cfg):
+        raise ValueError(f"复合指标 '{name}' 的成员暂不支持派生指标: {ref}")
+    member_expression = normalize_text(member_cfg.get("expression"))
+    if not parse_aggregate_expression(member_expression):
+        raise ValueError(f"复合指标 '{name}' 引用的指标不是聚合指标: {ref}")
+    ref_table = normalize_text(member_cfg.get("table"))
+    if not ref_table:
+        raise ValueError(f"复合指标 '{name}' 引用的指标缺少物理表: {ref}")
+    return {"name": ref, "expression": member_expression, "table": ref_table}
 
 
 def resolve_composite_metric(
@@ -314,22 +338,13 @@ def resolve_composite_metric(
         member_cfg = metrics_map.get(ref) or {}
         if not member_cfg:
             raise ValueError(f"复合指标 '{cfg.get('name')}' 引用的指标不存在: {ref}")
-        if is_composite_metric(member_cfg):
-            raise ValueError(f"复合指标 '{cfg.get('name')}' 不能引用其他复合指标: {ref}")
-        if is_derived_metric(member_cfg):
-            raise ValueError(f"复合指标 '{cfg.get('name')}' 的成员暂不支持派生指标: {ref}")
-        member_expression = normalize_text(member_cfg.get("expression"))
-        if not parse_aggregate_expression(member_expression):
-            raise ValueError(f"复合指标 '{cfg.get('name')}' 引用的指标不是聚合指标: {ref}")
-        ref_table = normalize_text(member_cfg.get("table"))
-        if not ref_table:
-            raise ValueError(f"复合指标 '{cfg.get('name')}' 引用的指标缺少物理表: {ref}")
-        if member_table and ref_table != member_table:
+        member = _resolve_composite_member(cfg.get("name"), ref, member_cfg)
+        if member_table and member["table"] != member_table:
             raise ValueError(
-                f"复合指标 '{cfg.get('name')}' 的成员指标跨表（{member_table} / {ref_table}），暂不支持"
+                f"复合指标 '{cfg.get('name')}' 的成员指标跨表（{member_table} / {member['table']}），暂不支持"
             )
-        member_table = ref_table
-        members.append({"name": ref, "expression": member_expression})
+        member_table = member["table"]
+        members.append({"name": ref, "expression": member["expression"]})
     return {"formula": formula, "members": members, "table": member_table}
 
 

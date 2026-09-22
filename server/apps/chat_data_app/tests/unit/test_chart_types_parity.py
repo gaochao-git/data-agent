@@ -4,6 +4,9 @@ chart 类型在五处声明：后端 ``chart_types.py``、前端 ``chartTypes.ts
 ``CHART_TYPE_HELP_TEXT``、后端 ``get_chart_type_prompt_text``（提示词物料）、
 data-analyzing 技能的看板主指南。任何一处新增/改名图表类型
 而其余未同步时，本测试立即失败。新增图表类型的唯一合法流程是五处同步改动。
+
+跨仓说明：内网前端以独立仓库部署，CI checkout 不含 ``web-vue/``。读前端
+源码的两条用例在分仓 CI 上跳过；本地为完整单仓，全量运行时对账照常执行。
 """
 
 import re
@@ -26,6 +29,12 @@ SKILL_DOC_PATHS = [
 ]
 
 BACKEND_KEYS = [item["key"] for item in CHART_TYPE_ITEMS]
+
+# 分仓 CI 只 checkout 后端仓库，web-vue/ 不存在；本地单仓全量时对账照常执行
+requires_frontend_source = pytest.mark.skipif(
+    not FRONTEND_CHART_TYPES_PATH.exists(),
+    reason="内网分仓 CI 无前端源码（web-vue/ 不在 checkout 内），跳过跨仓对账",
+)
 
 
 def _read(path: Path) -> str:
@@ -56,6 +65,7 @@ def _parse_frontend_registry(text: str) -> list[dict]:
     return items
 
 
+@requires_frontend_source
 def test_frontend_registry_keys_and_labels_match_backend():
     text = _read(FRONTEND_CHART_TYPES_PATH)
     frontend_items = _parse_frontend_registry(text)
@@ -76,6 +86,7 @@ def test_frontend_registry_keys_and_labels_match_backend():
     )
 
 
+@requires_frontend_source
 def test_frontend_help_text_covers_all_keys():
     text = _read(FRONTEND_CHART_TYPES_PATH)
     help_block = re.search(r"CHART_TYPE_HELP_TEXT[^=]*= \{(.*?)\n\}", text, re.S)

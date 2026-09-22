@@ -32,7 +32,7 @@
 
 ## P2（随手修或排期）
 
-- [ ] 4. parse 错误回传原始 yaml 异常文本（`chat_data_ossie_importer.py:134`）——清洗后再返回，避免泄露源文件片段。
+- [x] 4. parse 错误回传原始 yaml 异常文本（`chat_data_ossie_importer.py:134`）——清洗后再返回，避免泄露源文件片段。（2026-09-22 完成：`parse_ossie_document` 捕获 `yaml.YAMLError` 后改用 `problem_mark` 只输出「第 X 行第 Y 列」，不再回显源行片段；无 mark 时退回通用文案。三端（HTTP preview / import / agent check_yaml）共用该实现自动生效，测试断言同步更新为具体行列号）
 - [ ] 5. 无单文档模型数上限：2MB 可塞数千小模型，preview 逐模型跑物理校验+质量检查（`routers/semantic_config.py:672-690`）是慢查询面。加一个合理上限（如 200）。
 - [ ] 6. preview→import 之间被并发新建同名时，前端 `conflict_actions` 缺名 → 后端缺省 skip（`routers/semantic_config.py:905`），结果变「忽略」。可接受，但应在汇总提示中显式说明该情形。
 - [ ] 7. 治理闭环断点：agent 产物在会话工作区，导入弹窗只收本地文件（`OssieImportDialog.vue:174-181`）——考虑支持从工作区直接选取。
