@@ -624,6 +624,22 @@ having = [{
 | `【需要确认】` | 需要用户补充信息（含参数遗漏） | 直接展示给用户，等待补充 |
 | `抱歉，当前配置不支持` | 配置无法满足需求 | 直接告知用户 |
 
+## 开发工具
+
+### 认知复杂度扫描（Sonar S3776 口径）
+
+AGENTS.md 的复杂度红线「单函数 ≤15」权威口径是 SonarQube 的 Cognitive Complexity（规则 `python:S3776`），与 radon 圈复杂度是**两种度量**：radon 按决策点计数（if/for/每个 and/or 各 +1，嵌套不额外计分），Sonar 按嵌套深度加罚、扁平 elif 链几乎不罚。radon 全绿不代表 Sonar 达标，本脚本用于本地复现 Sonar 口径：
+
+```bash
+# server/ 目录下；纯标准库实现，无第三方依赖，内网可裸跑
+python apps/chat_data_app/tests/scan_cognitive_complexity.py            # 全量扫 apps/chat_data_app
+python apps/chat_data_app/tests/scan_cognitive_complexity.py --top 20   # 只看前 20
+python apps/chat_data_app/tests/scan_cognitive_complexity.py \
+    --target apps/chat_data_app/agent/middleware                        # 扫子目录
+```
+
+输出按分数倒序列出超阈值函数。降认知复杂度的手法与降 radon 圈复杂度不同：核心是**压平嵌套**（早返回守卫、内层循环体抽成独立函数、tool 工厂按工具拆分）；合并 `and/or` 只降 radon 分，对认知复杂度无效。算法 vendored 自 cognitive-complexity 1.3.0（MIT），与 SonarQube 实际值可能有 ±1~2 差异，最终以内网 Sonar 为准。
+
 # 参考的一些NL2SQL / 语义层产品全景
 
 ### 云厂商方案
