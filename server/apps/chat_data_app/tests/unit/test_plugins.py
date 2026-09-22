@@ -352,6 +352,63 @@ async def test_service_set_enabled_calls_dao_and_refreshes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_service_set_enabled_reconciles_orphan_plugin(monkeypatch):
+    """半装态自愈：盘上有目录、DB 无活跃行时，启停先补建行再落本次启停值。"""
+    _install_default_plugin()
+    calls = {"upsert": None, "set_enabled": []}
+
+    class _Dao:
+        async def set_enabled(self, **kw):
+            calls["set_enabled"].append(kw)
+            return False  # 模拟 DB 无活跃行
+
+        async def upsert_installed(self, **kw):
+            calls["upsert"] = kw
+
+        async def list_enabled_names(self):
+            return {"ops-readonly"}
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    ok = await plugin_service.set_plugin_enabled(
+        "ops-readonly", enabled=True, operator_id="u1", operator_name="张三",
+    )
+    assert ok is True
+    assert calls["upsert"]["plugin_name"] == "ops-readonly"
+    assert calls["upsert"]["version"] == "1.0.0"
+    assert calls["upsert"]["display_name"] == "智能运维只读插件"
+    # 补行后按本次请求值落启停
+    assert calls["set_enabled"][-1]["plugin_name"] == "ops-readonly"
+    assert calls["set_enabled"][-1]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_service_set_enabled_returns_false_when_missing_on_disk_and_db(monkeypatch):
+    """盘上无目录、DB 无行（真不存在）：不补行，返回 False。"""
+
+    class _Dao:
+        async def set_enabled(self, **kw):
+            return False
+
+        async def upsert_installed(self, **kw):  # pragma: no cover - 不应被调用
+            raise AssertionError("磁盘上没有插件时不应补建行")
+
+        async def list_enabled_names(self):
+            return set()
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    ok = await plugin_service.set_plugin_enabled(
+        "ghost-plugin", enabled=True, operator_id="u1", operator_name="张三",
+    )
+    assert ok is False
+
+
+@pytest.mark.asyncio
 async def test_service_uninstall_removes_files_and_marks_deleted(monkeypatch):
     _install_default_plugin()
     seen = {}
@@ -372,3 +429,74 @@ async def test_service_uninstall_removes_files_and_marks_deleted(monkeypatch):
     assert manifest.name == "ops-readonly"
     assert seen["plugin_name"] == "ops-readonly"
     assert not (plugin_loader.plugins_root() / "ops-readonly").exists()
+
+
+@pytest.mark.asyncio
+async def test_service_list_merges_db_audit_fields(monkeypatch):
+    """列表合并 DB 审计字段（创建人/创建时间）；DB 无行的孤儿插件留空。"""
+    import types as _types
+    from datetime import datetime
+
+    _install_default_plugin()
+    orphan_dir = plugin_loader.plugins_root() / "ops-orphan"
+    orphan_dir.mkdir()
+    (orphan_dir / "plugin.json").write_text(
+        json.dumps({**VALID_MANIFEST, "name": "ops-orphan"}, ensure_ascii=False), encoding="utf-8",
+    )
+    clear_metadata_cache()
+
+    db_row = _types.SimpleNamespace(
+        plugin_name="ops-readonly",
+        create_by_name="张三",
+        create_time=datetime(2026, 9, 22, 10, 0, 0),
+    )
+
+    class _Dao:
+        async def list_active(self):
+            return [db_row]
+
+        async def list_enabled_names(self):
+            return {"ops-readonly", "ops-orphan"}
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    data = await plugin_service.list_plugins()
+    items = {item["name"]: item for item in data["plugins"]}
+    assert data["total"] == 2
+    assert items["ops-readonly"]["create_by_name"] == "张三"
+    assert items["ops-readonly"]["create_time"] == "2026-09-22 10:00:00"
+    # DB 无行的孤儿插件：审计字段留空，不报错
+    assert items["ops-orphan"]["create_by_name"] == ""
+    assert items["ops-orphan"]["create_time"] == ""
+
+
+@pytest.mark.asyncio
+async def test_service_list_paginates_sorted_by_name(monkeypatch):
+    """分页：按插件名排序切片，total 为全量数。"""
+    plugin_loader.plugins_root().mkdir(parents=True, exist_ok=True)
+    for name in ("b-plugin", "a-plugin", "c-plugin"):
+        plugin_dir = plugin_loader.plugins_root() / name
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text(
+            json.dumps({**VALID_MANIFEST, "name": name}, ensure_ascii=False), encoding="utf-8",
+        )
+    clear_metadata_cache()
+
+    class _Dao:
+        async def list_active(self):
+            return []
+
+        async def list_enabled_names(self):
+            return set()
+
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    page1 = await plugin_service.list_plugins(limit=2, offset=0)
+    page2 = await plugin_service.list_plugins(limit=2, offset=2)
+    assert page1["total"] == 3
+    assert [item["name"] for item in page1["plugins"]] == ["a-plugin", "b-plugin"]
+    assert [item["name"] for item in page2["plugins"]] == ["c-plugin"]

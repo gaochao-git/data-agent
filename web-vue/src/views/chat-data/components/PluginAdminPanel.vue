@@ -18,12 +18,21 @@ const hasLoaded = ref(false)
 const uploadRef = ref<UploadInstance | null>(null)
 const installing = ref(false)
 
+// 服务端分页（口径与定时任务一致）
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
+
 const loadPlugins = async () => {
   loading.value = true
   try {
-    const res = await getAdminPlugins()
+    const res = await getAdminPlugins({
+      limit: pageSize.value,
+      offset: (currentPage.value - 1) * pageSize.value
+    })
     if (res.status === 'success') {
       plugins.value = res.data.plugins || []
+      total.value = res.data.total || 0
       hasLoaded.value = true
     } else {
       ElMessage.error(res.msg || '获取插件列表失败')
@@ -34,6 +43,15 @@ const loadPlugins = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handlePageChange = async () => {
+  await loadPlugins()
+}
+
+const handleSizeChange = async () => {
+  currentPage.value = 1
+  await loadPlugins()
 }
 
 const ensureLoaded = async () => {
@@ -138,7 +156,7 @@ defineExpose({ ensureLoaded })
       </el-button>
     </div>
 
-    <!-- 插件列表：数量少，全量表格（无分页） -->
+    <!-- 插件列表：服务端分页 -->
     <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">
       <el-table
         :data="plugins"
@@ -186,6 +204,16 @@ defineExpose({ ensureLoaded })
             <span v-else class="text-xs text-slate-400">-</span>
           </template>
         </el-table-column>
+        <el-table-column label="创建人" width="100" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="text-xs text-slate-600">{{ row.create_by_name || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="150">
+          <template #default="{ row }">
+            <span class="text-xs text-slate-600">{{ row.create_time || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="70" align="center">
           <template #default="{ row }">
             <el-switch
@@ -203,6 +231,19 @@ defineExpose({ ensureLoaded })
           </template>
         </el-table-column>
       </el-table>
+      <div class="flex shrink-0 justify-end pt-2">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          layout="total, sizes, prev, pager, next"
+          size="small"
+          background
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+        />
+      </div>
     </div>
   </div>
 </template>

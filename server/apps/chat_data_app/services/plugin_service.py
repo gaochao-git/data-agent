@@ -13,6 +13,7 @@ import shutil
 from typing import Any, Dict, List
 
 from utils.logger import get_logger
+from utils.models import ChatDataPlugin
 from ..agent.mcp.manager import reset_mcp_tool_manager
 from ..agent.plugins.installer import (
     install_plugin_from_zip_bytes,
@@ -43,10 +44,32 @@ def _reset_runtime_caches() -> None:
         logger.warning("重置 MCP 工具管理器失败: %s", err)
 
 
-async def list_plugins() -> List[Dict[str, Any]]:
-    """列出已安装插件（含禁用项），启停状态来自 DB。"""
+def _format_db_time(value: Any) -> str:
+    """DB 时间字段的统一展示格式（与 conversation_service 等口径一致）。"""
+    return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
+
+
+async def list_plugins(*, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    """已安装插件分页列表（含禁用项），启停与创建人/创建时间来自 DB。
+
+    磁盘扫描提供内容（manifest），DB 提供状态与审计字段；半装态孤儿插件
+    （DB 无行）审计字段留空，首次启停时自愈补行。返回 ``{"plugins": [...], "total": n}``，
+    分页口径与定时任务一致（limit 已由 router 收敛到 [1, 200]）。
+    """
     await refresh_plugin_state()
-    return [item.to_dict() for item in load_plugins_metadata().values()]
+    items = [item.to_dict() for item in load_plugins_metadata().values()]
+    audit_by_name: Dict[str, ChatDataPlugin] = {}
+    try:
+        audit_by_name = {row.plugin_name: row for row in await PluginDao().list_active()}
+    except Exception as err:
+        logger.warning("读取插件审计字段失败，列表将不展示创建人/创建时间: %s", err)
+    for item in items:
+        row = audit_by_name.get(item["name"])
+        item["create_by_name"] = str(row.create_by_name or "") if row is not None else ""
+        item["create_time"] = _format_db_time(row.create_time) if row is not None else ""
+    # 磁盘扫描本身按目录名排序（稳定），此处仅做分页切片
+    ordered = sorted(items, key=lambda item: item["name"])
+    return {"plugins": ordered[offset:offset + limit], "total": len(ordered)}
 
 
 async def install_plugin(
@@ -83,6 +106,43 @@ async def install_plugin(
     return manifest
 
 
+async def _reconcile_orphan(
+    name: str,
+    *,
+    enabled: bool,
+    operator_id: str,
+    operator_name: str,
+) -> bool:
+    """半装态自愈：磁盘有插件目录但 DB 无活跃行时，按 manifest 补建 DB 行。
+
+    触发场景：DB 换库/清数据、历史版本（磁盘 ``.disabled`` 时代）遗留的插件目录。
+    命中即按 ``upsert_installed`` 复活/新建行，再落本次启停值；磁盘上没有则返回 False。
+    列表展示不做写操作（读接口保持纯读），孤儿插件的启停开关自然触发补建。
+    """
+    metadata = load_plugins_metadata().get(name)
+    if metadata is None:
+        return False
+    manifest = metadata.manifest
+    await PluginDao().upsert_installed(
+        plugin_name=manifest.name,
+        version=manifest.version,
+        display_name=manifest.display_name,
+        description=manifest.description,
+        manifest_text=_manifest_json(manifest),
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+    await PluginDao().set_enabled(
+        plugin_name=name,
+        enabled=enabled,
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+    clear_metadata_cache()
+    logger.info("插件半装态自愈：已补建 DB 行 name=%s version=%s enabled=%s", manifest.name, manifest.version, enabled)
+    return True
+
+
 async def set_plugin_enabled(
     name: str,
     *,
@@ -90,7 +150,10 @@ async def set_plugin_enabled(
     operator_id: str,
     operator_name: str,
 ) -> bool:
-    """启用/禁用插件（写 DB）；返回是否命中记录。变更后刷新快照与缓存。"""
+    """启用/禁用插件（写 DB）；返回是否命中记录。变更后刷新快照与缓存。
+
+    DB 未命中时先做半装态自愈（磁盘有、库里无则补行），再按本次启停值落库。
+    """
     if not PLUGIN_NAME_PATTERN.fullmatch(name):
         raise PluginManifestError(f"插件名非法: {name!r}")
     updated = await PluginDao().set_enabled(
@@ -99,6 +162,10 @@ async def set_plugin_enabled(
         operator_id=operator_id,
         operator_name=operator_name,
     )
+    if not updated:
+        updated = await _reconcile_orphan(
+            name, enabled=enabled, operator_id=operator_id, operator_name=operator_name,
+        )
     if updated:
         await refresh_plugin_state()
         _reset_runtime_caches()

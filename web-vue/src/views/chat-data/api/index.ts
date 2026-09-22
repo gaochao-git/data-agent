@@ -1750,10 +1750,11 @@ export function getAdminAgentScheduleRuns(jobId: string, params?: { limit?: numb
 // ============ 插件管理 API（Admin） ============
 
 /** 后台：已安装插件列表（含禁用项） */
-export function getAdminPlugins(): Promise<ApiResponse<{ plugins: PluginInfo[] }>> {
+export function getAdminPlugins(params?: { limit?: number; offset?: number }): Promise<ApiResponse<{ plugins: PluginInfo[]; total: number }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/plugins`,
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 

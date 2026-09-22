@@ -943,7 +943,9 @@ export interface PluginManifestInfo {
   mcp_servers: PluginMcpServerInfo[]
 }
 
-// 后台插件列表条目（manifest + 运行状态）
+// 后台插件列表条目（manifest + 运行状态 + DB 审计字段）
 export interface PluginInfo extends PluginManifestInfo {
   enabled: boolean
+  create_by_name?: string
+  create_time?: string
 }

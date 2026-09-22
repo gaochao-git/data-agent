@@ -50,12 +50,15 @@ class PluginEnabledRequest(BaseModel):
 
 
 @router.get("/admin/plugins")
-async def list_plugins(request: Request):
-    """列出已安装插件（含禁用项），启停状态来自 DB。"""
+async def list_plugins(request: Request, limit: int = 50, offset: int = 0):
+    """已安装插件分页列表（含禁用项），启停与审计字段来自 DB。"""
     _ = request
     try:
-        data = await plugin_service.list_plugins()
-        return business_response(data={"plugins": data}, msg="获取成功")
+        data = await plugin_service.list_plugins(
+            limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
+        )
+        return business_response(data=data, msg="获取成功")
     except Exception as e:
         logger.error("获取插件列表失败: %s", e, exc_info=True)
         return business_response(msg="获取插件列表失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_LIST_FAILED, status="error")
