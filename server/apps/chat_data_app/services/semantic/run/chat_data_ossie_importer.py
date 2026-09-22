@@ -26,6 +26,9 @@ from pydantic import ValidationError
 
 from ..core.common import LOGICAL_TYPE_VALUES, normalize_relationship_type
 from .semantic_quality_checker import RULES as _QUALITY_RULES
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 CHAT_DATA_VENDOR_NAME = "CHAT_DATA"
 _ANSI_SQL_DIALECT = "ANSI_SQL"
@@ -137,7 +140,15 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
     try:
         data = yaml.safe_load(yaml_content)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Ossie 文档不是合法的 YAML: {exc}") from exc
+        # str(YAMLError) 会回显源 yaml 出错行片段，不直接透出；只保留定位信息。
+        # 服务端日志记录原始异常（含出错行片段），便于排查。
+        logger.warning("Ossie YAML 解析失败（原始异常）: %s", exc)
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            raise ValueError(
+                f"Ossie 文档 YAML 语法错误（第 {mark.line + 1} 行第 {mark.column + 1} 列）"
+            ) from exc
+        raise ValueError("Ossie 文档不是合法的 YAML") from exc
     if not isinstance(data, dict):
         raise ValueError("Ossie 文档必须是 YAML 映射（顶层为 version / semantic_model）")
     # yaml 会把 version: 1.0 解析成 float，而 OSI schema 要求字符串，做一次容错

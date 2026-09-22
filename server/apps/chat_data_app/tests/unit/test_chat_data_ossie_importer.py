@@ -395,7 +395,8 @@ semantic_model:
 
 
 def test_parse_ossie_document_rejects_invalid_yaml_and_empty_models():
-    with pytest.raises(ValueError, match="不是合法的 YAML"):
+    # YAML 语法错误：有 problem_mark 时只给行列号，不回显源内容
+    with pytest.raises(ValueError, match="YAML 语法错误（第 1 行第 19 列）"):
         parse_ossie_document("version: [unclosed")
     with pytest.raises(ValueError, match="必须是 YAML 映射"):
         parse_ossie_document("- just\n- a\n- list\n")
