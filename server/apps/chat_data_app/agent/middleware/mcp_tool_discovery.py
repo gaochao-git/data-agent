@@ -44,6 +44,23 @@ def _discovered_from_state(state: Any) -> list[str]:
     return merge_discovered_tool_names(None, state.get("discovered_tool_names"))
 
 
+def _names_from_search_content(content: Any) -> list[str]:
+    """解析 mcp_tool_search 消息的 JSON 内容，返回命中工具名列表（结构非法返回空）。"""
+    if not isinstance(content, str):
+        return []
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return [
+        str(item["name"])
+        for item in payload.get("results") or []
+        if isinstance(item, dict) and item.get("name")
+    ]
+
+
 def _discovered_from_history(messages: Any) -> list[str]:
     """从历史消息里的 mcp_tool_search 结果反推已发现工具（state 缺失时兜底）。"""
     if not isinstance(messages, list):
@@ -52,18 +69,7 @@ def _discovered_from_history(messages: Any) -> list[str]:
     for message in messages:
         if not isinstance(message, ToolMessage) or str(message.name or "") != MCP_TOOL_SEARCH_TOOL_NAME:
             continue
-        content = message.content
-        if not isinstance(content, str):
-            continue
-        try:
-            payload = json.loads(content)
-        except ValueError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        for item in payload.get("results") or []:
-            if isinstance(item, dict) and item.get("name"):
-                names.append(str(item["name"]))
+        names.extend(_names_from_search_content(message.content))
     return merge_discovered_tool_names(None, names)
 
 
@@ -148,21 +154,7 @@ def _names_from_tool_result(result: Any) -> list[str]:
             return []
     if not isinstance(message, ToolMessage) or message.status == "error":
         return []
-    content = message.content
-    if not isinstance(content, str):
-        return []
-    try:
-        payload = json.loads(content)
-    except ValueError:
-        return []
-    if not isinstance(payload, dict):
-        return []
-    names = [
-        str(item.get("name") or "")
-        for item in payload.get("results") or []
-        if isinstance(item, dict) and item.get("name")
-    ]
-    return merge_discovered_tool_names(None, names)
+    return merge_discovered_tool_names(None, _names_from_search_content(message.content))
 
 
 __all__ = ["MCPToolDiscoveryMiddleware"]

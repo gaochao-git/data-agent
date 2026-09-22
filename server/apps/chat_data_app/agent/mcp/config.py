@@ -47,13 +47,8 @@ class MCPServerConfigError(ValueError):
     """MCP server 配置非法。"""
 
 
-def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
-    """解析并校验单条 MCP server 配置，非法抛 ``MCPServerConfigError``。"""
-    if not isinstance(raw, dict):
-        raise MCPServerConfigError(f"{source}: 配置必须是对象")
-    server_id = str(raw.get("id") or raw.get("server_id") or "").strip()
-    if not _SERVER_ID_PATTERN.fullmatch(server_id):
-        raise MCPServerConfigError(f"{source}: id 非法（需匹配 {_SERVER_ID_PATTERN.pattern}）: {server_id!r}")
+def _parse_transport_fields(raw: dict, source: str) -> tuple[str, str, str]:
+    """校验 transport 与对应端点（stdio 需 command，远程需 http url），返回 (transport, command, url)。"""
     transport = str(raw.get("transport") or "").strip()
     if transport not in VALID_MCP_TRANSPORTS:
         raise MCPServerConfigError(
@@ -65,28 +60,47 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
         raise MCPServerConfigError(f"{source}: stdio 传输必须提供 command")
     if transport in ("streamable_http", "sse") and not url.startswith(("http://", "https://")):
         raise MCPServerConfigError(f"{source}: {transport} 传输必须提供 http(s) url")
-    raw_args = raw.get("args") or []
-    if not isinstance(raw_args, list) or not all(isinstance(item, str) for item in raw_args):
-        raise MCPServerConfigError(f"{source}: args 必须是字符串数组")
-    raw_env = raw.get("env") or {}
-    if not isinstance(raw_env, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in raw_env.items()
+    return transport, command, url
+
+
+def _string_list_field(raw: dict, key: str, source: str) -> list[str]:
+    """校验 ``raw[key]`` 为字符串数组（缺省为空数组）。"""
+    value = raw.get(key) or []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise MCPServerConfigError(f"{source}: {key} 必须是字符串数组")
+    return value
+
+
+def _string_mapping_field(raw: dict, key: str, source: str) -> dict:
+    """校验 ``raw[key]`` 为字符串到字符串的映射（缺省为空映射）。"""
+    value = raw.get(key) or {}
+    if not isinstance(value, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in value.items()
     ):
-        raise MCPServerConfigError(f"{source}: env 必须是字符串到字符串的映射")
-    raw_headers = raw.get("headers") or {}
-    if not isinstance(raw_headers, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in raw_headers.items()
-    ):
-        raise MCPServerConfigError(f"{source}: headers 必须是字符串到字符串的映射")
-    raw_tool_labels = raw.get("tool_labels") or {}
-    if not isinstance(raw_tool_labels, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in raw_tool_labels.items()
-    ):
-        raise MCPServerConfigError(f"{source}: tool_labels 必须是字符串到字符串的映射")
-    # 键为 MCP server 声明的原始工具名，值为非空展示名；空值条目视为无效配置直接报错。
+        raise MCPServerConfigError(f"{source}: {key} 必须是字符串到字符串的映射")
+    return value
+
+
+def _clean_tool_labels(raw_tool_labels: dict, source: str) -> dict[str, str]:
+    """清洗 tool_labels 的键值空白；空值条目视为无效配置直接报错。"""
     tool_labels = {str(k).strip(): str(v).strip() for k, v in raw_tool_labels.items()}
     if any(not key or not value for key, value in tool_labels.items()):
         raise MCPServerConfigError(f"{source}: tool_labels 的键值都不能为空白字符串")
+    return tool_labels
+
+
+def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
+    """解析并校验单条 MCP server 配置，非法抛 ``MCPServerConfigError``。"""
+    if not isinstance(raw, dict):
+        raise MCPServerConfigError(f"{source}: 配置必须是对象")
+    server_id = str(raw.get("id") or raw.get("server_id") or "").strip()
+    if not _SERVER_ID_PATTERN.fullmatch(server_id):
+        raise MCPServerConfigError(f"{source}: id 非法（需匹配 {_SERVER_ID_PATTERN.pattern}）: {server_id!r}")
+    transport, command, url = _parse_transport_fields(raw, source)
+    raw_args = _string_list_field(raw, "args", source)
+    raw_env = _string_mapping_field(raw, "env", source)
+    raw_headers = _string_mapping_field(raw, "headers", source)
+    tool_labels = _clean_tool_labels(_string_mapping_field(raw, "tool_labels", source), source)
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
         raise MCPServerConfigError(f"{source}: enabled 必须是布尔值")

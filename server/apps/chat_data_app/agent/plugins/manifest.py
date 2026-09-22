@@ -75,22 +75,40 @@ def _validate_mcp_server_entry(entry: object, source: str) -> None:
         raise PluginManifestError(f"{source}: mcp_servers 项 {server_id} 为 {transport} 传输时必须提供 http(s) url")
 
 
-def parse_plugin_manifest(data: object, *, source: str = "plugin.json") -> PluginManifest:
-    """解析 manifest dict，非法抛 ``PluginManifestError``。"""
-    if not isinstance(data, dict):
-        raise PluginManifestError(f"{source}: manifest 必须是 JSON 对象")
+def _parse_name(data: dict, source: str) -> str:
+    """解析并校验 name（同时是磁盘目录名与管理 API 资源 id）。"""
     name = str(data.get("name") or "").strip()
     if not PLUGIN_NAME_PATTERN.fullmatch(name):
         raise PluginManifestError(f"{source}: name 非法（需匹配 {PLUGIN_NAME_PATTERN.pattern}）: {name!r}")
+    return name
+
+
+def _parse_version(data: dict, source: str) -> str:
+    """解析并校验 version。"""
     version = str(data.get("version") or "").strip()
     if not version or len(version) > PLUGIN_VERSION_MAX_LENGTH:
         raise PluginManifestError(f"{source}: version 必须是非空且不超过 {PLUGIN_VERSION_MAX_LENGTH} 字符")
+    return version
+
+
+def _parse_display_name(data: dict, name: str, source: str) -> str:
+    """解析并校验 display_name（缺省用 name）。"""
     display_name = str(data.get("display_name") or "").strip() or name
     if len(display_name) > PLUGIN_DISPLAY_NAME_MAX_LENGTH:
         raise PluginManifestError(f"{source}: display_name 不能超过 {PLUGIN_DISPLAY_NAME_MAX_LENGTH} 字符")
+    return display_name
+
+
+def _parse_description(data: dict, source: str) -> str:
+    """解析并校验 description。"""
     description = str(data.get("description") or "").strip()
     if len(description) > PLUGIN_DESCRIPTION_MAX_LENGTH:
         raise PluginManifestError(f"{source}: description 不能超过 {PLUGIN_DESCRIPTION_MAX_LENGTH} 字符")
+    return description
+
+
+def _parse_skill_names(data: dict, source: str) -> tuple[str, ...]:
+    """解析并校验 skills 声明（字符串数组、名字合法、不重复）。"""
     skills_raw = data.get("skills") or []
     if not isinstance(skills_raw, list) or not all(isinstance(item, str) for item in skills_raw):
         raise PluginManifestError(f"{source}: skills 必须是字符串数组")
@@ -102,18 +120,34 @@ def parse_plugin_manifest(data: object, *, source: str = "plugin.json") -> Plugi
         if normalized in skills:
             raise PluginManifestError(f"{source}: 技能名重复声明: {normalized}")
         skills.append(normalized)
+    return tuple(skills)
+
+
+def _parse_mcp_entries(data: dict, source: str) -> tuple[dict[str, Any], ...]:
+    """解析并校验 mcp_servers 声明（每项只做结构校验，完整校验在 mcp/config.py）。"""
     mcp_raw = data.get("mcp_servers") or []
     if not isinstance(mcp_raw, list):
         raise PluginManifestError(f"{source}: mcp_servers 必须是数组")
     for index, entry in enumerate(mcp_raw):
         _validate_mcp_server_entry(entry, source=f"{source} mcp_servers[{index}]")
+    return tuple(dict(entry) for entry in mcp_raw)
+
+
+def parse_plugin_manifest(data: object, *, source: str = "plugin.json") -> PluginManifest:
+    """解析 manifest dict，非法抛 ``PluginManifestError``。"""
+    if not isinstance(data, dict):
+        raise PluginManifestError(f"{source}: manifest 必须是 JSON 对象")
+    name = _parse_name(data, source)
+    version = _parse_version(data, source)
+    display_name = _parse_display_name(data, name, source)
+    description = _parse_description(data, source)
     return PluginManifest(
         name=name,
         version=version,
         display_name=display_name,
         description=description,
-        skills=tuple(skills),
-        mcp_servers=tuple(dict(entry) for entry in mcp_raw),
+        skills=_parse_skill_names(data, source),
+        mcp_servers=_parse_mcp_entries(data, source),
     )
 
 
