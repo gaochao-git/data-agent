@@ -68,19 +68,26 @@ def normalize_dashboard_spec_chart_type(chart_type: Any) -> str:
     return normalize_chart_type(chart_type)
 
 
+def _normalize_dimension_dict(item: Dict[str, Any]) -> Dict[str, Any] | None:
+    """规整单个 dict 形态维度；无有效名称返回 None。"""
+    name = str(item.get("name") or item.get("dimension") or "").strip()
+    if not name:
+        return None
+    next_item: Dict[str, Any] = {"name": name}
+    time_grain = str(item.get("time_grain") or item.get("grain") or "").strip()
+    if time_grain:
+        next_item["time_grain"] = time_grain
+    return next_item
+
+
 def normalize_dashboard_spec_dimensions(dimensions: Any) -> List[Any]:
     """规整 AI 看板规格中的维度参数。"""
     result: List[Any] = []
     for item in dimensions or []:
         if isinstance(item, dict):
-            name = str(item.get("name") or item.get("dimension") or "").strip()
-            if not name:
-                continue
-            next_item = {"name": name}
-            time_grain = str(item.get("time_grain") or item.get("grain") or "").strip()
-            if time_grain:
-                next_item["time_grain"] = time_grain
-            result.append(next_item)
+            normalized = _normalize_dimension_dict(item)
+            if normalized is not None:
+                result.append(normalized)
         else:
             text = str(item or "").strip()
             if text:

@@ -1069,6 +1069,84 @@ def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
     return trail
 
 
+async def _build_task_tool_impl(
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    subagent_type: str,
+    description: str,
+    runtime: ToolRuntime,
+) -> Any:
+    """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。"""
+    runnable = compiled.get(subagent_type)
+    if runnable is None:
+        allowed = ", ".join(f"`{name}`" for name in compiled)
+        return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
+    spec = next(item for item in specs if item.name == subagent_type)
+    # writer 必须在子图调用前获取：调用后当前上下文会切进子图运行
+    try:
+        writer = get_stream_writer()
+    except Exception as exc:
+        # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
+        logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
+        writer = None
+    collected: list = []
+    captured: dict[str, Any] = {}
+    try:
+        messages = await _run_subagent_with_events(
+            runnable,
+            _build_subagent_state(runtime, description),
+            build_subagent_invocation_config(spec),
+            writer,
+            runtime.tool_call_id,
+            collected=collected,
+            captured=captured,
+            usage_meta=_safe_subagent_budget_meta(spec, list(spec.tools or [])),
+        )
+    except Exception as exc:
+        # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
+        # 若异常直接抛给 tool_error 中间件（无 additional_kwargs），历史里
+        # trail 会丢失，造成「直播看得到、历史看不到」的不一致。这里就地
+        # 转成 error ToolMessage，主智能体可据失败原因降级接手。
+        logger.error("[tools] 子智能体执行异常: %s", exc, exc_info=True)
+        report = f"子智能体执行失败：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
+        messages = collected
+        tool_status = "error"
+    else:
+        report = _extract_final_report(messages)
+        if not report:
+            report = "子智能体未产出有效结论，请检查任务书后重试或自行完成该任务。"
+        tool_status = "success"
+    context_usage = captured.get("context_usage")
+    if tool_status == "success" and context_usage and int(context_usage.get("percent", 0) or 0) >= 100:
+        # 预算收尾路径：报告可能残缺，必须在正文里告知主智能体（模型只可靠
+        # 读取 content，additional_kwargs 不进模型上下文）；只陈述事实，
+        # 如何续接由主智能体自行决定。
+        report = (
+            "【子智能体预算提示】子智能体上下文已达预算上限"
+            f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
+            "并已提前收尾，以下结论可能不完整。\n\n" + report
+        )
+    # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
+    # 走 conversation_event 的 tool_result payload（见
+    # conversation_event_service._serialize_tool_message）。
+    additional_kwargs: dict[str, Any] = {}
+    trail = _build_trail_snapshot(messages)
+    if trail:
+        additional_kwargs["subagent_trail"] = trail
+    # 上下文用量快照：随 ToolMessage 持久化，历史回放时前端在 task 卡片
+    # 标题行还原最后一次用量（直播路径走 subagent_context_usage SSE 事件）。
+    if context_usage:
+        additional_kwargs["subagent_context_usage"] = context_usage
+    return Command(update={
+        "messages": [ToolMessage(
+            content=report,
+            tool_call_id=runtime.tool_call_id or "",
+            status=tool_status,
+            additional_kwargs=additional_kwargs,
+        )],
+    })
+
+
 def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredTool:
     """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。"""
     validate_subagent_specs(specs)
@@ -1076,74 +1154,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredT
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
     async def atask(description: str, subagent_type: str, runtime: ToolRuntime):
-        runnable = compiled.get(subagent_type)
-        if runnable is None:
-            allowed = ", ".join(f"`{name}`" for name in compiled)
-            return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
-        spec = next(item for item in specs if item.name == subagent_type)
-        # writer 必须在子图调用前获取：调用后当前上下文会切进子图运行
-        try:
-            writer = get_stream_writer()
-        except Exception as exc:
-            # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
-            logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
-            writer = None
-        collected: list = []
-        captured: dict[str, Any] = {}
-        try:
-            messages = await _run_subagent_with_events(
-                runnable,
-                _build_subagent_state(runtime, description),
-                build_subagent_invocation_config(spec),
-                writer,
-                runtime.tool_call_id,
-                collected=collected,
-                captured=captured,
-                usage_meta=_safe_subagent_budget_meta(spec, list(spec.tools or [])),
-            )
-        except Exception as exc:
-            # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
-            # 若异常直接抛给 tool_error 中间件（无 additional_kwargs），历史里
-            # trail 会丢失，造成「直播看得到、历史看不到」的不一致。这里就地
-            # 转成 error ToolMessage，主智能体可据失败原因降级接手。
-            logger.error("[tools] 子智能体执行异常: %s", exc, exc_info=True)
-            report = f"子智能体执行失败：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
-            messages = collected
-            tool_status = "error"
-        else:
-            report = _extract_final_report(messages)
-            if not report:
-                report = "子智能体未产出有效结论，请检查任务书后重试或自行完成该任务。"
-            tool_status = "success"
-        context_usage = captured.get("context_usage")
-        if tool_status == "success" and context_usage and int(context_usage.get("percent", 0) or 0) >= 100:
-            # 预算收尾路径：报告可能残缺，必须在正文里告知主智能体（模型只可靠
-            # 读取 content，additional_kwargs 不进模型上下文）；只陈述事实，
-            # 如何续接由主智能体自行决定。
-            report = (
-                "【子智能体预算提示】子智能体上下文已达预算上限"
-                f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
-                "并已提前收尾，以下结论可能不完整。\n\n" + report
-            )
-        # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
-        # 走 conversation_event 的 tool_result payload（见
-        # conversation_event_service._serialize_tool_message）。
-        additional_kwargs: dict[str, Any] = {}
-        trail = _build_trail_snapshot(messages)
-        if trail:
-            additional_kwargs["subagent_trail"] = trail
-        # 上下文用量快照：随 ToolMessage 持久化，历史回放时前端在 task 卡片
-        # 标题行还原最后一次用量（直播路径走 subagent_context_usage SSE 事件）。
-        if context_usage:
-            additional_kwargs["subagent_context_usage"] = context_usage
-        return Command(update={
-            "messages": [ToolMessage(
-                content=report,
-                tool_call_id=runtime.tool_call_id or "",
-                status=tool_status,
-                additional_kwargs=additional_kwargs,
-            )],
-        })
+        return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
 
     return StructuredTool.from_function(
         name=TASK_TOOL_NAME,

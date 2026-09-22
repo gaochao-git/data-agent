@@ -198,8 +198,8 @@ def _message_end_payload_from_state(state: Any, usage: Any | None = None) -> dic
     return payload
 
 
-def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str:
-    """从 OpenAI compatible 流式 chunk 中提取思考内容。"""
+def _collect_reasoning_candidates(message_chunk: Any, msg_data: dict[str, Any] | None) -> list[Any]:
+    """按优先级收集可能携带思考内容的字典候选。"""
     candidates: list[Any] = []
     for attr in ("additional_kwargs", "response_metadata"):
         value = getattr(message_chunk, attr, None)
@@ -211,13 +211,22 @@ def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | No
             if isinstance(value, dict):
                 candidates.append(value)
         candidates.append(msg_data)
+    return candidates
 
+
+def _extract_reasoning_from_candidates(candidates: list[Any]) -> str:
+    """从候选字典中按固定 key 顺序提取首个非空思考内容。"""
     for candidate in candidates:
         for key in ("reasoning_content", "reasoning", "reasoning_text"):
             value = candidate.get(key)
             if isinstance(value, str) and value:
                 return value
     return ""
+
+
+def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str:
+    """从 OpenAI compatible 流式 chunk 中提取思考内容。"""
+    return _extract_reasoning_from_candidates(_collect_reasoning_candidates(message_chunk, msg_data))
 
 
 def _compile_reasoning_tool_name_patterns() -> list[tuple[re.Pattern[str], str]]:
@@ -511,6 +520,33 @@ def _finish_running_tool(
     return active_tool_call_id
 
 
+def _extract_streaming_progress_inputs(
+    args_text: str,
+    fields: dict[str, str] | None,
+) -> tuple[tuple[int, int] | None, str | None]:
+    """从流式 args 中计算行数统计与闭合后的 intent；纯计算，不涉及任何状态。
+
+    - 行数：整段替换口径，added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数；
+      非 行数统计工具（fields 为空）返回 (None, intent)。
+    - intent：字符串未闭合时丢弃，避免部分前缀被当作最终值推送。
+    """
+    added: str | None = None
+    removed: str | None = None
+    if fields:
+        added, _ = _extract_streaming_text_field(args_text, fields["added_field"])
+        if fields.get("removed_field"):
+            removed, _ = _extract_streaming_text_field(args_text, fields["removed_field"])
+        else:
+            removed = ""
+    counts: tuple[int, int] | None = None
+    if added is not None or removed is not None:
+        counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
+    intent, intent_closed = _extract_streaming_text_field(args_text, "intent")
+    if not intent_closed:
+        intent = None
+    return counts, intent
+
+
 class _ToolStreamState:
     """维护 LangGraph 流式工具调用状态，统一 running 和完成事件字段。"""
 
@@ -530,29 +566,33 @@ class _ToolStreamState:
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
 
+    def _handle_single_tool_call(self, tool_call: Any) -> list[str]:
+        """登记单个完整 tool_call，返回其 running 事件。"""
+        tool_call_id = str(tool_call.get("id") or "").strip()
+        tool_name = str(tool_call.get("name") or "").strip()
+        tool_index = tool_call.get("index")
+        if not tool_call_id or not tool_name:
+            return []
+        self.tool_names[tool_call_id] = tool_name
+        self.active_tool_call_id = tool_call_id
+        if isinstance(tool_index, int):
+            self.index_map[tool_index] = tool_call_id
+        self.args_buffer.setdefault(tool_call_id, "")
+        raw_args = tool_call.get("args")
+        coerced_args = _coerce_tool_args(raw_args)
+        if coerced_args is not None:
+            self.args_fallback[tool_call_id] = coerced_args
+        if isinstance(raw_args, str) and raw_args.strip():
+            # 字符串形态的 args（含双层编码）进 buffer，完成后由 _parse_tool_args_buffer 统一解析。
+            self.args_buffer[tool_call_id] = self.args_buffer.get(tool_call_id, "") + raw_args
+        return self._running_event(tool_call_id, tool_name, coerced_args)
+
     def handle_tool_calls(self, tool_calls: Any) -> list[str]:
         events: list[str] = []
         for tool_call in tool_calls or []:
             if not isinstance(tool_call, dict):
                 continue
-            tool_call_id = str(tool_call.get("id") or "").strip()
-            tool_name = str(tool_call.get("name") or "").strip()
-            tool_index = tool_call.get("index")
-            if not tool_call_id or not tool_name:
-                continue
-            self.tool_names[tool_call_id] = tool_name
-            self.active_tool_call_id = tool_call_id
-            if isinstance(tool_index, int):
-                self.index_map[tool_index] = tool_call_id
-            self.args_buffer.setdefault(tool_call_id, "")
-            raw_args = tool_call.get("args")
-            coerced_args = _coerce_tool_args(raw_args)
-            if coerced_args is not None:
-                self.args_fallback[tool_call_id] = coerced_args
-            if isinstance(raw_args, str) and raw_args.strip():
-                # 字符串形态的 args（含双层编码）进 buffer，完成后由 _parse_tool_args_buffer 统一解析。
-                self.args_buffer[tool_call_id] = self.args_buffer.get(tool_call_id, "") + raw_args
-            events.extend(self._running_event(tool_call_id, tool_name, coerced_args))
+            events.extend(self._handle_single_tool_call(tool_call))
         return events
 
     def _register_tool_call_chunk(
@@ -585,21 +625,9 @@ class _ToolStreamState:
           计数与上次一致时不重复推送。
         - 两类信息任一变化就合并推一个事件，行数字段仅行数统计工具携带。
         """
-        fields = _STREAMING_LINE_COUNT_TOOLS.get(tool_name)
-        added: str | None = None
-        removed: str | None = None
-        if fields:
-            added, _ = _extract_streaming_text_field(args_text, fields["added_field"])
-            if fields.get("removed_field"):
-                removed, _ = _extract_streaming_text_field(args_text, fields["removed_field"])
-            else:
-                removed = ""
-        counts: tuple[int, int] | None = None
-        if added is not None or removed is not None:
-            counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
-        intent, intent_closed = _extract_streaming_text_field(args_text, "intent")
-        if not intent_closed:
-            intent = None
+        counts, intent = _extract_streaming_progress_inputs(
+            args_text, _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
+        )
 
         counts_changed = counts is not None and self.progress_line_counts.get(tool_call_id) != counts
         intent_changed = bool(intent) and self.progress_intents.get(tool_call_id) != intent
@@ -1171,6 +1199,17 @@ async def _generate_chat_data_stream(
                 await heartbeat_task
 
 
+def _cancel_agent_owner_task(owner_task: asyncio.Task | None, reason: str) -> None:
+    """owner 任务尚未结束时协作取消本地执行。"""
+    if owner_task and not owner_task.done():
+        owner_task.cancel(reason)
+
+
+def _should_renew_heartbeat(heartbeat_status: str, owner_token: str | None) -> bool:
+    """心跳为 active 且持有 owner token 时才续约。"""
+    return heartbeat_status == "active" and owner_token
+
+
 async def _heartbeat_agent_run(
     run_id: str,
     owner_task: asyncio.Task | None,
@@ -1183,18 +1222,16 @@ async def _heartbeat_agent_run(
         await asyncio.sleep(5)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
-            if heartbeat_status == "active" and owner_token:
+            if _should_renew_heartbeat(heartbeat_status, owner_token):
                 await agent_run_event_service.renew_owner(run_id, owner_token)
         except AgentRunLeaseLostError:
-            if owner_task and not owner_task.done():
-                owner_task.cancel("agent_run_lease_lost")
+            _cancel_agent_owner_task(owner_task, "agent_run_lease_lost")
             return
         except Exception:
             logger.warning("ChatData Agent Run 心跳续约失败，下一周期重试: run_id=%s", run_id, exc_info=True)
             continue
         if heartbeat_status == "cancelling":
-            if owner_task and not owner_task.done():
-                owner_task.cancel("agent_run_cancelled")
+            _cancel_agent_owner_task(owner_task, "agent_run_cancelled")
             return
         if heartbeat_status != "active":
             # waiting_user/finished are normal transitions performed by this

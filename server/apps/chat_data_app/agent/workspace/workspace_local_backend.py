@@ -393,19 +393,107 @@ def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[st
         return {}
 
 
+_MAX_LIST_ENTRIES = 500
+
+
+def _resolve_list_target(
+    runtime: ConversationWorkspaceRuntime,
+    raw: str,
+) -> tuple[Path, str, bool]:
+    """把 dir_list 入参解析为 (实际路径, 技能可见根, 是否技能路径)。"""
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        return target, visible_root, True
+    return resolve_workspace_path(runtime.workspace_root, raw), "", False
+
+
+def _sorted_local_children(directory: Path) -> list[Path] | None:
+    """返回排序后的子项；目录不可读时返回 None。"""
+    try:
+        return sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name))
+    except OSError:
+        return None
+
+
+def _local_entry_visible_path(
+    child: Path,
+    *,
+    is_skill: bool,
+    visible_dir: str,
+    root: Path,
+) -> str | None:
+    if is_skill:
+        return f"{visible_dir}/{child.name}"
+    try:
+        return "/mnt/user-data/" + child.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return None
+
+
+def _local_dir_entry(
+    child: Path,
+    stat: os.stat_result,
+    is_dir: bool,
+    *,
+    is_skill: bool,
+    visible_dir: str,
+    root: Path,
+) -> dict[str, Any] | None:
+    """构造单个目录项；路径越出工作区根（无法转可见路径）时返回 None。"""
+    visible_path = _local_entry_visible_path(child, is_skill=is_skill, visible_dir=visible_dir, root=root)
+    if visible_path is None:
+        return None
+    return {
+        "type": "dir" if is_dir else "file",
+        "path": visible_path + ("/" if is_dir else ""),
+        "size": "-" if is_dir else stat.st_size,
+        "mtime": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def _visit_local_dir(
+    directory: Path,
+    visible_dir: str,
+    depth: int,
+    *,
+    entries: list[dict[str, Any]],
+    root: Path,
+    is_skill: bool,
+    max_depth: int,
+) -> None:
+    if len(entries) >= _MAX_LIST_ENTRIES:
+        return
+    children = _sorted_local_children(directory)
+    if children is None:
+        return
+    for child in children:
+        if len(entries) >= _MAX_LIST_ENTRIES:
+            return
+        if child.is_symlink():
+            continue
+        try:
+            stat = child.stat()
+        except OSError:
+            continue
+        is_dir = child.is_dir()
+        entry = _local_dir_entry(child, stat, is_dir, is_skill=is_skill, visible_dir=visible_dir, root=root)
+        if entry is None:
+            continue
+        entries.append(entry)
+        if is_dir and depth + 1 < max_depth:
+            _visit_local_dir(
+                child, entry["path"].rstrip("/"), depth + 1,
+                entries=entries, root=root, is_skill=is_skill, max_depth=max_depth,
+            )
+
+
 def _list_local_workspace_dir(
     runtime: ConversationWorkspaceRuntime,
     path: str,
     max_depth: int,
 ) -> list[dict[str, Any]]:
     raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
-    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-        target, visible_root = _resolve_local_skill_path(runtime, raw)
-        is_skill = True
-    else:
-        target = resolve_workspace_path(runtime.workspace_root, raw)
-        visible_root = ""
-        is_skill = False
+    target, visible_root, is_skill = _resolve_list_target(runtime, raw)
     if not target.exists():
         raise FileNotFoundError(f"目录不存在: {raw}")
     if not target.is_dir():
@@ -413,42 +501,10 @@ def _list_local_workspace_dir(
 
     entries: list[dict[str, Any]] = []
     root = Path(runtime.workspace_root).resolve()
-
-    def visit(directory: Path, visible_dir: str, depth: int) -> None:
-        if len(entries) >= 500:
-            return
-        try:
-            children = sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name))
-        except OSError:
-            return
-        for child in children:
-            if len(entries) >= 500:
-                return
-            resolved = child.resolve()
-            if child.is_symlink():
-                continue
-            try:
-                stat = child.stat()
-            except OSError:
-                continue
-            if is_skill:
-                visible_path = f"{visible_dir}/{child.name}"
-            else:
-                try:
-                    visible_path = "/mnt/user-data/" + resolved.relative_to(root).as_posix()
-                except ValueError:
-                    continue
-            is_dir = child.is_dir()
-            entries.append({
-                "type": "dir" if is_dir else "file",
-                "path": visible_path + ("/" if is_dir else ""),
-                "size": "-" if is_dir else stat.st_size,
-                "mtime": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-            })
-            if is_dir and depth + 1 < max_depth:
-                visit(child, visible_path, depth + 1)
-
-    visit(target, visible_root, 0)
+    _visit_local_dir(
+        target, visible_root, 0,
+        entries=entries, root=root, is_skill=is_skill, max_depth=max_depth,
+    )
     return entries
 
 
@@ -653,6 +709,27 @@ def _check_rg_available() -> bool:
     return _rg_available
 
 
+def _build_local_grep_match(
+    m: dict[str, Any],
+    is_skill: bool,
+    target: Path,
+    visible_root: str,
+    runtime: ConversationWorkspaceRuntime,
+) -> dict[str, Any]:
+    """按 skill / workspace 两种可见路径规则构造单条 grep 命中条目。"""
+    file_rel = m["file"]
+    if is_skill:
+        visible_path = visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
+    else:
+        resolved = (target / file_rel).resolve()
+        visible_path = to_visible_path(runtime.workspace_root, resolved)
+    return {
+        "path": visible_path,
+        "line_number": m["line_number"],
+        "line": m["content"],
+    }
+
+
 def _grep_local_workspace_text(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -691,17 +768,7 @@ def _grep_local_workspace_text(
     )
     matches: list[dict[str, Any]] = []
     for m in raw_matches:
-        file_rel = m["file"]
-        if is_skill:
-            visible_path = visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
-        else:
-            resolved = (target / file_rel).resolve()
-            visible_path = to_visible_path(runtime.workspace_root, resolved)
-        matches.append({
-            "path": visible_path,
-            "line_number": m["line_number"],
-            "line": m["content"],
-        })
+        matches.append(_build_local_grep_match(m, is_skill, target, visible_root, runtime))
     return {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
 
 

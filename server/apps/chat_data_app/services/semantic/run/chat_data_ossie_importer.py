@@ -152,6 +152,26 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
         raise ValueError(f"Ossie 文档结构校验失败（{location}）: {first_error.get('msg')}") from exc
 
 
+def _normalize_one_item_datatype(item: Any) -> None:
+    """归一单个 semantic 条目（指标/维度字段）的 datatype 别名（仅接受确定映射）。"""
+    if not isinstance(item, dict):
+        return
+    raw = item.get("datatype")
+    if not isinstance(raw, str):
+        return
+    mapped = _OSSIE_DATATYPE_ALIASES.get(raw.strip().lower())
+    if mapped:
+        item["datatype"] = mapped
+
+
+def _normalize_item_list_datatypes(items: Any) -> None:
+    """归一一个条目列表（metrics[] 或 datasets[].fields[]）内各条目的 datatype 别名。"""
+    if not isinstance(items, list):
+        return
+    for item in items:
+        _normalize_one_item_datatype(item)
+
+
 def _normalize_ossie_datatypes(data: Dict[str, Any]) -> None:
     """原地归一 YAML 中各 datatype 节点的别名（仅接受确定映射，不做猜测）。
 
@@ -169,17 +189,7 @@ def _normalize_ossie_datatypes(data: Dict[str, Any]) -> None:
         if isinstance(datasets, list):
             item_lists.extend(dataset.get("fields") for dataset in datasets if isinstance(dataset, dict))
         for items in item_lists:
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                raw = item.get("datatype")
-                if not isinstance(raw, str):
-                    continue
-                mapped = _OSSIE_DATATYPE_ALIASES.get(raw.strip().lower())
-                if mapped:
-                    item["datatype"] = mapped
+            _normalize_item_list_datatypes(items)
 
 
 def _optional_str(value: Any) -> Optional[str]:

@@ -105,6 +105,31 @@ def _ignore_symlinks(directory: str, names: list[str]) -> set[str]:
     return {name for name in names if (Path(directory) / name).is_symlink()}
 
 
+def _compute_single_skill_fingerprint(name: str, source_dir: Path) -> str:
+    """计算单个技能源目录的内容指纹（相对路径 + 大小 + mtime 的摘要）。"""
+    entries: list[str] = []
+    root = Path(source_dir)
+    if not root.is_dir():
+        entries.append("<missing>")
+    else:
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if path.is_dir():
+                entries.append(f"d:{rel}")
+            else:
+                try:
+                    file_stat = path.stat()
+                except OSError:
+                    # rglob 枚举与 stat 之间文件可能被并发删除/替换；
+                    # 跳过该文件让指纹自然失配触发快照重建，
+                    # 而不是让异常冒泡违背"指纹计算永不抛"的约定
+                    continue
+                entries.append(f"f:{rel}:{file_stat.st_size}:{file_stat.st_mtime_ns}")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
 def compute_skill_fingerprints(sources: Iterable[tuple[str, Path]]) -> dict[str, str]:
     """对每个技能源目录计算内容指纹（相对路径 + 大小 + mtime 的摘要）。
 
@@ -113,28 +138,7 @@ def compute_skill_fingerprints(sources: Iterable[tuple[str, Path]]) -> dict[str,
     """
     fingerprints: dict[str, str] = {}
     for name, source_dir in sources:
-        entries: list[str] = []
-        root = Path(source_dir)
-        if not root.is_dir():
-            entries.append("<missing>")
-        else:
-            for path in sorted(root.rglob("*")):
-                if path.is_symlink():
-                    continue
-                rel = path.relative_to(root).as_posix()
-                if path.is_dir():
-                    entries.append(f"d:{rel}")
-                else:
-                    try:
-                        file_stat = path.stat()
-                    except OSError:
-                        # rglob 枚举与 stat 之间文件可能被并发删除/替换；
-                        # 跳过该文件让指纹自然失配触发快照重建，
-                        # 而不是让异常冒泡违背"指纹计算永不抛"的约定
-                        continue
-                    entries.append(f"f:{rel}:{file_stat.st_size}:{file_stat.st_mtime_ns}")
-        digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
-        fingerprints[name] = digest
+        fingerprints[name] = _compute_single_skill_fingerprint(name, source_dir)
     return fingerprints
 
 

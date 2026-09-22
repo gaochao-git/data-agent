@@ -380,6 +380,65 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
     return items
 
 
+def _resolve_breakdown_content(redacted: bool, message: BaseMessage) -> Any:
+    """redacted 时回退占位文案，否则返回消息调试正文。"""
+    if redacted:
+        return SYSTEM_PROMPT_PLACEHOLDER
+    return _message_debug_content(message)
+
+
+def _is_round_boundary(message: BaseMessage, is_context_summary: bool) -> bool:
+    return isinstance(message, HumanMessage) and not is_context_summary
+
+
+def _apply_breakdown_item_flags(item: dict[str, Any], is_context_summary: bool, redacted: bool) -> None:
+    """按 redacted / 上下文摘要标记补充 item 的 description 与 redacted 字段。"""
+    if is_context_summary:
+        item["description"] = "运行态上下文摘要，内容不对用户展示。"
+    elif redacted:
+        item["description"] = SYSTEM_PROMPT_PLACEHOLDER
+    if redacted:
+        item["redacted"] = True
+
+
+def _build_message_breakdown_item(
+    message: BaseMessage,
+    index: int,
+    round_index: int,
+    scale: float,
+    hide_content: bool,
+) -> tuple[dict[str, Any], int]:
+    """构造单条消息的 token 用量明细，返回 (item, 更新后的 round_index)。"""
+    message_type = _message_role(message)
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    is_context_summary = bool(additional_kwargs.get("context_summary"))
+    redacted = hide_content or is_context_summary
+    content = _resolve_breakdown_content(redacted, message)
+    if _is_round_boundary(message, is_context_summary):
+        round_index += 1
+    estimated_tokens = count_messages_tokens([message])
+    item = {
+        "key": f"message_{index}",
+        "label": "历史摘要（运行态）" if is_context_summary else _message_label(message_type, round_index or 1),
+        "role": "context_summary" if is_context_summary else message_type,
+        "round": round_index or 1,
+        "message_index": index,
+        # 前端凭 message_id 从已加载的会话消息中取正文，payload 本身不落正文。
+        "message_id": getattr(message, "id", None),
+        "tool_call_id": getattr(message, "tool_call_id", None),
+        # AI 消息为模型调用、工具消息为工具执行的起止时间（epoch 毫秒）；
+        # 其余消息无此字段，耗时由前端相减得出。
+        "started_at_ms": _optional_non_negative_int(additional_kwargs.get("started_at_ms")),
+        "ended_at_ms": _optional_non_negative_int(additional_kwargs.get("ended_at_ms")),
+        "tokens": _scale_tokens(estimated_tokens, scale),
+        "estimated_tokens": estimated_tokens,
+        "estimated": True,
+        "content": content,
+    }
+    _apply_breakdown_item_flags(item, is_context_summary, redacted)
+    return item, round_index
+
+
 def build_message_breakdown(
     messages: list[BaseMessage],
     *,
@@ -392,38 +451,7 @@ def build_message_breakdown(
     round_index = 0
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
-        message_type = _message_role(message)
-        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-        is_context_summary = bool(additional_kwargs.get("context_summary"))
-        redacted = hide_content or is_context_summary
-        content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
-        if isinstance(message, HumanMessage) and not is_context_summary:
-            round_index += 1
-        estimated_tokens = count_messages_tokens([message])
-        item = {
-            "key": f"message_{index}",
-            "label": "历史摘要（运行态）" if is_context_summary else _message_label(message_type, round_index or 1),
-            "role": "context_summary" if is_context_summary else message_type,
-            "round": round_index or 1,
-            "message_index": index,
-            # 前端凭 message_id 从已加载的会话消息中取正文，payload 本身不落正文。
-            "message_id": getattr(message, "id", None),
-            "tool_call_id": getattr(message, "tool_call_id", None),
-            # AI 消息为模型调用、工具消息为工具执行的起止时间（epoch 毫秒）；
-            # 其余消息无此字段，耗时由前端相减得出。
-            "started_at_ms": _optional_non_negative_int(additional_kwargs.get("started_at_ms")),
-            "ended_at_ms": _optional_non_negative_int(additional_kwargs.get("ended_at_ms")),
-            "tokens": _scale_tokens(estimated_tokens, scale),
-            "estimated_tokens": estimated_tokens,
-            "estimated": True,
-            "content": content,
-        }
-        if is_context_summary:
-            item["description"] = "运行态上下文摘要，内容不对用户展示。"
-        elif redacted:
-            item["description"] = SYSTEM_PROMPT_PLACEHOLDER
-        if redacted:
-            item["redacted"] = True
+        item, round_index = _build_message_breakdown_item(message, index, round_index, scale, hide_content)
         items.append(item)
     return items
 

@@ -120,6 +120,27 @@ def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:
     return not normalized["enum_values"] and not normalized["synonyms"] and not normalized["storage_format"] and not normalized["unit"]
 
 
+def _normalize_table_index_item(raw_item: Any) -> Optional[Dict[str, Any]]:
+    """Normalize a single persisted table index; return None for invalid items."""
+    if not isinstance(raw_item, dict):
+        return None
+    index_type = str(raw_item.get("index_type") or "").strip().lower()
+    if index_type not in VALID_TABLE_INDEX_TYPES:
+        return None
+    index_name = str(raw_item.get("index_name") or "").strip()
+    if index_type == "primary":
+        index_name = "PRIMARY"
+    raw_columns = raw_item.get("columns")
+    columns = _unique_non_empty_texts(raw_columns) if isinstance(raw_columns, list) else []
+    if not columns:
+        return None
+    return {
+        "index_type": index_type,
+        "index_name": index_name,
+        "columns": columns,
+    }
+
+
 def _normalize_table_index_items(items: Any) -> List[Dict[str, Any]]:
     """Normalize persisted table indexes without inventing missing metadata."""
     if not isinstance(items, list):
@@ -127,28 +148,15 @@ def _normalize_table_index_items(items: Any) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for raw_item in items:
-        if not isinstance(raw_item, dict):
+        item = _normalize_table_index_item(raw_item)
+        if item is None:
             continue
-        index_type = str(raw_item.get("index_type") or "").strip().lower()
-        if index_type not in VALID_TABLE_INDEX_TYPES:
-            continue
-        index_name = str(raw_item.get("index_name") or "").strip()
-        if index_type == "primary":
-            index_name = "PRIMARY"
-        raw_columns = raw_item.get("columns")
-        columns = _unique_non_empty_texts(raw_columns) if isinstance(raw_columns, list) else []
-        if not columns:
-            continue
-        identity = index_name.lower() or "\x1f".join(columns)
-        key = (index_type, identity)
+        identity = item["index_name"].lower() or "\x1f".join(item["columns"])
+        key = (item["index_type"], identity)
         if key in seen:
             continue
         seen.add(key)
-        result.append({
-            "index_type": index_type,
-            "index_name": index_name,
-            "columns": columns,
-        })
+        result.append(item)
     return result
 
 
@@ -191,22 +199,25 @@ def _normalize_table_indexes_payload(raw_payload: Any, columns: Any = None) -> D
     }
 
 
+def _physical_index_entry(item: Any, index_type: str) -> Dict[str, Any]:
+    """把 unique/secondary 索引条目转换为统一结构，非 dict 条目按空名处理。"""
+    if isinstance(item, dict):
+        return {
+            "index_type": index_type,
+            "index_name": (item or {}).get("name"),
+            "columns": (item or {}).get("columns"),
+        }
+    return {"index_type": index_type, "index_name": "", "columns": []}
+
+
 def _physical_indexes_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     for columns in table.get("primary_keys") or []:
         result.append({"index_type": "primary", "index_name": "PRIMARY", "columns": columns})
     for item in table.get("unique_indexes") or []:
-        result.append({
-            "index_type": "unique",
-            "index_name": (item or {}).get("name") if isinstance(item, dict) else "",
-            "columns": (item or {}).get("columns") if isinstance(item, dict) else [],
-        })
+        result.append(_physical_index_entry(item, "unique"))
     for item in table.get("indexes") or []:
-        result.append({
-            "index_type": "secondary",
-            "index_name": (item or {}).get("name") if isinstance(item, dict) else "",
-            "columns": (item or {}).get("columns") if isinstance(item, dict) else [],
-        })
+        result.append(_physical_index_entry(item, "secondary"))
     return _normalize_table_index_items(result)
 
 

@@ -696,6 +696,16 @@ class DataSourceManager:
         return [{"table_group_name": name, "table_names": table_names} for name, table_names in groups.items()]
 
     @staticmethod
+    def _normalize_group_table_names(group: Dict[str, Any], existing_tables: set[str]) -> List[str]:
+        """归一化单个分组的表名列表：过滤不存在/重复/空的表名。"""
+        table_names: List[str] = []
+        for table_name in (group or {}).get("table_names") or []:
+            normalized_table_name = str(table_name or "").strip()
+            if normalized_table_name and normalized_table_name in existing_tables and normalized_table_name not in table_names:
+                table_names.append(normalized_table_name)
+        return table_names
+
+    @staticmethod
     def _normalize_table_groups(groups: List[Dict[str, Any]], existing_tables: set[str]) -> List[Dict[str, Any]]:
         """过滤掉空组名、不存在的表名与重复表名。"""
         normalized_groups: List[Dict[str, Any]] = []
@@ -703,11 +713,7 @@ class DataSourceManager:
             group_name = str((group or {}).get("table_group_name") or "").strip()
             if not group_name:
                 continue
-            table_names: List[str] = []
-            for table_name in (group or {}).get("table_names") or []:
-                normalized_table_name = str(table_name or "").strip()
-                if normalized_table_name and normalized_table_name in existing_tables and normalized_table_name not in table_names:
-                    table_names.append(normalized_table_name)
+            table_names = DataSourceManager._normalize_group_table_names(group, existing_tables)
             if table_names:
                 normalized_groups.append({"table_group_name": group_name, "table_names": table_names})
         return normalized_groups
@@ -964,12 +970,8 @@ class DataSourceManager:
             normalized.append(entry)
         return _normalize_table_index_items(normalized)
 
-    def _find_table_column(self, datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
-        """校验数据源缓存中是否存在指定表字段。"""
-        normalized_table_name = str(table_name or "").strip()
-        normalized_column_name = str(column_name or "").strip()
-        if not datasource or not normalized_table_name or not normalized_column_name:
-            return None
+    def _match_table_column(self, datasource: Optional[Dict[str, Any]], normalized_table_name: str, normalized_column_name: str) -> Optional[Dict[str, Any]]:
+        """在数据源缓存中匹配指定表字段，命中返回表记录否则 None。"""
         for table in datasource.get("ds_tables") or []:
             if str(table.get("table_name") or "").strip() != normalized_table_name:
                 continue
@@ -977,6 +979,14 @@ class DataSourceManager:
                 if str(column.get("name") or "").strip() == normalized_column_name:
                     return table
         return None
+
+    def _find_table_column(self, datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
+        """校验数据源缓存中是否存在指定表字段。"""
+        normalized_table_name = str(table_name or "").strip()
+        normalized_column_name = str(column_name or "").strip()
+        if not datasource or not normalized_table_name or not normalized_column_name:
+            return None
+        return self._match_table_column(datasource, normalized_table_name, normalized_column_name)
 
     async def create_datasource_group_from_sources_async(
         self,

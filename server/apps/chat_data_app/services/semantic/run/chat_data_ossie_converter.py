@@ -387,20 +387,31 @@ class ChatDataToOssieConverter:
             allow_unicode=True,
         )
 
+    @staticmethod
+    def _add_metric_or_dimension_table(item: Any, result: list[str]) -> None:
+        """把单个指标/维度条目命中的表名去重加入 result。"""
+        if not isinstance(item, dict):
+            return
+        table = _table_name(item)
+        if table and table not in result:
+            result.append(table)
+
+    @staticmethod
+    def _add_relationship_tables(item: Any, result: list[str]) -> None:
+        """把单个关系条目涉及的 left/right 表名去重加入 result。"""
+        if not isinstance(item, dict):
+            return
+        for key in ("left_table", "right_table"):
+            table = _text(item.get(key))
+            if table and table not in result:
+                result.append(table)
+
     def _table_names(self, config: dict[str, Any]) -> list[str]:
         result: list[str] = []
         for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
-            if isinstance(item, dict):
-                table = _table_name(item)
-                if table and table not in result:
-                    result.append(table)
+            self._add_metric_or_dimension_table(item, result)
         for item in config.get("relationships") or []:
-            if not isinstance(item, dict):
-                continue
-            for key in ("left_table", "right_table"):
-                table = _text(item.get(key))
-                if table and table not in result:
-                    result.append(table)
+            self._add_relationship_tables(item, result)
         if not result:
             result.append(_config_id(config))
         return result
@@ -417,6 +428,37 @@ class ChatDataToOssieConverter:
             custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
         )
 
+    def _append_dataset_field(
+        self,
+        fields: list[Any],
+        item: dict[str, Any],
+        config: dict[str, Any],
+        table: str,
+        field_type: Any,
+        expression_type: Any,
+        dialect_type: Any,
+        dimension_type: Any,
+        extension_type: Any,
+        datatype_type: Any,
+    ) -> None:
+        """把单个属于当前表的维度转换为 OSI 字段并追加到 fields。"""
+        if not isinstance(item, dict) or _table_name(item) != table:
+            return
+        name = _text(item.get("name") or _column_name(item))
+        expression = _expression(item, fallback=name)
+        if not name or not expression:
+            return
+        datatype = self._dimension_datatype(config, item)
+        fields.append(field_type(
+            name=name,
+            expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
+            dimension=dimension_type(is_time=_text(item.get("logical_type")).lower() in {"date", "datetime", "timestamp", "time"}) if item.get("logical_type") else None,
+            label=_text(item.get("label")) or None,
+            description=_text(item.get("description") or item.get("metadata_supplement")) or None,
+            datatype=datatype_type(datatype) if datatype else None,
+            custom_extensions=[extension_type(**x) for x in (_extension(_dimension_extension_data(item, datatype)) or [])],
+        ))
+
     def _dataset_fields(
         self,
         config: dict[str, Any],
@@ -431,22 +473,10 @@ class ChatDataToOssieConverter:
         """把属于当前表的维度转换为 OSI 字段。"""
         fields = []
         for item in config.get("dimensions") or []:
-            if not isinstance(item, dict) or _table_name(item) != table:
-                continue
-            name = _text(item.get("name") or _column_name(item))
-            expression = _expression(item, fallback=name)
-            if not name or not expression:
-                continue
-            datatype = self._dimension_datatype(config, item)
-            fields.append(field_type(
-                name=name,
-                expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
-                dimension=dimension_type(is_time=_text(item.get("logical_type")).lower() in {"date", "datetime", "timestamp", "time"}) if item.get("logical_type") else None,
-                label=_text(item.get("label")) or None,
-                description=_text(item.get("description") or item.get("metadata_supplement")) or None,
-                datatype=datatype_type(datatype) if datatype else None,
-                custom_extensions=[extension_type(**x) for x in (_extension(_dimension_extension_data(item, datatype)) or [])],
-            ))
+            self._append_dataset_field(
+                fields, item, config, table, field_type, expression_type, dialect_type,
+                dimension_type, extension_type, datatype_type,
+            )
         return fields
 
     @staticmethod
@@ -502,29 +532,51 @@ class ChatDataToOssieConverter:
         return primary_key, self._collect_unique_keys(table_config, manual_indexes)
 
     @staticmethod
+    def _resolve_column_physical_type(columns: Any, column_name: str) -> str:
+        """在单个表的列列表里按列名（casefold）定位物理类型；找不到返回空串。"""
+        for column in columns or []:
+            if not isinstance(column, dict):
+                continue
+            if _text(column.get("name")).casefold() != column_name:
+                continue
+            physical_type = next((
+                _text(column.get(key))
+                for key in ("mysql_type", "hive_type", "type", "data_type")
+                if _text(column.get(key))
+            ), "")
+            if physical_type:
+                return physical_type
+        return ""
+
+    @staticmethod
+    def _resolve_dimension_physical_type(
+        config: dict[str, Any],
+        table_name: str,
+        column_name: str,
+    ) -> str:
+        """在 config 的 tables 里按表名/别名与列名定位物理类型；找不到返回空串。"""
+        for table in config.get("tables") or []:
+            if not isinstance(table, dict):
+                continue
+            table_names = {
+                _table_name(table).casefold(),
+                _text(table.get("table_alias")).casefold(),
+            }
+            if table_name not in table_names:
+                continue
+            physical_type = ChatDataToOssieConverter._resolve_column_physical_type(table.get("columns"), column_name)
+            if physical_type:
+                return _datatype(physical_type)
+        return ""
+
+    @staticmethod
     def _dimension_datatype(config: dict[str, Any], dimension: dict[str, Any]) -> str | None:
         table_name = _table_name(dimension).casefold()
         column_name = _physical_column_name(dimension).casefold()
         if table_name and column_name:
-            for table in config.get("tables") or []:
-                if not isinstance(table, dict):
-                    continue
-                table_names = {
-                    _table_name(table).casefold(),
-                    _text(table.get("table_alias")).casefold(),
-                }
-                if table_name not in table_names:
-                    continue
-                for column in table.get("columns") or []:
-                    if not isinstance(column, dict) or _text(column.get("name")).casefold() != column_name:
-                        continue
-                    physical_type = next((
-                        _text(column.get(key))
-                        for key in ("mysql_type", "hive_type", "type", "data_type")
-                        if _text(column.get(key))
-                    ), "")
-                    if physical_type:
-                        return _datatype(physical_type)
+            physical_type = ChatDataToOssieConverter._resolve_dimension_physical_type(config, table_name, column_name)
+            if physical_type:
+                return _datatype(physical_type)
         return _datatype(dimension.get("logical_type"))
 
     def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:

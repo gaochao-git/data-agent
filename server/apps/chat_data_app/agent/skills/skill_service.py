@@ -136,6 +136,53 @@ def _strip_frontmatter(text: str) -> str:
     return match.group(1).strip() if match else str(text or "")
 
 
+def _safe_copy_skill_subdir(source_subdir: Path, target_subdir: Path) -> None:
+    """把单个技能固定子目录（`references`/`assets`）的文件复制到目标目录。
+
+    沿用原 ``_safe_copy_skill_dir`` 的校验与跳过语义：软链接与非文件跳过/拒绝，
+    含 ``..`` 的相对路径视为非法路径，逐文件创建父目录后复制。
+    """
+    for item in sorted(source_subdir.rglob("*")):
+        if item.is_symlink():
+            raise ValueError("技能目录不允许包含软链接")
+        if not item.is_file():
+            continue
+        relative_path = item.relative_to(source_subdir)
+        if ".." in relative_path.parts:
+            raise ValueError("技能目录包含非法路径")
+        target = target_subdir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(item, target)
+
+
+async def _append_runtime_user_skill_source(
+    out: list[tuple[str, Path]],
+    row: Dict[str, Any],
+    dao: "SkillDao",
+) -> None:
+    """按一行用户技能记录解析并追加其运行期版本目录到 ``out``。
+
+    仅当该技能为 user 来源、存在当前版本号、已发布版本目录存在且不越界时追加；
+    任何解析异常（权限/路径/缺失）交由 ``list_runtime_skill_sources_async`` 外层
+    循环捕获后跳过该行，不中断整个快照构建。
+    """
+    if row.get("skill_source") != "user":
+        return
+    current_version_no = int(row.get("current_skill_version_no") or 0)
+    if not current_version_no:
+        return
+    version = await dao.get_published_version_async(str(row.get("skill_id") or ""), current_version_no)
+    if not version:
+        return
+    version_dir = _derive_user_version_dir(
+        row.get("owner_user_id"),
+        row.get("skill_name"),
+        version.get("skill_version_no"),
+    )
+    if version_dir.is_dir() and not version_dir.is_symlink():
+        out.append((str(row.get("skill_name") or ""), version_dir))
+
+
 def _safe_copy_skill_dir(source_dir: Path, version_dir: Path) -> None:
     """复制技能固定目录文件到用户技能版本目录。"""
     target_version_dir = _resolve_user_skill_version_dir(version_dir)
@@ -146,17 +193,7 @@ def _safe_copy_skill_dir(source_dir: Path, version_dir: Path) -> None:
         if source_subdir.is_symlink() or not source_subdir.is_dir():
             raise ValueError(f"{dir_name} 必须是目录")
         target_subdir = target_version_dir / dir_name
-        for item in sorted(source_subdir.rglob("*")):
-            if item.is_symlink():
-                raise ValueError("技能目录不允许包含软链接")
-            if not item.is_file():
-                continue
-            relative_path = item.relative_to(source_subdir)
-            if ".." in relative_path.parts:
-                raise ValueError("技能目录包含非法路径")
-            target = target_subdir / relative_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
+        _safe_copy_skill_subdir(source_subdir, target_subdir)
 
 
 def _reject_symlink_tree(root: Path) -> None:
@@ -450,21 +487,7 @@ class SkillService:
             # 单个用户技能路径异常（如历史绝对路径、跨 CHAT_DATA_HOME 残留）不应中断
             # 整个快照构建，跳过该技能即可，系统技能与其他正常技能仍纳入快照。
             try:
-                if row.get("skill_source") != "user":
-                    continue
-                current_version_no = int(row.get("current_skill_version_no") or 0)
-                if not current_version_no:
-                    continue
-                version = await self.dao.get_published_version_async(str(row.get("skill_id") or ""), current_version_no)
-                if not version:
-                    continue
-                version_dir = _derive_user_version_dir(
-                    row.get("owner_user_id"),
-                    row.get("skill_name"),
-                    version.get("skill_version_no"),
-                )
-                if version_dir.is_dir() and not version_dir.is_symlink():
-                    out.append((str(row.get("skill_name") or ""), version_dir))
+                await _append_runtime_user_skill_source(out, row, self.dao)
             except Exception as err:
                 logger.warning("跳过无法纳入快照的用户技能 %s: %s", row.get("skill_name"), err)
                 continue

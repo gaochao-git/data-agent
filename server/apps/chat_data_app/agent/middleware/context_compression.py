@@ -162,11 +162,7 @@ async def compress_messages_for_state(
             static_input_tokens=static_tokens,
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
-    if on_compression_started:
-        try:
-            on_compression_started()
-        except Exception:
-            logger.debug("推送压缩开始事件失败，不影响压缩主流程", exc_info=True)
+    _notify_compression_started(on_compression_started)
     summary_text, summary_input_report = await _summarize_for_compression(
         messages_to_summarize,
         previous_summary=effective_previous_summary,
@@ -195,8 +191,67 @@ async def compress_messages_for_state(
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
 
-    after_tokens = static_tokens + count_messages_tokens(compressed_messages) + _summary_tokens(summary_text)
+    compressed_messages, summary_text, compressed_count, after_tokens, compression_passes = await _run_compression_passes(
+        compressed_messages,
+        summary_text,
+        compressed_count,
+        static_tokens,
+        target_tokens,
+        summarizer,
+        summary_input_limit_tokens,
+        summary_model_id,
+        report,
+    )
+
+    _finalize_compression_report(
+        report,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+        compressed_messages=compressed_count,
+        summary_text=summary_text,
+    )
+    report["compression_passes"] = compression_passes
+    report["target_reached"] = after_tokens <= target_tokens
+    logger.info(
+        "[agent] 上下文压缩已执行: before_tokens=%s after_tokens=%s threshold_tokens=%s compressed_messages=%s",
+        before_tokens,
+        after_tokens,
+        threshold_tokens,
+        compressed_count,
+    )
+    return _enforce_hard_input_limit(
+        compressed_messages,
+        summary_text,
+        report,
+        before_tokens=before_tokens,
+        static_input_tokens=static_tokens,
+        hard_input_limit_tokens=hard_input_limit_tokens,
+    )
+
+
+def _notify_compression_started(on_compression_started: Callable[[], None] | None) -> None:
+    """压缩开始前尝试推送通知事件；失败仅记录调试日志，不影响压缩主流程。"""
+    if on_compression_started:
+        try:
+            on_compression_started()
+        except Exception:
+            logger.debug("推送压缩开始事件失败，不影响压缩主流程", exc_info=True)
+
+
+async def _run_compression_passes(
+    compressed_messages: list[BaseMessage],
+    summary_text: str | None,
+    compressed_count: int,
+    static_tokens: int,
+    target_tokens: int,
+    summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None,
+    summary_input_limit_tokens: int | None,
+    summary_model_id: str | None,
+    report: dict[str, Any],
+) -> tuple[list[BaseMessage], str | None, int, int, int]:
+    """迭代执行多轮摘要压缩，返回 (压缩后消息, 摘要, 压缩消息数, after_tokens, 轮数)。"""
     compression_passes = 1
+    after_tokens = static_tokens + count_messages_tokens(compressed_messages) + _summary_tokens(summary_text)
     while after_tokens > target_tokens and compression_passes < MAX_COMPRESSION_PASSES:
         effective_target = max(target_tokens - _summary_tokens(summary_text), 1)
         additional_messages, next_messages, additional_count = _partition_messages_for_compression(
@@ -226,31 +281,7 @@ async def compress_messages_for_state(
         compressed_count += additional_count
         after_tokens = next_tokens
         compression_passes += 1
-
-    _finalize_compression_report(
-        report,
-        before_tokens=before_tokens,
-        after_tokens=after_tokens,
-        compressed_messages=compressed_count,
-        summary_text=summary_text,
-    )
-    report["compression_passes"] = compression_passes
-    report["target_reached"] = after_tokens <= target_tokens
-    logger.info(
-        "[agent] 上下文压缩已执行: before_tokens=%s after_tokens=%s threshold_tokens=%s compressed_messages=%s",
-        before_tokens,
-        after_tokens,
-        threshold_tokens,
-        compressed_count,
-    )
-    return _enforce_hard_input_limit(
-        compressed_messages,
-        summary_text,
-        report,
-        before_tokens=before_tokens,
-        static_input_tokens=static_tokens,
-        hard_input_limit_tokens=hard_input_limit_tokens,
-    )
+    return compressed_messages, summary_text, compressed_count, after_tokens, compression_passes
 
 
 async def build_context_compression_update(
@@ -286,6 +317,26 @@ async def build_context_compression_update(
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *compressed_messages], summary_text, report
 
 
+def _read_middleware_messages(state: Any) -> list[BaseMessage]:
+    """从 state 读取并拷贝消息列表（state 缺失/无 messages 时回退空列表）。"""
+    return list((state or {}).get("messages") or [])
+
+
+def _resolve_previous_summary(state: Any, legacy_summary: Any) -> Any:
+    """合并 state 中的 context_summary 与遗留摘要，得到上一轮压缩摘要。"""
+    return merge_context_summaries(
+        str((state or {}).get("context_summary") or "").strip() or None,
+        legacy_summary,
+    )
+
+
+def _emit_compression_started_event(messages: list[BaseMessage]) -> None:
+    """构造并下发压缩开始事件（无事件则静默跳过）。"""
+    started_event = _build_context_compression_started_event(messages)
+    if started_event:
+        _emit_context_compression_event(started_event)
+
+
 def create_context_compression_middleware(
     *,
     system_prompt: str,
@@ -300,18 +351,13 @@ def create_context_compression_middleware(
 
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
     async def context_compression_middleware(state, _runtime):
-        messages = list((state or {}).get("messages") or [])
+        messages = _read_middleware_messages(state)
         _, legacy_summary = extract_legacy_context_summary(messages)
-        previous_summary = merge_context_summaries(
-            str((state or {}).get("context_summary") or "").strip() or None,
-            legacy_summary,
-        )
+        previous_summary = _resolve_previous_summary(state, legacy_summary)
         budget = compression_budget.configure(system_prompt, request_tools, model_id=model_id)
 
         def _notify_compression_started() -> None:
-            started_event = _build_context_compression_started_event(messages)
-            if started_event:
-                _emit_context_compression_event(started_event)
+            _emit_compression_started_event(messages)
 
         message_updates, summary_text, report = await build_context_compression_update(
             messages,

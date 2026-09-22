@@ -748,6 +748,19 @@ def get_semantic_config_service() -> SemanticConfigService:
     return _semantic_config_service
 
 
+def _add_table_physical_columns(columns: Set[Tuple[str, str]], table: Any) -> None:
+    """把单个物理表的列登记进 columns 集合（{(table, column)}）。"""
+    if not isinstance(table, dict):
+        return
+    table_name = str(table.get("table_name") or "").strip()
+    for column in table.get("columns") or []:
+        if not isinstance(column, dict):
+            continue
+        column_name = str(column.get("name") or "").strip()
+        if table_name and column_name:
+            columns.add((table_name, column_name))
+
+
 async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) -> Optional[Set[Tuple[str, str]]]:
     """加载数据源物理列清单 {(table, column)}（get_cached_schema_async 的全量表结构）。
 
@@ -763,15 +776,7 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
         return None
     columns: Set[Tuple[str, str]] = set()
     for table in tables or []:
-        if not isinstance(table, dict):
-            continue
-        table_name = str(table.get("table_name") or "").strip()
-        for column in table.get("columns") or []:
-            if not isinstance(column, dict):
-                continue
-            column_name = str(column.get("name") or "").strip()
-            if table_name and column_name:
-                columns.add((table_name, column_name))
+        _add_table_physical_columns(columns, table)
     return columns
 
 

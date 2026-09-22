@@ -45,6 +45,36 @@ def _or_value(value: Any, default: Any) -> Any:
     return value or default
 
 
+def _append_group_relation_rows(
+    relation_rows: List[Dict[str, Any]],
+    seen: set,
+    group_id: str,
+    table_group_name: str,
+    table_names: Any,
+    *,
+    create_by: str,
+    create_by_name: str,
+    update_by: str,
+    update_by_name: str,
+) -> None:
+    """按 (table_group_name, table_name) 去重追加单个分组的关系行。"""
+    for table_name in _unique_non_empty_texts(table_names or []):
+        key = (table_group_name, table_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        relation_rows.append({
+            "group_id": group_id,
+            "table_group_name": table_group_name,
+            "table_name": table_name,
+            "create_by": create_by or "",
+            "create_by_name": create_by_name or "",
+            "update_by": update_by or "",
+            "update_by_name": update_by_name or "",
+            "delete_flag": 0,
+        })
+
+
 class DataSourceDao:
     """基于 MySQL 的数据源数据访问层。"""
 
@@ -472,21 +502,17 @@ class DataSourceDao:
             table_group_name = str((group or {}).get("table_group_name") or "").strip()
             if not table_group_name:
                 continue
-            for table_name in _unique_non_empty_texts((group or {}).get("table_names") or []):
-                key = (table_group_name, table_name)
-                if key in seen:
-                    continue
-                seen.add(key)
-                relation_rows.append({
-                    "group_id": group_id,
-                    "table_group_name": table_group_name,
-                    "table_name": table_name,
-                    "create_by": create_by or "",
-                    "create_by_name": create_by_name or "",
-                    "update_by": update_by or "",
-                    "update_by_name": update_by_name or "",
-                    "delete_flag": 0,
-                })
+            _append_group_relation_rows(
+                relation_rows,
+                seen,
+                group_id,
+                table_group_name,
+                (group or {}).get("table_names"),
+                create_by=create_by,
+                create_by_name=create_by_name,
+                update_by=update_by,
+                update_by_name=update_by_name,
+            )
         return relation_rows
 
     @staticmethod

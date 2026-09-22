@@ -6,12 +6,13 @@ ChatData 查询运行时服务。
 """
 
 import asyncio
+import functools
 import inspect
 import json
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from utils.database import get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
@@ -568,6 +569,53 @@ async def _finalize_member_query_result(
     return status
 
 
+async def _notify_remote_task_created_for_member(
+    payload: Dict[str, Any],
+    *,
+    execution_id: Optional[str],
+    query_task_id: Optional[str],
+    member_datasource_id: Any,
+    member_name: Any,
+    statement_index: Optional[int],
+) -> None:
+    """成员远程任务创建回调：透传执行上下文通知上游。"""
+    await _notify_remote_task_created(
+        payload,
+        execution_id=execution_id,
+        query_task_id=query_task_id,
+        member_datasource_id=member_datasource_id,
+        member_name=member_name,
+        statement_index=statement_index,
+    )
+
+
+async def _notify_db_connection_created_for_member(
+    payload: Dict[str, Any],
+    *,
+    execution_id: Optional[str],
+) -> None:
+    """成员数据库连接创建回调：透传执行上下文通知上游。"""
+    await _notify_db_connection_created(payload, execution_id)
+
+
+def _create_member_executor(
+    execution_target: Dict[str, Any],
+    execute_kwargs: Dict[str, Any],
+    username: Optional[str],
+    on_remote_task_created: Callable[[Dict[str, Any]], Awaitable[None]],
+    on_db_connection_created: Callable[[Dict[str, Any]], Awaitable[None]],
+) -> Any:
+    """创建执行器并按签名绑定回调，返回执行器实例。"""
+    executor = get_executor(execution_target)
+    if "username" in inspect.signature(executor.execute).parameters:
+        execute_kwargs["username"] = username
+    if "remote_task_callback" in inspect.signature(executor.execute).parameters:
+        execute_kwargs["remote_task_callback"] = on_remote_task_created
+    if "db_connection_callback" in inspect.signature(executor.execute).parameters:
+        execute_kwargs["db_connection_callback"] = on_db_connection_created
+    return executor
+
+
 async def execute_sql_for_member(
     execution_target: Dict[str, Any],
     sql: str,
@@ -588,18 +636,18 @@ async def execute_sql_for_member(
     http_target = query_cache.is_http_execution_target(execution_target)
     local_started_at = time.perf_counter()
 
-    async def on_remote_task_created(payload: Dict[str, Any]) -> None:
-        await _notify_remote_task_created(
-            payload,
-            execution_id=execution_id,
-            query_task_id=query_task_id,
-            member_datasource_id=member_datasource_id,
-            member_name=member_name,
-            statement_index=statement_index,
-        )
-
-    async def on_db_connection_created(payload: Dict[str, Any]) -> None:
-        await _notify_db_connection_created(payload, execution_id)
+    on_remote_task_created = functools.partial(
+        _notify_remote_task_created_for_member,
+        execution_id=execution_id,
+        query_task_id=query_task_id,
+        member_datasource_id=member_datasource_id,
+        member_name=member_name,
+        statement_index=statement_index,
+    )
+    on_db_connection_created = functools.partial(
+        _notify_db_connection_created_for_member,
+        execution_id=execution_id,
+    )
 
     execute_kwargs = {
         "sql": sql,
@@ -610,6 +658,15 @@ async def execute_sql_for_member(
     }
 
     executor = None
+
+    async def execute_query() -> Dict[str, Any]:
+        nonlocal executor
+        # 先赋值再执行：execute 抛异常时 finally 仍能关闭执行器资源
+        executor = _create_member_executor(
+            execution_target, execute_kwargs, username, on_remote_task_created, on_db_connection_created
+        )
+        return await executor.execute(**execute_kwargs)
+
     try:
         effective_sql = build_effective_sql(
             sql, limit, source_type=execution_target.get("source_type"), datasource_id=datasource_id, user_id=user_id
@@ -618,21 +675,16 @@ async def execute_sql_for_member(
         if execution_id and await _guard_running_execution(execution_id):
             return _cancelled_member_result(member_datasource_id, member_name, effective_sql)
 
-        async def execute_query() -> Dict[str, Any]:
-            nonlocal executor
-            executor = get_executor(execution_target)
-            if "username" in inspect.signature(executor.execute).parameters:
-                execute_kwargs["username"] = username
-            if "remote_task_callback" in inspect.signature(executor.execute).parameters:
-                execute_kwargs["remote_task_callback"] = on_remote_task_created
-            if "db_connection_callback" in inspect.signature(executor.execute).parameters:
-                execute_kwargs["db_connection_callback"] = on_db_connection_created
-            return await executor.execute(**execute_kwargs)
-
-        async def execute_query_and_update_cache() -> Dict[str, Any]:
-            return await _execute_query_and_save_cache(
-                execute_query, user_id, execution_target, skip_query_cache, http_target, cache_identity, username,
-            )
+        execute_query_and_update_cache = functools.partial(
+            _execute_query_and_save_cache,
+            execute_query,
+            user_id,
+            execution_target,
+            skip_query_cache,
+            http_target,
+            cache_identity,
+            username,
+        )
 
         if query_cache.is_sql_result_cache_enabled(skip_query_cache):
             cached_result = await _fetch_sql_cached_result(cache_identity)
@@ -742,6 +794,27 @@ def build_query_task_runtime_data(task: ChatDataQueryTask) -> Dict[str, Any]:
     }
 
 
+def _normalize_remote_task_item(item: Any) -> Dict[str, Any] | None:
+    """归一化单个远端任务项；缺 remote_task_id/member_datasource_id 返回 None。"""
+    if not isinstance(item, dict):
+        return None
+    remote_task_id = str(item.get("remote_task_id") or "").strip()
+    member_datasource_id = str(item.get("member_datasource_id") or "").strip()
+    member_name = str(item.get("member_name") or "").strip()
+    source_type = str(item.get("source_type") or "").strip().lower() or "hive"
+    if not remote_task_id or not member_datasource_id:
+        return None
+    normalized_remote_task: Dict[str, Any] = {
+        "member_datasource_id": member_datasource_id,
+        "member_name": member_name,
+        "remote_task_id": remote_task_id,
+        "source_type": source_type,
+    }
+    if item.get("statement_index") is not None:
+        normalized_remote_task["statement_index"] = item.get("statement_index")
+    return normalized_remote_task
+
+
 def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
     """解析远端任务映射列表。"""
     if not raw_payload:
@@ -757,23 +830,9 @@ def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
         return []
     result: List[Dict[str, Any]] = []
     for item in payload:
-        if not isinstance(item, dict):
-            continue
-        remote_task_id = str(item.get("remote_task_id") or "").strip()
-        member_datasource_id = str(item.get("member_datasource_id") or "").strip()
-        member_name = str(item.get("member_name") or "").strip()
-        source_type = str(item.get("source_type") or "").strip().lower() or "hive"
-        if not remote_task_id or not member_datasource_id:
-            continue
-        normalized_remote_task = {
-            "member_datasource_id": member_datasource_id,
-            "member_name": member_name,
-            "remote_task_id": remote_task_id,
-            "source_type": source_type,
-        }
-        if item.get("statement_index") is not None:
-            normalized_remote_task["statement_index"] = item.get("statement_index")
-        result.append(normalized_remote_task)
+        normalized = _normalize_remote_task_item(item)
+        if normalized is not None:
+            result.append(normalized)
     return result
 
 
@@ -1039,6 +1098,33 @@ async def is_query_task_cancelled(task_id: str) -> bool:
     return str((task_data or {}).get("status") or "").strip().lower() == "cancelled"
 
 
+def _apply_query_task_updates(
+    task: ChatDataQueryTask,
+    status: Optional[str],
+    progress_text: Optional[str],
+    result_payload: Any,
+    error_message: Optional[str],
+    started_time: Optional[datetime],
+    finished_time: Optional[datetime],
+) -> bool:
+    """行锁读取后校验终态守卫：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。"""
+    if task.task_status == "cancelled" and status in {"running", "succeeded", "failed", "partial_success"}:
+        return False
+    if status is not None:
+        task.task_status = status
+    if progress_text is not None:
+        task.progress_text = progress_text
+    if result_payload is not None:
+        task.result_payload = json.dumps(result_payload, ensure_ascii=False)
+    if error_message is not None:
+        task.error_message = error_message
+    if started_time is not None:
+        task.started_time = started_time
+    if finished_time is not None:
+        task.finished_time = finished_time
+    return True
+
+
 async def update_query_task(
     task_id: str,
     *,
@@ -1050,26 +1136,16 @@ async def update_query_task(
     finished_time: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """更新异步查询任务。"""
-
-    def apply_task_updates(task: ChatDataQueryTask) -> bool:
-        # 行锁读取后校验终态守卫：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。
-        if task.task_status == "cancelled" and status in {"running", "succeeded", "failed", "partial_success"}:
-            return False
-        if status is not None:
-            task.task_status = status
-        if progress_text is not None:
-            task.progress_text = progress_text
-        if result_payload is not None:
-            task.result_payload = json.dumps(result_payload, ensure_ascii=False)
-        if error_message is not None:
-            task.error_message = error_message
-        if started_time is not None:
-            task.started_time = started_time
-        if finished_time is not None:
-            task.finished_time = finished_time
-        return True
-
-    task = await query_task_dao.update_task_locked(task_id, apply_task_updates)
+    updater = functools.partial(
+        _apply_query_task_updates,
+        status=status,
+        progress_text=progress_text,
+        result_payload=result_payload,
+        error_message=error_message,
+        started_time=started_time,
+        finished_time=finished_time,
+    )
+    task = await query_task_dao.update_task_locked(task_id, updater)
     if task is None:
         return None
     return build_query_task_response_data(build_query_task_runtime_data(task))

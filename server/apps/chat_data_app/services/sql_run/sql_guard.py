@@ -234,25 +234,30 @@ def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str
     return True, ""
 
 
+def _consume_guard_literal_quote(sql: str, i: int, in_quote: Optional[str], result: list[str]) -> tuple[int, Optional[str]]:
+    """处理 _text_without_literals 引号内字符，返回 (新索引, 引号状态)。"""
+    char = sql[i]
+    next_char = sql[i + 1] if i + 1 < len(sql) else ""
+    if char == "\\":
+        return i + 2, in_quote
+    if char == in_quote:
+        if in_quote == "'" and next_char == "'":
+            result.append(" ")
+            return i + 2, in_quote
+        return i + 1, None
+    return i + 1, in_quote
+
+
 def _text_without_literals(sql: str) -> str:
     """剥离字符串/标识符字面量，保留 SQL 结构，供注释后文本做关键词判定。"""
     result: list[str] = []
     in_quote: Optional[str] = None
     i = 0
-    while i < len(sql):
+    n = len(sql)
+    while i < n:
         char = sql[i]
-        next_char = sql[i + 1] if i + 1 < len(sql) else ""
         if in_quote:
-            if char == "\\":
-                i += 2
-                continue
-            if char == in_quote:
-                if in_quote == "'" and next_char == "'":
-                    result.append(" ")
-                    i += 2
-                    continue
-                in_quote = None
-            i += 1
+            i, in_quote = _consume_guard_literal_quote(sql, i, in_quote, result)
             continue
         if char in {"'", '"', "`"}:
             in_quote = char

@@ -547,6 +547,24 @@ class AgentScheduleService:
                     )
             return control.to_dict()
 
+    @staticmethod
+    def _build_job_list_item(job, stats, titles, latest_runs) -> dict:
+        """组装单条任务列表项，含会话标题与最近一次执行状态（裸 datetime 转 ISO）。"""
+        item = job.to_dict()
+        item.update(stats)
+        item["conversation_title"] = titles.get(job.conversation_id)
+        last_plan_time = item.get("last_plan_time")
+        item["last_plan_time"] = last_plan_time.isoformat() if last_plan_time else None
+        last_run = latest_runs.get(job.job_id)
+        if last_run is not None:
+            last_time = last_run.finished_time or last_run.dispatched_time or last_run.plan_time
+            item["last_run_status"] = last_run.trigger_status
+            item["last_run_time"] = last_time.isoformat() if last_time else None
+        else:
+            item["last_run_status"] = None
+            item["last_run_time"] = None
+        return item
+
     async def list_all_jobs(
         self,
         *,
@@ -571,23 +589,7 @@ class AgentScheduleService:
             )
             latest_runs = await self._dao.latest_runs_by_jobs(session, [job.job_id for job, _stats in rows])
             titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job, _stats in rows])
-            items = []
-            for job, stats in rows:
-                item = job.to_dict()
-                item.update(stats)
-                item["conversation_title"] = titles.get(job.conversation_id)
-                # 聚合列 last_plan_time 是裸 datetime，必须显式转 ISO 才能进 JSON 响应
-                last_plan_time = item.get("last_plan_time")
-                item["last_plan_time"] = last_plan_time.isoformat() if last_plan_time else None
-                last_run = latest_runs.get(job.job_id)
-                if last_run is not None:
-                    last_time = last_run.finished_time or last_run.dispatched_time or last_run.plan_time
-                    item["last_run_status"] = last_run.trigger_status
-                    item["last_run_time"] = last_time.isoformat() if last_time else None
-                else:
-                    item["last_run_status"] = None
-                    item["last_run_time"] = None
-                items.append(item)
+            items = [self._build_job_list_item(job, stats, titles, latest_runs) for job, stats in rows]
             return {"jobs": items, "total": total}
 
     async def admin_set_job_enabled(self, *, job_id: str, enabled_flag: int, user_id: str, username: str) -> dict:

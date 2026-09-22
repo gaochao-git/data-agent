@@ -63,22 +63,10 @@ def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
     changed = False
     normalized_tool_calls = []
     for tool_call in tool_calls:
-        if not isinstance(tool_call, dict):
-            normalized_tool_calls.append(tool_call)
-            continue
-        raw_name = tool_call.get("name")
-        if available_tool_names:
-            normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
-            if normalized_name != raw_name:
-                tool_call = {**tool_call, "name": normalized_name}
-                changed = True
-        raw_args = tool_call.get("args")
-        if not isinstance(raw_args, dict):
-            coerced_args = coerce_tool_call_args(raw_args)
-            if coerced_args is not None:
-                tool_call = {**tool_call, "args": coerced_args}
-                changed = True
-        normalized_tool_calls.append(tool_call)
+        normalized_tool_call, call_changed = _normalize_single_tool_call(tool_call, available_tool_names)
+        if call_changed:
+            changed = True
+        normalized_tool_calls.append(normalized_tool_call)
 
     if not changed:
         return message
@@ -92,6 +80,26 @@ def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
             return message.model_copy(update={"tool_calls": normalized_tool_calls})
         logger.warning("工具调用归一化写入失败: message=%r", message, exc_info=True)
         return message
+
+
+def _normalize_single_tool_call(tool_call: Any, available_tool_names: set[str]) -> tuple[Any, bool]:
+    """归一化单条工具调用（重复名 + 字符串 args），返回 (调用, 是否变更)。"""
+    if not isinstance(tool_call, dict):
+        return tool_call, False
+    raw_name = tool_call.get("name")
+    changed = False
+    if available_tool_names:
+        normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
+        if normalized_name != raw_name:
+            tool_call = {**tool_call, "name": normalized_name}
+            changed = True
+    raw_args = tool_call.get("args")
+    if not isinstance(raw_args, dict):
+        coerced_args = coerce_tool_call_args(raw_args)
+        if coerced_args is not None:
+            tool_call = {**tool_call, "args": coerced_args}
+            changed = True
+    return tool_call, changed
 
 
 def create_tool_call_name_normalizer_middleware(tools: list[Any]):

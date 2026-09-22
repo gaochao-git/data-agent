@@ -60,24 +60,41 @@ def tool_result_payload(tool_name: str, payload: Any) -> str:
     return f"[{tool_name}]\n" + json_dumps(payload)
 
 
+_JSON_DECODE_FAILED = object()
+
+
+def _normalize_one_json_layer(current: Any, original_value: Any) -> Any:
+    """Attempt one JSON decode pass.
+
+    Returns the decoded value on success, the unchanged ``current`` when no more
+    decoding is possible (non-string or empty), or ``_JSON_DECODE_FAILED`` when
+    ``current`` looks like JSON but fails to parse (so the caller can return the
+    original ``value`` as the outer function does).
+    """
+    if not isinstance(current, str):
+        return current
+    text = current.strip()
+    if not text:
+        return current
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return _JSON_DECODE_FAILED
+
+
 def normalize_json_like_payload(value: Any) -> Any:
     """Parse JSON strings, double-encoded JSON strings, and fenced JSON blocks."""
     current = value
     for _ in range(2):
-        if not isinstance(current, str):
-            return current
-        text = current.strip()
-        if not text:
-            return current
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].strip().startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        try:
-            current = json.loads(text)
-        except json.JSONDecodeError:
+        decoded = _normalize_one_json_layer(current, value)
+        if decoded is _JSON_DECODE_FAILED:
             return value
+        current = decoded
     return current

@@ -379,6 +379,17 @@ class SemanticQualityChecker:
                     seen.add(name)
 
     @staticmethod
+    def _collect_table_raw_keys(table: Dict[str, Any]) -> List[Any]:
+        """收集单表声明的原始键定义：primary_keys + unique_indexes + manual_indexes。"""
+        raw_keys: List[Any] = list(table.get("primary_keys") or [])
+        for item in table.get("unique_indexes") or []:
+            raw_keys.append(item.get("columns") if isinstance(item, dict) else None)
+        for item in table.get("manual_indexes") or []:
+            if isinstance(item, dict) and str(item.get("index_type") or "").lower() in {"primary", "unique"}:
+                raw_keys.append(item.get("columns"))
+        return raw_keys
+
+    @staticmethod
     def _declared_table_keys(config: Dict[str, Any]) -> Dict[str, List[Set[str]]]:
         """从 config.tables 收集每张表声明的主键/唯一键列集合（表名/列名 casefold）。
 
@@ -394,24 +405,26 @@ class SemanticQualityChecker:
             name = str(table.get("table") or table.get("table_name") or "").strip()
             if not name:
                 continue
-            raw_keys: List[Any] = list(table.get("primary_keys") or [])
-            for item in table.get("unique_indexes") or []:
-                raw_keys.append(item.get("columns") if isinstance(item, dict) else None)
-            for item in table.get("manual_indexes") or []:
-                if isinstance(item, dict) and str(item.get("index_type") or "").lower() in {"primary", "unique"}:
-                    raw_keys.append(item.get("columns"))
-            keys: List[Set[str]] = []
-            for value in raw_keys:
-                columns = {
-                    str(column).strip().casefold()
-                    for column in (value if isinstance(value, list) else [])
-                    if str(column or "").strip()
-                }
-                if columns and columns not in keys:
-                    keys.append(columns)
+            keys = SemanticQualityChecker._normalize_table_keys(
+                SemanticQualityChecker._collect_table_raw_keys(table)
+            )
             if keys:
                 declared[name.casefold()] = keys
         return declared
+
+    @staticmethod
+    def _normalize_table_keys(raw_keys: List[Any]) -> List[Set[str]]:
+        """把原始键定义规范化为去重后的列名集合列表（列名 casefold，空列剔除）。"""
+        keys: List[Set[str]] = []
+        for value in raw_keys:
+            columns = {
+                str(column).strip().casefold()
+                for column in (value if isinstance(value, list) else [])
+                if str(column or "").strip()
+            }
+            if columns and columns not in keys:
+                keys.append(columns)
+        return keys
 
     @staticmethod
     def _check_relationship_key_coverage(
@@ -463,6 +476,38 @@ class SemanticQualityChecker:
         return owner
 
     @staticmethod
+    def _add_relationship_edge(
+        relationship: Dict[str, Any],
+        modeled_tables: Set[str],
+        raw: List[Tuple[str, str]],
+        seen_pairs: Dict[Tuple[str, str, str], int],
+        edges: Dict[str, Set[str]],
+    ) -> None:
+        """累计单条关系的 (left, right, columns) 计数并构建无向边邻接表；同时记录自环与未建模表。"""
+        left = _clean(relationship.get("left_table"))
+        right = _clean(relationship.get("right_table"))
+        conditions = relationship.get("join_conditions") or []
+        columns_key = ",".join(
+            f"{_clean(condition.get('left_column'))}={_clean(condition.get('right_column'))}"
+            for condition in conditions
+            if isinstance(condition, dict)
+        )
+        pair = (left, right, columns_key)
+        seen_pairs[pair] = seen_pairs.get(pair, 0) + 1
+        if not (left and right):
+            return
+        if left == right:
+            raw.append(("CON_RELATIONSHIP_SELF", left))
+        else:
+            edges.setdefault(left, set()).add(right)
+            edges.setdefault(right, set()).add(left)
+        # 自环（left == right）时两侧是同一张表，只检查一次：否则同一表名会被记两条 target，
+        # 报告里出现「T, T」重复项，并让「等 N 处」计数虚高。
+        for table in (left,) if left == right else (left, right):
+            if modeled_tables and table not in modeled_tables:
+                raw.append(("CON_RELATIONSHIP_TABLE_UNREFERENCED", table))
+
+    @staticmethod
     def _collect_relationship_edges(
         relationships: List[Dict[str, Any]],
         modeled_tables: Set[str],
@@ -475,28 +520,7 @@ class SemanticQualityChecker:
         seen_pairs: Dict[Tuple[str, str, str], int] = {}
         edges: Dict[str, Set[str]] = {}
         for relationship in relationships:
-            left = _clean(relationship.get("left_table"))
-            right = _clean(relationship.get("right_table"))
-            conditions = relationship.get("join_conditions") or []
-            columns_key = ",".join(
-                f"{_clean(condition.get('left_column'))}={_clean(condition.get('right_column'))}"
-                for condition in conditions
-                if isinstance(condition, dict)
-            )
-            pair = (left, right, columns_key)
-            seen_pairs[pair] = seen_pairs.get(pair, 0) + 1
-            if not (left and right):
-                continue
-            if left == right:
-                raw.append(("CON_RELATIONSHIP_SELF", left))
-            else:
-                edges.setdefault(left, set()).add(right)
-                edges.setdefault(right, set()).add(left)
-            # 自环（left == right）时两侧是同一张表，只检查一次：否则同一表名会被记两条 target，
-            # 报告里出现「T, T」重复项，并让「等 N 处」计数虚高。
-            for table in (left,) if left == right else (left, right):
-                if modeled_tables and table not in modeled_tables:
-                    raw.append(("CON_RELATIONSHIP_TABLE_UNREFERENCED", table))
+            SemanticQualityChecker._add_relationship_edge(relationship, modeled_tables, raw, seen_pairs, edges)
         return seen_pairs, edges
 
     @staticmethod

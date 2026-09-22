@@ -136,6 +136,34 @@ def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_err
     })
 
 
+def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns: List[Dict[str, str]]) -> None:
+    """非 tool_calls 的 assistant 发言裁剪后登记。"""
+    if (msg or {}).get("tool_calls"):
+        return
+    assistant_turns.append({"content": text[:500], "timestamp": timestamp})
+
+
+def _compact_one_history_message(
+    msg: Any,
+    user_turns: List[Dict[str, str]],
+    assistant_turns: List[Dict[str, str]],
+    tool_errors: List[Dict[str, str]],
+    negative_feedback: List[str],
+) -> None:
+    """裁剪单条对话消息，按角色登记到对应收集列表。"""
+    text = _history_message_text((msg or {}).get("content"))
+    if not text:
+        return
+    role = str((msg or {}).get("role") or "").strip()
+    timestamp = str((msg or {}).get("timestamp") or "").strip()
+    if role == "user":
+        _collect_user_turn(text, timestamp, user_turns, negative_feedback)
+    elif role == "assistant":
+        _append_assistant_turn(msg, text, timestamp, assistant_turns)
+    elif role == "tool" and _is_history_tool_error_message(text):
+        _collect_tool_error(msg, text, timestamp, tool_errors)
+
+
 def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """裁剪智能问数对话上下文，保留用户意图、反馈和工具错误。"""
     user_turns: List[Dict[str, str]] = []
@@ -143,18 +171,7 @@ def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Di
     tool_errors: List[Dict[str, str]] = []
     negative_feedback: List[str] = []
     for msg in messages or []:
-        role = str((msg or {}).get("role") or "").strip()
-        text = _history_message_text((msg or {}).get("content"))
-        if not text:
-            continue
-        timestamp = str((msg or {}).get("timestamp") or "").strip()
-        if role == "user":
-            _collect_user_turn(text, timestamp, user_turns, negative_feedback)
-        elif role == "assistant":
-            if not (msg or {}).get("tool_calls"):
-                assistant_turns.append({"content": text[:500], "timestamp": timestamp})
-        elif role == "tool" and _is_history_tool_error_message(text):
-            _collect_tool_error(msg, text, timestamp, tool_errors)
+        _compact_one_history_message(msg, user_turns, assistant_turns, tool_errors, negative_feedback)
     return {
         "user_turns": user_turns[-6:],
         "assistant_turns": assistant_turns[-3:],

@@ -580,6 +580,58 @@ async def _run_check_yaml(
 # 合并工具本体
 # ---------------------------------------------------------------------------
 
+async def _run_data_analyzing_impl(
+    action: str,
+    action_payload: dict,
+    state: Annotated[dict | None, InjectedState] | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+    bound_operator_name: str | None,
+    workspace_runtime,
+) -> str:
+    """按 action 分发到对应的 DSL 校验 / 查询执行 / YAML 自检实现。"""
+    payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS[action]
+    payload = payload_model.model_validate(action_payload)
+
+    if action == "validate_dsl":
+        if not bound_datasource_id:
+            raise ValueError("当前会话未绑定数据源")
+        return await _run_validate_dsl(
+            dsl=payload.dsl,
+            semantic_config_id=payload.semantic_config_id,
+            datasource_id=bound_datasource_id,
+            user_id=bound_user_id,
+            operator_name=bound_operator_name,
+        )
+    if action == "validate_dashboard":
+        if not bound_datasource_id:
+            raise ValueError("当前会话未绑定数据源")
+        return await _run_validate_dashboard(
+            dsl=payload.dsl,
+            semantic_config_id=payload.semantic_config_id,
+            datasource_id=bound_datasource_id,
+            user_id=bound_user_id,
+            operator_name=bound_operator_name,
+        )
+    if action == "execute_query":
+        return await _run_execute_query(
+            dsl=payload.dsl,
+            sql=payload.sql,
+            semantic_config_id=payload.semantic_config_id,
+            member_datasource_ids=payload.member_datasource_ids,
+            state=state,
+        )
+    # check_yaml
+    if not bound_datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    return await _run_check_yaml(
+        file_path=payload.file_path,
+        datasource_id=bound_datasource_id,
+        user_id=bound_user_id,
+        workspace_runtime=workspace_runtime,
+    )
+
+
 def create_data_analyzing_tool(
     datasource_id: str | None = None,
     user_id: str | None = None,
@@ -613,45 +665,14 @@ def create_data_analyzing_tool(
         - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS[action]
-        payload = payload_model.model_validate(action_payload)
-
-        if action == "validate_dsl":
-            if not bound_datasource_id:
-                raise ValueError("当前会话未绑定数据源")
-            return await _run_validate_dsl(
-                dsl=payload.dsl,
-                semantic_config_id=payload.semantic_config_id,
-                datasource_id=bound_datasource_id,
-                user_id=bound_user_id,
-                operator_name=bound_operator_name,
-            )
-        if action == "validate_dashboard":
-            if not bound_datasource_id:
-                raise ValueError("当前会话未绑定数据源")
-            return await _run_validate_dashboard(
-                dsl=payload.dsl,
-                semantic_config_id=payload.semantic_config_id,
-                datasource_id=bound_datasource_id,
-                user_id=bound_user_id,
-                operator_name=bound_operator_name,
-            )
-        if action == "execute_query":
-            return await _run_execute_query(
-                dsl=payload.dsl,
-                sql=payload.sql,
-                semantic_config_id=payload.semantic_config_id,
-                member_datasource_ids=payload.member_datasource_ids,
-                state=state,
-            )
-        # check_yaml
-        if not bound_datasource_id:
-            raise ValueError("当前会话未绑定数据源")
-        return await _run_check_yaml(
-            file_path=payload.file_path,
-            datasource_id=bound_datasource_id,
-            user_id=bound_user_id,
-            workspace_runtime=workspace_runtime,
+        return await _run_data_analyzing_impl(
+            action,
+            action_payload,
+            state,
+            bound_datasource_id,
+            bound_user_id,
+            bound_operator_name,
+            workspace_runtime,
         )
 
     return data_analyzing_tool

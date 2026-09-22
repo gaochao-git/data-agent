@@ -77,6 +77,27 @@ async def open_http_client(*, timeout_seconds: float, headers: Optional[Dict[str
         yield client
 
 
+def _apply_timeout_to_node(current: Any, timeout_ms: int, timeout_seconds: int, visited: set[int], stack: list) -> None:
+    """对单个 transport 节点设置 Thrift 超时与 socket 超时，并把子节点压入栈。"""
+    visited.add(id(current))
+    set_timeout = getattr(current, "setTimeout", None)
+    if callable(set_timeout):
+        try:
+            set_timeout(timeout_ms)
+        except Exception as exc:
+            logger.warning("设置 Hive transport 超时失败: %s", exc)
+    handle = getattr(current, "handle", None)
+    if handle is not None and hasattr(handle, "settimeout"):
+        try:
+            handle.settimeout(timeout_seconds)
+        except Exception as exc:
+            logger.warning("设置 Hive socket 超时失败: %s", exc)
+    for attr_name in ("_trans", "_transport", "_sock", "sock", "_TSaslClientTransport__trans"):
+        nested = getattr(current, attr_name, None)
+        if nested is not None:
+            stack.append(nested)
+
+
 def apply_hive_socket_timeout(transport: Any, timeout_seconds: int) -> None:
     """尽量将超时设置到 Thrift 底层 socket。"""
     if timeout_seconds <= 0 or transport is None:
@@ -89,23 +110,7 @@ def apply_hive_socket_timeout(transport: Any, timeout_seconds: int) -> None:
         current = stack.pop()
         if current is None or id(current) in visited:
             continue
-        visited.add(id(current))
-        set_timeout = getattr(current, "setTimeout", None)
-        if callable(set_timeout):
-            try:
-                set_timeout(timeout_ms)
-            except Exception as exc:
-                logger.warning("设置 Hive transport 超时失败: %s", exc)
-        handle = getattr(current, "handle", None)
-        if handle is not None and hasattr(handle, "settimeout"):
-            try:
-                handle.settimeout(timeout_seconds)
-            except Exception as exc:
-                logger.warning("设置 Hive socket 超时失败: %s", exc)
-        for attr_name in ("_trans", "_transport", "_sock", "sock", "_TSaslClientTransport__trans"):
-            nested = getattr(current, attr_name, None)
-            if nested is not None:
-                stack.append(nested)
+        _apply_timeout_to_node(current, timeout_ms, timeout_seconds, visited, stack)
 
 
 def sanitize_source_config(source_config: Dict[str, Any] | None) -> Dict[str, Any]:

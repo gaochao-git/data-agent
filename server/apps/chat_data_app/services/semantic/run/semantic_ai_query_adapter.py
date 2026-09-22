@@ -324,38 +324,65 @@ class SemanticAIQueryAdapter:
             }
         return {"type": "literal", "value": None}
 
+    @staticmethod
+    def _add_having_metric_name(name: Any, seen: set[str], metric_names: List[str]) -> None:
+        """去重登记一个 HAVING 指标名（用于.metrics_map 引用收集）。"""
+        metric_name = str(name or "").strip()
+        if metric_name and metric_name not in seen:
+            seen.add(metric_name)
+            metric_names.append(metric_name)
+
+    @staticmethod
+    def _collect_having_operand(operand: Any, seen: set[str], metric_names: List[str]) -> None:
+        """递归收集 HAVING 操作数树（metric/binary）涉及的指标名。"""
+        if not isinstance(operand, dict):
+            return
+        operand_type = str(operand.get("type") or "").strip().lower()
+        if operand_type == "metric":
+            SemanticAIQueryAdapter._add_having_metric_name(operand.get("name"), seen, metric_names)
+        elif operand_type == "binary":
+            SemanticAIQueryAdapter._collect_having_operand(operand.get("left"), seen, metric_names)
+            SemanticAIQueryAdapter._collect_having_operand(operand.get("right"), seen, metric_names)
+
     def _collect_having_metric_names(self, having: List[Dict[str, Any]]) -> List[str]:
         metric_names: List[str] = []
         seen: set[str] = set()
-
-        def add_metric(name: Any):
-            metric_name = str(name or "").strip()
-            if metric_name and metric_name not in seen:
-                seen.add(metric_name)
-                metric_names.append(metric_name)
-
-        def collect_operand(operand: Any):
-            if not isinstance(operand, dict):
-                return
-            operand_type = str(operand.get("type") or "").strip().lower()
-            if operand_type == "metric":
-                add_metric(operand.get("name"))
-            elif operand_type == "binary":
-                collect_operand(operand.get("left"))
-                collect_operand(operand.get("right"))
-
         for item in having or []:
             if not isinstance(item, dict):
                 continue
-            add_metric(item.get("metric"))
+            self._add_having_metric_name(item.get("metric"), seen, metric_names)
             if self._is_expression_having_node(item):
-                collect_operand(item.get("left"))
-                collect_operand(item.get("right"))
-
+                self._collect_having_operand(item.get("left"), seen, metric_names)
+                self._collect_having_operand(item.get("right"), seen, metric_names)
         return metric_names
 
     def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
         return self.query_plan_context.build_joins(main_table, tables_needed)
+
+    @staticmethod
+    def _resolve_dimension_raw_expression(dim_cfg: Dict[str, Any]) -> str:
+        """维度转 RAW 指标时的表达式：优先 physical expression，缺则按 table.column 拼，再缺则取列名。"""
+        raw_expression = dim_cfg.get("expression")
+        if raw_expression:
+            return raw_expression
+        dim_table = dim_cfg.get("table")
+        dim_column = dim_cfg.get("column")
+        if dim_table and dim_column:
+            return f"{dim_table}.{dim_column}"
+        return dim_column or ""
+
+    def _build_dimension_raw_metric(self, name: str, dim_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """把命中维度的 name 构建成 RAW 指标（用于明细展示）。"""
+        raw_expression = SemanticAIQueryAdapter._resolve_dimension_raw_expression(dim_cfg)
+        return {
+            "name": name,
+            "table": dim_cfg.get("table"),
+            "table_alias": self._table_alias(dim_cfg),
+            "column": dim_cfg.get("column"),
+            "expression": raw_expression,
+            "description": dim_cfg.get("description"),
+            "_from_dimension": True,
+        }
 
     def _normalize_metrics_allow_dimension_raw(self, metrics: List[str]) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """
@@ -373,27 +400,27 @@ class SemanticAIQueryAdapter:
                 normalized_metrics.append({**self._metric_base_cfgs[name], "name": name})
                 continue
             if name in self.dimensions_map:
-                dim_cfg = self.dimensions_map[name]
-                raw_expression = dim_cfg.get("expression")
-                if not raw_expression:
-                    dim_table = dim_cfg.get("table")
-                    dim_column = dim_cfg.get("column")
-                    if dim_table and dim_column:
-                        raw_expression = f"{dim_table}.{dim_column}"
-                    else:
-                        raw_expression = dim_column or ""
-                normalized_metrics.append({
-                    "name": name,
-                    "table": dim_cfg.get("table"),
-                    "table_alias": self._table_alias(dim_cfg),
-                    "column": dim_cfg.get("column"),
-                    "expression": raw_expression,
-                    "description": dim_cfg.get("description"),
-                    "_from_dimension": True,
-                })
+                normalized_metrics.append(self._build_dimension_raw_metric(name, self.dimensions_map[name]))
                 continue
             return [], f"错误：指标 '{name}' 不存在。可用指标：{', '.join(valid_metric_names)}。可用维度：{', '.join(valid_dimension_names)}"
         return normalized_metrics, None
+
+    def _register_table_columns(self, table: Any) -> None:
+        """把单个数据源表结构的列名映射登记进 self.tables_map。"""
+        table_name = table.get('table_name')
+        if not table_name:
+            return
+        columns = table.get('columns', [])
+        self.tables_map[table_name] = {
+            col.get('name'): col for col in columns if col.get('name')
+        }
+
+    def _register_unvalidated_tables(self, entries_key: str) -> None:
+        """从指标/维度条目提取表名登记进 self.tables_map（值为 None 表示不校验字段）。"""
+        for entry in self.semantic_config.get(entries_key, []):
+            table = entry.get('table')
+            if table and table not in self.tables_map:
+                self.tables_map[table] = None
 
     def _build_table_column_map(self):
         """构建表和字段的映射，用于存在性校验"""
@@ -402,24 +429,12 @@ class SemanticAIQueryAdapter:
         # 从数据源的 tables 配置中获取表结构
         tables = self.semantic_config.get('tables', [])
         for table in tables:
-            table_name = table.get('table_name')
-            columns = table.get('columns', [])
-            if table_name:
-                self.tables_map[table_name] = {
-                    col.get('name'): col for col in columns if col.get('name')
-                }
+            self._register_table_columns(table)
 
         # 如果没有 tables 配置，从指标和维度中提取表名（不校验字段）
         if not self.tables_map:
-            for m in self.semantic_config.get('metrics', []):
-                table = m.get('table')
-                if table and table not in self.tables_map:
-                    self.tables_map[table] = None  # None 表示不校验字段
-
-            for d in self.semantic_config.get('dimensions', []):
-                table = d.get('table')
-                if table and table not in self.tables_map:
-                    self.tables_map[table] = None
+            self._register_unvalidated_tables('metrics')
+            self._register_unvalidated_tables('dimensions')
 
     def _validate_table_column(self, table_name: str, column_name: str) -> Optional[str]:
         """
@@ -752,40 +767,44 @@ class SemanticAIQueryAdapter:
             for leaf in self._derived_fixed_leaves.get(name) or []:
                 self._append_filter_nodes_for_builder(plan.builder_filters, leaf)
 
+    def _append_order_by_entry(self, plan: _UnifiedEnginePlan, od: Dict[str, Any]) -> None:
+        """把单个 ORDER BY 条目按指标/维度口径映射为 builder 排序节点。"""
+        field_name = od.get("field")
+        direction = od.get("direction", "DESC")
+        if field_name in self.metrics_map:
+            metric_cfg = self._metric_base_cfgs.get(field_name) or self.metrics_map.get(field_name, {})
+            metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or plan.main_table
+            parsed = metric_func_column(metric_cfg.get("expression"))
+            func = parsed[0] if parsed else "RAW"
+            column = "*"
+            if parsed and parsed[1]:
+                column = parsed[1]
+            elif metric_cfg.get("column"):
+                column = metric_cfg.get("column")
+            plan.builder_order_by.append({
+                "id": f"order-{field_name}",
+                "table": metric_cfg.get("table", plan.main_table),
+                "tableAlias": metric_table_alias,
+                "column": column,
+                "expression": metric_cfg.get("expression"),
+                "direction": direction,
+                "aggFunc": func,
+                "aggId": plan.metric_alias_to_id.get(field_name),
+            })
+        else:
+            dim_cfg = self.dimensions_map.get(field_name, {})
+            dim_table_alias = self._table_alias(dim_cfg) or dim_cfg.get("table") or plan.main_table
+            plan.builder_order_by.append({
+                "id": f"order-{field_name}",
+                "table": dim_cfg.get("table", plan.main_table),
+                "tableAlias": dim_table_alias,
+                "column": dim_cfg.get("column", field_name),
+                "direction": direction,
+            })
+
     def _build_builder_order_by(self, plan: _UnifiedEnginePlan) -> None:
         for od in plan.validated_order_by:
-            field_name = od.get("field")
-            direction = od.get("direction", "DESC")
-            if field_name in self.metrics_map:
-                metric_cfg = self._metric_base_cfgs.get(field_name) or self.metrics_map.get(field_name, {})
-                metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or plan.main_table
-                parsed = metric_func_column(metric_cfg.get("expression"))
-                func = parsed[0] if parsed else "RAW"
-                column = "*"
-                if parsed and parsed[1]:
-                    column = parsed[1]
-                elif metric_cfg.get("column"):
-                    column = metric_cfg.get("column")
-                plan.builder_order_by.append({
-                    "id": f"order-{field_name}",
-                    "table": metric_cfg.get("table", plan.main_table),
-                    "tableAlias": metric_table_alias,
-                    "column": column,
-                    "expression": metric_cfg.get("expression"),
-                    "direction": direction,
-                    "aggFunc": func,
-                    "aggId": plan.metric_alias_to_id.get(field_name),
-                })
-            else:
-                dim_cfg = self.dimensions_map.get(field_name, {})
-                dim_table_alias = self._table_alias(dim_cfg) or dim_cfg.get("table") or plan.main_table
-                plan.builder_order_by.append({
-                    "id": f"order-{field_name}",
-                    "table": dim_cfg.get("table", plan.main_table),
-                    "tableAlias": dim_table_alias,
-                    "column": dim_cfg.get("column", field_name),
-                    "direction": direction,
-                })
+            self._append_order_by_entry(plan, od)
 
     @staticmethod
     def _block_table_alias(block: Dict[str, Any]) -> Optional[str]:
