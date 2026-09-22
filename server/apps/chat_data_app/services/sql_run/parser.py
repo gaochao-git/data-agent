@@ -94,6 +94,16 @@ def _strip_comments_by_scan(sql: str) -> str:
     return "".join(result)
 
 
+def _char_at(text: str, index: int) -> str:
+    """越界安全的单字符取值。"""
+    return text[index] if index < len(text) else ""
+
+
+def _is_validation_block_comment_start(text: str, i: int) -> bool:
+    """判断 i 处是否为块注释起始 ``/*``。"""
+    return text[i] == "/" and _char_at(text, i + 1) == "*"
+
+
 def _is_validation_dash_comment(text: str, index: int, dialect: str) -> bool:
     """按方言判断当前位置是否为校验用 -- 行注释。"""
     next_char = text[index + 1] if index + 1 < len(text) else ""
@@ -128,7 +138,7 @@ def _strip_comments_for_validation(sql: str, source_type: str | None = None) -> 
         if char == "#" and dialect == "mysql":
             i = _consume_validation_line_comment(text, i, search_offset=1, result=result)
             continue
-        if char == "/" and (text[i + 1] if i + 1 < len(text) else "") == "*":
+        if _is_validation_block_comment_start(text, i):
             i = _consume_validation_block_comment(text, i, result)
             continue
         result.append(char)

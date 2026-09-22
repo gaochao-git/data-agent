@@ -866,6 +866,40 @@ class _SubagentStreamState:
                 new_messages.append(message)
 
 
+def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dict[str, int]:
+    """按静态口径+已收集消息估算当前子图上下文用量快照。"""
+    used = usage_meta["static_tokens"] + count_messages_tokens(collected)
+    return {
+        "used_tokens": used,
+        "threshold_tokens": usage_meta["threshold_tokens"],
+        "percent": min(int(used * 100 / max(usage_meta["threshold_tokens"], 1)), 999),
+    }
+
+
+def _process_subagent_chunk(chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None) -> bool:
+    """消费单个子图流 chunk：messages 模式转发增量、updates 模式发工具生命周期事件。
+
+    返回是否为 updates 模式（调用方据此推送 subagent_context_usage）。
+    """
+    if not (isinstance(chunk, tuple) and len(chunk) == 2):
+        return False
+    mode, payload = chunk
+    if mode == "messages":
+        if isinstance(payload, tuple) and len(payload) == 2:
+            stream_state.emit_messages_chunk(payload[0], writer)
+        return False
+    if mode != "updates" or not isinstance(payload, dict):
+        return False
+    new_messages = stream_state.collect_update_messages(payload)
+    for event in _iter_subagent_stream_events(
+        new_messages, parent_tool_call_id,
+        stream_state.streamed_text_ids, stream_state.streamed_think_ids,
+        stream_state.resolve_anonymous_id,
+    ):
+        _emit_subagent_tool_event(writer, event)
+    return True
+
+
 async def _run_subagent_with_events(
     runnable: Any,
     state: dict[str, Any],
@@ -907,12 +941,7 @@ async def _run_subagent_with_events(
     def _emit_context_usage(*, emit: bool = True) -> dict[str, int] | None:
         if usage_meta is None:
             return None
-        used = usage_meta["static_tokens"] + count_messages_tokens(stream_state.collected)
-        usage = {
-            "used_tokens": used,
-            "threshold_tokens": usage_meta["threshold_tokens"],
-            "percent": min(int(used * 100 / max(usage_meta["threshold_tokens"], 1)), 999),
-        }
+        usage = _subagent_usage_snapshot(usage_meta, stream_state.collected)
         if emit:
             _emit_subagent_tool_event(writer, {
                 "event_type": "subagent_context_usage",
@@ -923,23 +952,8 @@ async def _run_subagent_with_events(
 
     try:
         async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
-            if not (isinstance(chunk, tuple) and len(chunk) == 2):
-                continue
-            mode, payload = chunk
-            if mode == "messages":
-                if isinstance(payload, tuple) and len(payload) == 2:
-                    stream_state.emit_messages_chunk(payload[0], writer)
-                continue
-            if mode != "updates" or not isinstance(payload, dict):
-                continue
-            new_messages = stream_state.collect_update_messages(payload)
-            for event in _iter_subagent_stream_events(
-                new_messages, parent_tool_call_id,
-                stream_state.streamed_text_ids, stream_state.streamed_think_ids,
-                stream_state.resolve_anonymous_id,
-            ):
-                _emit_subagent_tool_event(writer, event)
-            _emit_context_usage()
+            if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
+                _emit_context_usage()
     finally:
         # 用量只重算不外发（直播期最后一次已随节点更新发出，避免重复事件），
         # 异常路径同样交给调用方（失败 ToolMessage 也带用量快照）。

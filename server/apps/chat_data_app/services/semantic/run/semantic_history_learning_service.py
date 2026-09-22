@@ -66,6 +66,11 @@ def _extract_history_task_conversation_id(payload: Dict[str, Any]) -> str:
     return str((payload or {}).get("conversation_id") or "").strip()
 
 
+def _history_row_query_type(task: Any) -> str:
+    """取学习样本行的查询类型（任务缺失时回退空串），统一小写去空白。"""
+    return str((task.query_type if task else "") or "").strip().lower()
+
+
 def _history_message_text(content: Any) -> str:
     """提取对话消息可读文本。"""
     if isinstance(content, str):
@@ -747,7 +752,7 @@ class SemanticHistoryLearningService:
         context_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         for execution, task in rows:
             task_payload = _parse_json_object(task.request_payload if task else None)
-            query_type = str((task.query_type if task else "") or "").strip().lower()
+            query_type = _history_row_query_type(task)
             if not self._should_consider_source(query_type, source_set, skipped, source_stats):
                 continue
             matched, skip_reason, history_tables, skip_detail = self.history_matcher(

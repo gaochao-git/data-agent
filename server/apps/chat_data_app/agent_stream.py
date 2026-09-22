@@ -832,37 +832,9 @@ class _AgentSseStreamAdapter:
             yield self._queued_events.pop(0)
         started_at = time.perf_counter()
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
-        stream_started = False
         try:
-            async for event in self.agent.astream(
-                self.initial_state,
-                config=self.config,
-                stream_mode=["messages", "custom"],
-            ):
-                if not stream_started:
-                    stream_started = True
-                    self.graph_started = True
-                    if self.on_stream_started:
-                        await self.on_stream_started()
-                if await self._handle_disconnect():
-                    return
-
-                event_kind, payload = self._parse_stream_event(event)
-                if event_kind == "custom":
-                    for sse_event in self._handle_custom_payload(payload):
-                        yield sse_event
-                    continue
-                if event_kind != "messages":
-                    continue
-
-                message_chunk, metadata = payload
-                if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
-                    continue
-                if self._has_visible_payload(message_chunk):
-                    self._record_first_visible_payload(started_at)
-
-                async for sse_event in self._handle_message_chunk(message_chunk, metadata):
-                    yield sse_event
+            async for sse_event in self._iter_agent_stream_events(started_at):
+                yield sse_event
         except Exception as exc:
             if not self._first_visible_payload_seen:
                 self._emit_first_token_timeout_if_needed(started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)})
@@ -876,6 +848,47 @@ class _AgentSseStreamAdapter:
             timeout_task.cancel()
             with suppress(asyncio.CancelledError):
                 await timeout_task
+
+    async def _iter_agent_stream_events(self, started_at: float):
+        """消费 agent.astream 原始事件流并转成 SSE 事件；客户端断开时提前结束。"""
+        stream_started = False
+        async for event in self.agent.astream(
+            self.initial_state,
+            config=self.config,
+            stream_mode=["messages", "custom"],
+        ):
+            if not stream_started:
+                stream_started = True
+                await self._mark_stream_started()
+            if await self._handle_disconnect():
+                return
+
+            event_kind, payload = self._parse_stream_event(event)
+            if event_kind == "custom":
+                for sse_event in self._handle_custom_payload(payload):
+                    yield sse_event
+                continue
+            if event_kind != "messages":
+                continue
+
+            message_chunk, metadata = payload
+            async for sse_event in self._iter_message_chunk_events(message_chunk, metadata, started_at):
+                yield sse_event
+
+    async def _mark_stream_started(self) -> None:
+        """流首个事件到达：置位标记并触发外部回调（仅一次）。"""
+        self.graph_started = True
+        if self.on_stream_started:
+            await self.on_stream_started()
+
+    async def _iter_message_chunk_events(self, message_chunk: Any, metadata: Any, started_at: float):
+        """按可见性过滤并处理单个消息 chunk，产出 SSE 事件。"""
+        if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
+            return
+        if self._has_visible_payload(message_chunk):
+            self._record_first_visible_payload(started_at)
+        async for sse_event in self._handle_message_chunk(message_chunk, metadata):
+            yield sse_event
 
     async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
         """读取最终状态并构造 message_end payload。"""
