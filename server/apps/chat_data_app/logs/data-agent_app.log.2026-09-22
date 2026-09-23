@@ -1,0 +1,425 @@
+2026-09-22 18:10:49.628|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.629|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.630|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.642|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.642|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:10:49.645|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.646|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.647|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.649|WARNING|8620958272|-|unknown|172.20.10.2|loader.py|loader|107|忽略目录名与 manifest.name 不一致的插件: dir=other-name manifest=ops-readonly
+2026-09-22 18:10:49.651|ERROR|8620958272|-|unknown|172.20.10.2|loader.py|loader|83|刷新插件启停状态失败，本轮所有插件按不可用处理: db down
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/plugins/loader.py", line 81, in refresh_plugin_state
+    _enabled_state = frozenset(await PluginDao().list_enabled_names())
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 273, in list_enabled_names
+    raise RuntimeError("db down")
+RuntimeError: db down
+2026-09-22 18:10:49.653|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.655|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.655|ERROR|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|78|插件安装写库失败，已回滚解包目录: ops-readonly
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/services/plugin_service.py", line 64, in install_plugin
+    await PluginDao().upsert_installed(
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 316, in upsert_installed
+    raise RuntimeError("db write failed")
+RuntimeError: db write failed
+2026-09-22 18:10:49.659|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.659|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:10:49.724|INFO|13431107584|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.727|INFO|13431107584|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:10:49.730|INFO|13431107584|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:10:49.740|INFO|13431107584|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=mcp-plugin version=1.0.0
+2026-09-22 18:10:49.742|INFO|13431107584|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=mcp-plugin
+2026-09-22 18:11:19.046|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.048|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.050|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.062|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.063|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:11:19.066|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.068|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.069|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.071|WARNING|8620958272|-|unknown|172.20.10.2|loader.py|loader|107|忽略目录名与 manifest.name 不一致的插件: dir=other-name manifest=ops-readonly
+2026-09-22 18:11:19.074|ERROR|8620958272|-|unknown|172.20.10.2|loader.py|loader|83|刷新插件启停状态失败，本轮所有插件按不可用处理: db down
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/plugins/loader.py", line 81, in refresh_plugin_state
+    _enabled_state = frozenset(await PluginDao().list_enabled_names())
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 273, in list_enabled_names
+    raise RuntimeError("db down")
+RuntimeError: db down
+2026-09-22 18:11:19.077|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.079|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.080|ERROR|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|78|插件安装写库失败，已回滚解包目录: ops-readonly
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/services/plugin_service.py", line 64, in install_plugin
+    await PluginDao().upsert_installed(
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 316, in upsert_installed
+    raise RuntimeError("db write failed")
+RuntimeError: db write failed
+2026-09-22 18:11:19.084|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.084|INFO|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|119|插件半装态自愈：已补建 DB 行 name=ops-readonly version=1.0.0 enabled=True
+2026-09-22 18:11:19.087|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.088|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:11:19.142|INFO|13658796032|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.145|INFO|13658796032|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:11:19.149|INFO|13658796032|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:11:19.158|INFO|13658796032|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=mcp-plugin version=1.0.0
+2026-09-22 18:11:19.159|INFO|13658796032|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=mcp-plugin
+2026-09-22 18:22:25.462|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.463|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.465|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.479|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.480|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:22:25.482|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.484|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.486|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.487|WARNING|8620958272|-|unknown|172.20.10.2|loader.py|loader|107|忽略目录名与 manifest.name 不一致的插件: dir=other-name manifest=ops-readonly
+2026-09-22 18:22:25.489|ERROR|8620958272|-|unknown|172.20.10.2|loader.py|loader|83|刷新插件启停状态失败，本轮所有插件按不可用处理: db down
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/plugins/loader.py", line 81, in refresh_plugin_state
+    _enabled_state = frozenset(await PluginDao().list_enabled_names())
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 273, in list_enabled_names
+    raise RuntimeError("db down")
+RuntimeError: db down
+2026-09-22 18:22:25.492|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.494|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.494|ERROR|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|98|插件安装写库失败，已回滚解包目录: ops-readonly
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/services/plugin_service.py", line 84, in install_plugin
+    await PluginDao().upsert_installed(
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 316, in upsert_installed
+    raise RuntimeError("db write failed")
+RuntimeError: db write failed
+2026-09-22 18:22:25.497|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.497|INFO|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|139|插件半装态自愈：已补建 DB 行 name=ops-readonly version=1.0.0 enabled=True
+2026-09-22 18:22:25.500|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.501|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:22:25.502|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.596|INFO|13415395328|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.597|WARNING|13415395328|-|unknown|172.20.10.2|plugin_service.py|plugin_service|64|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:22:25.598|WARNING|13415395328|-|unknown|172.20.10.2|plugin_service.py|plugin_service|64|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:22:25.599|INFO|13415395328|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:22:25.603|INFO|13415395328|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:22:25.612|INFO|13415395328|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=mcp-plugin version=1.0.0
+2026-09-22 18:22:25.613|INFO|13415395328|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=mcp-plugin
+2026-09-22 18:24:46.040|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.042|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.043|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.058|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.058|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:24:46.060|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.061|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.063|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.063|WARNING|8620958272|-|unknown|172.20.10.2|loader.py|loader|107|忽略目录名与 manifest.name 不一致的插件: dir=other-name manifest=ops-readonly
+2026-09-22 18:24:46.066|ERROR|8620958272|-|unknown|172.20.10.2|loader.py|loader|83|刷新插件启停状态失败，本轮所有插件按不可用处理: db down
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/plugins/loader.py", line 81, in refresh_plugin_state
+    _enabled_state = frozenset(await PluginDao().list_enabled_names())
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 273, in list_enabled_names
+    raise RuntimeError("db down")
+RuntimeError: db down
+2026-09-22 18:24:46.069|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.072|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.072|ERROR|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|101|插件安装写库失败，已回滚解包目录: ops-readonly
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/services/plugin_service.py", line 87, in install_plugin
+    await PluginDao().upsert_installed(
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 316, in upsert_installed
+    raise RuntimeError("db write failed")
+RuntimeError: db write failed
+2026-09-22 18:24:46.077|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.077|INFO|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|142|插件半装态自愈：已补建 DB 行 name=ops-readonly version=1.0.0 enabled=True
+2026-09-22 18:24:46.081|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.082|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:24:46.083|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.250|INFO|13707014144|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.251|WARNING|13707014144|-|unknown|172.20.10.2|plugin_service.py|plugin_service|65|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:24:46.252|WARNING|13707014144|-|unknown|172.20.10.2|plugin_service.py|plugin_service|65|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:24:46.253|INFO|13707014144|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:24:46.256|INFO|13707014144|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:24:46.266|INFO|13707014144|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=mcp-plugin version=1.0.0
+2026-09-22 18:24:46.267|INFO|13707014144|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=mcp-plugin
+2026-09-22 18:25:04.291|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.293|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.295|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.307|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.307|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:25:04.309|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.311|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.312|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.313|WARNING|8620958272|-|unknown|172.20.10.2|loader.py|loader|107|忽略目录名与 manifest.name 不一致的插件: dir=other-name manifest=ops-readonly
+2026-09-22 18:25:04.316|ERROR|8620958272|-|unknown|172.20.10.2|loader.py|loader|83|刷新插件启停状态失败，本轮所有插件按不可用处理: db down
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/plugins/loader.py", line 81, in refresh_plugin_state
+    _enabled_state = frozenset(await PluginDao().list_enabled_names())
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 273, in list_enabled_names
+    raise RuntimeError("db down")
+RuntimeError: db down
+2026-09-22 18:25:04.318|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.320|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.320|ERROR|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|101|插件安装写库失败，已回滚解包目录: ops-readonly
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/services/plugin_service.py", line 87, in install_plugin
+    await PluginDao().upsert_installed(
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_plugins.py", line 316, in upsert_installed
+    raise RuntimeError("db write failed")
+RuntimeError: db write failed
+2026-09-22 18:25:04.323|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.324|INFO|8620958272|-|unknown|172.20.10.2|plugin_service.py|plugin_service|142|插件半装态自愈：已补建 DB 行 name=ops-readonly version=1.0.0 enabled=True
+2026-09-22 18:25:04.326|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.326|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:25:04.328|INFO|8620958272|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.380|INFO|13549613056|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.381|WARNING|13549613056|-|unknown|172.20.10.2|plugin_service.py|plugin_service|65|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:25:04.382|WARNING|13549613056|-|unknown|172.20.10.2|plugin_service.py|plugin_service|65|读取插件审计字段失败，列表将不展示创建人/创建时间: '_FakeDao' object has no attribute 'list_active'
+2026-09-22 18:25:04.383|INFO|13549613056|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=ops-readonly
+2026-09-22 18:25:04.387|INFO|13549613056|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=ops-readonly version=1.0.0
+2026-09-22 18:25:04.397|INFO|13549613056|-|unknown|172.20.10.2|installer.py|installer|154|插件安装成功: name=mcp-plugin version=1.0.0
+2026-09-22 18:25:04.398|INFO|13549613056|-|unknown|172.20.10.2|installer.py|installer|168|插件已卸载: name=mcp-plugin
+2026-09-22 19:15:25.774|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.775|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.777|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: outside graph context
+2026-09-22 19:15:25.811|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.812|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.814|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.815|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.816|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1166|[tools] 子智能体执行异常: Recursion limit of 40 reached without hitting a stop condition.
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1151, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 996, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 736, in astream
+    raise RuntimeError("Recursion limit of 40 reached without hitting a stop condition.")
+RuntimeError: Recursion limit of 40 reached without hitting a stop condition.
+2026-09-22 19:15:25.818|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.818|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1166|[tools] 子智能体执行异常: 模型连接失败
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1151, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 996, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 761, in astream
+    raise RuntimeError("模型连接失败")
+RuntimeError: 模型连接失败
+2026-09-22 19:15:25.831|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.837|INFO|8620958272|-|unknown|172.20.10.2|tool_result.py|tool_result|119|查询工具结果已保存: result_id=bb3ab023-31fd-45c0-9d7e-880ebc3d99fc size_chars=194 rows=1
+2026-09-22 19:15:25.846|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1146|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:15:25.850|WARNING|8620958272|-|unknown|172.20.10.2|agent_runtime.py|agent_runtime|91|[tools] [broken_tool] 工具执行失败(预期校验错误): 当前会话未绑定数据源
+2026-09-22 19:15:25.854|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:15:25.855|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:15:25.863|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=353 threshold=100 percent=353%
+2026-09-22 19:15:40.553|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.555|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.556|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.558|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.560|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.582|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=28903 after_tokens=49 threshold_tokens=10 compressed_messages=12
+2026-09-22 19:15:40.594|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=13282 after_tokens=6695 threshold_tokens=10 compressed_messages=2
+2026-09-22 19:15:40.599|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|103|[agent] 上下文压缩：工具结果外置已达标，跳过摘要 before_tokens=8326 after_tokens=197 threshold_tokens=10 referenced_tool_results=2
+2026-09-22 19:15:40.615|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|531|生成上下文摘要失败，改用硬上限确定性收缩
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/context_compression.py", line 523, in _summarize_for_compression
+    return str(await summarizer(summary_messages) or "").strip(), input_report
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_chat_data_agent_middleware.py", line 427, in fail_summary
+    raise RuntimeError("summary unavailable")
+RuntimeError: summary unavailable
+2026-09-22 19:15:40.616|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|177|[agent] 上下文压缩摘要为空，确定性收缩兜底（empty_summary，摘要输入不可用=False） before_tokens=3071 working_tokens=3071 threshold_tokens=10
+2026-09-22 19:15:40.629|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=19274 after_tokens=52 threshold_tokens=10 compressed_messages=8
+2026-09-22 19:15:40.631|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=65 after_tokens=49 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:15:40.633|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=62 after_tokens=49 threshold_tokens=28 compressed_messages=2
+2026-09-22 19:15:40.658|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=52055 after_tokens=49 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:15:40.682|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=22557 after_tokens=48 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:15:40.704|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=1955 after_tokens=81 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:15:40.705|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:15:40.705|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:15:40.708|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075740708 ended_at_ms=1790075740708 duration_ms=0 input_tokens=10551 output_tokens=None
+2026-09-22 19:15:40.709|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:15:40.709|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:15:40.709|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075740709 ended_at_ms=1790075740709 duration_ms=0 input_tokens=65 output_tokens=None
+2026-09-22 19:15:40.710|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:15:40.711|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:15:40.711|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:15:40.711|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:15:40.711|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:15:40.712|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075740711 ended_at_ms=1790075740712 duration_ms=1 input_tokens=31 output_tokens=None
+2026-09-22 19:15:40.712|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:15:40.713|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:15:40.713|WARNING|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|86|[agent] 模型调用失败: index=1 model=bad_model started_at_ms=1790075740713 duration_ms=0 error=模型不可用
+2026-09-22 19:16:24.289|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.291|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.293|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: outside graph context
+2026-09-22 19:16:24.314|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.315|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.316|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.317|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.317|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 子智能体执行异常: Recursion limit of 40 reached without hitting a stop condition.
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1156, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1001, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 736, in astream
+    raise RuntimeError("Recursion limit of 40 reached without hitting a stop condition.")
+RuntimeError: Recursion limit of 40 reached without hitting a stop condition.
+2026-09-22 19:16:24.318|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.318|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 子智能体执行异常: 模型连接失败
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1156, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1001, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 761, in astream
+    raise RuntimeError("模型连接失败")
+RuntimeError: 模型连接失败
+2026-09-22 19:16:24.330|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.336|INFO|8620958272|-|unknown|172.20.10.2|tool_result.py|tool_result|119|查询工具结果已保存: result_id=f177d067-88cb-4a4b-bbc8-59687e8b8cfe size_chars=194 rows=1
+2026-09-22 19:16:24.345|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1151|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:16:24.348|WARNING|8620958272|-|unknown|172.20.10.2|agent_runtime.py|agent_runtime|91|[tools] [broken_tool] 工具执行失败(预期校验错误): 当前会话未绑定数据源
+2026-09-22 19:16:24.352|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:16:24.352|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:16:24.360|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|347|[subagent] 预算提示注入 spec=data-explore used=353 threshold=100 percent=353%
+2026-09-22 19:16:24.407|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.408|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.409|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.411|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.412|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.434|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=28903 after_tokens=49 threshold_tokens=10 compressed_messages=12
+2026-09-22 19:16:24.445|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=13282 after_tokens=6695 threshold_tokens=10 compressed_messages=2
+2026-09-22 19:16:24.450|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|103|[agent] 上下文压缩：工具结果外置已达标，跳过摘要 before_tokens=8326 after_tokens=197 threshold_tokens=10 referenced_tool_results=2
+2026-09-22 19:16:24.465|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|531|生成上下文摘要失败，改用硬上限确定性收缩
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/context_compression.py", line 523, in _summarize_for_compression
+    return str(await summarizer(summary_messages) or "").strip(), input_report
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_chat_data_agent_middleware.py", line 427, in fail_summary
+    raise RuntimeError("summary unavailable")
+RuntimeError: summary unavailable
+2026-09-22 19:16:24.467|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|177|[agent] 上下文压缩摘要为空，确定性收缩兜底（empty_summary，摘要输入不可用=False） before_tokens=3071 working_tokens=3071 threshold_tokens=10
+2026-09-22 19:16:24.480|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=19274 after_tokens=52 threshold_tokens=10 compressed_messages=8
+2026-09-22 19:16:24.482|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=65 after_tokens=49 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:16:24.484|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=62 after_tokens=49 threshold_tokens=28 compressed_messages=2
+2026-09-22 19:16:24.507|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=52055 after_tokens=49 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:16:24.530|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=22557 after_tokens=48 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:16:24.552|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=1955 after_tokens=81 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:16:24.553|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:16:24.553|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:16:24.555|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075784555 ended_at_ms=1790075784555 duration_ms=0 input_tokens=10551 output_tokens=None
+2026-09-22 19:16:24.557|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:16:24.557|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:16:24.557|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075784557 ended_at_ms=1790075784557 duration_ms=0 input_tokens=65 output_tokens=None
+2026-09-22 19:16:24.558|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:16:24.559|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:16:24.559|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:16:24.559|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:16:24.559|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:16:24.559|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790075784559 ended_at_ms=1790075784559 duration_ms=0 input_tokens=31 output_tokens=None
+2026-09-22 19:16:24.560|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:16:24.560|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:16:24.560|WARNING|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|86|[agent] 模型调用失败: index=1 model=bad_model started_at_ms=1790075784560 duration_ms=0 error=模型不可用
+2026-09-22 19:36:42.039|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.041|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.045|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: outside graph context
+2026-09-22 19:36:42.068|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.070|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.071|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.071|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.072|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1195|[tools] 子智能体执行异常: Recursion limit of 40 reached without hitting a stop condition.
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1178, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1023, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 769, in astream
+    raise RuntimeError("Recursion limit of 40 reached without hitting a stop condition.")
+RuntimeError: Recursion limit of 40 reached without hitting a stop condition.
+2026-09-22 19:36:42.073|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.073|ERROR|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1195|[tools] 子智能体执行异常: 模型连接失败
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1178, in _build_task_tool_impl
+    messages = await _run_subagent_with_events(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/subagents.py", line 1023, in _run_subagent_with_events
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_subagents_middleware.py", line 794, in astream
+    raise RuntimeError("模型连接失败")
+RuntimeError: 模型连接失败
+2026-09-22 19:36:42.085|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.093|INFO|8620958272|-|unknown|172.20.10.2|tool_result.py|tool_result|119|查询工具结果已保存: result_id=5552a49f-0b8f-49fa-8ad7-99960f767d26 size_chars=194 rows=1
+2026-09-22 19:36:42.102|WARNING|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|1173|[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: Called get_config outside of a runnable context
+2026-09-22 19:36:42.106|WARNING|8620958272|-|unknown|172.20.10.2|agent_runtime.py|agent_runtime|91|[tools] [broken_tool] 工具执行失败(预期校验错误): 当前会话未绑定数据源
+2026-09-22 19:36:42.111|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|355|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:36:42.112|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|355|[subagent] 预算提示注入 spec=data-explore used=1514 threshold=100 percent=999%
+2026-09-22 19:36:42.122|INFO|8620958272|-|unknown|172.20.10.2|subagents.py|subagents|355|[subagent] 预算提示注入 spec=data-explore used=353 threshold=100 percent=353%
+2026-09-22 19:36:42.176|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.176|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.178|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.180|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.181|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.204|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=28903 after_tokens=49 threshold_tokens=10 compressed_messages=12
+2026-09-22 19:36:42.215|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=13282 after_tokens=6695 threshold_tokens=10 compressed_messages=2
+2026-09-22 19:36:42.221|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|103|[agent] 上下文压缩：工具结果外置已达标，跳过摘要 before_tokens=8326 after_tokens=197 threshold_tokens=10 referenced_tool_results=2
+2026-09-22 19:36:42.239|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|531|生成上下文摘要失败，改用硬上限确定性收缩
+Traceback (most recent call last):
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/agent/middleware/context_compression.py", line 523, in _summarize_for_compression
+    return str(await summarizer(summary_messages) or "").strip(), input_report
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gaochao/work/git_repo/data-agent/server/apps/chat_data_app/tests/unit/test_chat_data_agent_middleware.py", line 427, in fail_summary
+    raise RuntimeError("summary unavailable")
+RuntimeError: summary unavailable
+2026-09-22 19:36:42.241|WARNING|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|177|[agent] 上下文压缩摘要为空，确定性收缩兜底（empty_summary，摘要输入不可用=False） before_tokens=3071 working_tokens=3071 threshold_tokens=10
+2026-09-22 19:36:42.256|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=19274 after_tokens=52 threshold_tokens=10 compressed_messages=8
+2026-09-22 19:36:42.259|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=65 after_tokens=49 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:36:42.261|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=62 after_tokens=49 threshold_tokens=28 compressed_messages=2
+2026-09-22 19:36:42.286|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=52055 after_tokens=49 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:36:42.311|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=22557 after_tokens=48 threshold_tokens=1 compressed_messages=4
+2026-09-22 19:36:42.334|INFO|8620958272|-|unknown|172.20.10.2|context_compression.py|context_compression|215|[agent] 上下文压缩已执行: before_tokens=1955 after_tokens=81 threshold_tokens=1 compressed_messages=2
+2026-09-22 19:36:42.335|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:36:42.335|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:36:42.338|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790077002338 ended_at_ms=1790077002338 duration_ms=0 input_tokens=10551 output_tokens=None
+2026-09-22 19:36:42.339|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:36:42.339|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:36:42.339|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790077002339 ended_at_ms=1790077002339 duration_ms=0 input_tokens=65 output_tokens=None
+2026-09-22 19:36:42.340|WARNING|8620958272|-|unknown|172.20.10.2|tool_call_normalizer.py|tool_call_normalizer|74|已归一化模型返回的工具调用（重复名称/字符串参数），避免下游解析与执行异常
+2026-09-22 19:36:42.342|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:36:42.343|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:36:42.343|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:36:42.343|WARNING|8620958272|-|unknown|172.20.10.2|context_budget.py|context_budget|130|工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=file_read error=Unsupported function
+
+namespace(name='file_read')
+
+Functions must be passed in as Dict, pydantic.BaseModel, or Callable. If they're a dict they must either be in OpenAI function format or valid JSON schema with top-level 'title' key.
+2026-09-22 19:36:42.343|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|104|[agent] 模型调用完成: index=1 model=fake-model started_at_ms=1790077002343 ended_at_ms=1790077002343 duration_ms=0 input_tokens=31 output_tokens=None
+2026-09-22 19:36:42.344|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|58|Agent 处理用户请求
+2026-09-22 19:36:42.344|INFO|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|61|[agent] system_prompt 长度: 9 字符
+2026-09-22 19:36:42.345|WARNING|8620958272|-|unknown|172.20.10.2|context_usage.py|context_usage|86|[agent] 模型调用失败: index=1 model=bad_model started_at_ms=1790077002345 duration_ms=0 error=模型不可用

@@ -94,8 +94,12 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发一个隔离上下文的子智能体�
   不适合派发：已知位置的单点查询、需要向用户提问或展示中间过程的步骤——直接自己做。
 - 已派发的任务不要自己重复执行，等回传结果；回传不理想时先分析原因再决定补派，
   不要原样重发同一个任务书。
-- 子智能体看不到 available_skills 技能清单：任务与本轮可用技能（尤其用户自定义技能）
-  相关时，任务书必须写明技能名称与 skill_file 路径，否则子智能体无从读取。
+- 子智能体同样看得到会话技能清单（<available_skills>），但看不到主对话历史：
+  任务与本轮技能（尤其用户自定义技能）直接相关时，任务书仍应写明技能名称与
+  skill_file 路径，帮助子智能体选对技能、不走偏。
+- 子智能体同样看得到数据上下文（数据源组说明与已选执行对象清单），查询类任务
+  的 member_datasource_ids 优先按清单选择；任务只涉及其中部分成员时，任务书仍应
+  写明本次限定范围，避免子智能体扩大查询口径。
 - 大块背景事实（盘点结果、此前查询结论、长段分析等）必须先落盘：用 file_write 写入
   workspace，任务书里给文件路径让子智能体自己读取；只存在于对话中、没写进文件的信息
   子智能体拿不到，禁止在任务书里写"已完成 XX"却不给落盘路径。
@@ -157,6 +161,15 @@ class SubagentSpec:
     system_prompt: str
     tools: list = field(default_factory=list)
     model: Any = None
+    # 主智能体同一会话的技能清单（<available_skills> XML，format_skills_prompt 产物）。
+    # 与主智能体保持一致继承：子图 system prompt 由此注入目录段，正文仍按需
+    # file_read /mnt/skills/<name>/SKILL.md；空串或空目录时不注入。
+    available_skills_xml: str = ""
+    # 主智能体同一会话的数据源组上下文（datasource_group_context，含「当前用户
+    # 已选择的执行对象数据源」成员清单）。data_analyzing_tool 要求模型显式传
+    # member_datasource_ids 且服务端不做默认兜底，子图不注入清单则查询派发
+    # 必然报「缺少 member_datasource_ids」；与主图同源注入消除这层记忆依赖。
+    datasource_group_context: str = ""
     # 预算告警的口径来源：默认与主图同一 model_id，取同一 ContextBudget 的压缩触发
     # 阈值作为「上下文将尽」的告警线（与主图同源）；压测/调试可用
     # CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 单独覆盖子图告警线
@@ -292,7 +305,12 @@ _SUBAGENT_BUDGET_ALERT_PROMPT = """## 上下文预算提示
 只汇报事实，不要替主智能体决定后续安排；收尾本身比多收集一条事实更重要。"""
 
 
-def create_subagent_budget_alert_middleware(spec: SubagentSpec, tools: list) -> AgentMiddleware:
+def create_subagent_budget_alert_middleware(
+    spec: SubagentSpec,
+    tools: list,
+    *,
+    system_prompt: str | None = None,
+) -> AgentMiddleware:
     """子图预算软约束中间件：上下文逼近上限时注入「提前收尾」提示。
 
     演进结论（2026-09-20 实测 → 09-21 双阈值试验 → 当日回归纯软约束）：
@@ -317,7 +335,7 @@ def create_subagent_budget_alert_middleware(spec: SubagentSpec, tools: list) -> 
     前插进每次请求（与主图 ``ContextUsageMiddleware`` 同语义），且预算计数
     必须包含摘要 tokens，否则告警线漏算。只改当轮请求，不写 state、不落 checkpoint。
     """
-    meta = _subagent_budget_meta(spec, tools)
+    meta = _subagent_budget_meta(spec, tools, system_prompt=system_prompt)
     static_tokens = meta["static_tokens"]
     threshold = meta["threshold_tokens"]
 
@@ -371,7 +389,45 @@ def _request_subagent_context_summary(request: Any) -> str | None:
     return summary or None
 
 
-def _subagent_budget_meta(spec: SubagentSpec, tools: list) -> dict[str, int]:
+# 子图技能目录段的引导语与 XML 拼装：目录与主智能体同一份 <available_skills>，
+# 正文消费方式一致（file_read SKILL.md）。仅当目录非空时注入。
+_SUBAGENT_SKILLS_SECTION_TEMPLATE = """## 可用技能
+以下技能清单与主智能体共享同一会话快照；任务与技能相关时，先 `file_read` 对应
+SKILL.md 并严格按其执行：
+{skills_xml}"""
+
+# 子图数据上下文段：与主智能体同一份 datasource_group_context（数据源组问数
+# 说明 + 当前已选执行对象成员清单）。data_analyzing_tool 的查询动作要求模型
+# 显式传 member_datasource_ids（服务端只校验不兜底），清单不进子图提示词
+# 则子智能体无从得知合法 ID。仅当内容非空时注入。
+_SUBAGENT_DATASOURCE_SECTION_TEMPLATE = """## 数据上下文
+以下数据源组说明与执行对象清单与主智能体共享同一会话口径；查询类动作必须
+只使用清单中的 member_datasource_ids，不要使用清单之外的 ID：
+{datasource_context}"""
+
+
+def _subagent_system_prompt(spec: SubagentSpec) -> str:
+    """返回子图实际生效的 system prompt：spec.system_prompt + 会话级共享段。
+
+    共享段包括技能目录（``<available_skills>``，与主图同源）与数据源组上下文
+    （成员清单，与主图同源）；各自为空（未传或本轮无内容）时不追加空块。
+    """
+    prompt = spec.system_prompt
+    xml = str(spec.available_skills_xml or "").strip()
+    if "<skill>" in xml:
+        prompt += "\n\n" + _SUBAGENT_SKILLS_SECTION_TEMPLATE.format(skills_xml=xml)
+    context = str(spec.datasource_group_context or "").strip()
+    if context:
+        prompt += "\n\n" + _SUBAGENT_DATASOURCE_SECTION_TEMPLATE.format(datasource_context=context)
+    return prompt
+
+
+def _subagent_budget_meta(
+    spec: SubagentSpec,
+    tools: list,
+    *,
+    system_prompt: str | None = None,
+) -> dict[str, int]:
     """子图预算告警的公共口径：静态 token（system+tools）与告警阈值。
 
     预算告警中间件（决定何时注入收尾提示）与 ``subagent_context_usage``
@@ -379,6 +435,8 @@ def _subagent_budget_meta(spec: SubagentSpec, tools: list) -> dict[str, int]:
     永远一致；阈值覆盖 env 只在这里生效一处。默认与压缩线同源（同一
     ``ContextBudget.compression_trigger_tokens``）；覆盖 env 用窗口比例口径
     （窗口 × 比例，clamp 到硬限），换模型窗口后配置不失真。
+    ``system_prompt`` 传入增强后的实际 system prompt（含技能目录段），缺省用
+    spec.system_prompt。
     """
     budget = get_model_context_budget(spec.model_id)
     if SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO is not None:
@@ -389,15 +447,21 @@ def _subagent_budget_meta(spec: SubagentSpec, tools: list) -> dict[str, int]:
     else:
         threshold_tokens = max(int(budget.compression_trigger_tokens), 1)
     return {
-        "static_tokens": estimate_text_tokens(spec.system_prompt) + count_tools_tokens(list(tools or [])),
+        "static_tokens": estimate_text_tokens(system_prompt or spec.system_prompt)
+        + count_tools_tokens(list(tools or [])),
         "threshold_tokens": threshold_tokens,
     }
 
 
-def _safe_subagent_budget_meta(spec: SubagentSpec, tools: list) -> dict[str, int] | None:
+def _safe_subagent_budget_meta(
+    spec: SubagentSpec,
+    tools: list,
+    *,
+    system_prompt: str | None = None,
+) -> dict[str, int] | None:
     """用量推送口径的降级封装：预算查询失败只放弃展示，不影响 task 执行。"""
     try:
-        return _subagent_budget_meta(spec, tools)
+        return _subagent_budget_meta(spec, tools, system_prompt=system_prompt)
     except Exception as exc:
         logger.warning("[tools] 子图上下文用量口径获取失败，本次派发不做用量推送: %s", exc)
         return None
@@ -411,6 +475,9 @@ def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
     而不是只靠心跳的协作式取消。
     """
     tools = list(spec.tools or [])
+    # 技能目录与主智能体一致继承：增强后的 system prompt（含 <available_skills> 段）
+    # 是压缩中间件、预算告警静态 token 与 create_agent 三处的同一份口径。
+    effective_system_prompt = _subagent_system_prompt(spec)
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
     # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
@@ -422,12 +489,14 @@ def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
         # 压到 30%，模型该调工具照常调（不改工具面）。这是「提前收尾不优雅」
         # 的结构性解法——超预算先无害化（改 state），软提示只兜压缩后的残量。
         create_context_compression_middleware(
-            system_prompt=spec.system_prompt,
+            system_prompt=effective_system_prompt,
             tools=tools,
             model_id=spec.model_id,
             state_schema=ChatDataSubAgentState,
         ),
-        create_subagent_budget_alert_middleware(spec, tools),
+        create_subagent_budget_alert_middleware(
+            spec, tools, system_prompt=effective_system_prompt,
+        ),
         create_tool_call_name_normalizer_middleware(tools),
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
@@ -441,7 +510,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
     return create_agent(
         spec.model,
         tools=tools,
-        system_prompt=spec.system_prompt,
+        system_prompt=effective_system_prompt,
         state_schema=ChatDataSubAgentState,
         name=f"subagent_{spec.name}",
         # 内层模型与主智能体同一 vLLM，同样可能返回重复工具名/字符串 args，
@@ -1114,7 +1183,9 @@ async def _build_task_tool_impl(
             runtime.tool_call_id,
             collected=collected,
             captured=captured,
-            usage_meta=_safe_subagent_budget_meta(spec, list(spec.tools or [])),
+            usage_meta=_safe_subagent_budget_meta(
+                spec, list(spec.tools or []), system_prompt=_subagent_system_prompt(spec),
+            ),
         )
     except Exception as exc:
         # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，

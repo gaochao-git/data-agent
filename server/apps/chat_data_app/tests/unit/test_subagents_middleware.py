@@ -44,6 +44,76 @@ def test_validate_subagent_specs_rejects_empty_and_duplicates():
         validate_subagent_specs([_spec(name="a"), _spec(name="a")])
 
 
+def test_subagent_system_prompt_injects_skills_catalog():
+    """一致继承：spec 带技能清单时，子图 prompt 追加目录段。"""
+    xml = (
+        "<available_skills>\n  <skill>\n    <name>data-analyzing</name>\n"
+        "    <skill_file>/mnt/skills/data-analyzing/SKILL.md</skill_file>\n  </skill>\n</available_skills>"
+    )
+    spec = _spec(available_skills_xml=xml)
+    prompt = subagents_module._subagent_system_prompt(spec)
+    assert prompt.startswith("你是分析子智能体")
+    assert "## 可用技能" in prompt
+    assert "/mnt/skills/data-analyzing/SKILL.md" in prompt
+
+
+def test_subagent_system_prompt_injects_datasource_group_context():
+    """一致继承：spec 带数据源组上下文时，子图 prompt 追加数据上下文段。"""
+    context = (
+        "## 当前用户已选择的执行对象数据源\n"
+        "本次查询必须只使用以下 member_datasource_ids：\n"
+        "- 财付通（member_datasource_id: ORG_CODE1）"
+    )
+    spec = _spec(datasource_group_context=context)
+    prompt = subagents_module._subagent_system_prompt(spec)
+    assert prompt.startswith("你是分析子智能体")
+    assert "## 数据上下文" in prompt
+    assert "ORG_CODE1" in prompt
+
+
+def test_subagent_system_prompt_appends_both_sections_when_present():
+    """技能目录与数据上下文同时存在时两段都注入，且原 prompt 完整保留。"""
+    xml = (
+        "<available_skills>\n  <skill>\n    <name>data-analyzing</name>\n"
+        "    <skill_file>/mnt/skills/data-analyzing/SKILL.md</skill_file>\n  </skill>\n</available_skills>"
+    )
+    spec = _spec(available_skills_xml=xml, datasource_group_context="## 当前用户已选择的执行对象数据源\n- 财付通")
+    prompt = subagents_module._subagent_system_prompt(spec)
+    assert "## 可用技能" in prompt
+    assert "## 数据上下文" in prompt
+    assert prompt.index("## 可用技能") < prompt.index("## 数据上下文")
+    assert prompt.startswith(spec.system_prompt)
+
+
+def test_subagent_system_prompt_keeps_original_when_catalog_empty():
+    """未传目录或空目录块（无 <skill> 条目）时不注入，prompt 原样。"""
+    spec = _spec()
+    assert subagents_module._subagent_system_prompt(spec) == spec.system_prompt
+    empty_catalog = _spec(available_skills_xml="<available_skills>\n</available_skills>")
+    assert subagents_module._subagent_system_prompt(empty_catalog) == spec.system_prompt
+    # 数据上下文为空串/纯空白同样不追加空段
+    assert subagents_module._subagent_system_prompt(_spec(datasource_group_context="   ")) == spec.system_prompt
+
+
+def test_build_subagent_middleware_passes_skills_catalog_to_specs():
+    """data_agent.build_subagent_middleware 把技能清单透传给每个子智能体 spec。"""
+    from apps.chat_data_app.agent.data_agent import AgentRuntimeOptions, build_subagent_middleware
+
+    options = AgentRuntimeOptions(explore_subagent_enabled=True, plan_subagent_enabled=True)
+    xml = "<available_skills>\n  <skill>\n    <name>x</name>\n  </skill>\n</available_skills>"
+    mw = build_subagent_middleware(
+        options, tools=[], model=object(), model_id="m1", available_skills_xml=xml,
+        datasource_group_context="执行对象清单",
+    )
+    assert mw is not None
+    assert {spec.name for spec in mw.specs} == {"data-explore", "plan"}
+    assert all(spec.available_skills_xml == xml for spec in mw.specs)
+    assert all(spec.datasource_group_context == "执行对象清单" for spec in mw.specs)
+    mw_default = build_subagent_middleware(options, tools=[], model=object(), model_id="m1")
+    assert all(spec.available_skills_xml == "" for spec in mw_default.specs)
+    assert all(spec.datasource_group_context == "" for spec in mw_default.specs)
+
+
 def test_build_subagent_state_only_passes_whitelisted_keys():
     runtime = _fake_runtime({
         "user_id": "u1",
