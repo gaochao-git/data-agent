@@ -114,7 +114,6 @@ export function useSqlGenerator() {
       onStatus?: (status: string, message: string) => void
       onError?: (error: string) => void
       onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void
-      semanticConfigId?: string | null
       modelId?: string | null
       memberDatasourceIds?: string[]
       agentId?: string
@@ -122,7 +121,7 @@ export function useSqlGenerator() {
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
-      semanticConfigSelection?: SemanticConfigSelectionInfo | null
+      semanticConfigSelections?: SemanticConfigSelectionInfo[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
@@ -148,7 +147,6 @@ export function useSqlGenerator() {
       onStatus,
       onError,
       onRunningTool,
-      semanticConfigId,
       modelId,
       memberDatasourceIds,
       agentId = 'chat_data',
@@ -156,7 +154,7 @@ export function useSqlGenerator() {
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
-      semanticConfigSelection,
+      semanticConfigSelections,
       enableThinking,
       thinkingEffort,
       runtimeOptions,
@@ -212,12 +210,10 @@ export function useSqlGenerator() {
         options.model_id = modelId
       }
 
-      // 传入明确的语义配置 ID 时，使用语义模式
-      if (semanticConfigId !== null && semanticConfigId !== undefined) {
-        options.semantic_config_id = semanticConfigId
-      }
-      if (semanticConfigSelection?.semantic_config_id) {
-        options.semantic_config_selection = semanticConfigSelection
+      // @ 引用清单（多选）：后端兼容 dict 与 list 两种留痕格式，统一以列表传输；
+      // 单引用绑定的 semantic_config_id 由服务端从该列表推导，前端不重复发送
+      if (semanticConfigSelections?.length) {
+        options.semantic_config_selection = semanticConfigSelections
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {

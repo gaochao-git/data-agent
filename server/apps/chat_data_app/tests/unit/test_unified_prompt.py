@@ -77,17 +77,18 @@ def test_system_prompt_keeps_detailed_semantic_rules_in_skill():
     assert "## NL2SQL 回退规则" not in prompt
     assert "# 多步数据分析示例" not in prompt
     assert '"dimensions":[{"name":"时间维度"' not in prompt
-    assert "当前数据库方言：Hive" in prompt
-    assert "DSL 中只写 `time_grain`" in prompt
+    # 方言不再进系统提示词：随 list_execution_targets 返回（prompts/chat_data.py 开关）
+    assert "当前数据库方言" not in prompt
+    assert "## 方言上下文" not in prompt
     assert "/mnt/skills/data-analyzing/references/dialect.md" not in prompt
     assert prompt.count("## 输出与最终回答") == 1
     assert "## 输出规范" not in prompt
     assert "## 最终回答" not in prompt
 
 
-def test_system_prompt_keeps_dialect_fallback_for_legacy_skill_snapshot():
+def test_system_prompt_omits_dialect_for_tool_return_channel():
     prompt = build_unified_system_prompt(AgentRuntimeOptions())
 
-    assert "当前数据库方言：Hive" in prompt
-    assert "DSL 中只写 `time_grain`" in prompt
+    assert "当前数据库方言" not in prompt
+    assert "## 方言上下文" not in prompt
     assert "/mnt/skills/data-analyzing/references/dialect.md" not in prompt

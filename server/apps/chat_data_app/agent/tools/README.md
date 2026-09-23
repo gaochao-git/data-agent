@@ -13,7 +13,7 @@
 | `bash_run` | `bash_run.py` | 受限命令执行；**由 `runtime_options.bash_enabled` 控制注册（默认关）** |
 | `officecli_run` | `officecli_run.py` | OfficeCLI 文档解析/编辑（argv 直 execve，非通用执行器） |
 | `present_artifacts` | `present_artifacts.py` | 展示 outputs 最终产物 |
-| `data_analyzing_tool` | `data_analyzing.py` | 语义分析统一工具（`action` + `action_payload` 分派：`validate_dsl`/`validate_dashboard` DSL 与 dashboard_spec 校验（不执行）、`execute_query` 语义模型查询（DSL/只读 SQL 二选一执行）、`check_yaml` Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读）） |
+| `data_analyzing_tool` | `data_analyzing.py` | 语义分析统一工具（`action` + `action_payload` 分派：`validate_dsl`/`validate_dashboard` DSL 与 dashboard_spec 校验（不执行）、`execute_query` 语义模型查询（DSL/只读 SQL 二选一执行）、`check_yaml` Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读）、`list_execution_targets` 实时获取当前用户可用执行对象清单（只读）） |
 | `ask_user_question` | `ask_user_question.py` | 向用户追问 |
 | `calculator`/`current_time` | 同名模块 | 基础工具 |
 

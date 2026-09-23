@@ -7,7 +7,10 @@
 - ``validate_dashboard``：批量校验完整 dashboard_spec 的所有卡片；
 - ``execute_query``：执行查询（DSL 或只读 SQL 二选一），结果走内部协议由
   ToolResultMiddleware 落盘给前端；
-- ``check_yaml``：语义模型 YAML 交付前自检（与导入接口同口径，只读不落库）。
+- ``check_yaml``：语义模型 YAML 交付前自检（与导入接口同口径，只读不落库）；
+- ``list_execution_targets``：实时获取当前用户可用执行对象清单（只读发现通道，
+  为后续语义查询插件化预留的工具内数据源切口）；方言与智能问数说明随本返回
+  透出，系统提示词不再静态注入。
 
 入参契约在 ``schema.DataAnalyzingInput``：``action`` + ``action_payload``（结构随
 action 变化）+ ``intent``；每个 action 的 payload 在入口用对应 pydantic 模型校验
@@ -34,6 +37,12 @@ from apps.chat_data_app.services.dashboard.spec_service import (
     validate_dashboard_spec_payload,
 )
 from apps.chat_data_app.services.datasource.manager import get_datasource_manager
+from apps.chat_data_app.services.datasource.target_context import (
+    get_execution_target_member_id,
+    get_execution_target_name,
+    get_execution_target_org_code,
+    source_type_to_dialect,
+)
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     build_model_checklist,
@@ -202,7 +211,10 @@ def _validate_member_scope(
     if not available_member_datasource_ids:
         raise ValueError("本次请求没有可用执行对象，请先选择有权限的数据源后再查询")
     if not requested_member_datasource_ids:
-        raise ValueError("缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围")
+        raise ValueError(
+            "缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围；"
+            f"当前可用执行对象: {', '.join(available_member_datasource_ids)}"
+        )
     if matched_member_datasource_ids:
         invalid_matched_member_ids = [
             member_id
@@ -221,7 +233,11 @@ def _validate_member_scope(
         if member_id not in available_member_datasource_ids
     ]
     if invalid_member_ids:
-        raise ValueError(f"本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids")
+        raise ValueError(
+            f"本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；"
+            "请只使用可用执行对象中的 member_datasource_ids，"
+            f"当前可用执行对象: {', '.join(available_member_datasource_ids)}"
+        )
     return None
 
 
@@ -577,6 +593,71 @@ async def _run_check_yaml(
 
 
 # ---------------------------------------------------------------------------
+# list_execution_targets：实时获取当前用户可用执行对象（只读发现通道）
+# ---------------------------------------------------------------------------
+
+def _execution_target_entry(target: dict[str, Any], index: int) -> dict[str, Any]:
+    """单条执行对象的对外展示字段：只透出名称/ID/机构编码，不透出连接信息。"""
+    return {
+        "member_name": get_execution_target_name(target, index),
+        "member_datasource_id": get_execution_target_member_id(target),
+        "org_code": get_execution_target_org_code(target),
+    }
+
+
+def _datasource_overview(meta: dict) -> dict:
+    """数据源组概览字段：类型/方言/智能问数说明，随执行对象清单一起返回。
+
+    系统提示词不再注入方言块与数据源组说明（见 prompts/chat_data.py 开关），
+    这些都是数据源组属性，改为模型查数前经本工具按需获取。
+    """
+    source_type = str(meta.get("source_type") or "").strip().lower()
+    return {
+        "source_type": source_type,
+        "dialect": source_type_to_dialect(source_type),
+        "query_context": str(meta.get("query_context") or "").strip(),
+    }
+
+
+async def _run_list_execution_targets(
+    *,
+    state: dict | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+    bound_operator_name: str | None,
+) -> str:
+    """实时查询当前用户在会话数据源组下有权限执行的全部成员数据源。
+
+    范围完全由服务端决定（datasource_id 绑定会话 + user_id 鉴权），模型无参数可指定；
+    复用 manager 的全量授权清单入口，与系统提示词注入的执行对象同一套权限口径。
+    方言与智能问数说明（query_context）随本返回透出。
+    """
+    state = state or {}
+    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
+    if not datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip() or bound_operator_name
+    manager = get_datasource_manager()
+    targets = await manager.list_authorized_execution_targets_async(
+        datasource_id,
+        user_id=user_id,
+        username=operator_name,
+    )
+    meta = await manager.get_datasource_meta_async(datasource_id) or {}
+    entries = [
+        _execution_target_entry(target, index)
+        for index, target in enumerate(targets, start=1)
+    ]
+    return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
+        "success": True,
+        **_datasource_overview(meta),
+        "count": len(entries),
+        "execution_targets": entries,
+    })
+
+
+# ---------------------------------------------------------------------------
 # 合并工具本体
 # ---------------------------------------------------------------------------
 
@@ -621,6 +702,13 @@ async def _run_data_analyzing_impl(
             member_datasource_ids=payload.member_datasource_ids,
             state=state,
         )
+    if action == "list_execution_targets":
+        return await _run_list_execution_targets(
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+            bound_user_id=bound_user_id,
+            bound_operator_name=bound_operator_name,
+        )
     # check_yaml
     if not bound_datasource_id:
         raise ValueError("当前会话未绑定数据源")
@@ -658,11 +746,13 @@ def create_data_analyzing_tool(
         - validate_dashboard: 批量校验 dashboard_spec 的所有卡片
         - execute_query: 执行查询（DSL 或 SQL 二选一），结果落盘到 outputs/query_result/
         - check_yaml: 语义模型 YAML 质量自检
+        - list_execution_targets: 实时获取当前用户可用的执行对象清单（execute_query 前用于确认 member_datasource_ids 取值范围）
             action_payload: 操作参数，结构随 action 变化：
         - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
         - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
         - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": [...]}
         - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
+        - list_execution_targets: {}（无参数，范围由服务端会话上下文决定）
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_data_analyzing_impl(

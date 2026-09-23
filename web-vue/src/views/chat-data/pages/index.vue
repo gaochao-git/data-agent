@@ -15,7 +15,7 @@ import '../styles/z-index.css'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo } from '../types'
 import Conversation from '../components/conversation/Conversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
@@ -112,7 +112,6 @@ const noMatchedDatasource = ref(false)
 const SHOW_NO_DATASOURCE_EMPTY_PAGE = false
 const isNoDatasourceEmptyPage = computed(() => noMatchedDatasource.value && SHOW_NO_DATASOURCE_EMPTY_PAGE)
 // storage key 统一 chatdata: 前缀;按用户隔离,避免共享浏览器多账号互相可见
-const semanticConfigStorageKey = () => `chatdata:conversation-semantic-config:${currentUser.value.id || 'anonymous'}`
 const conversationModelStorageKey = () => `chatdata:conversation-model:${currentUser.value.id || 'anonymous'}`
 
 const noMatchedDatasourceTitle = computed(() => {
@@ -269,7 +268,6 @@ const metricConfigMounted = ref(viewMode.value === 'metricConfig')
 // 选中的指标集 ID
 const selectedSemanticConfigId = ref<string | null>(null)
 const metricSelectedSemanticConfigId = ref<string | null>(null)
-const conversationSelectedSemanticConfigId = ref<string | null>(null)
 const semanticConfigs = ref<SemanticConfigItem[]>([])
 const loadingSemanticConfigs = ref(false)
 const metricSemanticConfigs = ref<SemanticConfigItem[]>([])
@@ -790,34 +788,6 @@ const handleDatasourceChange = (dsId: string) => {
   selectedDatasourceId.value = dsId
 }
 
-const readConversationSemanticConfigSelection = (datasourceId: string) => {
-  if (typeof window === 'undefined' || !datasourceId) return null
-  try {
-    const raw = window.localStorage.getItem(semanticConfigStorageKey())
-    if (!raw) return null
-    const data = JSON.parse(raw) as Record<string, string>
-    return String(data?.[datasourceId] || '').trim() || null
-  } catch (err) {
-    return null
-  }
-}
-
-const writeConversationSemanticConfigSelection = (datasourceId: string, configId: string | null) => {
-  if (typeof window === 'undefined' || !datasourceId) return
-  try {
-    const raw = window.localStorage.getItem(semanticConfigStorageKey())
-    const data = raw ? JSON.parse(raw) as Record<string, string> : {}
-    if (configId) {
-      data[datasourceId] = configId
-    } else {
-      delete data[datasourceId]
-    }
-    window.localStorage.setItem(semanticConfigStorageKey(), JSON.stringify(data))
-  } catch (err) {
-    // 本地存储不可用时保持当前页面内状态即可
-  }
-}
-
 const getConversationModelStorageUserKey = () => {
   return conversationModelStorageUserKey.value
 }
@@ -856,7 +826,6 @@ const loadSemanticConfigs = async () => {
   if (!selectedDatasourceId.value) {
     semanticConfigs.value = []
     selectedSemanticConfigId.value = null
-    conversationSelectedSemanticConfigId.value = null
     return
   }
   loadingSemanticConfigs.value = true
@@ -867,20 +836,11 @@ const loadSemanticConfigs = async () => {
       if (selectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === selectedSemanticConfigId.value && c.enabled)) {
         selectedSemanticConfigId.value = null
       }
-      const savedConversationConfigId = readConversationSemanticConfigSelection(selectedDatasourceId.value)
-      if (!conversationSelectedSemanticConfigId.value && savedConversationConfigId) {
-        conversationSelectedSemanticConfigId.value = savedConversationConfigId
-      }
-      if (conversationSelectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === conversationSelectedSemanticConfigId.value && c.enabled)) {
-        conversationSelectedSemanticConfigId.value = null
-        writeConversationSemanticConfigSelection(selectedDatasourceId.value, null)
-      }
     }
   } catch (err) {
     console.error('加载指标集失败:', err)
     semanticConfigs.value = []
     selectedSemanticConfigId.value = null
-    conversationSelectedSemanticConfigId.value = null
   } finally {
     loadingSemanticConfigs.value = false
   }
@@ -1017,26 +977,6 @@ const formatSemanticConfigLabel = (config: SemanticConfigItem) => {
 const formatMetricSemanticConfigLabel = (config: SemanticConfigItem) => {
   return formatSemanticConfigOptionLabel(config, getMetricSemanticConfigIndex(config))
 }
-
-const conversationSemanticConfigId = computed(() => {
-  const selected = semanticConfigs.value.find(cfg => cfg.id === conversationSelectedSemanticConfigId.value)
-  return selected?.enabled ? selected.id : null
-})
-
-const conversationSemanticConfigSelection = computed<SemanticConfigSelectionInfo | null>(() => {
-  const selected = semanticConfigs.value.find(cfg => cfg.id === conversationSelectedSemanticConfigId.value && cfg.enabled)
-  if (!selected) return null
-  return {
-    semantic_config_id: selected.id,
-    semantic_config_name: selected.name || selected.id,
-    confidence: '',
-    reason: '用户手动选择指标集',
-    matched_metrics: [],
-    matched_dimensions: [],
-    auto_selected: false,
-    user_selected: true,
-  }
-})
 
 const ensureStructuredViewSemanticConfig = () => {
   if (viewMode.value === 'metricConfig') {
@@ -1240,7 +1180,6 @@ const showSidebarFooter = computed(() => {
 })
 
 watch(selectedDatasourceId, () => {
-  conversationSelectedSemanticConfigId.value = null
   metricSelectedSemanticConfigId.value = null
   metricSemanticConfigs.value = []
   loadSemanticConfigs()
@@ -1351,24 +1290,20 @@ const handleFillSemanticQuestion = (payload: { fieldName: string; fieldType: 'di
   conversationRef.value?.fillSemanticFieldQuestion(payload)
 }
 
-const handleConversationDatasetSelected = (configId: string | null) => {
-  conversationSelectedSemanticConfigId.value = configId
-  writeConversationSemanticConfigSelection(selectedDatasourceId.value, configId)
-}
-
 const handleBuilderSemanticConfigSelected = (configId: string) => {
   const normalizedId = String(configId || '').trim()
   if (!enabledSemanticConfigs.value.some(config => config.id === normalizedId)) return
   selectedSemanticConfigId.value = normalizedId
 }
 
-const handleConversationSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
-  const selectedId = String(payload.semantic_config_id || '').trim()
-  if (!selectedId || !payload.user_selected) return
-  if (!enabledSemanticConfigs.value.some(config => config.id === selectedId)) return
-  conversationSelectedSemanticConfigId.value = selectedId
-  writeConversationSemanticConfigSelection(selectedDatasourceId.value, selectedId)
-}
+/** 输入框 @ 引用的候选清单：与问数侧边栏同一份 enabled 模型，映射成引用弹层所需的展示子集。 */
+const semanticModelMentionOptions = computed(() => enabledSemanticConfigs.value.map(config => ({
+  id: config.id,
+  name: config.name,
+  description: config.description || config.business_notes || '',
+  metricsCount: config.metrics?.length || 0,
+  dimensionsCount: config.dimensions?.length || 0,
+})))
 
 // storage key 统一前缀改造后的一次性迁移：清掉历史版本的孤儿键，
 // 避免旧键里上一个账号的数据永久残留在浏览器
@@ -1673,10 +1608,8 @@ onMounted(async () => {
                   :semantic-configs="enabledSemanticConfigs"
                   :loading-configs="loadingSemanticConfigs"
                   :bootstrap-loading="conversationSidebarBootstrapLoading"
-                  :selected-dataset-id="conversationSemanticConfigId"
                   :tables="currentDatasource?.ds_tables || []"
                   :hide-management="!!parentComponentName"
-                  @select-dataset="handleConversationDatasetSelected"
                   @refresh-semantic-configs="loadSemanticConfigs"
                   @fill-question="handleFillSemanticQuestion"
                 />
@@ -1810,8 +1743,7 @@ onMounted(async () => {
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"
                   :selected-datasource-id="selectedDatasourceId"
-                  :semantic-config-id="conversationSemanticConfigId"
-                  :semantic-config-selection="conversationSemanticConfigSelection"
+                  :semantic-models="semanticModelMentionOptions"
                   :ensure-conversation-id="ensureConversationId"
                   :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"
@@ -1824,7 +1756,6 @@ onMounted(async () => {
                   @console-visibility-changed="conversationConsoleVisible = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
-                  @semantic-config-selected="handleConversationSemanticConfigSelected"
                 />
               </div>
             </div>

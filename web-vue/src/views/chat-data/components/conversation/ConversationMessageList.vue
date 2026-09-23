@@ -121,6 +121,18 @@ const getEffectiveAttachments = (message: Message): MessageAttachment[] =>
     ? message.attachments
     : parseAttachmentPlaceholders(message.content)
 
+// 用户消息上展示的 @ 引用语义模型列表（本地发送与历史回放统一走 semanticConfigSelections）
+const getUserMentionedSemanticModels = (message: Message): Array<{ id: string; name: string }> => {
+  if (message.role !== 'user') return []
+  const selections = (message.semanticConfigSelections || []).filter(
+    selection => selection.user_selected && (String(selection.semantic_config_id || '').trim() || String(selection.semantic_config_name || '').trim()),
+  )
+  return selections.map(selection => ({
+    id: String(selection.semantic_config_id || '').trim(),
+    name: String(selection.semantic_config_name || '').trim(),
+  }))
+}
+
 const formatCompressionTokens = (value?: number): string => new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0))
 
 const hasVisibleAssistantContent = (content: string): boolean => {
@@ -222,6 +234,20 @@ const handleCopyAssistantMessage = async (message: Message) => {
     >
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
         <template v-if="message.role === 'user'">
+          <div
+            v-if="getUserMentionedSemanticModels(message).length"
+            class="flex w-full flex-row-reverse flex-wrap gap-1.5"
+            title="本轮指定语义模型"
+          >
+            <div
+              v-for="model in getUserMentionedSemanticModels(message)"
+              :key="model.id || model.name"
+              class="flex items-center gap-1.5 rounded-full border border-[#1677FF]/20 bg-white/80 px-2.5 py-1 text-xs text-[#1F3A56]"
+            >
+              <i class="fa-solid fa-at text-[11px] text-[#1677FF]"></i>
+              <span class="max-w-[200px] truncate">{{ model.name || model.id }}</span>
+            </div>
+          </div>
           <div v-if="getEffectiveAttachments(message).length" class="flex w-full flex-col gap-1.5">
             <button
               v-for="attachment in getEffectiveAttachments(message)"

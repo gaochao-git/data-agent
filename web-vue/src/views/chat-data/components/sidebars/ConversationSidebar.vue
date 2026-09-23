@@ -15,7 +15,7 @@ import type {
   SemanticMetric,
   TableInfo,
 } from '../../types'
-import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
+import { getSemanticConfigTableCount } from '../../utils'
 import { findColumnDict, type FieldTooltipSection } from '../../utils/fieldDict'
 import {
   buildDimensionTooltip as sharedBuildDimensionTooltip,
@@ -90,7 +90,6 @@ interface Props {
   tables?: TableInfo[]
   loadingConfigs?: boolean
   bootstrapLoading?: boolean
-  selectedDatasetId?: string | null
   hideManagement?: boolean
 }
 
@@ -109,7 +108,6 @@ const props = withDefaults(defineProps<Props>(), {
   tables: () => [],
   loadingConfigs: undefined,
   bootstrapLoading: false,
-  selectedDatasetId: null,
   hideManagement: false
 })
 
@@ -123,7 +121,6 @@ const emit = defineEmits<{
   updateConversationViewMode: [mode: ConversationViewMode]
   updateConversationSortBy: [sortBy: ConversationSortBy]
   refreshConversations: []
-  selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
   openAgentSchedules: []
@@ -192,7 +189,6 @@ const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
 const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
 const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
-const semanticConfigTableCount = computed(() => getSemanticConfigsTableCount(semanticConfigs.value))
 const configSearchKeyword = ref('')
 const dimensionSearchKeywords = reactive<Record<string, string>>({})
 const metricSearchKeywords = reactive<Record<string, string>>({})
@@ -263,10 +259,6 @@ const filteredSemanticConfigs = computed(() => {
   })
 })
 
-const getSmartSelectionSummary = () => {
-  return `${semanticConfigs.value.length}语义模型/${semanticConfigTableCount.value}表`
-}
-
 const getConfigSummary = (config: SemanticConfigItem) => {
   return `${getSemanticConfigTableCount(config)}表/${(config.relationships || []).length}关系/${(config.dimensions || []).length}维度/${(config.metrics || []).length}指标`
 }
@@ -287,17 +279,6 @@ const getConfigScopeLabel = (config: SemanticConfigItem) => {
 
 const getConfigScopeTitle = (config: SemanticConfigItem) => {
   return `${getConfigScopeLabel(config)}语义模型`
-}
-
-const getConfigSelectCircleClass = (config: SemanticConfigItem) => {
-  const isSelected = selectedConfigId.value === config.id
-  if (isSelected) {
-    return 'border-[#165DFF] bg-[#165DFF] text-white'
-  }
-  if (config.scope_type === 'private') {
-    return 'border-2 border-[#00B42A] bg-white text-transparent hover:border-[#00B42A]'
-  }
-  return 'border-[#9CC7FF] bg-white text-transparent hover:border-[#165DFF]'
 }
 
 const getFilteredDimensions = (config: SemanticConfigItem) => {
@@ -396,8 +377,7 @@ const stopSectionResize = () => {
   document.removeEventListener('mouseup', stopSectionResize)
 }
 
-// 选中的指标集 ID
-const selectedConfigId = ref<string | null>(null)
+// 展开的语义模型节点（展开看维度/指标明细，与提问指定无关）
 const expandedConfigIds = ref<Set<string>>(new Set())
 
 const handleConversationScroll = (event: Event) => {
@@ -523,23 +503,9 @@ const toggleConversationFavoriteState = async (conv: ConversationItem) => {
   }
 }
 
-const syncSelectedConfig = () => {
+/** 清理失效的展开节点（模型被删除/过滤后收起）。 */
+const pruneExpandedConfigIds = () => {
   const configs = semanticConfigs.value
-  if (configs.length === 0) {
-    if (selectedConfigId.value !== null) {
-      selectedConfigId.value = null
-      emit('selectDataset', null)
-    }
-    expandedConfigIds.value = new Set()
-    return
-  }
-  if (selectedConfigId.value && configs.find(c => c.id === selectedConfigId.value)) {
-    return
-  }
-  if (selectedConfigId.value !== null) {
-    selectedConfigId.value = null
-    emit('selectDataset', null)
-  }
   expandedConfigIds.value = new Set([...expandedConfigIds.value].filter(id => configs.some(c => c.id === id)))
 }
 
@@ -555,19 +521,13 @@ const loadSemanticConfigs = async () => {
     const res = await getSemanticConfigs(props.datasourceId)
     if (res.status === 'success') {
       internalSemanticConfigs.value = res.data?.configs || []
-      syncSelectedConfig()
+      pruneExpandedConfigIds()
     }
   } catch (err) {
     console.error('加载语义配置失败:', err)
   } finally {
     internalIsLoadingConfigs.value = false
   }
-}
-
-// 选择指标集
-const handleSelectConfig = (configId: string | null) => {
-  selectedConfigId.value = configId
-  emit('selectDataset', configId)
 }
 
 const getConfigTableNames = (config: SemanticConfigItem) => [
@@ -615,32 +575,19 @@ const handleFillDimension = (dimension: SemanticDimension) => {
 
 // 监听数据源变化
 watch(() => props.datasourceId, () => {
-  selectedConfigId.value = null
   expandedConfigIds.value = new Set()
   resetColumnDictCache()
   if (props.semanticConfigs === undefined) {
     loadSemanticConfigs()
     return
   }
-  syncSelectedConfig()
+  pruneExpandedConfigIds()
 }, { immediate: true })
 
 watch(() => props.semanticConfigs, () => {
   if (props.semanticConfigs === undefined) return
-  syncSelectedConfig()
+  pruneExpandedConfigIds()
 }, { immediate: true, deep: true })
-
-// 父子同步：父层指标集变化时，同步当前选中指标集
-watch(() => props.selectedDatasetId, (newId) => {
-  if (newId === selectedConfigId.value) return
-  if (!newId) {
-    selectedConfigId.value = null
-    return
-  }
-  if (semanticConfigs.value.find(c => c.id === newId)) {
-    selectedConfigId.value = newId
-  }
-}, { immediate: true })
 
 onUnmounted(() => {
   clearTooltipHideTimer()
@@ -928,42 +875,16 @@ onUnmounted(() => {
             >
               <i class="fa-solid fa-xmark text-[10px]"></i>
             </button>
+            <button
+              type="button"
+              class="ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[#86909C] transition-colors hover:bg-[#F2F3F5] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="isLoadingConfigs"
+              title="刷新语义模型"
+              @click="loadSemanticConfigs"
+            >
+              <i :class="['fa-solid fa-rotate-right text-[10px]', isLoadingConfigs ? 'fa-spin' : '']"></i>
+            </button>
           </div>
-        </div>
-
-        <div
-          :class="[
-            'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
-            selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
-          ]"
-          :title="`智能选择语义模型：可用语义模型 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
-          @click="handleSelectConfig(null)"
-        >
-          <span
-            :class="[
-              'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px]',
-              selectedConfigId === null ? 'border-[#165DFF] bg-[#165DFF] text-white' : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
-            ]"
-            title="使用智能选择语义模型提问"
-          >
-            <i class="fa-solid fa-check"></i>
-          </span>
-          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择语义模型</span>
-          <span
-            class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
-            :title="`可用语义模型：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
-          >
-            {{ getSmartSelectionSummary() }}
-          </span>
-          <button
-            type="button"
-            class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#5B5C60] transition-colors hover:bg-[#E8F3FF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="isLoadingConfigs"
-            title="刷新语义模型"
-            @click.stop="loadSemanticConfigs"
-          >
-            <i :class="['fa-solid fa-rotate-right text-[10px]', isLoadingConfigs ? 'fa-spin' : '']"></i>
-          </button>
         </div>
 
         <div
@@ -977,23 +898,11 @@ onUnmounted(() => {
           <div
             :class="[
               'group flex h-[28px] cursor-pointer items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]',
-              selectedConfigId === config.id ? 'bg-[#E8F3FF]' : '',
               expandedConfigIds.has(config.id) ? 'text-[#1D2129]' : ''
             ]"
             :title="`${getConfigDisplayName(config)}：${getConfigSummary(config)}`"
             @click="toggleConfig(config.id)"
           >
-            <button
-              type="button"
-              :class="[
-                'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px] transition-all duration-150',
-                getConfigSelectCircleClass(config)
-              ]"
-              :title="`${selectedConfigId === config.id ? '当前提问使用该语义模型' : '使用该语义模型提问'}（${getConfigScopeTitle(config)}）`"
-              @click.stop="handleSelectConfig(selectedConfigId === config.id ? null : config.id)"
-            >
-              <i class="fa-solid fa-check"></i>
-            </button>
             <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-semibold leading-[28px] text-[#2E2F32]" :title="getConfigDisplayName(config)">
               {{ getConfigDisplayName(config) }}
             </span>

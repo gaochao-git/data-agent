@@ -10,7 +10,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
 from fastapi import Request
@@ -146,9 +146,32 @@ def _format_sse(event: str, data: dict | str) -> str:
 
 
 
+def _semantic_selection_mention_suffix(semantic_selection_events: List[Dict[str, Any]]) -> str:
+    """用户在输入框 @ 引用语义模型时，给 Human 消息追加模型可见的指定短句。
+
+    前端已改为 @ 引用（chip 随消息传 semantic_config_selection 列表），系统提示词
+    不再有「当前语义模型」段（见 prompts/chat_data.py 开关）；模型对本轮指定的
+    感知完全靠这行短句。未指定（智能选择）时不追加任何内容。
+    """
+    labels: List[str] = []
+    for event in semantic_selection_events:
+        if not isinstance(event, dict) or not event.get("user_selected"):
+            continue
+        name = str(event.get("semantic_config_name") or "").strip()
+        config_id = str(event.get("semantic_config_id") or "").strip()
+        label = name or config_id
+        if not label:
+            continue
+        id_part = f"（semantic_config_id: {config_id}）" if config_id and name else ""
+        labels.append(f"{label}{id_part}")
+    if not labels:
+        return ""
+    return f"\n\n[本轮指定语义模型：{'、'.join(labels)}]"
+
+
 def _build_user_message(
     content: str | list[dict[str, Any]],
-    semantic_selection_event: dict[str, Any] | None = None,
+    semantic_selection_events: List[Dict[str, Any]] | None = None,
     *,
     message_id: str | None = None,
     **extra_kwargs: Any,
@@ -157,14 +180,18 @@ def _build_user_message(
 
     content 为纯字符串（正文 + 附件占位行）；图片附件经 additional_kwargs
     的 ``vision_attachments`` 路径标记由 middleware 在请求层装载。
+    用户 @ 引用语义模型时在正文末尾追加指定短句（多选逐一列出），模型从对话即可看到本轮指定。
     """
+    mention_suffix = _semantic_selection_mention_suffix(semantic_selection_events or [])
+    if mention_suffix and isinstance(content, str):
+        content = f"{content}{mention_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs = {
         "timestamp": _get_timestamp(),
         "reasoning_turn_id": reasoning_turn_id,
     }
-    if semantic_selection_event:
-        additional_kwargs["semantic_config_selection"] = semantic_selection_event
+    if semantic_selection_events:
+        additional_kwargs["semantic_config_selection"] = semantic_selection_events
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -424,25 +451,52 @@ def _format_tool_lifecycle_event(
     return _format_sse(event_type, data)
 
 
-def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
-    """标准化前端传入的指标集选择留痕。"""
-    if not isinstance(value, dict):
-        return None
-    semantic_config_id = str(value.get("semantic_config_id") or "").strip()
-    if not semantic_config_id:
-        return None
-    matched_metrics = value.get("matched_metrics")
-    matched_dimensions = value.get("matched_dimensions")
+def _normalize_str_list(value: Any) -> List[str]:
+    """字符串列表规整：非列表回退为空，成员去空白后丢弃空串。"""
+    if not isinstance(value, list):
+        return []
+    return [str(m).strip() for m in value if str(m).strip()]
+
+
+def _normalize_one_selection_event(item: dict[str, Any]) -> Dict[str, Any]:
+    """单条语义模型引用留痕的字段规范化，无效字段回退为空。"""
+    semantic_config_id = str(item.get("semantic_config_id") or "").strip()
     return {
         "semantic_config_id": semantic_config_id,
-        "semantic_config_name": str(value.get("semantic_config_name") or semantic_config_id).strip(),
-        "confidence": str(value.get("confidence") or "").strip(),
-        "reason": str(value.get("reason") or "").strip(),
-        "matched_metrics": [str(item).strip() for item in matched_metrics if str(item).strip()] if isinstance(matched_metrics, list) else [],
-        "matched_dimensions": [str(item).strip() for item in matched_dimensions if str(item).strip()] if isinstance(matched_dimensions, list) else [],
-        "auto_selected": bool(value.get("auto_selected")),
-        "user_selected": bool(value.get("user_selected")),
+        "semantic_config_name": str(item.get("semantic_config_name") or semantic_config_id).strip(),
+        "confidence": str(item.get("confidence") or "").strip(),
+        "reason": str(item.get("reason") or "").strip(),
+        "matched_metrics": _normalize_str_list(item.get("matched_metrics")),
+        "matched_dimensions": _normalize_str_list(item.get("matched_dimensions")),
+        "auto_selected": bool(item.get("auto_selected")),
+        "user_selected": bool(item.get("user_selected")),
     }
+
+
+def _normalize_semantic_selection_events(value: Any) -> List[Dict[str, Any]]:
+    """标准化前端传入的语义模型引用留痕（@ 引用多选：dict 或 dict 列表均兼容）。
+
+    返回按 semantic_config_id 去重后的事件列表，无效条目直接丢弃。
+    """
+    raw_items: list[Any]
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, dict):
+        raw_items = [value]
+    else:
+        return []
+    events: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        event = _normalize_one_selection_event(item)
+        semantic_config_id = event["semantic_config_id"]
+        if not semantic_config_id or semantic_config_id in seen_ids:
+            continue
+        seen_ids.add(semantic_config_id)
+        events.append(event)
+    return events
 
 
 def _coerce_tool_args(value: Any) -> dict[str, Any] | None:
@@ -1121,7 +1175,7 @@ async def _generate_chat_data_stream(
     semantic_config_id: str | None = None,
     request: Request | None = None,
     model_id: str | None = None,
-    semantic_config_selection: dict | None = None,
+    semantic_config_selection: Any | None = None,
     enable_thinking: bool | None = None,
     thinking_effort: str | None = None,
     skill_names: list[str] | None = None,
@@ -1377,7 +1431,7 @@ async def _resolve_agent_turn_inputs(
     *,
     user_query: str,
     message_content: str,
-    semantic_selection_event: dict[str, Any],
+    semantic_selection_events: List[Dict[str, Any]],
     vision_attachments: list[dict[str, Any]],
     skill_names: list[str],
     recovering: bool,
@@ -1422,7 +1476,7 @@ async def _resolve_agent_turn_inputs(
     if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
         user_message = _build_user_message(
             message_content,
-            semantic_selection_event,
+            semantic_selection_events,
             message_id=turn_id,
             vision_attachments=vision_attachments,
             **message_kwargs,
@@ -1479,7 +1533,7 @@ async def _run_chat_data_agent_stream(
     semantic_config_id: str | None,
     request: Request | None,
     model_id: str | None,
-    semantic_config_selection: dict | None,
+    semantic_config_selection: Any | None,
     enable_thinking: bool | None,
     thinking_effort: str | None,
     skill_names: list[str],
@@ -1497,7 +1551,12 @@ async def _run_chat_data_agent_stream(
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
-    semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
+    semantic_selection_events = _normalize_semantic_selection_events(semantic_config_selection)
+    # 单引用自动绑定：前端只发 @ 引用列表，恰好引用一个时由服务端推导单值
+    # semantic_config_id（驱动语义工作区物化）；多引用/未引用交给模型检索（智能选择）。
+    # 显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。
+    if not semantic_config_id and len(semantic_selection_events) == 1:
+        semantic_config_id = semantic_selection_events[0]["semantic_config_id"]
     try:
         semantic_context, prompt_context = await _prepare_agent_semantic_context(
             thread_id=thread_id,
@@ -1573,7 +1632,7 @@ async def _run_chat_data_agent_stream(
                 config,
                 user_query=user_query,
                 message_content=message_content,
-                semantic_selection_event=semantic_selection_event,
+                semantic_selection_events=semantic_selection_events,
                 vision_attachments=vision_attachments,
                 skill_names=skill_names,
                 recovering=recovering,

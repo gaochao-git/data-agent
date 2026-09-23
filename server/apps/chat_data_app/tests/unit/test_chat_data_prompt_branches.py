@@ -7,10 +7,13 @@
 
 不可达分支说明：`build_unified_system_prompt` 中 `if dialect_context_text`
 的假分支无法触达 —— `build_dialect_prompt_context` 的返回值是 f-string，MySQL/Hive
-两种取值都非空。下方 `test_dialect_block_is_always_present` 固化该结论。
+两种取值都非空（`test_build_dialect_prompt_context_maps_source_type_to_dialect`
+固化该结论）；方言块注入由 `DIALECT_PROMPT_INJECTION_ENABLED` 开关控制。
 """
 
 from __future__ import annotations
+
+import pytest
 
 from apps.chat_data_app.agent.prompts import chat_data
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
@@ -22,7 +25,25 @@ from utils.builtin_skills import DATA_ANALYZING_SKILL
 # ---------------------------------------------------------------------------
 
 
-def test_format_datasource_group_context_for_llm():
+@pytest.fixture
+def datasource_injection_enabled(monkeypatch):
+    """打开数据源组上下文注入开关（默认关闭，见 prompts/chat_data.py 开关注释）。"""
+    monkeypatch.setattr(chat_data, "DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED", True)
+
+
+@pytest.fixture
+def semantic_injection_enabled(monkeypatch):
+    """打开语义模型选中状态注入开关（默认关闭，见 prompts/chat_data.py 开关注释）。"""
+    monkeypatch.setattr(chat_data, "SEMANTIC_MODEL_CONTEXT_INJECTION_ENABLED", True)
+
+
+def test_format_datasource_group_context_disabled_by_default():
+    """注入开关默认关闭：内容非空也返回空串，不进系统提示词。"""
+    assert chat_data.DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED is False
+    assert chat_data.format_datasource_group_context_for_llm("说明文本") == ""
+
+
+def test_format_datasource_group_context_for_llm(datasource_injection_enabled):
     assert chat_data.format_datasource_group_context_for_llm("说明文本") == (
         "\n## 数据源组智能问数说明\n说明文本\n"
     )
@@ -43,55 +64,53 @@ def test_format_datasource_group_context_for_llm():
 def test_build_semantic_layer_context_without_selection():
     unselected = chat_data.build_semantic_layer_context(None)
 
-    assert unselected.startswith("## 当前语义模型")
-    assert "本轮未手动选择语义模型" in unselected
+    # 只留一句状态：目录快照说明由环境块承载，检索规则由技能承载
+    assert unselected == "## 当前语义模型\n本轮未手动选择语义模型。\n"
     # 空 dict 与 None 走同一分支
     assert chat_data.build_semantic_layer_context({}) == unselected
 
 
-def test_build_semantic_layer_context_delegates_to_data_analyzing_skill():
-    """检索用法单一维护在数据分析技能：提示词只声明目录存在 + 指向技能，不重复步骤。"""
+def test_build_semantic_layer_context_is_minimal():
+    """选中/未选中都只报状态，不再展开目录、技能指引或检索步骤。"""
     unselected = chat_data.build_semantic_layer_context(None)
-
-    assert "/mnt/user-data/workspace/semantic/" in unselected
-    assert DATA_ANALYZING_SKILL in unselected
-    assert "SKILL.md" in unselected
-    assert "semantic_search" not in unselected
-    # 不再重复定义检索步骤
-    assert "dir_list" not in unselected
-    assert "file_grep" not in unselected
-    # 已选模型分支同样只指向技能
     selected = chat_data.build_semantic_layer_context({"id": "cfg_1", "name": "交易域"})
-    assert DATA_ANALYZING_SKILL in selected
-    assert "file_grep" not in selected
+
+    assert DATA_ANALYZING_SKILL not in unselected
+    assert DATA_ANALYZING_SKILL not in selected
+    assert "SKILL.md" not in selected
     assert "semantic_search" not in selected
+    assert "dir_list" not in selected
+    assert "file_grep" not in selected
+    # 选中时报用户可见路径 + 模型名 + semantic_config_id
+    assert "用户选中了 `/mnt/user-data/workspace/semantic/` 下的「交易域」语义模型" in selected
+    assert "semantic_config_id: cfg_1" in selected
 
 
 def test_build_semantic_layer_context_with_name_and_id():
     text = chat_data.build_semantic_layer_context({"id": "cfg_1", "name": "交易域"})
 
-    assert "当前已选择语义模型：交易域（semantic_config_id: cfg_1）" in text
-    assert "这是本轮优先参考，不代表锁定。" in text
+    assert "用户选中了 `/mnt/user-data/workspace/semantic/` 下的「交易域」语义模型（semantic_config_id: cfg_1）" in text
 
 
 def test_build_semantic_layer_context_name_fallbacks():
     """name 缺失时依次回落 config_name、id。"""
-    assert "：交易域配置" in chat_data.build_semantic_layer_context(
+    assert "「交易域配置」" in chat_data.build_semantic_layer_context(
         {"id": "cfg_1", "config_name": "交易域配置"}
     )
     # 连 config_name 都没有时用 id 顶上
-    assert "：cfg_1" in chat_data.build_semantic_layer_context({"id": "cfg_1"})
+    assert "「cfg_1」" in chat_data.build_semantic_layer_context({"id": "cfg_1"})
     # 有 name 但没 id 时不输出 semantic_config_id 片段
     text = chat_data.build_semantic_layer_context({"name": "交易域"})
-    assert "：交易域" in text
+    assert "「交易域」" in text
     assert "semantic_config_id" not in text
 
 
 def test_build_semantic_layer_context_with_id_only_skips_name_part():
-    """config_id 为空时连括号片段一并跳过（38->40 假分支 + 40->42 假分支）。"""
+    """config_name 缺失且 name 为空时不输出空的「」片段。"""
     text = chat_data.build_semantic_layer_context({"name": ""})
 
-    assert text.startswith("## 当前语义模型\n当前已选择语义模型。")
+    assert text.startswith("## 当前语义模型\n用户选中了")
+    assert "「」" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +124,41 @@ def test_format_conversation_context_rejects_non_dict():
     assert chat_data._format_conversation_context([]) == "{}"
 
 
-def test_format_conversation_context_picks_selected_config():
+def test_format_conversation_context_skips_datasource_context_by_default():
+    """两个注入开关默认关闭：数据源组段与语义模型选中状态段都被丢弃。
+
+    语义模型指定改由输入框 @ 引用挂在当轮 Human 消息上，系统提示词不再维护。
+    """
+    data_context = {
+        "datasource_group_context": "数据源组说明",
+        "semantic_configs": [{"id": "cfg_1", "name": "交易域", "selected": True}],
+    }
+
+    text = chat_data._format_conversation_context(data_context)
+
+    assert text == ""
+    assert "数据源组说明" not in text
+    assert "## 数据源组智能问数说明" not in text
+    assert "cfg_1" not in text
+    assert "## 当前语义模型" not in text
+
+
+def test_format_conversation_context_keeps_semantic_note_even_when_injection_disabled():
+    """物化说明不受开关影响，始终保留。"""
+    data_context = {
+        "datasource_group_context": "数据源组说明",
+        "semantic_materialize_note": "已预物化 3 个语义模型",
+        "semantic_configs": [{"id": "cfg_1", "name": "交易域", "selected": True}],
+    }
+
+    text = chat_data._format_conversation_context(data_context)
+
+    assert text == "已预物化 3 个语义模型"
+
+
+def test_format_conversation_context_picks_selected_config(
+    datasource_injection_enabled, semantic_injection_enabled
+):
     data_context = {
         "datasource_group_context": "数据源组说明",
         "semantic_configs": [
@@ -122,7 +175,7 @@ def test_format_conversation_context_picks_selected_config():
     assert "未选中" not in text
 
 
-def test_build_data_context_text_prefers_explicit_data_context():
+def test_build_data_context_text_prefers_explicit_data_context(datasource_injection_enabled):
     """传了 data_context 时忽略独立入参（82 真分支）。"""
     text = chat_data.build_data_context_text(
         data_context={"datasource_group_context": "来自会话上下文"},
@@ -133,14 +186,28 @@ def test_build_data_context_text_prefers_explicit_data_context():
     assert "被忽略" not in text
 
 
-def test_build_data_context_text_assembles_parts_when_no_data_context():
-    """未传 data_context 时按两段拼装，空段自动跳过（82 假分支 + 89 过滤）。"""
+def test_build_data_context_text_assembles_parts_when_no_data_context(
+    datasource_injection_enabled, semantic_injection_enabled
+):
+    """两个开关都打开时按两段拼装，空段自动跳过。"""
     text = chat_data.build_data_context_text(
         datasource_group_context="数据源组说明",
     )
 
     assert text.startswith("## 数据源组智能问数说明")
-    assert "本轮未手动选择语义模型" in text
+    assert "## 当前语义模型\n本轮未手动选择语义模型。" in text
+
+
+def test_build_data_context_text_omits_both_parts_by_default():
+    """两个注入开关默认关闭：独立入参形态下什么都不拼，返回空串。"""
+    text = chat_data.build_data_context_text(
+        datasource_group_context="数据源组说明",
+    )
+
+    assert text == ""
+    assert "数据源组说明" not in text
+    assert "## 数据源组智能问数说明" not in text
+    assert "本轮未手动选择语义模型" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +260,30 @@ def test_build_dialect_prompt_context_maps_source_type_to_dialect():
     assert "Hive" in chat_data.build_dialect_prompt_context({})
 
 
-def test_dialect_block_is_always_present():
-    """`build_dialect_prompt_context` 恒返回非空串。
+def test_dialect_block_disabled_by_default():
+    """方言块默认不注入：当前方言随 list_execution_targets 返回（见 prompts 开关注释）。
 
-    因此 `build_unified_system_prompt` 第 261 行 `if dialect_context_text` 的假分支
-    无法触达（方言段落必然被追加），这里固化该结论，避免误判为漏测。
+    `build_dialect_prompt_context` 恒返回非空串（含恢复注入时的假分支保护），
+    这里固化开关关闭时的行为。
     """
+    assert chat_data.DIALECT_PROMPT_INJECTION_ENABLED is False
     for data_context in ({}, {"datasource": None}, {"datasource": {"source_type": "mysql"}}, None):
         assert chat_data.build_dialect_prompt_context(data_context or {})
 
     prompt = chat_data.build_unified_system_prompt(AgentRuntimeOptions())
-    assert chat_data.DIALECT_BLOCK.split("{")[0] in prompt
+    assert chat_data.DIALECT_BLOCK.split("{")[0] not in prompt
+    assert "当前数据库方言" not in prompt
+
+
+def test_dialect_block_injected_when_enabled(datasource_injection_enabled, monkeypatch):
+    """恢复注入开关后方言块回到系统提示词（mysql 数据源映射为 MySQL）。"""
+    monkeypatch.setattr(chat_data, "DIALECT_PROMPT_INJECTION_ENABLED", True)
+    prompt = chat_data.build_unified_system_prompt(
+        AgentRuntimeOptions(),
+        data_context={"datasource": {"source_type": "mysql"}},
+    )
+    assert "## 方言上下文" in prompt
+    assert "当前数据库方言：MySQL" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +355,18 @@ def test_system_prompt_environment_block_ignores_workspace_root():
     assert chat_data.build_unified_system_prompt(AgentRuntimeOptions()) == with_root
 
 
-def test_system_prompt_inlines_data_context_parts():
+def test_system_prompt_omits_datasource_context_by_default():
+    """注入开关默认关闭：数据源组上下文不再进系统提示词。"""
+    prompt = chat_data.build_unified_system_prompt(
+        AgentRuntimeOptions(),
+        datasource_group_context="数据源组说明",
+    )
+
+    assert "## 数据源组智能问数说明" not in prompt
+    assert "数据源组说明" not in prompt
+
+
+def test_system_prompt_inlines_data_context_parts(datasource_injection_enabled):
     prompt = chat_data.build_unified_system_prompt(
         AgentRuntimeOptions(),
         datasource_group_context="数据源组说明",

@@ -1193,3 +1193,154 @@ def test_check_yaml_rejects_duplicate_names_in_request(monkeypatch):
     assert payload["stage"] == "duplicate_names"
     assert "重名模型" in payload["error"]
     assert payload["models"] == []
+
+
+# ---------------------------------------------------------------------------
+# list_execution_targets（只读发现通道）
+# ---------------------------------------------------------------------------
+
+_TARGETS_FIXTURE = [
+    {
+        "member_datasource_id": "m1",
+        "member_name": "机构A",
+        "org_code": "ORG_A",
+        "source_type": "hive",
+        "query_executor_type": "http",
+        "source_config": {"host": "10.0.0.1", "port": 10000, "database": "db_a", "org_code": "ORG_A", "org_name": "机构A"},
+    },
+    {
+        "member_datasource_id": "m2",
+        "member_name": "ORG_B",
+        "org_code": "ORG_B",
+        "source_type": "mysql",
+        "query_executor_type": "direct",
+        "source_config": {"host": "10.0.0.2", "port": 3306, "database": "db_b"},
+    },
+]
+
+
+class _FakeTargetsManager:
+    def __init__(self, targets, meta=None):
+        self._targets = targets
+        self._meta = meta
+        self.captured = None
+        self.meta_calls = []
+
+    async def list_authorized_execution_targets_async(self, datasource_id, user_id=None, username=None):
+        self.captured = {"datasource_id": datasource_id, "user_id": user_id, "username": username}
+        return self._targets
+
+    async def get_datasource_meta_async(self, datasource_id):
+        self.meta_calls.append(datasource_id)
+        return self._meta
+
+
+_DATASOURCE_META_FIXTURE = {
+    "group_name": "支付机构库",
+    "source_type": "hive",
+    "query_context": "本数据源组按机构分库存储交易数据。",
+}
+
+
+def _invoke_list_targets(monkeypatch, *, tool_kwargs=None, state=None, meta=_DATASOURCE_META_FIXTURE):
+    manager = _FakeTargetsManager(_TARGETS_FIXTURE, meta=meta)
+    monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
+    raw = asyncio.run(
+        data_analyzing.create_data_analyzing_tool(**(tool_kwargs or {})).ainvoke({
+            "action": "list_execution_targets",
+            "action_payload": {},
+            "state": state if state is not None else _semantic_query_state(),
+        })
+    )
+    return json.loads(raw.replace(RESULT_PREFIX, "", 1)), manager
+
+
+def test_input_list_execution_targets_accepts_empty_payload():
+    parsed = DataAnalyzingInput.model_validate({"action": "list_execution_targets", "action_payload": {}})
+    assert parsed.action == "list_execution_targets"
+
+
+def test_list_execution_targets_returns_sanitized_entries(monkeypatch):
+    """清单只透出名称/ID/机构编码，不透出连接信息；身份取自 state 会话上下文。"""
+    payload, manager = _invoke_list_targets(
+        monkeypatch,
+        state=_semantic_query_state(datasource_id="ds_a", user_id="user_a", operator_name="测试用户"),
+    )
+    assert payload["success"] is True
+    assert payload["count"] == 2
+    assert payload["execution_targets"] == [
+        {"member_name": "机构A", "member_datasource_id": "m1", "org_code": "ORG_A"},
+        {"member_name": "ORG_B", "member_datasource_id": "m2", "org_code": "ORG_B"},
+    ]
+    assert "host" not in json.dumps(payload, ensure_ascii=False)
+    assert "10.0.0.1" not in json.dumps(payload, ensure_ascii=False)
+    assert manager.captured == {"datasource_id": "ds_a", "user_id": "user_a", "username": "测试用户"}
+
+
+def test_list_execution_targets_returns_datasource_overview(monkeypatch):
+    """方言/类型/智能问数说明随清单返回，替代系统提示词静态注入。
+
+    datasource_id（服务端绑定，模型用不上）、datasource_name、usage_hint
+    均不透出，保持返回最小。
+    """
+    payload, manager = _invoke_list_targets(
+        monkeypatch,
+        state=_semantic_query_state(datasource_id="ds_a"),
+    )
+    assert payload["source_type"] == "hive"
+    assert payload["dialect"] == "Hive"
+    assert payload["query_context"] == "本数据源组按机构分库存储交易数据。"
+    assert manager.meta_calls == ["ds_a"]
+    assert "datasource_id" not in payload
+    assert "datasource_name" not in payload
+    assert "usage_hint" not in payload
+
+
+def test_list_execution_targets_overview_defaults_when_meta_missing(monkeypatch):
+    """meta 缺失（组刚被删等）时概览字段留空，方言回落 Hive，不报错。"""
+    payload, _ = _invoke_list_targets(
+        monkeypatch,
+        state=_semantic_query_state(datasource_id="ds_a"),
+        meta=None,
+    )
+    assert payload["source_type"] == ""
+    assert payload["dialect"] == "Hive"
+    assert payload["query_context"] == ""
+
+
+def test_list_execution_targets_falls_back_to_bound_context(monkeypatch):
+    """state 缺数据源/身份时回落到工具绑定的会话上下文。"""
+    payload, manager = _invoke_list_targets(
+        monkeypatch,
+        tool_kwargs={"datasource_id": "ds_bound", "user_id": "bound_u", "operator_name": "绑定用户"},
+        state={"execution_context": {}},
+    )
+    # datasource_id 不透出，但清单按绑定数据源解析（captured 可见）
+    assert manager.captured == {"datasource_id": "ds_bound", "user_id": "bound_u", "username": "绑定用户"}
+
+
+def test_list_execution_targets_requires_datasource():
+    with pytest.raises(ValueError, match="当前会话未绑定数据源"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool("").ainvoke({
+                "action": "list_execution_targets",
+                "action_payload": {},
+                "state": {},
+            })
+        )
+
+
+def test_validate_member_scope_error_includes_available_list():
+    """member 范围报错必须带当前可用执行对象清单，模型可自行纠正而不是再问一轮。"""
+    with pytest.raises(ValueError, match="当前可用执行对象: m1, m2"):
+        data_analyzing._validate_member_scope(
+            requested_member_datasource_ids=[],
+            available_member_datasource_ids=["m1", "m2"],
+            matched_member_datasource_ids=[],
+        )
+    with pytest.raises(ValueError, match="当前可用执行对象: m1, m2"):
+        data_analyzing._validate_member_scope(
+            requested_member_datasource_ids=["m3"],
+            available_member_datasource_ids=["m1", "m2"],
+            matched_member_datasource_ids=[],
+        )

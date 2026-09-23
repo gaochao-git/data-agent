@@ -637,14 +637,13 @@ class DataSourceManager:
         datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
         return self._build_execution_datasource_targets(datasource, member_datasource_ids)
 
-    async def authorize_execution_datasources_async(
+    async def _filter_authorized_datasource(
         self,
         datasource: dict,
-        member_datasource_ids: Optional[List[str]] = None,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """按当前用户机构权限过滤已读取的数据源执行对象。"""
+    ) -> dict:
+        """按当前用户机构权限过滤数据源成员，过滤后无任何可用成员时报错。"""
         if datasource_requires_http_permission(datasource):
             allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
         else:
@@ -656,7 +655,33 @@ class DataSourceManager:
         filtered_datasource = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
         if not filtered_datasource:
             raise ValueError("当前用户无可用执行对象权限")
+        return filtered_datasource
+
+    async def authorize_execution_datasources_async(
+        self,
+        datasource: dict,
+        member_datasource_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """按当前用户机构权限过滤已读取的数据源执行对象。"""
+        filtered_datasource = await self._filter_authorized_datasource(datasource, user_id, username)
         return self._build_execution_datasource_targets(filtered_datasource, member_datasource_ids)
+
+    async def list_authorized_execution_targets_async(
+        self,
+        datasource_id: str,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """列出当前用户在数据源组下有权限执行的全部成员数据源（不限定选中范围）。"""
+        datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
+        filtered_datasource = await self._filter_authorized_datasource(datasource, user_id, username)
+        member_map = self._member_source_map(filtered_datasource.get("member_sources") or [])
+        return [
+            self._build_execution_target(filtered_datasource, member_id, member_map[member_id])
+            for member_id in member_map
+        ]
 
     async def get_authorized_execution_datasources_async(
         self,

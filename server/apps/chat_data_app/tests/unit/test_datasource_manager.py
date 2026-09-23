@@ -332,6 +332,47 @@ def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
         asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", ["m_http_denied"], user_id="u1", username="用户1"))
 
 
+def test_list_authorized_execution_targets_returns_all_allowed_members(monkeypatch):
+    """全量授权清单：只返回过滤后的成员全集，不限定选中范围；无权限成员被整体剔除。"""
+    store = _FakeStore()
+    store.datasources["ds_a"].update({
+        "template_datasource_id": "m_http_allowed",
+        "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
+        "member_sources": [
+            {
+                "member_datasource_id": "m_http_allowed",
+                "org_code": "ORG_HTTP_ALLOWED",
+                "org_name": "HTTP机构A",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+            {
+                "member_datasource_id": "m_http_denied",
+                "org_code": "ORG_HTTP_DENIED",
+                "org_name": "HTTP机构B",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+        ],
+    })
+    manager = _build_manager(store)
+
+    async def allowed_http(_user_id=None, _username=None):
+        return {"direct": set(), "http": {"ORG_HTTP_ALLOWED"}}
+
+    async def denied_all(_user_id=None, _username=None):
+        return {"direct": set(), "http": set()}
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", allowed_http)
+    targets = asyncio.run(manager.list_authorized_execution_targets_async("ds_a", user_id="u1", username="用户1"))
+    assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
+    assert targets[0]["member_name"] == "HTTP机构A"
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", denied_all)
+    with pytest.raises(ValueError, match="当前用户无可用执行对象权限"):
+        asyncio.run(manager.list_authorized_execution_targets_async("ds_a", user_id="u1", username="用户1"))
+
+
 def test_execution_permission_http_provider_success_and_failure(monkeypatch):
     calls = []
 
