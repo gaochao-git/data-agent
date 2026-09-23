@@ -734,6 +734,105 @@ def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection
     assert "skill_names" not in human_message.additional_kwargs
 
 
+def _capture_semantic_prepare(monkeypatch, captured: dict):
+    """替换 prepare_semantic_conversation_context，捕获入参供断言推导结果。"""
+
+    async def capture_prepare(**kwargs):
+        captured.update(kwargs)
+        return _semantic_context_from_request(**kwargs)
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
+        capture_prepare,
+    )
+
+
+def _single_selection(config_id: str) -> dict:
+    return {
+        "semantic_config_id": config_id,
+        "semantic_config_name": config_id,
+        "confidence": "",
+        "reason": "输入框 @ 引用",
+        "matched_metrics": [],
+        "matched_dimensions": [],
+        "auto_selected": False,
+        "user_selected": True,
+    }
+
+
+def test_generate_chat_data_stream_derives_single_selection_binding(monkeypatch):
+    """前端只发 @ 引用列表：恰好引用一个时，服务端自动推导 semantic_config_id。"""
+    import asyncio
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    captured: dict = {}
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    _capture_semantic_prepare(monkeypatch, captured)
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_derive_single_binding",
+        user_query="商品数量有多少",
+        datasource_id="ds_a",
+        semantic_config_selection=[_single_selection("cfg_single")],
+    )))
+
+    assert captured.get("semantic_config_id") == "cfg_single"
+
+
+def test_generate_chat_data_stream_explicit_semantic_config_id_wins_over_derivation(monkeypatch):
+    """显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。"""
+    import asyncio
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    captured: dict = {}
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    _capture_semantic_prepare(monkeypatch, captured)
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_explicit_binding_wins",
+        user_query="商品数量有多少",
+        datasource_id="ds_a",
+        semantic_config_id="cfg_explicit",
+        semantic_config_selection=[_single_selection("cfg_other")],
+    )))
+
+    assert captured.get("semantic_config_id") == "cfg_explicit"
+
+
+def test_generate_chat_data_stream_multi_selection_skips_binding_derivation(monkeypatch):
+    """多引用不推导单值绑定，交给模型检索（智能选择）。"""
+    import asyncio
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    captured: dict = {}
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+    _capture_semantic_prepare(monkeypatch, captured)
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_multi_selection_no_binding",
+        user_query="商品数量有多少",
+        datasource_id="ds_a",
+        semantic_config_selection=[_single_selection("cfg_a"), _single_selection("cfg_b")],
+    )))
+
+    assert captured.get("semantic_config_id") is None
+
+
 def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
     import asyncio
 

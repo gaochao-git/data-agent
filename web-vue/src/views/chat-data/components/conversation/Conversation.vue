@@ -1964,8 +1964,8 @@ const submitAnalysisQuery = async (
           }
           upsertToolMessage(updated)
         },
-        // 服务端单值绑定只在恰好引用一个模型时生效；多引用/未引用交给模型检索（智能选择）
-        semanticConfigId: mentionSelections.length === 1 ? mentionSelections[0]?.semantic_config_id ?? null : null,
+        // 单值 semantic_config_id 绑定由服务端从 @ 引用列表推导（恰好引用一个时）；
+        // 多引用/未引用交给模型检索（智能选择），前端不再重复发单值字段。
         modelId: selectedModelValue.value,
         memberDatasourceIds: selectedMemberDatasourceIds.value,
         agentId: 'chat_data',

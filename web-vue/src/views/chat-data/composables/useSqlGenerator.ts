@@ -114,7 +114,6 @@ export function useSqlGenerator() {
       onStatus?: (status: string, message: string) => void
       onError?: (error: string) => void
       onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void
-      semanticConfigId?: string | null
       modelId?: string | null
       memberDatasourceIds?: string[]
       agentId?: string
@@ -148,7 +147,6 @@ export function useSqlGenerator() {
       onStatus,
       onError,
       onRunningTool,
-      semanticConfigId,
       modelId,
       memberDatasourceIds,
       agentId = 'chat_data',
@@ -212,11 +210,8 @@ export function useSqlGenerator() {
         options.model_id = modelId
       }
 
-      // 传入明确的语义配置 ID 时，使用语义模式
-      if (semanticConfigId !== null && semanticConfigId !== undefined) {
-        options.semantic_config_id = semanticConfigId
-      }
-      // @ 引用清单（多选）：后端兼容 dict 与 list 两种留痕格式，统一以列表传输
+      // @ 引用清单（多选）：后端兼容 dict 与 list 两种留痕格式，统一以列表传输；
+      // 单引用绑定的 semantic_config_id 由服务端从该列表推导，前端不重复发送
       if (semanticConfigSelections?.length) {
         options.semantic_config_selection = semanticConfigSelections
       }

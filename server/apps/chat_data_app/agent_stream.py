@@ -1546,6 +1546,11 @@ async def _run_chat_data_agent_stream(
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
     semantic_selection_events = _normalize_semantic_selection_events(semantic_config_selection)
+    # 单引用自动绑定：前端只发 @ 引用列表，恰好引用一个时由服务端推导单值
+    # semantic_config_id（驱动语义工作区物化）；多引用/未引用交给模型检索（智能选择）。
+    # 显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。
+    if not semantic_config_id and len(semantic_selection_events) == 1:
+        semantic_config_id = semantic_selection_events[0]["semantic_config_id"]
     try:
         semantic_context, prompt_context = await _prepare_agent_semantic_context(
             thread_id=thread_id,
