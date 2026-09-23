@@ -379,6 +379,8 @@ export interface Message {
   turnId?: string
   dashboardSpec?: DashboardSpecPayload
   semanticConfigSelection?: SemanticConfigSelectionInfo
+  /** 用户消息 @ 引用的语义模型清单（多选，本地发送与历史回放共用）。 */
+  semanticConfigSelections?: SemanticConfigSelectionInfo[]
   skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]

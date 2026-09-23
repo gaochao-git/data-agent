@@ -29,7 +29,8 @@ from apps.chat_data_app.agent_stream import (
     _format_thinking_event,
     _format_tool_event,
     _is_tool_result_error,
-    _normalize_semantic_selection_payload,
+    _normalize_semantic_selection_events,
+    _semantic_selection_mention_suffix,
     _append_reasoning_segment,
     _parse_tool_args_buffer,
     _generate_chat_data_stream,
@@ -253,10 +254,26 @@ def test_normalize_enable_thinking_branches():
     assert normalize_enable_thinking(object()) is None
 
 
-def test_normalize_semantic_selection_payload_branches():
-    assert _normalize_semantic_selection_payload(None) is None
-    assert _normalize_semantic_selection_payload({"semantic_config_id": ""}) is None
-    normalized = _normalize_semantic_selection_payload({
+def test_normalize_semantic_selection_events_branches():
+    # 非法入参一律空列表
+    assert _normalize_semantic_selection_events(None) == []
+    assert _normalize_semantic_selection_events({"semantic_config_id": ""}) == []
+    assert _normalize_semantic_selection_events(["junk", 1]) == []
+    # 单对象（旧格式）与列表（@ 多选）都兼容；按 id 去重
+    assert _normalize_semantic_selection_events([
+        {"semantic_config_id": " cfg_a ", "semantic_config_name": ""},
+        {"semantic_config_id": "cfg_a", "semantic_config_name": "重复丢弃"},
+    ]) == [{
+        "semantic_config_id": "cfg_a",
+        "semantic_config_name": "cfg_a",
+        "confidence": "",
+        "reason": "",
+        "matched_metrics": [],
+        "matched_dimensions": [],
+        "auto_selected": False,
+        "user_selected": False,
+    }]
+    normalized = _normalize_semantic_selection_events({
         "semantic_config_id": " cfg_a ",
         "semantic_config_name": "",
         "confidence": " high ",
@@ -267,7 +284,7 @@ def test_normalize_semantic_selection_payload_branches():
         "user_selected": "",
     })
 
-    assert normalized == {
+    assert normalized == [{
         "semantic_config_id": "cfg_a",
         "semantic_config_name": "cfg_a",
         "confidence": "high",
@@ -276,7 +293,21 @@ def test_normalize_semantic_selection_payload_branches():
         "matched_dimensions": [],
         "auto_selected": True,
         "user_selected": False,
-    }
+    }]
+
+
+def test_semantic_selection_mention_suffix_lists_all_models():
+    events = [
+        {"semantic_config_id": "cfg_a", "semantic_config_name": "订单模型", "user_selected": True},
+        {"semantic_config_id": "cfg_b", "semantic_config_name": "产品模型", "user_selected": True},
+        {"semantic_config_id": "cfg_c", "semantic_config_name": "未选", "user_selected": False},
+    ]
+
+    assert _semantic_selection_mention_suffix(events) == (
+        "\n\n[本轮指定语义模型：订单模型（semantic_config_id: cfg_a）、产品模型（semantic_config_id: cfg_b）]"
+    )
+    assert _semantic_selection_mention_suffix([]) == ""
+    assert _semantic_selection_mention_suffix([{"semantic_config_id": "cfg_x", "user_selected": False}]) == ""
 
 
 def test_parse_tool_args_buffer_falls_back_on_invalid_json():
@@ -483,7 +514,8 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     joined = "".join(events)
     assert "5+5=10" in joined
     assert "prompt_context" not in fake_graph.initial_state
-    assert "## 当前语义模型" in captured_agent_kwargs["model_invocation"].system_prompt
+    # 语义模型段已整体退出系统提示词（未选中/选中都不再注入；选中走 @ 引用短句）
+    assert "## 当前语义模型" not in captured_agent_kwargs["model_invocation"].system_prompt
     # 系统提示词不再枚举模型目录、不重复检索步骤，指向数据分析技能
     assert "当前可见指标集目录" not in captured_agent_kwargs["model_invocation"].system_prompt
     assert DATA_ANALYZING_SKILL in captured_agent_kwargs["model_invocation"].system_prompt
@@ -690,12 +722,15 @@ def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection
     joined = "".join(events)
     assert "商品数量为 10" in joined
     human_message = fake_graph.initial_state["messages"][0]
-    selection = human_message.additional_kwargs["semantic_config_selection"]
-    assert selection["semantic_config_id"] == "cfg_test"
-    assert selection["semantic_config_name"] == "测试指标集"
-    assert selection["matched_metrics"] == ["商品数量"]
-    assert selection["user_selected"] is True
-    assert selection["auto_selected"] is False
+    # 留痕统一为列表（@ 多选通道）；正文追加模型可见的指定短句
+    selections = human_message.additional_kwargs["semantic_config_selection"]
+    assert isinstance(selections, list) and len(selections) == 1
+    assert selections[0]["semantic_config_id"] == "cfg_test"
+    assert selections[0]["semantic_config_name"] == "测试指标集"
+    assert selections[0]["matched_metrics"] == ["商品数量"]
+    assert selections[0]["user_selected"] is True
+    assert selections[0]["auto_selected"] is False
+    assert human_message.content.endswith("[本轮指定语义模型：测试指标集（semantic_config_id: cfg_test）]")
     assert "skill_names" not in human_message.additional_kwargs
 
 

@@ -9,7 +9,7 @@
 
 ## 必读资料
 
-- 当前数据库方言为 Hive 或涉及原生 SQL 的日期、字符串、窗口等方言差异时，读取：
+- 当前数据库方言以 `list_execution_targets` 返回的 `dialect` 为准，调用该工具前不要假设方言；涉及原生 SQL 的日期、字符串、窗口等方言差异时，读取：
   `/mnt/skills/data-analyzing/references/analysis/dialect.md`
 - DSL 查询只使用 `time_grain`，不要把 SQL 日期格式串写入 DSL。
 
@@ -22,6 +22,7 @@
 - 指标、维度或业务口径本身不明确时必须澄清，不能用 SQL 绕过；字段已经确认、只是枚举值或时间存储格式未知时，才允许少量抽样确认。
 - 一次 `data_analyzing_tool` 调用只能使用一个 `semantic_config_id`，不能混合多个模型的字段、分组或 JOIN。
 - 机构范围由 `member_datasource_ids` 控制，不在 DSL 过滤机构名称、编码或 ID。
+- 可用执行对象清单不进系统提示词：查询前先用 `data_analyzing_tool(action="list_execution_targets", action_payload={})` 实时获取当前用户可用清单，`member_datasource_ids` 只能从返回清单中选，不要凭记忆或历史轮次假设。
 
 ## 标准流程
 
@@ -51,11 +52,12 @@
 
 ### 3. 选择执行对象
 
-- 用户明确指定一个机构：只传该机构对应的 `member_datasource_ids`。
-- 用户明确指定多个机构：只传这些机构对应的多个 ID。
-- 只有用户明确说全部机构、各机构或所有执行对象时，才传全部可用 ID。
-- 未指定机构且有多个可用机构时，默认传系统列表第 1 个机构，并在最终回答说明默认机构。
-- 机构名称或编码无法唯一匹配时，先澄清范围。
+1. 查询前先调用 `data_analyzing_tool(action="list_execution_targets", action_payload={})` 实时获取当前用户可用执行对象清单（机构名称、编码与 `member_datasource_id`）；返回同时携带当前方言 `dialect` 与智能问数说明 `query_context`，清单与方言均以工具当次返回为准。清单为空时直接向用户说明无可用执行对象，不继续查询。
+2. 用户明确指定一个机构：只传该机构对应的 `member_datasource_ids`。
+3. 用户明确指定多个机构：只传这些机构对应的多个 ID。
+4. 只有用户明确说全部机构、各机构或所有执行对象时，才传全部可用 ID。
+5. 未指定机构且有多个可用机构时，默认传系统列表第 1 个机构，并在最终回答说明默认机构。
+6. 机构名称或编码无法唯一匹配时，先澄清范围。
 
 机构 ID 只放 `member_datasource_ids`，不要添加机构维度或机构过滤条件。
 

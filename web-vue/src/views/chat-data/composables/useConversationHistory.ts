@@ -330,14 +330,16 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
 
     if (eventType === 'user_message') {
       activeAssistant = null
-      pendingSemanticConfigSelection = normalizeSemanticConfigSelection(messagePayload.semantic_config_selection)
-      const userContent = normalizeUserMessageContent(messagePayload.content)
+      const semanticSelections = normalizeSemanticConfigSelectionList(messagePayload.semantic_config_selection)
+      pendingSemanticConfigSelection = semanticSelections[0] || null
+      const userContent = stripSemanticMentionSuffix(normalizeUserMessageContent(messagePayload.content))
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
         content: userContent,
         turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
+        semanticConfigSelections: semanticSelections.length > 0 ? semanticSelections : undefined,
       })
       continue
     }
@@ -485,12 +487,14 @@ export const buildHistoryMessages = (
         : ''
       startReasoningTurn(reasoningTurnId || undefined)
       activeAssistant = null
-      pendingSemanticConfigSelection = normalizeSemanticConfigSelection(rawMessage.semantic_config_selection)
+      const semanticSelections = normalizeSemanticConfigSelectionList(rawMessage.semantic_config_selection)
+      pendingSemanticConfigSelection = semanticSelections[0] || null
       displayMessages.push({
         id: String(rawMessage.id || `user-history-${displayMessages.length}`),
         role: 'user',
-        content: String(rawMessage.content || '').trim(),
+        content: stripSemanticMentionSuffix(String(rawMessage.content || '').trim()),
         timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
+        semanticConfigSelections: semanticSelections.length > 0 ? semanticSelections : undefined,
       })
       continue
     }
@@ -563,6 +567,23 @@ const normalizeSemanticConfigSelection = (value: unknown): SemanticConfigSelecti
     user_selected: Boolean(data.user_selected),
   }
 }
+
+// @ 引用留痕兼容两种形态：单对象（历史存量）与对象列表（@ 多选），统一还原为列表
+const normalizeSemanticConfigSelectionList = (value: unknown): SemanticConfigSelectionInfo[] => {
+  const rawItems = Array.isArray(value) ? value : [value]
+  const selections: SemanticConfigSelectionInfo[] = []
+  for (const item of rawItems) {
+    const selection = normalizeSemanticConfigSelection(item)
+    if (selection && !selections.some(existing => existing.semantic_config_id === selection.semantic_config_id)) {
+      selections.push(selection)
+    }
+  }
+  return selections
+}
+
+// 历史用户消息正文里的服务端注入短句（[本轮指定语义模型：xxx]）不重复展示，引用改由 chip 呈现
+const SEMANTIC_MENTION_SUFFIX_RE = /\s*\[本轮指定语义模型：[^\]]*\]\s*$/
+const stripSemanticMentionSuffix = (content: string): string => content.replace(SEMANTIC_MENTION_SUFFIX_RE, '').trimEnd()
 
 const applySemanticConfigSelection = (message: Message, selection: SemanticConfigSelectionInfo) => {
   if (message.semanticConfigSelection?.user_selected && !selection.user_selected) return

@@ -37,6 +37,16 @@ def get_execution_target_org_code(target: Dict[str, Any]) -> str:
     return str(target.get("org_code") or source_config.get("org_code") or get_execution_target_member_id(target) or "").strip()
 
 
+def source_type_to_dialect(source_type: Any) -> str:
+    """数据源 source_type → SQL 方言展示名（mysql→MySQL，其余一律按 Hive 处理）。
+
+    方言映射的唯一权威入口：工具返回（list_execution_targets）与提示词
+    兜底（build_dialect_prompt_context）共用，避免两套映射口径漂移。
+    """
+    normalized = str(source_type or "").strip().lower()
+    return "MySQL" if normalized == "mysql" else "Hive"
+
+
 def append_selected_execution_targets_to_context(
     query_context: str,
     execution_targets: List[Dict[str, Any]],

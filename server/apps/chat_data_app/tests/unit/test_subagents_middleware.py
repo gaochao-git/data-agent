@@ -2,11 +2,11 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from types import SimpleNamespace
 
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import (
@@ -17,6 +17,13 @@ from apps.chat_data_app.agent.middleware.subagents import (
     build_task_tool,
     validate_subagent_specs,
 )
+from apps.chat_data_app.agent.prompts import chat_data as chat_data_prompts
+
+
+@pytest.fixture
+def datasource_injection_enabled(monkeypatch):
+    """打开数据源组上下文注入开关（默认关闭，与主图共用 prompts/chat_data.py 开关）。"""
+    monkeypatch.setattr(chat_data_prompts, "DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED", True)
 
 
 def _spec(name="data-explore", **overrides):
@@ -57,7 +64,14 @@ def test_subagent_system_prompt_injects_skills_catalog():
     assert "/mnt/skills/data-analyzing/SKILL.md" in prompt
 
 
-def test_subagent_system_prompt_injects_datasource_group_context():
+def test_subagent_system_prompt_skips_datasource_context_by_default():
+    """注入开关默认关闭：spec 带数据上下文也不进子图 prompt（管道透传不受影响）。"""
+    spec = _spec(datasource_group_context="## 当前用户已选择的执行对象数据源\n- 财付通")
+    assert chat_data_prompts.DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED is False
+    assert subagents_module._subagent_system_prompt(spec) == spec.system_prompt
+
+
+def test_subagent_system_prompt_injects_datasource_group_context(datasource_injection_enabled):
     """一致继承：spec 带数据源组上下文时，子图 prompt 追加数据上下文段。"""
     context = (
         "## 当前用户已选择的执行对象数据源\n"
@@ -71,7 +85,7 @@ def test_subagent_system_prompt_injects_datasource_group_context():
     assert "ORG_CODE1" in prompt
 
 
-def test_subagent_system_prompt_appends_both_sections_when_present():
+def test_subagent_system_prompt_appends_both_sections_when_present(datasource_injection_enabled):
     """技能目录与数据上下文同时存在时两段都注入，且原 prompt 完整保留。"""
     xml = (
         "<available_skills>\n  <skill>\n    <name>data-analyzing</name>\n"

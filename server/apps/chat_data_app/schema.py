@@ -884,6 +884,14 @@ class _CheckYamlActionPayload(BaseModel):
         return data
 
 
+class _ListExecutionTargetsActionPayload(BaseModel):
+    """``list_execution_targets`` 的入参结构：实时获取当前用户可用执行对象。
+
+    无业务参数：范围完全由服务端会话上下文（datasource_id + user_id）决定，
+    模型不可指定、也不可缩小——这是防越权的一部分。
+    """
+
+
 # action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
 # 入参校验与 handler 内的解析共用同一张表，保证两处口径一致。
 DATA_ANALYZING_ACTION_PAYLOAD_MODELS = {
@@ -891,24 +899,33 @@ DATA_ANALYZING_ACTION_PAYLOAD_MODELS = {
     "validate_dashboard": _ValidateDashboardActionPayload,
     "execute_query": SemanticQueryInput,
     "check_yaml": _CheckYamlActionPayload,
+    "list_execution_targets": _ListExecutionTargetsActionPayload,
 }
 
 
 class DataAnalyzingInput(BaseModel):
     """数据分析工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    四个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
-    ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检。
+    五个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
+    ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
+    ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
     但每个 action 的 payload 在入口用 pydantic 模型校验，错参在入参即报错，不进 handler。
     """
 
-    action: Literal["validate_dsl", "validate_dashboard", "execute_query", "check_yaml"] = Field(
+    action: Literal[
+        "validate_dsl",
+        "validate_dashboard",
+        "execute_query",
+        "check_yaml",
+        "list_execution_targets",
+    ] = Field(
         ...,
         description=(
             "操作类型：validate_dsl 校验单个查询 DSL 并返回编译后 SQL（不执行）；"
             "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
-            "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检"
+            "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
+            "list_execution_targets 实时获取当前用户可用执行对象清单"
         ),
     )
     action_payload: Dict[str, Any] = Field(
@@ -920,7 +937,8 @@ class DataAnalyzingInput(BaseModel):
             "\"semantic_config_id\": \"卡片缺省值，可选\"}；"
             "execute_query 传 {\"dsl\": <完整语义DSL> 或 \"sql\": \"...\", \"semantic_config_id\": \"...\", "
             "\"member_datasource_ids\": [...]}；"
-            "check_yaml 传 {\"file_path\": \"/mnt/user-data/workspace/model.yaml\"}"
+            "check_yaml 传 {\"file_path\": \"/mnt/user-data/workspace/model.yaml\"}；"
+            "list_execution_targets 传 {}"
         ),
     )
     intent: str = Field(

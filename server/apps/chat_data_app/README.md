@@ -513,7 +513,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 | 工具 | 说明 |
 |-----|------|
 | `file_read` | 读取受控会话文件，或读取运行时技能快照中的 `SKILL.md` 与其声明资源 |
-| `data_analyzing_tool` | 数据分析合并工具：按 `action` 分派——`validate_dsl` 根据语义参数校验并生成 SQL、`execute_query` 执行语义查询、`validate_dashboard` 批量校验看板规格、`check_yaml` 语义模型 YAML 自检 |
+| `data_analyzing_tool` | 数据分析合并工具：按 `action` 分派——`validate_dsl` 根据语义参数校验并生成 SQL、`execute_query` 执行语义查询、`validate_dashboard` 批量校验看板规格、`check_yaml` 语义模型 YAML 自检、`list_execution_targets` 实时获取当前用户可用执行对象清单 |
 
 ### 智能问数上下文边界
 
@@ -545,7 +545,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 回答
 ```
 
-系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
+系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过指标集配置维护；可用执行对象清单通过 `data_analyzing_tool` 的 `list_execution_targets` 实时获取（数据源组智能问数说明的系统提示词注入已默认关闭，见 `agent/prompts/chat_data.py` 的 `DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED`）。
 
 指标集检索分两层：
 

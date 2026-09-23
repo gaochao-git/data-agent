@@ -122,7 +122,7 @@ export function useSqlGenerator() {
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
-      semanticConfigSelection?: SemanticConfigSelectionInfo | null
+      semanticConfigSelections?: SemanticConfigSelectionInfo[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
@@ -156,7 +156,7 @@ export function useSqlGenerator() {
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
-      semanticConfigSelection,
+      semanticConfigSelections,
       enableThinking,
       thinkingEffort,
       runtimeOptions,
@@ -216,8 +216,9 @@ export function useSqlGenerator() {
       if (semanticConfigId !== null && semanticConfigId !== undefined) {
         options.semantic_config_id = semanticConfigId
       }
-      if (semanticConfigSelection?.semantic_config_id) {
-        options.semantic_config_selection = semanticConfigSelection
+      // @ 引用清单（多选）：后端兼容 dict 与 list 两种留痕格式，统一以列表传输
+      if (semanticConfigSelections?.length) {
+        options.semantic_config_selection = semanticConfigSelections
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {

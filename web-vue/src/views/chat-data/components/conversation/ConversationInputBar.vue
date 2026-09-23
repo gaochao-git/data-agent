@@ -28,6 +28,8 @@ interface Props {
   placeholder: string
   /** 已选技能列表（title 展示、name 用于单项移除）。 */
   selectedSkills?: Array<{ name: string; title?: string }>
+  /** 输入框 @ 引用的语义模型列表（多选，chip 展示、单项可移除；空 = 智能选择）。 */
+  selectedSemanticModels?: Array<{ id: string; name: string }>
   selectedModel: string
   modelOptions: ModelOption[]
   /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
@@ -47,6 +49,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   selectedSkills: () => [],
+  selectedSemanticModels: () => [],
   inputFocused: false,
   showSkillButton: true,
   submitTitle: '发送 (Enter)',
@@ -62,6 +65,7 @@ const emit = defineEmits<{
   submit: []
   stop: []
   clearSkill: [name: string]
+  clearSemanticModel: [modelId: string]
   openSkillManager: []
   uploadFile: []
   pasteFiles: [files: File[]]
@@ -172,7 +176,22 @@ onBeforeUnmount(() => {
     @blur="emit('blur')"
   >
     <template #prepend>
-      <div v-if="props.selectedSkills.length" class="mb-2 flex flex-wrap items-center gap-1.5">
+      <div
+        v-if="props.selectedSkills.length || props.selectedSemanticModels.length"
+        class="mb-2 flex flex-wrap items-center gap-1.5"
+      >
+        <div
+          v-for="model in props.selectedSemanticModels"
+          :key="model.id"
+          class="flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
+          title="本轮提问使用该语义模型；移除后恢复智能选择"
+        >
+          <i class="fa-solid fa-cube text-[10px]"></i>
+          <span class="max-w-[140px] truncate">@{{ model.name }}</span>
+          <button type="button" class="text-blue-400 hover:text-blue-700" @click="emit('clearSemanticModel', model.id)">
+            <i class="fa-solid fa-xmark text-[10px]"></i>
+          </button>
+        </div>
         <div
           v-for="skill in props.selectedSkills"
           :key="skill.name"

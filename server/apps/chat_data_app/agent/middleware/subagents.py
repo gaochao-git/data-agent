@@ -54,6 +54,7 @@ from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_result import create_tool_result_middleware
 from ..agent_runtime import on_tool_error
+from ..prompts import chat_data as chat_data_prompts
 
 logger = get_logger(__name__)
 
@@ -417,7 +418,9 @@ def _subagent_system_prompt(spec: SubagentSpec) -> str:
     if "<skill>" in xml:
         prompt += "\n\n" + _SUBAGENT_SKILLS_SECTION_TEMPLATE.format(skills_xml=xml)
     context = str(spec.datasource_group_context or "").strip()
-    if context:
+    # 数据源组上下文默认不注入（与主图共用同一开关）：可用执行对象清单已改为
+    # data_analyzing_tool 的 list_execution_targets 按需实时获取，管道透传保留。
+    if context and chat_data_prompts.DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED:
         prompt += "\n\n" + _SUBAGENT_DATASOURCE_SECTION_TEMPLATE.format(datasource_context=context)
     return prompt
 
