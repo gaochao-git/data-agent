@@ -2220,14 +2220,14 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
           admitPendingMessages([queuedMessage.messageId])
         }
       }
-      // 随行内容已入队：只释放已随消息入队的那批引用/附件/技能；
+      // 随行内容已入队：只释放已随消息入队的那批引用/附件/技能（快照精确释放）；
       // API 往返期间新加的保留给下一条消息（失败分支全部保留供重试）
       mentionFileSelectionsSnapshot.forEach(path => removeMentionFile(path))
       if (queuedFileIds.length > 0) {
         const queuedFileIdSet = new Set(queuedFileIds)
         pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
       }
-      clearSelectedSkills()
+      queuedSkillNames.forEach(name => removeSelectedSkill(name))
     } catch (error) {
       pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
       input.value = query

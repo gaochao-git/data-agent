@@ -28,15 +28,16 @@ CREATE TABLE `chat_data_conversation_event` (
 ) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='ChatData会话原始事件历史';
 
 CREATE TABLE `chat_data_agent_inbox` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
   `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
   `run_id` varchar(64) NOT NULL COMMENT '运行ID',
   `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
-  `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
+  `queue_type` varchar(16) NOT NULL DEFAULT 'steer' COMMENT '队列类型: steer-运行中立即注入, next_turn-本轮结束后作为下一轮',
   `record_content` mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
+  `record_meta` text COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}',
   `record_status` varchar(16) NOT NULL COMMENT '运行或消息状态',
   `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',
   `consumed_time` datetime DEFAULT NULL COMMENT '消息注入时间',
@@ -49,10 +50,10 @@ CREATE TABLE `chat_data_agent_inbox` (
   `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`, `message_id`),
-  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `record_status`),
-  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `record_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
+  UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`,`message_id`),
+  KEY `idx_agent_inbox_conv` (`conversation_id`,`user_id`,`record_type`,`record_status`),
+  KEY `idx_agent_inbox_run` (`run_id`,`record_type`,`record_status`)
+) ENGINE=InnoDB AUTO_INCREMENT=1647 DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
 -- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
 CREATE TABLE `chat_data_agent_schedule` (

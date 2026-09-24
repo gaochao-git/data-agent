@@ -581,6 +581,20 @@ def test_normalize_steer_meta_keeps_unvalidated_paths():
     assert meta == {"file_selections": ["../../etc/passwd", "uploads/a.pdf"]}
 
 
+def test_normalize_steer_meta_caps_item_count():
+    """数量护栏：meta 列 TEXT 64KB，单类引用超上限直接截断（防异常超大 payload）。"""
+    cap = conversation_router._STEER_META_MAX_ITEMS
+    request = conversation_router.SteerRequest(
+        query="x",
+        file_selections=[f"uploads/f{i}.pdf" for i in range(cap + 10)],
+        file_ids=[f"file-{i}" for i in range(cap + 10)],
+    )
+    meta = conversation_router._normalize_steer_meta(request)
+    assert len(meta["file_selections"]) == cap
+    assert len(meta["file_ids"]) == cap
+    assert meta["file_ids"][0] == "file-0"  # 截断保留先入队的
+
+
 @pytest.mark.asyncio
 async def test_steer_enqueue_rejects_blank_content(steer_router_state):
     response = await conversation_router.steer("conv-1", conversation_router.SteerRequest(query="   "), FakeRequest())

@@ -77,6 +77,11 @@ class SteerRequest(BaseModel):
     file_ids: Optional[List[str]] = None  # 本次消息关联的上传文件ID列表（附件/截图）
 
 
+# 随行元数据单类引用数量上限：meta 列为 TEXT（64KB），引用均人工逐个添加，
+# 正常场景远低于上限；超出截断，防异常超大 payload 撞存储上限
+_STEER_META_MAX_ITEMS = 50
+
+
 class SteerMessageUpdateRequest(BaseModel):
     """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
     # 编辑后的内容同样经 inbox 进 state/checkpoint，与 SteerRequest 同限
@@ -102,9 +107,11 @@ def _normalize_steer_meta(request: SteerRequest) -> Optional[Dict[str, List[str]
     file_selections 复用主链路的 parse_file_selections（strip/去重/首尾斜杠
     容错）；存在性与白名单校验延后到消费时（agent_stream 采纳点，届时工作区
     才就绪）——与普通发送路径同一条「存引用、晚解析」语义。
+    数量护栏：meta 列为 TEXT（64KB），异常超大 payload 会撞存储上限；附件/引用
+    均为人工逐个添加，正常场景远低于上限，超出部分直接截断（消费端无感）。
     """
-    file_selections = parse_file_selections(request.file_selections)
-    file_ids = _normalize_string_list(request.file_ids)
+    file_selections = parse_file_selections(request.file_selections)[:_STEER_META_MAX_ITEMS]
+    file_ids = _normalize_string_list(request.file_ids)[:_STEER_META_MAX_ITEMS]
     if not file_selections and not file_ids:
         return None
     meta: Dict[str, List[str]] = {}
