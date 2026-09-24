@@ -494,9 +494,11 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         intent: str = "",
     ) -> str:
         """
-        在 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 新建或整体覆盖文本文件。
+        在 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 新建文本文件。
 
-        修改已有局部内容请使用 file_edit，避免无意覆盖文件。
+        优先使用 file_edit 修改已有文件：目标文件已存在且只需局部修改或追加时，
+        不要用本工具整体覆盖，必须用 file_edit 精确替换。仅当文件不存在、或确需
+        整份重写（如合并淘汰后重写 memory.md）时才使用本工具。
         注意：单次 content 受模型单轮输出上限约束，过长会在生成阶段被截断成半截文件；
         超过约 8000 字符的文本必须分块写入——先用本工具写前段，再用 file_edit 逐段追加
         （以文件当前末尾的唯一内容作 old_content，new_content 为该段原文接续新增内容）。
