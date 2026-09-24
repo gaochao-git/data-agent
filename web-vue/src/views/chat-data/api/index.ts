@@ -1064,7 +1064,7 @@ export interface GenerateBasicSemanticConfigsResult {
   }>
 }
 
-/** 后台为尚未建模的物理表批量创建禁用的公共基础模型 */
+/** 后台为尚未建模的物理表批量创建公共基础模型（默认启用） */
 export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise<ApiResponse<GenerateBasicSemanticConfigsResult>> {
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/generate-basic`,
@@ -1269,6 +1269,32 @@ export function toggleAdminSemanticConfig(datasourceId: string, configId: string
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}/toggle`,
     method: 'patch',
     params: { enabled }
+  })
+}
+
+/** 批量切换启用状态结果：成功 / 无权限跳过 / 不存在 的 ID 明细 */
+export interface SemanticConfigBatchToggleResult {
+  updated_ids: string[]
+  skipped_ids: string[]
+  not_found_ids: string[]
+  updated_count: number
+}
+
+/** 批量切换个人语义配置启用状态 */
+export function batchToggleSemanticConfig(datasourceId: string, configIds: string[], enabled: boolean): Promise<ApiResponse<SemanticConfigBatchToggleResult>> {
+  return request({
+    url: `${DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/batch-toggle`,
+    method: 'patch',
+    data: { config_ids: configIds, enabled }
+  })
+}
+
+/** 后台批量切换公共语义配置启用状态 */
+export function batchToggleAdminSemanticConfig(datasourceId: string, configIds: string[], enabled: boolean): Promise<ApiResponse<SemanticConfigBatchToggleResult>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/batch-toggle`,
+    method: 'patch',
+    data: { config_ids: configIds, enabled }
   })
 }
 

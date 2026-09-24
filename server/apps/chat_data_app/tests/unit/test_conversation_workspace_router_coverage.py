@@ -291,9 +291,12 @@ def test_download_workspace_archive_branches(fake_service, monkeypatch):
     assert disposition.startswith("attachment")
     assert "outputs.zip" in disposition
 
-    # 非法目录名：不触达 service，直接 BAD_REQUEST
+    # 非法目录路径：校验已下沉到 service（normalize_archive_directory 抛 ValueError），
+    # 路由只负责翻译成 BAD_REQUEST，不再重复一份目录白名单，避免两处口径漂移
+    fake_service.errors["archive"] = ValueError("目录不支持打包: ../etc")
     payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "../etc", fake_request())))
     assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    del fake_service.errors["archive"]
 
     # 无权访问
     fake_service.access = False

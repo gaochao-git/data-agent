@@ -531,7 +531,12 @@ class FakeManager:
         return self._datasource["ds_tables"]
 
     async def get_column_dict_async(self, datasource_id, table_name, column_name):
-        return None
+        self.column_dict_calls = getattr(self, "column_dict_calls", 0) + 1
+        return (self._column_dicts or {}).get((table_name, column_name))
+
+    async def get_datasource_column_dicts_async(self, datasource_id):
+        self.batch_dict_calls = getattr(self, "batch_dict_calls", 0) + 1
+        return dict(self._column_dicts)
 
     async def get_column_dicts_async(self, datasource_id):
         return dict(self._column_dicts)
@@ -1196,6 +1201,67 @@ def test_prepare_models_public_conflict_sets_existing_config_not_locked():
     assert item.importable is True
     assert item.existing_config == {"config_id": "sc_pub", "name": "商品模型", "enabled": True}
     assert item.conflict_locked is False
+
+
+def test_prepare_models_enum_validation_uses_single_batch_dict_query():
+    """枚举维度校验用整批一次拉取的字典映射本地匹配，禁止逐维度回源。
+
+    回归背景：get_column_dict_async 每次都重载整份数据源（组行+全量表结构），
+    模型多+枚举维度多时是导入预览/导入校验慢的主因。
+    """
+    yaml_text = _single_dataset_yaml().replace(
+        "    metrics:",
+        "          - name: 状态\n"
+        "            expression:\n"
+        "              dialects:\n"
+        "                - dialect: ANSI_SQL\n"
+        "                  expression: status\n"
+        "            datatype: String\n"
+        "            custom_extensions:\n"
+        "              - vendor_name: CHAT_DATA\n"
+        "                data: '{\"table\": \"orders\", \"column\": \"status\", \"logical_type\": \"enum\"}'\n"
+        "    metrics:",
+        1,
+    )
+    manager = FakeManager(column_dicts={
+        ("orders", "status"): {"enum_values": [{"value": "PAID", "label": "已支付"}]},
+    })
+    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
+        manager, _DATASOURCE, "ds1", yaml_text, semantic_service=manager, user_id="user_a",
+    ))
+    assert error is None
+    assert models[0].importable is True
+    assert models[0].validation_error is None
+    # 字典映射整批只查一次；逐维度单查（每次重载整份数据源）一次都不允许
+    assert manager.batch_dict_calls == 1
+    assert getattr(manager, "column_dict_calls", 0) == 0
+
+
+def test_prepare_models_enum_without_dict_values_blocks_import():
+    """枚举维度缺字典枚举值：本地匹配同样要拦下并给出维护指引。"""
+    yaml_text = _single_dataset_yaml().replace(
+        "    metrics:",
+        "          - name: 状态\n"
+        "            expression:\n"
+        "              dialects:\n"
+        "                - dialect: ANSI_SQL\n"
+        "                  expression: status\n"
+        "            datatype: String\n"
+        "            custom_extensions:\n"
+        "              - vendor_name: CHAT_DATA\n"
+        "                data: '{\"table\": \"orders\", \"column\": \"status\", \"logical_type\": \"enum\"}'\n"
+        "    metrics:",
+        1,
+    )
+    manager = FakeManager()
+    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
+        manager, _DATASOURCE, "ds1", yaml_text, semantic_service=manager, user_id="user_a",
+    ))
+    assert error is None
+    assert models[0].importable is False
+    assert "请先维护字段字典枚举值" in models[0].validation_error
+    assert manager.batch_dict_calls == 1
+    assert getattr(manager, "column_dict_calls", 0) == 0
 
 
 def test_prepare_models_others_private_conflict_locked_without_existing():

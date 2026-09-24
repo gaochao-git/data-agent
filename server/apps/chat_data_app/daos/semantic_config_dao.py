@@ -226,6 +226,43 @@ class SemanticConfigDao:
                 await session.execute(self._upsert_batch_statement(batch))
         return True
 
+    async def batch_update_enabled_async(
+        self,
+        group_id: str,
+        config_ids: List[str],
+        enabled: bool,
+        update_by: str = "",
+        update_by_name: str = "",
+    ) -> int:
+        """在一个事务中批量切换语义配置启用状态，返回实际更新行数。
+
+        只命中未删除且属于该分组的记录；update_time 由模型 onupdate 维护，此处不显式赋值。
+
+        ⚠️ 授权前提：本方法自身不含任何 user/scope 限定，UPDATE 只按 group_id + id 列表生效。
+        调用方必须先完成逐条授权分类（service 层 classify_batch_toggle_ids：
+        普通通道仅限本人私有模型、后台通道须有后台权限且仅限公共模型），
+        再将授权子集传入，否则会绕过横向越权防护。当前唯一调用方
+        是 SemanticConfigService.batch_toggle；新增调用方前请复核这一点。
+        """
+        if not group_id or not config_ids:
+            return 0
+        async with session_scope() as session:
+            result = await session.execute(
+                update(SemanticConfig)
+                .where(
+                    SemanticConfig.group_id == group_id,
+                    SemanticConfig.delete_flag == 0,
+                    SemanticConfig.semantic_config_id.in_(config_ids),
+                )
+                .values(
+                    enabled_flag=1 if enabled else 0,
+                    update_by=update_by or "",
+                    update_by_name=update_by_name or "",
+                )
+            )
+            rowcount = int(result.rowcount or 0)
+        return rowcount
+
     async def soft_delete_async(self, config_id: str, update_by: str = "", update_by_name: str = "") -> None:
         """软删除单个语义配置。
 

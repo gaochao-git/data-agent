@@ -629,6 +629,12 @@ class SemanticConfigUpdateRequest(BaseModel):
     relationships: Optional[List[SemanticRelationship]] = Field(default=None, description="表关系列表")
 
 
+class SemanticConfigBatchToggleRequest(BaseModel):
+    """批量切换语义配置启用状态请求"""
+    config_ids: List[str] = Field(default_factory=list, description="待切换的指标集 ID 列表")
+    enabled: bool = Field(..., description="目标启用状态")
+
+
 class SemanticHistoryLearningRequest(BaseModel):
     """从当前指标集查询历史生成维护建议。"""
     days: int = Field(default=7, ge=1, le=90, description="学习最近多少天的历史")

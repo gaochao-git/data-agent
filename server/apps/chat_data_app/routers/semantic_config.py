@@ -17,6 +17,7 @@ from utils.llm_json import parse_llm_json
 from utils.response import business_response
 from ..agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from ..schema import (
+    SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
@@ -37,6 +38,7 @@ from ..services.semantic.run.chat_data_ossie_importer import build_model_checkli
 from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
 from ..services.semantic.run.semantic_config_service import (
     can_mutate_semantic_config,
+    dedupe_semantic_config_ids,
     get_semantic_config_service,
     is_private_semantic_config_owner,
     is_public_semantic_config,
@@ -56,6 +58,8 @@ router = APIRouter(tags=["ChatData 语义模型"], responses=JSON_API_RESPONSES)
 PREFILL_MAX_RECOMMENDED_METRICS = 10
 PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
 PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
+# 单次批量切换的指标集数量上限：限制 UPDATE ... IN 的规模与整批回滚成本。
+SEMANTIC_BATCH_TOGGLE_MAX_IDS = 200
 
 
 class _OssieImportWriteError(Exception):
@@ -603,7 +607,7 @@ async def create_admin_semantic_config(datasource_id: str, payload: SemanticConf
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/generate-basic")
 async def generate_admin_basic_semantic_configs(datasource_id: str, request: Request):
-    """后台按物理表批量创建禁用的公共基础模型。"""
+    """后台按物理表批量创建公共基础模型（默认启用）。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -1265,6 +1269,59 @@ async def delete_admin_semantic_config(datasource_id: str, config_id: str, reque
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
 
 
+def _build_batch_toggle_message(result: Dict[str, Any], enabled: bool) -> str:
+    """拼装批量切换结果提示：主结果 + 跳过原因统计。"""
+    action = "启用" if enabled else "禁用"
+    parts = [f"已{action} {len(result.get('updated_ids') or [])} 个指标集"]
+    skipped_count = len(result.get("skipped_ids") or [])
+    not_found_count = len(result.get("not_found_ids") or [])
+    if skipped_count:
+        parts.append(f"{skipped_count} 个无权限")
+    if not_found_count:
+        parts.append(f"{not_found_count} 个不存在")
+    return "，".join(parts)
+
+
+async def _batch_toggle_semantic_configs(
+    datasource_id: str,
+    payload: SemanticConfigBatchToggleRequest,
+    request: Request,
+    *,
+    admin_manage: bool = False,
+):
+    """批量切换指标集启用状态。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        config_ids = dedupe_semantic_config_ids(payload.config_ids)
+        if not config_ids:
+            return business_response(msg="请至少选择一个指标集", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+        if len(config_ids) > SEMANTIC_BATCH_TOGGLE_MAX_IDS:
+            return business_response(
+                msg=f"单次批量操作最多支持 {SEMANTIC_BATCH_TOGGLE_MAX_IDS} 个指标集",
+                code=ErrorCode.CHATDATA_VALIDATION_FAILED,
+                status="error",
+            )
+
+        result = await get_semantic_config_service().batch_toggle_enabled_async(
+            datasource_id=datasource_id,
+            config_ids=config_ids,
+            enabled=payload.enabled,
+            user_id=user_id,
+            username=username,
+            admin_manage=admin_manage,
+        )
+        logger.info(
+            f"批量切换语义配置: datasource={datasource_id}, enabled={payload.enabled}, "
+            f"成功={len(result['updated_ids'])}, 无权限={len(result['skipped_ids'])}, 不存在={len(result['not_found_ids'])}"
+        )
+        return business_response(data=result, msg=_build_batch_toggle_message(result, payload.enabled))
+    except Exception as e:
+        logger.error(f"批量切换语义配置失败: {str(e)}", exc_info=True)
+        return business_response(msg=f"操作失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
 @router.patch("/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
 async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
     """切换个人指标集启用状态。"""
@@ -1276,3 +1333,16 @@ async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabl
     """后台切换公共指标集启用状态。"""
     _get_current_user(request)
     return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=True)
+
+
+@router.patch("/datasources/{datasource_id}/semantic-configs/batch-toggle")
+async def batch_toggle_semantic_configs(datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request):
+    """批量切换个人指标集启用状态。"""
+    return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=False)
+
+
+@router.patch("/admin/datasources/{datasource_id}/semantic-configs/batch-toggle")
+async def batch_toggle_admin_semantic_configs(datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request):
+    """后台批量切换公共指标集启用状态。"""
+    _get_current_user(request)
+    return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=True)

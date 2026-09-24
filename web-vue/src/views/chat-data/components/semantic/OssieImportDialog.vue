@@ -83,6 +83,10 @@ watch(visible, value => {
   resetState()
 })
 
+/** 模型校验的并发上限：文件多时逐个串行请求太慢（N 次完整往返），但并发过猛会
+ * 打爆后端（每个 preview 都要加载数据源+字段字典）。6 是体验与压力的折中。 */
+const PREVIEW_CONCURRENCY = 6
+
 // 后端导入是「全有或全无」：任一模型存在阻断问题即整体拒绝，按钮须与该语义一致。
 // 同名冲突不阻断（可替换/忽略）；未勾选文件的模型不参与判定。
 const allImportable = computed(() => activeModels.value.length > 0 && activeModels.value.every(model => model.importable))
@@ -428,38 +432,60 @@ const handlePreview = async () => {
   previewedFileIds.value = {}
   filePreviewError.value = {}
   try {
+    // 并发受限的逐文件校验：每个文件仍是独立请求、独立记账（单文件失败不影响其他文件，
+    // 失败文件导入时会被门禁拦住）；但 IO 等待重叠执行——串行时 N 个文件就是 N 次完整
+    // 往返（24 文件实测约 30s），并发 6 后只剩个位数轮次。
+    const activeList = activeFiles.value
+    const outcomes: Array<
+      | { ok: true; fileModels: OssieImportModelPreview[]; empty: boolean }
+      | { ok: false; reason: string }
+    > = new Array(activeList.length)
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < activeList.length) {
+        const index = cursor++
+        const file = activeList[index]
+        if (!file) break
+        try {
+          const res = await previewAdminOssieSemanticImport(props.datasourceId, file.content)
+          if (res.status !== 'success') {
+            outcomes[index] = { ok: false, reason: res.msg || '解析失败，请检查 YAML 内容' }
+            continue
+          }
+          const fileModels = res.data?.models || []
+          outcomes[index] = { ok: true, fileModels, empty: !fileModels.length }
+        } catch (err) {
+          console.error('Ossie 导入预览失败:', err)
+          outcomes[index] = { ok: false, reason: '解析失败，请稍后重试' }
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(PREVIEW_CONCURRENCY, activeList.length) }, () => worker()),
+    )
+
     const merged: DialogModel[] = []
     const previewed: Record<number, boolean> = {}
     const failed: Record<number, string> = {}
-    // 逐文件请求：单个文件失败不影响其他文件；失败文件单独记账，导入时会被门禁拦住
-    for (const file of activeFiles.value) {
-      try {
-        const res = await previewAdminOssieSemanticImport(props.datasourceId, file.content)
-        if (res.status !== 'success') {
-          const reason = res.msg || '解析失败，请检查 YAML 内容'
-          failed[file.id] = reason
-          ElMessage.error(`${file.name}：${reason}`)
-          continue
-        }
-        previewed[file.id] = true
-        const fileModels = res.data?.models || []
-        if (!fileModels.length) {
-          ElMessage.warning(`${file.name}：没有可导入的语义模型（semantic_model 为空）`)
-        }
-        fileModels.forEach((model, modelIndex) =>
-          merged.push({
-            ...model,
-            source_file: file.name,
-            source_file_id: file.id,
-            muid: `${file.id}-${modelIndex}`,
-          }))
-      } catch (err) {
-        const reason = '解析失败，请稍后重试'
-        failed[file.id] = reason
-        console.error('Ossie 导入预览失败:', err)
-        ElMessage.error(`${file.name}：${reason}`)
+    activeList.forEach((file, index) => {
+      const outcome = outcomes[index]
+      if (!outcome || !outcome.ok) {
+        failed[file.id] = outcome?.reason || '解析失败，请稍后重试'
+        ElMessage.error(`${file.name}：${failed[file.id]}`)
+        return
       }
-    }
+      previewed[file.id] = true
+      if (outcome.empty) {
+        ElMessage.warning(`${file.name}：没有可导入的语义模型（semantic_model 为空）`)
+      }
+      outcome.fileModels.forEach((model, modelIndex) =>
+        merged.push({
+          ...model,
+          source_file: file.name,
+          source_file_id: file.id,
+          muid: `${file.id}-${modelIndex}`,
+        }))
+    })
     models.value = merged
     previewedFileIds.value = previewed
     filePreviewError.value = failed
@@ -707,122 +733,127 @@ const diffExistingFor = (muid: string) => {
         </el-button>
       </div>
 
-      <table v-if="files.length" class="w-full table-fixed border-collapse text-[11px] leading-4">
-        <thead>
-          <tr class="bg-gray-50 text-[10px] text-gray-400">
-            <td class="w-9 px-2 py-1 text-center">
-              <input
-                type="checkbox"
-                title="全选 / 全不选"
-                :checked="files.length > 0 && files.every(file => isFileChecked(file.id))"
-                :disabled="busy"
-                @change="toggleFileAll"
-              />
-            </td>
-            <td class="px-2 py-1">文件</td>
-            <td class="w-[80px] px-2 py-1">模式</td>
-            <td class="w-[80px] px-2 py-1">检查结果</td>
-            <td class="w-[168px] px-2 py-1 text-right">操作</td>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="file in files" :key="file.id" class="border-t border-gray-100">
-            <td class="px-2 py-1.5 text-center">
-              <input
-                type="checkbox"
-                :checked="isFileChecked(file.id)"
-                :disabled="busy"
-                @change="toggleFile(file.id, $event)"
-              />
-            </td>
-            <td class="px-2 py-1.5 text-gray-600">
-              <div class="flex items-center gap-2">
-                <span class="flex min-w-0 flex-1 items-center gap-1.5" :title="file.name">
-                  <i class="fa-solid fa-file-lines shrink-0 text-gray-300"></i>
-                  <span class="truncate">{{ file.name }}</span>
-                </span>
-                <!-- 同名但无操作权限（他人私有）：不提供差异对比，导入时后端强制忽略。
-                     这是纯信息提示（非动作），留在文件名一侧；动作按钮统一在「操作」列。 -->
-                <span
-                  v-if="fileLockedCount(file.id)"
-                  class="shrink-0 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px] text-amber-600"
-                  title="已存在同名配置但无操作权限，导入时将忽略该模型"
-                >
-                  <i class="fa-solid fa-triangle-exclamation"></i>
-                  同名无权限 · 忽略
-                </span>
-              </div>
-            </td>
-            <td class="px-2 py-1.5">
-              <!-- 模式列：该文件内模型的导入动作（替换/新增/忽略），未校验或无可导入模型时为「—」；中性文本样式，后果悬浮在 title -->
-              <span v-if="fileImportModeChips(file.id).length" class="flex flex-wrap items-center gap-1.5">
-                <span
-                  v-for="chip in fileImportModeChips(file.id)"
-                  :key="chip.label"
-                  class="text-[11px] text-gray-500"
-                  :title="chip.title"
-                >{{ chip.label }}</span>
-              </span>
-              <span v-else class="text-[11px] text-gray-300">—</span>
-            </td>
-            <td class="px-2 py-1.5">
-              <!-- 校验失败时把后端原因挂在徽标 title 上，行内不额外占位 -->
-              <span
-                class="rounded px-1.5 py-0.5 text-[10px]"
-                :class="fileStatusChipClass(fileCheckStatus(file.id))"
-                :title="filePreviewError[file.id]"
-              >
-                {{ fileStatusLabel(fileCheckStatus(file.id)) }}
-              </span>
-            </td>
-            <td class="px-2 py-1.5">
-              <div class="flex items-center justify-end gap-2">
-                <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
-                     `查看差异` 在后（仅同名冲突行有）、删除最右。
-                     详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
-                     （打开差异即收起详情，反之亦然），各看各的内容；
-                     展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
-                <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
-                     `查看差异` 在后（仅同名冲突行有）、删除最右。
-                     详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
-                     （打开差异即收起详情，反之亦然），各看各的内容；
-                     展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
-                <button
-                  v-if="models.some(model => model.source_file_id === file.id)"
-                  type="button"
-                  class="transition-colors"
-                  :class="rowActionClass(detailOpen[file.id] === true)"
-                  @click="toggleDetail(file.id)"
-                >
-                  {{ detailOpen[file.id] ? '收起详情' : '查看详情' }}
-                </button>
-                <button
-                  v-if="fileHasConflict(file.id)"
-                  type="button"
-                  class="flex shrink-0 items-center gap-1 transition-colors"
-                  :class="rowActionClass(fileDiffOpen(file.id), busy)"
+      <!-- 文件清单限高滚动（与下方差异面板同口径 420px）：模型多时弹窗不再超出视口；
+           表头 sticky 吸顶，滚动中保持列名可见。 -->
+      <div class="max-h-[420px] overflow-y-auto">
+        <!-- border-separate 是表头 sticky 的前提：border-collapse 下 Chrome 不支持表格内部元素 sticky -->
+        <table v-if="files.length" class="w-full table-fixed border-separate border-spacing-0 text-[11px] leading-4">
+          <thead>
+            <tr class="sticky top-0 z-[1] bg-gray-50 text-[10px] text-gray-400">
+              <td class="w-9 px-2 py-1 text-center">
+                <input
+                  type="checkbox"
+                  title="全选 / 全不选"
+                  :checked="files.length > 0 && files.every(file => isFileChecked(file.id))"
                   :disabled="busy"
-                  :title="fileConflictTitle(file.id)"
-                  @click="toggleFileDiff(file.id)"
-                >
-                  {{ fileDiffOpen(file.id) ? '收起差异' : '查看差异' }}
-                  <i v-if="fileDiffLoading(file.id)" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
-                </button>
-                <button
-                  type="button"
-                  class="transition-colors"
-                  :class="busy ? 'cursor-not-allowed text-gray-200' : 'text-gray-300 hover:text-red-500'"
+                  @change="toggleFileAll"
+                />
+              </td>
+              <td class="px-2 py-1">文件</td>
+              <td class="w-[80px] px-2 py-1">模式</td>
+              <td class="w-[80px] px-2 py-1">检查结果</td>
+              <td class="w-[168px] px-2 py-1 text-right">操作</td>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="file in files" :key="file.id" class="border-t border-gray-100">
+              <td class="px-2 py-1.5 text-center">
+                <input
+                  type="checkbox"
+                  :checked="isFileChecked(file.id)"
                   :disabled="busy"
-                  title="移除该文件"
-                  @click="removeFile(file.id)"
+                  @change="toggleFile(file.id, $event)"
+                />
+              </td>
+              <td class="px-2 py-1.5 text-gray-600">
+                <div class="flex items-center gap-2">
+                  <span class="flex min-w-0 flex-1 items-center gap-1.5" :title="file.name">
+                    <i class="fa-solid fa-file-lines shrink-0 text-gray-300"></i>
+                    <span class="truncate">{{ file.name }}</span>
+                  </span>
+                  <!-- 同名但无操作权限（他人私有）：不提供差异对比，导入时后端强制忽略。
+                       这是纯信息提示（非动作），留在文件名一侧；动作按钮统一在「操作」列。 -->
+                  <span
+                    v-if="fileLockedCount(file.id)"
+                    class="shrink-0 rounded border border-amber-200 bg-amber-50/60 px-1.5 py-0.5 text-[10px] text-amber-600"
+                    title="已存在同名配置但无操作权限，导入时将忽略该模型"
+                  >
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    同名无权限 · 忽略
+                  </span>
+                </div>
+              </td>
+              <td class="px-2 py-1.5">
+                <!-- 模式列：该文件内模型的导入动作（替换/新增/忽略），未校验或无可导入模型时为「—」；中性文本样式，后果悬浮在 title -->
+                <span v-if="fileImportModeChips(file.id).length" class="flex flex-wrap items-center gap-1.5">
+                  <span
+                    v-for="chip in fileImportModeChips(file.id)"
+                    :key="chip.label"
+                    class="text-[11px] text-gray-500"
+                    :title="chip.title"
+                  >{{ chip.label }}</span>
+                </span>
+                <span v-else class="text-[11px] text-gray-300">—</span>
+              </td>
+              <td class="px-2 py-1.5">
+                <!-- 校验失败时把后端原因挂在徽标 title 上，行内不额外占位 -->
+                <span
+                  class="rounded px-1.5 py-0.5 text-[10px]"
+                  :class="fileStatusChipClass(fileCheckStatus(file.id))"
+                  :title="filePreviewError[file.id]"
                 >
-                  <i class="fa-solid fa-trash-can text-[11px]"></i>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                  {{ fileStatusLabel(fileCheckStatus(file.id)) }}
+                </span>
+              </td>
+              <td class="px-2 py-1.5">
+                <div class="flex items-center justify-end gap-2">
+                  <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
+                       `查看差异` 在后（仅同名冲突行有）、删除最右。
+                       详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
+                       （打开差异即收起详情，反之亦然），各看各的内容；
+                       展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
+                  <!-- 顺序：`查看详情` 在前（通用动作，新模型行也有，靠左可让它在所有行位置固定）、
+                       `查看差异` 在后（仅同名冲突行有）、删除最右。
+                       详情与差异同列同风格（静息为灰色文字按钮），两者互斥 —— 同一时刻只显示一个
+                       （打开差异即收起详情，反之亦然），各看各的内容；
+                       展开的那个转蓝色高亮，标出当前打开的是哪一块。 -->
+                  <button
+                    v-if="models.some(model => model.source_file_id === file.id)"
+                    type="button"
+                    class="transition-colors"
+                    :class="rowActionClass(detailOpen[file.id] === true)"
+                    @click="toggleDetail(file.id)"
+                  >
+                    {{ detailOpen[file.id] ? '收起详情' : '查看详情' }}
+                  </button>
+                  <button
+                    v-if="fileHasConflict(file.id)"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1 transition-colors"
+                    :class="rowActionClass(fileDiffOpen(file.id), busy)"
+                    :disabled="busy"
+                    :title="fileConflictTitle(file.id)"
+                    @click="toggleFileDiff(file.id)"
+                  >
+                    {{ fileDiffOpen(file.id) ? '收起差异' : '查看差异' }}
+                    <i v-if="fileDiffLoading(file.id)" class="fa-solid fa-spinner fa-spin text-[10px] text-gray-400"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="transition-colors"
+                    :class="busy ? 'cursor-not-allowed text-gray-200' : 'text-gray-300 hover:text-red-500'"
+                    :disabled="busy"
+                    title="移除该文件"
+                    @click="removeFile(file.id)"
+                  >
+                    <i class="fa-solid fa-trash-can text-[11px]"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- 差异对比：**单独一块**，不混进下面的「校验结果」详情区（与同文件的详情互斥，
            同一时刻只显示一个）。置于文件表正下方；

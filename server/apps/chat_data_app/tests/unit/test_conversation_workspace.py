@@ -2321,6 +2321,52 @@ def test_archive_rejects_unknown_and_empty_directory(monkeypatch, tmp_path):
         conversation_workspace_module._archive_workspace_directory("conv_zip_c", "outputs", "user_a")
 
 
+def test_normalize_archive_directory_rejects_escape_variants():
+    """目录参数是可控路径，逃逸写法必须全部拦在服务边界内（首段白名单 + 拒绝 ..）。"""
+    normalize = conversation_workspace_module.normalize_archive_directory
+
+    assert normalize("outputs") == "outputs"
+    assert normalize("outputs/月报") == "outputs/月报"
+    assert normalize("/outputs/月报/") == "outputs/月报"
+    assert normalize("outputs\\月报") == "outputs/月报"
+
+    for escaped in ("../uploads", "outputs/../../uploads", "..", "/../etc", "not_a_workspace_dir"):
+        with pytest.raises(ValueError, match="目录不支持打包|目录不能为空"):
+            normalize(escaped)
+
+
+def test_archive_supports_subdirectory_and_rejects_escape(monkeypatch, tmp_path):
+    """打包放开到 outputs 下的子目录：只收该子目录的文件，同时拒绝路径逃逸。
+
+    目录参数变成用户可控的路径后，边界只能靠后端自己守：首段必须属于工作区目录，
+    且不允许用 `..` 把打包范围指到 outputs 之外（否则 uploads 的原件会被打进 outputs 的包）。
+    """
+    paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_sub")
+    root = Path(paths["root"])
+    (root / "outputs" / "月报").mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / "月报" / "明细.csv").write_text("id\n1\n", encoding="utf-8")
+    (root / "outputs" / "other.txt").write_text("outside", encoding="utf-8")
+    (root / "uploads" / "raw.txt").write_text("uploaded", encoding="utf-8")
+
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "outputs/月报", "user_a")
+
+    assert payload["filename"] == "月报.zip", "zip 名取末段，不能把斜杠带进文件名"
+    assert payload["file_count"] == 1
+    with zipfile.ZipFile(payload["temp_path"]) as zf:
+        assert zf.namelist() == ["outputs/月报/明细.csv"]
+    os.unlink(payload["temp_path"])
+
+    # 首尾斜杠与 Windows 分隔符归一到同一口径
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "/outputs\\月报/", "user_a")
+    assert payload["filename"] == "月报.zip"
+    os.unlink(payload["temp_path"])
+
+    with pytest.raises(ValueError, match="目录不支持打包"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "outputs/../uploads", "user_a")
+    with pytest.raises(ValueError, match="目录不能为空"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "  ", "user_a")
+
+
 def test_archive_aborts_and_cleans_up_when_zip_exceeds_limit(monkeypatch, tmp_path):
     _isolated_workspace(monkeypatch, tmp_path, "conv_zip_d", "user_a")
     outputs = Path(

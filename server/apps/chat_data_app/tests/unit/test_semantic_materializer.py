@@ -38,12 +38,15 @@ class _FakeDatasourceManager:
         self.configs = configs
         self.column_dicts = {}
         self.column_dict_calls = 0
+        self.bundle_calls = 0
+        self.single_loads = 0
 
     async def get_column_dicts_async(self, datasource_id):
         self.column_dict_calls += 1
         return self.column_dicts
 
     async def get_runtime_config_async(self, datasource_id, config_id, user_id="", *, column_dicts=None):
+        self.single_loads += 1
         assert datasource_id == "ds_1"
         assert user_id == "user_1"
         assert column_dicts is not None, "materializer 必须预取字段字典并下发，禁止逐模型重复拉取"
@@ -52,6 +55,12 @@ class _FakeDatasourceManager:
     async def get_runtime_configs_async(self, datasource_id, user_id=""):
         assert datasource_id == "ds_1"
         return self.configs
+
+    async def get_runtime_bundle_async(self, datasource_id, user_id=""):
+        """批量入口：一次返回全量配置与字段字典，禁止批量链路再逐模型回源。"""
+        self.bundle_calls += 1
+        assert datasource_id == "ds_1"
+        return self.configs, await self.get_column_dicts_async(datasource_id)
 
 
 def _config(config_id="sc_order", enabled=True):
@@ -295,6 +304,195 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
         "/mnt/user-data/workspace/semantic/订单模型__b.yaml",
     ]
     assert runtime.deleted == []
+
+
+def test_prematerialize_loads_once_instead_of_per_model(monkeypatch):
+    """预物化必须 O(1) 次查库：复用批量加载结果，禁止按 ID 逐个重载。
+
+    逐个重载会让每个模型都重新拉一遍数据源全量表结构，模型数上百时是主要瓶颈。
+    """
+    semantic_materializer._YAML_CACHE.clear()
+    configs = [_config(f"sc_{index}") for index in range(20)]
+    manager = _FakeDatasourceManager(configs)
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: manager)
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    runtime = _FakeRuntime()
+
+    result = asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+    ))
+
+    assert result == {"total": 20, "failed_ids": []}
+    assert manager.bundle_calls == 1
+    assert manager.single_loads == 0, "禁止按模型 ID 逐个回源加载（N+1）"
+    assert manager.column_dict_calls == 1
+    assert len(runtime.entries) == 20
+
+
+def test_materializer_reuses_caller_supplied_configs(monkeypatch):
+    """传入 configs/column_dicts 时完全不走服务层，避免重复查库。"""
+    semantic_materializer._YAML_CACHE.clear()
+    configs = [_config("sc_a", enabled=True), _config("sc_off", enabled=False)]
+
+    class _NoService:
+        async def get_column_dicts_async(self, datasource_id):
+            raise AssertionError("已提供 column_dicts，不应再查库")
+
+        async def get_runtime_config_async(self, *args, **kwargs):
+            raise AssertionError("已提供 configs，不应按 ID 回源")
+
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", _NoService)
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    runtime = _FakeRuntime()
+
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=["sc_a", "sc_off", "sc_missing"],
+        configs=configs,
+        column_dicts={},
+    ))
+
+    assert list(result["paths"]) == ["sc_a"]
+    assert result["failed_ids"] == []
+    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/semantic/订单模型__a.yaml"]
+
+
+def test_cache_key_uses_update_time_and_batch_salt(monkeypatch):
+    """库表模型走轻量键：update_time 变化、字段字典变化、表结构变化都要失效。"""
+    semantic_materializer._YAML_CACHE.clear()
+
+    def _db_config(**overrides):
+        config = _config()
+        config.update({"group_id": "g_1", "update_time": "2026-09-24 10:00:00"})
+        config.update(overrides)
+        return config
+
+    config = _db_config()
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager([config]))
+    calls = []
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, current, *, source_type="": calls.append(current["id"]) or "yaml",
+    )
+    _materialize(_FakeRuntime())
+    # update_time 未变 → 命中缓存，即使 description 变了也不重转
+    config["description"] = "改了描述"
+    _materialize(_FakeRuntime())
+    assert len(calls) == 1
+
+    config["update_time"] = "2026-09-24 11:00:00"
+    _materialize(_FakeRuntime())
+    assert len(calls) == 2, "update_time 变化必须让缓存失效"
+
+    shared_tables = [{"table_name": "orders", "manual_indexes": []}]
+    config["tables"] = shared_tables
+    semantic_materializer._YAML_CACHE.clear()
+    calls.clear()
+    _materialize(_FakeRuntime())
+    # 表结构原地变更（数据源改索引不更新模型 update_time）也必须失效
+    shared_tables[0]["manual_indexes"] = [{"index_name": "uniq_order_id"}]
+    _materialize(_FakeRuntime())
+    assert len(calls) == 2
+
+
+def test_batch_cache_salt_deduplicates_shared_tables():
+    """共享同一 tables 对象的多个模型只应参与一次盐计算（整批只算一次哈希）。"""
+    tables = [{"table_name": "orders"}]
+    configs = [dict(_config(f"sc_{index}"), tables=tables) for index in range(10)]
+    shared = semantic_materializer._batch_cache_salt(configs, {})
+    single = semantic_materializer._batch_cache_salt([dict(_config("sc_0"), tables=tables)], {})
+    assert shared == single
+    other = semantic_materializer._batch_cache_salt([dict(_config("sc_0"), tables=[{"table_name": "users"}])], {})
+    assert other != shared
+    # 字段字典进盐：字典变更要让整批缓存失效
+    assert semantic_materializer._batch_cache_salt(configs, {("orders", "city"): {"unit": "个"}}) != shared
+
+
+def test_normalize_loaded_config_backfills_id_and_joins_and_drops_disabled():
+    normalize = semantic_materializer._normalize_loaded_config
+    assert normalize(None, "sc_fallback") is None
+    assert normalize({"enabled": False}, "sc_fallback") is None
+    # 缺 id 用请求 id 兜底；relationships 兼容映射成 joins
+    assert normalize({"enabled": True, "relationships": [{"from": "a"}]}, "sc_fallback") == {
+        "enabled": True,
+        "relationships": [{"from": "a"}],
+        "joins": [{"from": "a"}],
+        "id": "sc_fallback",
+    }
+    assert normalize({"enabled": True, "id": "sc_own", "joins": [{"from": "b"}], "relationships": [{"from": "a"}]}, "x") == {
+        "enabled": True,
+        "id": "sc_own",
+        "joins": [{"from": "b"}],
+        "relationships": [{"from": "a"}],
+    }
+
+
+def test_load_selected_semantic_config_requires_datasource_and_id():
+    assert asyncio.run(semantic_materializer._load_selected_semantic_config(None, "sc_1", "user_1")) is None
+    assert asyncio.run(semantic_materializer._load_selected_semantic_config("ds_1", "  ", "user_1")) is None
+
+
+def test_cache_eviction_respects_batch_size(monkeypatch):
+    """模型数超过默认上限时按批扩容，避免整批互相淘汰导致每轮全量重转。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(semantic_materializer, "_CACHE_LIMIT", 2)
+    configs = [_config(f"sc_{index}") for index in range(5)]
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
+    calls = []
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": calls.append(config["id"]) or "yaml",
+    )
+
+    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=_FakeRuntime(),
+        datasource_id="ds_1",
+        user_id="user_1",
+        semantic_config_ids=[config["id"] for config in configs],
+    ))
+    assert len(calls) == 5
+    # 容量按批扩到 5，第二轮全部命中
+    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=_FakeRuntime(),
+        datasource_id="ds_1",
+        user_id="user_1",
+        semantic_config_ids=[config["id"] for config in configs],
+    ))
+    assert len(calls) == 5
+
+
+def test_cache_expansion_is_capped_by_hard_limit(monkeypatch):
+    """按批扩容有上界：超大批量不会把进程缓存撑爆。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(semantic_materializer, "_CACHE_LIMIT", 1)
+    monkeypatch.setattr(semantic_materializer, "_CACHE_HARD_LIMIT", 3)
+    configs = [_config(f"sc_{index}") for index in range(5)]
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter, "convert",
+        lambda self, config, *, source_type="": "yaml",
+    )
+
+    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=_FakeRuntime(),
+        datasource_id="ds_1",
+        user_id="user_1",
+        semantic_config_ids=[config["id"] for config in configs],
+    ))
+
+    assert len(semantic_materializer._YAML_CACHE) == 3
 
 
 def test_materializer_prunes_stale_files_only_for_full_scope(monkeypatch):

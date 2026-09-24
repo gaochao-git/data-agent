@@ -562,14 +562,17 @@ const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedCon
   }
 }
 
-// 目录打包下载：把整个 outputs 目录打成 zip（用户拍板 2026-09-19，只放开 outputs）。
+// 目录打包下载：把 outputs 或其下子目录打成 zip（用户拍板 2026-09-19 只放开 outputs，
+// 2026-09-24 追加放开其下层子目录；顶层范围仍是 outputs 一个）。
+// 传入的是目录相对路径（顶层为目录名，子目录为 'outputs/月报' 形式），下载文件名取末段
+// ——全路径含斜杠不能进文件名。
 // 大小限制针对压缩产物（后端 CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB）——压缩前
 // 无法预测产物大小，所以没有前端预检，超限时后端边打包边计量、中止并返回业务错误 JSON。
 // 后端业务错误走 HTTP 200 + JSON 体（与 raw 接口的错误形态一致），而本请求 responseType
 // 是 blob，因此拿到响应后先看 blob.type：application/json 说明是业务错误，解析 msg 提示。
 const isConsoleArchiveDownloading = ref<string>('')
-const handleDownloadConsoleDirectoryArchive = async (directoryName: string) => {
-  if (!isWorkspaceDirectoryArchiveDownloadable(directoryName)) {
+const handleDownloadConsoleDirectoryArchive = async (directoryPath: string) => {
+  if (!isWorkspaceDirectoryArchiveDownloadable(directoryPath)) {
     ElMessage.warning('该目录不支持打包下载')
     return
   }
@@ -578,9 +581,9 @@ const handleDownloadConsoleDirectoryArchive = async (directoryName: string) => {
     return
   }
   if (isConsoleArchiveDownloading.value) return
-  isConsoleArchiveDownloading.value = directoryName
+  isConsoleArchiveDownloading.value = directoryPath
   try {
-    const blob = await getConversationWorkspaceArchive(props.conversationId, directoryName)
+    const blob = await getConversationWorkspaceArchive(props.conversationId, directoryPath)
     if (blob.type.includes('application/json')) {
       const text = await blob.text()
       let msg = '打包下载失败，请稍后重试'
@@ -596,7 +599,7 @@ const handleDownloadConsoleDirectoryArchive = async (directoryName: string) => {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${directoryName}.zip`
+    link.download = `${directoryPath.split('/').pop() || directoryPath}.zip`
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -1005,7 +1008,7 @@ defineExpose({
                 </div>
                 <div
                   v-else
-                  class="flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50"
+                  class="group flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50"
                 >
                   <div
                     role="button"
@@ -1020,6 +1023,23 @@ defineExpose({
                     <i class="fa-regular w-4 shrink-0 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
                     <span class="truncate font-mono text-[13px] font-semibold" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
                   </div>
+                  <!-- 子目录打包下载：outputs 下的任意层级子目录都可单独打包（顶层范围仍是
+                       outputs，见 utils/consoleFileTree.ts）。图标沿用文件行的 hover 显现——
+                       子目录可能很多，常显会满屏都是下载图标压过目录名。
+                       系统结果目录（query_result / .tool-offload）不显示，包里本就不会有文件。 -->
+                  <button
+                    v-if="isWorkspaceDirectoryArchiveDownloadable(item.node.path) && getFileCount(item.node)"
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-all hover:bg-blue-100 hover:text-blue-600 disabled:opacity-50"
+                    :class="isConsoleArchiveDownloading === item.node.path ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
+                    title="打包下载该目录（zip）"
+                    aria-label="打包下载该目录"
+                    :disabled="isConsoleArchiveDownloading === item.node.path"
+                    data-console-archive-download="true"
+                    @click="handleDownloadConsoleDirectoryArchive(item.node.path)"
+                  >
+                    <i class="fa-solid" :class="isConsoleArchiveDownloading === item.node.path ? 'fa-spinner fa-spin' : 'fa-download'"></i>
+                  </button>
                   <!-- 数量徽标与顶层目录行同构：放在可点击区域之外的行尾，
                        所有数量徽标的右边缘落在同一条竖线上（放在按钮内时会被 px-1.5 推走 2px）。 -->
                   <span v-if="getFileCount(item.node)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>

@@ -18,6 +18,7 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from apps.chat_data_app.schema import (
+    SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
@@ -573,6 +574,8 @@ class _FakeSemanticManager:
         self.created_kwargs = None
         self.updated_kwargs = None
         self.deleted = None
+        self.batch_toggle_error = None
+        self.batch_toggle_result = None
 
     async def has_datasource_async(self, datasource_id):
         return datasource_id == "ds_a"
@@ -619,6 +622,21 @@ class _FakeSemanticManager:
     async def delete_async(self, datasource_id, config_id, update_by="", update_by_name=""):
         self.deleted = (datasource_id, config_id)
         return datasource_id == "ds_a" and config_id in {"cfg_a", "cfg_public"}
+
+    async def batch_toggle_enabled_async(self, **kwargs):
+        self.batch_toggle_kwargs = dict(kwargs)
+        if self.batch_toggle_error:
+            raise self.batch_toggle_error
+        if self.batch_toggle_result is not None:
+            return self.batch_toggle_result
+        config_ids = kwargs.get("config_ids") or []
+        updated = [config_id for config_id in config_ids if config_id != "missing"]
+        return {
+            "updated_ids": updated,
+            "skipped_ids": [],
+            "not_found_ids": ["missing"] if "missing" in config_ids else [],
+            "updated_count": len(updated),
+        }
 
 
 def _patch_semantic_route_user_and_manager(monkeypatch, manager=None, user_id="user_a"):
@@ -1870,3 +1888,75 @@ def test_semantic_config_remaining_history_helper_edges():
     )
     assert missing_column["needs_review"] is True
     assert "字段不在当前表结构中" in missing_column["review_reason"]
+
+
+def test_semantic_config_batch_toggle_message_helper():
+    result = {"updated_ids": ["a", "b"], "skipped_ids": ["c"], "not_found_ids": ["d"], "updated_count": 2}
+
+    assert semantic_config._build_batch_toggle_message(result, True) == "已启用 2 个指标集，1 个无权限，1 个不存在"
+    assert semantic_config._build_batch_toggle_message(result, False) == "已禁用 2 个指标集，1 个无权限，1 个不存在"
+    assert semantic_config._build_batch_toggle_message(
+        {"updated_ids": ["a"], "skipped_ids": [], "not_found_ids": []},
+        True,
+    ) == "已启用 1 个指标集"
+
+
+def test_semantic_config_batch_toggle_routes(monkeypatch):
+    manager = _patch_semantic_route_user_and_manager(monkeypatch)
+
+    ok_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=["cfg_a", "cfg_public", "missing"], enabled=False),
+        object(),
+    )))
+    admin_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_admin_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
+        object(),
+    )))
+    admin_kwargs = dict(manager.batch_toggle_kwargs)
+    empty_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=[], enabled=True),
+        object(),
+    )))
+    blank_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=["  ", "cfg_a", "cfg_a"], enabled=True),
+        object(),
+    )))
+    overflow_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(
+            config_ids=[f"cfg_{index}" for index in range(semantic_config.SEMANTIC_BATCH_TOGGLE_MAX_IDS + 1)],
+            enabled=True,
+        ),
+        object(),
+    )))
+
+    assert ok_payload["data"]["updated_ids"] == ["cfg_a", "cfg_public"]
+    assert ok_payload["data"]["not_found_ids"] == ["missing"]
+    assert ok_payload["msg"] == "已禁用 2 个指标集，1 个不存在"
+    assert admin_payload["data"]["updated_ids"] == ["cfg_public"]
+    assert admin_kwargs["admin_manage"] is True
+    assert admin_kwargs["enabled"] is True
+    assert admin_kwargs["user_id"] == "user_a"
+    assert empty_payload["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert blank_payload["data"]["updated_ids"] == ["cfg_a"]
+    assert overflow_payload["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+
+    manager.batch_toggle_result = {"updated_ids": [], "skipped_ids": ["cfg_public"], "not_found_ids": [], "updated_count": 0}
+    none_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
+        object(),
+    )))
+    assert none_payload["msg"] == "已启用 0 个指标集，1 个无权限"
+
+    manager.batch_toggle_error = RuntimeError("batch failed")
+    error_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
+        "ds_a",
+        SemanticConfigBatchToggleRequest(config_ids=["cfg_a"], enabled=True),
+        object(),
+    )))
+    assert error_payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR

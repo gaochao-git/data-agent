@@ -252,7 +252,7 @@ ChatData
 - 至少准备一个 MySQL 数据源组、一个 Hive direct 数据源组和一个 Hive HTTP 数据源组；无法连接某类真实数据源时，使用测试环境的可控 mock，但仍保留该页面流程。
 - 至少准备一个多成员数据源组，并为成员设置不同的 `member_name`、权限和可观察的成功/失败结果。
 - 表结构至少包含：主键、唯一键、普通索引、时间列、数值列、枚举/状态列、无备注列、含中文备注的表和字段、可自关联的层级表。
-- 准备一个系统公共语义模型、一个普通用户公共模型、一个 `USER_A` 私有模型、一个 `USER_B` 私有模型；准备一个尚未复核的基础模型，初始为禁用。
+- 准备一个系统公共语义模型、一个普通用户公共模型、一个 `USER_A` 私有模型、一个 `USER_B` 私有模型；准备一个自动生成的基础模型（默认启用），以及一个手工禁用的模型。
 - 准备历史学习记录、评测用例、成功/失败/取消的 SQL 历史、收藏 SQL、个人看板、公共看板和未发布技能草稿。
 - 定时任务需要：一个已启用的当前用户任务（周期 cron）、一个单次任务（执行时间设为近未来 2~5 分钟）、一个已停用任务、一个绑定会话已被删除的任务、一个含失败执行的执行历史；管理端还需要跨用户任务与至少一条「执行中」实例，以及一个可把调度暂停后恢复的窗口。
 - 会话侧栏需要：同一用户 ≥25 条会话（覆盖刚刚结束/几分钟前/数天前三种时间）、至少两条已「置顶」会话、跨两个数据源的会话（用于分组视图）、以及一个标题命中关键词的长列表（用于搜索）。
@@ -472,15 +472,30 @@ ChatData
 
 - 角色：`SYS_ADMIN`、`USER_A`
 - 前置：数据源中有尚未建模的物理表。
-- 操作：管理员点击“生成基础模型”，选择单表或批量生成；普通用户尝试相同操作。
-- 预期：只有管理员可以调用生成接口；每张表生成一个基础模型；生成模型默认禁用，标记待人工复核；表字段、主键、唯一键、物理类型和表列关系正确；字段备注为空时不阻塞生成，后续可人工补充；已存在模型不重复生成。
+- 操作：管理员点击“模型初始化”，选择单表或批量生成；普通用户尝试相同操作。
+- 预期：只有管理员可以调用生成接口；每张表生成一个基础模型；生成模型默认启用；表字段、主键、唯一键、物理类型和表列关系正确；字段备注为空时不阻塞生成，后续可人工补充；已存在模型不重复生成。
 - 边界：无新表、部分表失败、重复点击、连接失败均有明确结果；普通用户不显示或不能操作该按钮。
 - 关联：`POST /admin/datasources/{id}/semantic-configs/generate-basic`。
+
+#### SEM-19 批量启动与批量暂停
+
+- 角色：`SYS_ADMIN`、`USER_A`
+- 前置：数据源下存在多个语义模型，且启用/禁用状态混合；个人维护页（`USER_A`）至少有两个本人私有模型。
+- 操作：管理员点击头部“批量启动”与“批量暂停”（`title` 分别为「批量启动选中的语义模型」/「批量暂停选中的语义模型」），在弹窗中确认默认勾选集合、搜索过滤、全选/取消全选后确认；普通用户在个人维护页对本人私有模型执行同样操作。
+- 预期：
+  - 弹窗标题随入口变化（批量启动语义模型 / 批量暂停语义模型），只列出 `can_manage !== false` 的模型；打开时默认勾选「当前状态与目标相反」的模型。
+  - 确认后一次请求完成整批切换：`PATCH /datasources/{id}/semantic-configs/batch-toggle` 与 `PATCH /admin/datasources/{id}/semantic-configs/batch-toggle`（个人/公共两套入口）。
+  - 返回 `updated_ids / skipped_ids / not_found_ids / updated_count`，提示形如「已启用 3 个指标集，1 个无权限，1 个不存在」；`updated_count > 0` 成功提示，为 0 时降级为警告提示。
+  - 列表刷新后每个模型的启用状态与 `updated_ids` 一致；单条开关与批量开关状态口径一致。
+  - 越权模型（普通用户操作公共模型、管理员操作他人私有模型）计入 `skipped_ids`，不中断整批；不存在的 ID 计入 `not_found_ids`。
+  - 空勾选时确认按钮 disabled；单次最多 200 个，超出给出明确提示。
+- 边界：全选后取消、搜索无匹配、列表为空时按钮 disabled、重复提交期间按钮禁用。
+- 关联：`components/semantic/SemanticBatchToggleDialog.vue`、`routers/semantic_config.py`（`batch-toggle`）、`daos/semantic_config_dao.py`（`batch_update_enabled_async`）；与 SEM-05 同源（单条 toggle）口径必须一致。
 
 #### SEM-05 启用、禁用和默认状态
 
 - 角色：`SYS_ADMIN`、`USER_A`
-- 前置：存在禁用基础模型和启用模型。
+- 前置：存在默认启用的基础模型和手工禁用的模型。
 - 操作：管理员复核后启用、再次禁用；普通用户尝试改变公共模型状态。
 - 预期：禁用模型不进入智能体或 Builder 可选列表；启用后可选择；普通用户不能改变公共模型状态；保存失败时页面状态回滚。
 
@@ -890,12 +905,18 @@ ChatData
 - 操作：查看消息流内「交互 HTML 页面」占位卡（文件名 + 类型标签，样式与 Word/Excel/PPT 文件卡一致）；点击「预览」在右侧预览面板打开；切换「源码/渲染」视图；点击「下载」；刷新浏览器与切换历史会话后卡片仍在。
 - 预期：HTML 产物以占位卡呈现，与 Word/Excel/PPT/Markdown 同列表、同交互口径，消息流内不渲染 iframe；预览面板 iframe 带 `sandbox="allow-scripts"` 且通过 `srcdoc` 渲染，无外链资源加载（内网无外网也应正常显示）；下载内容与原文件一致；历史会话恢复后卡片仍可打开预览；工作区文件树中同一 HTML 文件可正常打开。
 
-#### FILE-10 目录打包下载（2026-09-19 新增）
+#### FILE-10 目录打包下载（2026-09-19 新增，2026-09-24 追加子目录）
 
 - 角色：`USER_A`
-- 前置：会话 `outputs/` 下有产出文件；`workspace/`、`uploads/` 行为对照。
-- 操作：展开右侧工作区，查看 outputs 目录行新出现的「打包下载整个目录」按钮（`data-console-archive-download`，位于目录名与数量徽标之间，空目录不显示）；点击后浏览器下载 `outputs.zip`；对照 uploads / workspace 行无该按钮。
-- 预期：**只有 outputs 行出现该按钮**（白名单 `ARCHIVE_DOWNLOADABLE_DIRECTORIES`，2026-09-19 用户拍板）；zip 内容 = 文件树可见文件（arcname 保留 `outputs/...` 目录结构，系统结果目录 `query_result`/`.tool-offload` 与内部文件不进包，与单文件下载同一防泄漏口径）；大小限制针对 **zip 产物**（`CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB` 默认 50MB，限压缩后大小无法前端预检），超限后端中止并 toast 业务文案「压缩包超过大小限制…已中止打包」；业务错误以 HTTP 200 + JSON 体返回（blob.type=application/json），前端解析 msg 提示。
+- 前置：会话 `outputs/` 下有产出文件，且含至少一个子目录（如 `outputs/月报/`）；`workspace/`、`uploads/` 行为对照。
+- 操作：展开右侧工作区，查看 outputs 目录行的「打包下载整个目录」按钮（`data-console-archive-download`，位于目录名与数量徽标之间，空目录不显示）；点击后浏览器下载 `outputs.zip`；再展开 outputs 的子目录行，hover 后点击其下载按钮，下载 `月报.zip`；对照 uploads / workspace 行与其子目录行均无该按钮。
+- 预期：
+  - **顶层口径不变：只有 outputs 行出现该按钮**（白名单 `ARCHIVE_DOWNLOADABLE_DIRECTORIES`，2026-09-19 用户拍板）；uploads / workspace 顶层及其子目录都不可打包。
+  - **outputs 下的任意层级子目录都可单独打包**（2026-09-24 放开）：按钮 hover 显现（与文件行下载同口径，避免子目录多时图标压过目录名），文件名取路径末段（`月报.zip`，不含斜杠）。
+  - zip 内容 = 该文件树节点下的可见文件（顶层打包时 arcname 保留 `outputs/...` 目录结构；系统结果目录 `query_result`/`.tool-offload` 与内部文件不进包，与单文件下载同一防泄漏口径，且这些目录行不出现打包按钮）。
+  - 大小限制针对 **zip 产物**（`CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB` 默认 50MB，限压缩后大小无法前端预检），超限后端中止并 toast 业务文案「压缩包超过大小限制…已中止打包」；业务错误以 HTTP 200 + JSON 体返回（blob.type=application/json），前端解析 msg 提示。
+- 边界：目录参数容错 `outputs/../uploads`（拒绝，后端 `normalize_archive_directory` 拦 `..` 与非法首段，返回业务错误而非 500）；空目录不显示按钮；打包中按钮进 spin 且重复点击被吞。
+- 关联：`utils/consoleFileTree.ts`（`isWorkspaceDirectoryArchiveDownloadable`）、`ConversationWorkspacePanel.vue`、`routers/conversation_workspace.py`（archive）、`services/agent_run/conversation_workspace.py`（`normalize_archive_directory`）。
 
 ### 4.7 上下文、消息和会话历史
 
@@ -1760,7 +1781,7 @@ ChatData
 | SEM-15 删除确认 | ✅ PASS | 删除 → 确认弹窗含模型名；取消 → API 复核 total 不变；确定 → API 复核 remaining=0 |
 
 **观察项（非缺陷）**：
-1. 个人维护页（语义模型配置 tab，`getMySemanticConfigs`）只返回个人指标集、不显示公共模型——与后端契约一致（`routers/semantic_config.py:487` docstring「普通维护页可维护的个人指标集」），浏览器直调 API 返回 0 与页面空态一致。SEM-04/SEM-18 入口仅存在于后台管理全屏面板（`SemanticConfigPanel.vue:2474/2484` `v-if="props.adminMode"`）。**在该 URL 测 SEM-18 必须走 后台管理(gear) → 数据源行「模型」**。
+1. 个人维护页（语义模型配置 tab，`getMySemanticConfigs`）只返回个人指标集、不显示公共模型——与后端契约一致（`routers/semantic_config.py:487` docstring「普通维护页可维护的个人指标集」），浏览器直调 API 返回 0 与页面空态一致。SEM-04/SEM-18 入口仅存在于后台管理全屏面板（`SemanticConfigPanel.vue:2469/2575` `v-if="props.adminMode"`）；SEM-19 批量启动/批量暂停两种角色都可见（个人入口走 `/datasources/.../batch-toggle`，后台入口走 `/admin/...`）。**在该 URL 测 SEM-18 必须走 后台管理(gear) → 数据源行「模型」**。
 2. 测试工程注意事项（再次踩实，**根因已于 15:18 复验定位**）：面板控件普遍存在隐藏双实例（新建指标/折叠维度配置/删除语义模型），`querySelector.find` 会命中隐藏实例静默落空；必须以 `elementFromPoint` hit-test 定位可见实例后再 `agent-browser click`。复验定位到**两个独立来源**：① `pages/index.vue` 存在**两处 `SemanticConfigPanel` 挂载**（`:1520` 内嵌用户面板 + `:1869` 全屏 admin 面板 `v-if`），两实例同时渲染模型配置 UI 时同名按钮各有一份，被盖住/隐藏的那份会被先匹配到；② 面板自身的**未打开 `el-dialog` 预渲染 DOM**——实测「删除/保存」各挂 6 个 0×0 副本，全部位于 `display:none` 的 `.el-overlay > .el-dialog__body` 内（确认弹窗未打开但内容已在 DOM）。过滤口径：按 `getBoundingClientRect().width>0 && height>0` 或 `elementFromPoint` 取可见实例。
 3. 维度区副标题计数 N 在取消勾选后不变（N=物理字段行数）。基线未约定该计数随勾选变化，不记缺陷；若产品期望「已勾选数」需另行确认。
 

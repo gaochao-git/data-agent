@@ -2185,6 +2185,29 @@
         "title": "QuickSqlRequest",
         "type": "object"
       },
+      "SemanticConfigBatchToggleRequest": {
+        "description": "批量切换语义配置启用状态请求",
+        "properties": {
+          "config_ids": {
+            "description": "待切换的指标集 ID 列表",
+            "items": {
+              "type": "string"
+            },
+            "title": "Config Ids",
+            "type": "array"
+          },
+          "enabled": {
+            "description": "目标启用状态",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SemanticConfigBatchToggleRequest",
+        "type": "object"
+      },
       "SemanticConfigCreateRequest": {
         "description": "创建语义配置请求",
         "properties": {
@@ -4297,9 +4320,67 @@
         ]
       }
     },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/batch-toggle": {
+      "patch": {
+        "description": "后台批量切换公共指标集启用状态。",
+        "operationId": "batch_toggle_admin_semantic_configs_api_chatdata_admin_datasources__datasource_id__semantic_configs_batch_toggle_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigBatchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Batch Toggle Admin Semantic Configs",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
     "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/generate-basic": {
       "post": {
-        "description": "后台按物理表批量创建禁用的公共基础模型。",
+        "description": "后台按物理表批量创建公共基础模型（默认启用）。",
         "operationId": "generate_admin_basic_semantic_configs_api_chatdata_admin_datasources__datasource_id__semantic_configs_generate_basic_post",
         "parameters": [
           {
@@ -7827,7 +7908,7 @@
     },
     "/api/chatdata/conversations/{conversation_id}/workspace-files/archive": {
       "get": {
-        "description": "把会话工作区的单个顶层目录（当前仅放开 outputs）打包为 zip 下载。\n\n内容与权限口径复用文件列表的白名单（见 service 层注释）；大小限制针对 zip\n产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。\n临时 zip 通过 BackgroundTask 在响应发送后删除。",
+        "description": "把会话工作区的目录（顶层目录或其下子目录，UI 当前只放开 outputs）打包为 zip 下载。\n\n目录合法性由 service 层 ``normalize_archive_directory`` 单点校验（首段必须在工作区\n目录白名单内、拒绝 ``..`` 逃逸），路由不再重复一份白名单，非法目录走 ValueError\n分支返回业务错误。内容与权限口径复用文件列表的白名单（见 service 层注释）；大小\n限制针对 zip 产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。\n临时 zip 通过 BackgroundTask 在响应发送后删除。",
         "operationId": "download_conversation_workspace_archive",
         "parameters": [
           {
@@ -9142,6 +9223,64 @@
           }
         ],
         "summary": "Create Semantic Config",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/datasources/{datasource_id}/semantic-configs/batch-toggle": {
+      "patch": {
+        "description": "批量切换个人指标集启用状态。",
+        "operationId": "batch_toggle_semantic_configs_api_chatdata_datasources__datasource_id__semantic_configs_batch_toggle_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigBatchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Batch Toggle Semantic Configs",
         "tags": [
           "ChatData 语义模型"
         ]

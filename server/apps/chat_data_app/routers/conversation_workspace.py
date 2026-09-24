@@ -27,7 +27,6 @@ from ..services.agent_run.conversation_workspace import (
     read_conversation_workspace_raw_file,
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
-    WORKSPACE_DIR_NAMES,
 )
 from ..agent.skills.skill_service import skill_service
 from .dependencies import _get_current_user
@@ -188,10 +187,12 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
 async def download_conversation_workspace_archive(
     conversation_id: str, directory: str, request: Request
 ):
-    """把会话工作区的单个顶层目录（当前仅放开 outputs）打包为 zip 下载。
+    """把会话工作区的目录（顶层目录或其下子目录，UI 当前只放开 outputs）打包为 zip 下载。
 
-    内容与权限口径复用文件列表的白名单（见 service 层注释）；大小限制针对 zip
-    产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。
+    目录合法性由 service 层 ``normalize_archive_directory`` 单点校验（首段必须在工作区
+    目录白名单内、拒绝 ``..`` 逃逸），路由不再重复一份白名单，非法目录走 ValueError
+    分支返回业务错误。内容与权限口径复用文件列表的白名单（见 service 层注释）；大小
+    限制针对 zip 产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。
     临时 zip 通过 BackgroundTask 在响应发送后删除。
     """
     normalized_directory = str(directory or "").strip()
@@ -199,12 +200,6 @@ async def download_conversation_workspace_archive(
         current_user = _get_current_user(request)
         if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if normalized_directory not in WORKSPACE_DIR_NAMES:
-            return business_response(
-                msg=f"目录不支持打包: {normalized_directory}",
-                code=ErrorCode.CHATDATA_BAD_REQUEST,
-                status="error",
-            )
         payload = await archive_conversation_workspace_directory(
             conversation_id, user_id=str(current_user.user_id), directory=normalized_directory
         )

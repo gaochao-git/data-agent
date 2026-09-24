@@ -17,6 +17,8 @@ import {
   deleteSemanticConfig,
   toggleAdminSemanticConfig,
   toggleSemanticConfig,
+  batchToggleAdminSemanticConfig,
+  batchToggleSemanticConfig,
   getDatasourceTableColumnDicts,
   getAdminDatasourceTableColumnDicts,
 } from '../api'
@@ -40,6 +42,7 @@ import AddFieldDialog from './semantic/AddFieldDialog.vue'
 import ExpressionEditorDialog from './semantic/ExpressionEditorDialog.vue'
 import RelationshipEditorDialog from './semantic/RelationshipEditorDialog.vue'
 import OssieImportDialog from './semantic/OssieImportDialog.vue'
+import SemanticBatchToggleDialog from './semantic/SemanticBatchToggleDialog.vue'
 import type {
   SemanticConfigItem,
   SemanticMetric,
@@ -82,6 +85,9 @@ const togglingEnabledId = ref<string | null>(null)
 const creatingConfig = ref(false)
 const generatingBasicConfigs = ref(false)
 const ossieImportVisible = ref(false)
+const batchToggleVisible = ref(false)
+const batchToggleEnabled = ref(true)
+const batchToggling = ref(false)
 const savedConfigSignatures = ref<Record<string, string>>({})
 
 interface TableScopeEntry {
@@ -230,6 +236,7 @@ const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticC
 const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
 const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
 const semanticConfigToggleApi = computed(() => props.adminMode ? toggleAdminSemanticConfig : toggleSemanticConfig)
+const semanticConfigBatchToggleApi = computed(() => props.adminMode ? batchToggleAdminSemanticConfig : batchToggleSemanticConfig)
 const columnDictListApi = computed(() => props.adminMode ? getAdminDatasourceTableColumnDicts : getDatasourceTableColumnDicts)
 
 const formatConfigOperator = (value?: string) => {
@@ -501,8 +508,8 @@ const generateBasicConfigs = async () => {
   if (!props.adminMode || generatingBasicConfigs.value || !props.datasourceId) return
   try {
     await ElMessageBox.confirm(
-      `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认禁用，需人工复核后逐个启用；已有模型不会被覆盖。`,
-      '生成基础模型',
+      `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认启用，可直接在会话中引用；生成结果只有字段骨架，建议复核后补充指标。已有模型不会被覆盖。`,
+      '模型初始化',
       {
         confirmButtonText: '开始生成',
         cancelButtonText: '取消',
@@ -615,6 +622,38 @@ const handleToggleEnabled = async (config: SemanticConfigItem) => {
     ElMessage.error('操作失败')
   } finally {
     togglingEnabledId.value = null
+  }
+}
+
+// 批量启动 / 批量暂停入口：目标状态由按钮决定，弹窗只负责选模型
+const openBatchToggle = (enabled: boolean) => {
+  if (batchToggling.value || configs.value.length === 0) return
+  batchToggleEnabled.value = enabled
+  batchToggleVisible.value = true
+}
+
+const applyBatchToggle = async (configIds: string[], enabled: boolean) => {
+  if (batchToggling.value || !props.datasourceId || configIds.length === 0) return
+  batchToggling.value = true
+  try {
+    const res = await semanticConfigBatchToggleApi.value(props.datasourceId, configIds, enabled)
+    if (res.status !== 'success' || !res.data) {
+      ElMessage.error(res.msg || '批量操作失败')
+      return
+    }
+    await fetchConfigs()
+    emit('configChange')
+    const message = res.msg || (enabled ? '批量启用成功' : '批量禁用成功')
+    if (res.data.updated_count > 0) {
+      ElMessage.success(message)
+    } else {
+      ElMessage.warning(message)
+    }
+  } catch (err) {
+    console.error('批量切换语义模型启用状态失败:', err)
+    ElMessage.error('批量操作失败')
+  } finally {
+    batchToggling.value = false
   }
 }
 
@@ -2476,12 +2515,30 @@ const saveBusinessNotes = (businessNotes: string) => {
         <button
           v-if="props.adminMode"
           class="h-8 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-lg bg-blue-50 px-3 text-[13px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="为尚未建模的物理表生成禁用的基础模型"
+          title="为尚未建模的物理表初始化基础模型（默认启用）"
           :disabled="generatingBasicConfigs || props.tables.length === 0"
           @click="generateBasicConfigs"
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          <span>生成基础模型</span>
+          <span>模型初始化</span>
+        </button>
+        <button
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+          title="批量启动选中的语义模型"
+          :disabled="batchToggling || configs.length === 0"
+          @click="openBatchToggle(true)"
+        >
+          <i :class="['fa-solid', 'fa-play']"></i>
+          <span>批量启动</span>
+        </button>
+        <button
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+          title="批量暂停选中的语义模型"
+          :disabled="batchToggling || configs.length === 0"
+          @click="openBatchToggle(false)"
+        >
+          <i :class="['fa-solid', 'fa-pause']"></i>
+          <span>批量暂停</span>
         </button>
         <button
           v-if="props.adminMode"
@@ -2513,7 +2570,7 @@ const saveBusinessNotes = (businessNotes: string) => {
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
         <p class="text-sm text-gray-500 m-0 mb-1">暂无语义模型</p>
-        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表生成待复核的基础模型' : '点击上方加号创建第一个语义模型' }}</span>
+        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表一键初始化基础模型' : '点击上方加号创建第一个语义模型' }}</span>
         <button
           v-if="props.adminMode"
           class="mt-4 h-9 flex items-center gap-2 border border-blue-200 rounded-md bg-blue-50 px-4 text-[13px] text-blue-600 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -2521,7 +2578,7 @@ const saveBusinessNotes = (businessNotes: string) => {
           @click="generateBasicConfigs"
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          生成基础模型
+          模型初始化
         </button>
       </div>
 
@@ -2564,12 +2621,30 @@ const saveBusinessNotes = (businessNotes: string) => {
                 <button
                   v-if="props.adminMode"
                   class="h-9 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-md bg-blue-50 px-3 text-[12px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="为尚未建模的物理表生成禁用的基础模型"
+                  title="为尚未建模的物理表初始化基础模型（默认启用）"
                   :disabled="generatingBasicConfigs || props.tables.length === 0"
                   @click="generateBasicConfigs"
                 >
                   <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-                  <span>生成基础模型</span>
+                  <span>模型初始化</span>
+                </button>
+                <button
+                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  title="批量启动选中的语义模型"
+                  :disabled="batchToggling || configs.length === 0"
+                  @click="openBatchToggle(true)"
+                >
+                  <i :class="['fa-solid', 'fa-play']"></i>
+                  <span>批量启动</span>
+                </button>
+                <button
+                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  title="批量暂停选中的语义模型"
+                  :disabled="batchToggling || configs.length === 0"
+                  @click="openBatchToggle(false)"
+                >
+                  <i :class="['fa-solid', 'fa-pause']"></i>
+                  <span>批量暂停</span>
                 </button>
                 <button
                   class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-md bg-blue-500 text-white text-[12px] cursor-pointer transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -3223,6 +3298,13 @@ const saveBusinessNotes = (businessNotes: string) => {
       :config="activeConfig"
       :can-manage="canManageConfig(activeConfig)"
       @save="saveBusinessNotes"
+    />
+
+    <SemanticBatchToggleDialog
+      v-model:visible="batchToggleVisible"
+      :configs="configs"
+      :enabled="batchToggleEnabled"
+      @confirm="applyBatchToggle"
     />
 
     <SemanticHistoryLearningDialog
