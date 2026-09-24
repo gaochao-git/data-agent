@@ -59,6 +59,20 @@ describe('inboxQueue', () => {
     expect(admitted.messages.map(message => [message.id, message.role])).toEqual([['m2', 'user']])
   })
 
+  it('本地项保留引用快照，服务端重建项不带快照（fileSelections）', () => {
+    const withSnapshot: InboxQueueItem = { ...queued('m1'), fileSelections: ['uploads/a.pdf'] }
+    const result = reconcileInboxSnapshot([withSnapshot], [
+      { message_id: 'm1', content: '内容-m1', queue_type: 'next-turn', status: 'claimed', create_time: '2026-08-14T10:00:00' },
+      { message_id: 'm2', content: '服务端消息', queue_type: 'next-turn', status: 'claimed', create_time: '2026-08-14T10:02:00' },
+    ], new Set())
+    // 本地项 spread 保留，快照原样透传
+    const local = result.queue.find(item => item.messageId === 'm1')
+    expect(local?.fileSelections).toEqual(['uploads/a.pdf'])
+    // 服务端重建项无快照：执行时显式不带引用，绝不兜底取当前 chip
+    const fromServer = result.queue.find(item => item.messageId === 'm2')
+    expect(fromServer?.fileSelections).toBeUndefined()
+  })
+
   it('does not duplicate an admitted user message after reconnect', () => {
     const existing = [{ id: 'm1', role: 'user' as const, content: '已存在' }]
     const result = admitInboxMessages([queued('m1')], existing, ['m1'])

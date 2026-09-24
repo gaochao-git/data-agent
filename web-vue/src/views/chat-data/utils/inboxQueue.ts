@@ -10,6 +10,8 @@ export interface InboxQueueItem {
   queueType: InboxQueueType
   status: 'submitting' | InboxMessageStatus
   timestamp: Date
+  /** 入队瞬间捕获的 @ 引用快照（相对路径列表）。undefined = 恢复自服务端（服务端不存引用），执行时显式不带引用。 */
+  fileSelections?: string[]
 }
 
 export interface InboxServerMessage {

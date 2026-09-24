@@ -2171,6 +2171,9 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
         userMessageId: queuedMessage.messageId,
         queuedMessageId: queuedMessage.messageId,
         preserveQueuedMessages: true,
+        // 队列消息的引用快照：入队时捕获；恢复自服务端的项无快照（服务端不存引用），显式不带引用，
+        // 绝不兜底取当前 chip（执行时点的 chip 属于之后的新消息）
+        fileSelections: queuedMessage.fileSelections ?? [],
       })
     } finally {
       executingQueueMessageId.value = null
@@ -2183,12 +2186,15 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     const conversationId = localConversationId.value || props.conversationId
     if (!query || !conversationId || isSteering.value) return
     const temporaryId = `steer-${Date.now()}`
+    // 入队瞬间捕获 @ 引用快照：执行时间点与入队时间点之间 chip 可能已变化，引用必须随消息走
+    const mentionFileSelectionsSnapshot = buildMentionFileSelections()
     pendingSteerMessages.value.push({
       clientId: temporaryId,
       content: query,
       queueType: 'next-turn',
       status: 'submitting',
       timestamp: new Date(),
+      fileSelections: mentionFileSelectionsSnapshot,
     })
     input.value = ''
     isSteering.value = true
@@ -2202,13 +2208,16 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
           admitPendingMessages([queuedMessage.messageId])
         }
       }
+      // 引用已随消息入队，只从 chip 列表移除入队的那批；API 往返期间新加的引用保留给下一条消息
+      // （失败分支不移除，chip 保留供重试）
+      mentionFileSelectionsSnapshot.forEach(path => removeMentionFile(path))
     } catch (error) {
       pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
       input.value = query
       await restorePendingSteerQueue({ restartPolling: false })
       if (!hasActiveRun.value) {
         if (isStoppingRun.value) return // 停止竞态下不得重新发起任务
-        void submitAnalysisQuery(query)
+        void submitAnalysisQuery(query, { fileSelections: mentionFileSelectionsSnapshot })
         return
       }
       ElMessage.error(error instanceof Error ? error.message : '追加消息失败')
