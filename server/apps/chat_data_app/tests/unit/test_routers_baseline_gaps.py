@@ -349,9 +349,9 @@ async def test_stream_sql_assist_chunks_threads_model_options(monkeypatch):
     monkeypatch.setattr(query_execution_routes.agent_module, "get_checkpointer", lambda: _FakeCheckpointer())
     monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", _fake_create_agent)
 
-    chunks = [
-        chunk
-        async for chunk in query_execution_routes._stream_sql_assist_chunks(
+    events = [
+        (kind, text)
+        async for kind, text in query_execution_routes._stream_sql_assist_chunks(
             "c1",
             HumanMessage(content="查销量"),
             source_type="hive",
@@ -362,7 +362,7 @@ async def test_stream_sql_assist_chunks_threads_model_options(monkeypatch):
         )
     ]
 
-    assert chunks == ["select 1"]
+    assert events == [("chunk", "select 1")]
     assert captured["model"] == "qwen-max"
     assert captured["enable_thinking"] is True
     assert captured["thinking_effort"] == "high"

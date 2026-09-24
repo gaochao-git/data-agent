@@ -1110,7 +1110,7 @@ def test_quick_sql_persists_partial_assistant_output_after_model_failure(monkeyp
         return None
 
     async def fake_stream(*_args, **_kwargs):
-        yield "SELECT "
+        yield "chunk", "SELECT "
         raise RuntimeError("model interrupted")
 
     async def persist_user_message(**_kwargs):

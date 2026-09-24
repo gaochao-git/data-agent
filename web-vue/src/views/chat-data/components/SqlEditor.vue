@@ -63,7 +63,7 @@ const safeRandomId = (): string => {
 }
 
 type SqlEditorSSEEventType = 'message' | 'error'
-type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean }
+type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean; reasoning?: string; reasoningExpanded?: boolean }
 type AiMessageSegment = { type: 'markdown' | 'sql'; content: string }
 type QueryResultPanelItem = {
   key?: string | number
@@ -903,6 +903,19 @@ const showAiPanel = ref(false)
 const aiQuery = ref('')
 const isAiGenerating = ref(false)
 const aiMessages = ref<AiChatMessage[]>([])
+
+// 思考区交互口径与主会话一致：默认收起，流式思考中同行走马灯预览尾部文字。
+const THINKING_PREVIEW_TAIL_LENGTH = 80
+
+const isAiThinking = (msg: AiChatMessage): boolean => Boolean(msg.isStreaming && !msg.content)
+
+const getAiThinkingPreview = (reasoning: string): string => {
+  const singleLine = reasoning.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return ''
+  return singleLine.length > THINKING_PREVIEW_TAIL_LENGTH
+    ? `…${singleLine.slice(-THINKING_PREVIEW_TAIL_LENGTH)}`
+    : singleLine
+}
 const aiInputRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
 // AI 生成模型选择：与主对话口径一致，模型必选并回填默认模型
 const aiModelId = ref('')
@@ -1166,8 +1179,9 @@ const ensureAiConversationId = async () => {
 }
 
 const saveCurrentAiConversation = (datasourceId = props.datasourceId, datasourceName = props.datasource?.group_name || '') => {
+  // 思考-only 消息（正文为空但有思考段）也要保留，与后端 persist_turn 落历史口径一致。
   const messages = aiMessages.value
-    .filter(item => item.content.trim() || item.role === 'user')
+    .filter(item => item.content.trim() || item.role === 'user' || item.reasoning)
     .map(item => ({ ...item, isStreaming: false }))
 
   if (!datasourceId || messages.length === 0) return
@@ -1794,6 +1808,17 @@ const handleAiGenerate = async () => {
           if (event === 'error' || data.type === 'error') {
             throw new Error(data.message || '生成失败')
           }
+          if (data.type === 'thinking') {
+            const reasoningText = String(data.content || '')
+            if (reasoningText && aiGenerationSeq.value === generationSeq) {
+              const lastMessage = aiMessages.value[aiMessages.value.length - 1]
+              if (lastMessage?.role === 'assistant') {
+                lastMessage.reasoning = `${lastMessage.reasoning || ''}${reasoningText}`
+                scrollAiOutputToBottom()
+              }
+            }
+            continue
+          }
           if (data.type === 'chunk') {
             fullContent += data.content || ''
             if (aiGenerationSeq.value === generationSeq) {
@@ -2304,6 +2329,35 @@ defineExpose({
               <div v-for="(msg, idx) in aiMessages" :key="idx" class="mb-3" :class="msg.role === 'user' ? 'flex flex-col items-end' : ''">
                 <div v-if="msg.role === 'assistant'" class="max-w-[85%]">
                   <div class="ai-assistant-message px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
+                    <div v-if="msg.reasoning" class="min-w-0">
+                      <button
+                        type="button"
+                        class="group inline-flex max-w-full items-center gap-2 rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
+                        @click="msg.reasoningExpanded = !msg.reasoningExpanded"
+                      >
+                        <i
+                          :class="[
+                            'fa-solid fa-brain text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600',
+                            isAiThinking(msg) ? 'fa-fade' : ''
+                          ]"
+                        ></i>
+                        <span>{{ isAiThinking(msg) ? '思考中' : '思考' }}</span>
+                        <i
+                          :class="[
+                            'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
+                            msg.reasoningExpanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100'
+                          ]"
+                        ></i>
+                        <span
+                          v-if="isAiThinking(msg) && !msg.reasoningExpanded && getAiThinkingPreview(msg.reasoning)"
+                          class="min-w-0 flex-1 truncate text-xs font-normal text-slate-400/80"
+                        >{{ getAiThinkingPreview(msg.reasoning) }}</span>
+                      </button>
+                      <div
+                        v-if="msg.reasoningExpanded"
+                        class="mb-1.5 max-h-[210px] overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-400"
+                      >{{ msg.reasoning }}</div>
+                    </div>
                     <template v-if="msg.content">
                       <template v-for="(segment, segmentIdx) in splitAiMessageSegments(msg.content)" :key="segmentIdx">
                         <div v-if="segment.type === 'markdown'" class="ai-message-markdown" v-html="renderMarkdown(segment.content)"></div>
