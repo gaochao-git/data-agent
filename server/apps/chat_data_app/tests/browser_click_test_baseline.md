@@ -212,7 +212,7 @@ ChatData
 | --- | --- | --- | --- | --- |
 | `ENT` 业务端入口与权限 | 建立普通用户进入 ChatData 后的模式和资源选择边界 | 模式切换、数据源/模型/执行对象选择、空态、权限回收、状态恢复 | `pages/index.vue`、查询入口 | `ENT-01/03/04/05` |
 | `SEM` 用户自定义语义模型 | 让用户维护个人查询所需的私有语义模型并验证其查询质量 | 私有模型 CRUD、表范围、别名、维度配置（一行 = 一个物理字段，勾选决定是否参与维度，可排除多表重复字段）、自定义维度、物理详情、表达式、指标管理（原子/派生/复合统一新建、编辑与聚合扩展）、关系/自关联、业务说明、字段字典只读、历史学习、私有模型评估、校验和删除 | `SemanticConfigPanel.vue`、`SemanticEvaluationDrawer.vue`、`components/semantic/` | `SEM-02/06-18`、`EVAL-*` |
-| `AG` 数据智能体 | 通过自然语言完成语义查询、后续分析和技能使用与管理 | 入口与资源选择（数据源组切换、执行对象选择与成员勾选、语义模型智能选择/手动切换/搜索、推荐问题使用并回填聚焦输入框、模型选择与深度思考开关、上传文件入口）；消息队列与插队执行（运行中连发入队、立即插入/转下轮策略切换、多轮链式自动接续、停止后队列保留、单条「执行」按钮插队、停止后输入框发送不合并队列按 FIFO 续跑、队列项编辑移除）；任务计划与询问确认（write_todos 任务计划进度条与步骤卡片、ask_user_question 询问卡片分页与选项）；安全防护（内容安全：输入输出合规、system prompt 与敏感信息不泄漏；行动安全：查询语言控制（SQL 只读校验、危险语句拦截）、运行能力控制（不引入沙箱、不启用 Bash、安全模式配置）、资源访问控制（文件虚拟目录边界、执行对象权限边界））；会话记忆（memory.md 口径沉淀与复用）、task 子智能体派发（plan 规划 / data-explore 只读探索）与报告工作流；DSL/SQL 两种模式、模型检索、单/多成员查询、空结果、错误、结果落盘、文件读取、分段分析、工具轨迹、流式停止和恢复；会话新建、切换、标题、收藏、删除与恢复，消息与上下文详情，Token 与缓存，上下文压缩，轮次导航，工具卡片意图悬浮详情与状态/起止时间/耗时展示，会话列表时间按宽度分级显示；技能使用（搜索、命令选择、发布状态与权限范围、运行期快照执行）与技能管理（列表与分类搜索、草稿创建与元数据校验、文件树与内容编辑、版本查看、发布与回滚、复制、收藏、删除、工作区导入与运行期加载） | `conversation/Conversation.vue`、`ConversationInputBar.vue`、`AnalysisProgress.vue`、`ToolCallCard.vue`、`UserQuestionCard.vue`、`components/sidebars/ConversationSidebar.vue`、`ConversationTokenUsage.vue`、`ConversationTurnNavigator.vue`、`SkillManager.vue`、技能命令菜单 | `AG-*`、`CTX-*`（会话与上下文子分类）、`SKILL-*`（技能子分类） |
+| `AG` 数据智能体 | 通过自然语言完成语义查询、后续分析和技能使用与管理 | 入口与资源选择（数据源组切换、执行对象选择与成员勾选、语义模型智能选择/手动切换/搜索、推荐问题使用并回填聚焦输入框、模型选择与深度思考开关、上传文件入口、工作区文件 @ 引用（输入框 `@` 唤起文件候选弹层与实时过滤、chip 多选与单独移除、发送后与历史回放的引用 chip 展示、生成中排队消息实时接纳后 chip 保留、点击 chip 在工作区面板定位预览文件））；消息队列与插队执行（运行中连发入队、立即插入/转下轮策略切换、多轮链式自动接续、停止后队列保留、单条「执行」按钮插队、停止后输入框发送不合并队列按 FIFO 续跑、队列项编辑移除）；任务计划与询问确认（write_todos 任务计划进度条与步骤卡片、ask_user_question 询问卡片分页与选项）；安全防护（内容安全：输入输出合规、system prompt 与敏感信息不泄漏；行动安全：查询语言控制（SQL 只读校验、危险语句拦截）、运行能力控制（不引入沙箱、不启用 Bash、安全模式配置）、资源访问控制（文件虚拟目录边界、执行对象权限边界））；会话记忆（memory.md 口径沉淀与复用）、task 子智能体派发（plan 规划 / data-explore 只读探索）与报告工作流；DSL/SQL 两种模式、模型检索、单/多成员查询、空结果、错误、结果落盘、文件读取、分段分析、工具轨迹、流式停止和恢复；会话新建、切换、标题、收藏、删除与恢复，消息与上下文详情，Token 与缓存，上下文压缩，轮次导航，工具卡片意图悬浮详情与状态/起止时间/耗时展示，会话列表时间按宽度分级显示；技能使用（搜索、命令选择、发布状态与权限范围、运行期快照执行）与技能管理（列表与分类搜索、草稿创建与元数据校验、文件树与内容编辑、版本查看、发布与回滚、复制、收藏、删除、工作区导入与运行期加载） | `conversation/Conversation.vue`、`ConversationInputBar.vue`、`AnalysisProgress.vue`、`ToolCallCard.vue`、`UserQuestionCard.vue`、`components/sidebars/ConversationSidebar.vue`、`ConversationTokenUsage.vue`、`ConversationTurnNavigator.vue`、`SkillManager.vue`、技能命令菜单 | `AG-*`、`CTX-*`（会话与上下文子分类）、`SKILL-*`（技能子分类） |
 | `SCHED` 定时任务（数据智能体子功能） | 让用户把周期性问数任务托管给调度器，结果落在绑定会话中 | 任务列表与启停、新建/编辑（运行会话：指定历史会话 / 每次新建会话；运行配置：数据源组、模型、推理等级；调度：周期 cron 每小时/每天/每周/自定义、单次执行时间、有效期至）、编辑态只下发改动项的补丁式提交、立即执行与会话忙时转队列、执行历史、绑定会话跳转与复制会话 ID、到点自动触发与结果交付 | `AgentScheduleManager.vue`、`AgentScheduleRunsTable.vue`、会话侧栏「定时任务」入口 | `SCHED-01~04/08` |
 | `BI` 可视化查询 | 通过 Builder DSL 配置并执行语义查询 | 模型/主表、维度、指标、聚合、时间粒度、过滤、字段引用、`rightExpression`、派生/复合逻辑指标拖拽使用、排序、limit/offset、预览、执行、多成员、图表和结果分析 | `QueryBuilder/` | `BI-*` |
 | `SQL` SQL 查询 | 提供普通用户可控的只读 SQL 编辑和执行 | 编辑器、格式化、AI 辅助、多语句、多成员、limit、安全校验、异步任务、停止、错误、历史、结果和收藏 | `SqlEditor.vue`、查询结果组件 | `SQL-*` |
@@ -807,6 +807,19 @@ ChatData
   - 运行中占位显示的开始时间在完成后被服务端实测值覆盖，同一次调用的开始时间不发生跳变。
   - 历史旧数据无起止时间时不显示时间行（或显示为空），不显示天文数字或错误耗时；子智能体过程区内层工具与顶层工具卡片展示口径一致。
 - 关联：AG-09 工具卡片；CTX-06 历史分页回放；`ToolCallCard.vue`、`ToolCallDetailPanel.vue`。
+
+#### AG-20 工作区文件 @ 引用（2026-09-24 新增）
+
+- 角色：`USER_A`
+- 前置：会话内已有可引用文件——至少一个上传附件（`uploads/`）与一个智能体产出文件（`workspace/`）；另准备一个可控耗时的查询任务，用于验证生成中入队场景。
+- 操作与预期：
+  - **唤起与过滤**：输入框输入 `@` 弹出文件候选弹层（平铺列表，每项显示文件名 + 目录路径，如 `uploads/`、`workspace/semantic/`）；`@` 后继续输入实时过滤（匹配文件名或相对路径）；↑↓ 移动高亮、Enter/Tab 选中、Esc 关闭、鼠标点击选中均可用。
+  - **多选与移除**：选中后 `@token` 从输入文本移除、文件进入 chip 列表；再次输入 `@` 可继续追加第二个文件；同一文件重复选择不产生重复 chip；每个 chip 可单独移除。
+  - **消息展示**：发送后用户气泡上方展示引用 chip（`@` 图标 + 文件名，悬浮显示相对路径）；刷新页面后历史回放的 chip 与实时一致（由事件 payload 的 `file_selections` 重建）。
+  - **排队消息 chip 保留**：上一轮流式生成期间发送带 @ 引用的消息（走 steer 队列），消息被服务端消费实时接纳后，气泡上 chip 仍在，不得退化为纯文本。
+  - **点击定位**：点击用户消息上的引用 chip，右侧会话工作区面板打开并定位预览该文件；`uploads/` 与 `workspace/` 两种路径各验证一次；chip 有与附件 chip 一致的 hover 态。
+- 边界：空工作区时输入 `@` 无可引用项（不弹层或空态）；新会话首轮会话 ID 未就绪时点击 chip 走「会话未就绪」兜底提示（与附件 chip 点击一致）；正文中的 `[引用文件：…]` 标记由后端白名单校验后追加，不因引用文件不存在而崩溃。
+- 关联：AG-13 消息队列（steer 实时接纳链路）；FILE-01 工作区文件树与目录隔离；`WorkspaceFileMentionMenu.vue`、`useWorkspaceFileMention.ts`、`ConversationMessageList.vue`。
 
 ### 4.6 会话文件、查询结果和产物
 
@@ -1824,3 +1837,12 @@ ChatData
 | AG-01 纯文本粘贴对照 | ✅ PASS（合成事件口径） | 合成纯文本 paste 不生成图片芯片（不误拦截）；**合成事件不触发浏览器原生文本插入**（trusted event 限制），原生插入路径由 ChatInputBox/ConversationInputBar 单测覆盖 |
 
 操作手法备忘：el-select 用 `mousedown`（bubbles）开下拉后点 `.el-select-dropdown__item`（popper 为 fixed 定位，勿按 offsetParent 过滤可见性）；el-dialog 开合按 `.el-overlay` 的 `display` 判断；裸 `fetch` 需带 `Authorization: Bearer <Admin-Token cookie>` 且路径为 `/dev-api` + `/agents/api/chatdata/...`；行内更多操作在 el-dropdown（`立即执行/执行历史/编辑/删除`）。测试任务已删除，环境无残留。
+
+### §5.18 基线补录工作区文件 @ 引用用例 AG-20（2026-09-24 17:30，未执行浏览器跑）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | 输入框 @ 引用工作区文件功能上线（候选弹层/chip 多选）后，当日修复两处缺陷：① steer 队列消息被实时接纳后用户气泡丢失引用 chip（`inboxQueue.ts` admitInboxMessages 未透传 fileSelections，dfa9d72）；② 引用 chip 不可点击（07b6ebd，改为复用 openAttachment → 工作区面板定位预览）。基线自 09-20 后未更新，补录 AG-20（总条目 144 → 145），同步 1.3 功能目录 AG 行。 |
+| 代码级验证 | inboxQueue.spec.ts 9 passed（含接纳透传回归）；`vue-tsc -p tsconfig.app.json` 0 错误；后端 inbox 单测 82 passed。 |
+| 待办 | AG-20 浏览器首跑尚未执行（唤起/过滤/多选、排队接纳 chip 保留、chip 点击定位三条主线），下次浏览器回归时按 §2.3 可见性过滤口径执行并回填结果。 |
+
