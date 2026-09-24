@@ -112,4 +112,20 @@ describe('inboxQueue', () => {
     expect(result.queue).toEqual([])
     expect(result.messages).toEqual(existing)
   })
+
+  it('admitted user message carries the @ mention snapshot (live chip parity with history)', () => {
+    // 生成中入队的消息被服务端消费后，气泡必须带上入队时的引用快照；
+    // 否则实时会话无 chip、刷新后历史回放才有（file_selections 来自事件 payload）
+    const withMention: InboxQueueItem = {
+      ...queued('m1', 'consumed'),
+      fileSelections: ['workspace/semantic/订单模型__444139.yaml'],
+    }
+    const result = admitInboxMessages([withMention], [], ['m1'])
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]!.fileSelections).toEqual(['workspace/semantic/订单模型__444139.yaml'])
+
+    // 无快照的消息不挂空数组字段（保持与纯文本消息同形）
+    const plain = admitInboxMessages([queued('m2', 'consumed')], [], ['m2'])
+    expect(plain.messages[0]!.fileSelections).toBeUndefined()
+  })
 })

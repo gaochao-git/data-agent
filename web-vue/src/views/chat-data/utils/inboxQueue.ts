@@ -43,6 +43,9 @@ export const admitInboxMessages = (
       role: 'user' as const,
       content: item.content,
       timestamp: item.timestamp,
+      // 随行快照一并落气泡：否则实时会话里被接纳的排队消息丢 @ 引用 chip，
+      // 只有刷新后的历史回放（从事件 payload 重建）才显示
+      ...(item.fileSelections?.length ? { fileSelections: item.fileSelections } : {}),
     }))
   return {
     queue: queue.filter(item => !item.messageId || !admittedIds.has(item.messageId)),
