@@ -132,29 +132,6 @@ CREATE TABLE `chat_data_schedule_control` (
 ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
 ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
 
--- 2026-09-24：排队消息随行元数据（@ 引用工作区文件相对路径、上传附件 file_id 的 JSON 文本）。
--- 排队消息此前只存纯文本，生成中入队的消息续跑执行时引用/附件/截图全部丢失（E2E 实证）。
--- 同时按建表规范把单单词列改为下划线命名（除主键 id 外字段必须含下划线）：
--- content→record_content（消息行存追加文本、运行行存运行状态 JSON）、status→record_status；
--- meta 从未上线，直接以 record_meta 落列。索引 idx_agent_inbox_conv/idx_agent_inbox_run
--- 引用的 status 列由 MySQL 随 CHANGE 自动更新，无需手工处理。
-ALTER TABLE chat_data_agent_inbox
-  CHANGE COLUMN content record_content mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
-  CHANGE COLUMN status record_status varchar(16) NOT NULL COMMENT '运行或消息状态',
-  ADD COLUMN record_meta text NULL COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}' after record_content;
-
--- 2026-09-24：修正 queue_type 列定义与代码契约对齐。代码全链路只使用 next-step/next-turn
--- （agent_inbox_service.INBOX_QUEUE_TYPES、claim 查询、steering 注入、models.py server_default='next-step'），
--- 此前列被误改为 DEFAULT 'steer' 注释 steer/next_turn（'steer' 语义即代码的 'next-step'），与实际存储不符；
--- 且默认值 'steer' 会让省略 queue_type 的 INSERT 落入代码不认识的值、永远不被 claim 消费。
--- 实库分布佐证：next-step 1506 条、next-turn 137 条，steer/next_turn 各为个位数脏行。
-ALTER TABLE chat_data_agent_inbox
-  MODIFY COLUMN queue_type varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理';
-
--- 脏数据归一（steer→next-step、next_turn→next-turn，回到代码可消费的枚举；确认是测试数据也可直接清理）
-UPDATE chat_data_agent_inbox SET queue_type='next-step' WHERE queue_type='steer';
-UPDATE chat_data_agent_inbox SET queue_type='next-turn' WHERE queue_type='next_turn';
-
 -- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
 -- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
 -- 其余环境执行 ALTER 前先跑查重，有结果则先处理重复行。
