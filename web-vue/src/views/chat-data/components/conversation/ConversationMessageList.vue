@@ -205,6 +205,17 @@ const handleAttachmentClick = (attachment: MessageAttachment) => {
   emit('openAttachment', attachment)
 }
 
+// @ 引用 chip 点击：复用附件打开链路（presented artifact 同款），在会话工作区面板
+// 定位并预览该文件。file_id 用 mention: 前缀避免与真实附件 id 混淆。
+const handleMentionFileClick = (file: { path: string; name: string }) => {
+  emit('openAttachment', {
+    file_id: `mention:${file.path}`,
+    filename: file.name,
+    file_type: file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : undefined,
+    original_path: file.path,
+  })
+}
+
 const handleCopyAssistantMessage = async (message: Message) => {
   const text = getCopyableAssistantContent(message)
   if (!text) return
@@ -235,15 +246,17 @@ const handleCopyAssistantMessage = async (message: Message) => {
             class="flex w-full flex-row-reverse flex-wrap gap-1.5"
             title="本轮引用的工作区文件"
           >
-            <div
+            <button
               v-for="file in getUserMentionedFiles(message)"
               :key="file.path"
-              class="flex items-center gap-1.5 rounded-full border border-[#1677FF]/20 bg-white/80 px-2.5 py-1 text-xs text-[#1F3A56]"
+              type="button"
+              class="flex items-center gap-1.5 rounded-full border border-[#1677FF]/20 bg-white/80 px-2.5 py-1 text-xs text-[#1F3A56] transition-colors duration-150 hover:border-[#1677FF]/40 hover:bg-white"
               :title="file.path"
+              @click="handleMentionFileClick(file)"
             >
               <i class="fa-solid fa-at text-[11px] text-[#1677FF]"></i>
               <span class="max-w-[200px] truncate">{{ file.name }}</span>
-            </div>
+            </button>
           </div>
           <div v-if="getEffectiveAttachments(message).length" class="flex w-full flex-col gap-1.5">
             <button
