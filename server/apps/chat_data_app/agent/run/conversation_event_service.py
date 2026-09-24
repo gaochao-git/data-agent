@@ -754,7 +754,7 @@ def _serialize_human_message(message: HumanMessage) -> dict[str, Any]:
     }
     # vision_attachments 与 message_compose.select_vision_attachments 对应；
     # 不直接 import 是为了避免 services 反向依赖 agent.middleware。
-    for key in ("file_ids", "semantic_config_selection", "reasoning_turn_id", "vision_attachments"):
+    for key in ("file_ids", "file_selections", "reasoning_turn_id", "vision_attachments"):
         if additional_kwargs.get(key):
             payload[key] = additional_kwargs[key]
     return payload

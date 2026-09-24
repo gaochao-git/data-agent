@@ -321,17 +321,6 @@ export interface ThinkingSegment {
   reasoningTurnId?: string
 }
 
-export interface SemanticConfigSelectionInfo {
-  semantic_config_id: string
-  semantic_config_name?: string
-  confidence?: 'high' | 'medium' | 'low' | 'none' | string
-  reason?: string
-  matched_metrics?: string[]
-  matched_dimensions?: string[]
-  auto_selected?: boolean
-  user_selected?: boolean
-}
-
 // 会话项
 export interface ConversationItem {
   id: string
@@ -378,9 +367,8 @@ export interface Message {
   isStreaming?: boolean
   turnId?: string
   dashboardSpec?: DashboardSpecPayload
-  semanticConfigSelection?: SemanticConfigSelectionInfo
-  /** 用户消息 @ 引用的语义模型清单（多选，本地发送与历史回放共用）。 */
-  semanticConfigSelections?: SemanticConfigSelectionInfo[]
+  /** 用户消息 @ 引用的会话工作区文件清单（相对路径，本地发送与历史回放共用）。 */
+  fileSelections?: string[]
   skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]

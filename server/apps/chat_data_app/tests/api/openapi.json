@@ -721,6 +721,17 @@
           "agent_id": {
             "title": "Agent Id",
             "type": "string"
+          },
+          "datasource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datasource Id"
           }
         },
         "required": [
@@ -6697,7 +6708,7 @@
         ]
       },
       "post": {
-        "description": "创建新会话\n\nPOST /api/chatdata/conversations\nBody: {\"agent_id\": \"...\"}\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"create_time\": \"...\"}\n}",
+        "description": "创建新会话\n\nPOST /api/chatdata/conversations\nBody: {\"agent_id\": \"...\", \"datasource_id\": \"...\"}  # datasource_id 可选\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"create_time\": \"...\"}\n}",
         "operationId": "create_conversation_api_chatdata_conversations_post",
         "requestBody": {
           "content": {

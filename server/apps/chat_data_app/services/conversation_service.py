@@ -119,13 +119,14 @@ async def get_or_create_conversation(
     return conversation_id
 
 
-async def create(agent_id: str, user_id: str = "system") -> Dict[str, Any]:
+async def create(agent_id: str, user_id: str = "system", datasource_id: str | None = None) -> Dict[str, Any]:
     """
     创建新会话
 
     Args:
         agent_id: 代理标识
         user_id: 用户ID
+        datasource_id: 建会话即绑定的数据源组（空串/None 表示暂不绑定）
 
     Returns:
         {"id": thread_id, "create_time": create_time}
@@ -133,7 +134,13 @@ async def create(agent_id: str, user_id: str = "system") -> Dict[str, Any]:
     thread_id = str(uuid.uuid4())
     now = datetime.now()
 
-    await conversation_dao.create_thread(user_id=user_id, thread_id=thread_id, agent_id=agent_id, now=now)
+    await conversation_dao.create_thread(
+        user_id=user_id,
+        thread_id=thread_id,
+        agent_id=agent_id,
+        datasource_id=str(datasource_id or "").strip(),
+        now=now,
+    )
 
     logger.info(f"创建新对话: {thread_id}, agent: {agent_id}")
     return {"id": thread_id, "create_time": now.strftime('%Y-%m-%d %H:%M:%S')}

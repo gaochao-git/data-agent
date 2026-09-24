@@ -16,7 +16,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking
+from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking, parse_file_selections
 from apps.chat_data_app.agent_run_support import (
     _prepare_conversation_workspace_sync,
     prepare_conversation_workspace,
@@ -29,8 +29,8 @@ from apps.chat_data_app.agent_stream import (
     _format_thinking_event,
     _format_tool_event,
     _is_tool_result_error,
-    _normalize_semantic_selection_events,
-    _semantic_selection_mention_suffix,
+    _validate_workspace_file_selections,
+    _file_selection_mention_suffix,
     _append_reasoning_segment,
     _parse_tool_args_buffer,
     _generate_chat_data_stream,
@@ -251,60 +251,101 @@ def test_normalize_enable_thinking_branches():
     assert normalize_enable_thinking(object()) is None
 
 
-def test_normalize_semantic_selection_events_branches():
+def test_parse_file_selections_branches():
     # 非法入参一律空列表
-    assert _normalize_semantic_selection_events(None) == []
-    assert _normalize_semantic_selection_events({"semantic_config_id": ""}) == []
-    assert _normalize_semantic_selection_events(["junk", 1]) == []
-    # 单对象（旧格式）与列表（@ 多选）都兼容；按 id 去重
-    assert _normalize_semantic_selection_events([
-        {"semantic_config_id": " cfg_a ", "semantic_config_name": ""},
-        {"semantic_config_id": "cfg_a", "semantic_config_name": "重复丢弃"},
-    ]) == [{
-        "semantic_config_id": "cfg_a",
-        "semantic_config_name": "cfg_a",
-        "confidence": "",
-        "reason": "",
-        "matched_metrics": [],
-        "matched_dimensions": [],
-        "auto_selected": False,
-        "user_selected": False,
-    }]
-    normalized = _normalize_semantic_selection_events({
-        "semantic_config_id": " cfg_a ",
-        "semantic_config_name": "",
-        "confidence": " high ",
-        "reason": " 命中 ",
-        "matched_metrics": [" 订单数 ", "", None],
-        "matched_dimensions": "bad",
-        "auto_selected": 1,
-        "user_selected": "",
-    })
-
-    assert normalized == [{
-        "semantic_config_id": "cfg_a",
-        "semantic_config_name": "cfg_a",
-        "confidence": "high",
-        "reason": "命中",
-        "matched_metrics": ["订单数", "None"],
-        "matched_dimensions": [],
-        "auto_selected": True,
-        "user_selected": False,
-    }]
+    assert parse_file_selections(None) == []
+    assert parse_file_selections(123) == []
+    assert parse_file_selections(["", "   "]) == []
+    # 单字符串与列表都兼容；strip 后按序去重
+    assert parse_file_selections(" uploads/a.pdf ") == ["uploads/a.pdf"]
+    assert parse_file_selections([
+        "uploads/a.pdf", " outputs/b.md ", "uploads/a.pdf", "",
+    ]) == ["uploads/a.pdf", "outputs/b.md"]
+    # 首尾斜杠归一（前端容错）
+    assert parse_file_selections("/workspace/semantic/a__1.yaml/") == ["workspace/semantic/a__1.yaml"]
 
 
-def test_semantic_selection_mention_suffix_lists_all_models():
-    events = [
-        {"semantic_config_id": "cfg_a", "semantic_config_name": "订单模型", "user_selected": True},
-        {"semantic_config_id": "cfg_b", "semantic_config_name": "产品模型", "user_selected": True},
-        {"semantic_config_id": "cfg_c", "semantic_config_name": "未选", "user_selected": False},
-    ]
-
-    assert _semantic_selection_mention_suffix(events) == (
-        "\n\n[本轮指定语义模型：订单模型（semantic_config_id: cfg_a）、产品模型（semantic_config_id: cfg_b）]"
+def test_file_selection_mention_suffix_lists_files():
+    assert _file_selection_mention_suffix([
+        "uploads/a.pdf", "workspace/semantic/b__1.yaml",
+    ]) == (
+        "\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/semantic/b__1.yaml]"
     )
-    assert _semantic_selection_mention_suffix([]) == ""
-    assert _semantic_selection_mention_suffix([{"semantic_config_id": "cfg_x", "user_selected": False}]) == ""
+    assert _file_selection_mention_suffix([]) == ""
+
+
+def test_validate_workspace_file_selections_filters_invalid(tmp_path):
+    import os
+
+    root = tmp_path / "user-data"
+    (root / "uploads").mkdir(parents=True)
+    (root / "outputs" / "query_result").mkdir(parents=True)
+    (root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
+    (root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    root_str = str(root)
+
+    # 合法文件保留；不存在/系统结果区/越界路径丢弃；按序去重
+    assert _validate_workspace_file_selections(
+        [
+            "uploads/a.pdf",
+            "uploads/missing.pdf",
+            "outputs/query_result/r.json",
+            "uploads/a.pdf",
+            "../../etc/passwd",
+            "/abs/path.pdf",
+        ],
+        root_str,
+    ) == ["uploads/a.pdf"]
+
+
+def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkeypatch):
+    """建会话物化 helper 的契约：失败吞异常返回 total=0，不阻断会话创建。"""
+    import asyncio
+
+    from apps.chat_data_app import agent_run_support
+
+    # datasource_id 缺省：短路，不触任何 IO
+    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
+        "conv_x", user_id="u1", datasource_id="",
+    )) == {"total": 0, "failed_ids": []}
+
+    # 前置步骤（读会话日期）失败：吞异常
+    def date_boom(*args, **kwargs):
+        raise RuntimeError("date boom")
+
+    monkeypatch.setattr(agent_run_support, "get_conversation_created_date", date_boom)
+    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
+        "conv_x", user_id="u1", datasource_id="ds_1",
+    )) == {"total": 0, "failed_ids": []}
+
+    # 正常路径：透传 prematerialize 结果
+    async def fake_created_date(conversation_id, user_id=None):
+        return None
+
+    async def fake_prepare(conversation_id, user_id, created_date=None):
+        return {"root": "/tmp/whatever"}
+
+    class _FakeRuntime:
+        def __init__(self, *, workspace_root, user_id):
+            self.workspace_root = workspace_root
+            self.user_id = user_id
+
+    class _FakeManager:
+        async def get_datasource_meta_async(self, datasource_id):
+            return {"source_type": "mysql"}
+
+    async def fake_prematerialize(**kwargs):
+        return {"total": 2, "failed_ids": []}
+
+    monkeypatch.setattr(agent_run_support, "get_conversation_created_date", fake_created_date)
+    monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_prepare)
+    monkeypatch.setattr(agent_run_support, "ConversationWorkspaceRuntime", _FakeRuntime)
+    monkeypatch.setattr(agent_run_support, "get_datasource_manager", lambda: _FakeManager())
+    monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", fake_prematerialize)
+
+    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
+        "conv_x", user_id="u1", datasource_id="ds_1",
+    )) == {"total": 2, "failed_ids": []}
 
 
 def test_parse_tool_args_buffer_falls_back_on_invalid_json():
@@ -686,147 +727,42 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     assert "已查询支付数据" in joined
 
 
-def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection(monkeypatch):
+def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp_path):
+    """@ 引用文件：白名单校验通过后随 Human 消息留痕，正文追加引用短句。"""
     import asyncio
+
+    workspace_root = tmp_path / "user-data"
+    (workspace_root / "uploads").mkdir(parents=True)
+    (workspace_root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
+    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
+    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+
+    async def fake_prepare_workspace(*_args, **_kwargs):
+        return {"root": str(workspace_root)}
 
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="商品数量为 10"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
-    selection = {
-        "semantic_config_id": "cfg_test",
-        "semantic_config_name": "测试指标集",
-        "confidence": "low",
-        "reason": "用户从候选指标集中选择",
-        "matched_metrics": ["商品数量", ""],
-        "matched_dimensions": [],
-        "auto_selected": False,
-        "user_selected": True,
-    }
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_user_selected_semantic",
-        user_query="商品数量有多少",
+        thread_id="conv_file_selections",
+        user_query="分析这个文件",
         datasource_id="ds_a",
-        semantic_config_id="cfg_test",
-        semantic_config_selection=selection,
+        file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
     )))
 
     joined = "".join(events)
     assert "商品数量为 10" in joined
     human_message = fake_graph.initial_state["messages"][0]
-    # 留痕统一为列表（@ 多选通道）；正文追加模型可见的指定短句
-    selections = human_message.additional_kwargs["semantic_config_selection"]
-    assert isinstance(selections, list) and len(selections) == 1
-    assert selections[0]["semantic_config_id"] == "cfg_test"
-    assert selections[0]["semantic_config_name"] == "测试指标集"
-    assert selections[0]["matched_metrics"] == ["商品数量"]
-    assert selections[0]["user_selected"] is True
-    assert selections[0]["auto_selected"] is False
-    assert human_message.content.endswith("[本轮指定语义模型：测试指标集（semantic_config_id: cfg_test）]")
+    # 只有白名单内真实存在的文件进入留痕；正文追加模型可见的引用短句
+    assert human_message.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
+    assert human_message.content.endswith("[引用文件：/mnt/user-data/uploads/a.pdf]")
     assert "skill_names" not in human_message.additional_kwargs
-
-
-def _capture_semantic_prepare(monkeypatch, captured: dict):
-    """替换 prepare_semantic_conversation_context，捕获入参供断言推导结果。"""
-
-    async def capture_prepare(**kwargs):
-        captured.update(kwargs)
-        return _semantic_context_from_request(**kwargs)
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
-        capture_prepare,
-    )
-
-
-def _single_selection(config_id: str) -> dict:
-    return {
-        "semantic_config_id": config_id,
-        "semantic_config_name": config_id,
-        "confidence": "",
-        "reason": "输入框 @ 引用",
-        "matched_metrics": [],
-        "matched_dimensions": [],
-        "auto_selected": False,
-        "user_selected": True,
-    }
-
-
-def test_generate_chat_data_stream_derives_single_selection_binding(monkeypatch):
-    """前端只发 @ 引用列表：恰好引用一个时，服务端自动推导 semantic_config_id。"""
-    import asyncio
-
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-    captured: dict = {}
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
-    _capture_semantic_prepare(monkeypatch, captured)
-
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_derive_single_binding",
-        user_query="商品数量有多少",
-        datasource_id="ds_a",
-        semantic_config_selection=[_single_selection("cfg_single")],
-    )))
-
-    assert captured.get("semantic_config_id") == "cfg_single"
-
-
-def test_generate_chat_data_stream_explicit_semantic_config_id_wins_over_derivation(monkeypatch):
-    """显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。"""
-    import asyncio
-
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-    captured: dict = {}
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
-    _capture_semantic_prepare(monkeypatch, captured)
-
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_explicit_binding_wins",
-        user_query="商品数量有多少",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_explicit",
-        semantic_config_selection=[_single_selection("cfg_other")],
-    )))
-
-    assert captured.get("semantic_config_id") == "cfg_explicit"
-
-
-def test_generate_chat_data_stream_multi_selection_skips_binding_derivation(monkeypatch):
-    """多引用不推导单值绑定，交给模型检索（智能选择）。"""
-    import asyncio
-
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-    captured: dict = {}
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
-    _capture_semantic_prepare(monkeypatch, captured)
-
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_multi_selection_no_binding",
-        user_query="商品数量有多少",
-        datasource_id="ds_a",
-        semantic_config_selection=[_single_selection("cfg_a"), _single_selection("cfg_b")],
-    )))
-
-    assert captured.get("semantic_config_id") is None
 
 
 def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
@@ -986,7 +922,7 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
     assert "已进入当前指标集链路" in joined
-    assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
+    assert "file_selections" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
 def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
@@ -1010,7 +946,7 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
     assert "已查询订单数据" in joined
-    assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
+    assert "file_selections" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
 def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(monkeypatch):

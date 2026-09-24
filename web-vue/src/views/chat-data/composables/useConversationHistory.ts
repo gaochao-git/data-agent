@@ -11,7 +11,6 @@ import type {
   SubagentTrailItem,
   ToolCallInfo,
   Message,
-  SemanticConfigSelectionInfo,
   SemanticParams,
   ThinkingSegment,
 } from '../types'
@@ -124,7 +123,7 @@ interface HistoryMessagePayload {
   content?: unknown
   timestamp?: unknown
   reasoning_content?: unknown
-  semantic_config_selection?: unknown
+  file_selections?: unknown
   tool_calls?: unknown
   tool_call_id?: unknown
   tool_name?: unknown
@@ -301,7 +300,6 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
   const toolCallTargets = new Map<string, Message>()
   const persistedReasoningTurnIds = new Set<string>()
   let activeAssistant: Message | null = null
-  let pendingSemanticConfigSelection: SemanticConfigSelectionInfo | null = null
 
   const ensureActiveAssistant = (rawMessage: HistoryMessagePayload, turnId?: string): Message => {
     if (activeAssistant) return activeAssistant
@@ -312,10 +310,6 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       turnId: turnId || undefined,
       timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
       segments: [],
-    }
-    if (pendingSemanticConfigSelection) {
-      applySemanticConfigSelection(activeAssistant, pendingSemanticConfigSelection)
-      pendingSemanticConfigSelection = null
     }
     displayMessages.push(activeAssistant)
     return activeAssistant
@@ -330,16 +324,15 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
 
     if (eventType === 'user_message') {
       activeAssistant = null
-      const semanticSelections = normalizeSemanticConfigSelectionList(messagePayload.semantic_config_selection)
-      pendingSemanticConfigSelection = semanticSelections[0] || null
-      const userContent = stripSemanticMentionSuffix(normalizeUserMessageContent(messagePayload.content))
+      const fileSelections = normalizeFileSelections(messagePayload.file_selections)
+      const userContent = stripMentionSuffix(normalizeUserMessageContent(messagePayload.content))
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
         content: userContent,
         turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
-        semanticConfigSelections: semanticSelections.length > 0 ? semanticSelections : undefined,
+        fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
       })
       continue
     }
@@ -432,7 +425,6 @@ export const buildHistoryMessages = (
   }
   const toolCallTargets = new Map<string, Message>()
   let activeAssistant: Message | null = null
-  let pendingSemanticConfigSelection: SemanticConfigSelectionInfo | null = null
   let legacyReasoningGroupIndex = -1
   let currentReasoningSegments: ThinkingSegment[] = []
   let nextReasoningSegmentIndex = 0
@@ -457,10 +449,6 @@ export const buildHistoryMessages = (
       content: '',
       timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
       segments: [],
-    }
-    if (pendingSemanticConfigSelection) {
-      applySemanticConfigSelection(activeAssistant, pendingSemanticConfigSelection)
-      pendingSemanticConfigSelection = null
     }
     displayMessages.push(activeAssistant)
     return activeAssistant
@@ -487,14 +475,13 @@ export const buildHistoryMessages = (
         : ''
       startReasoningTurn(reasoningTurnId || undefined)
       activeAssistant = null
-      const semanticSelections = normalizeSemanticConfigSelectionList(rawMessage.semantic_config_selection)
-      pendingSemanticConfigSelection = semanticSelections[0] || null
+      const fileSelections = normalizeFileSelections(rawMessage.file_selections)
       displayMessages.push({
         id: String(rawMessage.id || `user-history-${displayMessages.length}`),
         role: 'user',
-        content: stripSemanticMentionSuffix(String(rawMessage.content || '').trim()),
+        content: stripMentionSuffix(String(rawMessage.content || '').trim()),
         timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
-        semanticConfigSelections: semanticSelections.length > 0 ? semanticSelections : undefined,
+        fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
       })
       continue
     }
@@ -545,50 +532,26 @@ export const buildHistoryMessages = (
   return displayMessages
 }
 
-const normalizeSemanticConfigSelection = (value: unknown): SemanticConfigSelectionInfo | null => {
-  if (!value || typeof value !== 'object') return null
-  const data = value as Record<string, unknown>
-  const semanticConfigId = String(data.semantic_config_id || '').trim()
-  if (!semanticConfigId) return null
-  const matchedMetrics = Array.isArray(data.matched_metrics)
-    ? data.matched_metrics.map(item => String(item || '').trim()).filter(Boolean)
-    : []
-  const matchedDimensions = Array.isArray(data.matched_dimensions)
-    ? data.matched_dimensions.map(item => String(item || '').trim()).filter(Boolean)
-    : []
-  return {
-    semantic_config_id: semanticConfigId,
-    semantic_config_name: typeof data.semantic_config_name === 'string' ? data.semantic_config_name : undefined,
-    confidence: typeof data.confidence === 'string' ? data.confidence : undefined,
-    reason: typeof data.reason === 'string' ? data.reason : undefined,
-    matched_metrics: matchedMetrics,
-    matched_dimensions: matchedDimensions,
-    auto_selected: Boolean(data.auto_selected),
-    user_selected: Boolean(data.user_selected),
-  }
-}
-
-// @ 引用留痕兼容两种形态：单对象（历史存量）与对象列表（@ 多选），统一还原为列表
-const normalizeSemanticConfigSelectionList = (value: unknown): SemanticConfigSelectionInfo[] => {
+// @ 引用工作区文件留痕：相对路径字符串列表，无效条目丢弃、按序去重
+const normalizeFileSelections = (value: unknown): string[] => {
   const rawItems = Array.isArray(value) ? value : [value]
-  const selections: SemanticConfigSelectionInfo[] = []
+  const selections: string[] = []
   for (const item of rawItems) {
-    const selection = normalizeSemanticConfigSelection(item)
-    if (selection && !selections.some(existing => existing.semantic_config_id === selection.semantic_config_id)) {
-      selections.push(selection)
-    }
+    const normalized = String(item || '').trim().replace(/^\/+|\/+$/g, '')
+    if (!normalized || selections.includes(normalized)) continue
+    selections.push(normalized)
   }
   return selections
 }
 
-// 历史用户消息正文里的服务端注入短句（[本轮指定语义模型：xxx]）不重复展示，引用改由 chip 呈现
-const SEMANTIC_MENTION_SUFFIX_RE = /\s*\[本轮指定语义模型：[^\]]*\]\s*$/
-const stripSemanticMentionSuffix = (content: string): string => content.replace(SEMANTIC_MENTION_SUFFIX_RE, '').trimEnd()
-
-const applySemanticConfigSelection = (message: Message, selection: SemanticConfigSelectionInfo) => {
-  if (message.semanticConfigSelection?.user_selected && !selection.user_selected) return
-  message.semanticConfigSelection = selection
-}
+// 历史用户消息正文里的服务端注入短句不重复展示，引用改由 chip 呈现：
+// 现行为 [引用文件：...]；历史存量还有 [本轮指定语义模型：...]（通道已废弃，仅剥文本）
+const MENTION_SUFFIX_RES = [
+  /\s*\[引用文件：[^\]]*\]\s*$/,
+  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/,
+]
+const stripMentionSuffix = (content: string): string =>
+  MENTION_SUFFIX_RES.reduce((text, regex) => text.replace(regex, ''), content).trimEnd()
 
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>

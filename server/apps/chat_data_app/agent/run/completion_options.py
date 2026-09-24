@@ -19,7 +19,7 @@ class CompletionRunOptions:
     enable_thinking: Any
     thinking_effort: Any
     member_datasource_ids: list
-    semantic_config_selection: Any
+    file_selections: list[str]
     skill_names: list[str]
 
 
@@ -47,6 +47,26 @@ def normalize_thinking_effort(value: Any) -> str | None:
     return None
 
 
+def parse_file_selections(value: Any) -> list[str]:
+    """解析 @ 引用的工作区文件清单（相对路径列表），无效条目丢弃、按序去重。"""
+    raw_items: list[Any]
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return []
+    selections: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        normalized = str(item or "").strip().strip("/")
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        selections.append(normalized)
+    return selections
+
+
 def parse_completion_run_options(options: Optional[Dict[str, Any]]) -> CompletionRunOptions:
     options_data = options or {}
     raw_skill_names = options_data.get("skill_names") or []
@@ -63,6 +83,6 @@ def parse_completion_run_options(options: Optional[Dict[str, Any]]) -> Completio
         enable_thinking=normalize_enable_thinking(options_data.get("enable_thinking")),
         thinking_effort=normalize_thinking_effort(options_data.get("thinking_effort")),
         member_datasource_ids=options_data.get("member_datasource_ids") or [],
-        semantic_config_selection=options_data.get("semantic_config_selection"),
+        file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
     )

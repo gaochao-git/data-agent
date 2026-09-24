@@ -16,6 +16,7 @@ from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..agent_run_support import materialize_conversation_semantic_models
 from ..services import conversation_service as conversation
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
@@ -38,6 +39,7 @@ logger = get_logger(__name__)
 class CreateConversationRequest(BaseModel):
     """创建会话请求"""
     agent_id: str
+    datasource_id: Optional[str] = None  # 建会话即绑定的数据源组（问数 agent 用）
 
 
 class UpdateTitleRequest(BaseModel):
@@ -242,7 +244,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
     创建新会话
 
     POST /api/chatdata/conversations
-    Body: {"agent_id": "..."}
+    Body: {"agent_id": "...", "datasource_id": "..."}  # datasource_id 可选
 
     返回：
     {
@@ -256,14 +258,31 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         config = get_agent_config(request.agent_id)
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-        result = await conversation.create(request.agent_id, user_id)
+        normalized_datasource_id = str(request.datasource_id or "").strip()
+        result = await conversation.create(request.agent_id, user_id, datasource_id=normalized_datasource_id or None)
+        conversation_id = str(result.get("id") or "")
         if request.agent_id == AGENT_ID:
             # 创建会话即构建本会话全部可见技能的快照；构建失败不阻断会话创建，
             # 首次运行时 build_runtime_skill_snapshot_async 会幂等重试。
             try:
-                await build_runtime_skill_snapshot_async(user_id, str(result.get("id") or ""))
+                await build_runtime_skill_snapshot_async(user_id, conversation_id)
             except Exception as err:
                 logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
+            # 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在）：
+            # 建会话即物化启用语义模型到 workspace/semantic/，输入框 @ 引用
+            # 工作区文件从第一刻起就有语义模型可选。物化失败不阻断创建，
+            # 首轮 run 的预物化会幂等兜底。
+            if normalized_datasource_id:
+                materialized = await materialize_conversation_semantic_models(
+                    conversation_id,
+                    user_id=user_id,
+                    datasource_id=normalized_datasource_id,
+                )
+                if materialized.get("failed_ids"):
+                    logger.warning(
+                        "创建会话物化部分语义模型失败: conversation_id=%s failed_ids=%s",
+                        conversation_id, materialized["failed_ids"],
+                    )
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e

@@ -54,7 +54,7 @@ def identity_sync(request_obj=None):
 async def test_create_conversation_snapshot_failure_is_non_blocking(router_state, monkeypatch):
     created = []
 
-    async def fake_create(agent_id, user_id):
+    async def fake_create(agent_id, user_id, datasource_id=None):
         created.append((agent_id, user_id))
         return {"id": "conv_1"}
 

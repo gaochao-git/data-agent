@@ -41,6 +41,7 @@ class ConversationDao:
         thread_id: str,
         agent_id: str,
         title: Optional[str] = None,
+        datasource_id: str = "",
         now: datetime,
     ) -> UserThread:
         async with self._session_context() as session:
@@ -49,6 +50,7 @@ class ConversationDao:
                 thread_id=thread_id,
                 thread_title=title or "未命名会话",
                 agent_id=agent_id,
+                datasource_id=str(datasource_id or "").strip(),
                 delete_flag=0,
                 create_time=now,
                 update_time=now,

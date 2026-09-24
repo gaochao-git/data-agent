@@ -559,13 +559,14 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
   }
 }
 
-// 确保会话 ID 存在（懒创建模式，只在发送消息时才创建）
+// 确保会话 ID 存在（选数据源即创建 / 发送时兜底创建），创建即绑定当前数据源组；
+// 服务端建会话时同步物化启用语义模型到工作区，@ 引用菜单从第一刻起就有内容可选。
 const ensureConversationId = async (): Promise<string | null> => {
   if (currentConversationId.value) {
     return currentConversationId.value
   }
   try {
-    const res = await createConversation({ agent_id: 'chat_data' })
+    const res = await createConversation({ agent_id: 'chat_data', datasource_id: selectedDatasourceId.value || undefined })
     if (res.status === 'success' && res.data?.id) {
       currentConversationId.value = res.data.id
       currentConversationTitle.value = '新会话'
@@ -652,7 +653,7 @@ watch(visibleModes, () => {
   }
 })
 
-// 新建会话（只清空状态，不立即创建，等发送第一条消息时才创建）
+// 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
 const handleNewConversation = () => {
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
@@ -1140,7 +1141,7 @@ watch(
   }
 )
 
-const handleConfirmContextSelector = () => {
+const handleConfirmContextSelector = async () => {
   if (draftExecutionTargets.value.length > 0 && draftSelectedMemberDatasourceIds.value.length === 0) {
     ElMessage.warning('请选择执行对象')
     return
@@ -1152,11 +1153,17 @@ const handleConfirmContextSelector = () => {
     true,
     draftDefaultAllExecutionTargets.value
   )
-  if (draftSelectedDatasourceId.value && draftSelectedDatasourceId.value !== selectedDatasourceId.value) {
+  const datasourceChanged = Boolean(draftSelectedDatasourceId.value && draftSelectedDatasourceId.value !== selectedDatasourceId.value)
+  if (datasourceChanged) {
     selectedDatasourceId.value = draftSelectedDatasourceId.value
   }
   if (isConversationContextMode.value) {
     conversationMemberDatasourceIds.value = nextIds
+    // 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在），服务端
+    // 建会话即绑定数据源组并物化语义模型；已有会话时数据源被锁定不可换。
+    if (!currentConversationId.value) {
+      await ensureConversationId()
+    }
   } else {
     selectedMemberDatasourceIds.value = nextIds
   }
@@ -1295,15 +1302,6 @@ const handleBuilderSemanticConfigSelected = (configId: string) => {
   if (!enabledSemanticConfigs.value.some(config => config.id === normalizedId)) return
   selectedSemanticConfigId.value = normalizedId
 }
-
-/** 输入框 @ 引用的候选清单：与问数侧边栏同一份 enabled 模型，映射成引用弹层所需的展示子集。 */
-const semanticModelMentionOptions = computed(() => enabledSemanticConfigs.value.map(config => ({
-  id: config.id,
-  name: config.name,
-  description: config.description || config.business_notes || '',
-  metricsCount: config.metrics?.length || 0,
-  dimensionsCount: config.dimensions?.length || 0,
-})))
 
 // storage key 统一前缀改造后的一次性迁移：清掉历史版本的孤儿键，
 // 避免旧键里上一个账号的数据永久残留在浏览器
@@ -1743,7 +1741,6 @@ onMounted(async () => {
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"
                   :selected-datasource-id="selectedDatasourceId"
-                  :semantic-models="semanticModelMentionOptions"
                   :ensure-conversation-id="ensureConversationId"
                   :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"

@@ -328,7 +328,7 @@ async def test_stream_fails_fast_on_semantic_config_error(monkeypatch):
         agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="今天销量", datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
+            request=None, model_id=None, file_selections=None,
             enable_thinking=None, thinking_effort=None, skill_names=[], options={},
             file_ids=None, run_id=None,
             log_phase=lambda *_a, **_k: None,
@@ -356,7 +356,7 @@ async def test_stream_rejects_datasource_binding_conflict(monkeypatch, tmp_path)
         agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="今天销量", datasource_id="ds-2", user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
+            request=None, model_id=None, file_selections=None,
             enable_thinking=None, thinking_effort=None, skill_names=[], options={},
             file_ids=None, run_id=None,
             log_phase=lambda *_a, **_k: None,
@@ -408,7 +408,7 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
         agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query=long_query, datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
+            request=None, model_id=None, file_selections=None,
             enable_thinking=None, thinking_effort=None, skill_names=["demo-skill"],
             options={}, file_ids=["f-ok", "f-missing", "f-other"], run_id=None,
             log_phase=lambda *_a, **_k: None,
@@ -448,7 +448,7 @@ async def test_stream_without_attachments_skips_offload(monkeypatch, tmp_path):
         agent_stream._run_chat_data_agent_stream(
             thread_id="t1", user_query="短问题", datasource_id=None, user_id="u1",
             username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
+            request=None, model_id=None, file_selections=None,
             enable_thinking=None, thinking_effort=None, skill_names=[], options={},
             file_ids=None, run_id=None,
             log_phase=lambda *_a, **_k: None,

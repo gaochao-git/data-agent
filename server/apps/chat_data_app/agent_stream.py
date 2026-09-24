@@ -42,8 +42,10 @@ from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_s
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
-from .agent.run.completion_options import parse_completion_run_options
+from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
 from .agent.middleware.steering import SteeringMessageTracker
+from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
+from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
@@ -143,32 +145,22 @@ def _format_sse(event: str, data: dict | str) -> str:
 
 
 
-def _semantic_selection_mention_suffix(semantic_selection_events: List[Dict[str, Any]]) -> str:
-    """用户在输入框 @ 引用语义模型时，给 Human 消息追加模型可见的指定短句。
+def _file_selection_mention_suffix(file_selections: List[str]) -> str:
+    """用户在输入框 @ 引用工作区文件时，给 Human 消息追加模型可见的引用短句。
 
-    前端已改为 @ 引用（chip 随消息传 semantic_config_selection 列表），系统提示词
-    不再有「当前语义模型」段（见 prompts/chat_data.py 开关）；模型对本轮指定的
-    感知完全靠这行短句。未指定（智能选择）时不追加任何内容。
+    前端 @ 菜单数据源是会话工作区（uploads/outputs/workspace）文件树，chip 随
+    消息传 file_selections（相对路径列表）；引用的感知完全靠这行短句，模型从
+    对话即可看到本轮用户点名了哪些文件。未引用时不追加任何内容。
     """
-    labels: List[str] = []
-    for event in semantic_selection_events:
-        if not isinstance(event, dict) or not event.get("user_selected"):
-            continue
-        name = str(event.get("semantic_config_name") or "").strip()
-        config_id = str(event.get("semantic_config_id") or "").strip()
-        label = name or config_id
-        if not label:
-            continue
-        id_part = f"（semantic_config_id: {config_id}）" if config_id and name else ""
-        labels.append(f"{label}{id_part}")
-    if not labels:
+    if not file_selections:
         return ""
-    return f"\n\n[本轮指定语义模型：{'、'.join(labels)}]"
+    references = "、".join(f"{USER_DATA_VIRTUAL_ROOT}/{path}" for path in file_selections)
+    return f"\n\n[引用文件：{references}]"
 
 
 def _build_user_message(
     content: str | list[dict[str, Any]],
-    semantic_selection_events: List[Dict[str, Any]] | None = None,
+    file_selections: List[str] | None = None,
     *,
     message_id: str | None = None,
     **extra_kwargs: Any,
@@ -177,9 +169,9 @@ def _build_user_message(
 
     content 为纯字符串（正文 + 附件占位行）；图片附件经 additional_kwargs
     的 ``vision_attachments`` 路径标记由 middleware 在请求层装载。
-    用户 @ 引用语义模型时在正文末尾追加指定短句（多选逐一列出），模型从对话即可看到本轮指定。
+    用户 @ 引用工作区文件时在正文末尾追加引用短句（多选逐一列出），模型从对话即可看到本轮引用。
     """
-    mention_suffix = _semantic_selection_mention_suffix(semantic_selection_events or [])
+    mention_suffix = _file_selection_mention_suffix(file_selections or [])
     if mention_suffix and isinstance(content, str):
         content = f"{content}{mention_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
@@ -187,8 +179,8 @@ def _build_user_message(
         "timestamp": _get_timestamp(),
         "reasoning_turn_id": reasoning_turn_id,
     }
-    if semantic_selection_events:
-        additional_kwargs["semantic_config_selection"] = semantic_selection_events
+    if file_selections:
+        additional_kwargs["file_selections"] = list(file_selections)
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -448,52 +440,30 @@ def _format_tool_lifecycle_event(
     return _format_sse(event_type, data)
 
 
-def _normalize_str_list(value: Any) -> List[str]:
-    """字符串列表规整：非列表回退为空，成员去空白后丢弃空串。"""
-    if not isinstance(value, list):
-        return []
-    return [str(m).strip() for m in value if str(m).strip()]
+def _validate_workspace_file_selections(file_selections: List[str], workspace_root: str) -> List[str]:
+    """校验 @ 引用文件：必须落在当前会话工作区白名单目录内且真实存在。
 
-
-def _normalize_one_selection_event(item: dict[str, Any]) -> Dict[str, Any]:
-    """单条语义模型引用留痕的字段规范化，无效字段回退为空。"""
-    semantic_config_id = str(item.get("semantic_config_id") or "").strip()
-    return {
-        "semantic_config_id": semantic_config_id,
-        "semantic_config_name": str(item.get("semantic_config_name") or semantic_config_id).strip(),
-        "confidence": str(item.get("confidence") or "").strip(),
-        "reason": str(item.get("reason") or "").strip(),
-        "matched_metrics": _normalize_str_list(item.get("matched_metrics")),
-        "matched_dimensions": _normalize_str_list(item.get("matched_dimensions")),
-        "auto_selected": bool(item.get("auto_selected")),
-        "user_selected": bool(item.get("user_selected")),
-    }
-
-
-def _normalize_semantic_selection_events(value: Any) -> List[Dict[str, Any]]:
-    """标准化前端传入的语义模型引用留痕（@ 引用多选：dict 或 dict 列表均兼容）。
-
-    返回按 semantic_config_id 去重后的事件列表，无效条目直接丢弃。
+    白名单校验复用 WORKSPACE_PATH_POLICY（拒越界/裸别名），系统结果区
+    （outputs/query_result、outputs/.tool-offload）不可引用；不存在的文件
+    （@ 后被删除）丢弃。无效条目记日志后跳过，不阻断本轮。
     """
-    raw_items: list[Any]
-    if isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, dict):
-        raw_items = [value]
-    else:
+    if not file_selections:
         return []
-    events: List[Dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for item in raw_items:
-        if not isinstance(item, dict):
+    valid: List[str] = []
+    for relative_path in file_selections:
+        try:
+            logical = WORKSPACE_PATH_POLICY.parse(f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}")
+            target = resolve_workspace_path(workspace_root, f"{USER_DATA_VIRTUAL_ROOT}/{logical.normalized}")
+            if is_system_result_workspace_path(workspace_root, target):
+                raise ValueError("系统结果区文件不可引用")
+            if not target.is_file():
+                raise FileNotFoundError(relative_path)
+        except (ValueError, OSError) as err:
+            logger.warning("忽略无效的引用文件 %r: %s", relative_path, err)
             continue
-        event = _normalize_one_selection_event(item)
-        semantic_config_id = event["semantic_config_id"]
-        if not semantic_config_id or semantic_config_id in seen_ids:
-            continue
-        seen_ids.add(semantic_config_id)
-        events.append(event)
-    return events
+        if logical.normalized not in valid:
+            valid.append(logical.normalized)
+    return valid
 
 
 def _coerce_tool_args(value: Any) -> dict[str, Any] | None:
@@ -1168,7 +1138,7 @@ async def _generate_chat_data_stream(
     semantic_config_id: str | None = None,
     request: Request | None = None,
     model_id: str | None = None,
-    semantic_config_selection: Any | None = None,
+    file_selections: Any | None = None,
     enable_thinking: bool | None = None,
     thinking_effort: str | None = None,
     skill_names: list[str] | None = None,
@@ -1228,7 +1198,7 @@ async def _generate_chat_data_stream(
             semantic_config_id=semantic_config_id,
             request=request,
             model_id=model_id,
-            semantic_config_selection=semantic_config_selection,
+            file_selections=file_selections,
             enable_thinking=enable_thinking,
             thinking_effort=thinking_effort,
             skill_names=normalized_skill_names,
@@ -1425,7 +1395,7 @@ async def _resolve_agent_turn_inputs(
     *,
     user_query: str,
     message_content: str,
-    semantic_selection_events: List[Dict[str, Any]],
+    file_selections: List[str],
     vision_attachments: list[dict[str, Any]],
     skill_names: list[str],
     recovering: bool,
@@ -1469,7 +1439,7 @@ async def _resolve_agent_turn_inputs(
     if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
         user_message = _build_user_message(
             message_content,
-            semantic_selection_events,
+            file_selections,
             message_id=turn_id,
             vision_attachments=vision_attachments,
             **message_kwargs,
@@ -1525,7 +1495,7 @@ async def _run_chat_data_agent_stream(
     semantic_config_id: str | None,
     request: Request | None,
     model_id: str | None,
-    semantic_config_selection: Any | None,
+    file_selections: Any | None,
     enable_thinking: bool | None,
     thinking_effort: str | None,
     skill_names: list[str],
@@ -1543,12 +1513,7 @@ async def _run_chat_data_agent_stream(
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
-    semantic_selection_events = _normalize_semantic_selection_events(semantic_config_selection)
-    # 单引用自动绑定：前端只发 @ 引用列表，恰好引用一个时由服务端推导单值
-    # semantic_config_id（驱动语义工作区物化）；多引用/未引用交给模型检索（智能选择）。
-    # 显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。
-    if not semantic_config_id and len(semantic_selection_events) == 1:
-        semantic_config_id = semantic_selection_events[0]["semantic_config_id"]
+    selected_files = parse_file_selections(file_selections)
     try:
         semantic_context = await _prepare_agent_semantic_context(
             thread_id=thread_id,
@@ -1577,6 +1542,8 @@ async def _run_chat_data_agent_stream(
         yield _format_sse("error", {"error": exc.message})
         raise AgentRunStreamFailedError from None
     log_phase("prepare_semantic_context")
+    # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
+    valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
 
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
         semantic_materialize_note, user_id, thread_id, workspace_runtime,
@@ -1624,7 +1591,7 @@ async def _run_chat_data_agent_stream(
                 config,
                 user_query=user_query,
                 message_content=message_content,
-                semantic_selection_events=semantic_selection_events,
+                file_selections=valid_file_selections,
                 vision_attachments=vision_attachments,
                 skill_names=skill_names,
                 recovering=recovering,
@@ -1757,7 +1724,7 @@ async def sql_completion_handler(
         "member_datasource_ids": run_options.member_datasource_ids,
         "semantic_config_id": run_options.semantic_config_id,
         "model_id": run_options.model_id,
-        "semantic_config_selection": run_options.semantic_config_selection,
+        "file_selections": run_options.file_selections,
         "enable_thinking": run_options.enable_thinking,
         "thinking_effort": run_options.thinking_effort,
         "skill_names": run_options.skill_names,

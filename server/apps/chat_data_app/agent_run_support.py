@@ -38,6 +38,7 @@ from .services.agent_run.conversation_workspace import (
     get_conversation_created_date,
 )
 from .services.agent_run.uploaded_file_service import get_file_info
+from .services.datasource.manager import get_datasource_manager
 from .services.semantic.run.semantic_conversation_context import (
     SemanticConversationContext,
     prepare_semantic_conversation_context,
@@ -79,6 +80,51 @@ def _prepare_conversation_workspace_sync(
 ) -> dict[str, str]:
     """同步创建 ChatData 会话工作目录。"""
     return ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+
+
+async def materialize_conversation_semantic_models(
+    conversation_id: str,
+    *,
+    user_id: str,
+    datasource_id: str | None,
+) -> dict[str, Any]:
+    """会话创建时把当前数据源组全部启用语义模型物化到 ``workspace/semantic/``。
+
+    输入框 @ 引用改走工作区文件后，语义模型以 YAML 文件形态出现在 @ 菜单里；
+    在建会话时就物化，用户第一条消息即可引用，不必等首轮 run。物化本身幂等
+    （sha256 缓存），首轮 run 的预物化自然降级为兜底。仅本地后端落盘：@ 菜单
+    与工作区文件列表都读物理目录，运行期再按 runtime_options 换后端重刷。
+    整体失败不抛出（返回 total=0）：创建会话不应因物化故障被阻断，首轮 run
+    的 fail-fast 语义保持不变。
+    """
+    normalized_datasource_id = str(datasource_id or "").strip()
+    if not normalized_datasource_id:
+        return {"total": 0, "failed_ids": []}
+    try:
+        created_date = await get_conversation_created_date(conversation_id, user_id=user_id)
+        workspace_paths = await prepare_conversation_workspace(conversation_id, user_id, created_date=created_date)
+        workspace_runtime = ConversationWorkspaceRuntime(
+            workspace_root=workspace_paths["root"],
+            user_id=user_id,
+        )
+        source_type = ""
+        try:
+            datasource_meta = await get_datasource_manager().get_datasource_meta_async(normalized_datasource_id)
+            source_type = str((datasource_meta or {}).get("source_type") or "")
+        except Exception as meta_err:
+            logger.warning("会话创建物化：读取数据源组元信息失败: %s", meta_err)
+        return await prematerialize_enabled_semantic_models(
+            workspace_runtime=workspace_runtime,
+            datasource_id=normalized_datasource_id,
+            user_id=user_id,
+            source_type=source_type,
+        )
+    except Exception as err:
+        logger.warning(
+            "会话创建时语义模型物化失败（首轮运行将重试）: conversation_id=%s datasource_id=%s error=%s",
+            conversation_id, normalized_datasource_id, err,
+        )
+        return {"total": 0, "failed_ids": []}
 
 
 def _build_agent_context_state(

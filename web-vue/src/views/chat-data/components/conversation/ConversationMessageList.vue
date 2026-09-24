@@ -121,16 +121,13 @@ const getEffectiveAttachments = (message: Message): MessageAttachment[] =>
     ? message.attachments
     : parseAttachmentPlaceholders(message.content)
 
-// 用户消息上展示的 @ 引用语义模型列表（本地发送与历史回放统一走 semanticConfigSelections）
-const getUserMentionedSemanticModels = (message: Message): Array<{ id: string; name: string }> => {
+// 用户消息上展示的 @ 引用工作区文件列表（本地发送与历史回放统一走 fileSelections）
+const getUserMentionedFiles = (message: Message): Array<{ path: string; name: string }> => {
   if (message.role !== 'user') return []
-  const selections = (message.semanticConfigSelections || []).filter(
-    selection => selection.user_selected && (String(selection.semantic_config_id || '').trim() || String(selection.semantic_config_name || '').trim()),
-  )
-  return selections.map(selection => ({
-    id: String(selection.semantic_config_id || '').trim(),
-    name: String(selection.semantic_config_name || '').trim(),
-  }))
+  return (message.fileSelections || [])
+    .map(path => String(path || '').trim())
+    .filter(Boolean)
+    .map(path => ({ path, name: path.split('/').pop() || path }))
 }
 
 const formatCompressionTokens = (value?: number): string => new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0))
@@ -144,7 +141,6 @@ const shouldShowStreamingStatus = (message: Message): boolean => (
   hasVisibleAssistantContent(message.content)
   || Boolean(message.thinkingSegments?.length)
   || Boolean(message.toolCalls?.length)
-  || Boolean(message.semanticConfigSelection)
 )
 
 const getCopyableAssistantContent = (message: Message): string => {
@@ -235,17 +231,18 @@ const handleCopyAssistantMessage = async (message: Message) => {
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
         <template v-if="message.role === 'user'">
           <div
-            v-if="getUserMentionedSemanticModels(message).length"
+            v-if="getUserMentionedFiles(message).length"
             class="flex w-full flex-row-reverse flex-wrap gap-1.5"
-            title="本轮指定语义模型"
+            title="本轮引用的工作区文件"
           >
             <div
-              v-for="model in getUserMentionedSemanticModels(message)"
-              :key="model.id || model.name"
+              v-for="file in getUserMentionedFiles(message)"
+              :key="file.path"
               class="flex items-center gap-1.5 rounded-full border border-[#1677FF]/20 bg-white/80 px-2.5 py-1 text-xs text-[#1F3A56]"
+              :title="file.path"
             >
               <i class="fa-solid fa-at text-[11px] text-[#1677FF]"></i>
-              <span class="max-w-[200px] truncate">{{ model.name || model.id }}</span>
+              <span class="max-w-[200px] truncate">{{ file.name }}</span>
             </div>
           </div>
           <div v-if="getEffectiveAttachments(message).length" class="flex w-full flex-col gap-1.5">

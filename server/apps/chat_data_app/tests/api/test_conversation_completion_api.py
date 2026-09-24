@@ -76,7 +76,7 @@ def _stub_conversation_event_writes(monkeypatch):
                     semantic_config_id=context.get("semantic_config_id"),
                     request=None,
                     model_id=context.get("model_id"),
-                    semantic_config_selection=context.get("semantic_config_selection"),
+                    file_selections=context.get("file_selections"),
                     enable_thinking=context.get("enable_thinking"),
                     skill_names=context.get("skill_names") or [],
                     options=context.get("options") or {},

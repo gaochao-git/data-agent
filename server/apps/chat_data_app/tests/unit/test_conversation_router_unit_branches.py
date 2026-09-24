@@ -91,7 +91,7 @@ async def test_get_agent_config_by_conversation_branches(router_state, monkeypat
 async def test_conversation_crud_routes_success_and_errors(router_state, monkeypatch):
     request = FakeRequest()
 
-    async def fake_create(agent_id, user_id):
+    async def fake_create(agent_id, user_id, datasource_id=None):
         return {"id": "conv_new", "agent_id": agent_id, "user_id": user_id}
 
     monkeypatch.setattr(conversation_router.conversation, "create", fake_create)
