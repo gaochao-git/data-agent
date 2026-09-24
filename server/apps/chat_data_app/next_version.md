@@ -35,7 +35,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
-  `queue_type` varchar(16) NOT NULL DEFAULT 'steer' COMMENT '队列类型: steer-运行中立即注入, next_turn-本轮结束后作为下一轮',
+  `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
   `record_content` mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
   `record_meta` text COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}',
   `record_status` varchar(16) NOT NULL COMMENT '运行或消息状态',
@@ -53,7 +53,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`,`message_id`),
   KEY `idx_agent_inbox_conv` (`conversation_id`,`user_id`,`record_type`,`record_status`),
   KEY `idx_agent_inbox_run` (`run_id`,`record_type`,`record_status`)
-) ENGINE=InnoDB AUTO_INCREMENT=1647 DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
 -- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
 CREATE TABLE `chat_data_agent_schedule` (
@@ -142,6 +142,18 @@ ALTER TABLE chat_data_agent_inbox
   CHANGE COLUMN content record_content mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
   CHANGE COLUMN status record_status varchar(16) NOT NULL COMMENT '运行或消息状态',
   ADD COLUMN record_meta text NULL COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}' after record_content;
+
+-- 2026-09-24：修正 queue_type 列定义与代码契约对齐。代码全链路只使用 next-step/next-turn
+-- （agent_inbox_service.INBOX_QUEUE_TYPES、claim 查询、steering 注入、models.py server_default='next-step'），
+-- 此前列被误改为 DEFAULT 'steer' 注释 steer/next_turn（'steer' 语义即代码的 'next-step'），与实际存储不符；
+-- 且默认值 'steer' 会让省略 queue_type 的 INSERT 落入代码不认识的值、永远不被 claim 消费。
+-- 实库分布佐证：next-step 1506 条、next-turn 137 条，steer/next_turn 各为个位数脏行。
+ALTER TABLE chat_data_agent_inbox
+  MODIFY COLUMN queue_type varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理';
+
+-- 脏数据归一（steer→next-step、next_turn→next-turn，回到代码可消费的枚举；确认是测试数据也可直接清理）
+UPDATE chat_data_agent_inbox SET queue_type='next-step' WHERE queue_type='steer';
+UPDATE chat_data_agent_inbox SET queue_type='next-turn' WHERE queue_type='next_turn';
 
 -- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
 -- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；
