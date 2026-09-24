@@ -332,8 +332,8 @@ async def test_list_job_runs_joins_agent_run_status(harness):
             run_id="run-1",
             message_id="run-1",
             record_type="run",
-            content="{}",
-            status="finished",
+            record_content="{}",
+            record_status="finished",
             delete_flag=0,
             create_time=now,
         ))

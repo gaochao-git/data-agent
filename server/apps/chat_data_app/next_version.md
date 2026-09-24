@@ -36,8 +36,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
   `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
-  `content` mediumtext NOT NULL COMMENT '追加消息内容，运行记录为空',
-  `status` varchar(16) NOT NULL COMMENT '运行或消息状态',
+  `record_content` mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
+  `record_status` varchar(16) NOT NULL COMMENT '运行或消息状态',
   `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',
   `consumed_time` datetime DEFAULT NULL COMMENT '消息注入时间',
   `lease_expire_time` datetime DEFAULT NULL COMMENT '领取租约过期时间',
@@ -50,8 +50,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`, `message_id`),
-  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `status`),
-  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
+  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `record_status`),
+  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `record_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
 -- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
@@ -130,6 +130,17 @@ CREATE TABLE `chat_data_schedule_control` (
 
 ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
 ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
+
+-- 2026-09-24：排队消息随行元数据（@ 引用工作区文件相对路径、上传附件 file_id 的 JSON 文本）。
+-- 排队消息此前只存纯文本，生成中入队的消息续跑执行时引用/附件/截图全部丢失（E2E 实证）。
+-- 同时按建表规范把单单词列改为下划线命名（除主键 id 外字段必须含下划线）：
+-- content→record_content（消息行存追加文本、运行行存运行状态 JSON）、status→record_status；
+-- meta 从未上线，直接以 record_meta 落列。索引 idx_agent_inbox_conv/idx_agent_inbox_run
+-- 引用的 status 列由 MySQL 随 CHANGE 自动更新，无需手工处理。
+ALTER TABLE chat_data_agent_inbox
+  CHANGE COLUMN content record_content mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
+  CHANGE COLUMN status record_status varchar(16) NOT NULL COMMENT '运行或消息状态',
+  ADD COLUMN record_meta text NULL COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}' after record_content;
 
 -- 唯一索引改造（与 utils/schema.py 模板同名同列序）：生产已于 2026-09-19 执行并核对
 -- （SHOW CREATE TABLE 已含 uniq_group_id_config_name_delete_flag，无旧两列索引需 DROP）；

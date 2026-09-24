@@ -734,6 +734,7 @@ class _AgentRunStreamCallbacks:
     stream_event_id_provider: Callable[[], str | None] | None
     log_phase: Callable[[str], Any]
     steering_tracker: SteeringMessageTracker
+    workspace_root: str = ""
     adopted_messages: list[HumanMessage] | None = None
     user_message: HumanMessage | None = None
     stream_adapter: "_AgentSseStreamAdapter | None" = None

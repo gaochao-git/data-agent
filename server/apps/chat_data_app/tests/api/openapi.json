@@ -3307,8 +3307,36 @@
         "type": "object"
       },
       "SteerRequest": {
-        "description": "运行中追加纯文本消息。",
+        "description": "运行中追加消息（正文 + 随行元数据）。\n\nfile_selections / file_ids 以引用形式存入 inbox 行 meta，续跑构建\nHumanMessage 时还原进 additional_kwargs，由 agent_stream 采纳点统一\n校验解析（白名单 + 引用短句 + 附件占位/视觉装载）——排队消息与\n普通发送路径共享同一条「存引用、晚解析」语义。",
         "properties": {
+          "file_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Ids"
+          },
+          "file_selections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Selections"
+          },
           "query": {
             "maxLength": 4000,
             "minLength": 1,
@@ -7412,7 +7440,7 @@
         ]
       },
       "post": {
-        "description": "向当前用户正在运行的 ChatData Agent 追加一条纯文本消息。",
+        "description": "向当前用户正在运行的 ChatData Agent 追加一条消息（正文 + 随行引用/附件元数据）。",
         "operationId": "steer_api_chatdata_conversations__conversation_id__steer_post",
         "parameters": [
           {

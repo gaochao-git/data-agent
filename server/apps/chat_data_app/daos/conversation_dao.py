@@ -106,9 +106,9 @@ class ConversationDao:
             ChatDataAgentInbox.record_type == "run",
             ChatDataAgentInbox.delete_flag == 0,
             or_(
-                ChatDataAgentInbox.status.in_(("pending", "waiting_user")),
+                ChatDataAgentInbox.record_status.in_(("pending", "waiting_user")),
                 and_(
-                    ChatDataAgentInbox.status.in_(("active", "cancelling")),
+                    ChatDataAgentInbox.record_status.in_(("active", "cancelling")),
                     ChatDataAgentInbox.lease_expire_time > now,
                 ),
             ),
@@ -117,7 +117,7 @@ class ConversationDao:
             conditions.append(ChatDataAgentInbox.user_id == user_id)
         async with self._session_context() as session:
             result = await session.execute(
-                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.status)
+                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.record_status)
                 .where(*conditions)
             )
             statuses: dict[str, str] = {}

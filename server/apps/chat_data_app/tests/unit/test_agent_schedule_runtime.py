@@ -304,8 +304,8 @@ async def test_finalize_closes_dispatched_trigger_with_run_terminal_state(harnes
             run_id="run-1",
             message_id="run-1",
             record_type="run",
-            content="{}",
-            status="finished",
+            record_content="{}",
+            record_status="finished",
             delete_flag=0,
             create_time=now,
         ))
@@ -341,8 +341,8 @@ async def test_finalize_marks_failed_run(harness):
             run_id="run-1",
             message_id="run-1",
             record_type="run",
-            content="{}",
-            status="failed",
+            record_content="{}",
+            record_status="failed",
             delete_flag=0,
             create_time=now,
         ))
@@ -381,8 +381,8 @@ async def test_paused_control_freezes_plan_and_dispatch(harness):
             run_id="run-1",
             message_id="run-1",
             record_type="run",
-            content="{}",
-            status="finished",
+            record_content="{}",
+            record_status="finished",
             delete_flag=0,
             create_time=now,
         ))

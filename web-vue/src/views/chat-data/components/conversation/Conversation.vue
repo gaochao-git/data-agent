@@ -2171,9 +2171,10 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
         userMessageId: queuedMessage.messageId,
         queuedMessageId: queuedMessage.messageId,
         preserveQueuedMessages: true,
-        // 队列消息的引用快照：入队时捕获；恢复自服务端的项无快照（服务端不存引用），显式不带引用，
-        // 绝不兜底取当前 chip（执行时点的 chip 属于之后的新消息）
+        // 队列消息的随行快照：入队时捕获；恢复自服务端且无 meta 的项显式传空，
+        // 绝不兜底取当前输入框状态（执行时点的 chip/附件属于之后的新消息）
         fileSelections: queuedMessage.fileSelections ?? [],
+        fileIds: queuedMessage.fileIds ?? [],
       })
     } finally {
       executingQueueMessageId.value = null
@@ -2186,20 +2187,31 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     const conversationId = localConversationId.value || props.conversationId
     if (!query || !conversationId || isSteering.value) return
     const temporaryId = `steer-${Date.now()}`
-    // 入队瞬间捕获 @ 引用快照：执行时间点与入队时间点之间 chip 可能已变化，引用必须随消息走
+    // 入队瞬间捕获随行快照：执行时间点与入队时间点之间输入框状态可能已变化，
+    // 引用/附件必须随消息走（服务端存引用，续跑执行时统一校验解析）。
     const mentionFileSelectionsSnapshot = buildMentionFileSelections()
+    const queuedFileIds = pendingFiles.value
+      .filter(f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'))
+      .map(f => f.file_id!)
+    // 技能沿用普通发送口径：入队时拼进正文（技能激活靠文本，无独立通道）
+    const queuedSkillNames = selectedSkills.value.map(skill => skill.name)
+    const bakedQuery = buildSkillRequestText(query, queuedSkillNames)
     pendingSteerMessages.value.push({
       clientId: temporaryId,
-      content: query,
+      content: bakedQuery,
       queueType: 'next-turn',
       status: 'submitting',
       timestamp: new Date(),
       fileSelections: mentionFileSelectionsSnapshot,
+      fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
     })
     input.value = ''
     isSteering.value = true
     try {
-      const response = await steerConversation(conversationId, query, 'next-turn')
+      const response = await steerConversation(conversationId, bakedQuery, 'next-turn', {
+        file_selections: mentionFileSelectionsSnapshot,
+        file_ids: queuedFileIds,
+      })
       const queuedMessage = pendingSteerMessages.value.find(item => item.clientId === temporaryId)
       if (queuedMessage && response.data?.message_id) {
         queuedMessage.messageId = response.data.message_id
@@ -2208,16 +2220,29 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
           admitPendingMessages([queuedMessage.messageId])
         }
       }
-      // 引用已随消息入队，只从 chip 列表移除入队的那批；API 往返期间新加的引用保留给下一条消息
-      // （失败分支不移除，chip 保留供重试）
+      // 随行内容已入队：只释放已随消息入队的那批引用/附件/技能；
+      // API 往返期间新加的保留给下一条消息（失败分支全部保留供重试）
       mentionFileSelectionsSnapshot.forEach(path => removeMentionFile(path))
+      if (queuedFileIds.length > 0) {
+        const queuedFileIdSet = new Set(queuedFileIds)
+        pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
+      }
+      clearSelectedSkills()
     } catch (error) {
       pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
       input.value = query
       await restorePendingSteerQueue({ restartPolling: false })
       if (!hasActiveRun.value) {
         if (isStoppingRun.value) return // 停止竞态下不得重新发起任务
-        void submitAnalysisQuery(query, { fileSelections: mentionFileSelectionsSnapshot })
+        // 降级为直接发送：submit 内会清空 chip 与技能，这里同步释放已发送的附件
+        if (queuedFileIds.length > 0) {
+          const queuedFileIdSet = new Set(queuedFileIds)
+          pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
+        }
+        void submitAnalysisQuery(bakedQuery, {
+          fileSelections: mentionFileSelectionsSnapshot,
+          fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
+        })
         return
       }
       ElMessage.error(error instanceof Error ? error.message : '追加消息失败')

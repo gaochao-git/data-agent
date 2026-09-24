@@ -73,6 +73,39 @@ describe('inboxQueue', () => {
     expect(fromServer?.fileSelections).toBeUndefined()
   })
 
+  it('本地项缺快照时回填服务端 meta，服务端重建项携带 meta 快照', () => {
+    // 本地项只有 fileSelections、缺 fileIds：合并时从服务端 meta 补齐
+    const localPartial: InboxQueueItem = { ...queued('m1'), fileSelections: ['uploads/a.pdf'] }
+    const result = reconcileInboxSnapshot([localPartial], [
+      {
+        message_id: 'm1',
+        content: '内容-m1',
+        queue_type: 'next-turn',
+        status: 'claimed',
+        meta: { file_selections: ['workspace/semantic/a__1.yaml'], file_ids: ['file-9'] },
+        create_time: '2026-08-14T10:00:00',
+      },
+    ], new Set())
+    const merged = result.queue.find(item => item.messageId === 'm1')
+    expect(merged?.fileSelections).toEqual(['uploads/a.pdf']) // 本地快照优先
+    expect(merged?.fileIds).toEqual(['file-9']) // 缺失的从服务端回填
+
+    // 服务端重建项：meta 快照完整还原（刷新恢复后执行仍带引用/附件）
+    const rebuilt = reconcileInboxSnapshot([], [
+      {
+        message_id: 'm2',
+        content: '服务端消息',
+        queue_type: 'next-turn',
+        status: 'pending',
+        meta: { file_selections: ['uploads/b.md'], file_ids: ['file-8'] },
+        create_time: '2026-08-14T10:02:00',
+      },
+    ], new Set())
+    const item = rebuilt.queue.find(entry => entry.messageId === 'm2')
+    expect(item?.fileSelections).toEqual(['uploads/b.md'])
+    expect(item?.fileIds).toEqual(['file-8'])
+  })
+
   it('does not duplicate an admitted user message after reconnect', () => {
     const existing = [{ id: 'm1', role: 'user' as const, content: '已存在' }]
     const result = admitInboxMessages([queued('m1')], existing, ['m1'])

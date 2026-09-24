@@ -38,7 +38,7 @@ def load_run_content(content: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-# Run 生命周期状态（chat_data_agent_inbox 表 record_type='run' 行的 status 列）。
+# Run 生命周期状态（chat_data_agent_inbox 表 record_type='run' 行的 record_status 列）。
 # 同表的 message 行（record_type='message'）另有 pending/claimed/consumed/cancelled
 # 状态体系，两者共用 status 列但取值域不同，勿混用常量。
 RUN_STATUS_PENDING = "pending"
@@ -184,8 +184,8 @@ class AgentInboxService:
                 run_id=run_id,
                 message_id=run_id,
                 record_type="run",
-                content=json.dumps({"runtime_context": runtime_context or {}, "turn_id": run_id}, ensure_ascii=False),
-                status=RUN_STATUS_PENDING,
+                record_content=json.dumps({"runtime_context": runtime_context or {}, "turn_id": run_id}, ensure_ascii=False),
+                record_status=RUN_STATUS_PENDING,
                 lease_expire_time=None,
                 delete_flag=0,
                 create_time=now,
@@ -204,7 +204,7 @@ class AgentInboxService:
                 )
                 if selected is None:
                     raise SteerMessageNotFoundError("队列消息不存在")
-                if selected.status != "pending":
+                if selected.record_status != "pending":
                     raise SteerMessageNotPendingError("队列消息已进入处理流程")
                 selected.run_id = run_id
                 selected.update_time = now
@@ -230,20 +230,20 @@ class AgentInboxService:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None:
                 return None
-            if run.status != RUN_STATUS_PENDING:
+            if run.record_status != RUN_STATUS_PENDING:
                 return None
             active = await self._dao.get_active_run(session, run.conversation_id, run.user_id)
             if active is not None and active.run_id != run_id:
                 return None
-            run.status = RUN_STATUS_ACTIVE
-            content = self._load_run_content(run.content)
+            run.record_status = RUN_STATUS_ACTIVE
+            content = self._load_run_content(run.record_content)
             owner_generation = int(content.get("owner_generation") or 0) + 1
             content["owner_generation"] = owner_generation
             # 新执行段开始后，上一段的终止游标即失效；保留会让下一次
             # 问答恢复把旧段的 done 误判为当前段已收口。
             content.pop("terminal_event", None)
             content.pop("next_run_id", None)
-            run.content = json.dumps(content, ensure_ascii=False)
+            run.record_content = json.dumps(content, ensure_ascii=False)
             owner_token = f"{owner_generation}:{uuid4().hex}"
             run.owner_token = owner_token
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
@@ -312,18 +312,18 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status != RUN_STATUS_ACTIVE:
+            if run is None or run.record_status != RUN_STATUS_ACTIVE:
                 raise AgentRunNotActiveError("当前运行已结束")
             self._assert_owner(run, owner_token)
             rows = await self._dao.list_claimed_messages(session, run_id)
             for row in rows:
                 if row.message_id in checkpoint_message_ids:
-                    row.status = "consumed"
+                    row.record_status = "consumed"
                     row.consumed_time = now
                 else:
                     # The old worker claimed but did not checkpoint this
                     # message. Return it to the middleware for injection.
-                    row.status = "pending"
+                    row.record_status = "pending"
                 row.lease_expire_time = None
                 row.update_time = now
 
@@ -348,9 +348,9 @@ class AgentInboxService:
             # 0 行既可能是取消/完成，也可能是 owner 已被接管。只在这个
             # 竞争路径做一次普通读取，正常心跳始终只有一条 UPDATE。
             run = await self._dao.get_run_by_id(session, run_id)
-            if run is None or run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+            if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
                 return "inactive"
-            if run.status == RUN_STATUS_CANCELLING:
+            if run.record_status == RUN_STATUS_CANCELLING:
                 return RUN_STATUS_CANCELLING
             self._assert_owner(run, owner_token)
             return RUN_STATUS_ACTIVE
@@ -359,7 +359,7 @@ class AgentInboxService:
         """Fence a new tool side effect against a superseded Worker."""
         async with get_session() as session:
             run = await self._dao.get_run_by_id(session, run_id)
-            if run is None or run.status != RUN_STATUS_ACTIVE:
+            if run is None or run.record_status != RUN_STATUS_ACTIVE:
                 raise AgentRunLeaseLostError("当前运行已结束或已暂停")
             self._assert_owner(run, owner_token)
 
@@ -374,16 +374,16 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status != RUN_STATUS_ACTIVE:
+            if run is None or run.record_status != RUN_STATUS_ACTIVE:
                 raise AgentRunNotActiveError("当前运行已结束")
             self._assert_owner(run, owner_token)
-            content = self._load_run_content(run.content)
+            content = self._load_run_content(run.record_content)
             content["pending_question"] = question
             content.pop("resuming_question", None)
             content.pop("pending_answer", None)
             content.pop("next_run_id", None)
-            run.content = json.dumps(content, ensure_ascii=False)
-            run.status = RUN_STATUS_WAITING_USER
+            run.record_content = json.dumps(content, ensure_ascii=False)
+            run.record_status = RUN_STATUS_WAITING_USER
             run.owner_token = None
             run.lease_expire_time = None
             run.update_time = now
@@ -398,7 +398,7 @@ class AgentInboxService:
                 raise AgentRunNotActiveError("会话不存在")
             run = await self._dao.get_active_run(session, conversation_id, user_id)
             run = await self._reap_expired_run(session, run, now, user_id, user_id)
-            if run is None or run.status != RUN_STATUS_WAITING_USER:
+            if run is None or run.record_status != RUN_STATUS_WAITING_USER:
                 return None
             return self._question_response(run)
 
@@ -418,9 +418,9 @@ class AgentInboxService:
             run = await self._dao.get_active_run(session, conversation_id, user_id)
             if run is None:
                 raise AgentQuestionNotFoundError("待回答问题不存在")
-            if run.status != RUN_STATUS_WAITING_USER:
+            if run.record_status != RUN_STATUS_WAITING_USER:
                 raise AgentQuestionNotWaitingError("问题已回答或运行已恢复")
-            content = self._load_run_content(run.content)
+            content = self._load_run_content(run.record_content)
             question = content.get("pending_question") or {}
             if str(question.get("question_id") or "") != question_id:
                 raise AgentQuestionNotFoundError("待回答问题不存在")
@@ -432,10 +432,10 @@ class AgentInboxService:
             content["resuming_question"] = content.pop("pending_question")
             content["pending_answer"] = answer
             content["resume_started"] = False
-            run.content = json.dumps(content, ensure_ascii=False)
+            run.record_content = json.dumps(content, ensure_ascii=False)
             # The answer is durable before dispatch. Runtime will atomically
             # claim the pending run, including after a worker restart.
-            run.status = RUN_STATUS_PENDING
+            run.record_status = RUN_STATUS_PENDING
             run.lease_expire_time = None
             run.update_time = now
             run.update_by = user_id
@@ -455,9 +455,9 @@ class AgentInboxService:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None:
                 return
-            content = self._load_run_content(run.content)
+            content = self._load_run_content(run.record_content)
             content["terminal_event"] = {"stream_id": stream_id, "event_type": "done"}
-            run.content = json.dumps(content, ensure_ascii=False)
+            run.record_content = json.dumps(content, ensure_ascii=False)
             run.update_time = now
 
     async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
@@ -465,14 +465,14 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_PENDING}:
+            if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_PENDING}:
                 return
             self._assert_owner(run, owner_token)
-            content = self._load_run_content(run.content)
+            content = self._load_run_content(run.record_content)
             if not isinstance(content.get("resuming_question"), dict):
                 return
             content["resume_started"] = True
-            run.content = json.dumps(content, ensure_ascii=False)
+            run.record_content = json.dumps(content, ensure_ascii=False)
             run.update_time = now
 
     async def restore_question_answer(
@@ -486,18 +486,18 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_PENDING}:
+            if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_PENDING}:
                 return
             self._assert_owner(run, owner_token)
-            content = self._load_run_content(run.content)
+            content = self._load_run_content(run.record_content)
             question = content.pop("resuming_question", None)
             if not isinstance(question, dict) or "pending_answer" not in content:
                 return
             content.pop("pending_answer", None)
             content.pop("resume_started", None)
             content["pending_question"] = question
-            run.content = json.dumps(content, ensure_ascii=False)
-            run.status = RUN_STATUS_WAITING_USER
+            run.record_content = json.dumps(content, ensure_ascii=False)
+            run.record_status = RUN_STATUS_WAITING_USER
             run.lease_expire_time = None
             run.update_time = now
             run.update_by = user_id
@@ -510,6 +510,7 @@ class AgentInboxService:
         operator_name: str,
         content: str,
         queue_type: str = "next-turn",
+        meta: dict[str, Any] | None = None,
     ) -> str:
         if queue_type not in INBOX_QUEUE_TYPES:
             raise ValueError(f"非法队列类型: {queue_type}")
@@ -523,7 +524,7 @@ class AgentInboxService:
                 raise AgentRunNotActiveError("会话不存在")
             run = await self._dao.get_active_run(session, conversation_id, user_id)
             run = await self._reap_expired_run(session, run, now, user_id, operator_name)
-            if run is None or run.status not in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE}:
+            if run is None or run.record_status not in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE}:
                 raise AgentRunNotActiveError("当前会话没有运行中的任务")
             message_id = uuid4().hex
             session.add(ChatDataAgentInbox(
@@ -533,8 +534,11 @@ class AgentInboxService:
                 message_id=message_id,
                 record_type="message",
                 queue_type=queue_type,
-                content=normalized_content,
-                status="pending",
+                record_content=normalized_content,
+                # 随行元数据（@ 引用 / 附件 file_id）以 JSON 引用形式落列，
+                # 消费时才由 agent_stream 采纳点校验解析——存引用、晚解析。
+                record_meta=json.dumps(meta, ensure_ascii=False) if meta else None,
+                record_status="pending",
                 delete_flag=0,
                 create_time=now,
                 update_time=now,
@@ -555,7 +559,7 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status != RUN_STATUS_ACTIVE:
+            if run is None or run.record_status != RUN_STATUS_ACTIVE:
                 return ClaimedAgentMessages(run_id, [])
             self._assert_owner(run, owner_token)
             rows = await self._dao.claim_messages(
@@ -578,7 +582,7 @@ class AgentInboxService:
             self._assert_owner(run, owner_token)
             rows = await self._dao.get_claimed_messages(session, run_id, message_ids)
             for row in rows:
-                row.status = "consumed"
+                row.record_status = "consumed"
                 row.consumed_time = now
                 row.lease_expire_time = None
                 row.update_time = now
@@ -594,29 +598,29 @@ class AgentInboxService:
         async with get_session() as session:
             now = await self._dao.now(session)
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run and run.status == RUN_STATUS_WAITING_USER:
+            if run and run.record_status == RUN_STATUS_WAITING_USER:
                 # 问题已落库、Run 已处于合法等待态（异常/取消发生在
                 # mark_waiting_for_user 之后）：不重复收口、不回退队列，
                 # 回报权威状态让调用方发布与之一致的 done。
                 return RUN_STATUS_WAITING_USER
-            if run and run.status in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+            if run and run.record_status in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
                 self._assert_owner(run, owner_token)
                 if status in {RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
                     await self._dao.requeue_messages(session, run_id, now)
-                content = self._load_run_content(run.content)
+                content = self._load_run_content(run.record_content)
                 self._restore_unstarted_question(content)
                 content.pop("next_run_id", None)
                 # A claimed answer is already in the resume lifecycle. If the
                 # resumed stream fails, do not expose the old question again;
                 # the checkpoint may already have consumed its interrupt.
-                run.status = RUN_STATUS_WAITING_USER if content.get("pending_question") else status
-                run.content = json.dumps(content, ensure_ascii=False)
+                run.record_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else status
+                run.record_content = json.dumps(content, ensure_ascii=False)
                 run.lease_expire_time = None
                 run.owner_token = None
                 run.update_time = now
                 run.update_by = user_id
                 run.update_by_name = operator_name
-                return run.status
+                return run.record_status
             return None
 
     async def complete_run(
@@ -636,18 +640,18 @@ class AgentInboxService:
             if thread is None:
                 raise AgentRunLeaseLostError("当前会话不存在")
             run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+            if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
                 raise AgentRunLeaseLostError("当前运行已结束或已由其他 Worker 接管")
             self._assert_owner(run, owner_token)
-            content = self._load_run_content(run.content)
-            if run.status == RUN_STATUS_CANCELLING:
+            content = self._load_run_content(run.record_content)
+            if run.record_status == RUN_STATUS_CANCELLING:
                 await self._dao.requeue_messages(session, run_id, now)
                 self._restore_unstarted_question(content)
                 terminal_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else RUN_STATUS_CANCELLED
                 content.pop("next_run_id", None)
-                run.content = json.dumps(content, ensure_ascii=False)
+                run.record_content = json.dumps(content, ensure_ascii=False)
                 run.owner_token = None
-                run.status = terminal_status
+                run.record_status = terminal_status
                 run.lease_expire_time = None
                 run.update_time = now
                 run.update_by = user_id
@@ -660,7 +664,7 @@ class AgentInboxService:
             for key in ("pending_question", "resuming_question", "pending_answer", "resume_started"):
                 content.pop(key, None)
             run.owner_token = None
-            run.status = RUN_STATUS_FINISHED
+            run.record_status = RUN_STATUS_FINISHED
             run.lease_expire_time = None
             run.update_time = now
             run.update_by = user_id
@@ -691,12 +695,12 @@ class AgentInboxService:
                     run_id=next_run_id,
                     message_id=next_run_id,
                     record_type="run",
-                    content=json.dumps({
+                    record_content=json.dumps({
                         "runtime_context": runtime_context,
                         "run_kind": "continuation",
                         "turn_id": next_turn_id,
                     }, ensure_ascii=False),
-                    status=RUN_STATUS_PENDING,
+                    record_status=RUN_STATUS_PENDING,
                     lease_expire_time=None,
                     delete_flag=0,
                     create_time=now,
@@ -710,7 +714,7 @@ class AgentInboxService:
                 content["next_run_id"] = next_run_id
             else:
                 content.pop("next_run_id", None)
-            run.content = json.dumps(content, ensure_ascii=False)
+            run.record_content = json.dumps(content, ensure_ascii=False)
             return AgentRunCompletionResult(
                 status=RUN_STATUS_FINISHED,
                 next_run_id=next_run_id,
@@ -730,16 +734,16 @@ class AgentInboxService:
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
             run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run is None or run.run_id != run_id or run.status not in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE}:
+            if run is None or run.run_id != run_id or run.record_status not in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE}:
                 return AgentRunCancellationResult(cancelled=False)
-            if run.status == RUN_STATUS_PENDING:
+            if run.record_status == RUN_STATUS_PENDING:
                 terminal_owner_token = await self._cancel_run(session, run, now, user_id, operator_name)
                 return AgentRunCancellationResult(
                     cancelled=True,
-                    status=run.status,
+                    status=run.record_status,
                     terminal_owner_token=terminal_owner_token,
                 )
-            run.status = RUN_STATUS_CANCELLING
+            run.record_status = RUN_STATUS_CANCELLING
             run.lease_expire_time = now + timedelta(seconds=5)
             run.update_time = now
             run.update_by = user_id
@@ -774,10 +778,10 @@ class AgentInboxService:
             )
             if message is None:
                 raise SteerMessageNotFoundError("队列消息不存在")
-            if message.status != "pending":
+            if message.record_status != "pending":
                 raise SteerMessageNotPendingError("消息已进入注入流程，无法修改")
             if content is not None:
-                message.content = content.strip()
+                message.record_content = content.strip()
             if queue_type is not None:
                 message.queue_type = queue_type
             message.update_time = now
@@ -785,7 +789,7 @@ class AgentInboxService:
             message.update_by_name = operator_name
             return {
                 "message_id": message.message_id,
-                "content": message.content,
+                "content": message.record_content,
                 "queue_type": message.queue_type,
             }
 
@@ -810,9 +814,9 @@ class AgentInboxService:
             )
             if message is None:
                 raise SteerMessageNotFoundError("队列消息不存在")
-            if message.status != "pending":
+            if message.record_status != "pending":
                 raise SteerMessageNotPendingError("消息已进入注入流程，无法删除")
-            message.status = "cancelled"
+            message.record_status = "cancelled"
             message.delete_flag = 1
             message.update_time = now
             message.update_by = user_id
@@ -839,11 +843,11 @@ class AgentInboxService:
             )
             latest_run = active_run or await self._dao.get_latest_run(session, conversation_id, user_id)
             rows = await self._dao.list_run_messages(session, latest_run.run_id) if latest_run else []
-            latest_content = self._load_run_content(latest_run.content) if latest_run else {}
+            latest_content = self._load_run_content(latest_run.record_content) if latest_run else {}
             return {
                 "has_active_run": active_run is not None,
                 "run_id": latest_run.run_id if latest_run else None,
-                "run_status": latest_run.status if latest_run else None,
+                "run_status": latest_run.record_status if latest_run else None,
                 "next_run_id": self._next_run_id(latest_content),
                 "turn_id": str(latest_content.get("turn_id") or "") or None,
                 "is_continuation": latest_content.get("run_kind") == "continuation",
@@ -851,9 +855,11 @@ class AgentInboxService:
                 "messages": [
                     {
                         "message_id": row.message_id,
-                        "content": row.content,
+                        "content": row.record_content,
                         "queue_type": row.queue_type,
-                        "status": row.status,
+                        "status": row.record_status,
+                        # 随行引用/附件元数据：前端刷新恢复队列项快照用
+                        "meta": _load_inbox_meta(row.record_meta) or None,
                         # ISO 格式：前端 new Date() 跨浏览器（含 Safari）均可解析
                         "create_time": row.create_time.isoformat(),
                     }
@@ -876,10 +882,10 @@ class AgentInboxService:
                 "run_id": run.run_id,
                 "conversation_id": run.conversation_id,
                 "user_id": run.user_id,
-                "status": run.status,
-                "next_run_id": self._next_run_id(self._load_run_content(run.content)),
+                "status": run.record_status,
+                "next_run_id": self._next_run_id(self._load_run_content(run.record_content)),
                 "history_checkpoint": self._history_checkpoint(
-                    self._load_run_content(run.content),
+                    self._load_run_content(run.record_content),
                     run.run_id,
                 ),
             }
@@ -894,15 +900,15 @@ class AgentInboxService:
     ) -> str:
         """在持有 Run 行锁时完成取消收口。"""
         await self._dao.requeue_messages(session, run.run_id, now)
-        content = self._load_run_content(run.content)
+        content = self._load_run_content(run.record_content)
         self._restore_unstarted_question(content)
         owner_generation = int(content.get("owner_generation") or 0) + 1
         content["owner_generation"] = owner_generation
         terminal_owner_token = f"{owner_generation}:{uuid4().hex}"
         terminal_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else RUN_STATUS_CANCELLED
         content.pop("next_run_id", None)
-        run.content = json.dumps(content, ensure_ascii=False)
-        run.status = terminal_status
+        run.record_content = json.dumps(content, ensure_ascii=False)
+        run.record_status = terminal_status
         run.owner_token = None
         run.lease_expire_time = None
         run.update_time = now
@@ -923,7 +929,7 @@ class AgentInboxService:
         排队消息退回 pending 由下一个新 Run 接管；有未开始的待答问题则还原为
         waiting_user，否则 active 收口为 failed、cancelling 收口为 cancelled。
         """
-        if run is None or run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+        if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
             return run
         if run.lease_expire_time is None or run.lease_expire_time > now:
             return run
@@ -939,20 +945,20 @@ class AgentInboxService:
         operator_name: str,
     ) -> AgentRunReapResult | None:
         """收口单个过期 Run，并生成新的终态发布 fencing token。"""
-        if run.status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+        if run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
             return None
         if run.lease_expire_time is None or run.lease_expire_time > now:
             return None
-        dead_status = RUN_STATUS_FAILED if run.status == RUN_STATUS_ACTIVE else RUN_STATUS_CANCELLED
+        dead_status = RUN_STATUS_FAILED if run.record_status == RUN_STATUS_ACTIVE else RUN_STATUS_CANCELLED
         await self._dao.requeue_messages(session, run.run_id, now)
-        content = self._load_run_content(run.content)
+        content = self._load_run_content(run.record_content)
         self._restore_unstarted_question(content)
         terminal_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else dead_status
         owner_generation = int(content.get("owner_generation") or 0) + 1
         content["owner_generation"] = owner_generation
         content.pop("next_run_id", None)
-        run.content = json.dumps(content, ensure_ascii=False)
-        run.status = terminal_status
+        run.record_content = json.dumps(content, ensure_ascii=False)
+        run.record_status = terminal_status
         run.owner_token = None
         run.lease_expire_time = None
         run.update_time = now
@@ -979,7 +985,7 @@ class AgentInboxService:
             raise AgentRunLeaseLostError("当前运行已由其他 Worker 接管")
 
     def _question_response(self, run: ChatDataAgentInbox) -> dict[str, Any] | None:
-        question = self._load_run_content(run.content).get("pending_question")
+        question = self._load_run_content(run.record_content).get("pending_question")
         if not isinstance(question, dict):
             return None
         return {"run_id": run.run_id, **question}
@@ -1063,11 +1069,31 @@ class AgentInboxService:
 
     @staticmethod
     def _to_human_message(row: ChatDataAgentInbox) -> HumanMessage:
+        additional_kwargs: dict[str, Any] = {
+            "timestamp": row.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        meta = _load_inbox_meta(row.record_meta)
+        # 随行引用/附件还原进 additional_kwargs；校验解析（白名单、引用短句、
+        # 附件占位与视觉装载）由 agent_stream 采纳点统一完成——本层只透传。
+        for key in ("file_selections", "file_ids"):
+            if meta.get(key):
+                additional_kwargs[key] = meta[key]
         return HumanMessage(
             id=row.message_id,
-            content=row.content,
-            additional_kwargs={"timestamp": row.create_time.strftime("%Y-%m-%d %H:%M:%S")},
+            content=row.record_content,
+            additional_kwargs=additional_kwargs,
         )
+
+
+def _load_inbox_meta(meta_text: str | None) -> dict[str, Any]:
+    """解析排队消息随行元数据列（JSON 文本）；空/坏数据一律回退空 dict。"""
+    if not meta_text:
+        return {}
+    try:
+        loaded = json.loads(meta_text)
+    except (TypeError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 agent_inbox_service = AgentInboxService()

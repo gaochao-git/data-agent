@@ -1317,10 +1317,55 @@ def _create_agent_stream_adapter(
     return adapter
 
 
-async def _admit_agent_inbox_messages(
+async def _resolve_inbox_message_references(
+    message: HumanMessage,
+    *,
+    workspace_root: str,
+    user_id: str | None,
+    thread_id: str,
+) -> HumanMessage:
+    """把排队消息 additional_kwargs 里的引用/附件解析为与普通发送同构的形态。
+
+    「存引用、晚解析」的消费端：@ 引用在校验工作区白名单后追加引用短句，
+    附件 file_id 解析为附件占位行与 vision 标记——与首条用户消息
+    （_build_user_message + 附件文本）同一条代码语义。必须在 workspace
+    就绪之后、进入 initial_state 之前调用（图输入与持久化共享解析结果）；
+    失效条目记日志跳过，不阻断消息。
+    """
+    kwargs = getattr(message, "additional_kwargs", None) or {}
+    selections = kwargs.get("file_selections") or []
+    file_ids = kwargs.get("file_ids") or []
+    if not selections and not file_ids:
+        return message
+    valid_selections = (
+        _validate_workspace_file_selections(selections, workspace_root)
+        if selections else []
+    )
+    file_attachments = (
+        await _resolve_file_attachments(
+            file_ids, user_id=user_id, thread_id=thread_id,
+        )
+        if file_ids else []
+    )
+    new_kwargs = dict(kwargs)
+    if selections:
+        new_kwargs["file_selections"] = valid_selections
+    vision_attachments = select_vision_attachments(file_attachments)
+    if vision_attachments:
+        new_kwargs["vision_attachments"] = vision_attachments
+    new_content = (
+        f"{message.content}"
+        f"{_file_selection_mention_suffix(valid_selections)}"
+        f"{build_file_attachment_text(file_attachments)}"
+    )
+    return message.model_copy(update={"content": new_content, "additional_kwargs": new_kwargs})
+
+
+async def _persist_admitted_inbox_messages(
     callbacks: _AgentRunStreamCallbacks,
     messages: list[HumanMessage],
 ) -> None:
+    """把已解析的排队消息持久化为 admitted 用户历史（上屏与回放的依据）。"""
     for message in messages:
         await conversation_event_service.persist_user_message(
             conversation_id=callbacks.thread_id,
@@ -1328,6 +1373,25 @@ async def _admit_agent_inbox_messages(
             operator_name=callbacks.username or callbacks.user_id or "system",
             message=message,
         )
+
+
+async def _admit_agent_inbox_messages(
+    callbacks: _AgentRunStreamCallbacks,
+    messages: list[HumanMessage],
+) -> None:
+    """steering 中间件认领路径：解析随行引用/附件后持久化。
+
+    就地替换列表元素：中间件随后把同一列表注入图 state，替换后图输入
+    拿到的即是解析后的消息（与持久化内容一致）。
+    """
+    for index, message in enumerate(messages):
+        messages[index] = await _resolve_inbox_message_references(
+            message,
+            workspace_root=callbacks.workspace_root,
+            user_id=callbacks.user_id,
+            thread_id=callbacks.thread_id,
+        )
+    await _persist_admitted_inbox_messages(callbacks, messages)
 
 
 async def _log_agent_stream_done(callbacks: _AgentRunStreamCallbacks) -> None:
@@ -1474,8 +1538,9 @@ async def _admit_adopted_messages(
     adopted_messages: list[HumanMessage] | None,
 ) -> None:
     """上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
-    先持久化并通知前端上屏，再随 initial_state 进入本轮对话。"""
-    await _admit_agent_inbox_messages(callbacks, adopted_messages or [])
+    先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
+    消息的随行引用/附件已在 workspace 就绪后统一解析（见主流程），此处只持久化。"""
+    await _persist_admitted_inbox_messages(callbacks, adopted_messages or [])
     if adopted_messages:
         adopted_ids = [str(message.id or "") for message in adopted_messages]
         steering_tracker.record(adopted_ids)
@@ -1544,6 +1609,17 @@ async def _run_chat_data_agent_stream(
     log_phase("prepare_semantic_context")
     # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
     valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
+
+    # 排队消息（续跑接管）随行引用/附件的「晚解析」：workspace 就绪后、进入
+    # initial_state 前完成，图输入与后续持久化共享同一份解析结果。
+    if adopted_messages:
+        for adopted_index, adopted_message in enumerate(adopted_messages):
+            adopted_messages[adopted_index] = await _resolve_inbox_message_references(
+                adopted_message,
+                workspace_root=workspace_paths["root"],
+                user_id=user_id,
+                thread_id=thread_id,
+            )
 
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
         semantic_materialize_note, user_id, thread_id, workspace_runtime,
@@ -1627,6 +1703,7 @@ async def _run_chat_data_agent_stream(
                 stream_event_id_provider=stream_event_id_provider,
                 log_phase=log_phase,
                 steering_tracker=steering_tracker,
+                workspace_root=workspace_paths["root"],
                 adopted_messages=adopted_messages,
                 user_message=user_message,
                 recovering=recovering,

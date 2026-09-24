@@ -298,6 +298,84 @@ def test_validate_workspace_file_selections_filters_invalid(tmp_path):
     ) == ["uploads/a.pdf"]
 
 
+@pytest.mark.asyncio
+async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypatch):
+    """排队消息采纳点：引用校验后追加引用短句、附件解析为占位行与 vision 标记。"""
+    import asyncio
+
+    from langchain_core.messages import HumanMessage
+
+    from apps.chat_data_app import agent_stream
+
+    root = tmp_path / "user-data"
+    (root / "uploads").mkdir(parents=True)
+    (root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
+    root_str = str(root)
+
+    # 无随行元数据的消息原样返回（快速路径，不触任何 IO）
+    plain = HumanMessage(id="m0", content="纯文本", additional_kwargs={"timestamp": "t"})
+    resolved = await agent_stream._resolve_inbox_message_references(
+        plain, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+    )
+    assert resolved is plain
+
+    # 引用 + 附件：短句/占位行进正文，kwargs 留痕与普通发送同构
+    async def fake_resolve_file_attachments(file_ids, *, user_id, thread_id):
+        assert file_ids == ["file-1"]
+        assert user_id == "u1" and thread_id == "conv-1"
+        return [{
+            "file_id": "file-1",
+            "original_filename": "b.md",
+            "file_type": "md",
+            "file_size": 3,
+            "virtual_path": "/mnt/user-data/uploads/b.md",
+        }]
+
+    monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_resolve_file_attachments)
+    message = HumanMessage(
+        id="m1",
+        content="排队消息",
+        additional_kwargs={
+            "timestamp": "t",
+            "file_selections": ["uploads/a.pdf", "uploads/missing.pdf", "../../etc/passwd"],
+            "file_ids": ["file-1"],
+        },
+    )
+    resolved = await agent_stream._resolve_inbox_message_references(
+        message, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+    )
+    # 正文 = 原文 + 引用短句（只含校验通过的）+ 附件占位行，与普通发送同构
+    assert resolved.content == (
+        "排队消息"
+        "\n\n[引用文件：/mnt/user-data/uploads/a.pdf]"
+        "\n[attachment] /mnt/user-data/uploads/b.md"
+    )
+    assert resolved.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
+    # md 非图片：不打 vision 标记
+    assert "vision_attachments" not in resolved.additional_kwargs
+    assert resolved.id == "m1"
+
+    # 图片附件：vision 标记进 kwargs，供 ImageInjectionMiddleware 装载
+    async def fake_image_attachments(file_ids, *, user_id, thread_id):
+        return [{
+            "file_id": "file-img",
+            "original_filename": "shot.png",
+            "file_type": "png",
+            "file_size": 10,
+            "virtual_path": "/mnt/user-data/uploads/shot.png",
+        }]
+
+    monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_image_attachments)
+    image_message = HumanMessage(
+        id="m2", content="看图", additional_kwargs={"file_ids": ["file-img"]},
+    )
+    resolved = await agent_stream._resolve_inbox_message_references(
+        image_message, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+    )
+    assert resolved.additional_kwargs["vision_attachments"] == ["/mnt/user-data/uploads/shot.png"]
+    assert "[attachment] /mnt/user-data/uploads/shot.png" in resolved.content
+
+
 def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkeypatch):
     """建会话物化 helper 的契约：失败吞异常返回 total=0，不阻断会话创建。"""
     import asyncio

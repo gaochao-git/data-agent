@@ -66,10 +66,10 @@ def _run(**overrides):
         run_id="r1",
         conversation_id="conv-1",
         user_id="user-1",
-        status="active",
+        record_status="active",
         owner_token="tok-1",
         lease_expire_time=None,
-        content=json.dumps({"owner_generation": 1}),
+        record_content=json.dumps({"owner_generation": 1}),
         create_by_name="用户一",
         update_by=None,
         update_by_name=None,
@@ -151,11 +151,11 @@ def test_assert_owner_fences_superseded_workers():
 
 def test_question_response_requires_dict_payload():
     service = _service()
-    run = SimpleNamespace(run_id="r1", content=json.dumps({"pending_question": "not-a-dict"}))
+    run = SimpleNamespace(run_id="r1", record_content=json.dumps({"pending_question": "not-a-dict"}))
     assert service._question_response(run) is None
 
     valid = SimpleNamespace(
-        run_id="r1", content=json.dumps({"pending_question": {"question_id": "q1"}})
+        run_id="r1", record_content=json.dumps({"pending_question": {"question_id": "q1"}})
     )
     assert service._question_response(valid) == {"run_id": "r1", "question_id": "q1"}
 
@@ -215,14 +215,14 @@ async def test_start_run_selected_message_errors():
         await _service(
             lock_thread=SimpleNamespace(),
             get_active_run=None,
-            get_message_by_id=SimpleNamespace(status="consumed"),
+            get_message_by_id=SimpleNamespace(record_status="consumed"),
         ).start_run("conv-1", "user-1", "用户一", selected_message_id="m1")
 
 
 @pytest.mark.asyncio
 async def test_start_run_selected_message_is_adopted():
     """选中队列消息时只迁移该条，其余保持排队。"""
-    selected = SimpleNamespace(status="pending")
+    selected = SimpleNamespace(record_status="pending")
     service = _service(
         lock_thread=SimpleNamespace(),
         get_active_run=None,
@@ -242,7 +242,7 @@ async def test_prepare_pending_run_returns_none_for_ineligible_runs():
 
     # 非 pending 不接管
     service = _service(
-        get_run_by_id=_run(), lock_thread=SimpleNamespace(), get_run_by_id_for_update=_run(status="active")
+        get_run_by_id=_run(), lock_thread=SimpleNamespace(), get_run_by_id_for_update=_run(record_status="active")
     )
     assert await service.prepare_pending_run("r1") is None
 
@@ -250,7 +250,7 @@ async def test_prepare_pending_run_returns_none_for_ineligible_runs():
     service = _service(
         get_run_by_id=_run(),
         lock_thread=SimpleNamespace(),
-        get_run_by_id_for_update=_run(status="pending"),
+        get_run_by_id_for_update=_run(record_status="pending"),
         get_active_run=_run(run_id="other"),
     )
     assert await service.prepare_pending_run("r1") is None
@@ -270,18 +270,18 @@ async def test_reap_expired_runs_skips_missing_and_collects():
 @pytest.mark.asyncio
 async def test_reap_expired_runs_drops_candidates_nobody_can_close():
     """候选拿到行锁后已不具备收口条件（已终态）→ 本轮不产出结果。"""
-    finished = _run(status="finished", lease_expire_time=NOW.replace(year=2020))
+    finished = _run(record_status="finished", lease_expire_time=NOW.replace(year=2020))
     service = _service(list_expired_runs=[finished], get_run_by_id_for_update=finished)
     assert await service.reap_expired_runs() == []
 
 
 @pytest.mark.asyncio
 async def test_finish_run_requeues_only_terminal_failures():
-    service = _service(get_run_by_id_for_update=_run(status="active"))
+    service = _service(get_run_by_id_for_update=_run(record_status="active"))
     assert await service.finish_run("r1", "failed", "user-1", "用户一", "tok-1") == "failed"
     assert "requeue_messages" in service._dao.calls
 
-    service = _service(get_run_by_id_for_update=_run(status="active"))
+    service = _service(get_run_by_id_for_update=_run(record_status="active"))
     assert await service.finish_run("r1", "finished", "user-1", "用户一", "tok-1") == "finished"
     assert "requeue_messages" not in service._dao.calls
 
@@ -289,7 +289,7 @@ async def test_finish_run_requeues_only_terminal_failures():
 @pytest.mark.asyncio
 async def test_update_pending_message_keeps_omitted_fields():
     """content / queue_type 传 None 表示「不改」，不能把已有值覆盖掉。"""
-    message = SimpleNamespace(message_id="m1", status="pending", content="原文", queue_type="next-turn")
+    message = SimpleNamespace(message_id="m1", record_status="pending", record_content="原文", queue_type="next-turn")
     service = _service(lock_thread=SimpleNamespace(), get_message_by_id=message)
     assert await service.update_pending_message("conv-1", "user-1", "用户一", "m1") == {
         "message_id": "m1",
@@ -316,7 +316,7 @@ async def test_reap_expired_runs_swallows_single_failure():
 @pytest.mark.asyncio
 async def test_reap_expired_run_state_skips_ineligible():
     service = _service()
-    assert await service._reap_expired_run_state(None, _run(status="finished"), NOW, "u", "n") is None
+    assert await service._reap_expired_run_state(None, _run(record_status="finished"), NOW, "u", "n") is None
     assert await service._reap_expired_run_state(None, _run(lease_expire_time=None), NOW, "u", "n") is None
     future = _run(lease_expire_time=NOW.replace(year=2030))
     assert await service._reap_expired_run_state(None, future, NOW, "u", "n") is None
@@ -327,7 +327,7 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
     service = _service()
     assert await service._reap_expired_run(None, None, NOW, "u", "n") is None
 
-    finished = _run(status="finished")
+    finished = _run(record_status="finished")
     assert await service._reap_expired_run(None, finished, NOW, "u", "n") is finished
 
     not_expired = _run(lease_expire_time=NOW.replace(year=2030))
@@ -335,14 +335,14 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
 
     waiting = _run(
         lease_expire_time=NOW.replace(year=2020),
-        content=json.dumps({"pending_question": {"question_id": "q"}}),
+        record_content=json.dumps({"pending_question": {"question_id": "q"}}),
     )
     assert await service._reap_expired_run(None, waiting, NOW, "u", "n") is waiting
-    assert waiting.status == "waiting_user"
+    assert waiting.record_status == "waiting_user"
 
-    cancelling = _run(status="cancelling", lease_expire_time=NOW.replace(year=2020))
+    cancelling = _run(record_status="cancelling", lease_expire_time=NOW.replace(year=2020))
     assert await service._reap_expired_run(None, cancelling, NOW, "u", "n") is None
-    assert cancelling.status == "cancelled"
+    assert cancelling.record_status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -350,27 +350,27 @@ async def test_reconcile_recovered_messages():
     with pytest.raises(AgentRunNotActiveError):
         await _service().reconcile_recovered_messages("r1", set())
 
-    checkpointed = SimpleNamespace(message_id="m1", status="claimed")
+    checkpointed = SimpleNamespace(message_id="m1", record_status="claimed")
     await _service(
         get_run_by_id_for_update=_run(), list_claimed_messages=[checkpointed]
     ).reconcile_recovered_messages("r1", {"m1"}, owner_token="tok-1")
-    assert checkpointed.status == "consumed"
+    assert checkpointed.record_status == "consumed"
 
-    orphan = SimpleNamespace(message_id="m2", status="claimed")
+    orphan = SimpleNamespace(message_id="m2", record_status="claimed")
     await _service(
         get_run_by_id_for_update=_run(), list_claimed_messages=[orphan]
     ).reconcile_recovered_messages("r1", set(), owner_token="tok-1")
-    assert orphan.status == "pending"          # 旧 Worker 已领取但未落检查点 → 退回中间件
+    assert orphan.record_status == "pending"          # 旧 Worker 已领取但未落检查点 → 退回中间件
 
 
 @pytest.mark.asyncio
 async def test_heartbeat_run_competition_paths():
     assert await _service(renew_run_lease=False, get_run_by_id=None).heartbeat_run("r1", "tok-1") == "inactive"
-    terminal = _service(renew_run_lease=False, get_run_by_id=_run(status="finished"))
+    terminal = _service(renew_run_lease=False, get_run_by_id=_run(record_status="finished"))
     assert await terminal.heartbeat_run("r1", "tok-1") == "inactive"
-    cancelling = _service(renew_run_lease=False, get_run_by_id=_run(status="cancelling"))
+    cancelling = _service(renew_run_lease=False, get_run_by_id=_run(record_status="cancelling"))
     assert await cancelling.heartbeat_run("r1", "tok-1") == "cancelling"
-    still_owner = _service(renew_run_lease=False, get_run_by_id=_run(status="active"))
+    still_owner = _service(renew_run_lease=False, get_run_by_id=_run(record_status="active"))
     assert await still_owner.heartbeat_run("r1", "tok-1") == "active"
 
 
@@ -380,7 +380,7 @@ async def test_assert_run_owner_all_paths():
     with pytest.raises(AgentRunLeaseLostError):
         await _service().assert_run_owner("r1", "tok-1")
     with pytest.raises(AgentRunLeaseLostError):
-        await _service(get_run_by_id=_run(status="finished")).assert_run_owner("r1", "tok-1")
+        await _service(get_run_by_id=_run(record_status="finished")).assert_run_owner("r1", "tok-1")
     with pytest.raises(AgentRunLeaseLostError):
         await _service(get_run_by_id=_run(owner_token="tok-2")).assert_run_owner("r1", "tok-1")
 
@@ -405,7 +405,7 @@ async def test_claim_question_answer_rejects_ineligible():
         await _service(lock_thread=SimpleNamespace()).claim_question_answer(
             "conv-1", "user-1", "用户一", "q1", {"answers": []}
         )
-    mismatched = _run(status="waiting_user", content=json.dumps({"pending_question": {"question_id": "other"}}))
+    mismatched = _run(record_status="waiting_user", record_content=json.dumps({"pending_question": {"question_id": "other"}}))
     with pytest.raises(AgentQuestionNotFoundError):
         await _service(lock_thread=SimpleNamespace(), get_active_run=mismatched).claim_question_answer(
             "conv-1", "user-1", "用户一", "q1", {"answers": []}
@@ -418,48 +418,48 @@ async def test_record_terminal_event():
 
     run = _run()
     await _service(get_run_by_id_for_update=run).record_terminal_event("r1", "1-1")
-    assert json.loads(run.content)["terminal_event"] == {"stream_id": "1-1", "event_type": "done"}
+    assert json.loads(run.record_content)["terminal_event"] == {"stream_id": "1-1", "event_type": "done"}
 
 
 @pytest.mark.asyncio
 async def test_mark_question_resume_started_guards():
     await _service().mark_question_resume_started("r1", "tok-1")
-    await _service(get_run_by_id_for_update=_run(status="finished")).mark_question_resume_started("r1", "tok-1")
+    await _service(get_run_by_id_for_update=_run(record_status="finished")).mark_question_resume_started("r1", "tok-1")
 
-    without_question = _run(status="active")
+    without_question = _run(record_status="active")
     await _service(get_run_by_id_for_update=without_question).mark_question_resume_started("r1", "tok-1")
-    assert "resume_started" not in json.loads(without_question.content)
+    assert "resume_started" not in json.loads(without_question.record_content)
 
-    with_question = _run(status="active", content=json.dumps({"resuming_question": {"question_id": "q"}}))
+    with_question = _run(record_status="active", record_content=json.dumps({"resuming_question": {"question_id": "q"}}))
     await _service(get_run_by_id_for_update=with_question).mark_question_resume_started("r1", "tok-1")
-    assert json.loads(with_question.content)["resume_started"] is True
+    assert json.loads(with_question.record_content)["resume_started"] is True
 
 
 @pytest.mark.asyncio
 async def test_restore_question_answer_guards_and_rollback():
     await _service().restore_question_answer("r1", "user-1", "用户一", "tok-1")
 
-    without_question = _run(status="active")
+    without_question = _run(record_status="active")
     await _service(get_run_by_id_for_update=without_question).restore_question_answer("r1", "user-1", "用户一", "tok-1")
-    assert "pending_question" not in json.loads(without_question.content)
+    assert "pending_question" not in json.loads(without_question.record_content)
 
-    without_answer = _run(status="active", content=json.dumps({"resuming_question": {"question_id": "q"}}))
+    without_answer = _run(record_status="active", record_content=json.dumps({"resuming_question": {"question_id": "q"}}))
     await _service(get_run_by_id_for_update=without_answer).restore_question_answer("r1", "user-1", "用户一", "tok-1")
-    assert json.loads(without_answer.content).get("pending_question") is None
+    assert json.loads(without_answer.record_content).get("pending_question") is None
 
     full = _run(
-        status="active",
-        content=json.dumps({
+        record_status="active",
+        record_content=json.dumps({
             "resuming_question": {"question_id": "q"},
             "pending_answer": {"answers": []},
             "resume_started": True,
         }),
     )
     await _service(get_run_by_id_for_update=full).restore_question_answer("r1", "user-1", "用户一", "tok-1")
-    content = json.loads(full.content)
+    content = json.loads(full.record_content)
     assert content["pending_question"] == {"question_id": "q"}
     assert "pending_answer" not in content
-    assert full.status == "waiting_user"
+    assert full.record_status == "waiting_user"
 
 
 @pytest.mark.asyncio
@@ -493,15 +493,15 @@ async def test_complete_run_lease_checks():
         await _service(get_run_by_id=_run()).complete_run("r1", "user-1", "用户一", "tok-1")
     with pytest.raises(AgentRunLeaseLostError):
         await _service(
-            get_run_by_id=_run(), lock_thread=SimpleNamespace(), get_run_by_id_for_update=_run(status="finished")
+            get_run_by_id=_run(), lock_thread=SimpleNamespace(), get_run_by_id_for_update=_run(record_status="finished")
         ).complete_run("r1", "user-1", "用户一", "tok-1")
 
 
 @pytest.mark.asyncio
 async def test_complete_run_schedules_continuation_without_runtime_context():
     """runtime_context 损坏时按空字典处理，仍能调度下一轮。"""
-    run = _run(content=json.dumps({"runtime_context": "not-a-dict"}))
-    claimed_row = SimpleNamespace(message_id="m9", content="排队消息", create_time=NOW)
+    run = _run(record_content=json.dumps({"runtime_context": "not-a-dict"}))
+    claimed_row = SimpleNamespace(message_id="m9", record_content="排队消息", create_time=NOW)
     service = _service(
         get_run_by_id=_run(),
         lock_thread=SimpleNamespace(),
@@ -512,7 +512,7 @@ async def test_complete_run_schedules_continuation_without_runtime_context():
     result = await service.complete_run("r1", "user-1", "用户一", "tok-1")
     assert result.status == "finished"
     assert result.next_run_id
-    assert json.loads(run.content)["next_run_id"] == result.next_run_id
+    assert json.loads(run.record_content)["next_run_id"] == result.next_run_id
 
 
 @pytest.mark.asyncio

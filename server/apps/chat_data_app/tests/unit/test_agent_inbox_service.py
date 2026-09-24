@@ -97,7 +97,7 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
         rows = list((await session.execute(
             select(ChatDataAgentInbox).order_by(ChatDataAgentInbox.id)
         )).scalars())
-    assert [row.status for row in rows] == ["finished", "consumed", "consumed"]
+    assert [row.record_status for row in rows] == ["finished", "consumed", "consumed"]
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "pending"
+    assert run.record_status == "pending"
     assert run.lease_expire_time is None
 
     prepared = await service.prepare_pending_run(run_id)
@@ -154,7 +154,7 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "failed"
+    assert run.record_status == "failed"
 
 
 @pytest.mark.asyncio
@@ -180,8 +180,8 @@ async def test_finish_run_reports_waiting_user_when_question_already_asked(inbox
             select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id)
             .order_by(ChatDataAgentInbox.id)
         )).scalars())
-    assert rows[0].status == "waiting_user"
-    assert [(row.message_id, row.status) for row in rows[1:]] == [(message_id, "claimed")]
+    assert rows[0].record_status == "waiting_user"
+    assert [(row.message_id, row.record_status) for row in rows[1:]] == [(message_id, "claimed")]
 
 
 @pytest.mark.asyncio
@@ -279,14 +279,14 @@ async def test_agent_inbox_completion_schedules_next_run(inbox_service):
         rows = list((await session.execute(
             select(ChatDataAgentInbox).order_by(ChatDataAgentInbox.id)
         )).scalars())
-    assert rows[0].status == "finished"
-    assert service._load_run_content(rows[0].content)["next_run_id"] == next_run_id
+    assert rows[0].record_status == "finished"
+    assert service._load_run_content(rows[0].record_content)["next_run_id"] == next_run_id
     assert rows[1].run_id == next_run_id
-    assert rows[1].status == "claimed"
+    assert rows[1].record_status == "claimed"
     assert rows[1].message_id == message_id
 
     next_run = next(row for row in rows if row.record_type == "run" and row.run_id == next_run_id)
-    assert service._load_run_content(next_run.content)["turn_id"] == message_id
+    assert service._load_run_content(next_run.record_content)["turn_id"] == message_id
 
 
 @pytest.mark.asyncio
@@ -309,7 +309,7 @@ async def test_continuation_turn_id_tracks_last_admitted_user_message(inbox_serv
             ChatDataAgentInbox.run_id == next_run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert service._load_run_content(next_run.content)["turn_id"] == last_message_id
+    assert service._load_run_content(next_run.record_content)["turn_id"] == last_message_id
 
 
 @pytest.mark.asyncio
@@ -404,7 +404,7 @@ async def test_start_run_can_preserve_pending_messages_for_new_input(inbox_servi
         queued = (await session.execute(select(ChatDataAgentInbox).where(
             ChatDataAgentInbox.message_id == queued_id,
         ))).scalar_one()
-    assert queued.status == "pending"
+    assert queued.record_status == "pending"
     assert queued.run_id == old_run_id
 
 
@@ -433,7 +433,7 @@ async def test_start_run_selected_message_only_executes_one_pending_message(inbo
         rows = list((await session.execute(select(ChatDataAgentInbox).where(
             ChatDataAgentInbox.message_id.in_([first_id, second_id]),
         ).order_by(ChatDataAgentInbox.id))).scalars())
-    assert [(row.message_id, row.run_id, row.status) for row in rows] == [
+    assert [(row.message_id, row.run_id, row.record_status) for row in rows] == [
         (first_id, new_run_id, "claimed"),
         (second_id, old_run_id, "pending"),
     ]
@@ -467,7 +467,7 @@ async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_serv
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert old_run.status == "failed"
+    assert old_run.record_status == "failed"
     assert old_run.owner_token is None
 
 
@@ -497,10 +497,10 @@ async def test_background_reaper_closes_expired_run_and_requeues_messages(inbox_
         rows = list((await session.execute(select(ChatDataAgentInbox).where(
             ChatDataAgentInbox.run_id == run_id,
         ).order_by(ChatDataAgentInbox.id))).scalars())
-    assert rows[0].status == "failed"
+    assert rows[0].record_status == "failed"
     assert rows[0].owner_token is None
     assert rows[1].message_id == message_id
-    assert rows[1].status == "pending"
+    assert rows[1].record_status == "pending"
 
 
 @pytest.mark.asyncio
@@ -520,7 +520,7 @@ async def test_background_reaper_preserves_waiting_question(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "waiting_user"
+    assert run.record_status == "waiting_user"
 
 
 @pytest.mark.asyncio
@@ -567,7 +567,7 @@ async def test_recovered_messages_are_reconciled_against_checkpoint(inbox_servic
             .where(ChatDataAgentInbox.record_type == "message")
             .order_by(ChatDataAgentInbox.id)
         )).scalars())
-    assert [(row.message_id, row.status) for row in rows] == [
+    assert [(row.message_id, row.record_status) for row in rows] == [
         (checkpointed_id, "consumed"),
         (pending_id, "pending"),
     ]
@@ -635,7 +635,7 @@ async def test_cancel_pending_run_closes_transaction_with_terminal_status(inbox_
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "cancelled"
+    assert run.record_status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -660,8 +660,8 @@ async def test_cancelling_run_cannot_claim_messages(inbox_service):
             select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id)
             .order_by(ChatDataAgentInbox.id)
         )).scalars())
-    assert rows[0].status == "cancelled"
-    assert [(row.message_id, row.status) for row in rows[1:]] == [
+    assert rows[0].record_status == "cancelled"
+    assert [(row.message_id, row.record_status) for row in rows[1:]] == [
         (step_id, "pending"),
         (turn_id, "pending"),
     ]
@@ -683,7 +683,7 @@ async def test_stale_run_id_cannot_cancel_newer_run(inbox_service):
             ChatDataAgentInbox.run_id == new_run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert new_run.status == "active"
+    assert new_run.record_status == "active"
 
 
 @pytest.mark.asyncio
@@ -859,7 +859,7 @@ async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_s
             ChatDataAgentInbox.run_id == next_run_id,
             ChatDataAgentInbox.message_id == next_id,
         ))).scalar_one()
-    assert row.status == "claimed"
+    assert row.record_status == "claimed"
 
 
 @pytest.mark.asyncio
@@ -889,7 +889,7 @@ async def test_agent_inbox_update_pending_message_content_and_type(inbox_service
         row = (await session.execute(
             select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id, ChatDataAgentInbox.record_type == "message")
         )).scalar_one()
-    assert row.content == "修改后内容"
+    assert row.record_content == "修改后内容"
     assert row.queue_type == "next-turn"
 
 
@@ -960,7 +960,7 @@ async def test_agent_inbox_can_delete_pending_message_after_run_cancelled(inbox_
         row = (await session.execute(
             select(ChatDataAgentInbox).where(ChatDataAgentInbox.message_id == message_id)
         )).scalar_one()
-    assert row.status == "cancelled"
+    assert row.record_status == "cancelled"
     assert row.delete_flag == 1
 
 
@@ -983,7 +983,7 @@ async def test_agent_inbox_completion_claims_all_next_step_and_one_next_turn(inb
             ChatDataAgentInbox.run_id == next_run_id,
             ChatDataAgentInbox.record_type == "message",
         ).order_by(ChatDataAgentInbox.id))).scalars())
-    assert [(row.message_id, row.status) for row in rows] == [
+    assert [(row.message_id, row.record_status) for row in rows] == [
         (next_id, "claimed"),
         (next_id_2, "pending"),
     ]
@@ -1049,8 +1049,8 @@ async def test_record_terminal_event_persists_cursor_without_owner(inbox_service
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "waiting_user"
-    content = json.loads(run.content)
+    assert run.record_status == "waiting_user"
+    content = json.loads(run.record_content)
     assert content["terminal_event"] == {"stream_id": "1740000000000-0", "event_type": "done"}
     # pending_question 不受影响，问答仍可恢复。
     assert content["pending_question"]["question_id"] == "question-1"
@@ -1072,8 +1072,8 @@ async def test_record_terminal_event_supports_finished_run(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "finished"
-    assert json.loads(run.content)["terminal_event"]["stream_id"] == "1740000000001-0"
+    assert run.record_status == "finished"
+    assert json.loads(run.record_content)["terminal_event"]["stream_id"] == "1740000000001-0"
 
 
 @pytest.mark.asyncio
@@ -1102,4 +1102,65 @@ async def test_prepare_pending_run_clears_stale_terminal_event(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert "terminal_event" not in json.loads(run.content)
+    assert "terminal_event" not in json.loads(run.record_content)
+
+@pytest.mark.asyncio
+async def test_agent_inbox_meta_roundtrip_to_human_message(inbox_service):
+    """排队消息随行元数据：入队落 meta 列，构建 HumanMessage 时还原进 additional_kwargs。"""
+    service, create_thread, get_session, _owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+
+    meta = {"file_selections": ["workspace/semantic/a__1.yaml"], "file_ids": ["file-1", "file-2"]}
+    with_meta_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "带引用", queue_type="next-step", meta=meta,
+    )
+    without_meta_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "纯文本", queue_type="next-step",
+    )
+
+    async with get_session() as session:
+        rows = {row.message_id: row for row in (await session.execute(
+            select(ChatDataAgentInbox)
+        )).scalars()}
+    assert rows[with_meta_id].record_meta and "file_selections" in rows[with_meta_id].record_meta
+    assert rows[without_meta_id].record_meta is None
+
+    claimed = await service.claim_pending_messages(run_id, owner_token=_owners[run_id])
+    by_content = {message.content: message for message in claimed.messages}
+    with_meta_msg = by_content["带引用"]
+    assert with_meta_msg.additional_kwargs["file_selections"] == meta["file_selections"]
+    assert with_meta_msg.additional_kwargs["file_ids"] == meta["file_ids"]
+    assert with_meta_msg.additional_kwargs["timestamp"]
+    without_meta_msg = by_content["纯文本"]
+    assert "file_selections" not in without_meta_msg.additional_kwargs
+    assert "file_ids" not in without_meta_msg.additional_kwargs
+
+
+@pytest.mark.asyncio
+async def test_agent_inbox_list_message_states_returns_meta(inbox_service):
+    """刷新恢复接口透传随行元数据；无 meta 的项返回 None。"""
+    service, create_thread, _get_session, _owners = inbox_service
+    await create_thread()
+    await service.start_run("conv-1", "user-1", "用户一")
+    await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "带附件",
+        queue_type="next-turn", meta={"file_ids": ["file-9"]},
+    )
+    await service.enqueue_message("conv-1", "user-1", "用户一", "纯文本")
+
+    queue = await service.list_message_states("conv-1", "user-1")
+    states = {item["content"]: item for item in queue["messages"]}
+    assert states["带附件"]["meta"] == {"file_ids": ["file-9"]}
+    assert states["纯文本"]["meta"] is None
+
+
+def test_load_inbox_meta_tolerates_bad_data():
+    """meta 列坏数据（非 JSON / 非 dict / 空）一律回退空 dict，不影响构建消息。"""
+    from apps.chat_data_app.agent.run.agent_inbox_service import _load_inbox_meta
+
+    assert _load_inbox_meta(None) == {}
+    assert _load_inbox_meta("") == {}
+    assert _load_inbox_meta("not-json") == {}
+    assert _load_inbox_meta('["list"]') == {}
+    assert _load_inbox_meta('{"file_ids": ["f1"]}') == {"file_ids": ["f1"]}

@@ -1475,11 +1475,18 @@ export function steerConversation(
   conversationId: string,
   query: string,
   queueType?: 'next-step' | 'next-turn',
+  meta?: { file_selections?: string[]; file_ids?: string[] },
 ): Promise<ApiResponse<{ message_id: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
     method: 'post',
-    data: { query, ...(queueType ? { queue_type: queueType } : {}) },
+    data: {
+      query,
+      ...(queueType ? { queue_type: queueType } : {}),
+      // 随行引用/附件快照：服务端存引用，续跑执行时统一校验解析
+      ...(meta?.file_selections?.length ? { file_selections: meta.file_selections } : {}),
+      ...(meta?.file_ids?.length ? { file_ids: meta.file_ids } : {}),
+    },
   })
 }
 

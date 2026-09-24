@@ -35,10 +35,10 @@ class _InboxDao:
             pass
 
         row = Row()
-        row.status = self._status
+        row.record_status = self._status
         row.conversation_id = "conversation-1"
         row.user_id = "user-1"
-        row.content = json.dumps(self._content, ensure_ascii=False) if self._content is not None else ""
+        row.record_content = json.dumps(self._content, ensure_ascii=False) if self._content is not None else ""
         return row
 
 

@@ -263,7 +263,7 @@ class AgentScheduleDao:
         if not run_ids:
             return {}
         result = await session.execute(
-            select(ChatDataAgentInbox.run_id, ChatDataAgentInbox.status).where(
+            select(ChatDataAgentInbox.run_id, ChatDataAgentInbox.record_status).where(
                 ChatDataAgentInbox.run_id.in_(run_ids),
                 ChatDataAgentInbox.record_type == "run",
                 ChatDataAgentInbox.delete_flag == 0,

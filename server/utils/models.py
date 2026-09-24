@@ -90,8 +90,12 @@ class ChatDataAgentInbox(Base):
         server_default="next-step",
         comment="队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理",
     )
-    content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 记录内容：消息行为追加消息文本，运行行为运行状态 JSON（_load_run_content 解析）
+    record_content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
+    # 排队消息随行元数据（JSON 文本）：{file_selections, file_ids}。附件/引用只存引用，
+    # 消费（续跑构建 HumanMessage → agent_stream 采纳）时才校验解析。
+    record_meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    record_status: Mapped[str] = mapped_column(String(16), nullable=False)
     claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     consumed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     lease_expire_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -105,8 +109,8 @@ class ChatDataAgentInbox(Base):
 
     __table_args__ = (
         UniqueConstraint("record_type", "message_id", name="uniq_agent_inbox_msg"),
-        Index("idx_agent_inbox_conv", "conversation_id", "user_id", "record_type", "status"),
-        Index("idx_agent_inbox_run", "run_id", "record_type", "status"),
+        Index("idx_agent_inbox_conv", "conversation_id", "user_id", "record_type", "record_status"),
+        Index("idx_agent_inbox_run", "run_id", "record_type", "record_status"),
     )
 
 

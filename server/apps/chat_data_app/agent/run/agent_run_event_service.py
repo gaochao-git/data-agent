@@ -304,7 +304,7 @@ class AgentRunEventService:
         """读取 inbox Run 行记录的终止事件游标（done 发布成功后写入）。"""
         async with get_session() as session:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
-        content = load_run_content(row.content if row else None)
+        content = load_run_content(row.record_content if row else None)
         if not content:
             return None
         terminal_event = content.get("terminal_event")
@@ -315,10 +315,10 @@ class AgentRunEventService:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
             if row is None:
                 return None
-            content = load_run_content(row.content)
+            content = load_run_content(row.record_content)
             next_run_id = content.get("next_run_id") or None
             return {
-                "status": row.status,
+                "status": row.record_status,
                 "conversation_id": row.conversation_id,
                 "user_id": row.user_id,
                 "next_run_id": str(next_run_id).strip() if next_run_id else None,
