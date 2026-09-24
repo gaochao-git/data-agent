@@ -54,7 +54,6 @@ from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_result import create_tool_result_middleware
 from ..agent_runtime import on_tool_error
-from ..prompts import chat_data as chat_data_prompts
 
 logger = get_logger(__name__)
 
@@ -166,11 +165,6 @@ class SubagentSpec:
     # 与主智能体保持一致继承：子图 system prompt 由此注入目录段，正文仍按需
     # file_read /mnt/skills/<name>/SKILL.md；空串或空目录时不注入。
     available_skills_xml: str = ""
-    # 主智能体同一会话的数据源组上下文（datasource_group_context，含「当前用户
-    # 已选择的执行对象数据源」成员清单）。data_analyzing_tool 要求模型显式传
-    # member_datasource_ids 且服务端不做默认兜底，子图不注入清单则查询派发
-    # 必然报「缺少 member_datasource_ids」；与主图同源注入消除这层记忆依赖。
-    datasource_group_context: str = ""
     # 预算告警的口径来源：默认与主图同一 model_id，取同一 ContextBudget 的压缩触发
     # 阈值作为「上下文将尽」的告警线（与主图同源）；压测/调试可用
     # CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 单独覆盖子图告警线
@@ -397,31 +391,16 @@ _SUBAGENT_SKILLS_SECTION_TEMPLATE = """## 可用技能
 SKILL.md 并严格按其执行：
 {skills_xml}"""
 
-# 子图数据上下文段：与主智能体同一份 datasource_group_context（数据源组问数
-# 说明 + 当前已选执行对象成员清单）。data_analyzing_tool 的查询动作要求模型
-# 显式传 member_datasource_ids（服务端只校验不兜底），清单不进子图提示词
-# 则子智能体无从得知合法 ID。仅当内容非空时注入。
-_SUBAGENT_DATASOURCE_SECTION_TEMPLATE = """## 数据上下文
-以下数据源组说明与执行对象清单与主智能体共享同一会话口径；查询类动作必须
-只使用清单中的 member_datasource_ids，不要使用清单之外的 ID：
-{datasource_context}"""
-
-
 def _subagent_system_prompt(spec: SubagentSpec) -> str:
     """返回子图实际生效的 system prompt：spec.system_prompt + 会话级共享段。
 
-    共享段包括技能目录（``<available_skills>``，与主图同源）与数据源组上下文
-    （成员清单，与主图同源）；各自为空（未传或本轮无内容）时不追加空块。
+    共享段为技能目录（``<available_skills>``，与主图同源）；为空（未传或
+    本轮无内容）时不追加空块。
     """
     prompt = spec.system_prompt
     xml = str(spec.available_skills_xml or "").strip()
     if "<skill>" in xml:
         prompt += "\n\n" + _SUBAGENT_SKILLS_SECTION_TEMPLATE.format(skills_xml=xml)
-    context = str(spec.datasource_group_context or "").strip()
-    # 数据源组上下文默认不注入（与主图共用同一开关）：可用执行对象清单已改为
-    # data_analyzing_tool 的 list_execution_targets 按需实时获取，管道透传保留。
-    if context and chat_data_prompts.DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED:
-        prompt += "\n\n" + _SUBAGENT_DATASOURCE_SECTION_TEMPLATE.format(datasource_context=context)
     return prompt
 
 

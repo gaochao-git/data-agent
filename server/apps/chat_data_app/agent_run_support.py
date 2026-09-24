@@ -39,9 +39,7 @@ from .services.agent_run.conversation_workspace import (
 )
 from .services.agent_run.uploaded_file_service import get_file_info
 from .services.semantic.run.semantic_conversation_context import (
-    AgentPromptContext,
     SemanticConversationContext,
-    build_agent_prompt_context,
     prepare_semantic_conversation_context,
 )
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
@@ -415,7 +413,7 @@ async def _prepare_agent_semantic_context(
     username: str | None,
     member_datasource_ids: list[str] | None,
     semantic_config_id: str | None,
-) -> tuple[SemanticConversationContext, AgentPromptContext]:
+) -> SemanticConversationContext:
     """准备语义会话上下文并校验数据源绑定；致命失败抛 _AgentRunPreparationError。"""
     semantic_context = await prepare_semantic_conversation_context(
         datasource_id=datasource_id,
@@ -443,7 +441,7 @@ async def _prepare_agent_semantic_context(
         )
     else:
         logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
-    return semantic_context, build_agent_prompt_context(semantic_context)
+    return semantic_context
 
 
 async def _prepare_agent_workspace_runtime(

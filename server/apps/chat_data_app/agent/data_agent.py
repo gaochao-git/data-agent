@@ -79,7 +79,6 @@ class DatasourceContext:
 
     datasource_id: str | None = None
     source_type: str | None = None
-    datasource_group_context: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,10 +92,6 @@ class ModelInvocationConfig:
     # 会话技能清单（<available_skills> XML，agent_stream 每轮构建）。
     # 归「模型怎么调」组：目录本是系统提示的一部分，子智能体与主智能体一致继承。
     available_skills_xml: str | None = None
-    # 会话数据源组上下文（含「当前用户已选择的执行对象数据源」成员清单）。
-    # 归「模型怎么调」组：查询工具要求模型显式传 member_datasource_ids，
-    # 子智能体与主智能体一致继承该清单。
-    datasource_group_context: str | None = None
 
 
 def assemble_tools(
@@ -156,7 +151,6 @@ def build_subagent_middleware(
     model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
     available_skills_xml: str | None = None,
-    datasource_group_context: str | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -166,9 +160,6 @@ def build_subagent_middleware(
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
     system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
-    ``datasource_group_context`` 与主智能体同一会话数据源组上下文（含已选
-    执行对象成员清单）：查询工具要求模型显式传 member_datasource_ids，
-    清单不进子图提示词则查询派发无从得知合法 ID；未传或为空则不注入。
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -183,7 +174,6 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
-            datasource_group_context=datasource_group_context or "",
         ))
     if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
@@ -197,7 +187,6 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
-            datasource_group_context=datasource_group_context or "",
         ))
     if not specs:
         return None
@@ -261,7 +250,6 @@ def create_data_agent(
     subagent_middleware = build_subagent_middleware(
         options, tools, model=model, model_id=model_id, run_controls=run_controls,
         available_skills_xml=invocation.available_skills_xml,
-        datasource_group_context=invocation.datasource_group_context,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,

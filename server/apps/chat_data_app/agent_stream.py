@@ -44,7 +44,6 @@ from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .agent.run.completion_options import parse_completion_run_options
 from .agent.middleware.steering import SteeringMessageTracker
-from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
@@ -1403,16 +1402,17 @@ async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
 
 
 async def _prepare_agent_prompt_bundle(
-    prompt_context: dict[str, Any],
     semantic_materialize_note: str,
     user_id: str | None,
     thread_id: str,
     workspace_runtime: ConversationWorkspaceRuntime,
 ) -> tuple[Any, str]:
-    """构建数据上下文与会话技能提示词清单。"""
-    data_context = await build_conversation_prompt_context(prompt_context)
-    if semantic_materialize_note and isinstance(data_context, dict):
-        data_context["semantic_materialize_note"] = semantic_materialize_note
+    """构建数据上下文与会话技能提示词清单。
+
+    静态注入下线后，数据上下文区唯一有效字段是物化说明；恒传 dict 以兼容
+    build_unified_system_prompt 的既有口径（无说明时为空 dict → 空文本）。
+    """
+    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
     available_skills_xml = await _load_runtime_skills_xml(
         user_id or "system", thread_id, workspace_runtime,
     )
@@ -1442,7 +1442,6 @@ async def _resolve_agent_turn_inputs(
     semantic_context: Any,
     runtime_options: Any,
     workspace_root: str,
-    prompt_context: dict[str, Any],
     data_context: Any,
     available_skills_xml: str,
 ) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
@@ -1493,7 +1492,6 @@ async def _resolve_agent_turn_inputs(
         runtime_options,
         data_context=data_context,
         workspace_root=workspace_root,
-        datasource_group_context=prompt_context["datasource_group_context"],
         available_skills_xml=available_skills_xml,
     )
     return user_message, initial_state, system_prompt, adopted_messages
@@ -1552,7 +1550,7 @@ async def _run_chat_data_agent_stream(
     if not semantic_config_id and len(semantic_selection_events) == 1:
         semantic_config_id = semantic_selection_events[0]["semantic_config_id"]
     try:
-        semantic_context, prompt_context = await _prepare_agent_semantic_context(
+        semantic_context = await _prepare_agent_semantic_context(
             thread_id=thread_id,
             user_query=user_query,
             datasource_id=datasource_id,
@@ -1581,7 +1579,7 @@ async def _run_chat_data_agent_stream(
     log_phase("prepare_semantic_context")
 
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
-        prompt_context, semantic_materialize_note, user_id, thread_id, workspace_runtime,
+        semantic_materialize_note, user_id, thread_id, workspace_runtime,
     )
 
     config = {
@@ -1643,7 +1641,6 @@ async def _run_chat_data_agent_stream(
                 semantic_context=semantic_context,
                 runtime_options=runtime_options,
                 workspace_root=workspace_paths["root"],
-                prompt_context=prompt_context,
                 data_context=data_context,
                 available_skills_xml=available_skills_xml,
             )
@@ -1683,7 +1680,6 @@ async def _run_chat_data_agent_stream(
                 datasource_context=DatasourceContext(
                     datasource_id=datasource_id,
                     source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
-                    datasource_group_context=prompt_context["datasource_group_context"],
                 ),
                 model_invocation=ModelInvocationConfig(
                     system_prompt=system_prompt,
@@ -1691,7 +1687,6 @@ async def _run_chat_data_agent_stream(
                     enable_thinking=enable_thinking,
                     thinking_effort=thinking_effort,
                     available_skills_xml=available_skills_xml,
-                    datasource_group_context=prompt_context["datasource_group_context"],
                 ),
                 workspace_runtime=workspace_runtime,
                 run_controls=AgentRunControls(

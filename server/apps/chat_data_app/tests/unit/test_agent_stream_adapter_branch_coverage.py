@@ -272,17 +272,12 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
     async def fake_workspace(*_args, **_kwargs):
         return {"root": workspace_root}
 
-    async def fake_build_prompt_context(_ctx):
-        return {}
-
     async def fake_snapshot(*_args, **_kwargs):
         return None
 
     # 运行准备逻辑已下沉 agent_run_support：相关桩打在消费方命名空间。
     monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fake_prepare_semantic)
     monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_workspace)
-    monkeypatch.setattr(agent_stream, "build_conversation_prompt_context", fake_build_prompt_context)
-    monkeypatch.setattr(agent_run_support, "build_agent_prompt_context", lambda _ctx: {})
     monkeypatch.setattr(
         agent_stream, "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),

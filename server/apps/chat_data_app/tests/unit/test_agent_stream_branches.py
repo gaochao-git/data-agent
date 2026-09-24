@@ -48,7 +48,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         available_member_datasource_ids=selected_member_ids,
         matched_member_datasource_ids=[],
         selected_member_datasource_ids=selected_member_ids,
-        datasource_group_context="",
     )
 
 

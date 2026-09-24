@@ -43,7 +43,6 @@ from apps.chat_data_app.agent_stream import (
 )
 from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
-from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
@@ -66,7 +65,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     ]
     query = str(kwargs.get("user_query") or "")
     matched_ids = selected_ids if "所有机构" in query or "全部机构" in query else []
-    datasource_group_context = append_selected_execution_targets_to_context("", targets, selected_ids)
     return SemanticConversationContext(
         datasource_id=datasource_id,
         datasource_meta={"query_context": ""} if datasource_id else None,
@@ -76,7 +74,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         available_member_datasource_ids=selected_ids,
         matched_member_datasource_ids=matched_ids,
         selected_member_datasource_ids=selected_ids,
-        datasource_group_context=datasource_group_context,
     )
 
 
@@ -513,7 +510,6 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
 
     joined = "".join(events)
     assert "5+5=10" in joined
-    assert "prompt_context" not in fake_graph.initial_state
     # 语义模型段已整体退出系统提示词（未选中/选中都不再注入；选中走 @ 引用短句）
     assert "## 当前语义模型" not in captured_agent_kwargs["model_invocation"].system_prompt
     # 系统提示词不再枚举模型目录、不重复检索步骤，指向数据分析技能
@@ -1201,10 +1197,6 @@ def test_generate_chat_data_stream_projects_visible_members_from_shared_context(
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
-    datasource_group_context = captured_agent_kwargs["datasource_context"].datasource_group_context
-    assert "当前用户已选择的执行对象数据源" in datasource_group_context
-    assert "member_datasource_id: m1" in datasource_group_context
-    assert "m2" not in datasource_group_context
 
 
 def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(monkeypatch):
@@ -1223,10 +1215,6 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
         return fake_graph
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-    _override_semantic_context(
-        monkeypatch,
-        datasource_group_context="当前数据源组按执行对象数据源分库",
-    )
 
     asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_members",
@@ -1239,8 +1227,6 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
-    assert "prompt_context" not in fake_graph.initial_state
-    assert captured_agent_kwargs["datasource_context"].datasource_group_context == "当前数据源组按执行对象数据源分库"
 
 
 def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_context(monkeypatch):
@@ -1270,10 +1256,6 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
     )))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-    datasource_group_context = captured_agent_kwargs["datasource_context"].datasource_group_context
-    assert "当前用户已选择的执行对象数据源" in datasource_group_context
-    assert "member_datasource_id: m1" in datasource_group_context
-    assert "m2" not in datasource_group_context
 
 
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):

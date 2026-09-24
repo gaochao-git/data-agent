@@ -5,7 +5,6 @@ from utils.builtin_skills import (
     SEMANTIC_MODEL_AUTHORITY_DOC,
     builtin_skill_file,
 )
-from apps.chat_data_app.services.datasource.target_context import source_type_to_dialect
 
 from .security_prompt import SECURITY_PROMPT
 from ..runtime_options import AgentRuntimeOptions
@@ -15,128 +14,25 @@ from ..runtime_options import AgentRuntimeOptions
 # 数据上下文格式化（问数与分析两套输入形态统一为一段文本）
 # ---------------------------------------------------------------------------
 
-# 数据源组上下文是否注入系统提示词（主图与子图共用同一开关）。
-# 2026-09-23 起默认关闭：data_analyzing_tool 新增 ``list_execution_targets``
-# 只读 action，可用执行对象清单改为模型按需实时获取（引导语在 data-analyzing
-# 技能 query.md「3. 选择执行对象」），系统提示词不再静态注入成员清单。
-# 上游管道（semantic_conversation_context 计算、agent_stream 传递、子图 spec
-# 透传）全部保留不动，恢复注入只需改回 True。
-DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED = False
-
-# 语义模型选中状态是否注入系统提示词。
-# 2026-09-23 起默认关闭：前端改为输入框 @ 引用语义模型（像附件一样挂在消息上），
-# 用户指定时由 agent_stream 把「[本轮指定语义模型：xxx]」并入当轮 Human 消息，
-# 未指定即智能选择（按 data-analyzing 技能检索），系统提示词不再维护选中状态段。
-# build_semantic_layer_context 及调用点全保留，恢复注入只需改回 True。
-SEMANTIC_MODEL_CONTEXT_INJECTION_ENABLED = False
-
-
-def format_datasource_group_context_for_llm(context: str) -> str:
-    """格式化数据源组智能问数说明，供 system prompt 注入。"""
-    if not DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED:
-        return ""
-    text = str(context or "").strip()
-    if not text:
-        return ""
-    return f"\n## 数据源组智能问数说明\n{text}\n"
-
-
-def build_semantic_layer_context(semantic_config: dict | None) -> str:
-    """构建统一语义层上下文（问数态使用）：只声明语义模型的选中状态。
-
-    未选中一句带过；选中只报模型名与 semantic_config_id。目录快照说明由系统
-    提示词环境块承载，语义模型检索、候选定位与字段口径确认规则以
-    ``data-analyzing`` 技能为唯一依据，本提示不重复定义。
-    """
-    if not semantic_config:
-        return "## 当前语义模型\n本轮未手动选择语义模型。\n"
-
-    config_id = str(semantic_config.get("id") or "").strip()
-    config_name = str(semantic_config.get("name") or semantic_config.get("config_name") or config_id or "").strip()
-    name_part = f"「{config_name}」" if config_name else ""
-    id_part = f"（semantic_config_id: {config_id}）" if config_id else ""
-    return (
-        "## 当前语义模型\n"
-        f"用户选中了 `/mnt/user-data/workspace/semantic/` 下的{name_part}语义模型{id_part}，作为本轮优先参考。\n"
-    )
-
-
-def _conversation_datasource_context(data_context: dict) -> str:
-    """取会话数据上下文中的数据源组段；注入开关关闭时返回空串（不进提示词）。"""
-    if not DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED:
-        return ""
-    return str(data_context.get("datasource_group_context") or "").strip()
+# 2026-09-24 起静态注入链路整体下线：可用执行对象清单/方言/智能问数说明改为
+# data_analyzing_tool 的 list_execution_targets 按需实时获取（引导语在
+# data-analyzing 技能 query.md「1. 获取执行对象清单」）；语义模型选中信息由
+# agent_stream 并入当轮 Human 消息（未选中即智能选择，按技能检索）。系统提示词
+# 的数据上下文区只保留 semantic_materialize_note。
 
 
 def _format_conversation_context(data_context: dict) -> str:
     """格式化注入系统提示词的会话数据上下文。"""
     if not isinstance(data_context, dict):
         return "{}"
-    datasource_group_context = _conversation_datasource_context(data_context)
-    semantic_materialize_note = str(data_context.get("semantic_materialize_note") or "").strip()
-    semantic_configs = data_context.get("semantic_configs") or []
-    selected_config = next(
-        (
-            config
-            for config in semantic_configs
-            if isinstance(config, dict) and config.get("selected")
-        ),
-        None,
-    )
-    return "\n\n".join(
-        section
-        for section in (
-            datasource_group_context,
-            build_semantic_layer_context(selected_config) if SEMANTIC_MODEL_CONTEXT_INJECTION_ENABLED else "",
-            semantic_materialize_note,
-        )
-        if section
-    )
+    return str(data_context.get("semantic_materialize_note") or "").strip()
 
 
-def build_data_context_text(
-    *,
-    data_context: dict | None = None,
-    datasource_group_context: str | None = None,
-) -> str:
+def build_data_context_text(*, data_context: dict | None = None) -> str:
     """统一的数据上下文文本入口。"""
     if data_context is not None:
         return _format_conversation_context(data_context)
-    parts = [
-        format_datasource_group_context_for_llm(datasource_group_context),
-        build_semantic_layer_context(None) if SEMANTIC_MODEL_CONTEXT_INJECTION_ENABLED else "",
-    ]
-    return "\n".join(p for p in parts if p).strip()
-
-
-# ---------------------------------------------------------------------------
-# 方言 / 示例片段
-# ---------------------------------------------------------------------------
-
-def _extract_source_type(data_context: dict) -> str:
-    """从数据上下文提取当前方言类型。"""
-    datasource = data_context.get("datasource") if isinstance(data_context, dict) else {}
-    source_type = str((datasource or {}).get("source_type") or "").strip().lower()
-    if source_type:
-        return source_type
-    semantic_configs = data_context.get("semantic_configs") if isinstance(data_context, dict) else []
-    if isinstance(semantic_configs, list):
-        for config in semantic_configs:
-            if not isinstance(config, dict):
-                continue
-            source_type = str(config.get("source_type") or "").strip().lower()
-            if source_type:
-                return source_type
     return ""
-
-
-def build_dialect_prompt_context(
-    data_context: dict,
-) -> str:
-    """返回运行时当前方言，不在系统层展开方言细节。"""
-    source_type = _extract_source_type(data_context)
-    dialect = source_type_to_dialect(source_type)
-    return f"当前数据库方言：{dialect}。DSL 中只写 `time_grain`。"
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +110,6 @@ MEMORY_BLOCK = """## 会话记忆
 - 每条一行写清结论与适用范围；同一口径发生变化时追加新条目而不改旧条目，读取时以文件中更靠后的条目为准。整份文件控制在 20 行以内，超出时合并同类或淘汰最早的条目。
 - 再次执行同类任务（如再生成一期报告）前，或对口径、格式拿不准时，先读取该文件再动手，避免向用户重复追问。
 - 闲聊、一次性查询和过程性中间结果不记，只记后续还会用到的结论。"""
-
-DIALECT_BLOCK = """## 方言上下文
-{dialect_context_text}"""
-
-# 方言块是否注入系统提示词。2026-09-23 起默认关闭：当前数据库方言改为随
-# data_analyzing_tool 的 list_execution_targets 返回（source_type/dialect/
-# query_context 同批透出，都是数据源组属性；刻意不含 datasource_name），
-# 模型查数前先取清单即可拿到方言，不需要每轮静态占用提示词。恢复注入改回 True。
-DIALECT_PROMPT_INJECTION_ENABLED = False
 
 PRIORITY_BLOCK = """## 优先级
 1. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
@@ -325,13 +212,9 @@ def build_unified_system_prompt(
     data_context: dict | None = None,
     workspace_root: str | None = None,
     available_skills_xml: str | None = None,
-    datasource_group_context: str | None = None,
 ) -> str:
     """构造单一 Agent 的系统提示词。"""
-    context_text = build_data_context_text(
-        data_context=data_context,
-        datasource_group_context=datasource_group_context,
-    )
+    context_text = build_data_context_text(data_context=data_context)
 
     sections: list[str] = [ROLE_BLOCK]
 
@@ -354,9 +237,6 @@ def build_unified_system_prompt(
         SEMANTIC_QUERY_GATE_BLOCK,
     ])
 
-    dialect_context_text = build_dialect_prompt_context(data_context or {})
-    if DIALECT_PROMPT_INJECTION_ENABLED and dialect_context_text:
-        sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
     sections.append(PRIORITY_BLOCK)
     sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
     return "\n\n".join(sections)
