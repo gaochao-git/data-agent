@@ -136,6 +136,20 @@ def _patch_startup_budget_sources(monkeypatch, configs, output_tokens, summary_o
     monkeypatch.setattr(cb, "get_chat_data_model_configs", lambda: configs)
     monkeypatch.setattr(cb, "get_chat_data_output_max_tokens", lambda: output_tokens)
     monkeypatch.setattr(cb, "get_context_compression_summary_output_max_tokens", lambda: summary_output_tokens)
+    # validate 内部会取压缩目标做自洽校验；按触发阈值 30% 的同口径桩掉，避免依赖真实模型注册表
+    budgets = {}
+    for config in configs:
+        window = max(int(config.get("context_window") or 0), 1)
+        trigger = max(int(window * 0.70), 1)
+        budgets[str(config.get("id") or "")] = cb.ContextBudget(
+            context_window=window,
+            max_output_tokens=1,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=1,
+            compression_trigger_tokens=trigger,
+            compression_target_tokens=max(int(trigger * 0.30), 1),
+        )
+    monkeypatch.setattr(cb, "get_model_context_budget", lambda model_id=None, **_kwargs: budgets[str(model_id or "")])
 
 
 def test_startup_validation_passes_when_reserves_fit_context_window(monkeypatch):
@@ -194,9 +208,33 @@ def test_startup_validation_collects_errors_for_every_model(monkeypatch):
     message = str(excinfo.value)
     for model_id in ("model-a", "model-b"):
         assert model_id in message
-    # 每个模型两条错误（output + summary），共 6 条，用分号分隔
-    assert message.count(";") == 5
-    assert "上下文窗口 1" in message
+    # 每个模型 3 条违规（output + summary + 压缩目标），3 个模型共 9 条，用分号分隔
+    assert message.count(";") == 8
+
+
+def test_startup_validation_rejects_target_smaller_than_summary_budget(monkeypatch):
+    """压缩目标（触发阈值 30%）不大于摘要输出预算时报配置自洽错误。"""
+    _patch_startup_budget_sources(
+        monkeypatch,
+        configs=[{"id": "tiny", "context_window": 100_000}],
+        output_tokens=8_000,
+        summary_output_tokens=50_000,
+    )
+    monkeypatch.setattr(
+        cb,
+        "get_model_context_budget",
+        lambda *_args, **_kwargs: cb.ContextBudget(
+            context_window=100_000,
+            max_output_tokens=20_000,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=80_000,
+            compression_trigger_tokens=56_000,
+            compression_target_tokens=100,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="压缩目标 100"):
+        cb.validate_context_budget_startup_config()
 
 
 # ---------------------------------------------------------------------------

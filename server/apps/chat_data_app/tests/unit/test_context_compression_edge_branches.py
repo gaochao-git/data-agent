@@ -510,7 +510,7 @@ def test_neutralize_stale_todo_tool_messages_replaces_only_write_todos():
     ai = AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": []}, "id": "call-1"}])
     stale_todo = ToolMessage("Updated todo list to [...]", tool_call_id="call-1", name="write_todos")
     other = ToolMessage('{"rows": 1}', tool_call_id="call-2", name="execute_sql")
-    neutralized = context_compression._neutralize_stale_todo_tool_messages([human, ai, stale_todo, other])
+    neutralized = context_compression.neutralize_stale_todo_tool_messages([human, ai, stale_todo, other])
     # 只替换 write_todos 的内容，消息本体保留（tool_call 配对不破坏），其余原样
     assert neutralized[0] is human and neutralized[1] is ai
     assert neutralized[2] is not stale_todo
@@ -518,7 +518,7 @@ def test_neutralize_stale_todo_tool_messages_replaces_only_write_todos():
     assert neutralized[2].tool_call_id == "call-1"
     assert neutralized[3] is other
     # 无 write_todos 时原列表原对象返回
-    untouched = context_compression._neutralize_stale_todo_tool_messages([human, other])
+    untouched = context_compression.neutralize_stale_todo_tool_messages([human, other])
     assert untouched[0] is human and untouched[1] is other
 
 

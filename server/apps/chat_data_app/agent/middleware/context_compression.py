@@ -26,6 +26,7 @@ from ..context.context_budget import (
     get_model_context_budget,
     hard_input_guard_tokens,
     merge_context_summaries,
+    resolve_summary_output_budget,
 )
 from apps.chat_data_app.services.llm_config import (
     get_chat_data_llm,
@@ -41,10 +42,6 @@ logger = get_logger(__name__)
 SUMMARY_TOOL_RESULT_COMPACT_TOKENS = 512
 RECENT_COMPLETED_ROUNDS_TO_KEEP = 2
 MAX_COMPRESSION_PASSES = 3
-# 摘要输出预算：未显式配置时按模型窗口动态计算 min(窗口/20, 上限)，并设下限防小窗口模型摘要过短
-SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR = 20
-SUMMARY_OUTPUT_TOKENS_FLOOR = 2000
-SUMMARY_OUTPUT_TOKENS_CAP = 12000
 
 
 @dataclass(frozen=True)
@@ -1003,15 +1000,10 @@ def _summary_tokens(summary_text: str | None) -> int:
 
 
 def _resolve_summary_output_max_tokens(model_id: str | None) -> int:
-    """摘要调用输出上限：显式配置优先，否则按模型窗口动态取 min(窗口/20, 上限) 并设下限。"""
+    """摘要调用输出上限：显式配置优先，否则按模型窗口动态计算（口径在 context_budget 单一维护）。"""
     configured = get_context_compression_summary_output_max_tokens()
-    if configured is not None:
-        return configured
     window = max(int(get_context_window(model_id) or 0), 1)
-    return min(
-        max(window // SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR, SUMMARY_OUTPUT_TOKENS_FLOOR),
-        SUMMARY_OUTPUT_TOKENS_CAP,
-    )
+    return resolve_summary_output_budget(configured, window)
 
 
 def _get_summary_input_limit_tokens(model_id: str | None) -> int:
@@ -1031,7 +1023,7 @@ def _prepare_summary_input(
     todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], dict[str, Any]]:
     """构造受预算约束的摘要输入，不改写 Agent 运行态消息。"""
-    prepared_messages = _neutralize_stale_todo_tool_messages(list(messages))
+    prepared_messages = neutralize_stale_todo_tool_messages(list(messages))
     before_tokens = _count_summary_input_tokens(
         prepared_messages,
         previous_summary=previous_summary,
@@ -1141,11 +1133,10 @@ _STALE_TODO_TOOL_RESULT_PLACEHOLDER = (
 )
 
 
-def _neutralize_stale_todo_tool_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
-    """把摘要输入中的历史 write_todos 工具结果替换为占位符。
+def neutralize_stale_todo_tool_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """把历史 write_todos ToolMessage 的陈旧快照替换为占位文本（唯一权威，摘要输入与出站视图共用）。
 
-    保留消息本体（不删），避免破坏 AIMessage tool_calls 与 ToolMessage 的配对；
-    陈旧的 todo 快照由实时 state 快照（todo_snapshot）替代。
+    只换 content 不删消息，保留 tool_call_id 配对；无命中时原对象返回。
     """
     neutralized: list[BaseMessage] | None = None
     for index, message in enumerate(messages):

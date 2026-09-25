@@ -44,6 +44,9 @@ step "backend-pytest" bash -c "cd server && '$PY' -m pytest -q"
 step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
 step "params"         bash -c "'$PY' scripts/checks/params.py"
 step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
+# baseline 防滥用报警：本轮改动触碰 scripts/checks/（含 baselines/）时提醒人工确认，不阻断。
+# 往 baseline 加一行即可让门禁变绿，所以动它们必须有人看过——合法修债（真实复杂度下降）也允许改。
+step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- scripts/checks; git diff --name-only HEAD -- scripts/checks; git ls-files --others --exclude-standard scripts/checks; } | sort -u | { grep . && echo '    ⚠ 本轮改动了 scripts/checks/：往 baseline 加行会使门禁失效，请人工确认登记是否合法（新文件不允许登记）' || true; }"
 
 # ---- 前端 ----
 step "frontend-type"  bash -c "cd web-vue && npm run type-check"

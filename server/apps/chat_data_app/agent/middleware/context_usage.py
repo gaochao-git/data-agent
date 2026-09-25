@@ -35,7 +35,7 @@ from ..context.context_budget import (
     sanitize_context_usage_for_response,
 )
 from apps.chat_data_app.services.runtime_config import get_context_compression_config
-from .context_compression import format_todo_snapshot_lines
+from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
 
 logger = get_logger(__name__)
 
@@ -526,6 +526,9 @@ def _build_agent_context_usage(
         messages,
         context_summary=context_summary,
     )
+    # 陈旧的 write_todos 快照在出站视图上替换，配合下方 fresh 块的权威声明消除新旧状态矛盾；
+    # 只改本轮请求视图，不改写 Agent 运行态消息（checkpoint 保持原样）。
+    request_messages = neutralize_stale_todo_tool_messages(request_messages)
     if todo_status:
         # 实时 todo 状态在压缩之后的出站视图上拼接（不会被摘要吞掉），并参与本轮计量。
         effective_system_prompt = f"{effective_system_prompt}\n\n{todo_status}"
@@ -671,6 +674,7 @@ def _format_todo_status(todos: list[dict[str, Any]]) -> str | None:
     return (
         "<todo_status source=\"state\" fresh=\"true\">\n"
         f"{todo_block}\n"
+        "历史 write_todos 工具结果中的旧快照均已失效，任务状态一律以本块为准。\n"
         f"{reminder}\n"
         "</todo_status>"
     )
