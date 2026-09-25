@@ -405,7 +405,11 @@ async def generate_title(
     conversation_id: str,
     user_id: Optional[str] = None
 ) -> Optional[str]:
-    """根据事件表中的第一条用户消息生成会话标题。"""
+    """根据事件表中的第一条用户消息生成会话标题。
+
+    标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
+    LLM 生成失败时抛异常且不落库（保持占位符，调用方可下一轮重试）。
+    """
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if not thread:
         return None
@@ -452,7 +456,9 @@ async def _generate_and_update_title(
             },
         )
         logger.warning(f"LLM生成标题失败: {e}")
-        title = _clean_title("", query)
+        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 终态时
+        # 前端会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
+        raise
 
     # 更新到数据库
     await update_title(conversation_id, title, user_id)

@@ -15,7 +15,7 @@ class _FakeRedis:
     async def xread(self, streams, count, block):
         assert streams == {"chatdata:run:run-1:events": "0-0"}
         assert count == 100
-        assert block == 15000
+        assert block == 6000
         return [
             ("chatdata:run:run-1:events", [
                 ("1740000000000-0", {
@@ -34,7 +34,7 @@ class _FakeRedis:
 @pytest.mark.asyncio
 async def test_read_run_preserves_redis_stream_id():
     bus = RedisEventBus()
-    bus._redis = _FakeRedis()
+    bus._read_redis = _FakeRedis()
 
     events = await bus.read_run("run-1", "0-0")
 
@@ -181,12 +181,43 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     assert master_kwargs["db"] == 0  # 缺省逻辑库 0，等价于旧 URL 无 /N 后缀
     assert master_kwargs["health_check_interval"] == 30
     assert master_kwargs["socket_keepalive"] is True
-    # 必须大于 XREAD 最长阻塞 15s，否则正常阻塞读会被误判超时
-    assert master_kwargs["socket_timeout"] > 15.0
-    assert master_kwargs["retry"]._retries == 2
+    # 操作档：非阻塞命令短超时 + 单次重试，claim/publish 故障时秒级失败
+    assert master_kwargs["socket_timeout"] == 4.0
+    assert master_kwargs["retry"]._retries == 1
     # failover 窗口旧连接收到 READONLY 错误必须可重试自愈
     from redis.exceptions import ReadOnlyError
     assert ReadOnlyError in master_kwargs["retry"]._supported_errors
+
+
+def test_sentinel_mode_read_client_uses_relaxed_blocking_profile(monkeypatch):
+    """读档客户端（仅 XREAD）：socket 超时受 block 约束而非 20s 旧档，不重试。"""
+    monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
+    monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379")
+    monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
+
+    bus = RedisEventBus()
+    with patch(
+        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
+    ) as sentinel_cls:
+        sentinel_cls.return_value.master_for.return_value = object()
+        _ = bus.redis
+        _ = bus.read_redis
+
+    assert sentinel_cls.return_value.master_for.call_count == 2
+    read_kwargs = sentinel_cls.return_value.master_for.call_args_list[1].kwargs
+    assert read_kwargs["db"] == 0
+    assert read_kwargs["socket_timeout"] == 10.0
+    assert read_kwargs["retry"]._retries == 0
+
+
+def test_read_socket_timeout_always_exceeds_block_invariant():
+    """读档 socket 超时下限恒大于 block，正常阻塞等待不会被误判超时。"""
+    from apps.chat_data_app.agent.run.redis_event_bus import (
+        REDIS_READ_BLOCK_SECONDS,
+        REDIS_READ_SOCKET_TIMEOUT_SECONDS,
+    )
+
+    assert REDIS_READ_SOCKET_TIMEOUT_SECONDS >= REDIS_READ_BLOCK_SECONDS + 2.0
 
 
 def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch):

@@ -28,21 +28,34 @@ REDIS_CONNECT_TIMEOUT_SECONDS = max(
     float(os.getenv("CHAT_DATA_REDIS_CONNECT_TIMEOUT_SECONDS", "5")),
     1.0,
 )
-REDIS_COMMAND_RETRIES = max(int(os.getenv("CHAT_DATA_REDIS_COMMAND_RETRIES", "2")), 0)
-# ReadOnlyError 必须进重试列表：failover 窗口期连接池里的旧连接打到已降级的
-# 旧主上会收到 READONLY 错误（ResponseError 子类，默认重试不覆盖），重试触发
-# 重建连接后 master_for 会解析到新主，切换窗口内自愈。
-REDIS_COMMAND_RETRY = Retry(
+# 连接档位按命令类别拆成两个客户端（同一 Sentinel）：失败探测成本与
+# 「XREAD 需要长时间阻塞」解耦，这是把 Redis 故障下的失败反馈压到秒级的关键。
+# —— 读档（仅 XREAD 阻塞命令）——
+# socket 超时只需略大于 block；健康时空转一个 block 周期返回空，
+# 连接被静默掐断（NAT/黑洞）时最多 socket_timeout 秒解卡，
+# 之后由 SSE 订阅循环降级到 MySQL 快照兜底。不重试：订阅循环天然按周期重读。
+REDIS_READ_BLOCK_SECONDS = max(float(os.getenv("CHAT_DATA_REDIS_READ_BLOCK_SECONDS", "6")), 1.0)
+REDIS_READ_SOCKET_TIMEOUT_SECONDS = max(
+    float(os.getenv("CHAT_DATA_REDIS_READ_SOCKET_TIMEOUT_SECONDS", "10")),
+    REDIS_READ_BLOCK_SECONDS + 2.0,
+)
+REDIS_READ_RETRY = Retry(
     ExponentialBackoff(base=0.1, cap=1.0),
-    retries=REDIS_COMMAND_RETRIES,
+    retries=0,
     supported_errors=(RedisConnectionError, TimeoutError, ReadOnlyError, socket.timeout),
 )
-# 单次命令的 socket 读写超时：必须大于 XREAD 的最长阻塞时间（15s），
-# 否则正常阻塞等待会被误判超时。作用是让被 NAT/防火墙静默掐断的死连接
-# 在秒级暴露并走重试换新连接，而不是等 OS 层 TCP 超时卡住几十秒。
-REDIS_SOCKET_TIMEOUT_SECONDS = max(
-    float(os.getenv("CHAT_DATA_REDIS_SOCKET_TIMEOUT_SECONDS", "20")),
-    16.0,
+# —— 操作档（eval/exists/xrevrange 等非阻塞命令）——
+# 健康链路毫秒级完成，短超时仍有两个数量级余量；claim/publish 走此档，
+# Redis 故障时秒级失败让 Run 快速收口，而不是按旧档 20s×2 重试拖到 40s+。
+REDIS_OPS_SOCKET_TIMEOUT_SECONDS = max(
+    float(os.getenv("CHAT_DATA_REDIS_OPS_SOCKET_TIMEOUT_SECONDS", "4")),
+    1.0,
+)
+REDIS_OPS_COMMAND_RETRIES = max(int(os.getenv("CHAT_DATA_REDIS_OPS_COMMAND_RETRIES", "1")), 0)
+REDIS_OPS_RETRY = Retry(
+    ExponentialBackoff(base=0.1, cap=1.0),
+    retries=REDIS_OPS_COMMAND_RETRIES,
+    supported_errors=(RedisConnectionError, TimeoutError, ReadOnlyError, socket.timeout),
 )
 
 _PUBLISH_SCRIPT = """
@@ -134,7 +147,8 @@ class RedisEventBus:
     sentinel 单独开了认证时用 ``CHAT_DATA_REDIS_SENTINEL_PASSWORD`` 指定（SM4 密文）。
     逻辑库经 ``CHAT_DATA_REDIS_DB`` 选择（缺省 0）。
     master 地址在连接建立时向 sentinel 解析；failover 后旧连接上的命令会
-    收到 ConnectionError/ReadOnlyError，由命令级重试重建连接跟随新主。
+    收到 ConnectionError/ReadOnlyError：操作档由命令级重试重建连接跟随新主；
+    读档不重试（见 REDIS_READ_RETRY 注释），由 SSE 订阅循环按周期重读自愈。
     """
 
     def __init__(self) -> None:
@@ -151,16 +165,17 @@ class RedisEventBus:
             )
         else:
             self._sentinel_password = None
+        self._sentinel: Sentinel | None = None
         self._redis: Redis | None = None
+        self._read_redis: Redis | None = None
 
-    @property
-    def redis(self) -> Redis:
-        if self._redis is None:
+    def _build_sentinel(self) -> Sentinel:
+        if self._sentinel is None:
             if not self._sentinel_addrs:
                 raise ValueError("CHAT_DATA_REDIS_SENTINELS 未配置")
             if not self._master_name:
                 raise ValueError("CHAT_DATA_REDIS_MASTER_NAME 未配置")
-            sentinel = Sentinel(
+            self._sentinel = Sentinel(
                 self._sentinel_addrs,
                 sentinel_kwargs={
                     "password": self._sentinel_password,
@@ -170,16 +185,39 @@ class RedisEventBus:
                 password=self._password,
                 socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
             )
-            self._redis = sentinel.master_for(
+        return self._sentinel
+
+    @property
+    def redis(self) -> Redis:
+        """操作档客户端：除 XREAD 外的全部命令（claim/publish/exists 等）。"""
+        if self._redis is None:
+            self._redis = self._build_sentinel().master_for(
                 self._master_name,
                 db=self._db,
                 decode_responses=True,
                 health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
                 socket_keepalive=True,
-                socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
-                retry=REDIS_COMMAND_RETRY,
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_timeout=REDIS_OPS_SOCKET_TIMEOUT_SECONDS,
+                retry=REDIS_OPS_RETRY,
             )
         return self._redis
+
+    @property
+    def read_redis(self) -> Redis:
+        """读档客户端：仅承载 XREAD 阻塞读，超时档位与操作档解耦。"""
+        if self._read_redis is None:
+            self._read_redis = self._build_sentinel().master_for(
+                self._master_name,
+                db=self._db,
+                decode_responses=True,
+                health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
+                socket_keepalive=True,
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_timeout=REDIS_READ_SOCKET_TIMEOUT_SECONDS,
+                retry=REDIS_READ_RETRY,
+            )
+        return self._read_redis
 
     async def start(self) -> None:
         await self.redis.ping()
@@ -188,6 +226,9 @@ class RedisEventBus:
         if self._redis is not None:
             await self._redis.aclose()
             self._redis = None
+        if self._read_redis is not None:
+            await self._read_redis.aclose()
+            self._read_redis = None
 
     async def publish(
         self,
@@ -248,8 +289,8 @@ class RedisEventBus:
         if int(renewed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
-    async def read_run(self, run_id: str, cursor: str, *, block_ms: int = 15000, count: int = 100) -> list[dict[str, str]]:
-        result = await self.redis.xread(
+    async def read_run(self, run_id: str, cursor: str, *, block_ms: int = int(REDIS_READ_BLOCK_SECONDS * 1000), count: int = 100) -> list[dict[str, str]]:
+        result = await self.read_redis.xread(
             {self.run_stream_key(run_id): cursor},
             count=count,
             block=block_ms,

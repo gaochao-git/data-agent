@@ -738,6 +738,36 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   }
 }
 
+// 会话标题占位符：与后端 generate_title 的占位符集合保持一致。
+// 命名只成功写库一次；失败时后端不落降级标题（保持占位符），
+// 由下一轮 Run 终态再次触发，直到成功自停。
+const CONVERSATION_TITLE_PLACEHOLDERS = new Set(['', '新会话', '未命名会话'])
+const titleRetryInFlight = new Set<string>()
+
+const retryConversationTitleIfNeeded = async (conversationId: string) => {
+  if (titleRetryInFlight.has(conversationId)) return
+  const currentTitle = currentConversationId.value === conversationId
+    ? currentConversationTitle.value
+    : conversations.value.find(item => item.id === conversationId)?.title || ''
+  if (!CONVERSATION_TITLE_PLACEHOLDERS.has(currentTitle.trim())) return
+  titleRetryInFlight.add(conversationId)
+  try {
+    const res = await generateConversationTitle(conversationId)
+    if (res?.status === 'success' && res.data?.title) {
+      if (currentConversationId.value === conversationId) {
+        currentConversationTitle.value = res.data.title
+      }
+      updateHistoryConversationTitle(conversationId, res.data.title)
+      invalidateInactiveView()
+    }
+  } catch (error) {
+    // 失败保持占位符，等下一轮 Run 终态再试
+    console.error('重试生成会话标题失败:', error)
+  } finally {
+    titleRetryInFlight.delete(conversationId)
+  }
+}
+
 const handleConversationRunStatusChanged = (
   conversationId: string,
   status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
@@ -746,6 +776,8 @@ const handleConversationRunStatusChanged = (
   if (status === null) {
     // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
     void ensureConversationsLoaded(true)
+    // 标题仍是占位符的会话借本轮终态重试命名（直到成功自停）
+    void retryConversationTitleIfNeeded(conversationId)
   }
 }
 
