@@ -29,7 +29,7 @@ from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
-from apps.chat_data_app.agent.workspace.workspace_execution import _artifact_payload_from_bytes
+from apps.chat_data_app.agent.workspace.workspace_ops import _artifact_payload_from_bytes
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
@@ -46,6 +46,22 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 from apps.chat_data_app.agent.workspace.workspace_special_services import (
     WorkspaceOfficePreviewService,
     stabilize_office_preview_html,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+    workspace_sandbox_api as we_api,
+    workspace_sandbox_paths as we_paths,
+    workspace_search as we_search,
+    workspace_session as we_session,
+    workspace_sync as we_sync,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+    workspace_sandbox_api as we_api,
+    workspace_sandbox_paths as we_paths,
+    workspace_search as we_search,
+    workspace_session as we_session,
+    workspace_sync as we_sync,
 )
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")

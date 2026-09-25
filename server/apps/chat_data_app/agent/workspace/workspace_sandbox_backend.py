@@ -14,31 +14,37 @@ from apps.chat_data_app.agent.workspace.runtime import (
     _absolute_command_path_tokens,
 )
 from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
-from apps.chat_data_app.agent.workspace.workspace_execution import (
-    OPENSANDBOX_BACKEND,
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSessionRef,
-    get_workspace_execution_session,
     run_command_in_sandbox,
+)
+from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
+    sandbox_path_to_visible,
+    sandbox_visible_path,
+    sandbox_workspace_dir,
+)
+from apps.chat_data_app.agent.workspace.workspace_session import (
+    OPENSANDBOX_BACKEND,
+    get_workspace_execution_session,
+)
+from apps.chat_data_app.agent.workspace.workspace_ops import (
     sandbox_artifact_payload,
     sandbox_copy_path,
     sandbox_create_dir,
-    sandbox_delete_path,
     sandbox_delete_internal_text_file,
-    sandbox_grep_text,
+    sandbox_delete_path,
     sandbox_list_dir,
     sandbox_move_path,
-    sandbox_path_to_visible,
     sandbox_read_text_file,
     sandbox_render_office_html,
     sandbox_replace_text_file,
     sandbox_search_files,
-    sandbox_visible_path,
-    sandbox_workspace_dir,
     sandbox_write_internal_text_files,
     sandbox_write_text_file,
     sandbox_write_tool_result,
-    sync_sandbox_working_trees,
 )
+from apps.chat_data_app.agent.workspace.workspace_search import sandbox_grep_text
+from apps.chat_data_app.agent.workspace.workspace_sync import sync_sandbox_working_trees
 
 
 @dataclass

@@ -6,7 +6,7 @@ runtime-skills 快照，不区分系统 / 用户类别）；磁盘真实管理�
 ``CHAT_DATA_HOME/skills/user/<user_id>/<name>/...``（用户技能）。
 
 此前该虚拟根、类别集合、物理根在 ``conversation_workspace.py``、
-``workspace_execution.py``、``skill_service.py``、``loader.py``
+``workspace_*`` 各沙箱模块、``skill_service.py``、``loader.py``
 等多处各自硬编码副本，新增类别（如 team）时极易漏改导致后端行为漂移。
 现集中至此模块，全项目统一引用。
 """
