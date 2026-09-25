@@ -1,0 +1,11 @@
+# 参数个数 baseline（AGENTS.md §3：单方法形参 ≤13，self/cls 不计）
+# 口径见 scripts/checks/params.py；每行「相对路径:函数名」，# 开头为注释。
+# 规则：存量债务只能收敛不能增长——新函数不允许登记；修掉一处就删一行。
+chat_data_app/agent_stream.py:_run_chat_data_agent_stream
+chat_data_app/agent_stream.py:_generate_chat_data_stream
+chat_data_app/agent_stream.py:_resolve_agent_turn_inputs
+chat_data_app/services/datasource/manager.py:_save_datasource_async
+chat_data_app/services/agent_schedule/schedule_service.py:update_job
+chat_data_app/services/dashboard/service.py:add_panel
+chat_data_app/agent/run/conversation_runtime.py:stream_agent_turn
+chat_data_app/services/dashboard/service.py:update_panel
