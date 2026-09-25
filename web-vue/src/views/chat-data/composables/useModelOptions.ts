@@ -9,12 +9,15 @@ import { getChatDataConfig } from '../api'
 import type { ChatDataRuntimeConfig } from '../api'
 import type { ChatDataModelOption } from '../types'
 
-export function useModelOptions() {
-  const modelOptions = ref<ChatDataModelOption[]>([])
-  const config = ref<ChatDataRuntimeConfig | null>(null)
-  const loading = ref(false)
-  let inflight: Promise<void> | null = null
+// 状态提升到模块级：config 下发的是会话期静态数据（models.json 注册表 + 运行时选项），
+// 且消费方（主对话）会因新建任务 conversationKey++ 强制重挂载，实例级缓存会被清空、
+// 每次点「新建任务」都重复请求 /config。共享后重挂载直接复用缓存，inflight 去重也随之跨实例生效。
+const modelOptions = ref<ChatDataModelOption[]>([])
+const config = ref<ChatDataRuntimeConfig | null>(null)
+const loading = ref(false)
+let inflight: Promise<void> | null = null
 
+export function useModelOptions() {
   const defaultModelId = computed(
     () => modelOptions.value.find(item => item.is_default)?.id || modelOptions.value[0]?.id || ''
   )

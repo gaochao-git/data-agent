@@ -559,8 +559,9 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
   }
 }
 
-// 确保会话 ID 存在（选数据源即创建 / 发送时兜底创建），创建即绑定当前数据源组；
-// 服务端建会话时同步物化启用语义模型到工作区，@ 引用菜单从第一刻起就有内容可选。
+// 确保会话 ID 存在（发送首条消息时兜底创建），创建即绑定当前数据源组；
+// 服务端建会话时同步物化启用语义模型到工作区，发送后 @ 引用即可选。
+// 选择器弹窗确认只记草稿不调本函数——与「新建任务」同口径，重活延迟到发送首条消息。
 const ensureConversationId = async (): Promise<string | null> => {
   if (currentConversationId.value) {
     return currentConversationId.value
@@ -1081,9 +1082,6 @@ const selectedExecutionTargetSummary = computed(() => {
 })
 
 const showContextSelectorDialog = ref(false)
-// 确认后在途标记：建会话是同步物化语义模型的慢请求（秒级），期间必须给状态
-// 并冻结弹窗（禁用按钮 + 禁遮罩/ESC/✕ 关闭），否则看起来像「点了没反应」
-const isSwitchingContext = ref(false)
 const draftSelectedDatasourceId = ref<string>('')
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
 const draftDefaultAllExecutionTargets = ref(false)
@@ -1097,21 +1095,24 @@ const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => (
   buildExecutionTargets({ datasource: draftDatasource.value, fallbackId: draftDatasource.value?.id })
 ))
 
-const canChangeDraftDatasource = computed(() => {
-  if (datasources.value.length <= 1) return false
-  return !isConversationContextMode.value || !currentConversationDatasourceId.value
-})
+const canChangeDraftDatasource = computed(() => datasources.value.length > 1)
 
-// 数据源组下拉被禁用时的原因提示：禁用控件若不说明原因，用户会误以为是故障；
-// 两条禁用路径（仅一个数据源组 / 对话已绑定数据源）原因不同，分开给文案
+// 数据源组下拉被禁用时的原因提示：仅剩「只有一个数据源组」一条路径；
+// 会话已绑定组不再锁死下拉——换组语义 = 基于新组新建任务（见 isGroupSwitchNewTask）
 const datasourceSelectLockReason = computed(() => {
   if (!showContextSelectorDialog.value) return ''
   if (datasources.value.length <= 1) return '当前仅有一个数据源组，无可切换项'
-  if (isConversationContextMode.value && currentConversationDatasourceId.value) {
-    return '对话已绑定当前数据源组，会话内不支持切换；如需使用其他数据源组，请新建会话'
-  }
   return ''
 })
+
+// 会话模式下把数据源组换成别的组 = 基于新组新建任务（与侧栏「新建任务」按钮同一条链路）：
+// 当前会话保留在历史列表，确认后进入绑定新组的新任务。同组确认仍只调整执行对象，不新建。
+const isGroupSwitchNewTask = computed(() => (
+  isConversationContextMode.value
+  && Boolean(currentConversationDatasourceId.value)
+  && Boolean(draftSelectedDatasourceId.value)
+  && draftSelectedDatasourceId.value !== currentConversationDatasourceId.value
+))
 
 const openContextSelector = () => {
   // 无数据源：不打开选择器（无可选项），提示原因；管理员可走旁边齿轮入口配置
@@ -1144,8 +1145,7 @@ watch(
   }
 )
 
-const handleConfirmContextSelector = async () => {
-  if (isSwitchingContext.value) return
+const handleConfirmContextSelector = () => {
   if (draftExecutionTargets.value.length > 0 && draftSelectedMemberDatasourceIds.value.length === 0) {
     ElMessage.warning('请选择执行对象')
     return
@@ -1162,21 +1162,19 @@ const handleConfirmContextSelector = async () => {
     selectedDatasourceId.value = draftSelectedDatasourceId.value
   }
   if (isConversationContextMode.value) {
+    if (isGroupSwitchNewTask.value) {
+      // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
+      // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建
+      currentConversationId.value = null
+      currentConversationTitle.value = '新会话'
+      currentConversationDatasourceId.value = null
+      conversationKey.value++
+    }
     conversationMemberDatasourceIds.value = nextIds
-    // 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在），服务端
-    // 建会话即绑定数据源组并物化语义模型；已有会话时数据源被锁定不可换。
+    // 确认 = 草稿记录，与「新建任务」「分析模式切组」同口径（0 请求瞬时完成）。
+    // 会话落库与语义模型物化延迟到发送首条消息时兜底发生，三条路径体感一致。
     if (!currentConversationId.value) {
-      // 慢请求期间弹窗展示「初始化空间中…」并冻结；失败不关弹窗，用户可重试
-      isSwitchingContext.value = true
-      try {
-        const conversationId = await ensureConversationId()
-        if (!conversationId) {
-          ElMessage.error('会话初始化失败，请稍后重试')
-          return
-        }
-      } finally {
-        isSwitchingContext.value = false
-      }
+      currentConversationDatasourceId.value = selectedDatasourceId.value || null
     }
   } else {
     selectedMemberDatasourceIds.value = nextIds
@@ -1840,9 +1838,6 @@ onMounted(async () => {
       v-model="showContextSelectorDialog"
       width="520px"
       title="选择执行对象"
-      :close-on-click-modal="!isSwitchingContext"
-      :close-on-press-escape="!isSwitchingContext"
-      :show-close="!isSwitchingContext"
     >
       <div class="space-y-4">
         <div>
@@ -1890,26 +1885,17 @@ onMounted(async () => {
 
       <template #footer>
         <div class="flex items-center justify-end gap-2">
-          <div
-            v-if="isSwitchingContext"
-            class="mr-auto flex items-center gap-1.5 text-[13px] text-slate-500"
-          >
-            <i class="fa-solid fa-circle-notch animate-spin text-[12px]"></i>
-            <span>初始化空间中…</span>
-          </div>
             <button
               class="h-9 px-4 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="isSwitchingContext"
               @click="showContextSelectorDialog = false"
             >
               取消
             </button>
             <button
               class="h-9 px-4 rounded-lg border border-[#1677FF] bg-[#1677FF] text-[13px] text-white transition-all hover:bg-[#3d8bfd] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="isSwitchingContext"
               @click="handleConfirmContextSelector"
             >
-              {{ isSwitchingContext ? '初始化空间中…' : '确定' }}
+              确定
             </button>
         </div>
       </template>

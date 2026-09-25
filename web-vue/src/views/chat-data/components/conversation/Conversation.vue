@@ -825,7 +825,9 @@ const {
   files: mentionWorkspaceFiles,
 })
 
-// 菜单打开（输入 @）时刷新文件清单，保证引用的是工作区最新内容
+// 菜单打开（输入 @）时刷新文件清单，保证引用的是工作区最新内容。
+// 不在此触发建会话/物化：@ 只引用当前工作区已有文件，没有就走空态提示；
+// 会话落库与物化统一由发送首条消息的兜底链路完成。
 watch(showMentionMenu, (open) => {
   if (open) void loadMentionWorkspaceFiles()
 })
