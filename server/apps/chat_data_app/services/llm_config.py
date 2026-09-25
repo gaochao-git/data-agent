@@ -21,7 +21,6 @@ from utils.llm import get_llm
 
 
 DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS = 20000
-DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS = 2000
 
 # ---- 思考能力词表 ----
 THINKING_MODE_NONE = "none"  # 模型不支持思考
@@ -72,12 +71,20 @@ def get_chat_data_output_max_tokens() -> int:
     )
 
 
-def get_context_compression_summary_output_max_tokens() -> int:
-    """读取上下文压缩摘要调用的最大输出 token；独立于主模型输出预留。"""
-    return _read_positive_int_env(
-        "CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS",
-        DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS,
-    )
+def get_context_compression_summary_output_max_tokens() -> int | None:
+    """读取上下文压缩摘要调用的最大输出 token 配置。
+
+    显式配置了 CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS 时返回该值；
+    未配置或非法时返回 None，由调用侧按模型上下文窗口动态计算（独立于主模型输出预留）。
+    """
+    raw = str(os.getenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 # ---------------------------------------------------------------------------

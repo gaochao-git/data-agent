@@ -72,6 +72,43 @@ import {
 import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
 import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
+import { useQueryBuilderFilters } from './composables/useQueryBuilderFilters'
+import { useQueryBuilderAtMention } from './composables/useQueryBuilderAtMention'
+import { useQueryBuilderExecution } from './composables/useQueryBuilderExecution'
+import {
+  aggFunctions,
+  dateQuickPresets,
+  fixedDateShortcuts,
+  getAggFuncFromExpression,
+  getAggFuncLabel,
+  getApiErrorDetail,
+  getBuilderSemanticConfigId,
+  getBuilderSemanticConfigName,
+  getDimensionDisplayName,
+  getFieldType,
+  getMetricDisplayName,
+  getOperatorLabel,
+  isListOperator,
+  isLogicalAggregation,
+  isRawAggFunc,
+  listOperators,
+  monthEnd,
+  monthStart,
+  normalizeBuilderErrorMessage,
+  normalizeAggFunc,
+  normalizeOptionalInteger,
+  operators,
+  parseAdvancedFilterFromConfig,
+  parseFirstQualifiedFromExpression,
+  parseMetricExpressionMeta,
+  fieldRefOperators,
+  formatMetricChipLabel,
+  shiftDays,
+  singleDateShortcuts,
+  startOfDay,
+  stripFieldPrefix,
+  transformOptions,
+} from './utils/builderExpressions'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
 import { isAbortError } from '../../utils/abort'
 
@@ -93,8 +130,6 @@ const props = defineProps({
 })
 const attrs = useAttrs()
 const { submitSqlTask } = useQueryTask()
-// 当前查询任务轮询的取消通道：组件卸载时中止，避免销毁后仍继续轮询/写状态
-let queryTaskAbortController: AbortController | null = null
 
 const emit = defineEmits<{
   datasourceChange: [dsId: string]
@@ -137,11 +172,6 @@ const showAggregationManager = ref(false)
 const dimensionDrafts = ref<Array<DimensionField & { selected?: boolean }>>([])
 const aggregationDrafts = ref<Array<AggregationField & { selected?: boolean }>>([])
 
-// SQL预览弹窗
-const showSqlPreview = ref(false)
-const previewSql = ref('')
-const previewSqlLoading = ref(false)
-
 const getTableAlias = (item: { table?: string; tableAlias?: string; alias?: string }) => {
   return String(item.tableAlias || item.alias || item.table || '').trim()
 }
@@ -163,30 +193,8 @@ const getTableRoleLabel = (table: string, tableAlias?: string, fallbackLabel?: s
 
 
 // 执行状态
-const executing = ref(false)
-const executingTaskText = ref('')
-const executingTaskId = ref('')
-const cancellingTask = ref(false)
-const rawResultData = ref<string | null>(null)
 const analyzedResultData = ref<string | null>(null)
-const executedSql = ref<string>('')
-const compiledSql = ref('')
-const compiledSqlSnapshot = ref('')
 const savedBuilderConfigSnapshot = ref('')
-const skipQueryCache = ref(false)
-const queryCacheEnabled = ref(false)
-
-// 快捷查询刷新触发器
-const quickQueryRefresh = ref(0)
-const resultTabs = ref<Array<{
-  title: string
-  rawResultData: string
-  executedSql: string
-  memberDatasourceId?: string
-  memberName?: string
-  status?: 'success' | 'error' | 'none'
-}>>([])
-const activeResultTabIndex = ref(0)
 const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   resultTabs.value.map((result, index) => ({
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
@@ -347,26 +355,6 @@ const onMouseUp = () => {
   isResizing.value = false
 }
 
-// 聚合函数选项
-const aggFunctions = [
-  { value: 'RAW', label: '原始值' },
-  { value: 'COUNT', label: '计数' },
-  { value: 'SUM', label: '求和' },
-  { value: 'AVG', label: '平均' },
-  { value: 'MAX', label: '最大' },
-  { value: 'MIN', label: '最小' },
-  { value: 'COUNT_DISTINCT', label: '去重计数' }
-]
-
-const normalizeAggFunc = (func?: string): AggregationField['func'] => {
-  const upper = String(func || 'RAW').toUpperCase()
-  if (upper === 'COUNT' || upper === 'SUM' || upper === 'AVG' || upper === 'MAX' || upper === 'MIN' || upper === 'COUNT_DISTINCT' || upper === 'RAW') {
-    return upper as AggregationField['func']
-  }
-  return 'RAW'
-}
-
-const isRawAggFunc = (func?: string) => normalizeAggFunc(func) === 'RAW'
 
 const getAggregationModeState = (excludeAggId?: string) => {
   const list = excludeAggId ? aggregations.value.filter(item => item.id !== excludeAggId) : aggregations.value
@@ -411,62 +399,6 @@ const getCompareAnalysisWarning = (): string | null => {
   return null
 }
 
-const AGG_EXPR_PATTERN = /^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i
-
-const getAggFuncFromExpression = (expression?: string): AggregationField['func'] | undefined => {
-  const expr = (expression || '').trim()
-  if (!expr) return undefined
-  const matched = expr.match(AGG_EXPR_PATTERN)
-  if (!matched) return undefined
-  const func = (matched[1] || '').toUpperCase()
-  const hasDistinct = !!(matched[2] || '').trim()
-  if (func === 'COUNT' && hasDistinct) return 'COUNT_DISTINCT'
-  if (func === 'COUNT' || func === 'SUM' || func === 'AVG' || func === 'MAX' || func === 'MIN') {
-    return func as AggregationField['func']
-  }
-  return undefined
-}
-
-const parseMetricExpressionMeta = (expression?: string) => {
-  const expr = (expression || '').trim()
-  const normalizeColumn = (raw: string) => {
-    const cleaned = (raw || '').replace(/`/g, '').trim()
-    if (!cleaned) return '*'
-    const parts = cleaned.split('.')
-    return parts[parts.length - 1] || '*'
-  }
-  const distinctMatch = expr.match(/^COUNT\s*\(\s*DISTINCT\s+([^)]+)\s*\)$/i)
-  if (distinctMatch) {
-    return { func: 'COUNT_DISTINCT' as AggregationField['func'], column: normalizeColumn(distinctMatch[1] || '') }
-  }
-  const aggMatch = expr.match(/^(COUNT|SUM|AVG|MAX|MIN)\s*\(\s*([^)]+)\s*\)$/i)
-  if (aggMatch) {
-    const fn = (aggMatch[1] || 'COUNT').toUpperCase() as AggregationField['func']
-    const raw = (aggMatch[2] || '').trim()
-    const col = raw === '*' ? '*' : normalizeColumn(raw)
-    return { func: fn, column: col || '*' }
-  }
-  const fallbackCol = normalizeColumn(expr)
-  return { func: 'RAW' as AggregationField['func'], column: fallbackCol }
-}
-
-const parseFirstQualifiedFromExpression = (expression?: string): { table: string; column: string } | null => {
-  const expr = (expression || '').trim()
-  if (!expr) return null
-  const matched = expr.match(/`?([\w\u4e00-\u9fa5]+)`?\.`?([\w\u4e00-\u9fa5]+)`?/)
-  if (!matched) return null
-  return { table: matched[1] || '', column: matched[2] || '' }
-}
-
-// 日期转换选项
-const transformOptions = [
-  { value: 'raw', label: '原始值' },
-  { value: 'year', label: '按年' },
-  { value: 'quarter', label: '按季度' },
-  { value: 'month', label: '按月' },
-  { value: 'week', label: '按周' },
-  { value: 'day', label: '按日' }
-]
 
 const selectedChartType = ref<ChartType>('table')
 
@@ -495,15 +427,6 @@ const queryPagination = reactive({
   offset: null as number | string | null,
 })
 
-const normalizeOptionalInteger = (value: unknown): number | null => {
-  if (value === null || value === undefined || value === '') return null
-  if (typeof value !== 'number' && typeof value !== 'string') return null
-  const normalizedValue = typeof value === 'string' ? value.trim() : value
-  if (normalizedValue === '') return null
-  const num = Number(normalizedValue)
-  return Number.isInteger(num) ? num : null
-}
-
 const validateQueryPagination = () => {
   if (!queryPagination.enabled) return true
   const limit = normalizeOptionalInteger(queryPagination.limit)
@@ -526,274 +449,6 @@ const validateBuilderFilters = () => {
   return false
 }
 
-// 运算符选项
-const operators = [
-  { value: '=', label: '等于' },
-  { value: '!=', label: '不等于' },
-  { value: '>', label: '大于' },
-  { value: '>=', label: '大于等于' },
-  { value: '<', label: '小于' },
-  { value: '<=', label: '小于等于' },
-  { value: 'BETWEEN', label: '介于' },
-  { value: 'STARTS WITH', label: '开头为' },
-  { value: 'ENDS WITH', label: '结尾为' },
-  { value: 'EMPTY STRING', label: '为空字符串' },
-  { value: 'IS NULL', label: '为空' },
-  { value: 'IS NOT NULL', label: '不为空' }
-]
-
-const fieldRefOperators = [
-  { value: '=', label: '等于' },
-  { value: '!=', label: '不等于' },
-  { value: '>', label: '大于' },
-  { value: '>=', label: '大于等于' },
-  { value: '<', label: '小于' },
-  { value: '<=', label: '小于等于' }
-]
-const listOperators = [
-  { value: 'IN', label: '包含' },
-  { value: 'NOT IN', label: '不包含' }
-]
-
-const showFilterEditor = ref(false)
-const editingFilter = ref<FilterCondition | null>(null)
-const editingFilterFromAdvanced = ref(false)
-const filterEditorCommitted = ref(false)
-const editingFilterSnapshot = ref<FilterCondition | null>(null)
-const manualInputText = ref('')
-const manualDelimiter = ref<',' | ';' | ' ' | '\n'>(',')
-const inInputMode = ref<'list' | 'subquery'>('list')
-const subquerySql = ref('')
-const subqueryExclude = ref(false)
-const showAsChartFilter = ref(false)
-const showAdvancedFieldPicker = ref(false)
-const advancedFieldKeyword = ref('')
-const pickingAdvancedFilter = ref<FilterCondition | null>(null)
-const showAdvancedFilterDialog = ref(false)
-const advancedFilterTree = ref<AdvancedFilterGroup | null>(null)
-const advancedFilterDraft = ref<AdvancedFilterGroup | null>(null)
-const advancedFilterDraftScope = ref<AdvancedFilterScope>('detail')
-const dateFilterMode = ref<'dynamic' | 'fixed' | 'single'>('dynamic')
-const fixedDateRange = ref<string[]>([])
-const singleDateValue = ref('')
-
-const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate())
-const shiftDays = (base: Date, offset: number) => {
-  const shifted = new Date(base)
-  shifted.setDate(shifted.getDate() + offset)
-  return shifted
-}
-const monthStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1)
-const monthEnd = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0)
-
-const fixedDateShortcuts = [
-  {
-    text: '今天',
-    value: () => {
-      const today = startOfDay(new Date())
-      return [today, today]
-    }
-  },
-  {
-    text: '昨天',
-    value: () => {
-      const yesterday = startOfDay(shiftDays(new Date(), -1))
-      return [yesterday, yesterday]
-    }
-  },
-  {
-    text: '最近7天',
-    value: () => [startOfDay(shiftDays(new Date(), -6)), startOfDay(new Date())]
-  },
-  {
-    text: '最近30天',
-    value: () => [startOfDay(shiftDays(new Date(), -29)), startOfDay(new Date())]
-  },
-  {
-    text: '本月',
-    value: () => [startOfDay(monthStart(new Date())), startOfDay(new Date())]
-  },
-  {
-    text: '上月',
-    value: () => {
-      const now = new Date()
-      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      return [startOfDay(monthStart(lastMonth)), startOfDay(monthEnd(lastMonth))]
-    }
-  }
-]
-
-const singleDateShortcuts = [
-  { text: '今天', value: () => startOfDay(new Date()) },
-  { text: '昨天', value: () => startOfDay(shiftDays(new Date(), -1)) },
-  { text: '7天前', value: () => startOfDay(shiftDays(new Date(), -7)) },
-  { text: '月初', value: () => startOfDay(monthStart(new Date())) },
-  { text: '月末', value: () => startOfDay(monthEnd(new Date())) }
-]
-
-interface DateQuickPreset {
-  label: string
-  operator: string
-  expression: string
-}
-
-const dateQuickPresets: DateQuickPreset[] = [
-  { label: '最近 1 天', operator: '>=', expression: 'DATE_SUB(CURRENT_DATE, INTERVAL 1 DAY)' },
-  { label: '最近 7 天', operator: '>=', expression: 'DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)' },
-  { label: '最近 30 天', operator: '>=', expression: 'DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)' },
-  { label: '本月', operator: '>=', expression: "DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')" },
-  { label: '上月', operator: 'BETWEEN', expression: "DATE_FORMAT(DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH), '%Y-%m-01') AND LAST_DAY(DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH))" },
-  { label: '今年', operator: '>=', expression: "DATE_FORMAT(CURRENT_DATE, '%Y-01-01')" },
-]
-
-const isDatePresetActive = (preset: DateQuickPreset) => {
-  const f = editingFilter.value
-  if (!f) return false
-  if ((f.operator || '').toUpperCase() !== preset.operator.toUpperCase()) return false
-  if (f.valueType !== 'expression') return false
-  return (f.rightExpression || '').trim() === preset.expression
-}
-
-const currentFilterOperatorOptions = computed(() => {
-  const f = editingFilter.value
-  if (!f) return [...operators, ...listOperators]
-  return f.valueType === 'field_ref' ? fieldRefOperators : [...operators, ...listOperators]
-})
-
-const getFilterColumnType = (f: FilterCondition | null) => {
-  if (!f?.table || !f?.column) return ''
-  const table = tables.value.find(t => t.table_name === f.table)
-  const col = table?.columns?.find(c => c.name === f.column)
-  return `${col?.mysql_type || col?.type || ''}`.toLowerCase()
-}
-
-const isDateLikeType = (rawType: string) => /(date|time|timestamp|datetime)/i.test(rawType || '')
-const isDateTimeType = (rawType: string) => /(time|timestamp|datetime)/i.test(rawType || '')
-
-const isEditingDateField = computed(() => {
-  if (!editingFilter.value) return false
-  if (editingFilter.value.aggFunc) return false
-  return isDateLikeType(getFilterColumnType(editingFilter.value))
-})
-
-const isEditingDateTimeField = computed(() => {
-  if (!editingFilter.value) return false
-  if (editingFilter.value.aggFunc) return false
-  return isDateTimeType(getFilterColumnType(editingFilter.value))
-})
-
-const currentFixedDatePickerType = computed(() => (isEditingDateTimeField.value ? 'datetimerange' : 'daterange'))
-const currentSingleDatePickerType = computed(() => (isEditingDateTimeField.value ? 'datetime' : 'date'))
-const currentDateValueFormat = computed(() => (isEditingDateTimeField.value ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD'))
-const currentStartPlaceholder = computed(() => (isEditingDateTimeField.value ? '开始时间' : '开始日期'))
-const currentEndPlaceholder = computed(() => (isEditingDateTimeField.value ? '结束时间' : '结束日期'))
-const currentSinglePlaceholder = computed(() => (isEditingDateTimeField.value ? '请选择日期时间' : '请选择日期'))
-
-const advancedOutsideFilters = computed(() => {
-  const leafIds = getAdvancedLeafIdSet(advancedFilterTree.value)
-  if (leafIds.size === 0) return []
-  return filters.value.filter(f => !leafIds.has(f.id))
-})
-
-const appendFilterToAdvancedTree = (filter: FilterCondition) => {
-  if (!advancedFilterTree.value) return
-  appendFilterToAdvancedTreeUtil(advancedFilterTree.value, filter)
-}
-
-const removeFilterFromAdvancedTree = (filterId: string) => {
-  advancedFilterTree.value = removeFilterFromAdvancedTreeUtil(advancedFilterTree.value, filterId)
-}
-
-const syncAdvancedTreeLeafByFilter = (filter: FilterCondition) => {
-  syncAdvancedTreeLeafByFilterUtil(advancedFilterTree.value, filter)
-}
-
-const createDefaultDetailFilter = (): FilterCondition => {
-  const fromDimension = dimensions.value[0]
-  if (fromDimension) {
-    return {
-      id: createNodeId(),
-      table: fromDimension.table,
-      tableAlias: getTableAlias(fromDimension),
-      column: fromDimension.column,
-      semanticName: fromDimension.semanticName,
-      displayName: fromDimension.displayName || fromDimension.column,
-      expression: fromDimension.expression,
-      operator: '=',
-      value: '',
-      valueType: 'literal',
-      logic: 'AND'
-    }
-  }
-  const firstTableName = selectedTables.value[0]?.name || tables.value[0]?.table_name || ''
-  const firstTableAlias = selectedTables.value[0] ? getSelectedTableAlias(selectedTables.value[0]) : firstTableName
-  const tableInfo = tables.value.find(t => t.table_name === firstTableName)
-  const firstCol = tableInfo?.columns?.[0]
-  if (!firstTableName || !firstCol) {
-    return {
-      id: createNodeId(),
-      table: '',
-      column: '',
-      operator: '=',
-      value: '',
-      valueType: 'literal',
-      logic: 'AND'
-    }
-  }
-  return {
-    id: createNodeId(),
-    table: firstTableName,
-    tableAlias: firstTableAlias,
-    column: firstCol.name,
-    displayName: firstCol.description || firstCol.name,
-    operator: '=',
-    value: '',
-    valueType: 'literal',
-    logic: 'AND'
-  }
-}
-
-const createEmptyFilter = (): FilterCondition => ({
-  id: createNodeId(),
-  table: '',
-  column: '',
-  displayName: '',
-  operator: '=',
-  value: '',
-  valueType: 'literal',
-  logic: 'AND'
-})
-
-const createDefaultAggregateFilter = (): FilterCondition => {
-  const fromAgg = aggregations.value[0]
-  if (fromAgg) {
-    return {
-      id: createNodeId(),
-      table: fromAgg.table,
-      tableAlias: getTableAlias(fromAgg),
-      column: fromAgg.column,
-      semanticName: fromAgg.semanticName,
-      displayName: fromAgg.displayName || fromAgg.column,
-      expression: fromAgg.expression,
-      operator: '=',
-      value: '',
-      valueType: 'literal',
-      logic: 'AND',
-      aggFunc: fromAgg.func,
-      aggId: fromAgg.id
-    }
-  }
-  return createEmptyFilter()
-}
-
-// 根据字段类型返回图标类型（DataWind 风格）
-const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
-  const t = (col.mysql_type || col.type || '').toLowerCase()
-  if (/int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/.test(t)) return 'number'
-  if (/date|time|timestamp|datetime|year/.test(t)) return 'date'
-  return 'string'
-}
-
 const isDimensionDateField = (item: Pick<DimensionField, 'table' | 'column'>) => {
   const column = getTableColumns(item.table).find(col => col.name === item.column)
   if (!column) return false
@@ -807,186 +462,289 @@ const getDefaultAggregationFunc = (field: { table?: string; column?: string; typ
   const column = getTableColumns(field.table || '').find(col => col.name === field.column)
   return column && getFieldType(column) === 'number' ? 'SUM' : 'COUNT_DISTINCT'
 }
-
-// ===== @mention 选择功能 =====
-type AtRowType = 'dimension' | 'aggregation' | 'filter' | 'order'
-interface AtItem {
-  name: string
-  label: string
-  table?: string
-  tableAlias?: string
-  tableLabel?: string
-  type?: string
-  fieldType: 'table' | 'string' | 'number' | 'date'
-}
-
-const atState = reactive({
-  activeRow: '' as AtRowType | '',
-  inputText: '',
-  dropdownVisible: false,
-  selectedIndex: 0,
-})
-const atInputRef = ref<HTMLInputElement | null>(null)
-
-// 计算 @mention 下拉列表项
-const atFilteredItems = computed<AtItem[]>(() => {
-  const keyword = atState.inputText.replace(/^@/, '').toLowerCase()
-
-  // 维度/指标/筛选行：显示已选表的字段（按表分组）
-  const items: AtItem[] = []
-  for (const t of selectedTables.value) {
-    const cols = getTableColumns(t.name)
-    // 多表时插入分组标题
-    if (selectedTables.value.length > 1) {
-      const groupLabel = t.label || t.name
-      if (!keyword || cols.some(col => (col.name.toLowerCase().includes(keyword) || (col.description || '').toLowerCase().includes(keyword)))) {
-        items.push({
-          name: `__group__${t.name}`,
-          label: groupLabel,
-          table: t.name,
-          tableAlias: getSelectedTableAlias(t),
-          tableLabel: t.label,
-          fieldType: 'table',
-        })
-      }
-    }
-    for (const col of cols) {
-      if (!keyword || col.name.toLowerCase().includes(keyword) || (col.description || '').toLowerCase().includes(keyword)) {
-        items.push({
-          name: col.name,
-          label: col.description || col.name,
-          table: t.name,
-          tableAlias: getSelectedTableAlias(t),
-          tableLabel: t.label,
-          type: col.mysql_type || col.type || '',
-          fieldType: getFieldType(col),
-        })
-      }
-    }
-  }
-  return items
+const dimensionFieldRefOptions = computed(() => {
+  const dedup = new Map<string, { value: string; label: string }>()
+  dimensions.value.forEach((d) => {
+    const key = buildFieldKey(d.tableAlias, d.table, d.column)
+    if (dedup.has(key)) return
+    dedup.set(key, {
+      value: key,
+      label: getDimensionDisplayName(d)
+    })
+  })
+  return Array.from(dedup.values())
 })
 
-// 输入变化 — 检测 @ 触发下拉
-const handleAtInputChange = (row: AtRowType) => {
-  const v = atState.inputText
-  if (v.includes('@')) {
-    if (selectedTables.value.length === 0) {
-      ElMessage.warning('请先添加数据表')
-      atState.inputText = ''
-      return
-    }
-    atState.activeRow = row
-    atState.dropdownVisible = true
-    // 跳过分组标题，选中第一个可选项
-    const firstSelectable = atFilteredItems.value.findIndex(i => !i.name.startsWith('__group__'))
-    atState.selectedIndex = firstSelectable >= 0 ? firstSelectable : 0
-  } else {
-    atState.dropdownVisible = false
+const getFilterFieldLabel = (f: FilterCondition) => {
+  if (!f.table || !f.column) return '编辑筛选器'
+  if (f.aggId || f.aggFunc) {
+    const matchedAgg = f.aggId
+      ? aggregations.value.find(a => a.id === f.aggId)
+      : aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(f.tableAlias, f.table, f.column) && a.func === f.aggFunc)
+    if (matchedAgg) return formatMetricChipLabel(matchedAgg)
+    const funcLabel = getAggFuncLabel(f.aggFunc)
+    if ((f.displayName || '').trim()) return `${funcLabel}(${stripFieldPrefix(f.displayName)})`
+    return `${funcLabel || '指标'}(${f.column})`
   }
+  const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(f.tableAlias, f.table, f.column))
+  if (matchedDim) return getDimensionDisplayName(matchedDim)
+  if ((f.displayName || '').trim()) return stripFieldPrefix(f.displayName)
+  const tableInfo = tables.value.find(t => t.table_name === f.table)
+  const colInfo = tableInfo?.columns?.find(c => c.name === f.column)
+  const colLabel = colInfo?.description || f.column
+  return colLabel
 }
 
-// 键盘导航（跳过分组标题）
-const handleAtKeydown = (e: KeyboardEvent) => {
-  if (!atState.dropdownVisible) return
-  const items = atFilteredItems.value
-  const len = items.length
-  const isGroup = (idx: number) => items[idx]?.name.startsWith('__group__')
-
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    let next = atState.selectedIndex + 1
-    while (next < len && isGroup(next)) next++
-    if (next < len) atState.selectedIndex = next
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    let prev = atState.selectedIndex - 1
-    while (prev >= 0 && isGroup(prev)) prev--
-    if (prev >= 0) atState.selectedIndex = prev
-  } else if (e.key === 'Enter') {
-    e.preventDefault()
-    const item = items[atState.selectedIndex]
-    if (item && !item.name.startsWith('__group__')) handleAtSelect(item)
-  } else if (e.key === 'Escape') {
-    closeAtDropdown()
+const getFilterValueLabel = (f: FilterCondition) => {
+  if (!f.table || !f.column) return ''
+  if (f.operator === 'IS NULL' || f.operator === 'IS NOT NULL') return ''
+  if (f.valueType === 'field_ref' && f.rightTable && f.rightColumn) {
+    const tableInfo = tables.value.find(t => t.table_name === f.rightTable)
+    const tableLabel = getTableRoleLabel(f.rightTable, f.rightTableAlias, tableInfo?.description || f.rightTable)
+    const colInfo = tableInfo?.columns?.find(c => c.name === f.rightColumn)
+    const colLabel = colInfo?.description || f.rightColumn
+    return `${tableLabel}.${colLabel}`
   }
-}
-
-// 选择项
-const handleAtSelect = (item: AtItem) => {
-  const row = atState.activeRow
-  const tableAlias = item.tableAlias || item.table
-  if (row === 'dimension') {
-    if (!dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(tableAlias, item.table, item.name))) {
-      dimensions.value.push({
-        id: `${Date.now()}`,
-        table: item.table!,
-        tableAlias,
-        column: item.name,
-        semanticName: item.label,
-        displayName: item.label,
-        label: `${item.tableLabel}.${item.label}`,
-        transform: 'raw'
-      })
+  if (f.valueType === 'expression') {
+    const matchedPreset = dateQuickPresets.find(
+      preset => preset.operator.toUpperCase() === (f.operator || '').toUpperCase()
+        && preset.expression === ((f.rightExpression || '').trim())
+    )
+    if (matchedPreset) return matchedPreset.label
+    if (f.operator === 'BETWEEN' && (f.rightExpression || '').includes('AND')) {
+      return '动态时间范围'
     }
-  } else if (row === 'aggregation') {
-    const targetFunc = getDefaultAggregationFunc({ table: item.table, column: item.name, type: item.type })
-    if (!canUseAggregationFunc(targetFunc)) {
-      showAggregationModeConflictMessage(targetFunc)
-      closeAtDropdown()
-      return
-    }
-    if (!aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, item.table, item.name) && a.func === targetFunc)) {
-      aggregations.value.push({
-        id: `${Date.now()}`,
-        table: item.table!,
-        tableAlias,
-        column: item.name,
-        semanticName: item.label,
-        displayName: item.label,
-        label: `${item.tableLabel}.${item.label}`,
-        func: targetFunc
-      })
-    }
-  } else if (row === 'filter') {
-    const nextFilter: FilterCondition = {
-      id: `${Date.now()}`,
-      table: item.table!,
-      tableAlias,
-      column: item.name,
-      semanticName: item.label,
-      operator: '=',
-      value: '',
-      valueType: 'literal',
-      logic: 'AND'
-    }
-    filters.value.push(nextFilter)
-  } else if (row === 'order') {
-    const existed = orderBy.value.find(o => buildFieldKey(o.tableAlias, o.table, o.column) === buildFieldKey(tableAlias, item.table, item.name) && !o.aggFunc)
-    if (!existed) {
-      orderBy.value.push({
-        id: `${Date.now()}`,
-        table: item.table!,
-        tableAlias,
-        column: item.name,
-        semanticName: item.label,
-        direction: 'ASC'
-      })
-    }
+    return (f.rightExpression || '').trim() || '表达式'
   }
-  closeAtDropdown()
+  if (f.operator === 'BETWEEN' && Array.isArray(f.value) && f.value.length === 2) {
+    return `${f.value[0]} ~ ${f.value[1]}`
+  }
+  if (Array.isArray(f.value)) {
+    const arr = f.value
+    if (arr.length === 0) return '值'
+    if (arr.length === 1) return String(arr[0])
+    return `${arr[0]} 等${arr.length}项`
+  }
+  return f.value || '值'
 }
 
-// 关闭下拉
-const closeAtDropdown = () => {
-  atState.activeRow = ''
-  atState.inputText = ''
-  atState.dropdownVisible = false
+const semanticDimensionFilterFields = computed<FieldPickerOption[]>(() => {
+  const items = props.semanticConfig?.dimensions || []
+  const dedup = new Map<string, FieldPickerOption>()
+  items.forEach((dim) => {
+    if (!dim?.table || !dim?.column) return
+    const alias = getTableAlias({ table: dim.table, tableAlias: dim.table_alias })
+    const key = buildFieldKey(alias, dim.table, dim.column)
+    if (dedup.has(key)) return
+    dedup.set(key, {
+      value: key,
+      label: dim.name || dim.column,
+      semanticName: dim.name,
+      expression: dim.expression
+    })
+  })
+  return Array.from(dedup.values())
+})
+
+const semanticMetricFilterFields = computed<FieldPickerOption[]>(() => {
+  const items = props.semanticConfig?.metrics || []
+  const fields: FieldPickerOption[] = []
+  items.forEach((metric) => {
+    const meta = parseMetricExpressionMeta(metric.expression || '')
+    const qualified = parseFirstQualifiedFromExpression(metric.expression || '')
+    const table = metric.table || qualified?.table || ''
+    const tableAlias = getTableAlias({ table, tableAlias: metric.table_alias })
+    const func = meta.func || 'RAW'
+    const column = meta.column || metric.field_name || qualified?.column || ''
+    if (!table || !column) return
+    fields.push({
+      value: `AGG:${func}:${tableAlias}.${column}`,
+      label: metric.name || `${func}(${column})`,
+      semanticName: metric.name,
+      expression: metric.expression
+    })
+  })
+  return fields
+})
+
+const advancedDimensionFieldsGrouped = computed(() => {
+  const dedup = new Map<string, FieldPickerOption>()
+  dimensions.value.forEach((d) => {
+    const key = buildFieldKey(d.tableAlias, d.table, d.column)
+    if (dedup.has(key)) return
+    dedup.set(key, {
+      value: key,
+      label: getDimensionDisplayName(d)
+    })
+  })
+  if (dedup.size === 0) {
+    if (semanticDimensionFilterFields.value.length === 0) return []
+    return [{ groupLabel: '维度', fields: semanticDimensionFilterFields.value }]
+  }
+  return [{ groupLabel: '维度', fields: Array.from(dedup.values()) }]
+})
+
+const advancedMetricFieldsGrouped = computed(() => {
+  const merged = new Map<string, FieldPickerOption>()
+  aggregations.value.forEach((a) => {
+    merged.set(`AGGID:${a.id}`, {
+      value: `AGGID:${a.id}`,
+      label: formatMetricChipLabel(a)
+    })
+  })
+  semanticMetricFilterFields.value.forEach((field) => {
+    if (merged.has(field.value)) return
+    merged.set(field.value, field)
+  })
+  filters.value.forEach((f) => {
+    if (!f.aggFunc || !f.table || !f.column) return
+    const value = f.aggId ? `AGGID:${f.aggId}` : `AGG:${f.aggFunc}:${getTableAlias(f)}.${f.column}`
+    if (merged.has(value)) return
+    const funcLabel = getAggFuncLabel(f.aggFunc)
+    const labelBase = stripFieldPrefix(f.displayName || f.column) || f.column
+    merged.set(value, { value, label: `${funcLabel}(${labelBase})` })
+  })
+  if (merged.size === 0) return []
+  return [{ groupLabel: '指标', fields: Array.from(merged.values()) }]
+})
+
+// 解析筛选/排序字段值
+const parseFieldValue = (value: string): { table: string; tableAlias?: string; column: string; semanticName?: string; aggFunc?: string; aggId?: string } => {
+  if (value.startsWith('AGGID:')) {
+    const aggId = value.substring(6)
+    const agg = aggregations.value.find(a => a.id === aggId)
+    if (agg) {
+      return { table: agg.table, tableAlias: getTableAlias(agg), column: agg.column, semanticName: agg.semanticName, aggFunc: agg.func, aggId }
+    }
+    const fallbackDim = dimensions.value[0]
+    if (fallbackDim) {
+      ElMessage.warning('原聚合字段已失效，已回退到可用维度字段')
+      return { table: fallbackDim.table, tableAlias: getTableAlias(fallbackDim), column: fallbackDim.column, semanticName: fallbackDim.semanticName }
+    }
+    const fallbackAgg = aggregations.value[0]
+    if (fallbackAgg) {
+      ElMessage.warning('原聚合字段已失效，已回退到可用聚合字段')
+      return { table: fallbackAgg.table, tableAlias: getTableAlias(fallbackAgg), column: fallbackAgg.column, semanticName: fallbackAgg.semanticName, aggFunc: fallbackAgg.func, aggId: fallbackAgg.id }
+    }
+    ElMessage.warning('当前无可用字段，请先添加维度或指标')
+    return { table: '', column: '' }
+  }
+  if (value.startsWith('AGG:')) {
+    const rest = value.substring(4)
+    const colonIdx = rest.indexOf(':')
+    if (colonIdx <= 0) return { table: '', column: '' }
+    const aggFunc = rest.substring(0, colonIdx)
+    const dotIdx = rest.indexOf('.', colonIdx + 1)
+    if (dotIdx <= colonIdx + 1) return { table: '', column: '' }
+    const tableAlias = rest.substring(colonIdx + 1, dotIdx)
+    const column = rest.substring(dotIdx + 1)
+    if (!tableAlias || !column) return { table: '', column: '' }
+    const table = resolvePhysicalTableByAlias(tableAlias)
+    const matchedAgg = aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, table, column) && a.func === aggFunc)
+    const semanticOption = semanticMetricFilterFields.value.find(field => field.value === value)
+    return { table, tableAlias, column, semanticName: matchedAgg?.semanticName || semanticOption?.semanticName, aggFunc }
+  }
+  const dotIdx = value.indexOf('.')
+  if (dotIdx <= 0) return { table: '', column: '' }
+  const tableAlias = value.substring(0, dotIdx)
+  const table = resolvePhysicalTableByAlias(tableAlias)
+  const column = value.substring(dotIdx + 1)
+  const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(tableAlias, table, column))
+  const semanticOption = semanticDimensionFilterFields.value.find(field => field.value === value)
+  return { table, tableAlias, column, semanticName: matchedDim?.semanticName || semanticOption?.semanticName }
 }
 
-const handleAtInputBlur = () => {
-  window.setTimeout(() => closeAtDropdown(), 150)
-}
+const firstTableName = computed(() => selectedTables.value[0]?.name || tables.value[0]?.table_name || '')
+const firstTableAlias = computed(() => selectedTables.value[0] ? getSelectedTableAlias(selectedTables.value[0]) : firstTableName.value)
+
+const {
+  showFilterEditor,
+  editingFilter,
+  editingFilterFromAdvanced,
+  editingFilterSnapshot,
+  manualInputText,
+  manualDelimiter,
+  inInputMode,
+  subquerySql,
+  subqueryExclude,
+  showAsChartFilter,
+  dateFilterMode,
+  fixedDateRange,
+  singleDateValue,
+  isDatePresetActive,
+  currentFilterOperatorOptions,
+  getFilterColumnType,
+  isDateLikeType,
+  isDateTimeType,
+  isEditingDateField,
+  isEditingDateTimeField,
+  currentFixedDatePickerType,
+  currentSingleDatePickerType,
+  currentDateValueFormat,
+  currentStartPlaceholder,
+  currentEndPlaceholder,
+  currentSinglePlaceholder,
+  filterFieldRefOptions,
+  handleFilterOperatorChange,
+  applyDatePreset,
+  openFilterEditor,
+  openFilterEditorFromAdvanced,
+  closeFilterEditor,
+  handleFilterEditorConfirm,
+  handleFilterRightFieldChange,
+  getFilterRightFieldValue,
+  handleFilterValueTypeChange,
+  createDefaultDetailFilter,
+  createEmptyFilter,
+  createDefaultAggregateFilter,
+  showAdvancedFieldPicker,
+  advancedFieldKeyword,
+  pickingAdvancedFilter,
+  showAdvancedFilterDialog,
+  advancedFilterTree,
+  advancedFilterDraft,
+  advancedFilterDraftScope,
+  advancedOutsideFilters,
+  appendFilterToAdvancedTree,
+  removeFilterFromAdvancedTree,
+  syncAdvancedTreeLeafByFilter,
+  getAdvancedLeafLabel,
+  advancedFirstConfiguredLeaf,
+  advancedEffectiveScope,
+  advancedActiveScope,
+  advancedAllFieldGroups,
+  advancedEditingFieldGroups,
+  advancedFieldPickerGroups,
+  getAdvancedPickerFieldType,
+  openAdvancedFieldPicker,
+  closeAdvancedFieldPicker,
+  handleAdvancedFieldPick,
+  openAdvancedFilterDialog,
+  clearAdvancedFilter,
+  closeAdvancedFilterDialog,
+  handleAdvancedToggleLogic,
+  handleAdvancedAddLeaf,
+  handleAdvancedAddGroup,
+  handleAdvancedRemoveNode,
+  handleAdvancedEditLeaf,
+  confirmAdvancedFilterDialog,
+} = useQueryBuilderFilters({
+  filters,
+  dimensions,
+  aggregations,
+  tables,
+  dimensionFieldRefOptions,
+  advancedDimensionFieldsGrouped,
+  advancedMetricFieldsGrouped,
+  parseFieldValue,
+  getTableAlias,
+  buildFieldKey,
+  getDefaultAggregationFunc,
+  getFilterFieldLabel,
+  getFilterValueLabel,
+  firstTableName,
+  firstTableAlias,
+})
 
 // 加载表结构
 const loadTables = async () => {
@@ -1248,6 +1006,30 @@ const getTableColumns = (tableName: string) => {
   return tableInfo?.columns || []
 }
 
+const {
+  atState,
+  atInputRef,
+  atFilteredItems,
+  handleAtInputChange,
+  handleAtKeydown,
+  handleAtSelect,
+  closeAtDropdown,
+  handleAtInputBlur,
+} = useQueryBuilderAtMention({
+  selectedTables,
+  dimensions,
+  aggregations,
+  filters,
+  orderBy,
+  getTableColumns,
+  getSelectedTableAlias,
+  buildFieldKey,
+  getDefaultAggregationFunc,
+  canUseAggregationFunc,
+  showAggregationModeConflictMessage,
+})
+
+
 const quoteIdentifier = (name: string) => {
   const safe = (name || '').replace(/`/g, '``')
   return `\`${safe}\``
@@ -1411,621 +1193,7 @@ const removeFilterById = (filterId: string) => {
 }
 
 
-const stripFieldPrefix = (name?: string) => {
-  const text = (name || '').trim()
-  const idx = text.lastIndexOf('.')
-  return idx > 0 ? text.slice(idx + 1) : text
-}
-
-const getDimensionDisplayName = (d: DimensionField) => {
-  return stripFieldPrefix(d.displayName || d.label || d.column) || d.column
-}
-
-const getMetricDisplayName = (a: AggregationField) => {
-  return stripFieldPrefix(a.displayName || a.label || a.column) || a.column
-}
-
-const isLogicalAggregation = (a: AggregationField) => a.metricKind === 'derived' || a.metricKind === 'composite'
-
-// 逻辑口径指标（派生/复合）没有聚合函数概念，chip 显示不带函数前缀
-const formatMetricChipLabel = (a: AggregationField) => {
-  const name = getMetricDisplayName(a)
-  return isLogicalAggregation(a) ? name : `${getAggFuncLabel(a.func)}(${name})`
-}
-
-const getAggFuncLabel = (func?: string) => {
-  const key = String(func || '').toUpperCase()
-  return aggFunctions.find(item => item.value === key)?.label || key
-}
-
 const resultData = computed(() => analyzedResultData.value || rawResultData.value)
-const {
-  selectedAnalysisType,
-  compareType,
-  resultSortField,
-  resultSortDirection,
-  resultTopN,
-  topNField,
-  topNDirection,
-  percentMetricField,
-  percentScope,
-  percentGroupField,
-  compareMetricField,
-  compareBaselineMode,
-  hasAnalyzedResult,
-  resultAnalysisFieldOptions,
-  resultAnalysisMetricOptions,
-  resultAnalysisDimensionOptions,
-  isCompareAnalysisApplied,
-  isCompareAnalysisDisabled,
-  resultSemanticParams,
-  runCompareAnalysis,
-  runSortAnalysis,
-  runTopNAnalysis,
-  runTotalAnalysis,
-  runPercentAnalysis,
-  runCompareBaselineAnalysis,
-  cancelResultAnalysis,
-  resetResultAnalysis,
-} = useQueryBuilderResultAnalysis({
-  resultData,
-  analyzedResultData,
-  dimensions,
-  aggregations,
-  getDimensionDisplayName,
-  getMetricDisplayName,
-  getCompareAnalysisWarning,
-})
-
-const dimensionFieldRefOptions = computed(() => {
-  const dedup = new Map<string, { value: string; label: string }>()
-  dimensions.value.forEach((d) => {
-    const key = buildFieldKey(d.tableAlias, d.table, d.column)
-    if (dedup.has(key)) return
-    dedup.set(key, {
-      value: key,
-      label: getDimensionDisplayName(d)
-    })
-  })
-  return Array.from(dedup.values())
-})
-
-const filterFieldRefOptions = computed(() => {
-  if (editingFilter.value?.aggFunc) return []
-  return dimensionFieldRefOptions.value
-})
-
-const isListOperator = (operator: string) => operator === 'IN' || operator === 'NOT IN'
-
-const handleFilterOperatorChange = (f: FilterCondition, operator: string) => {
-  f.operator = operator
-  if (isListOperator(operator)) {
-    f.valueType = 'literal'
-    inInputMode.value = 'list'
-    subqueryExclude.value = operator === 'NOT IN'
-    return
-  }
-  if (Array.isArray(f.value)) {
-    f.value = ''
-  }
-  if (operator !== 'BETWEEN') {
-    fixedDateRange.value = []
-  }
-  if (operator !== '=') {
-    singleDateValue.value = ''
-  }
-}
-
-const applyDatePreset = (preset: DateQuickPreset) => {
-  const f = editingFilter.value
-  if (!f) return
-  f.operator = preset.operator
-  f.valueType = 'expression'
-  f.rightExpression = preset.expression
-  f.value = ''
-  dateFilterMode.value = 'dynamic'
-}
-
-const openFilterEditor = (f: FilterCondition) => {
-  filterEditorCommitted.value = false
-  editingFilterSnapshot.value = cloneFilterCondition(f)
-  editingFilter.value = f
-  if (!f.valueType) f.valueType = 'literal'
-  if (f.aggFunc && f.valueType === 'field_ref') {
-    f.valueType = 'literal'
-  }
-  if (f.valueType === 'field_ref' && (!f.rightTable || !f.rightColumn)) {
-    const first = filterFieldRefOptions.value[0]
-    if (first) {
-      const parsed = parseFieldValue(first.value)
-      f.rightTable = parsed.table
-      f.rightTableAlias = parsed.tableAlias || parsed.table
-      f.rightColumn = parsed.column
-    }
-  }
-  showAsChartFilter.value = Boolean(f.asChartFilter)
-  const op = (f.operator || '').toUpperCase()
-  if (isListOperator(op) && f.valueType === 'expression' && /select/i.test(f.rightExpression || '')) {
-    inInputMode.value = 'subquery'
-    subquerySql.value = f.rightExpression || ''
-    subqueryExclude.value = op === 'NOT IN'
-    manualInputText.value = ''
-  } else if (isListOperator(op)) {
-    inInputMode.value = 'list'
-    const arr = ensureArrayValues(f.value)
-    manualInputText.value = arr.join('\n')
-    subquerySql.value = ''
-    subqueryExclude.value = op === 'NOT IN'
-  } else {
-    inInputMode.value = 'list'
-    manualInputText.value = ''
-    subquerySql.value = ''
-    subqueryExclude.value = false
-  }
-  if (isDateLikeType(getFilterColumnType(f))) {
-    const op = (f.operator || '').toUpperCase()
-    if (op === 'BETWEEN' && Array.isArray(f.value) && f.value.length === 2) {
-      dateFilterMode.value = 'fixed'
-      fixedDateRange.value = [String(f.value[0] || ''), String(f.value[1] || '')]
-    } else if (op === 'BETWEEN' && f.valueType === 'expression' && (f.rightExpression || '').includes('AND')) {
-      dateFilterMode.value = 'dynamic'
-      fixedDateRange.value = []
-    } else if (op === '=' && !Array.isArray(f.value) && String(f.value || '').trim()) {
-      dateFilterMode.value = 'single'
-      singleDateValue.value = String(f.value || '').trim()
-      fixedDateRange.value = []
-    } else {
-      dateFilterMode.value = 'dynamic'
-      fixedDateRange.value = []
-      singleDateValue.value = ''
-    }
-  }
-  showFilterEditor.value = true
-}
-
-const openFilterEditorFromAdvanced = (f: FilterCondition) => {
-  editingFilterFromAdvanced.value = true
-  openFilterEditor(f)
-}
-
-const closeFilterEditor = () => {
-  if (!filterEditorCommitted.value && editingFilter.value && editingFilterSnapshot.value) {
-    Object.assign(editingFilter.value, editingFilterSnapshot.value)
-  }
-  showFilterEditor.value = false
-  editingFilter.value = null
-  editingFilterFromAdvanced.value = false
-  editingFilterSnapshot.value = null
-  manualInputText.value = ''
-  inInputMode.value = 'list'
-  subquerySql.value = ''
-  subqueryExclude.value = false
-  fixedDateRange.value = []
-  singleDateValue.value = ''
-  dateFilterMode.value = 'dynamic'
-  filterEditorCommitted.value = false
-}
-
-const handleFilterEditorConfirm = () => {
-  if (!editingFilter.value) return
-  const f = editingFilter.value
-  if (isEditingDateField.value && !isListOperator(f.operator) && !['IS NULL', 'IS NOT NULL'].includes(f.operator)) {
-    if (dateFilterMode.value === 'fixed') {
-      if (fixedDateRange.value.length !== 2 || !fixedDateRange.value[0] || !fixedDateRange.value[1]) {
-        ElMessage.warning('请选择开始和结束日期')
-        return
-      }
-      f.operator = 'BETWEEN'
-      f.valueType = 'literal'
-      f.value = [fixedDateRange.value[0] || '', fixedDateRange.value[1] || '']
-      f.rightExpression = undefined
-    } else if (dateFilterMode.value === 'single') {
-      if (!singleDateValue.value) {
-        ElMessage.warning('请选择日期')
-        return
-      }
-      if ((f.operator || '').toUpperCase() === 'BETWEEN') {
-        f.operator = '='
-      }
-      f.valueType = 'literal'
-      f.value = singleDateValue.value
-      f.rightExpression = undefined
-    } else {
-      const expr = (f.rightExpression || '').trim()
-      if (!(f.valueType === 'expression' && expr)) {
-        applyDatePreset(dateQuickPresets[1]!)
-      }
-    }
-  }
-  if (isListOperator(f.operator)) {
-    f.operator = subqueryExclude.value ? 'NOT IN' : 'IN'
-    if (inInputMode.value === 'subquery') {
-      const subSql = subquerySql.value.trim()
-      if (!subSql) {
-        ElMessage.warning('请输入子查询语句')
-        return
-      }
-      f.valueType = 'expression'
-      f.rightExpression = subSql
-      f.value = ''
-    } else {
-      const values = parseManualValues(manualInputText.value, manualDelimiter.value)
-      if (values.length === 0) {
-        ElMessage.warning('请至少输入一个值')
-        return
-      }
-      f.value = values
-      f.valueType = 'literal'
-      f.rightExpression = undefined
-    }
-  }
-  f.asChartFilter = showAsChartFilter.value
-  filterEditorCommitted.value = true
-  showFilterEditor.value = false
-}
-
-const handleFilterRightFieldChange = (f: FilterCondition, value: string) => {
-  const parsed = parseFieldValue(value)
-  f.rightTable = parsed.table
-  f.rightTableAlias = parsed.tableAlias || parsed.table
-  f.rightColumn = parsed.column
-}
-
-const getFilterRightFieldValue = (f: FilterCondition) => {
-  if (!f.rightTable || !f.rightColumn) return ''
-  return buildFieldKey(f.rightTableAlias, f.rightTable, f.rightColumn)
-}
-
-const handleFilterValueTypeChange = (f: FilterCondition, valueType: 'literal' | 'field_ref' | 'expression') => {
-  if (f.aggFunc && valueType === 'field_ref') {
-    ElMessage.warning('聚合过滤暂不支持字段对字段比较')
-    f.valueType = 'literal'
-    return
-  }
-  if (valueType === 'field_ref' && filterFieldRefOptions.value.length === 0) {
-    ElMessage.warning('暂无可比较字段，请先添加维度')
-    f.valueType = 'literal'
-    return
-  }
-  f.valueType = valueType
-  if (valueType === 'field_ref' && !fieldRefOperators.some(op => op.value === f.operator)) {
-    f.operator = '='
-  }
-  if (valueType !== 'field_ref' && ![...operators, ...listOperators].some(op => op.value === f.operator)) {
-    f.operator = '='
-  }
-  if (valueType === 'field_ref' && (!f.rightTable || !f.rightColumn)) {
-    const first = filterFieldRefOptions.value[0]
-    if (first) {
-      handleFilterRightFieldChange(f, first.value)
-    }
-  }
-}
-
-const getOperatorLabel = (operator: string) => {
-  const allOps = [...operators, ...fieldRefOperators, ...listOperators]
-  return allOps.find(op => op.value === operator)?.label || operator
-}
-
-const getFilterFieldLabel = (f: FilterCondition) => {
-  if (!f.table || !f.column) return '编辑筛选器'
-  if (f.aggId || f.aggFunc) {
-    const matchedAgg = f.aggId
-      ? aggregations.value.find(a => a.id === f.aggId)
-      : aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(f.tableAlias, f.table, f.column) && a.func === f.aggFunc)
-    if (matchedAgg) return formatMetricChipLabel(matchedAgg)
-    const funcLabel = getAggFuncLabel(f.aggFunc)
-    if ((f.displayName || '').trim()) return `${funcLabel}(${stripFieldPrefix(f.displayName)})`
-    return `${funcLabel || '指标'}(${f.column})`
-  }
-  const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(f.tableAlias, f.table, f.column))
-  if (matchedDim) return getDimensionDisplayName(matchedDim)
-  if ((f.displayName || '').trim()) return stripFieldPrefix(f.displayName)
-  const tableInfo = tables.value.find(t => t.table_name === f.table)
-  const colInfo = tableInfo?.columns?.find(c => c.name === f.column)
-  const colLabel = colInfo?.description || f.column
-  return colLabel
-}
-
-const getFilterValueLabel = (f: FilterCondition) => {
-  if (!f.table || !f.column) return ''
-  if (f.operator === 'IS NULL' || f.operator === 'IS NOT NULL') return ''
-  if (f.valueType === 'field_ref' && f.rightTable && f.rightColumn) {
-    const tableInfo = tables.value.find(t => t.table_name === f.rightTable)
-    const tableLabel = getTableRoleLabel(f.rightTable, f.rightTableAlias, tableInfo?.description || f.rightTable)
-    const colInfo = tableInfo?.columns?.find(c => c.name === f.rightColumn)
-    const colLabel = colInfo?.description || f.rightColumn
-    return `${tableLabel}.${colLabel}`
-  }
-  if (f.valueType === 'expression') {
-    const matchedPreset = dateQuickPresets.find(
-      preset => preset.operator.toUpperCase() === (f.operator || '').toUpperCase()
-        && preset.expression === ((f.rightExpression || '').trim())
-    )
-    if (matchedPreset) return matchedPreset.label
-    if (f.operator === 'BETWEEN' && (f.rightExpression || '').includes('AND')) {
-      return '动态时间范围'
-    }
-    return (f.rightExpression || '').trim() || '表达式'
-  }
-  if (f.operator === 'BETWEEN' && Array.isArray(f.value) && f.value.length === 2) {
-    return `${f.value[0]} ~ ${f.value[1]}`
-  }
-  if (Array.isArray(f.value)) {
-    const arr = f.value
-    if (arr.length === 0) return '值'
-    if (arr.length === 1) return String(arr[0])
-    return `${arr[0]} 等${arr.length}项`
-  }
-  return f.value || '值'
-}
-
-const getAdvancedLeafLabel = (leaf: AdvancedFilterLeaf) => {
-  const f = leaf.filter
-  if (!f.table || !f.column) return ''
-  return `${getFilterFieldLabel(f)} ${getOperatorLabel(f.operator)} ${getFilterValueLabel(f)}`
-}
-
-const advancedFirstConfiguredLeaf = computed(() => getFirstConfiguredLeaf(advancedFilterDraft.value))
-const advancedEffectiveScope = computed<AdvancedFilterScope | null>(() => {
-  const firstLeaf = advancedFirstConfiguredLeaf.value
-  return firstLeaf ? getFilterScope(firstLeaf) : null
-})
-const advancedActiveScope = computed<AdvancedFilterScope>(() => advancedEffectiveScope.value || advancedFilterDraftScope.value)
-
-const advancedAllFieldGroups = computed(() => {
-  return [...advancedDimensionFieldsGrouped.value, ...advancedMetricFieldsGrouped.value]
-})
-
-const appendCurrentEditingFilterOption = (
-  groups: FieldPickerGroup[]
-) => {
-  const f = editingFilter.value
-  if (!f?.table || !f.column) return groups
-  const optionValue = f.aggFunc
-    ? (f.aggId ? `AGGID:${f.aggId}` : `AGG:${f.aggFunc}:${getTableAlias(f)}.${f.column}`)
-    : buildFieldKey(f.tableAlias, f.table, f.column)
-  const exists = groups.some(group => group.fields.some(field => field.value === optionValue))
-  if (exists) return groups
-
-  const option = { value: optionValue, label: getFilterFieldLabel(f) }
-  const targetLabel = f.aggFunc ? '指标' : '维度'
-  const copied = groups.map(group => ({ groupLabel: group.groupLabel, fields: [...group.fields] }))
-  const target = copied.find(group => group.groupLabel === targetLabel)
-  if (target) {
-    target.fields.unshift(option)
-    return copied
-  }
-  return [{ groupLabel: targetLabel, fields: [option] }, ...copied]
-}
-
-const advancedEditingFieldGroups = computed(() => {
-  let baseGroups: FieldPickerGroup[]
-  if (!editingFilterFromAdvanced.value) {
-    baseGroups = advancedAllFieldGroups.value
-  } else if (!advancedEffectiveScope.value) {
-    baseGroups = advancedAllFieldGroups.value
-  } else {
-    baseGroups = advancedEffectiveScope.value === 'aggregate' ? advancedMetricFieldsGrouped.value : advancedDimensionFieldsGrouped.value
-  }
-  return appendCurrentEditingFilterOption(baseGroups)
-})
-
-const advancedFieldPickerGroups = computed(() => {
-  const keyword = advancedFieldKeyword.value.trim().toLowerCase()
-  const sourceGroups = advancedEffectiveScope.value
-    ? (advancedEffectiveScope.value === 'aggregate' ? advancedMetricFieldsGrouped.value : advancedDimensionFieldsGrouped.value)
-    : advancedAllFieldGroups.value
-  const groups = sourceGroups.map(group => ({
-    groupLabel: group.groupLabel,
-    fields: group.fields.filter(field => {
-      if (!keyword) return true
-      return field.label.toLowerCase().includes(keyword) || field.value.toLowerCase().includes(keyword)
-    })
-  })).filter(group => group.fields.length > 0)
-  return groups
-})
-
-const getAdvancedPickerFieldType = (value: string, groupLabel?: string): 'string' | 'number' | 'date' => {
-  if (groupLabel === '指标' || value.startsWith('AGGID:') || value.startsWith('AGG:')) return 'number'
-  const parsed = parseFieldValue(value)
-  if (!parsed.table || !parsed.column) return 'string'
-  const tableInfo = tables.value.find(t => t.table_name === parsed.table)
-  const colInfo = tableInfo?.columns?.find(c => c.name === parsed.column)
-  if (!colInfo) return 'string'
-  return getFieldType(colInfo)
-}
-
-const openAdvancedFieldPicker = (f: FilterCondition) => {
-  pickingAdvancedFilter.value = f
-  advancedFieldKeyword.value = ''
-  showAdvancedFieldPicker.value = true
-}
-
-const closeAdvancedFieldPicker = () => {
-  showAdvancedFieldPicker.value = false
-  advancedFieldKeyword.value = ''
-  pickingAdvancedFilter.value = null
-}
-
-const handleAdvancedFieldPick = (value: string) => {
-  if (!pickingAdvancedFilter.value) return
-  const parsed = parseFieldValue(value)
-  if (!parsed.table || !parsed.column) {
-    ElMessage.warning('请选择有效字段')
-    return
-  }
-  const nextScope = parsed.aggFunc ? 'aggregate' : 'detail'
-  const establishedScope = getConfiguredScopeExcludingFilter(advancedFilterDraft.value, pickingAdvancedFilter.value.id)
-  if (establishedScope && nextScope !== establishedScope) {
-    ElMessage.warning(`当前组合筛选仅支持${getAdvancedScopeLabel(establishedScope)}`)
-    return
-  }
-  if (!establishedScope) advancedFilterDraftScope.value = nextScope
-  pickingAdvancedFilter.value.table = parsed.table
-  pickingAdvancedFilter.value.tableAlias = parsed.tableAlias || parsed.table
-  pickingAdvancedFilter.value.column = parsed.column
-  pickingAdvancedFilter.value.semanticName = parsed.semanticName
-  pickingAdvancedFilter.value.aggFunc = parsed.aggFunc
-  pickingAdvancedFilter.value.aggId = parsed.aggId
-  if (parsed.aggId) {
-    const matchedAgg = aggregations.value.find(a => a.id === parsed.aggId)
-    if (matchedAgg) {
-      pickingAdvancedFilter.value.displayName = getMetricDisplayName(matchedAgg)
-    }
-  } else if (parsed.aggFunc) {
-    pickingAdvancedFilter.value.displayName = `${parsed.aggFunc}(${parsed.column})`
-  } else {
-    const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(parsed.tableAlias, parsed.table, parsed.column))
-    pickingAdvancedFilter.value.displayName = matchedDim ? getDimensionDisplayName(matchedDim) : parsed.column
-  }
-  if (nextScope === 'aggregate' && pickingAdvancedFilter.value.valueType === 'field_ref') {
-    pickingAdvancedFilter.value.valueType = 'literal'
-  }
-  if (!pickingAdvancedFilter.value.operator) pickingAdvancedFilter.value.operator = '='
-  if (!pickingAdvancedFilter.value.valueType) pickingAdvancedFilter.value.valueType = 'literal'
-  closeAdvancedFieldPicker()
-}
-
-const openAdvancedFilterDialog = () => {
-  const whereFilters = filters.value.filter(f => !f.aggFunc)
-  const havingFilters = filters.value.filter(f => !!f.aggFunc)
-  const baseTree: AdvancedFilterGroup = advancedFilterTree.value
-    ? cloneAdvancedFilterNode(advancedFilterTree.value) as AdvancedFilterGroup
-    : { kind: 'group', id: createNodeId(), logic: 'AND', children: [] }
-  advancedFilterDraftScope.value = detectAdvancedScopeFromTree(baseTree) || (havingFilters.length > 0 && whereFilters.length === 0 ? 'aggregate' : 'detail')
-  advancedFilterDraft.value = baseTree
-  showAdvancedFilterDialog.value = true
-}
-
-const clearAdvancedFilter = () => {
-  const treeLeafIds = getAdvancedLeafIdSet(advancedFilterTree.value)
-  advancedFilterTree.value = null
-  if (treeLeafIds.size === 0) return
-  filters.value = filters.value.filter(f => !treeLeafIds.has(f.id))
-}
-
-const closeAdvancedFilterDialog = () => {
-  showAdvancedFilterDialog.value = false
-  advancedFilterDraft.value = null
-}
-
-const handleAdvancedToggleLogic = (groupId: string) => {
-  const group = findAdvancedGroup(advancedFilterDraft.value, groupId)
-  if (!group) return
-  group.logic = group.logic === 'AND' ? 'OR' : 'AND'
-}
-
-const handleAdvancedAddLeaf = (groupId: string) => {
-  const group = findAdvancedGroup(advancedFilterDraft.value, groupId)
-  if (!group) return
-  if (advancedActiveScope.value === 'aggregate' && aggregations.value.length === 0) {
-    ElMessage.warning('请先添加指标，再配置结果过滤')
-    return
-  }
-  const next = advancedEffectiveScope.value
-    ? (advancedEffectiveScope.value === 'aggregate' ? createDefaultAggregateFilter() : createDefaultDetailFilter())
-    : createEmptyFilter()
-  group.children.push({
-    kind: 'leaf',
-    id: createNodeId(),
-    filter: next
-  })
-}
-
-const handleAdvancedAddGroup = (groupId: string) => {
-  const group = findAdvancedGroup(advancedFilterDraft.value, groupId)
-  if (!group) return
-  if (advancedActiveScope.value === 'aggregate' && aggregations.value.length === 0) {
-    ElMessage.warning('请先添加指标，再配置结果过滤')
-    return
-  }
-  const next = advancedEffectiveScope.value
-    ? (advancedEffectiveScope.value === 'aggregate' ? createDefaultAggregateFilter() : createDefaultDetailFilter())
-    : createEmptyFilter()
-  group.children.push({
-    kind: 'group',
-    id: createNodeId(),
-    logic: 'AND',
-    children: [{ kind: 'leaf', id: createNodeId(), filter: next }]
-  })
-}
-
-const handleAdvancedRemoveNode = (nodeId: string) => {
-  if (!advancedFilterDraft.value) return
-  if (advancedFilterDraft.value.id === nodeId) {
-    advancedFilterDraft.value = null
-    return
-  }
-  removeAdvancedNode(advancedFilterDraft.value, nodeId)
-}
-
-const handleAdvancedEditLeaf = (filterId: string) => {
-  const leaf = findAdvancedLeafByFilterId(advancedFilterDraft.value, filterId)
-  if (!leaf) return
-  if (!leaf.filter.table || !leaf.filter.column) {
-    openAdvancedFieldPicker(leaf.filter)
-    return
-  }
-  openFilterEditorFromAdvanced(leaf.filter)
-}
-
-const confirmAdvancedFilterDialog = () => {
-  const scope = advancedEffectiveScope.value || advancedFilterDraftScope.value
-  const previousTreeLeafIds = getAdvancedLeafIdSet(advancedFilterTree.value)
-  if (!advancedFilterDraft.value) {
-    advancedFilterTree.value = null
-    if (previousTreeLeafIds.size > 0) {
-      filters.value = filters.value.filter(f => !previousTreeLeafIds.has(f.id))
-    }
-    closeAdvancedFilterDialog()
-    return
-  }
-  const nextTree = cloneAdvancedFilterNode(advancedFilterDraft.value) as AdvancedFilterGroup
-  const scopedLeaves = collectAdvancedLeafFilters(nextTree)
-  const invalidLeaf = scopedLeaves.find(f => !f.table || !f.column)
-  if (invalidLeaf) {
-    ElMessage.warning('请先为筛选项选择字段')
-    return
-  }
-  if (scope === 'detail' && scopedLeaves.some(f => !!f.aggFunc)) {
-    ElMessage.warning('当前组合筛选仅支持明细过滤')
-    return
-  }
-  if (scope === 'aggregate' && scopedLeaves.some(f => !f.aggFunc)) {
-    ElMessage.warning('当前组合筛选仅支持结果过滤')
-    return
-  }
-  const nextScopedFilters = scopedLeaves.map((f, idx) => {
-    const cloned = cloneFilterCondition(f)
-    if (scope === 'detail') {
-      cloned.aggFunc = undefined
-      cloned.aggId = undefined
-    }
-    cloned.logic = (idx === 0 ? 'AND' : 'AND') as FilterLogic
-    return cloned
-  })
-  const sameScopeOutsideFilters = filters.value
-    .filter(f => (scope === 'detail' ? !f.aggFunc : !!f.aggFunc))
-    .filter(f => !previousTreeLeafIds.has(f.id))
-    .map(f => {
-      const cloned = cloneFilterCondition(f)
-      cloned.logic = 'AND'
-      return cloned
-    })
-  const oppositeFilters = filters.value
-    .filter(f => (scope === 'detail' ? !!f.aggFunc : !f.aggFunc))
-    .map(f => {
-      const cloned = cloneFilterCondition(f)
-      cloned.logic = 'AND'
-      return cloned
-    })
-  filters.value = scope === 'detail'
-    ? [...nextScopedFilters, ...sameScopeOutsideFilters, ...oppositeFilters]
-    : [...oppositeFilters, ...nextScopedFilters, ...sameScopeOutsideFilters]
-  advancedFilterTree.value = nextTree
-  closeAdvancedFilterDialog()
-}
 
 const removeOrderBy = (index: number) => {
   orderBy.value.splice(index, 1)
@@ -2145,264 +1313,85 @@ const handleFavoriteSaved = () => {
   quickQueryRefresh.value++
 }
 
-const normalizeBuilderErrorMessage = (raw: unknown, fallback: string) => {
-  const text = String(raw || '').trim()
-  if (!text) return fallback
-  if (text.includes('不能混用明细过滤和结果过滤')) {
-    return '组合筛选配置冲突：同一筛选组内不能同时使用明细过滤和结果过滤，请在组合筛选弹窗中调整字段类型'
-  }
-  return text
-}
 
-// 提取后端统一响应中的错误信息（msg 优先，其次 detail）
-const getApiErrorDetail = (err: unknown): string => {
-  const data = (err as { response?: { data?: { msg?: string; detail?: string } } } | null)?.response?.data
-  return data?.msg || data?.detail || ''
-}
+const {
+  executing,
+  executingTaskText,
+  executingTaskId,
+  cancellingTask,
+  rawResultData,
+  executedSql,
+  compiledSql,
+  compiledSqlSnapshot,
+  skipQueryCache,
+  queryCacheEnabled,
+  quickQueryRefresh,
+  resultTabs,
+  activeResultTabIndex,
+  showSqlPreview,
+  previewSql,
+  previewSqlLoading,
+  compileCurrentBuilderSql,
+  handlePreviewSql,
+  loadRuntimeConfig,
+  executeQuery,
+  handleCancelExecutingTask,
+} = useQueryBuilderExecution({
+  datasourceId: () => props.datasourceId,
+  semanticConfigId: () => props.semanticConfigId as string,
+  submitSqlTask,
+  isBuilderConfigured,
+  builderConfigSnapshot,
+  executionTargets,
+  selectedMemberDatasourceIds,
+  validateBuilderFilters,
+  validateQueryPagination,
+  validateAggregationModeBeforeRun,
+  ensureSemanticConfigSelected,
+  snapshotSemanticBuilderConfig,
+  buildBuilderConfigSnapshot,
+  // activateResultTab/cancelResultAnalysis 来自下方的 useQueryBuilderResultAnalysis 解构，
+  // 此时尚未初始化，用惰性闭包透传（调用发生在运行期，届时解构已完成）
+  activateResultTab: (index: number) => activateResultTab(index),
+  cancelResultAnalysis: () => cancelResultAnalysis(),
+})
 
-const compileCurrentBuilderSql = async (
-  semanticBuilderConfig: Record<string, unknown> = snapshotSemanticBuilderConfig(),
-  snapshot: string = buildBuilderConfigSnapshot(),
-  datasourceId: string = props.datasourceId,
-  semanticConfigId: string = props.semanticConfigId as string,
-  force = false,
-): Promise<string> => {
-  if (!validateBuilderFilters()) {
-    return ''
-  }
-  if (!validateQueryPagination()) {
-    return ''
-  }
-  const compileSnapshot = JSON.stringify({ datasourceId, semanticConfigId, snapshot })
-  if (!force && compiledSql.value && compiledSqlSnapshot.value === compileSnapshot) {
-    return compiledSql.value
-  }
-  if (!ensureSemanticConfigSelected()) {
-    return ''
-  }
-  const response = await compileSemanticBuilderSql({
-    datasource_id: datasourceId,
-    semantic_config_id: semanticConfigId,
-    semantic_builder_config: semanticBuilderConfig,
-  })
-  const sqlText = String(response.data?.sql || '').trim()
-  compiledSql.value = sqlText
-  compiledSqlSnapshot.value = compileSnapshot
-  return sqlText
-}
-
-const handlePreviewSql = async () => {
-  if (!validateAggregationModeBeforeRun()) {
-    return
-  }
-  if (!ensureSemanticConfigSelected()) {
-    return
-  }
-  if (!isBuilderConfigured.value) {
-    ElMessage.warning('请先配置查询条件')
-    return
-  }
-  if (!validateQueryPagination()) {
-    return
-  }
-  if (showSqlPreview.value) {
-    showSqlPreview.value = false
-    return
-  }
-  previewSqlLoading.value = true
-  try {
-    previewSql.value = await compileCurrentBuilderSql()
-    if (!previewSql.value) {
-      return
-    }
-    showSqlPreview.value = true
-  } catch (err) {
-    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
-    const message = normalizeBuilderErrorMessage(rawMessage, 'SQL 编译失败')
-    ElMessage.error(message)
-  } finally {
-    previewSqlLoading.value = false
-  }
-}
-
-const loadRuntimeConfig = async () => {
-  try {
-    const response = await getChatDataConfig()
-    queryCacheEnabled.value = !!response.data?.query_cache_enabled
-    if (!queryCacheEnabled.value) {
-      skipQueryCache.value = false
-    }
-  } catch (err) {
-    console.warn('获取智能问数运行时配置失败:', err)
-    queryCacheEnabled.value = false
-    skipQueryCache.value = false
-  }
-}
-
-const executeQuery = async () => {
-  if (!validateAggregationModeBeforeRun()) {
-    return
-  }
-  if (!ensureSemanticConfigSelected()) {
-    return
-  }
-  if (!isBuilderConfigured.value) {
-    ElMessage.warning('请先配置查询条件')
-    return
-  }
-  if (executionTargets.value.length > 0 && selectedMemberDatasourceIds.value.length === 0) {
-    ElMessage.warning('请选择执行数据源')
-    return
-  }
-  if (!validateQueryPagination()) {
-    return
-  }
-  if (!validateBuilderFilters()) {
-    return
-  }
-  executing.value = true
-  executingTaskText.value = '任务创建中...'
-  executingTaskId.value = ''
-  rawResultData.value = null
-  cancelResultAnalysis()
-  executedSql.value = ''
-  resultTabs.value = []
-  activeResultTabIndex.value = 0
-  // 每次执行创建独立取消通道，供组件卸载时中止本次轮询
-  const taskController = new AbortController()
-  queryTaskAbortController = taskController
-  try {
-    const datasourceId = props.datasourceId
-    const semanticConfigId = props.semanticConfigId as string
-    const memberDatasourceIds = [...selectedMemberDatasourceIds.value]
-    const shouldSkipQueryCache = queryCacheEnabled.value ? skipQueryCache.value : false
-    const semanticBuilderConfig = snapshotSemanticBuilderConfig()
-
-    const task = await submitSqlTask({
-      datasource_id: datasourceId,
-      member_datasource_ids: memberDatasourceIds,
-      query_type: 'builder',
-      semantic_builder_config: semanticBuilderConfig,
-      semantic_config_id: semanticConfigId,
-      query_text: '可视化查询',
-      skip_query_cache: shouldSkipQueryCache,
-    }, {
-      returnTerminalTask: true,
-      signal: taskController.signal,
-      onProgress: (taskStatus) => {
-        executingTaskText.value = taskStatus.progress_text || '执行中...'
-        executingTaskId.value = taskStatus.task_id
-      }
-    })
-    const memberResults = task.results || []
-    if (memberResults.length > 0) {
-      resultTabs.value = memberResults.map((result, index) => {
-        const memberLabel = result.member_name || result.member_datasource_id || `成员${index + 1}`
-        const payload = isQuerySucceeded(result)
-          ? {
-              status: 'succeeded',
-              sql: result.sql || '',
-              columns: result.columns || [],
-              data: result.data || [],
-              total_count: result.total_count || 0,
-              execution_time_ms: result.execution_time_ms,
-              cache_hit: result.cache_hit,
-              cache_age_seconds: result.cache_age_seconds,
-              cache_expires_in_seconds: result.cache_expires_in_seconds,
-              member_datasource_id: result.member_datasource_id,
-              member_name: result.member_name,
-            }
-          : {
-              status: result.status || 'failed',
-              sql: result.sql || '',
-              columns: result.columns || [],
-              data: result.data || [],
-              total_count: result.total_count || 0,
-              execution_time_ms: result.execution_time_ms,
-              error: result.error || '查询失败',
-              member_datasource_id: result.member_datasource_id,
-              member_name: result.member_name,
-            }
-        return {
-          title: memberLabel,
-          rawResultData: JSON.stringify(payload),
-          executedSql: result.sql || '',
-          memberDatasourceId: result.member_datasource_id,
-          memberName: result.member_name,
-          status: isQuerySucceeded(result) ? 'success' : 'error',
-        }
-      })
-      activateResultTab(0)
-      // 刷新快捷查询
-      quickQueryRefresh.value++
-    } else {
-      rawResultData.value = JSON.stringify({
-        status: 'failed',
-        error: task.error_message || '查询失败'
-      })
-      resultTabs.value = [{
-        title: '结果1',
-        rawResultData: rawResultData.value,
-        executedSql: '',
-        status: 'error',
-      }]
-    }
-  } catch (err) {
-    // 组件卸载触发的轮询取消不属于查询失败，不向结果区写错误，避免已销毁组件仍弹错误提示
-    if (!isAbortError(err)) {
-      const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
-      const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
-      rawResultData.value = JSON.stringify({
-        status: 'failed',
-        error: message
-      })
-      resultTabs.value = [{
-        title: '结果1',
-        rawResultData: rawResultData.value,
-        executedSql: '',
-        status: 'error',
-      }]
-    }
-  } finally {
-    executing.value = false
-    executingTaskText.value = ''
-    executingTaskId.value = ''
-    cancellingTask.value = false
-  }
-}
-
-const handleCancelExecutingTask = async () => {
-  if (!executingTaskId.value || cancellingTask.value) return
-  cancellingTask.value = true
-  try {
-    const response = await cancelQueryTask(executingTaskId.value)
-    if (response.status !== 'success') {
-      ElMessage.error(response.msg || '暂停失败')
-      cancellingTask.value = false
-      return
-    }
-    executingTaskText.value = '暂停请求已提交...'
-    if (response.data?.status === 'partial_success' || response.data?.status === 'failed') {
-      const firstMessage = response.data?.executions?.find(execution => execution.message)?.message
-      ElMessage.warning(firstMessage || '部分 SQL 暂停失败')
-    } else {
-      ElMessage.success('已提交暂停请求')
-    }
-  } catch (err) {
-    console.error('暂停可视化查询任务失败:', err)
-    ElMessage.error('暂停失败，请稍后重试')
-    cancellingTask.value = false
-  }
-}
-
-// 配置发生变化时，若 SQL 预览已展开则自动折叠；再次点击时重新编译最新 SQL。
-watch(builderConfigSnapshot, (nextSnapshot, prevSnapshot) => {
-  if (nextSnapshot === prevSnapshot) return
-  compiledSql.value = ''
-  compiledSqlSnapshot.value = ''
-  previewSql.value = ''
-  if (!showSqlPreview.value) return
-  showSqlPreview.value = false
+const {
+  selectedAnalysisType,
+  compareType,
+  resultSortField,
+  resultSortDirection,
+  resultTopN,
+  topNField,
+  topNDirection,
+  percentMetricField,
+  percentScope,
+  percentGroupField,
+  compareMetricField,
+  compareBaselineMode,
+  hasAnalyzedResult,
+  resultAnalysisFieldOptions,
+  resultAnalysisMetricOptions,
+  resultAnalysisDimensionOptions,
+  isCompareAnalysisApplied,
+  isCompareAnalysisDisabled,
+  resultSemanticParams,
+  runCompareAnalysis,
+  runSortAnalysis,
+  runTopNAnalysis,
+  runTotalAnalysis,
+  runPercentAnalysis,
+  runCompareBaselineAnalysis,
+  cancelResultAnalysis,
+  resetResultAnalysis,
+} = useQueryBuilderResultAnalysis({
+  resultData,
+  analyzedResultData,
+  dimensions,
+  aggregations,
+  getDimensionDisplayName,
+  getMetricDisplayName,
+  getCompareAnalysisWarning,
 })
 
 // 清空所有
@@ -2429,55 +1418,6 @@ const clearAll = () => {
   previewSql.value = ''
   showSqlPreview.value = false
   savedBuilderConfigSnapshot.value = ''
-}
-
-const parseAdvancedFilterFromConfig = (node: BuilderFilterNode | null | undefined): AdvancedFilterGroup | AdvancedFilterLeaf | null => {
-  if (!node || typeof node !== 'object') return null
-  if (Array.isArray(node.and) || Array.isArray(node.or)) {
-    const logic: FilterLogic = Array.isArray(node.and) ? 'AND' : 'OR'
-    const source = node[logic === 'AND' ? 'and' : 'or'] || []
-    const children = source
-      .map((child) => parseAdvancedFilterFromConfig(child))
-      .filter((child): child is AdvancedFilterLeaf | AdvancedFilterGroup => Boolean(child))
-    return {
-      kind: 'group',
-      id: createNodeId(),
-      logic,
-      children
-    }
-  }
-  if (!node.table || !node.column) return null
-  return {
-    kind: 'leaf',
-    id: createNodeId(),
-    filter: {
-      id: node.id || createNodeId(),
-      table: node.table,
-      tableAlias: node.tableAlias || node.table,
-      column: node.column,
-      semanticName: node.semanticName,
-      displayName: node.displayName,
-      operator: node.operator || '=',
-      value: node.value || '',
-      valueType: node.valueType || 'literal',
-      rightTable: node.rightTable,
-      rightTableAlias: node.rightTableAlias || node.rightTable,
-      rightColumn: node.rightColumn,
-      rightExpression: node.rightExpression,
-      logic: node.logic || 'AND',
-      expression: node.expression,
-      aggFunc: node.aggFunc,
-      aggId: node.aggId
-    }
-  }
-}
-
-const getBuilderSemanticConfigId = (config: BuilderConfig | null | undefined) => {
-  return String(config?.semantic_config_id || config?.semanticConfigId || '').trim()
-}
-
-const getBuilderSemanticConfigName = (config: BuilderConfig | null | undefined) => {
-  return String(config?.semantic_config_name || config?.semanticConfigName || '').trim()
 }
 
 const isAvailableSemanticConfig = (configId: string) => {
@@ -2679,132 +1619,6 @@ const allDetailFieldsGrouped = computed(() => {
   })
   return groups
 })
-
-const semanticDimensionFilterFields = computed<FieldPickerOption[]>(() => {
-  const items = props.semanticConfig?.dimensions || []
-  const dedup = new Map<string, FieldPickerOption>()
-  items.forEach((dim) => {
-    if (!dim?.table || !dim?.column) return
-    const alias = getTableAlias({ table: dim.table, tableAlias: dim.table_alias })
-    const key = buildFieldKey(alias, dim.table, dim.column)
-    if (dedup.has(key)) return
-    dedup.set(key, {
-      value: key,
-      label: dim.name || dim.column,
-      semanticName: dim.name,
-      expression: dim.expression
-    })
-  })
-  return Array.from(dedup.values())
-})
-
-const semanticMetricFilterFields = computed<FieldPickerOption[]>(() => {
-  const items = props.semanticConfig?.metrics || []
-  const fields: FieldPickerOption[] = []
-  items.forEach((metric) => {
-    const meta = parseMetricExpressionMeta(metric.expression || '')
-    const qualified = parseFirstQualifiedFromExpression(metric.expression || '')
-    const table = metric.table || qualified?.table || ''
-    const tableAlias = getTableAlias({ table, tableAlias: metric.table_alias })
-    const func = meta.func || 'RAW'
-    const column = meta.column || metric.field_name || qualified?.column || ''
-    if (!table || !column) return
-    fields.push({
-      value: `AGG:${func}:${tableAlias}.${column}`,
-      label: metric.name || `${func}(${column})`,
-      semanticName: metric.name,
-      expression: metric.expression
-    })
-  })
-  return fields
-})
-
-const advancedDimensionFieldsGrouped = computed(() => {
-  const dedup = new Map<string, FieldPickerOption>()
-  dimensions.value.forEach((d) => {
-    const key = buildFieldKey(d.tableAlias, d.table, d.column)
-    if (dedup.has(key)) return
-    dedup.set(key, {
-      value: key,
-      label: getDimensionDisplayName(d)
-    })
-  })
-  if (dedup.size === 0) {
-    if (semanticDimensionFilterFields.value.length === 0) return []
-    return [{ groupLabel: '维度', fields: semanticDimensionFilterFields.value }]
-  }
-  return [{ groupLabel: '维度', fields: Array.from(dedup.values()) }]
-})
-
-const advancedMetricFieldsGrouped = computed(() => {
-  const merged = new Map<string, FieldPickerOption>()
-  aggregations.value.forEach((a) => {
-    merged.set(`AGGID:${a.id}`, {
-      value: `AGGID:${a.id}`,
-      label: formatMetricChipLabel(a)
-    })
-  })
-  semanticMetricFilterFields.value.forEach((field) => {
-    if (merged.has(field.value)) return
-    merged.set(field.value, field)
-  })
-  filters.value.forEach((f) => {
-    if (!f.aggFunc || !f.table || !f.column) return
-    const value = f.aggId ? `AGGID:${f.aggId}` : `AGG:${f.aggFunc}:${getTableAlias(f)}.${f.column}`
-    if (merged.has(value)) return
-    const funcLabel = getAggFuncLabel(f.aggFunc)
-    const labelBase = stripFieldPrefix(f.displayName || f.column) || f.column
-    merged.set(value, { value, label: `${funcLabel}(${labelBase})` })
-  })
-  if (merged.size === 0) return []
-  return [{ groupLabel: '指标', fields: Array.from(merged.values()) }]
-})
-
-// 解析筛选/排序字段值
-const parseFieldValue = (value: string): { table: string; tableAlias?: string; column: string; semanticName?: string; aggFunc?: string; aggId?: string } => {
-  if (value.startsWith('AGGID:')) {
-    const aggId = value.substring(6)
-    const agg = aggregations.value.find(a => a.id === aggId)
-    if (agg) {
-      return { table: agg.table, tableAlias: getTableAlias(agg), column: agg.column, semanticName: agg.semanticName, aggFunc: agg.func, aggId }
-    }
-    const fallbackDim = dimensions.value[0]
-    if (fallbackDim) {
-      ElMessage.warning('原聚合字段已失效，已回退到可用维度字段')
-      return { table: fallbackDim.table, tableAlias: getTableAlias(fallbackDim), column: fallbackDim.column, semanticName: fallbackDim.semanticName }
-    }
-    const fallbackAgg = aggregations.value[0]
-    if (fallbackAgg) {
-      ElMessage.warning('原聚合字段已失效，已回退到可用聚合字段')
-      return { table: fallbackAgg.table, tableAlias: getTableAlias(fallbackAgg), column: fallbackAgg.column, semanticName: fallbackAgg.semanticName, aggFunc: fallbackAgg.func, aggId: fallbackAgg.id }
-    }
-    ElMessage.warning('当前无可用字段，请先添加维度或指标')
-    return { table: '', column: '' }
-  }
-  if (value.startsWith('AGG:')) {
-    const rest = value.substring(4)
-    const colonIdx = rest.indexOf(':')
-    if (colonIdx <= 0) return { table: '', column: '' }
-    const aggFunc = rest.substring(0, colonIdx)
-    const dotIdx = rest.indexOf('.', colonIdx + 1)
-    if (dotIdx <= colonIdx + 1) return { table: '', column: '' }
-    const tableAlias = rest.substring(colonIdx + 1, dotIdx)
-    const column = rest.substring(dotIdx + 1)
-    if (!tableAlias || !column) return { table: '', column: '' }
-    const table = resolvePhysicalTableByAlias(tableAlias)
-    const matchedAgg = aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, table, column) && a.func === aggFunc)
-    const semanticOption = semanticMetricFilterFields.value.find(field => field.value === value)
-    return { table, tableAlias, column, semanticName: matchedAgg?.semanticName || semanticOption?.semanticName, aggFunc }
-  }
-  const dotIdx = value.indexOf('.')
-  if (dotIdx <= 0) return { table: '', column: '' }
-  const tableAlias = value.substring(0, dotIdx)
-  const table = resolvePhysicalTableByAlias(tableAlias)
-  const column = value.substring(dotIdx + 1)
-  const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(tableAlias, table, column))
-  const semanticOption = semanticDimensionFilterFields.value.find(field => field.value === value)
-  return { table, tableAlias, column, semanticName: matchedDim?.semanticName || semanticOption?.semanticName }
-}
 
 // 生成筛选字段组合值
 const getFilterFieldValue = (f: FilterCondition) => {
@@ -3008,9 +1822,6 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('mousemove', onMouseMove)
   document.removeEventListener('mouseup', onMouseUp)
-  // 卸载时中止进行中的查询任务轮询（AbortError 由调用方静默处理）
-  queryTaskAbortController?.abort()
-  queryTaskAbortController = null
 })
 
 // 暴露方法给父组件

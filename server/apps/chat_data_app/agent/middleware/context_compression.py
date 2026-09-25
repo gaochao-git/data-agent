@@ -31,7 +31,7 @@ from apps.chat_data_app.services.llm_config import (
     get_chat_data_llm,
     get_context_compression_summary_output_max_tokens,
 )
-from apps.chat_data_app.services.runtime_config import get_context_compression_config
+from apps.chat_data_app.services.runtime_config import get_context_compression_config, get_context_window
 from ..prompts.context_compression import build_context_compression_summary_prompt
 from ..tool_results import tool_result_recovery
 from .message_integrity import complete_message_boundaries
@@ -40,7 +40,11 @@ logger = get_logger(__name__)
 
 SUMMARY_TOOL_RESULT_COMPACT_TOKENS = 512
 RECENT_COMPLETED_ROUNDS_TO_KEEP = 2
-MAX_COMPRESSION_PASSES = 8
+MAX_COMPRESSION_PASSES = 3
+# 摘要输出预算：未显式配置时按模型窗口动态计算 min(窗口/20, 上限)，并设下限防小窗口模型摘要过短
+SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR = 20
+SUMMARY_OUTPUT_TOKENS_FLOOR = 2000
+SUMMARY_OUTPUT_TOKENS_CAP = 12000
 
 
 @dataclass(frozen=True)
@@ -174,8 +178,21 @@ async def compress_messages_for_state(
     if not summary_text:
         report["compression_skipped_reason"] = "empty_summary"
         report["estimated_tokens_after"] = working_tokens
+        if working_tokens <= hard_input_guard_tokens(hard_input_limit_tokens):
+            # fail-closed：摘要失败但尚未触碰硬限安全水位时保留原样，本轮不删任何内容，
+            # 下一轮超过触发线时重试摘要；仅在逼近硬限时才退回确定性收缩保可用性。
+            report["summary_retry_next_turn"] = True
+            logger.warning(
+                "[agent] 上下文压缩摘要为空且未超硬限安全水位，保留原样待下轮重试"
+                "（摘要输入不可用=%s） before_tokens=%s working_tokens=%s threshold_tokens=%s",
+                bool(summary_input_report.get("summary_input_unusable")),
+                before_tokens,
+                working_tokens,
+                threshold_tokens,
+            )
+            return working_messages, effective_previous_summary, report
         logger.warning(
-            "[agent] 上下文压缩摘要为空，确定性收缩兜底（empty_summary，摘要输入不可用=%s）"
+            "[agent] 上下文压缩摘要为空且逼近硬限，确定性收缩兜底（empty_summary，摘要输入不可用=%s）"
             " before_tokens=%s working_tokens=%s threshold_tokens=%s",
             bool(summary_input_report.get("summary_input_unusable")),
             before_tokens,
@@ -313,6 +330,9 @@ async def build_context_compression_update(
         on_compression_started=on_compression_started,
     )
     if not report.get("triggered") and not report.get("legacy_summary_migrated"):
+        return None, summary_text, report
+    if report.get("summary_retry_next_turn"):
+        # 摘要失败的 fail-closed 轮：消息保持原样，不产生任何 state 写更新
         return None, summary_text, report
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *compressed_messages], summary_text, report
 
@@ -933,11 +953,23 @@ def _summary_tokens(summary_text: str | None) -> int:
     return count_messages_tokens([summary_message]) if summary_message else 0
 
 
+def _resolve_summary_output_max_tokens(model_id: str | None) -> int:
+    """摘要调用输出上限：显式配置优先，否则按模型窗口动态取 min(窗口/20, 上限) 并设下限。"""
+    configured = get_context_compression_summary_output_max_tokens()
+    if configured is not None:
+        return configured
+    window = max(int(get_context_window(model_id) or 0), 1)
+    return min(
+        max(window // SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR, SUMMARY_OUTPUT_TOKENS_FLOOR),
+        SUMMARY_OUTPUT_TOKENS_CAP,
+    )
+
+
 def _get_summary_input_limit_tokens(model_id: str | None) -> int:
     """摘要调用使用独立的输出预留，避免摘要请求本身超出模型窗口。"""
     budget = get_model_context_budget(
         model_id,
-        max_output_tokens=get_context_compression_summary_output_max_tokens(),
+        max_output_tokens=_resolve_summary_output_max_tokens(model_id),
     )
     return hard_input_guard_tokens(budget.hard_input_limit_tokens)
 
@@ -1140,7 +1172,7 @@ async def _summarize_messages_with_llm(
     llm = get_chat_data_llm(
         model=model_id,
         streaming=False,
-        max_tokens=get_context_compression_summary_output_max_tokens(),
+        max_tokens=_resolve_summary_output_max_tokens(model_id),
         enable_thinking=False,
     )
     try:

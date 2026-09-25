@@ -28,6 +28,8 @@ import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHours
 import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../utils/executionTargets'
 import { parseSseChunk } from '../utils/sse'
 import { isAbortError } from '../utils/abort'
+import { parseSQLStatements } from '../utils/sqlStatements'
+import { appleTheme } from './sqlEditorTheme'
 
 const { submitSqlTask } = useQueryTask()
 // 当前查询任务轮询的取消通道:组件卸载时中止,避免销毁后仍继续轮询/写状态
@@ -1216,103 +1218,7 @@ const scrollAiOutputToBottom = (force = false) => {
   })
 }
 
-// CodeMirror 主题 - Apple 风格
-const appleTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#FFFFFF',
-    color: '#1D1D1F',
-    height: '100%',
-    fontSize: '14px',
-  },
-  '&.cm-editor': {
-    height: '100%',
-  },
-  '&.cm-editor.cm-focused': {
-    outline: 'none',
-  },
-  '.cm-scroller': {
-    overflow: 'auto',
-    height: '100%',
-    fontFamily: '"SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace',
-    lineHeight: '1.6',
-  },
-  '.cm-content': {
-    caretColor: '#1677FF',
-    padding: '8px 0',
-  },
-  '.cm-cursor': {
-    borderLeftColor: '#1677FF',
-    borderLeftWidth: '2px',
-  },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-    backgroundColor: 'rgba(22, 119, 255, 0.12)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(22, 119, 255, 0.04)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#FAFAFA',
-    color: '#AEAEB2',
-    border: 'none',
-    borderRight: '1px solid rgba(0, 0, 0, 0.06)',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 12px 0 12px',
-    minWidth: '32px',
-    fontSize: '12px',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'transparent',
-    color: '#1677FF',
-  },
-  // SQL 语法高亮
-  '.cm-keyword': {
-    color: '#1677FF',
-    fontWeight: '600',
-  },
-  '.cm-string': {
-    color: '#FF3B30',
-  },
-  '.cm-number': {
-    color: '#FF9500',
-  },
-  '.cm-comment': {
-    color: '#8E8E93',
-    fontStyle: 'italic',
-  },
-  '.cm-operator': {
-    color: '#1677FF',
-  },
-  '.cm-punctuation': {
-    color: '#636366',
-  },
-  '.cm-variableName, .cm-propertyName': {
-    color: '#30B0C7',
-  },
-  '.cm-typeName': {
-    color: '#30B0C7',
-  },
-  // 自动补全样式
-  '.cm-tooltip': {
-    backgroundColor: '#FFFFFF',
-    border: '1px solid rgba(0, 0, 0, 0.1)',
-    borderRadius: '8px',
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
-  },
-  '.cm-tooltip-autocomplete': {
-    '& > ul': {
-      fontFamily: '"SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace',
-      fontSize: '13px',
-    },
-    '& > ul > li': {
-      padding: '4px 12px',
-    },
-    '& > ul > li[aria-selected]': {
-      backgroundColor: 'rgba(22, 119, 255, 0.1)',
-      color: '#1677FF',
-    },
-  },
-})
+// CodeMirror 主题 - Apple 风格（配置体较大，抽至 sqlEditorTheme.ts）
 
 // CodeMirror 扩展
 const extensions = computed<Extension[]>(() => {
@@ -1335,97 +1241,7 @@ const extensions = computed<Extension[]>(() => {
   ]
 })
 
-// 解析多条 SQL 语句
-function parseSQLStatements(sqlText: string): string[] {
-  const statements: string[] = []
-  let current = ''
-  let quoteChar = ''
-  let inLineComment = false
-  let inBlockComment = false
-
-  for (let i = 0; i < sqlText.length; i++) {
-    const char = sqlText[i]
-    const nextChar = sqlText[i + 1]
-
-    if (inLineComment) {
-      current += char
-      if (char === '\n') {
-        inLineComment = false
-      }
-      continue
-    }
-
-    if (inBlockComment) {
-      current += char
-      if (char === '*' && nextChar === '/') {
-        current += nextChar
-        i++
-        inBlockComment = false
-      }
-      continue
-    }
-
-    if (quoteChar) {
-      current += char
-      if (char === '\\') {
-        if (i + 1 < sqlText.length) {
-          current += sqlText[i + 1]
-          i++
-        }
-        continue
-      }
-      if (char === quoteChar) {
-        if (quoteChar === "'" && nextChar === "'") {
-          current += nextChar
-          i++
-          continue
-        }
-        quoteChar = ''
-      }
-      continue
-    }
-
-    if (char === '-' && nextChar === '-') {
-      inLineComment = true
-      current += char + nextChar
-      i++
-      continue
-    }
-    if (char === '#') {
-      inLineComment = true
-      current += char
-      continue
-    }
-    if (char === '/' && nextChar === '*') {
-      inBlockComment = true
-      current += char + nextChar
-      i++
-      continue
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quoteChar = char
-      current += char
-      continue
-    }
-
-    if (char === ';') {
-      const trimmed = current.trim()
-      if (trimmed) {
-        statements.push(trimmed)
-      }
-      current = ''
-    } else {
-      current += char
-    }
-  }
-
-  const trimmed = current.trim()
-  if (trimmed) {
-    statements.push(trimmed)
-  }
-
-  return statements
-}
+// 解析多条 SQL 语句（实现抽至 utils/sqlStatements.ts，含注释/引号跳过逻辑）
 
 // 执行 SQL（支持多条）
 const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {

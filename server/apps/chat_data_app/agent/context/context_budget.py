@@ -220,7 +220,7 @@ def validate_context_budget_startup_config() -> None:
                 f"模型 {model_id} 的 CHAT_DATA_OUTPUT_MAX_TOKENS={output_tokens} "
                 f"必须小于上下文窗口 {context_window}（可在注册表为该模型配置 max_output_tokens）"
             )
-        if summary_output_tokens >= context_window:
+        if summary_output_tokens is not None and summary_output_tokens >= context_window:
             errors.append(
                 f"模型 {model_id} 的 CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS="
                 f"{summary_output_tokens} 必须小于上下文窗口 {context_window}"

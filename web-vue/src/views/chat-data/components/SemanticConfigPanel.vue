@@ -54,7 +54,57 @@ import type {
   AddFieldTableOption,
 } from '../types'
 
-type SemanticLogicalType = NonNullable<SemanticDimension['logical_type']>
+// 领域纯函数与共享类型已抽至 semantic/panelModelUtils.ts（单一来源）
+import {
+  AGG_DISPLAY_SUFFIX_MAP,
+  EXPANDABLE_AGG_FUNCS,
+  LOGICAL_TYPE_OPTIONS,
+  atomicMetricColumn,
+  buildAliasAwareDefaultDisplayName,
+  buildConfigMaintainerTitle,
+  buildConfigSignature,
+  buildDimensionPreserveKey,
+  buildFieldRowKey,
+  buildFieldRows as buildFieldRowsForConfig,
+  buildMetricExpandDisplayName,
+  buildTablePrefixedDisplayName,
+  canManageConfig,
+  copyDimensionRuntimeConfig,
+  deriveScopeFromConfig,
+  extractExpressionColumns,
+  formatConfigOperator,
+  formatJoinTypeLabel,
+  formatRelationshipTypeLabel,
+  generateScopeAlias,
+  getConfigCreatorName,
+  getColumnDictKey,
+  getFieldColumnDictKey,
+  getFieldPhysicalColumn,
+  getFieldRowAlias,
+  getFieldTableAlias,
+  getMetricDataType,
+  getRelationshipLeftAlias,
+  getRelationshipRightAlias,
+  getScopeAlias,
+  getScopePhysicalTable,
+  hasColumnDictContent,
+  hasColumnDictEnumValues,
+  inferLogicalType,
+  isFieldRowInScope,
+  isNumericColumnType,
+  isNumericPhysicalTableName,
+  isRawColumnExpression,
+  expressionUsesColumn,
+  mergeFieldRowsWithDraft as mergeFieldRowsWithDraftUtil,
+  normalizeExpressionColumn,
+  normalizeFieldName,
+  normalizeScopeEntries,
+  normalizeSqlAliasBase,
+  parseAggFuncFromExpression,
+  parseSimpleMetricExpression,
+  toLetterSuffix,
+} from './semantic/panelModelUtils'
+import type { FieldConfigRow, SemanticLogicalType, TableScopeEntry } from './semantic/panelModelUtils'
 
 interface Props {
   datasourceId: string
@@ -89,11 +139,6 @@ const batchToggleVisible = ref(false)
 const batchToggleEnabled = ref(true)
 const batchToggling = ref(false)
 const savedConfigSignatures = ref<Record<string, string>>({})
-
-interface TableScopeEntry {
-  table: string
-  alias: string
-}
 
 const tableScopes = ref<Record<string, TableScopeEntry[]>>({})
 const draggingTableName = ref('')
@@ -130,18 +175,6 @@ const getTableHoverTitle = (table: TableInfo) => {
   return [table.description || table.table_name, businessDesc].filter(Boolean).join('\n')
 }
 
-const buildConfigSignature = (config: SemanticConfigItem) => {
-  return JSON.stringify({
-    name: config.name || '',
-    description: config.description || '',
-    business_notes: config.business_notes || '',
-    enabled: !!config.enabled,
-    metrics: config.metrics || [],
-    dimensions: config.dimensions || [],
-    relationships: config.relationships || [],
-  })
-}
-
 const activeConfig = computed<SemanticConfigItem | null>(() => {
   if (configs.value.length === 0) return null
   const targetId = props.selectedConfigId || expandedId.value
@@ -159,106 +192,12 @@ const isActiveConfigDirty = computed(() => {
 const hasUnsavedSemanticConfig = computed(() => isActiveConfigDirty.value || isFieldRowsDirty.value)
 const canOpenEvaluation = computed(() => Boolean(activeConfig.value && props.datasourceId))
 
-const normalizeSqlAliasBase = (tableName: string) => {
-  const normalized = String(tableName || '').trim().replace(/[^\w]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-  const base = normalized || 'table'
-  return /^[A-Za-z_]/.test(base) ? base : `t_${base}`
-}
-
-const isNumericPhysicalTableName = (tableName: string) => /^\d+$/.test(String(tableName || '').trim())
-
-const toLetterSuffix = (index: number) => {
-  let value = Math.max(1, index)
-  let suffix = ''
-  while (value > 0) {
-    value -= 1
-    suffix = String.fromCharCode(97 + (value % 26)) + suffix
-    value = Math.floor(value / 26)
-  }
-  return suffix
-}
-
-const getScopeAlias = (entry: TableScopeEntry | string | undefined | null) => {
-  if (!entry) return ''
-  if (typeof entry === 'string') return entry
-  return entry.alias || entry.table
-}
-
-const getScopePhysicalTable = (entry: TableScopeEntry | string | undefined | null) => {
-  if (!entry) return ''
-  if (typeof entry === 'string') return entry
-  return entry.table
-}
-
-const normalizeScopeEntries = (entries: Array<TableScopeEntry | string>) => {
-  const seenAliases = new Set<string>()
-  const result: TableScopeEntry[] = []
-  entries.forEach(item => {
-    const table = getScopePhysicalTable(item).trim()
-    const alias = (getScopeAlias(item) || table).trim()
-    if (!table || !alias || seenAliases.has(alias)) return
-    seenAliases.add(alias)
-    result.push({ table, alias })
-  })
-  return result
-}
-
-const getFieldTableAlias = (item: { table: string; table_alias?: string }) => {
-  return String(item.table_alias || item.table || '').trim()
-}
-
-const getRelationshipLeftAlias = (rel: SemanticRelationship) => String(rel.left_alias || rel.left_table || '').trim()
-const getRelationshipRightAlias = (rel: SemanticRelationship) => String(rel.right_alias || rel.right_table || '').trim()
-
-const deriveScopeFromConfig = (config: SemanticConfigItem) => {
-  const entries: TableScopeEntry[] = []
-  const addEntry = (table: string, alias?: string) => {
-    const physical = String(table || '').trim()
-    const effectiveAlias = String(alias || physical).trim()
-    if (!physical || !effectiveAlias || entries.some(item => item.alias === effectiveAlias)) return
-    entries.push({ table: physical, alias: effectiveAlias })
-  }
-  config.dimensions.forEach(item => addEntry(item.table, getFieldTableAlias(item)))
-  config.metrics.forEach(item => addEntry(item.table, getFieldTableAlias(item)))
-  config.relationships.forEach(item => {
-    addEntry(item.left_table, getRelationshipLeftAlias(item))
-    addEntry(item.right_table, getRelationshipRightAlias(item))
-  })
-  return entries
-}
-
-const canManageConfig = (config?: SemanticConfigItem | null) => {
-  if (!config) return false
-  return typeof config.can_manage === 'boolean' ? config.can_manage : true
-}
-
 const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticConfigs : getMySemanticConfigs)
 const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
 const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
 const semanticConfigToggleApi = computed(() => props.adminMode ? toggleAdminSemanticConfig : toggleSemanticConfig)
 const semanticConfigBatchToggleApi = computed(() => props.adminMode ? batchToggleAdminSemanticConfig : batchToggleSemanticConfig)
 const columnDictListApi = computed(() => props.adminMode ? getAdminDatasourceTableColumnDicts : getDatasourceTableColumnDicts)
-
-const formatConfigOperator = (value?: string) => {
-  const text = String(value || '').trim()
-  return text || '未知'
-}
-
-const getConfigCreatorName = (config: SemanticConfigItem) => {
-  return formatConfigOperator(config.create_by_name)
-}
-
-const getConfigUpdaterName = (config: SemanticConfigItem) => {
-  return formatConfigOperator(config.update_by_name)
-}
-
-const buildConfigMaintainerTitle = (config: SemanticConfigItem) => {
-  const creator = getConfigCreatorName(config)
-  const updater = getConfigUpdaterName(config)
-  const createTime = config.create_time || '-'
-  const updateTime = config.update_time || '-'
-  return `创建人：${creator}\n创建时间：${createTime}\n最近维护人：${updater}\n维护时间：${updateTime}`
-}
 
 const getConfigIndex = (config: SemanticConfigItem) => {
   return configs.value.findIndex(item => item.id === config.id)
@@ -318,31 +257,6 @@ const getScopeEntryLabel = (entry: TableScopeEntry | string | undefined | null) 
 
 const getScopeCountByPhysicalTable = (configId: string, tableName: string) => {
   return getScopeEntries(configId).filter(entry => entry.table === tableName).length
-}
-
-const isFieldRowInScope = (row: Pick<FieldConfigRow, 'table' | 'tableAlias'>, scopeEntries: TableScopeEntry[]) => {
-  const alias = getFieldRowAlias(row)
-  return scopeEntries.some(entry => entry.alias === alias && entry.table === row.table)
-}
-
-const generateScopeAlias = (tableName: string, entries: TableScopeEntry[]) => {
-  const base = normalizeSqlAliasBase(tableName)
-  const usedAliases = new Set(entries.map(item => item.alias))
-  if (!usedAliases.has(base)) return base
-  if (isNumericPhysicalTableName(tableName)) {
-    let index = 1
-    let candidate = `${base}_${toLetterSuffix(index)}`
-    while (usedAliases.has(candidate)) {
-      index += 1
-      candidate = `${base}_${toLetterSuffix(index)}`
-    }
-    return candidate
-  }
-  let index = 2
-  while (usedAliases.has(`${base}_${index}`)) {
-    index += 1
-  }
-  return `${base}_${index}`
 }
 
 const toggleScopeEntry = (configId: string, entry: TableScopeEntry, checked: boolean) => {
@@ -711,25 +625,6 @@ const editingConfigId = ref<string | null>(null)
 // 编辑中的数据
 const editingRelationship = ref<SemanticRelationship | null>(null)
 
-interface FieldConfigRow {
-  key: string
-  table: string
-  tableAlias: string
-  column: string
-  sourceColumn?: string
-  columnType: string
-  displayName: string
-  columnComment?: string
-  description?: string
-  metadataSupplement?: string
-  logicalType: SemanticLogicalType
-  expression: string
-  /** 是否参与维度：未勾选行仅作占位展示，应用字段设置时不写入 dimensions */
-  isDimension: boolean
-  isCustom?: boolean
-  isMissingPhysical?: boolean
-}
-
 const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
@@ -791,14 +686,6 @@ const showMetricExpandDialog = ref(false)
 const metricExpandSourceIndex = ref(-1)
 const metricExpandOptions = ref<MetricExpandOption[]>([])
 const showBusinessNotesDialog = ref(false)
-const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
-  { value: 'text', label: '文本' },
-  { value: 'number', label: '数值' },
-  { value: 'date', label: '日期' },
-  { value: 'datetime', label: '日期时间' },
-  { value: 'enum', label: '枚举' },
-]
-
 const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(rows.map(row => ({
   key: row.key,
   table: row.table,
@@ -863,46 +750,9 @@ const activeConfigSaveDisabledReason = computed(() => {
 
 const canSaveActiveConfig = computed(() => !activeConfigSaveDisabledReason.value)
 
-const normalizeExpressionColumn = (value: string) => {
-  const cleaned = (value || '').trim().replace(/`/g, '')
-  if (!cleaned) return ''
-  const parts = cleaned.split('.')
-  return parts[parts.length - 1] || ''
-}
-
-const isCountAllExpression = (expression: string) => {
-  return ['COUNT(*)', 'COUNT(1)'].includes((expression || '').replace(/\s+/g, '').toUpperCase())
-}
-
 const hasPhysicalColumn = (tableName: string, columnName: string) => {
   const table = props.tables.find(t => t.table_name === tableName)
   return !!table?.columns?.some(col => col.name === columnName)
-}
-
-const expressionUsesColumn = (expression: string, column: string) => {
-  const expr = (expression || '').trim().replace(/`/g, '')
-  const col = (column || '').trim()
-  if (!expr || !col) return false
-
-  const escapedCol = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const directPattern = new RegExp(`(^|[^A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*\\.)?${escapedCol}([^A-Za-z0-9_]|$)`, 'i')
-  if (directPattern.test(expr)) return true
-
-  const aggMatch = expr.match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-  if (aggMatch?.[3]) {
-    return normalizeExpressionColumn(aggMatch[3]) === col
-  }
-
-  return normalizeExpressionColumn(expr) === col
-}
-
-const isRawColumnExpression = (expression: string | undefined, column: string) => {
-  const expr = (expression || '').trim().replace(/`/g, '').replace(/\s+/g, '')
-  const col = (column || '').trim()
-  if (!col) return false
-  if (!expr) return true
-  const escapedCol = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^(?:[A-Za-z_][A-Za-z0-9_]*\\.)?${escapedCol}$`, 'i').test(expr)
 }
 
 const validateFieldRowsBeforeApply = () => {
@@ -1313,18 +1163,6 @@ const activeRelationshipCards = computed(() => {
   return result
 })
 
-const formatJoinTypeLabel = (joinType?: string) => {
-  if (joinType === 'inner') return '内连接'
-  if (joinType === 'right') return '右连接'
-  return '左连接'
-}
-
-const formatRelationshipTypeLabel = (relationshipType?: string) => {
-  if (relationshipType === 'one_to_many') return '一对多'
-  if (relationshipType === 'many_to_one') return '多对一'
-  return '一对一'
-}
-
 const activeUnlinkedTables = computed(() => {
   if (!activeConfig.value) return [] as TableScopeEntry[]
   const scope = getScopeEntries(activeConfig.value.id)
@@ -1459,75 +1297,9 @@ const hasMultiTables = (configId: string) => {
   return getScopeEntries(configId).length > 1
 }
 
-const AGG_DISPLAY_SUFFIX_MAP: Record<string, string> = {
-  COUNT: '数量',
-  SUM: '合计',
-  AVG: '平均值',
-  MAX: '最大值',
-  MIN: '最小值',
-}
-
-const EXPANDABLE_AGG_FUNCS = ['SUM', 'AVG', 'MAX', 'MIN']
-
-const parseAggFuncFromExpression = (expression: string) => {
-  const match = (expression || '').trim().match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-  if (!match) return 'COUNT'
-  if (match[1]?.toUpperCase() === 'COUNT' && match[2]) return 'COUNT_DISTINCT'
-  return (match[1] || 'COUNT').toUpperCase()
-}
-
-const parseSimpleMetricExpression = (expression: string) => {
-  const match = (expression || '').trim().match(/^(COUNT|SUM|AVG|MAX|MIN)\(\s*(?:`?([A-Za-z_][A-Za-z0-9_]*)`?|`?([A-Za-z_][A-Za-z0-9_]*)`?\.`?([A-Za-z_][A-Za-z0-9_]*)`?)\s*\)$/i)
-  if (!match) return null
-  return {
-    aggFunc: (match[1] || 'COUNT').toUpperCase(),
-    column: match[4] || match[2] || '',
-  }
-}
-
-const extractExpressionColumns = (expression: string) => {
-  const text = (expression || '').trim()
-  if (!text) return []
-  const keywords = new Set([
-    'case', 'when', 'then', 'else', 'end', 'filter', 'where', 'distinct', 'count', 'sum', 'avg', 'max', 'min',
-    'and', 'or', 'not', 'null', 'is', 'in', 'as', 'on', 'if', 'cast', 'char', 'date', 'date_format', 'str_to_date',
-    'unix_timestamp', 'from_unixtime', 'year', 'month', 'day',
-    ...SQL_EXPRESSION_FUNCTION_KEYWORDS,
-  ])
-  const result = new Set<string>()
-  const pattern = /`([^`]+)`|(?<!['"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['"])/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(text)) !== null) {
-    if (text.slice(match.index + match[0].length).trimStart().startsWith('.')) continue
-    const isQuotedIdentifier = Boolean(match[1])
-    const token = (match[1] || match[2] || '').trim().split('.').pop() || ''
-    if (!token || (!isQuotedIdentifier && keywords.has(token.toLowerCase()))) continue
-    result.add(token)
-  }
-  return Array.from(result)
-}
-
 const getFirstPhysicalColumnFromExpression = (tableName: string, expression: string) => {
   const columns = extractExpressionColumns(expression)
   return columns.find(column => hasPhysicalColumn(tableName, column)) || ''
-}
-
-const isNumericColumnType = (columnType: string) => {
-  return /int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/i.test(columnType || '')
-}
-
-const inferLogicalType = (columnType: string): SemanticLogicalType => {
-  const normalized = (columnType || '').toLowerCase()
-  if (/timestamp|datetime/.test(normalized)) return 'datetime'
-  if (/date|year/.test(normalized)) return 'date'
-  if (isNumericColumnType(normalized)) return 'number'
-  return 'text'
-}
-
-const getMetricDataType = (columnType: string) => {
-  const normalized = (columnType || '').trim()
-  if (!normalized) return undefined
-  return normalized
 }
 
 const getTableColumnType = (tableName: string, columnName: string) => {
@@ -1548,47 +1320,9 @@ const getTableColumnDisplayName = (tableName: string, columnName: string) => {
   return getTableColumnComment(tableName, columnName) || (columnName || '').trim()
 }
 
-const getFieldRowAlias = (row: Pick<FieldConfigRow, 'table' | 'tableAlias'>) => row.tableAlias || row.table
-
-const buildFieldRowKey = (tableAlias: string, column: string, suffix = '') => {
-  const base = `${tableAlias}.${column}`
-  return suffix ? `${base}${suffix}` : base
-}
-
-const buildTablePrefixedDisplayName = (tableName: string, displayName: string) => {
-  const normalizedTable = (tableName || '').trim()
-  let normalizedName = (displayName || '').trim()
-  if (!normalizedTable || !normalizedName) return normalizedName
-  const repeatedPrefix = new RegExp(`^(?:${normalizedTable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[_.])+`)
-  normalizedName = normalizedName.replace(repeatedPrefix, '')
-  return `${normalizedTable}_${normalizedName}`
-}
-
-const buildAliasAwareDefaultDisplayName = (entry: TableScopeEntry, columnName: string, columnComment?: string) => {
-  const baseName = (columnComment || columnName || '').trim()
-  if (!baseName) return ''
-  return entry.alias && entry.alias !== entry.table ? buildTablePrefixedDisplayName(entry.alias, baseName) : baseName
-}
-
 const buildFieldRowDefaultDisplayName = (row: Pick<FieldConfigRow, 'table' | 'tableAlias' | 'column' | 'sourceColumn' | 'columnComment'>) => {
   const sourceColumn = row.sourceColumn || row.column
   return buildAliasAwareDefaultDisplayName({ table: row.table, alias: getFieldRowAlias(row) }, sourceColumn, row.columnComment || getTableColumnComment(row.table, sourceColumn))
-}
-
-const normalizeFieldName = (value: string) => (value || '').trim()
-
-const buildDimensionPreserveKey = (dimension: Pick<SemanticDimension, 'table' | 'table_alias' | 'column' | 'field_name'>) => {
-  const tableAlias = getFieldTableAlias(dimension)
-  return `${tableAlias}.${dimension.field_name || dimension.column || ''}.${dimension.column || ''}`
-}
-
-const copyDimensionRuntimeConfig = (dimension: SemanticDimension, source?: SemanticDimension) => {
-  if (!source) return dimension
-  const next = { ...dimension }
-  if (source.allowed_values) next.allowed_values = [...source.allowed_values]
-  if (source.mapping) next.mapping = { ...source.mapping }
-  if (source.allowed_operators) next.allowed_operators = [...source.allowed_operators]
-  return next
 }
 
 const getUniqueCustomFieldName = (tableAlias: string, baseColumn: string) => {
@@ -1813,12 +1547,6 @@ const confirmAddDimension = () => {
   addFieldDefaultDisplayName.value = ''
 }
 
-// 原子指标的物理列从表达式解析（AGG(col) / AGG(DISTINCT col)），复杂表达式返回空
-const atomicMetricColumn = (metric: SemanticMetric) => {
-  const parsed = parseSimpleMetricExpression(metric.expression || '')
-  return normalizeExpressionColumn(parsed?.column || metric.expression || '')
-}
-
 const canExpandMetricEntry = (metric: SemanticMetric) => {
   if (metric.metric_kind) return false
   const parsed = parseSimpleMetricExpression(metric.expression || '')
@@ -1833,14 +1561,6 @@ const metricAggExists = (tableAlias: string, sourceColumn: string, aggFunc: stri
     if (!parsed) return false
     return parsed.aggFunc === aggFunc && normalizeExpressionColumn(parsed.column) === normalizeExpressionColumn(sourceColumn)
   })
-}
-
-const buildMetricExpandDisplayName = (baseName: string, aggFunc: string) => {
-  const normalizedBase = (baseName || '').trim()
-  const suffix = AGG_DISPLAY_SUFFIX_MAP[aggFunc] || aggFunc
-  if (!normalizedBase) return suffix
-  if (normalizedBase.endsWith(suffix)) return normalizedBase
-  return `${normalizedBase}${suffix}`
 }
 
 const openMetricExpandDialog = (metric: SemanticMetric, index: number) => {
@@ -2058,29 +1778,6 @@ const previewTableData = (tableName: string) => {
   showTablePreviewDialog.value = true
 }
 
-const getFieldPhysicalColumn = (row: FieldConfigRow) => String(row.sourceColumn || row.column || '').trim()
-
-const getColumnDictKey = (tableName: string, columnName: string) => `${tableName}.${columnName}`
-
-const getFieldColumnDictKey = (row: FieldConfigRow) => {
-  const tableName = String(row.table || '').trim()
-  const columnName = getFieldPhysicalColumn(row)
-  return tableName && columnName ? getColumnDictKey(tableName, columnName) : ''
-}
-
-const hasColumnDictContent = (dict?: DatasourceColumnDictPayload | null) => {
-  if (!dict) return false
-  return Boolean(
-    (dict.enum_values || []).length > 0 ||
-    (dict.storage_format || '').trim() ||
-    (dict.unit || '').trim()
-  )
-}
-
-const hasColumnDictEnumValues = (dict?: DatasourceColumnDictPayload | null) => {
-  return Boolean(dict?.enum_values?.some(item => String(item.value || '').trim()))
-}
-
 const hasFieldColumnDict = (row: FieldConfigRow) => {
   const key = getFieldColumnDictKey(row)
   return Boolean(key && columnDictVisibleMap.value[key])
@@ -2158,140 +1855,21 @@ const handleColumnDictSaved = async () => {
 // 字段配置 = 维度勾选清单：作用域内每个物理列一行（一行=一列），勾选状态决定是否写入 dimensions；
 // 勾选态 = 持久化的 dimensions 有该物理列条目，或该表别名尚未持久化过配置（会话内默认全勾）；
 // 指标不回挂到字段行，统一在「指标」区管理。
-const buildFieldRows = (configId: string) => {
-  const config = configs.value.find(c => c.id === configId)
-  if (!config) return []
-  const scopeEntries = getScopeEntries(configId)
-  const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
-  const defaultDimensionAliasSet = getDefaultDimensionAliasSet(configId)
-
-  const dimensionSet = new Set<string>()
-  const dimensionByColumnMap = new Map<string, SemanticDimension>()
-  const customRowsMap = new Map<string, FieldConfigRow>()
-  const configuredKeys = new Set<string>()
-
-  config.dimensions.forEach(d => {
-    const tableAlias = getFieldTableAlias(d)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const physicalKey = `${tableAlias}.${d.column}`
-    const fieldName = (d.field_name || d.column || '').trim()
-    const expression = (d.expression || quoteIdentifier(d.column)).trim()
-    configuredKeys.add(physicalKey)
-    if (fieldName && d.column && fieldName !== d.column && !isRawColumnExpression(expression, d.column)) {
-      const customKey = buildFieldRowKey(tableAlias, fieldName)
-      const existed = customRowsMap.get(customKey)
-      customRowsMap.set(customKey, {
-        key: customKey,
-        table: d.table,
-        tableAlias,
-        column: fieldName,
-        sourceColumn: d.column,
-        columnType: existed?.columnType || '',
-        displayName: existed?.displayName || d.name || fieldName,
-        isDimension: true,
-        columnComment: getTableColumnComment(d.table, d.column),
-        description: existed?.description || d.description || '',
-        metadataSupplement: existed?.metadataSupplement || d.metadata_supplement || '',
-        logicalType: existed?.logicalType || d.logical_type || inferLogicalType(existed?.columnType || getTableColumnType(d.table, d.column)),
-        expression: existed?.expression || expression,
-        isCustom: true,
-      })
-      return
-    }
-    if (!dimensionByColumnMap.has(physicalKey)) {
-      dimensionByColumnMap.set(physicalKey, d)
-    }
-    dimensionSet.add(physicalKey)
-  })
-
-  const rows: FieldConfigRow[] = []
-  scopeEntries.forEach(entry => {
-    const table = getScopeTableInfo(entry)
-    if (!table) return
-    table.columns?.forEach(col => {
-      const key = buildFieldRowKey(entry.alias, col.name)
-      const dimInfo = dimensionByColumnMap.get(key)
-      const expression = dimInfo?.expression || quoteIdentifier(col.name)
-      const columnComment = (col.description || '').trim()
-      const displayName = dimInfo?.name || buildAliasAwareDefaultDisplayName(entry, col.name, columnComment)
-      const columnType = col.mysql_type || col.hive_type || col.type || ''
-      rows.push({
-        key,
-        table: table.table_name,
-        tableAlias: entry.alias,
-        column: col.name,
-        sourceColumn: col.name,
-        columnType,
-        isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
-        displayName,
-        columnComment,
-        description: dimInfo?.description || '',
-        metadataSupplement: dimInfo?.metadata_supplement || '',
-        logicalType: dimInfo?.logical_type || inferLogicalType(columnType),
-        expression,
-      })
-    })
-  })
-  customRowsMap.forEach(row => {
-    const tableInfo = getScopeTableInfo({ table: row.table, alias: row.tableAlias })
-    const sourceInfo = tableInfo?.columns?.find(c => c.name === (row.sourceColumn || row.column))
-    rows.push({
-      ...row,
-      columnType: row.columnType || sourceInfo?.mysql_type || sourceInfo?.type || '',
-      logicalType: row.logicalType || inferLogicalType(row.columnType || sourceInfo?.mysql_type || sourceInfo?.hive_type || sourceInfo?.type || ''),
-      expression: row.expression || quoteIdentifier(row.sourceColumn || row.column),
-      isCustom: true,
-      isMissingPhysical: !sourceInfo,
-    })
-  })
-  config.dimensions.forEach(d => {
-    const tableAlias = getFieldTableAlias(d)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const key = `${tableAlias}.${d.column}`
-    if (!configuredKeys.has(key) || rows.some(row => getFieldRowAlias(row) === tableAlias && (row.sourceColumn || row.column) === d.column)) return
-    rows.push({
-      key,
-      table: d.table,
-      tableAlias,
-      column: d.field_name || d.column,
-      sourceColumn: d.column,
-      columnType: '',
-      isDimension: true,
-      displayName: d.name || d.field_name || d.column,
-      columnComment: getTableColumnComment(d.table, d.column),
-      description: d.description || '',
-      metadataSupplement: d.metadata_supplement || '',
-      logicalType: d.logical_type || inferLogicalType(getTableColumnType(d.table, d.column)),
-      expression: d.expression || quoteIdentifier(d.column),
-      isMissingPhysical: true,
-    })
-  })
-  return rows
-}
+// 字段行构建主体在 semantic/panelModelUtils.ts，此处注入组件上下文
+const buildFieldRows = (configId: string) => buildFieldRowsForConfig(configId, {
+  configs: configs.value,
+  getScopeEntries,
+  getScopeTableInfo,
+  getDefaultDimensionAliasSet,
+  getTableColumnComment,
+  getTableColumnType,
+})
 
 const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
-  const scopeEntries = getScopeEntries(activeConfig.value?.id || '')
-  const currentMap = new Map(fieldRows.value.map(row => [row.key, row]))
-  const nextKeySet = new Set(nextRows.map(row => row.key))
-  const mergedRows = nextRows.map(row => {
-    const draft = currentMap.get(row.key)
-    if (!draft) return row
-    return {
-      ...row,
-      isDimension: draft.isDimension,
-      displayName: draft.displayName,
-      description: draft.description ?? row.description,
-      metadataSupplement: draft.metadataSupplement,
-      logicalType: draft.logicalType,
-      expression: draft.expression,
-    }
+  return mergeFieldRowsWithDraftUtil(nextRows, {
+    scopeEntries: getScopeEntries(activeConfig.value?.id || ''),
+    currentRows: fieldRows.value,
   })
-  fieldRows.value
-    .filter(row => row.isCustom && !nextKeySet.has(row.key) && isFieldRowInScope(row, scopeEntries))
-    .forEach(row => {
-      mergedRows.push({ ...row })
-    })
-  return mergedRows
 }
 
 const loadFieldRows = (configId: string) => {
