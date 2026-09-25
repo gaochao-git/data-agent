@@ -66,6 +66,7 @@ async def compress_messages_for_state(
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
     on_compression_started: Callable[[], None] | None = None,
+    todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], str | None, dict[str, Any]]:
     """压缩旧历史和当前回合较早的完整工具链。"""
     cfg = _config_from_mapping(config)
@@ -173,6 +174,7 @@ async def compress_messages_for_state(
         summarizer=summarizer,
         summary_input_limit_tokens=summary_input_limit_tokens,
         summary_model_id=summary_model_id,
+        todo_snapshot=todo_snapshot,
     )
     _merge_summary_input_report(report, summary_input_report)
     if not summary_text:
@@ -218,6 +220,7 @@ async def compress_messages_for_state(
         summary_input_limit_tokens,
         summary_model_id,
         report,
+        todo_snapshot=todo_snapshot,
     )
 
     _finalize_compression_report(
@@ -265,6 +268,7 @@ async def _run_compression_passes(
     summary_input_limit_tokens: int | None,
     summary_model_id: str | None,
     report: dict[str, Any],
+    todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], str | None, int, int, int]:
     """迭代执行多轮摘要压缩，返回 (压缩后消息, 摘要, 压缩消息数, after_tokens, 轮数)。"""
     compression_passes = 1
@@ -286,6 +290,7 @@ async def _run_compression_passes(
             summarizer=summarizer,
             summary_input_limit_tokens=summary_input_limit_tokens,
             summary_model_id=summary_model_id,
+            todo_snapshot=todo_snapshot,
         )
         _merge_summary_input_report(report, next_input_report)
         if not merged_summary:
@@ -314,6 +319,7 @@ async def build_context_compression_update(
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
     on_compression_started: Callable[[], None] | None = None,
+    todos: list[dict[str, Any]] | None = None,
 ) -> tuple[list[BaseMessage] | None, str | None, dict[str, Any]]:
     """构造可写入 LangGraph state 的压缩消息更新。"""
     compressed_messages, summary_text, report = await compress_messages_for_state(
@@ -328,6 +334,7 @@ async def build_context_compression_update(
         summary_input_limit_tokens=summary_input_limit_tokens,
         summary_model_id=summary_model_id,
         on_compression_started=on_compression_started,
+        todo_snapshot=_format_todo_snapshot(todos),
     )
     if not report.get("triggered") and not report.get("legacy_summary_migrated"):
         return None, summary_text, report
@@ -340,6 +347,44 @@ async def build_context_compression_update(
 def _read_middleware_messages(state: Any) -> list[BaseMessage]:
     """从 state 读取并拷贝消息列表（state 缺失/无 messages 时回退空列表）。"""
     return list((state or {}).get("messages") or [])
+
+
+def _read_middleware_todos(state: Any) -> list[dict[str, Any]] | None:
+    """读取 state 中的 todos 快照（无效形态回退 None，不参与摘要输入）。"""
+    todos = (state or {}).get("todos")
+    if not isinstance(todos, list):
+        return None
+    items = [item for item in todos if isinstance(item, dict) and str(item.get("content") or "").strip()]
+    return items or None
+
+
+_TODO_STATUS_LABELS = {"pending": "待办", "in_progress": "进行中", "completed": "已完成"}
+
+
+def format_todo_snapshot_lines(todos: list[dict[str, Any]] | None) -> tuple[list[str], int]:
+    """todos → (编号行文本, 未完成数)；跳过非 dict 与空 content 条目，编号保持连续。"""
+    lines: list[str] = []
+    unfinished = 0
+    for item in todos or []:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        status = str(item.get("status") or "pending").strip()
+        label = _TODO_STATUS_LABELS.get(status, status)
+        if status in ("pending", "in_progress"):
+            unfinished += 1
+        lines.append(f"{len(lines) + 1}. [{label}] {content}")
+    return lines, unfinished
+
+
+def _format_todo_snapshot(todos: list[dict[str, Any]] | None) -> str | None:
+    """把 todos 格式化为摘要输入里的实时状态快照文本。"""
+    if not todos:
+        return None
+    lines, _unfinished = format_todo_snapshot_lines(todos)
+    return "\n".join(lines) if lines else None
 
 
 def _resolve_previous_summary(state: Any, legacy_summary: Any) -> Any:
@@ -390,6 +435,7 @@ def create_context_compression_middleware(
             summary_input_limit_tokens=_get_summary_input_limit_tokens(model_id),
             summary_model_id=model_id,
             on_compression_started=_notify_compression_started,
+            todos=_read_middleware_todos(state),
         )
         if report["estimated_tokens_after"] > budget.hard_input_limit_tokens:
             raise ContextInputLimitExceededError("模型固定输入超过上下文硬上限，请检查系统提示词、工具描述和输出预留配置。")
@@ -530,11 +576,13 @@ async def _summarize_for_compression(
     summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None,
     summary_input_limit_tokens: int | None,
     summary_model_id: str | None,
+    todo_snapshot: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     summary_messages, input_report = _prepare_summary_input(
         messages,
         previous_summary=previous_summary,
         summary_input_limit_tokens=summary_input_limit_tokens,
+        todo_snapshot=todo_snapshot,
     )
     if not summary_messages or input_report.get("summary_input_unusable"):
         return "", input_report
@@ -545,6 +593,7 @@ async def _summarize_for_compression(
             summary_messages,
             model_id=summary_model_id,
             previous_summary=previous_summary,
+            todo_snapshot=todo_snapshot,
         )
         return summary, input_report
     except Exception:
@@ -979,10 +1028,15 @@ def _prepare_summary_input(
     *,
     previous_summary: str | None,
     summary_input_limit_tokens: int | None,
+    todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], dict[str, Any]]:
     """构造受预算约束的摘要输入，不改写 Agent 运行态消息。"""
-    prepared_messages = list(messages)
-    before_tokens = _count_summary_input_tokens(prepared_messages, previous_summary=previous_summary)
+    prepared_messages = _neutralize_stale_todo_tool_messages(list(messages))
+    before_tokens = _count_summary_input_tokens(
+        prepared_messages,
+        previous_summary=previous_summary,
+        todo_snapshot=todo_snapshot,
+    )
     report = {
         "summary_input_limit_tokens": None,
         "summary_input_tokens_before": before_tokens,
@@ -1016,10 +1070,13 @@ def _prepare_summary_input(
             continue
         prepared_messages[index] = compacted
         report["summary_tool_results_compacted"] += 1
-        if _count_summary_input_tokens(prepared_messages, previous_summary=previous_summary) <= input_limit:
+        if _count_summary_input_tokens(
+            prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
+        ) <= input_limit:
             report["summary_input_tokens_after"] = _count_summary_input_tokens(
                 prepared_messages,
                 previous_summary=previous_summary,
+                todo_snapshot=todo_snapshot,
             )
             return prepared_messages, report
 
@@ -1034,11 +1091,14 @@ def _prepare_summary_input(
         dropped_rounds += 1
         marker = _build_summary_omission_marker(dropped_messages, dropped_rounds)
         prepared_messages = [marker, *remaining_messages]
-        if _count_summary_input_tokens(prepared_messages, previous_summary=previous_summary) <= input_limit:
+        if _count_summary_input_tokens(
+            prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
+        ) <= input_limit:
             report.update({
                 "summary_input_tokens_after": _count_summary_input_tokens(
                     prepared_messages,
                     previous_summary=previous_summary,
+                    todo_snapshot=todo_snapshot,
                 ),
                 "summary_input_pruned_messages": dropped_messages,
                 "summary_input_pruned_rounds": dropped_rounds,
@@ -1048,7 +1108,9 @@ def _prepare_summary_input(
 
     marker = _build_summary_omission_marker(dropped_messages, dropped_rounds)
     prepared_messages = [marker]
-    after_tokens = _count_summary_input_tokens(prepared_messages, previous_summary=previous_summary)
+    after_tokens = _count_summary_input_tokens(
+        prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
+    )
     report.update({
         "summary_input_tokens_after": after_tokens,
         "summary_input_pruned_messages": dropped_messages,
@@ -1060,9 +1122,39 @@ def _prepare_summary_input(
     return prepared_messages, report
 
 
-def _count_summary_input_tokens(messages: list[BaseMessage], *, previous_summary: str | None) -> int:
-    prompt = build_context_compression_summary_prompt(messages, previous_summary=previous_summary)
+def _count_summary_input_tokens(
+    messages: list[BaseMessage],
+    *,
+    previous_summary: str | None,
+    todo_snapshot: str | None = None,
+) -> int:
+    prompt = build_context_compression_summary_prompt(
+        messages,
+        previous_summary=previous_summary,
+        todo_snapshot=todo_snapshot,
+    )
     return count_messages_tokens([HumanMessage(content=prompt)]) + REQUEST_OVERHEAD_TOKENS
+
+
+_STALE_TODO_TOOL_RESULT_PLACEHOLDER = (
+    "[todo 列表已由实时 state 快照另行提供，此处省略历史快照以避免新旧状态矛盾]"
+)
+
+
+def _neutralize_stale_todo_tool_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """把摘要输入中的历史 write_todos 工具结果替换为占位符。
+
+    保留消息本体（不删），避免破坏 AIMessage tool_calls 与 ToolMessage 的配对；
+    陈旧的 todo 快照由实时 state 快照（todo_snapshot）替代。
+    """
+    neutralized: list[BaseMessage] | None = None
+    for index, message in enumerate(messages):
+        if not isinstance(message, ToolMessage) or getattr(message, "name", None) != "write_todos":
+            continue
+        if neutralized is None:
+            neutralized = list(messages)
+        neutralized[index] = message.model_copy(update={"content": _STALE_TODO_TOOL_RESULT_PLACEHOLDER})
+    return neutralized if neutralized is not None else messages
 
 
 def _compact_tool_result_for_summary(message: ToolMessage) -> ToolMessage:
@@ -1167,8 +1259,13 @@ async def _summarize_messages_with_llm(
     *,
     model_id: str | None = None,
     previous_summary: str | None = None,
+    todo_snapshot: str | None = None,
 ) -> str:
-    prompt = build_context_compression_summary_prompt(messages, previous_summary=previous_summary)
+    prompt = build_context_compression_summary_prompt(
+        messages,
+        previous_summary=previous_summary,
+        todo_snapshot=todo_snapshot,
+    )
     llm = get_chat_data_llm(
         model=model_id,
         streaming=False,

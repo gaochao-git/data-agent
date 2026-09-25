@@ -3,8 +3,8 @@
 #
 # 用法:
 #   scripts/verify            # 等价 --fast
-#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 前端类型检查
-#   scripts/verify --all      # 推送前：fast 全部 + 覆盖率 + 前端单测 + 构建
+#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + 前端类型检查
+#   scripts/verify --all      # 推送前：fast 全部 + 覆盖率 + openapi 快照漂移 + 前端单测 + 构建
 #
 # 环境前提: 后端必须用 conda env fxcjg 的解释器（conda run 在非交互 shell 下
 # 不可靠，直接用绝对路径）；前端命令走 npm scripts（见 web-vue/package.json）。
@@ -43,12 +43,16 @@ step "backend-import" bash -c "cd server && '$PY' -c 'import main'"
 step "backend-pytest" bash -c "cd server && '$PY' -m pytest -q"
 step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
 step "params"         bash -c "'$PY' scripts/checks/params.py"
+step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
 
 # ---- 前端 ----
 step "frontend-type"  bash -c "cd web-vue && npm run type-check"
 
 if [[ "$MODE" == "--all" ]]; then
-  step "coverage"       bash -c "cd server && '$PY' -m pytest -q --cov=apps/chat_data_app --cov=utils --cov-fail-under=95"
+  # 口径与 AGENTS.md §39 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置
+  step "coverage"       bash -c "cd server && '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing --cov-fail-under=95"
+  # openapi 快照漂移门禁：重新生成后与 HEAD 比对，改了路由没更新快照即失败
+  step "openapi"        bash -c "'$PY' server/apps/chat_data_app/tests/generate_openapi.py > /dev/null && git diff --exit-code -- server/apps/chat_data_app/tests/api/openapi.json"
   step "frontend-test"  bash -c "cd web-vue && npm run test:unit -- --run"
   step "frontend-build" bash -c "cd web-vue && npm run build-only"
 fi

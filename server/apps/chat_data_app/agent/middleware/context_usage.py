@@ -35,6 +35,7 @@ from ..context.context_budget import (
     sanitize_context_usage_for_response,
 )
 from apps.chat_data_app.services.runtime_config import get_context_compression_config
+from .context_compression import format_todo_snapshot_lines
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,7 @@ def create_context_usage_middleware(
             request_budget=request_budget,
             context_compression=_request_context_compression(request),
             context_summary=_request_context_summary(request),
+            todo_status=_format_todo_status(_request_todos(request)),
         )
         record = _build_llm_call_record(token_usage, model_id=effective_model_id, index=len(records) + 1)
         records.append(record)
@@ -515,6 +517,7 @@ def _build_agent_context_usage(
     request_budget: ContextRequestBudget,
     context_compression: dict[str, Any] | None = None,
     context_summary: str | None = None,
+    todo_status: str | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """构造当前模型入口 token usage。"""
     budget = request_budget.configure(system_prompt, tools, model_id=model_id)
@@ -523,6 +526,9 @@ def _build_agent_context_usage(
         messages,
         context_summary=context_summary,
     )
+    if todo_status:
+        # 实时 todo 状态在压缩之后的出站视图上拼接（不会被摘要吞掉），并参与本轮计量。
+        effective_system_prompt = f"{effective_system_prompt}\n\n{todo_status}"
     llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)
     tool_tokens = count_tools_tokens(tools)
@@ -633,6 +639,41 @@ def _request_context_summary(request: Any) -> str | None:
         return None
     summary = str(state.get("context_summary") or "").strip()
     return summary or None
+
+
+def _request_todos(request: Any) -> list[dict[str, Any]]:
+    """读取 state 中的 todos（官方 TodoListMiddleware 将其 OmitFromInput，不会自动进模型输入）。"""
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return []
+    todos = state.get("todos")
+    if not isinstance(todos, list):
+        return []
+    return [item for item in todos if isinstance(item, dict) and str(item.get("content") or "").strip()]
+
+
+def _format_todo_status(todos: list[dict[str, Any]]) -> str | None:
+    """把 state 中的 todos 格式化为每轮注入 system 的实时状态块。
+
+    无有效条目时返回 None（不注入）；注入的是"从 state 重新生成的易失视图"，
+    替代历史里一次性 write_todos ToolMessage 的陈旧快照。
+    """
+    lines, unfinished = format_todo_snapshot_lines(todos)
+    if not lines:
+        return None
+    reminder = (
+        f"未完成任务 {unfinished} 个。"
+        "若本轮执行推进或完成了其中任一项，必须先调用 write_todos 更新状态，再继续后续步骤。"
+        if unfinished
+        else "全部任务已完成。若本轮产生新的待办事项，用 write_todos 记录。"
+    )
+    todo_block = "\n".join(lines)
+    return (
+        "<todo_status source=\"state\" fresh=\"true\">\n"
+        f"{todo_block}\n"
+        f"{reminder}\n"
+        "</todo_status>"
+    )
 
 
 def _now_epoch_ms() -> int:
