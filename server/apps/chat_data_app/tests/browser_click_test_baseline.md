@@ -1879,3 +1879,11 @@ ChatData
 | 数据还原 | 删除测试模型；`is_active` 字典 PUT 回空态（enum_values/synonyms/storage_format/unit 全空）。环境与测试前一致。 |
 | 截图 | `.workbuddy/screenshots/colordict_e2e_0925/01_checklist_pass.png` |
 | 待办 | 本次为定向记录，发布前需按 §2 全量执行；AG-20 浏览器首跑仍未执行。 |
+
+### §5.20 执行对象弹窗切换数据源增加「初始化空间中」状态（2026-09-25 08:31，agent-browser）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | 用户反馈：切换数据源组确认后，服务端建会话同步物化语义模型是秒级慢请求，弹窗原样静止像「点了没反应」。`pages/index.vue` `handleConfirmContextSelector` 增加 `isSwitchingContext` 在途状态：确认按钮变「初始化空间中…」+ footer 左侧 spinner 文案、两按钮禁用、遮罩/ESC/✕ 关闭通道冻结；失败不关弹窗并报「会话初始化失败，请稍后重试」。 |
+| 实测 | 切 hive-localhost → mysql-62 点确定：立即采样到在途态（取消 disabled / 确定文案「初始化空间中…」disabled / footer 状态行出现）；随后弹窗自动关闭，上下文栏切为 `mysql-62…/运维平台 等 2 个`，新会话建立，无前端报错。截图 `.workbuddy/screenshots/colordict_e2e_0925/02_switching_status.png`。`vue-tsc` 0 错误、vitest 423 passed。 |
+| 备注 | 该弹窗（选择执行对象）此前不在基线 17 模块内，属补录候选；本次实测残留一条「新会话」（mysql 组，产品无会话删除接口，无法清理）。 |

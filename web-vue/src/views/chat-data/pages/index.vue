@@ -1081,6 +1081,9 @@ const selectedExecutionTargetSummary = computed(() => {
 })
 
 const showContextSelectorDialog = ref(false)
+// 确认后在途标记：建会话是同步物化语义模型的慢请求（秒级），期间必须给状态
+// 并冻结弹窗（禁用按钮 + 禁遮罩/ESC/✕ 关闭），否则看起来像「点了没反应」
+const isSwitchingContext = ref(false)
 const draftSelectedDatasourceId = ref<string>('')
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
 const draftDefaultAllExecutionTargets = ref(false)
@@ -1142,6 +1145,7 @@ watch(
 )
 
 const handleConfirmContextSelector = async () => {
+  if (isSwitchingContext.value) return
   if (draftExecutionTargets.value.length > 0 && draftSelectedMemberDatasourceIds.value.length === 0) {
     ElMessage.warning('请选择执行对象')
     return
@@ -1162,7 +1166,17 @@ const handleConfirmContextSelector = async () => {
     // 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在），服务端
     // 建会话即绑定数据源组并物化语义模型；已有会话时数据源被锁定不可换。
     if (!currentConversationId.value) {
-      await ensureConversationId()
+      // 慢请求期间弹窗展示「初始化空间中…」并冻结；失败不关弹窗，用户可重试
+      isSwitchingContext.value = true
+      try {
+        const conversationId = await ensureConversationId()
+        if (!conversationId) {
+          ElMessage.error('会话初始化失败，请稍后重试')
+          return
+        }
+      } finally {
+        isSwitchingContext.value = false
+      }
     }
   } else {
     selectedMemberDatasourceIds.value = nextIds
@@ -1822,7 +1836,14 @@ onMounted(async () => {
       />
     </div>
 
-    <el-dialog v-model="showContextSelectorDialog" width="520px" title="选择执行对象">
+    <el-dialog
+      v-model="showContextSelectorDialog"
+      width="520px"
+      title="选择执行对象"
+      :close-on-click-modal="!isSwitchingContext"
+      :close-on-press-escape="!isSwitchingContext"
+      :show-close="!isSwitchingContext"
+    >
       <div class="space-y-4">
         <div>
           <div class="mb-2 text-[13px] font-medium text-slate-700">当前数据源组</div>
@@ -1869,17 +1890,26 @@ onMounted(async () => {
 
       <template #footer>
         <div class="flex items-center justify-end gap-2">
+          <div
+            v-if="isSwitchingContext"
+            class="mr-auto flex items-center gap-1.5 text-[13px] text-slate-500"
+          >
+            <i class="fa-solid fa-circle-notch animate-spin text-[12px]"></i>
+            <span>初始化空间中…</span>
+          </div>
             <button
-              class="h-9 px-4 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600 transition-all hover:bg-slate-50"
+              class="h-9 px-4 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="isSwitchingContext"
               @click="showContextSelectorDialog = false"
             >
               取消
             </button>
             <button
-              class="h-9 px-4 rounded-lg border border-[#1677FF] bg-[#1677FF] text-[13px] text-white transition-all hover:bg-[#3d8bfd]"
+              class="h-9 px-4 rounded-lg border border-[#1677FF] bg-[#1677FF] text-[13px] text-white transition-all hover:bg-[#3d8bfd] disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="isSwitchingContext"
               @click="handleConfirmContextSelector"
             >
-              确定
+              {{ isSwitchingContext ? '初始化空间中…' : '确定' }}
             </button>
         </div>
       </template>
