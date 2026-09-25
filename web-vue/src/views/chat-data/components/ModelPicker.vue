@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * 模型选择 pill：一个下拉内聚合「模型列表 + 思考档位单选」。
+ * 模型选择 pill：两级筛选结构（参考 DeepSeek 官网）——
+ * 主面板两行入口「模型 / 推理等级」，点进二级列表选择。
  * 思考三态与主对话口径一致：enableDeepThinking null 未触碰（展示回退模型
  * default_on）、true/false 用户显式选择；档位 null 跟随模型 default_effort。
- * 交互参考「开关+等级」合并形态：关闭/开启/各 effort 档平铺单选，
  * off 映射 enableDeepThinking=false，其余档映射 true + thinkingEffort。
  * allowEmpty=true 时模型可空（列表含「系统默认」项），用于定时任务。
  */
@@ -55,6 +55,8 @@ const LEVEL_LABELS: Record<string, string> = { off: '关闭', on: '开启', low:
 
 const menuRef = ref<HTMLElement | null>(null)
 const menuOpen = ref(false)
+/** 两级筛选：null=主面板；'models'/'levels'=对应二级列表。打开与关闭时重置。 */
+const subView = ref<'models' | 'levels' | null>(null)
 
 const selectedModelLabel = computed(() => {
   if (!props.selectedModel) return '系统默认'
@@ -99,9 +101,26 @@ const thinkingLevelLabel = computed(() => {
   return LEVEL_LABELS[currentThinkingLevel.value] ?? currentThinkingLevel.value
 })
 
+/** 推理等级行副值：不支持时占位文案。 */
+const levelEntryValue = computed(() => {
+  if (thinkingLevelOptions.value.length === 0) return '不支持'
+  return LEVEL_LABELS[currentThinkingLevel.value] ?? currentThinkingLevel.value
+})
+
+const openMenuPanel = () => {
+  if (props.isGenerating) return
+  subView.value = null
+  menuOpen.value = !menuOpen.value
+}
+
+const closeMenu = () => {
+  menuOpen.value = false
+  subView.value = null
+}
+
 const selectModel = (modelId: string) => {
   emit('update:selectedModel', modelId)
-  menuOpen.value = false
+  subView.value = null
 }
 
 const selectThinkingLevel = (level: string) => {
@@ -111,13 +130,14 @@ const selectThinkingLevel = (level: string) => {
   }
   emit('update:enableDeepThinking', true)
   if (level !== 'on') emit('update:thinkingEffort', level)
+  subView.value = null
 }
 
 const handleDocumentClick = (event: MouseEvent) => {
   const target = event.target
   if (!(target instanceof Node)) return
   if (menuRef.value?.contains(target)) return
-  menuOpen.value = false
+  closeMenu()
 }
 
 onMounted(() => {
@@ -140,7 +160,7 @@ onBeforeUnmount(() => {
         :disabled="isGenerating"
         class="flex min-w-0 items-center gap-1.5 border-none bg-transparent p-0 text-xs text-gray-500 cursor-pointer"
         title="模型设置"
-        @click="!isGenerating && (menuOpen = !menuOpen)"
+        @click="openMenuPanel"
       >
         <span class="model-trigger-label max-w-[150px] truncate text-gray-500">
           {{ selectedModelLabel }}
@@ -153,9 +173,50 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="menuOpen"
+      data-model-picker-menu
       class="absolute right-0 bottom-8 z-50 w-[220px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+      @click.stop
     >
-      <div class="py-1">
+      <!-- 主面板：两行入口（模型 / 推理等级） -->
+      <template v-if="subView === null">
+        <button
+          type="button"
+          class="flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+          @click="subView = 'models'"
+        >
+          <span>模型</span>
+          <span class="flex min-w-0 items-center gap-1.5 text-gray-400">
+            <span class="max-w-[110px] truncate">{{ selectedModelLabel }}</span>
+            <i class="fa-solid fa-chevron-right text-[8px]"></i>
+          </span>
+        </button>
+        <button
+          type="button"
+          :disabled="thinkingLevelOptions.length === 0"
+          :class="[
+            'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600',
+            thinkingLevelOptions.length === 0 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-gray-50'
+          ]"
+          @click="thinkingLevelOptions.length > 0 && (subView = 'levels')"
+        >
+          <span>推理等级</span>
+          <span class="flex items-center gap-1.5 text-gray-400">
+            <span>{{ levelEntryValue }}</span>
+            <i class="fa-solid fa-chevron-right text-[8px]"></i>
+          </span>
+        </button>
+      </template>
+
+      <!-- 二级：模型列表 -->
+      <template v-else-if="subView === 'models'">
+        <button
+          type="button"
+          class="flex w-full items-center gap-1.5 border-none bg-transparent px-3 py-2 text-left text-[11px] text-gray-400 cursor-pointer hover:text-gray-600"
+          @click="subView = null"
+        >
+          <i class="fa-solid fa-chevron-left text-[8px]"></i>
+          <span>模型</span>
+        </button>
         <button
           v-if="allowEmpty"
           type="button"
@@ -182,33 +243,33 @@ onBeforeUnmount(() => {
           <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
         </button>
         <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">暂无模型</div>
-      </div>
-      <!-- 思考档位：单选平铺（关闭/开启/各 effort），off 即关闭思考 -->
-      <div class="border-t border-gray-100 p-1.5">
-        <div v-if="thinkingLevelOptions.length === 0" class="px-2 py-1.5 text-[11px] text-gray-400">
-          当前模型不支持深度思考
-        </div>
-        <template v-else>
-          <div class="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[10px] text-gray-400">
-            <i class="fa-solid fa-brain text-[10px]" :class="thinkingDisplayOn ? 'text-blue-500' : 'text-gray-400'"></i>
-            <span>深度思考</span>
-          </div>
-          <button
-            v-for="level in thinkingLevelOptions"
-            :key="level"
-            type="button"
-            :class="[
-              'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs cursor-pointer',
-              currentThinkingLevel === level ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
-            ]"
-            :title="`思考档位：${LEVEL_LABELS[level] ?? level}`"
-            @click="selectThinkingLevel(level)"
-          >
-            <span>{{ LEVEL_LABELS[level] ?? level }}</span>
-            <i v-if="currentThinkingLevel === level" class="fa-solid fa-check text-[10px]"></i>
-          </button>
-        </template>
-      </div>
+      </template>
+
+      <!-- 二级：推理等级列表 -->
+      <template v-else>
+        <button
+          type="button"
+          class="flex w-full items-center gap-1.5 border-none bg-transparent px-3 py-2 text-left text-[11px] text-gray-400 cursor-pointer hover:text-gray-600"
+          @click="subView = null"
+        >
+          <i class="fa-solid fa-chevron-left text-[8px]"></i>
+          <span>推理等级</span>
+        </button>
+        <button
+          v-for="level in thinkingLevelOptions"
+          :key="level"
+          type="button"
+          :class="[
+            'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs cursor-pointer',
+            currentThinkingLevel === level ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
+          ]"
+          :title="`思考档位：${LEVEL_LABELS[level] ?? level}`"
+          @click="selectThinkingLevel(level)"
+        >
+          <span>{{ LEVEL_LABELS[level] ?? level }}</span>
+          <i v-if="currentThinkingLevel === level" class="fa-solid fa-check text-[10px]"></i>
+        </button>
+      </template>
     </div>
   </div>
 </template>

@@ -7,52 +7,80 @@ type ModelPickerProps = InstanceType<typeof ModelPicker>['$props']
 
 const mountPicker = (props: ModelPickerProps) => mount(ModelPicker, { props })
 
-const openMenu = async (wrapper: ReturnType<typeof mountPicker>) => {
-  await wrapper.find('[title="模型设置"]').trigger('click')
+const isPanelOpen = (wrapper: ReturnType<typeof mountPicker>) =>
+  wrapper.find('[data-model-picker-menu]').exists()
+
+const openPanel = async (wrapper: ReturnType<typeof mountPicker>) => {
+  if (!isPanelOpen(wrapper)) await wrapper.find('[title="模型设置"]').trigger('click')
   return wrapper
 }
 
-const findLevelButtons = async (wrapper: ReturnType<typeof mountPicker>) => {
-  await wrapper.find('[title="模型设置"]').trigger('click')
-  return wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考档位'))
+const findEntry = async (wrapper: ReturnType<typeof mountPicker>, label: string) => {
+  await openPanel(wrapper)
+  // 排除触发器按钮（title="模型设置"，其文本同样可能以「模型」开头）
+  return wrapper.findAll('button').find(b => b.attributes('title') !== '模型设置' && b.text().startsWith(label))!
 }
 
+const openModelsView = async (wrapper: ReturnType<typeof mountPicker>) => {
+  await (await findEntry(wrapper, '模型')).trigger('click')
+  return wrapper
+}
+
+const openLevelsView = async (wrapper: ReturnType<typeof mountPicker>) => {
+  await (await findEntry(wrapper, '推理等级')).trigger('click')
+  return wrapper
+}
+
+const findLevelButtons = (wrapper: ReturnType<typeof mountPicker>) =>
+  wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考档位'))
+
 describe('ModelPicker 模型选择', () => {
-  it('选中模型并回显名称，未选时显示系统默认', async () => {
-    const wrapper = await openMenu(mountPicker({
+  it('主面板两行入口展示当前模型与等级，二级选中并回显', async () => {
+    const wrapper = mountPicker({
       selectedModel: 'model-a',
-      modelOptions: [{ id: 'model-a', label: '模型 A' }, { id: 'model-b', label: '模型 B' }],
-    }))
+      modelOptions: [
+        { id: 'model-a', label: '模型 A', thinking: { mode: 'optional', efforts: ['low'], default_on: false, default_effort: null } },
+        { id: 'model-b', label: '模型 B', thinking: { mode: 'optional', efforts: ['low'], default_on: false, default_effort: null } },
+      ],
+    })
 
-    expect(wrapper.find('.model-trigger-label').text()).toBe('模型 A')
+    const panel = await openPanel(wrapper)
+    expect(panel.text()).toContain('模型 A')
 
+    await openModelsView(wrapper)
     const optionB = wrapper.findAll('button').find(b => b.text() === '模型 B')!
     await optionB.trigger('click')
 
     expect(wrapper.emitted('update:selectedModel')?.[0]).toEqual(['model-b'])
+    // 模拟父组件回写后：回到主面板并回显新模型
+    await wrapper.setProps({ selectedModel: 'model-b' })
+    expect(wrapper.text()).toContain('模型 B')
+    expect(wrapper.text()).toContain('推理等级')
   })
 
-  it('allowEmpty 时提供「系统默认」选项，选择后回退空值', async () => {
-    const wrapper = await openMenu(mountPicker({
+  it('allowEmpty 时二级提供「系统默认」选项，选择后回退空值', async () => {
+    const wrapper = mountPicker({
       selectedModel: 'model-a',
       modelOptions: [{ id: 'model-a', label: '模型 A' }],
       allowEmpty: true,
-    }))
+    })
 
+    await openModelsView(wrapper)
     const systemDefault = wrapper.findAll('button').find(b => b.text() === '系统默认')!
     await systemDefault.trigger('click')
 
     expect(wrapper.emitted('update:selectedModel')?.[0]).toEqual([''])
   })
 
-  it('未选模型时触发器展示「系统默认」', () => {
+  it('未选模型时入口展示「系统默认」', async () => {
     const wrapper = mountPicker({ selectedModel: '', modelOptions: [], allowEmpty: true })
 
-    expect(wrapper.find('.model-trigger-label').text()).toBe('系统默认')
+    const entry = await findEntry(wrapper, '模型')
+    expect(entry.text()).toContain('系统默认')
   })
 })
 
-describe('ModelPicker 思考档位（单选形态）', () => {
+describe('ModelPicker 推理等级（两级筛选）', () => {
   const mountWithThinking = (
     enableDeepThinking: boolean | null,
     thinking?: { mode: 'none' | 'optional' | 'forced'; efforts: string[]; default_on: boolean; default_effort: string | null },
@@ -66,7 +94,8 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   it('未触碰时当前档回退模型 default_on（开且无 efforts → 「开启」高亮）', async () => {
     const wrapper = mountWithThinking(null, { mode: 'optional', efforts: [], default_on: true, default_effort: null })
 
-    const buttons = await findLevelButtons(wrapper)
+    await openLevelsView(wrapper)
+    const buttons = findLevelButtons(wrapper)
     expect(buttons.map(b => b.text())).toEqual(['关闭', '开启'])
     expect(buttons.find(b => b.classes().includes('text-blue-600'))?.text()).toBe('开启')
   })
@@ -74,7 +103,8 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   it('点击「开启」从未触碰态发出显式 true', async () => {
     const wrapper = mountWithThinking(null, { mode: 'optional', efforts: [], default_on: false, default_effort: null })
 
-    const buttons = await findLevelButtons(wrapper)
+    await openLevelsView(wrapper)
+    const buttons = findLevelButtons(wrapper)
     await buttons.find(b => b.text() === '开启')!.trigger('click')
 
     expect(wrapper.emitted('update:enableDeepThinking')?.[0]).toEqual([true])
@@ -83,7 +113,8 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   it('点击「关闭」发出显式 false', async () => {
     const wrapper = mountWithThinking(true, { mode: 'optional', efforts: ['low'], default_on: true, default_effort: 'low' })
 
-    const buttons = await findLevelButtons(wrapper)
+    await openLevelsView(wrapper)
+    const buttons = findLevelButtons(wrapper)
     expect(buttons.map(b => b.text())).toEqual(['关闭', '低'])
     await buttons.find(b => b.text() === '关闭')!.trigger('click')
 
@@ -94,7 +125,8 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   it('effort 档点击同时发出开启与档位，default_effort 高亮', async () => {
     const wrapper = mountWithThinking(null, { mode: 'optional', efforts: ['low', 'medium', 'high'], default_on: true, default_effort: 'high' })
 
-    const buttons = await findLevelButtons(wrapper)
+    await openLevelsView(wrapper)
+    const buttons = findLevelButtons(wrapper)
     expect(buttons.map(b => b.text())).toEqual(['关闭', '低', '中', '高'])
     expect(buttons.find(b => b.classes().includes('text-blue-600'))?.text()).toBe('高')
 
@@ -106,7 +138,8 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   it('forced 模型恒开：只列 efforts 档（无「关闭」），default_effort 高亮', async () => {
     const wrapper = mountWithThinking(false, { mode: 'forced', efforts: ['low', 'high'], default_on: false, default_effort: 'high' })
 
-    const buttons = await findLevelButtons(wrapper)
+    await openLevelsView(wrapper)
+    const buttons = findLevelButtons(wrapper)
     expect(buttons.map(b => b.text())).toEqual(['低', '高'])
     expect(buttons.find(b => b.classes().includes('text-blue-600'))?.text()).toBe('高')
 
@@ -115,14 +148,14 @@ describe('ModelPicker 思考档位（单选形态）', () => {
     expect(wrapper.emitted('update:thinkingEffort')?.[0]).toEqual(['low'])
   })
 
-  it('none 模型不支持思考：无档位按钮且不发出事件', async () => {
+  it('none 模型：推理等级行禁用并显示「不支持」', async () => {
     const wrapper = mountWithThinking(true, { mode: 'none', efforts: [], default_on: false, default_effort: null })
 
-    await wrapper.find('[title="模型设置"]').trigger('click')
-
-    expect(wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考档位')).length).toBe(0)
-    expect(wrapper.text()).toContain('当前模型不支持深度思考')
-    expect(wrapper.emitted('update:enableDeepThinking')).toBeUndefined()
+    const panel = await openPanel(wrapper)
+    const entry = wrapper.findAll('button').find(b => b.text().startsWith('推理等级'))!
+    expect(entry.text()).toContain('不支持')
+    expect(entry.attributes('disabled')).toBeDefined()
+    expect(panel.emitted('update:enableDeepThinking')).toBeUndefined()
   })
 
   it('触发器内联展示当前档位文案', () => {
@@ -142,7 +175,7 @@ describe('ModelPicker 思考档位（单选形态）', () => {
   })
 })
 
-describe('ModelPicker 定时任务组合（allowEmpty + 档位形态）', () => {
+describe('ModelPicker 定时任务组合（allowEmpty + 两级筛选）', () => {
   const mountSchedule = (enableDeepThinking: boolean | null = null) =>
     mountPicker({
       selectedModel: 'model-a',
@@ -152,10 +185,11 @@ describe('ModelPicker 定时任务组合（allowEmpty + 档位形态）', () => 
       allowEmpty: true,
     })
 
-  it('allowEmpty 与思考档位共存，交互与主对话一致', async () => {
+  it('allowEmpty 与推理等级共存，交互与主对话一致', async () => {
     // 未触碰：当前档回退 default_on（false → 「关闭」高亮），点「低」发出显式 true + low
     const untouched = mountSchedule()
-    const buttons = await findLevelButtons(untouched)
+    await openLevelsView(untouched)
+    const buttons = findLevelButtons(untouched)
     expect(buttons.find(b => b.classes().includes('text-blue-600'))?.text()).toBe('关闭')
 
     await buttons.find(b => b.text() === '低')!.trigger('click')
@@ -163,15 +197,17 @@ describe('ModelPicker 定时任务组合（allowEmpty + 档位形态）', () => 
     expect(untouched.emitted('update:thinkingEffort')?.[0]).toEqual(['low'])
   })
 
-  it('选「系统默认」模型后思考档位不可知，展示不支持文案', async () => {
+  it('选「系统默认」模型后推理等级不可知，入口禁用', async () => {
     const wrapper = mountSchedule(true)
-    await wrapper.find('[title="模型设置"]').trigger('click')
+    await openModelsView(wrapper)
 
     const systemDefault = wrapper.findAll('button').find(b => b.text() === '系统默认')!
     await systemDefault.trigger('click')
 
     expect(wrapper.emitted('update:selectedModel')?.[0]).toEqual([''])
-    // 无模型选中时档位不可知，不展示档位按钮
-    expect(wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考档位')).length).toBe(0)
+    // 模拟父组件回写后：无模型选中时等级不可知，入口禁用
+    await wrapper.setProps({ selectedModel: '' })
+    const levelEntry = wrapper.findAll('button').find(b => b.attributes('title') !== '模型设置' && b.text().startsWith('推理等级'))!
+    expect(levelEntry.attributes('disabled')).toBeDefined()
   })
 })
