@@ -24,7 +24,11 @@ _EVENT_NAME_RE = re.compile(r"(?:^|\n)event:\s*([^\n]+)")
 logger = get_logger(__name__)
 QUESTION_DONE_WAIT_SECONDS = 10.0
 QUESTION_DONE_DURABLE_POLL_SECONDS = 0.5
-TERMINAL_PERSISTENCE_GRACE_SECONDS = 10.0
+# done 发布失败后等待 MySQL 兜底终态的宽限期。后端先 finish_run（MySQL 终态落库）
+# 再发布 done，兜底事件的状态永远准确；缩短只影响「done 只是慢而非失败」时直播
+# 流的提前收口（未读尾部事件靠刷新历史回放补全）。公网/劣化链路下 10s 白等体感
+# 过差，取 3s 平衡；极端 Redis 读超时（20s×2 重试）本来就在宽限期之外。
+TERMINAL_PERSISTENCE_GRACE_SECONDS = 3.0
 # Run 终态集合；"succeeded" 是防御性保留（当前收口只写 finished，历史数据可能存在）。
 TERMINAL_STATUSES = {
     RUN_STATUS_FINISHED,

@@ -115,7 +115,9 @@ const editingSteerId = ref<string | null>(null)
 const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
-const activeRunStatus = ref<string | null>(null)
+/** Run 活跃状态的合法取值：与 runStatusChanged emit 的契约保持一致。 */
+type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'waiting_user'
+const activeRunStatus = ref<RunActiveStatus | null>(null)
 const activeRunTurnId = ref<string | null>(null)
 const activeRunIsContinuation = ref(false)
 const ownedRunStorageKey = 'chatdata:active-run-conversation'
@@ -211,6 +213,10 @@ const applyRunDoneState = (
   if (status === 'waiting_user') {
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
+    // 兜底 done（如 Redis 劣化时 question 事件未被读到）也可能走这里：
+    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「等待回答」
+    // 状态却没有可回答的卡片
+    if (!pendingUserQuestion.value) void restorePendingUserQuestion()
     emit('runStatusChanged', conversationId, 'waiting_user')
     return
   }
@@ -252,15 +258,13 @@ const restorePendingSteerQueue = async (options?: {
     const serverMessages = response.data?.messages ?? []
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
-    activeRunStatus.value = response.data?.run_status ?? null
+    activeRunStatus.value = (response.data?.run_status ?? null) as RunActiveStatus | null
     activeRunTurnId.value = response.data?.turn_id || null
     activeRunIsContinuation.value = Boolean(response.data?.is_continuation)
     emit(
       'runStatusChanged',
       conversationId,
-      hasActiveRun.value
-        ? activeRunStatus.value as 'pending' | 'active' | 'cancelling' | 'waiting_user' | null
-        : null,
+      hasActiveRun.value ? activeRunStatus.value : null,
     )
     if (activeRunId.value) {
       if (activeRunResumeRunId.value !== activeRunId.value || !options?.preserveResumeCursor) {
@@ -1182,7 +1186,7 @@ const {
   tokenUsage,
   onActiveRunLoaded: (activeRun) => {
     activeRunId.value = activeRun?.run_id || null
-    activeRunStatus.value = activeRun?.status || null
+    activeRunStatus.value = (activeRun?.status || null) as RunActiveStatus | null
     activeRunTurnId.value = activeRun?.turn_id || null
     activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
     activeRunResumeRunId.value = activeRun?.run_id || null
@@ -2336,20 +2340,31 @@ const handleStop = async () => {
   const runId = activeRunId.value
   if (!conversationId || !runId) return
   isStoppingRun.value = true
+  // 乐观反馈：点击立即显示「停止中」。取消链路含多次远程存储操作，链路劣化时
+  // HTTP 响应可能秒级，等待期间无反馈像「点了没反应」。done 先到的竞态由下方
+  // activeRunId 守卫 + done 回调清空 activeRunId 双重防护，不会覆盖已收口状态。
+  const previousRunStatus = activeRunStatus.value
+  if (hasActiveRun.value && activeRunId.value === runId) {
+    activeRunStatus.value = 'cancelling'
+    emit('runStatusChanged', conversationId, 'cancelling')
+  }
   try {
     const response = await cancelConversationRun(conversationId, runId)
     if (!response.data?.cancelled) {
+      // 后端明确说没有运行中任务：以服务端快照恢复真实状态（同时回滚乐观置位）
       await restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
       isStoppingRun.value = false
       return
     }
-    // 接口响应只代表后端已接受取消。若 done 尚未先到达，则显示停止中；
+    // 接口响应只代表后端已接受取消。「停止中」已在点击时乐观置位；
     // 气泡、工具和历史终态全部由结构化 done 的统一回调收口。
-    if (hasActiveRun.value && activeRunId.value === runId) {
-      activeRunStatus.value = 'cancelling'
-      emit('runStatusChanged', conversationId, 'cancelling')
-    }
   } catch (error) {
+    // 回滚乐观状态：仅当 done 尚未收口（activeRunId 未变）时恢复原状态，
+    // 避免「实际已受理取消但响应丢失」时把 UI 改回运行中造成误导
+    if (hasActiveRun.value && activeRunId.value === runId) {
+      activeRunStatus.value = previousRunStatus
+      emit('runStatusChanged', conversationId, previousRunStatus)
+    }
     isStoppingRun.value = false
     ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
   }

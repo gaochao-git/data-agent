@@ -299,7 +299,27 @@ class AgentRunRuntime:
         state.conversation_id = prepared["conversation_id"]
         state.user_id = prepared["user_id"]
         state.operator_name = prepared.get("operator_name") or state.operator_name or state.user_id
-        await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
+        try:
+            await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
+        except Exception:
+            # prepare 已把 Run 行置为 ACTIVE（租约 120s）；claim_owner 失败
+            # （典型为 Redis 不可达）若不收口，行会作为无主 ACTIVE 僵尸挂到
+            # 租约过期被 reaper 回收，期间 SSE 一直显示「进行中」假状态。
+            # finish_run("failed") 断言 DB owner（prepare 已写入）并重排队消息，
+            # 纯 MySQL；SSE 经 MySQL 终态兜底立刻拿到 done(failed)，用户可重发。
+            try:
+                await self._inbox_service.finish_run(
+                    state.run_id,
+                    "failed",
+                    state.user_id,
+                    state.operator_name,
+                    prepared["owner_token"],
+                )
+            except Exception:
+                # 收口失败（同样多为存储异常）只记日志，不掩盖原始 claim 异常；
+                # 此时僵尸行退回租约 reaper 兜底回收
+                logger.exception("Run claim 失败后收口也失败 run_id=%s", state.run_id)
+            raise
         self._owned_runs.add(state.run_id)
         if await self._inbox_service.heartbeat_run(state.run_id, prepared["owner_token"]) == "cancelling":
             state.cancelled_prepared = prepared

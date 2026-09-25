@@ -207,6 +207,38 @@ onBeforeUnmount(() => {
     </template>
 
     <template #toolbar>
+      <div v-if="showSkillButton" ref="plusMenuRef" class="relative">
+        <button
+          type="button"
+          class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+          title="更多操作"
+          @click="plusMenuOpen = !plusMenuOpen"
+        >
+          <i class="fa-solid fa-plus text-[10px]"></i>
+        </button>
+        <div
+          v-if="plusMenuOpen"
+          class="absolute left-0 bottom-8 z-50 w-[160px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+        >
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+            @click="emit('uploadFile'); plusMenuOpen = false"
+          >
+            <i class="fa-solid fa-paperclip text-[11px] text-gray-400"></i>
+            <span>上传文件</span>
+          </button>
+          <div class="border-t border-gray-100"></div>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+            @click="emit('openSkillManager'); plusMenuOpen = false"
+          >
+            <i class="fa-solid fa-wand-magic-sparkles text-[11px] text-gray-400"></i>
+            <span>技能管理</span>
+          </button>
+        </div>
+      </div>
       <!-- 能力面板：隔离模式 pill 下拉（上面选隔离模式，下面运行模式开关 Bash，参考模型选择+深度思考） -->
       <template v-if="userOverridable">
         <div ref="sandboxMenuRef" class="relative">
@@ -271,38 +303,6 @@ onBeforeUnmount(() => {
       </template>
       <!-- userOverridable=false 时完全隐藏隔离模式选择器 -->
 
-      <div v-if="showSkillButton" ref="plusMenuRef" class="relative">
-        <button
-          type="button"
-          class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-          title="更多操作"
-          @click="plusMenuOpen = !plusMenuOpen"
-        >
-          <i class="fa-solid fa-plus text-[10px]"></i>
-        </button>
-        <div
-          v-if="plusMenuOpen"
-          class="absolute left-0 bottom-8 z-50 w-[160px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
-        >
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
-            @click="emit('uploadFile'); plusMenuOpen = false"
-          >
-            <i class="fa-solid fa-paperclip text-[11px] text-gray-400"></i>
-            <span>上传文件</span>
-          </button>
-          <div class="border-t border-gray-100"></div>
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
-            @click="emit('openSkillManager'); plusMenuOpen = false"
-          >
-            <i class="fa-solid fa-wand-magic-sparkles text-[11px] text-gray-400"></i>
-            <span>技能管理</span>
-          </button>
-        </div>
-      </div>
       <slot name="toolbar-extra" />
     </template>
 
@@ -317,14 +317,9 @@ onBeforeUnmount(() => {
         @update:enable-deep-thinking="emit('update:enableDeepThinking', $event)"
         @update:thinking-effort="emit('update:thinkingEffort', $event)"
       >
-        <template #prefix="{ thinkingOn }">
+        <template #prefix>
           <slot name="model-prefix">
-            <i
-              :class="[
-                'fa-solid fa-microchip text-[10px]',
-                thinkingOn ? 'text-blue-500' : 'text-gray-400'
-              ]"
-            ></i>
+            <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
           </slot>
         </template>
       </ModelPicker>
