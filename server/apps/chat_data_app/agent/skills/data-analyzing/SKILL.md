@@ -64,7 +64,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 读取 `references/governance/quality-check.md`。
 
 - 机器检查项清单与严重度：`references/governance/quality-rules.md`，与平台导入预览的机器检查同源，**不自创检查规则**。
-- 产出可回导 YAML 之前：`references/governance/yaml-authoring.md`。
+- 产出可回导 YAML 之前：`references/governance/model-template.md`（骨架照抄填空 + 可回导规则备注与自检清单）。
 
 ## 通用边界
 

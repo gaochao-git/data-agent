@@ -328,6 +328,34 @@ def plan_column_dict_fills(
     return plan
 
 
+def merge_carried_column_dicts(
+    existing_column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]],
+    carried_entries: List[Dict[str, Any]],
+) -> Optional[Dict[Tuple[str, str], Dict[str, Any]]]:
+    """把 YAML 携带的字典条目按「仅填空」并入校验用字典映射（既有值一律保留）。
+
+    供导入物理校验使用：随 YAML 携带的枚举值等字典内容计入枚举维度校验，
+    与落库时「仅填空」回填的最终状态一致，新枚举维度首次导入即可自足通过。
+    existing_column_dicts 为 None（批量读取失败、降级逐维度查询）时原样返回——
+    该路径下携带字典不参与校验，与「字典只做补充标注」的容错口径一致。
+    """
+    if existing_column_dicts is None:
+        return None
+    merged: Dict[Tuple[str, str], Dict[str, Any]] = {
+        key: dict(value or {}) for key, value in existing_column_dicts.items()
+    }
+    for entry in carried_entries or []:
+        key = (str(entry.get("table") or "").strip(), str(entry.get("column") or "").strip())
+        carried = entry.get("dict") or {}
+        if not key[0] or not key[1] or not carried:
+            continue
+        target = merged.setdefault(key, {})
+        for field_key in _COLUMN_DICT_FIELD_KEYS:
+            if not target.get(field_key) and carried.get(field_key):
+                target[field_key] = carried[field_key]
+    return merged
+
+
 def _dialect_value(dialect: Any) -> str:
     return str(getattr(dialect, "value", dialect) or "")
 
@@ -1026,6 +1054,7 @@ __all__ = [
     "OssieToChatDataImporter",
     "build_model_checklist",
     "extract_metric_source_column",
+    "merge_carried_column_dicts",
     "parse_ossie_document",
     "plan_column_dict_fills",
 ]

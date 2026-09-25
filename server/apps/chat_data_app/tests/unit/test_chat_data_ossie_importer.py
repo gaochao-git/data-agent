@@ -22,6 +22,7 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
     build_model_checklist,
+    merge_carried_column_dicts,
     parse_ossie_document,
     plan_column_dict_fills,
 )
@@ -1502,6 +1503,77 @@ def test_plan_column_dict_fills_only_targets_empty_fields():
         },
     }
     assert plan_column_dict_fills(item, covered) == []
+
+
+def test_merge_carried_column_dicts_fills_empty_only():
+    """携带字典按「仅填空」并入校验映射：既有值保留、空缺字段补齐、新列整条新增。"""
+    existing = {
+        ("orders", "status"): {
+            "enum_values": [{"value": "2", "label": "已有值"}],
+            "synonyms": [],
+            "storage_format": "",
+            "unit": "元",
+        },
+        ("orders", "amount"): {"unit": "万元"},
+    }
+    carried = [
+        {"table": "orders", "column": "status", "dict": {
+            "enum_values": [{"value": "0", "label": "待支付"}], "synonyms": ["支付"], "unit": "不该覆盖",
+        }},
+        {"table": "orders", "column": "new_col", "dict": {"unit": "秒"}},
+        {"table": "orders", "column": "blank", "dict": {}},
+        {"table": "", "column": "status", "dict": {"unit": "元"}},
+    ]
+    merged = merge_carried_column_dicts(existing, carried)
+    # 既有枚举值/单位保留，仅空缺字段被补齐
+    assert merged[("orders", "status")] == {
+        "enum_values": [{"value": "2", "label": "已有值"}],
+        "synonyms": ["支付"],
+        "storage_format": "",
+        "unit": "元",
+    }
+    # 已有值的列未被携带条目改动
+    assert merged[("orders", "amount")] == {"unit": "万元"}
+    # 新列整条并入；空 dict / 定位不完整的条目跳过
+    assert merged[("orders", "new_col")] == {"unit": "秒"}
+    assert ("orders", "blank") not in merged
+    # 原入参不被修改
+    assert existing[("orders", "status")]["synonyms"] == []
+
+
+def test_merge_carried_column_dicts_none_passthrough():
+    """批量读取失败（None，降级逐维度查询）时原样返回，携带字典不参与校验。"""
+    carried = [{"table": "orders", "column": "status", "dict": {"unit": "元"}}]
+    assert merge_carried_column_dicts(None, carried) is None
+    assert merge_carried_column_dicts({}, []) == {}
+
+
+def test_apply_physical_validation_counts_carried_dicts(monkeypatch):
+    """物理校验使用「库内字典 + 携带字典仅填空合并」后的映射做枚举校验。"""
+    from apps.chat_data_app.services.semantic.run import semantic_config_service
+
+    captured: dict = {}
+
+    async def fake_validate(ds_manager, datasource_id, datasource, metrics, dimensions, relationships, *, column_dicts=None, table_columns_map=None):
+        captured["column_dicts"] = column_dicts
+        return None
+
+    monkeypatch.setattr(semantic_config_service, "validate_semantic_config_for_save", fake_validate)
+
+    class _DictManager:
+        async def get_datasource_column_dicts_async(self, datasource_id):
+            return {}
+
+    item = OssieSemanticModelImport(
+        name="订单模型",
+        metrics=[{"name": "销售额", "expression": "SUM(amount)", "table": "orders"}],
+        dimensions=[{"name": "订单状态", "expression": "status", "table": "orders"}],
+        column_dicts=[{"table": "orders", "column": "status", "dict": {"unit": "元"}}],
+    )
+    asyncio.run(semantic_config_service._apply_physical_validation(
+        [item], _DictManager(), "ds_1", {"id": "ds_1"}, {}, set(),
+    ))
+    assert captured["column_dicts"] == {("orders", "status"): {"unit": "元"}}
 
 
 def test_checklist_dict_row_states():

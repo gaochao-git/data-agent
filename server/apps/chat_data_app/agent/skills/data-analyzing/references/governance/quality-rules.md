@@ -61,12 +61,12 @@
 ## 修复指引
 
 findings 只回答「哪里有问题」。修复前先按三档判断「能不能自己改」：可直接修的按
-references/governance/yaml-authoring.md 对应小节在拷贝件上 file_edit 局部修改（最小 diff）；
-标准写法直接照抄 references/governance/model-template.md 的骨架；
+references/governance/model-template.md 的规则备注在拷贝件上 file_edit 局部修改（最小 diff）；
+标准写法直接照抄同一文件的骨架；
 标「问用户」的，口径确认后才落字；「只提示」的止步于报告与建议。
 
 注意：关联字段为空或左右数量不一致、缺 from/to 数据集等属**导入闸门错误**，不会进入质量
-报告，出现时按 yaml-authoring.md 修正后重跑 check_yaml 即可。
+报告，出现时按 model-template.md 的规则备注修正后重跑 check_yaml 即可。
 
 ### 可直接修（确定性修复）
 

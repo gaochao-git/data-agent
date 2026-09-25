@@ -16,6 +16,7 @@ from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
     extract_metric_source_column,
+    merge_carried_column_dicts,
 )
 
 logger = get_logger(__name__)
@@ -998,7 +999,9 @@ async def _apply_physical_validation(
     """逐个可导入模型做物理校验（复用 validate_semantic_config_for_save），并落同名标记。
 
     错误写入 item.errors 并使 importable=False。枚举维度的字典校验用整批一次
-    拉取的字段映射在本地匹配；逐维度回源会让每个枚举维度都重载整份数据源
+    拉取的字段映射在本地匹配，并按「仅填空」并入 YAML 携带的字典条目
+    （merge_carried_column_dicts）——新枚举维度随 YAML 带枚举值时首次导入即可通过；
+    逐维度回源会让每个枚举维度都重载整份数据源
     （get_column_dict_async 每次都 get_datasource_async），模型多时是校验慢的主因。
     读取失败降级为 None（回落逐维度查询），与字典只做补充标注的容错口径一致。
     """
@@ -1018,7 +1021,9 @@ async def _apply_physical_validation(
             item.metrics,
             item.dimensions,
             item.relationships,
-            column_dicts=column_dicts,
+            # YAML 携带的字典条目按「仅填空」并入：新枚举维度首次导入即可自足通过，
+            # 与落库时仅填空回填的最终状态一致（既有字典值不覆盖）
+            column_dicts=merge_carried_column_dicts(column_dicts, item.column_dicts),
         )
         if validation_error:
             item.errors.append(validation_error)
