@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from utils.logger import get_logger
 
 from ...chart_types import get_chart_type_label, is_supported_chart_type_input, normalize_chart_type
-from .service import get_dashboard_service
+from .service import PanelWritePayload, get_dashboard_service
 from ..datasource.manager import get_datasource_manager
 from ..semantic.run.semantic_model_repository import load_semantic_model
 from ..semantic.core.query_plan import is_composite_metric, is_derived_metric
@@ -702,16 +702,18 @@ async def _add_panel_from_card(
 ) -> Optional[Dict[str, Any]]:
     return await service.add_panel(
         dashboard_id=dashboard["id"],
-        name=_truncate_text(str(card.get("title") or "分析卡片"), 24) or _build_panel_name_fallback(chart_type, 24),
-        sql=str((plan or {}).get("sql") or ""),
-        chart_type=chart_type,
-        chart_config=_build_dashboard_panel_chart_config(card, panel_error),
-        layout_x=layout["x"],
-        layout_y=layout["y"],
-        layout_w=layout["w"],
-        layout_h=layout["h"],
-        source_thread_id=conversation_id,
-        datasource_id=datasource_id,
+        payload=PanelWritePayload(
+            name=_truncate_text(str(card.get("title") or "分析卡片"), 24) or _build_panel_name_fallback(chart_type, 24),
+            sql=str((plan or {}).get("sql") or ""),
+            chart_type=chart_type,
+            chart_config=_build_dashboard_panel_chart_config(card, panel_error),
+            layout_x=layout["x"],
+            layout_y=layout["y"],
+            layout_w=layout["w"],
+            layout_h=layout["h"],
+            source_thread_id=conversation_id,
+            datasource_id=datasource_id,
+        ),
         user_id=str(user_id or "system"),
         operator_name=str(username or ""),
     )

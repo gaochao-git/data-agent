@@ -16,6 +16,7 @@ from apps.chat_data_app.services.datasource import credentials as datasource_cre
 from apps.chat_data_app.services.datasource import manager as datasource_manager_module
 from apps.chat_data_app.services.datasource import permission as execution_permission
 from apps.chat_data_app.services.datasource.manager import (
+    DatasourceWriteAudit,
     _build_member_source_identity,
     _build_member_source_text_line,
     _build_meta_source_config,
@@ -821,8 +822,10 @@ def test_save_datasource_rejects_duplicate_member_connections():
             tables=[],
             mapped_modules=[],
             is_default=False,
-            create_by="",
-            update_by="",
+            audit=DatasourceWriteAudit(
+                create_by="",
+                update_by="",
+            ),
         ))
 
 
@@ -849,8 +852,10 @@ def test_save_datasource_rejects_missing_member_name():
             tables=[],
             mapped_modules=[],
             is_default=False,
-            create_by="",
-            update_by="",
+            audit=DatasourceWriteAudit(
+                create_by="",
+                update_by="",
+            ),
         ))
 
 
@@ -880,8 +885,10 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
         tables=[],
         mapped_modules=[],
         is_default=False,
-        create_by="",
-        update_by="",
+        audit=DatasourceWriteAudit(
+            create_by="",
+            update_by="",
+        ),
     ))
 
     assert fake_store.saved_kwargs is not None
@@ -916,8 +923,10 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
         tables=[],
         mapped_modules=[],
         is_default=False,
-        create_by="",
-        update_by="",
+        audit=DatasourceWriteAudit(
+            create_by="",
+            update_by="",
+        ),
     ))
 
     assert fake_store.saved_kwargs is not None
@@ -953,8 +962,10 @@ def test_save_datasource_rejects_duplicate_hive_http_names():
             tables=[],
             mapped_modules=[],
             is_default=False,
-            create_by="",
-            update_by="",
+            audit=DatasourceWriteAudit(
+                create_by="",
+                update_by="",
+            ),
         ))
 
 
@@ -1134,8 +1145,10 @@ def test_save_datasource_persists_group_and_tables_in_transaction():
         tables=[{"table_name": "orders"}],
         mapped_modules=["执法检查"],
         is_default=True,
-        create_by="u1",
-        update_by="u2",
+        audit=DatasourceWriteAudit(
+            create_by="u1",
+            update_by="u2",
+        ),
     ))
 
     assert result == {"id": "ds_a"}
@@ -1577,8 +1590,10 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
             tables=[{"table_name": "orders"}],
             mapped_modules=["智能问数"],
             is_default=True,
-            create_by="u1",
-            update_by="u2",
+            audit=DatasourceWriteAudit(
+                create_by="u1",
+                update_by="u2",
+            ),
         )
         assert saved == {"id": "ds_async", "loaded": True}
         assert calls[0][1]["member_sources_text"] == "机构A|ORG_A|direct|h:3306:d"

@@ -129,7 +129,7 @@ def test_cached_tokens_from_openai_usage_falls_back_to_prompt_details():
 
 
 # ---------------------------------------------------------------------------
-# todo 实时状态注入（TodoListMiddleware 的 todos 被 OmitFromInput，需每轮手动注入）
+# 待办实时状态注入（TodoListMiddleware 的待办被 OmitFromInput，需每轮手动注入）
 # ---------------------------------------------------------------------------
 
 def test_format_todo_status_lists_items_and_unfinished_reminder():
@@ -199,7 +199,7 @@ def test_build_agent_context_usage_appends_todo_status_and_counts_it(monkeypatch
     )
     assert todo_prompt.startswith(base_prompt)
     assert todo_prompt.endswith("1. [待办] 任务A\n</todo_status>")
-    # todo 块参与本轮输入计量
+    # 待办块参与本轮输入计量
     assert todo_usage["input_tokens"] > base_usage["input_tokens"]
 
 

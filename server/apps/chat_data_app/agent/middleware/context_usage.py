@@ -530,7 +530,7 @@ def _build_agent_context_usage(
     # 只改本轮请求视图，不改写 Agent 运行态消息（checkpoint 保持原样）。
     request_messages = neutralize_stale_todo_tool_messages(request_messages)
     if todo_status:
-        # 实时 todo 状态在压缩之后的出站视图上拼接（不会被摘要吞掉），并参与本轮计量。
+        # 实时待办状态在压缩之后的出站视图上拼接（不会被摘要吞掉），并参与本轮计量。
         effective_system_prompt = f"{effective_system_prompt}\n\n{todo_status}"
     llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)

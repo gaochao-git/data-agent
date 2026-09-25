@@ -671,21 +671,21 @@ class _FakeDashboardService:
     async def add_panel(
         self,
         dashboard_id: str,
-        name: str,
-        sql: str,
-        chart_type: str = "table",
-        chart_config: dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
-        layout_w: int = 4,
-        layout_h: int = 4,
-        refresh_interval: int = None,
-        source_thread_id: str = None,
-        datasource_id: str = None,
-        member_datasource_id: str = "",
+        payload,
         user_id: str = None,
         operator_name: str = "",
     ):
+        name = payload.name
+        sql = payload.sql
+        chart_type = payload.chart_type or "table"
+        chart_config = payload.chart_config or {}
+        layout_x = payload.layout_x
+        layout_y = payload.layout_y
+        layout_w = payload.layout_w if payload.layout_w is not None else 4
+        layout_h = payload.layout_h if payload.layout_h is not None else 4
+        source_thread_id = payload.source_thread_id
+        datasource_id = payload.datasource_id
+        member_datasource_id = payload.member_datasource_id or ""
         panel_id = f"panel_created_{len(self.panels) + 1}"
         panel = {
             "id": panel_id,
@@ -714,19 +714,15 @@ class _FakeDashboardService:
         self,
         dashboard_id: str,
         panel_id: str,
-        name: str = None,
-        sql: str = None,
-        chart_type: str = None,
-        chart_config: dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
-        layout_w: int = None,
-        layout_h: int = None,
-        refresh_interval: int = None,
-        member_datasource_id: str = None,
+        payload,
         user_id: str = None,
         operator_name: str = "",
     ):
+        name = payload.name
+        sql = payload.sql
+        chart_type = payload.chart_type
+        chart_config = payload.chart_config
+        member_datasource_id = payload.member_datasource_id
         panel = self.panels.get(panel_id)
         if not panel or panel.get("dashboard_id") != dashboard_id:
             return None

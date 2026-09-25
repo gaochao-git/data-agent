@@ -13,6 +13,7 @@ from uuid import uuid4
 from utils.logger import get_logger
 from .agent_inbox_service import AgentRunLeaseLostError, AgentInboxService, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
+from .chat_data_stream_request import ChatDataStreamRequest
 from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
@@ -262,31 +263,35 @@ class AgentRunRuntime:
             raise RuntimeError("AgentRunRuntime 未装配 stream_generator，请在启动时调用 set_stream_generator()")
 
         def factory() -> AsyncIterator[str]:
+            # 流式执行入参统一走 ChatDataStreamRequest：字段列表/默认值单一来源，
+            # 生成器签名收窄后无需再在这里罗列二十余个关键字参数。
             return stream_generator(
-                thread_id=prepared["conversation_id"],
-                user_query=str(context.get("query") or ""),
-                datasource_id=context.get("datasource_id"),
-                user_id=prepared["user_id"],
-                username=prepared.get("operator_name") or prepared["user_id"],
-                member_datasource_ids=context.get("member_datasource_ids") or [],
-                semantic_config_id=context.get("semantic_config_id"),
-                request=None,
-                model_id=context.get("model_id"),
-                file_selections=context.get("file_selections"),
-                enable_thinking=context.get("enable_thinking"),
-                thinking_effort=context.get("thinking_effort"),
-                skill_names=context.get("skill_names") or [],
-                options=context.get("options") or {},
-                file_ids=context.get("file_ids"),
-                run_id=prepared["run_id"],
-                owner_token=prepared["owner_token"],
-                stream_event_id_provider=prepared.get("stream_event_id_provider"),
-                adopted_messages=prepared.get("messages") or [],
-                resume_answer=prepared.get("resume_answer"),
-                resume_started=bool(prepared.get("resume_started")),
-                resume_turn_id=prepared.get("resume_turn_id"),
-                turn_id=prepared.get("turn_id"),
-                recovering=bool(prepared.get("recovering")),
+                ChatDataStreamRequest(
+                    thread_id=prepared["conversation_id"],
+                    user_query=str(context.get("query") or ""),
+                    datasource_id=context.get("datasource_id"),
+                    user_id=prepared["user_id"],
+                    username=prepared.get("operator_name") or prepared["user_id"],
+                    member_datasource_ids=context.get("member_datasource_ids") or [],
+                    semantic_config_id=context.get("semantic_config_id"),
+                    request=None,
+                    model_id=context.get("model_id"),
+                    file_selections=context.get("file_selections"),
+                    enable_thinking=context.get("enable_thinking"),
+                    thinking_effort=context.get("thinking_effort"),
+                    skill_names=context.get("skill_names") or [],
+                    options=context.get("options") or {},
+                    file_ids=context.get("file_ids"),
+                    run_id=prepared["run_id"],
+                    owner_token=prepared["owner_token"],
+                    stream_event_id_provider=prepared.get("stream_event_id_provider"),
+                    adopted_messages=prepared.get("messages") or [],
+                    resume_answer=prepared.get("resume_answer"),
+                    resume_started=bool(prepared.get("resume_started")),
+                    resume_turn_id=prepared.get("resume_turn_id"),
+                    turn_id=prepared.get("turn_id"),
+                    recovering=bool(prepared.get("recovering")),
+                )
             )
 
         return factory

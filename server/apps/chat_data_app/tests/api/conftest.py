@@ -445,16 +445,25 @@ class FakeDashboardService:
         self.dashboard["scope"] = "public" if is_public else "mine"
         return dict(self.dashboard)
 
-    async def add_panel(self, **kwargs):
-        self.added_panel = dict(kwargs)
-        return {"panel_id": "panel_new", **kwargs}
+    @staticmethod
+    def _panel_fields(payload) -> dict:
+        """把 PanelWritePayload 摊平成测试断言用的扁平字段（只保留显式提供的）。"""
+        if payload is None:
+            return {}
+        return {key: value for key, value in vars(payload).items() if value is not None}
 
-    async def update_panel(self, **kwargs):
-        self.updated_panel = dict(kwargs)
-        if kwargs.get("panel_id") != "panel_a":
+    async def add_panel(self, dashboard_id, payload=None, **kwargs):
+        flat = {**self._panel_fields(payload), **kwargs, "dashboard_id": dashboard_id}
+        self.added_panel = flat
+        return {"panel_id": "panel_new", **flat}
+
+    async def update_panel(self, panel_id, payload=None, **kwargs):
+        flat = {**self._panel_fields(payload), **kwargs, "panel_id": panel_id}
+        self.updated_panel = flat
+        if panel_id != "panel_a":
             return None
         panel = dict(self.dashboard["panels"][0])
-        panel.update({key: value for key, value in kwargs.items() if value is not None})
+        panel.update({key: value for key, value in flat.items() if value is not None})
         return panel
 
     async def delete_panel(self, dashboard_id: str, panel_id: str, user_id: str, operator_name: str = ""):

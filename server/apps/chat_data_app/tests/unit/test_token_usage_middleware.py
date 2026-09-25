@@ -312,6 +312,11 @@ def test_context_budget_startup_validation_rejects_output_reserve_without_input_
         "apps.chat_data_app.agent.context.context_budget.get_context_compression_summary_output_max_tokens",
         lambda: 200,
     )
+    # 压缩目标自洽校验按窗口 1000 的同口径桩掉（trigger 700 → target 210 > 200，不触发该断言）
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: SimpleNamespace(compression_target_tokens=210),
+    )
 
     with pytest.raises(RuntimeError, match="CHAT_DATA_OUTPUT_MAX_TOKENS=1000"):
         validate_context_budget_startup_config()

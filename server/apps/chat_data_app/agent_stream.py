@@ -37,11 +37,16 @@ from .agent import (
     get_checkpointer,
 )
 from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
-from .agent.run.conversation_runtime import stream_agent_turn
+from .agent.run.conversation_runtime import (
+    TurnLifecycleHooks,
+    TurnPersistenceHooks,
+    stream_agent_turn,
+)
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
+from .agent.run.chat_data_stream_request import ChatDataStreamRequest
 from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
@@ -1129,32 +1134,35 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
 
 
 async def _generate_chat_data_stream(
-    thread_id: str,
-    user_query: str,
-    datasource_id: str | None = None,
-    user_id: str | None = None,
-    username: str | None = None,
-    member_datasource_ids: list[str] | None = None,
-    semantic_config_id: str | None = None,
-    request: Request | None = None,
-    model_id: str | None = None,
-    file_selections: Any | None = None,
-    enable_thinking: bool | None = None,
-    thinking_effort: str | None = None,
-    skill_names: list[str] | None = None,
-    options: Optional[Dict[str, Any]] = None,
-    file_ids: list[str] | None = None,
-    run_id: str | None = None,
-    adopted_messages: list[HumanMessage] | None = None,
-    resume_answer: dict[str, Any] | None = None,
-    resume_started: bool = False,
-    resume_turn_id: str | None = None,
-    turn_id: str | None = None,
-    recovering: bool = False,
-    owner_token: str | None = None,
-    stream_event_id_provider: Callable[[], str | None] | None = None,
+    req: ChatDataStreamRequest,
 ):
     """流式执行单一 ChatData Agent。"""
+    # 入参对象在此拆成局部变量：函数体与拆分前保持一致，避免大范围表达式改写造成的
+    # 语义漂移；签名的收窄已经让「一次执行的完整入参」成为可复用的一等公民。
+    thread_id = req.thread_id
+    user_query = req.user_query
+    datasource_id = req.datasource_id
+    user_id = req.user_id
+    username = req.username
+    member_datasource_ids = req.member_datasource_ids
+    semantic_config_id = req.semantic_config_id
+    request = req.request
+    model_id = req.model_id
+    file_selections = req.file_selections
+    enable_thinking = req.enable_thinking
+    thinking_effort = req.thinking_effort
+    skill_names = req.skill_names
+    options = req.options
+    file_ids = req.file_ids
+    run_id = req.run_id
+    adopted_messages = req.adopted_messages
+    resume_answer = req.resume_answer
+    resume_started = req.resume_started
+    resume_turn_id = req.resume_turn_id
+    turn_id = req.turn_id
+    recovering = req.recovering
+    owner_token = req.owner_token
+    stream_event_id_provider = req.stream_event_id_provider
     started_at = time.perf_counter()
     last_phase_at = started_at
 
@@ -1189,30 +1197,32 @@ async def _generate_chat_data_stream(
     # done 发布统一由 AgentRunRuntime（唯一生命周期 owner）完成。
     try:
         async for event in _run_chat_data_agent_stream(
-            thread_id=thread_id,
-            user_query=user_query,
-            datasource_id=datasource_id,
-            user_id=user_id,
-            username=username,
-            member_datasource_ids=member_datasource_ids,
-            semantic_config_id=semantic_config_id,
-            request=request,
-            model_id=model_id,
-            file_selections=file_selections,
-            enable_thinking=enable_thinking,
-            thinking_effort=thinking_effort,
-            skill_names=normalized_skill_names,
-            options=options,
-            file_ids=file_ids,
-            run_id=run_id,
-            adopted_messages=adopted_messages,
-            resume_answer=resume_answer,
-            resume_started=resume_started,
-            resume_turn_id=resume_turn_id,
-            turn_id=turn_id,
-            recovering=recovering,
-            owner_token=owner_token,
-            stream_event_id_provider=stream_event_id_provider,
+            req=ChatDataStreamRequest(
+                thread_id=thread_id,
+                user_query=user_query,
+                datasource_id=datasource_id,
+                user_id=user_id,
+                username=username,
+                member_datasource_ids=member_datasource_ids,
+                semantic_config_id=semantic_config_id,
+                request=request,
+                model_id=model_id,
+                file_selections=file_selections,
+                enable_thinking=enable_thinking,
+                thinking_effort=thinking_effort,
+                skill_names=normalized_skill_names,
+                options=options,
+                file_ids=file_ids,
+                run_id=run_id,
+                adopted_messages=adopted_messages,
+                resume_answer=resume_answer,
+                resume_started=resume_started,
+                resume_turn_id=resume_turn_id,
+                turn_id=turn_id,
+                recovering=recovering,
+                owner_token=owner_token,
+                stream_event_id_provider=stream_event_id_provider,
+            ),
             log_phase=log_phase,
         ):
             yield event
@@ -1453,36 +1463,79 @@ async def _prepare_agent_prompt_bundle(
     return data_context, available_skills_xml
 
 
+@dataclass(frozen=True)
+class TurnUserInput:
+    """本轮用户侧输入：消息素材与上一轮遗留的排队消息。"""
+
+    user_query: str
+    message_content: str
+    file_selections: List[str]
+    vision_attachments: list[dict[str, Any]]
+    skill_names: list[str]
+    adopted_messages: list[HumanMessage] | None = None
+
+
+@dataclass(frozen=True)
+class TurnResumeContext:
+    """checkpoint 恢复相关的上下文（是否恢复、恢复答案、所属 turn/run 与租约 token）。"""
+
+    recovering: bool
+    resume_answer: dict[str, Any] | None
+    resume_started: bool
+    turn_id: str | None
+    run_id: str | None
+    owner_token: str | None
+
+
+@dataclass(frozen=True)
+class TurnRuntimeContext:
+    """本轮执行所需的不变上下文：操作人、会话、数据源、语义、运行时与提示素材。"""
+
+    user_id: str | None
+    username: str | None
+    thread_id: str
+    datasource_id: str | None
+    semantic_context: Any
+    runtime_options: Any
+    workspace_root: str
+    data_context: Any
+    available_skills_xml: str
+
+
 async def _resolve_agent_turn_inputs(
     checkpointer: Any,
     config: dict[str, Any],
     *,
-    user_query: str,
-    message_content: str,
-    file_selections: List[str],
-    vision_attachments: list[dict[str, Any]],
-    skill_names: list[str],
-    recovering: bool,
-    resume_answer: dict[str, Any] | None,
-    resume_started: bool,
-    turn_id: str | None,
-    run_id: str | None,
-    owner_token: str | None,
-    adopted_messages: list[HumanMessage] | None,
-    user_id: str | None,
-    username: str | None,
-    thread_id: str,
-    datasource_id: str | None,
-    semantic_context: Any,
-    runtime_options: Any,
-    workspace_root: str,
-    data_context: Any,
-    available_skills_xml: str,
+    user_input: TurnUserInput,
+    resume: TurnResumeContext,
+    runtime: TurnRuntimeContext,
 ) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
     """解析 checkpoint 恢复状态，构建用户消息、initial_state 与系统提示词。
 
     `adopted_messages` 可能在恢复对齐时被重置为空列表，须回传给主流程继续使用。
     """
+    # 三个入参对象在此还原为局部变量：函数体与拆分前保持一致，避免表达式级改写。
+    user_query = user_input.user_query
+    message_content = user_input.message_content
+    file_selections = user_input.file_selections
+    vision_attachments = user_input.vision_attachments
+    skill_names = user_input.skill_names
+    adopted_messages = user_input.adopted_messages
+    recovering = resume.recovering
+    resume_answer = resume.resume_answer
+    resume_started = resume.resume_started
+    turn_id = resume.turn_id
+    run_id = resume.run_id
+    owner_token = resume.owner_token
+    user_id = runtime.user_id
+    username = runtime.username
+    thread_id = runtime.thread_id
+    datasource_id = runtime.datasource_id
+    semantic_context = runtime.semantic_context
+    runtime_options = runtime.runtime_options
+    workspace_root = runtime.workspace_root
+    data_context = runtime.data_context
+    available_skills_xml = runtime.available_skills_xml
     message_kwargs: dict[str, Any] = {}
     if skill_names:
         message_kwargs["skill_names"] = skill_names
@@ -1551,33 +1604,35 @@ async def _admit_adopted_messages(
 
 async def _run_chat_data_agent_stream(
     *,
-    thread_id: str,
-    user_query: str,
-    datasource_id: str | None,
-    user_id: str | None,
-    username: str | None,
-    member_datasource_ids: list[str] | None,
-    semantic_config_id: str | None,
-    request: Request | None,
-    model_id: str | None,
-    file_selections: Any | None,
-    enable_thinking: bool | None,
-    thinking_effort: str | None,
-    skill_names: list[str],
-    options: Optional[Dict[str, Any]],
-    file_ids: list[str] | None,
-    run_id: str | None,
-    adopted_messages: list[HumanMessage] | None = None,
-    resume_answer: dict[str, Any] | None = None,
-    resume_started: bool = False,
-    resume_turn_id: str | None = None,
-    turn_id: str | None = None,
-    recovering: bool = False,
-    owner_token: str | None = None,
-    stream_event_id_provider: Callable[[], str | None] | None = None,
+    req: ChatDataStreamRequest,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
+    # 与 _generate_chat_data_stream 同一口径：入参对象在此还原为局部变量，函数体保持不变。
+    thread_id = req.thread_id
+    user_query = req.user_query
+    datasource_id = req.datasource_id
+    user_id = req.user_id
+    username = req.username
+    member_datasource_ids = req.member_datasource_ids
+    semantic_config_id = req.semantic_config_id
+    request = req.request
+    model_id = req.model_id
+    file_selections = req.file_selections
+    enable_thinking = req.enable_thinking
+    thinking_effort = req.thinking_effort
+    skill_names = req.skill_names
+    options = req.options
+    file_ids = req.file_ids
+    run_id = req.run_id
+    adopted_messages = req.adopted_messages
+    resume_answer = req.resume_answer
+    resume_started = req.resume_started
+    resume_turn_id = req.resume_turn_id
+    turn_id = req.turn_id
+    recovering = req.recovering
+    owner_token = req.owner_token
+    stream_event_id_provider = req.stream_event_id_provider
     selected_files = parse_file_selections(file_selections)
     try:
         semantic_context = await _prepare_agent_semantic_context(
@@ -1663,30 +1718,36 @@ async def _run_chat_data_agent_stream(
 
             user_message, initial_state, system_prompt, adopted_messages = (
                 await _resolve_agent_turn_inputs(
-                checkpointer,
-                config,
-                user_query=user_query,
-                message_content=message_content,
-                file_selections=valid_file_selections,
-                vision_attachments=vision_attachments,
-                skill_names=skill_names,
-                recovering=recovering,
-                resume_answer=resume_answer,
-                resume_started=resume_started,
-                turn_id=turn_id,
-                run_id=run_id,
-                owner_token=owner_token,
-                adopted_messages=adopted_messages,
-                user_id=user_id,
-                username=username,
-                thread_id=thread_id,
-                datasource_id=datasource_id,
-                semantic_context=semantic_context,
-                runtime_options=runtime_options,
-                workspace_root=workspace_paths["root"],
-                data_context=data_context,
-                available_skills_xml=available_skills_xml,
-            )
+                    checkpointer,
+                    config,
+                    user_input=TurnUserInput(
+                        user_query=user_query,
+                        message_content=message_content,
+                        file_selections=valid_file_selections,
+                        vision_attachments=vision_attachments,
+                        skill_names=skill_names,
+                        adopted_messages=adopted_messages,
+                    ),
+                    resume=TurnResumeContext(
+                        recovering=recovering,
+                        resume_answer=resume_answer,
+                        resume_started=resume_started,
+                        turn_id=turn_id,
+                        run_id=run_id,
+                        owner_token=owner_token,
+                    ),
+                    runtime=TurnRuntimeContext(
+                        user_id=user_id,
+                        username=username,
+                        thread_id=thread_id,
+                        datasource_id=datasource_id,
+                        semantic_context=semantic_context,
+                        runtime_options=runtime_options,
+                        workspace_root=workspace_paths["root"],
+                        data_context=data_context,
+                        available_skills_xml=available_skills_xml,
+                    ),
+                )
             )
             log_phase("build_system_prompt")
 
@@ -1754,14 +1815,18 @@ async def _run_chat_data_agent_stream(
             async for sse_event in stream_agent_turn(
                 stream_adapter=stream_adapter,
                 format_sse=_format_sse,
-                persist_user_message=partial(_persist_agent_user_message, callbacks),
-                persist_turn_history=partial(_persist_agent_turn_history_snapshot, callbacks),
-                persist_partial_history=partial(_persist_agent_partial_history, callbacks),
-                before_stream=partial(_before_agent_stream, callbacks),
-                after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
-                after_turn=partial(_log_agent_stream_done, callbacks),
-                after_stream=partial(_confirm_agent_consumed_messages, callbacks),
-                on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
+                persistence=TurnPersistenceHooks(
+                    persist_user_message=partial(_persist_agent_user_message, callbacks),
+                    persist_turn_history=partial(_persist_agent_turn_history_snapshot, callbacks),
+                    persist_partial_history=partial(_persist_agent_partial_history, callbacks),
+                ),
+                hooks=TurnLifecycleHooks(
+                    before_stream=partial(_before_agent_stream, callbacks),
+                    after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
+                    after_turn=partial(_log_agent_stream_done, callbacks),
+                    after_stream=partial(_confirm_agent_consumed_messages, callbacks),
+                    on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
+                ),
             ):
                 yield sse_event
 

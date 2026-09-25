@@ -9,6 +9,14 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 import asyncio
 
+
+def _flat_panel_kwargs(payload, **extra):
+    """把 PanelWritePayload 摊平成测试断言用的扁平字段（只保留显式提供的）。"""
+    flat = {key: value for key, value in vars(payload).items() if value is not None} if payload else {}
+    flat.update(extra)
+    return flat
+
+
 from apps.chat_data_app.services.dashboard.spec_service import (
     _build_dashboard_panel_chart_config,
     _build_panel_name_fallback,
@@ -197,7 +205,8 @@ def test_create_dashboard_from_spec_payload_skips_sql_precheck(monkeypatch):
         async def create_dashboard(self, **_kwargs):
             return {"id": "dash_1"}
 
-        async def add_panel(self, **kwargs):
+        async def add_panel(self, dashboard_id, payload=None, **kwargs):
+            kwargs = _flat_panel_kwargs(payload, **kwargs)
             return {
                 "id": f"panel_{kwargs['name']}",
                 "layout": {
@@ -263,7 +272,8 @@ def test_create_dashboard_from_spec_payload_keeps_invalid_sql_cards(monkeypatch)
         async def create_dashboard(self, **_kwargs):
             return {"id": "dash_1"}
 
-        async def add_panel(self, **kwargs):
+        async def add_panel(self, dashboard_id, payload=None, **kwargs):
+            kwargs = _flat_panel_kwargs(payload, **kwargs)
             panel = {
                 "id": f"panel_{len(self.panels) + 1}",
                 "name": kwargs["name"],
@@ -928,7 +938,8 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
         async def create_dashboard(self, **_kwargs):
             return {"id": "dash_1"}
 
-        async def add_panel(self, **kwargs):
+        async def add_panel(self, dashboard_id, payload=None, **kwargs):
+            kwargs = _flat_panel_kwargs(payload, **kwargs)
             if self.mode == "add_fail":
                 raise RuntimeError("写入失败")
             return {"id": "panel_1", "name": kwargs["name"]}
@@ -1129,7 +1140,8 @@ def test_create_dashboard_from_spec_payload_skips_non_dict_cards(monkeypatch):
         async def create_dashboard(self, **_kwargs):
             return {"id": "dash_1"}
 
-        async def add_panel(self, **kwargs):
+        async def add_panel(self, dashboard_id, payload=None, **kwargs):
+            kwargs = _flat_panel_kwargs(payload, **kwargs)
             self.added.append(kwargs)
             return {"id": "panel_1", "name": kwargs["name"]}
 

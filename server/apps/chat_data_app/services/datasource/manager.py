@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,21 @@ from .permission import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class DatasourceWriteAudit:
+    """数据源写入的操作人审计字段（创建人 / 更新人及其显示名）。
+
+    四个字段总是结伴出现（写入组信息时同时用于组表、成员表与表结构），收敛成对象以保证
+    ``_save_datasource_async`` 的形参数量落在 AGENTS.md §3 的阈值内。
+    """
+
+    create_by: str = ""
+    update_by: str = ""
+    create_by_name: str = ""
+    update_by_name: str = ""
+
 
 _UNSET = object()
 SUPPORTED_QUERY_EXECUTOR_TYPES = {"direct", "http"}
@@ -442,10 +458,7 @@ class DataSourceManager:
         is_default: Any = _UNSET,
         query_context: str = "",
         recommended_questions: Optional[List[str]] = None,
-        create_by: str = "",
-        update_by: str = "",
-        create_by_name: str = "",
-        update_by_name: str = "",
+        audit: DatasourceWriteAudit = DatasourceWriteAudit(),
     ) -> dict:
         """异步写入数据源组及表结构缓存。"""
         normalized_query_executor_type = _normalize_query_executor_type(source_type, query_executor_type)
@@ -476,16 +489,16 @@ class DataSourceManager:
                 template_source=template_source_line,
                 member_sources_text="\n".join(persisted_member_source_lines),
                 recommended_questions=recommended_questions or [],
-                create_by=create_by,
-                update_by=update_by,
-                create_by_name=create_by_name,
-                update_by_name=update_by_name,
+                create_by=audit.create_by,
+                update_by=audit.update_by,
+                create_by_name=audit.create_by_name,
+                update_by_name=audit.update_by_name,
             )
             update_kwargs: Dict[str, Any] = {
                 "group_id": datasource_id,
                 "mapped_modules": [] if mapped_modules is _UNSET else mapped_modules,
-                "update_by": update_by,
-                "update_by_name": update_by_name,
+                "update_by": audit.update_by,
+                "update_by_name": audit.update_by_name,
             }
             if is_default is not _UNSET:
                 update_kwargs["is_default"] = is_default
@@ -494,10 +507,10 @@ class DataSourceManager:
                 await self.datasource_dao.replace_datasource_tables_async(
                     group_id=datasource_id,
                     tables=tables or [],
-                    create_by=create_by,
-                    update_by=update_by,
-                    create_by_name=create_by_name,
-                    update_by_name=update_by_name,
+                    create_by=audit.create_by,
+                    update_by=audit.update_by,
+                    create_by_name=audit.create_by_name,
+                    update_by_name=audit.update_by_name,
                 )
         return await self._load_datasource_async(datasource_id)
 
@@ -1050,10 +1063,12 @@ class DataSourceManager:
             mapped_modules=[],
             is_default=False,
             recommended_questions=recommended_questions or [],
-            create_by=create_by,
-            update_by=create_by,
-            create_by_name=create_by_name,
-            update_by_name=create_by_name,
+            audit=DatasourceWriteAudit(
+                create_by=create_by,
+                update_by=create_by,
+                create_by_name=create_by_name,
+                update_by_name=create_by_name,
+            ),
         )
         logger.info("创建数据源组: %s - %s, members=%s", datasource_id, group_name, len(member_source_configs_merged))
         return created
@@ -1184,10 +1199,12 @@ class DataSourceManager:
         return {
             "group_name": name if name is not None else current.get("group_name") or datasource_id,
             "group_desc": description if description is not None else current.get("ds_description") or "",
-            "create_by": current.get("create_by") or "",
-            "create_by_name": current.get("create_by_name") or "",
-            "update_by": update_by or current.get("update_by") or "",
-            "update_by_name": update_by_name or current.get("update_by_name") or "",
+            "audit": DatasourceWriteAudit(
+                create_by=current.get("create_by") or "",
+                create_by_name=current.get("create_by_name") or "",
+                update_by=update_by or current.get("update_by") or "",
+                update_by_name=update_by_name or current.get("update_by_name") or "",
+            ),
         }
 
     @staticmethod

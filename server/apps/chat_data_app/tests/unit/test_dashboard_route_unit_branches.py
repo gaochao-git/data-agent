@@ -113,10 +113,10 @@ class FakeDashboardService:
         self.public_state = is_public
         return {"id": dashboard_id, "user_id": user_id, "is_public": is_public}
 
-    async def add_panel(self, **kwargs):
-        if kwargs["dashboard_id"] == "missing":
+    async def add_panel(self, dashboard_id, payload=None, **_kwargs):
+        if dashboard_id == "missing":
             return None
-        return {"id": "panel_new", "name": kwargs["name"], "sql": kwargs["sql"]}
+        return {"id": "panel_new", "name": payload.name, "sql": payload.sql}
 
     async def get_panel(self, panel_id, dashboard_id=None, user_id=None, include_public=True):
         for panel in self.dashboard["panels"]:
@@ -124,10 +124,10 @@ class FakeDashboardService:
                 return dict(panel)
         return None
 
-    async def update_panel(self, **kwargs):
-        if kwargs["panel_id"] == "missing":
+    async def update_panel(self, panel_id, payload=None, **_kwargs):
+        if panel_id == "missing":
             return None
-        return {"id": kwargs["panel_id"], "name": kwargs.get("name")}
+        return {"id": panel_id, "name": payload.name}
 
     async def delete_panel(self, dashboard_id, panel_id, **_kwargs):
         return panel_id != "missing"

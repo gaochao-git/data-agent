@@ -707,8 +707,13 @@ def test_build_stream_factory_requires_injected_stream_generator():
 def test_set_stream_generator_is_used_by_stream_factory():
     captured = {}
 
-    def fake_stream_generator(**kwargs):
-        captured.update(kwargs)
+    def fake_stream_generator(request):
+        # 流式执行入参已收敛为 ChatDataStreamRequest（单一对象）
+        captured.update({
+            "thread_id": request.thread_id,
+            "run_id": request.run_id,
+            "owner_token": request.owner_token,
+        })
 
         async def stream():
             yield "event: done\ndata: [DONE]\n\n"

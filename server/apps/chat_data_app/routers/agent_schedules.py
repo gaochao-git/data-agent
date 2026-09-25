@@ -15,6 +15,8 @@ from ..services.agent_schedule.schedule_service import (
     AgentScheduleLimitExceededError,
     AgentScheduleNotFoundError,
     AgentScheduleValidationError,
+    ScheduleFieldsUpdate,
+    UpdateOperator,
     agent_schedule_service,
 )
 from ..agent.run.agent_schedule_runtime import agent_schedule_runtime
@@ -92,20 +94,24 @@ async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest
             prompt=payload.prompt,
             conversation_mode=payload.conversation_mode,
             conversation_id=payload.conversation_id,
-            schedule_type=payload.schedule_type,
-            cron_expr=payload.cron_expr,
-            plan_time=payload.plan_time,
-            effective_end_time=payload.effective_end_time,
-            # 更新请求里 None 既可能是「未提供」也可能是「显式清空」：只有字段真的
-            # 出现在请求体中且为 null 时才视为清除有效期（Pydantic 可区分二者）
-            clear_effective_end_time=(
-                "effective_end_time" in payload.model_fields_set and payload.effective_end_time is None
+            schedule=ScheduleFieldsUpdate(
+                schedule_type=payload.schedule_type,
+                cron_expr=payload.cron_expr,
+                plan_time=payload.plan_time,
+                effective_end_time=payload.effective_end_time,
+                # 更新请求里 None 既可能是「未提供」也可能是「显式清空」：只有字段真的
+                # 出现在请求体中且为 null 时才视为清除有效期（Pydantic 可区分二者）
+                clear_effective_end_time=(
+                    "effective_end_time" in payload.model_fields_set and payload.effective_end_time is None
+                ),
             ),
             enabled_flag=payload.enabled_flag,
             datasource_id=payload.datasource_id,
             options=payload.options,
-            user_id=str(current_user.user_id),
-            username=str(current_user.username or ""),
+            operator=UpdateOperator(
+                user_id=str(current_user.user_id),
+                username=str(current_user.username or ""),
+            ),
         )
         return business_response(data=data, msg="更新成功")
     except AgentScheduleNotFoundError as e:

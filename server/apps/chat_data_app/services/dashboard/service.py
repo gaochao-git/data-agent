@@ -6,6 +6,7 @@ Dashboard 服务层
 
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -15,6 +16,30 @@ from utils.logger import get_logger
 from ...daos.dashboard_dao import DashboardDao
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class PanelWritePayload:
+    """面板写入内容的聚合对象（新增 / 更新共用）。
+
+    面板属性字段（名称、SQL、图表配置、布局、刷新间隔、数据源绑定）成组出现且数量多，
+    直接铺成服务方法形参会突破 AGENTS.md §3 的「形参 ≤13」红线，故收敛为单一对象。
+    全部字段默认 ``None``：``update_panel`` 只写入显式提供的字段（保持局部更新语义），
+    ``add_panel`` 的默认值（table / 4 / 4）在该方法内回落到 concrete 值。
+    """
+
+    name: Optional[str] = None
+    sql: Optional[str] = None
+    chart_type: Optional[str] = None
+    chart_config: Optional[Dict] = None
+    layout_x: Optional[int] = None
+    layout_y: Optional[int] = None
+    layout_w: Optional[int] = None
+    layout_h: Optional[int] = None
+    refresh_interval: Optional[int] = None
+    source_thread_id: Optional[str] = None
+    datasource_id: Optional[str] = None
+    member_datasource_id: Optional[str] = None
 
 
 class DashboardService:
@@ -120,40 +145,29 @@ class DashboardService:
     async def add_panel(
         self,
         dashboard_id: str,
-        name: str,
-        sql: str,
-        chart_type: str = "table",
-        chart_config: Dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
-        layout_w: int = 4,
-        layout_h: int = 4,
-        refresh_interval: int = None,
-        source_thread_id: str = None,
-        datasource_id: str = None,
-        member_datasource_id: str = "",
+        payload: PanelWritePayload,
         user_id: str = None,
         operator_name: str = "",
     ) -> Optional[Dict[str, Any]]:
-        """添加面板到大屏"""
+        """添加面板到大屏（面板属性经 ``PanelWritePayload`` 传入）。"""
         panel_id = str(uuid.uuid4())
         panel = await self.dao.add_panel(
             dashboard_id=dashboard_id,
             panel_id=panel_id,
             user_id=user_id,
             panel_values=self._panel_create_values(
-                name=name,
-                sql=sql,
-                chart_type=chart_type,
-                chart_config=chart_config,
-                layout_x=layout_x,
-                layout_y=layout_y,
-                layout_w=layout_w,
-                layout_h=layout_h,
-                refresh_interval=refresh_interval,
-                source_thread_id=source_thread_id,
-                datasource_id=datasource_id,
-                member_datasource_id=member_datasource_id,
+                name=payload.name,
+                sql=payload.sql,
+                chart_type=payload.chart_type or "table",
+                chart_config=payload.chart_config,
+                layout_x=payload.layout_x,
+                layout_y=payload.layout_y,
+                layout_w=payload.layout_w if payload.layout_w is not None else 4,
+                layout_h=payload.layout_h if payload.layout_h is not None else 4,
+                refresh_interval=payload.refresh_interval,
+                source_thread_id=payload.source_thread_id,
+                datasource_id=payload.datasource_id,
+                member_datasource_id=payload.member_datasource_id or "",
             ),
             operator_name=operator_name,
             now=datetime.now(),
@@ -168,35 +182,26 @@ class DashboardService:
         self,
         dashboard_id: str,
         panel_id: str,
-        name: str = None,
-        sql: str = None,
-        chart_type: str = None,
-        chart_config: Dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
-        layout_w: int = None,
-        layout_h: int = None,
-        refresh_interval: int = None,
-        member_datasource_id: str = None,
+        payload: PanelWritePayload,
         user_id: str = None,
         operator_name: str = "",
     ) -> Optional[Dict[str, Any]]:
-        """更新面板"""
+        """更新面板（只写入 payload 中显式提供的字段）。"""
         panel = await self.dao.update_panel(
             dashboard_id=dashboard_id,
             panel_id=panel_id,
             user_id=user_id,
             values=self._panel_update_values(
-                name=name,
-                sql=sql,
-                chart_type=chart_type,
-                chart_config=chart_config,
-                layout_x=layout_x,
-                layout_y=layout_y,
-                layout_w=layout_w,
-                layout_h=layout_h,
-                refresh_interval=refresh_interval,
-                member_datasource_id=member_datasource_id,
+                name=payload.name,
+                sql=payload.sql,
+                chart_type=payload.chart_type,
+                chart_config=payload.chart_config,
+                layout_x=payload.layout_x,
+                layout_y=payload.layout_y,
+                layout_w=payload.layout_w,
+                layout_h=payload.layout_h,
+                refresh_interval=payload.refresh_interval,
+                member_datasource_id=payload.member_datasource_id,
             ),
             operator_name=operator_name,
             now=datetime.now(),

@@ -620,12 +620,12 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
     _override_semantic_context(monkeypatch)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_auto_file_grep",
         user_query="5+5等于多少",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "5+5=10" in joined
@@ -663,12 +663,12 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
     )
     _override_semantic_context(monkeypatch)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_partial_prematerialize",
         user_query="查询订单数",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
     assert "本轮语义目录物化不完整" in system_prompt
@@ -699,12 +699,12 @@ def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(mon
         failing_prematerialize,
     )
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_prematerialize_failed",
         user_query="查询订单数",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     assert failure is not None
     assert "语义模型目录初始化失败" in "".join(events)
@@ -746,12 +746,12 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_snapshot",
         user_query="查询订单",
         datasource_id="ds_a",
         user_id="u1",
-    )))
+    ))))
 
     assert "完成" in "".join(events)
     system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
@@ -788,11 +788,11 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_select_tool_event",
         user_query="按机构查询交易金额",
         datasource_id="ds_a",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -827,12 +827,12 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_file_selections",
         user_query="分析这个文件",
         datasource_id="ds_a",
         file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
-    )))
+    ))))
 
     joined = "".join(events)
     assert "商品数量为 10" in joined
@@ -854,12 +854,12 @@ def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_query_skill_names",
         user_query="查询金额",
         datasource_id="ds_a",
         skill_names=["custom-query-skill", "risk-query-skill"],
-    )))
+    ))))
 
     assert "完成" in "".join(events)
     human_message = fake_graph.initial_state["messages"][0]
@@ -889,12 +889,12 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_multiple_file_grep_event",
         user_query="查询金额",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -928,12 +928,12 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_retrieval_tool_event",
         user_query="查询订单金额和用户数",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -965,12 +965,12 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_cross_config_retrieval",
         user_query="按用户等级关联订单金额",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -990,12 +990,12 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_selected_semantic_no_precheck",
         user_query="查询明细",
         datasource_id="ds_a",
         semantic_config_id="cfg_order",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
@@ -1014,12 +1014,12 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_keep_semantic",
         user_query="查询订单金额",
         datasource_id="ds_a",
         semantic_config_id="cfg_order",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
@@ -1038,12 +1038,12 @@ def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(m
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_selected_ambiguous_semantic",
         user_query="商品数量是多少",
         datasource_id="ds_a",
         semantic_config_id="cfg_order",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: semantic_config_select_required" not in joined
@@ -1061,12 +1061,12 @@ def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_no_preblock_semantic",
         user_query="查询退款金额",
         datasource_id="ds_a",
         semantic_config_id="cfg_order",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "当前选择的指标集不支持该问题：缺少退款金额指标" not in joined
@@ -1095,12 +1095,12 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_multiple_semantic",
         user_query="查询金额",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -1131,12 +1131,12 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_cross_semantic_retrieval",
         user_query="查询订单金额和商品库存",
         datasource_id="ds_a",
         semantic_config_id=None,
-    )))
+    ))))
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -1162,13 +1162,13 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_a",
         user_query="查订单数",
         datasource_id="ds_a",
         user_id="user_a",
         username="测试用户",
-    )))
+    ))))
 
     joined = "".join(events)
     assert '"status": "running"' in joined
@@ -1200,14 +1200,14 @@ def test_generate_chat_data_stream_projects_visible_members_from_shared_context(
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_query_members",
         user_query="查询所有机构订单数",
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=["m1"],
         semantic_config_id="cfg_a",
-    )))
+    ))))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
@@ -1230,14 +1230,14 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_query_members",
         user_query="查询所有机构订单数",
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=[],
         semantic_config_id="cfg_a",
-    )))
+    ))))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
@@ -1260,14 +1260,14 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_query_member_selected",
         user_query="查询订单数",
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=["m1"],
         semantic_config_id="cfg_a",
-    )))
+    ))))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
 
@@ -1278,11 +1278,11 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True))
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_error",
         user_query="查订单数",
         datasource_id="ds_a",
-    )))
+    ))))
 
     joined = "".join(events)
     assert 'event: error\ndata: {"error": "智能问数执行失败，请稍后重试。"}' in joined
@@ -1304,11 +1304,11 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_context_limit",
         user_query="查订单数",
         datasource_id="ds_a",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "当前输入内容过长，请拆分问题后重试。" in joined
@@ -1325,12 +1325,12 @@ def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
         semantic_config=None,
         semantic_config_error="未找到可用指标集: cfg_missing",
     )
-    missing_events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+    missing_events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_missing_semantic",
         user_query="查订单",
         datasource_id="ds_a",
         semantic_config_id="cfg_missing",
-    )))
+    ))))
     assert "未找到可用指标集: cfg_missing" in "".join(missing_events)
     assert failure is not None  # 失败异常抛给 Runtime 收口
 
@@ -1351,12 +1351,12 @@ def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypa
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_disconnect",
         user_query="查订单",
         datasource_id="ds_a",
         request=DisconnectRequest(),
-    )))
+    ))))
 
     assert events == []
     assert fake_graph.initial_state is None
@@ -1376,11 +1376,11 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(
+    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_state_fail",
         user_query="查订单",
         datasource_id="ds_a",
-    )))
+    ))))
 
     joined = "".join(events)
     assert "完成" in joined
@@ -1456,6 +1456,7 @@ from apps.chat_data_app.services.agent_run.message_compose import (
 )
 from apps.chat_data_app.services.agent_run.uploaded_file_service import MAX_IMAGES_PER_MESSAGE
 from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
+from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 
 
 def test_is_image_attachment_checks_type_and_size():

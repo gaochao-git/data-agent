@@ -502,7 +502,7 @@ async def test_middleware_skips_started_event_when_compression_not_triggered(mon
 
 
 # ---------------------------------------------------------------------------
-# todo 快照注入摘要 + 陈旧 write_todos 工具结果占位
+# 待办快照注入摘要 + 陈旧 write_todos 工具结果占位
 # ---------------------------------------------------------------------------
 
 def test_neutralize_stale_todo_tool_messages_replaces_only_write_todos():

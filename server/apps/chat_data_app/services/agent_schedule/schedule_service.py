@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -28,6 +29,29 @@ from .trigger_time import (
     normalize_title,
     validate_cron_expr,
 )
+
+@dataclass(frozen=True)
+class ScheduleFieldsUpdate:
+    """定时任务调度字段的更新意图（全部可缺省，缺省表示沿用任务现值）。
+
+    这五个字段只在「调度配置真的变了」的场景下成套出现，成组之后 ``update_job`` 的
+    形参数量才能落在 AGENTS.md §3 的阈值内。
+    """
+
+    schedule_type: str | None = None
+    cron_expr: str | None = None
+    plan_time: datetime | None = None
+    effective_end_time: datetime | None = None
+    clear_effective_end_time: bool = False
+
+
+@dataclass(frozen=True)
+class UpdateOperator:
+    """写操作的审计对象：用户 ID 与其显示名（两者总是一起写入替换审计列）。"""
+
+    user_id: str = ""
+    username: str = ""
+
 
 logger = get_logger(__name__)
 
@@ -214,16 +238,11 @@ class AgentScheduleService:
         prompt: str | None,
         conversation_mode: str | None = None,
         conversation_id: str | None = None,
-        schedule_type: str | None = None,
-        cron_expr: str | None,
-        plan_time: datetime | None,
-        effective_end_time: datetime | None,
-        clear_effective_end_time: bool = False,
+        schedule: ScheduleFieldsUpdate | None = None,
         enabled_flag: int | None,
         datasource_id: str | None,
         options: dict[str, Any] | None,
-        user_id: str,
-        username: str,
+        operator: UpdateOperator,
     ) -> dict:
         """更新任务；未传的字段保持不变。
 
@@ -232,21 +251,22 @@ class AgentScheduleService:
         原样保留，避免编辑标题时顺带清空其它运行配置。调度字段仅在真的变化时
         才重新校验并重算 ``next_trigger_time``。
         """
+        schedule_fields = schedule or ScheduleFieldsUpdate()
         async with get_session() as session:
             now = await self._dao.now(session)
             job = await self._dao.get_job_for_update(session, job_id)
-            if job is None or job.user_id != user_id:
+            if job is None or job.user_id != operator.user_id:
                 raise AgentScheduleNotFoundError("定时任务不存在")
             resolved_mode, conversation_key = await self._resolve_conversation_binding(
-                session, job, conversation_mode, conversation_id, user_id
+                session, job, conversation_mode, conversation_id, operator.user_id
             )
             resolved, schedule_changed = self._resolve_schedule_update(
                 job,
-                schedule_type=schedule_type,
-                cron_expr=cron_expr,
-                plan_time=plan_time,
-                effective_end_time=effective_end_time,
-                clear_effective_end_time=clear_effective_end_time,
+                schedule_type=schedule_fields.schedule_type,
+                cron_expr=schedule_fields.cron_expr,
+                plan_time=schedule_fields.plan_time,
+                effective_end_time=schedule_fields.effective_end_time,
+                clear_effective_end_time=schedule_fields.clear_effective_end_time,
                 now=now,
             )
             if title is not None:
@@ -262,8 +282,8 @@ class AgentScheduleService:
             self._apply_schedule_fields(job, resolved)
             await self._apply_enabled_transition(session, job, enabled_flag, now, schedule_changed)
             job.update_time = now
-            job.update_by = user_id
-            job.update_by_name = username
+            job.update_by = operator.user_id
+            job.update_by_name = operator.username
             return job.to_dict()
 
     # ---- update_job 的分段实现：只为把单函数复杂度压进阈值，语义与未拆分时完全一致 ----

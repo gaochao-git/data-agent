@@ -10,7 +10,17 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.run.conversation_runtime import stream_agent_turn
+from apps.chat_data_app.agent.run.conversation_runtime import (
+
+    TurnLifecycleHooks,
+
+    TurnPersistenceHooks,
+
+    TurnResourceOptions,
+
+    stream_agent_turn,
+
+)
 
 
 class _FakeStreamAdapter:
@@ -53,13 +63,19 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=lambda: hook("user"),
-        before_stream=lambda: _before_stream(calls),
-        persist_turn_history=lambda: hook("history"),
-        persist_partial_history=lambda: hook("partial"),
-        finalize_resources=finalize_resources,
-        finalize_stream_kwargs={"persist_latest_ai_timestamp": True},
-        after_turn=lambda: hook("after"),
+        persistence=TurnPersistenceHooks(
+            persist_user_message=lambda: hook("user"),
+            persist_turn_history=lambda: hook("history"),
+            persist_partial_history=lambda: hook("partial"),
+        ),
+        hooks=TurnLifecycleHooks(
+            before_stream=lambda: _before_stream(calls),
+            after_turn=lambda: hook("after"),
+        ),
+        resources=TurnResourceOptions(
+            finalize_resources=finalize_resources,
+            finalize_stream_kwargs={"persist_latest_ai_timestamp": True},
+        ),
     ))
 
     assert events == ["event: message\n\n", "event: message_end\n\n"]
@@ -88,9 +104,15 @@ async def test_stream_agent_turn_starts_model_before_slow_user_persistence_finis
     events = await _collect(stream_agent_turn(
         stream_adapter=Adapter([]),
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=persist_user,
-        persist_turn_history=lambda: _noop_async(),
-        persist_partial_history=lambda: _noop_async(),
+        persistence=TurnPersistenceHooks(
+            persist_user_message=persist_user,
+            persist_turn_history=lambda: _noop_async(),
+            persist_partial_history=lambda: _noop_async(),
+        ),
+        hooks=TurnLifecycleHooks(
+        ),
+        resources=TurnResourceOptions(
+        ),
     ))
 
     assert model_started.is_set()
@@ -111,10 +133,16 @@ async def test_stream_agent_turn_persists_disconnected_turn_without_end_events()
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=lambda: hook("user"),
-        persist_turn_history=lambda: hook("history"),
-        persist_partial_history=lambda: hook("partial"),
-        finalize_resources=finalize_resources,
+        persistence=TurnPersistenceHooks(
+            persist_user_message=lambda: hook("user"),
+            persist_turn_history=lambda: hook("history"),
+            persist_partial_history=lambda: hook("partial"),
+        ),
+        hooks=TurnLifecycleHooks(
+        ),
+        resources=TurnResourceOptions(
+            finalize_resources=finalize_resources,
+        ),
     ))
 
     assert events == []
@@ -133,10 +161,16 @@ async def test_stream_agent_turn_notifies_disconnect_before_cleanup():
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=lambda: hook("user"),
-        persist_turn_history=lambda: hook("history"),
-        persist_partial_history=lambda: hook("partial"),
-        on_disconnect=lambda: hook("disconnect"),
+        persistence=TurnPersistenceHooks(
+            persist_user_message=lambda: hook("user"),
+            persist_turn_history=lambda: hook("history"),
+            persist_partial_history=lambda: hook("partial"),
+        ),
+        hooks=TurnLifecycleHooks(
+            on_disconnect=lambda: hook("disconnect"),
+        ),
+        resources=TurnResourceOptions(
+        ),
     ))
 
     assert events == []
@@ -158,10 +192,16 @@ async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_o
         await _collect(stream_agent_turn(
             stream_adapter=adapter,
             format_sse=lambda event, _data: f"event: {event}\n\n",
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-            finalize_resources=finalize_resources,
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(
+            ),
+            resources=TurnResourceOptions(
+                finalize_resources=finalize_resources,
+            ),
         ))
 
     assert calls == ["user", "partial", "finalize:False"]
@@ -177,10 +217,16 @@ async def test_stream_agent_turn_emits_final_events_once():
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=lambda: hook("user"),
-        persist_turn_history=lambda: hook("history"),
-        persist_partial_history=lambda: hook("partial"),
-        after_stream=lambda: hook("after_stream"),
+        persistence=TurnPersistenceHooks(
+            persist_user_message=lambda: hook("user"),
+            persist_turn_history=lambda: hook("history"),
+            persist_partial_history=lambda: hook("partial"),
+        ),
+        hooks=TurnLifecycleHooks(
+            after_stream=lambda: hook("after_stream"),
+        ),
+        resources=TurnResourceOptions(
+        ),
     ))
 
     assert events == [
@@ -201,10 +247,16 @@ async def test_stream_agent_turn_runs_after_finish_before_history():
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        persist_user_message=lambda: hook("user"),
-        persist_turn_history=lambda: hook("history"),
-        persist_partial_history=lambda: hook("partial"),
-        after_finish=lambda: hook("checkpointed"),
+        persistence=TurnPersistenceHooks(
+            persist_user_message=lambda: hook("user"),
+            persist_turn_history=lambda: hook("history"),
+            persist_partial_history=lambda: hook("partial"),
+        ),
+        hooks=TurnLifecycleHooks(
+            after_finish=lambda: hook("checkpointed"),
+        ),
+        resources=TurnResourceOptions(
+        ),
     ))
 
     assert events[-1:] == ["event: message_end\n\n"]

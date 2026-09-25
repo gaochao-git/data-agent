@@ -165,7 +165,7 @@ def test_update_agent_schedule_clear_effective_end_time(client, auth_headers, fa
     assert response.status_code == 200
     kwargs = fake_service.calls["update_job"]
     assert kwargs["job_id"] == "job_a"
-    assert kwargs["clear_effective_end_time"] is True
+    assert kwargs["schedule"].clear_effective_end_time is True
 
 
 def test_update_agent_schedule_not_found(client, auth_headers, fake_service):
