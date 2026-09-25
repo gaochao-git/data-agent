@@ -49,8 +49,10 @@ step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
 step "frontend-type"  bash -c "cd web-vue && npm run type-check"
 
 if [[ "$MODE" == "--all" ]]; then
-  # 口径与 AGENTS.md §39 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置
-  step "coverage"       bash -c "cd server && '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing --cov-fail-under=95"
+  # 口径与 AGENTS.md §39 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置。
+  # 独立数据文件 .coverage.gate + 先擦除：防止与历史运行的数据叠加（否则行/分支阈值会读到被污染的合并数据）。
+  # 行/分支双门禁由 coverage_thresholds.py 校验（两阈值满足时合并必 ≥95，故无需 --cov-fail-under）
+  step "coverage"       bash -c "cd server && rm -f .coverage.gate && COVERAGE_FILE=.coverage.gate '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing && COVERAGE_FILE=.coverage.gate '$PY' ../scripts/checks/coverage_thresholds.py"
   # openapi 快照漂移门禁：重新生成后与 HEAD 比对，改了路由没更新快照即失败
   step "openapi"        bash -c "'$PY' server/apps/chat_data_app/tests/generate_openapi.py > /dev/null && git diff --exit-code -- server/apps/chat_data_app/tests/api/openapi.json"
   step "frontend-test"  bash -c "cd web-vue && npm run test:unit -- --run"
