@@ -44,7 +44,7 @@ token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷T
 
 1. ②③ 必须在 ④ 之前：done 进流、锚点落库时发布方必须仍持有 Redis 所有权。
 2. ① 先于 ② 是刻意设计：done 对观看者可见时最终历史已提交（read-your-writes）。
-3. ①② 之间的窗口由 SSE 读取侧宽限期兜底（`TERMINAL_PERSISTENCE_GRACE_SECONDS = 10s`）：Run 已终态但 Redis 中没有 done 时，宽限期内继续读流，超时后用 MySQL `status + content.next_run_id` 合成同一结构化 done。
+3. ①② 之间的窗口由 SSE 读取侧宽限期兜底（`TERMINAL_PERSISTENCE_GRACE_SECONDS = 3s`；Redis 读已判定不可用时收窄到 `TERMINAL_UNAVAILABLE_GRACE_SECONDS = 0.5s`——此时 done 无法经流到达）：Run 已终态但 Redis 中没有 done 时，宽限期内继续读流，超时后用 MySQL `status + content.next_run_id` 合成同一结构化 done。
 4. `done` 数据固定携带 `status=finished|failed|cancelled|waiting_user`，成功且已创建下一轮时附带 `next_run_id`；纯文本 `[DONE]` 只作为旧协议哨兵，不承载业务终态。
 
 ### Run 调度与本进程 fast-path
@@ -59,7 +59,7 @@ token     ──► Redis Lua 原子: owner校验 + event_id去重 + XADD + 刷T
 |---|---|---|
 | SSE 断连/页面刷新 | Last-Event-ID → XREAD 续读 | token 级无损 |
 | 换实例（多 worker 路由） | stream 在 Redis，任意实例可读 | token 级无损 |
-| 哨兵 failover | 命令级重试 + ReadOnlyError 跟随新主 | 无损 |
+| 哨兵 failover | 操作档命令级重试 + ReadOnlyError 跟随新主；读档不重试，由订阅循环周期重读自愈 | 无损 |
 | 页面刷新/重新打开运行中会话 | 历史事件 + 活跃 Run 的 `history_checkpoint` → Redis 增量 | 消息级历史 + checkpoint 后 token 级增量 |
 | Redis 数据清空 | 进行中 run 因 owner key 丢失在下次 publish 时失败标记；已完成步骤在账本不丢 | 消息级 |
 | TTL 过期后打开旧会话 | 历史 API 读 conversation_event | 消息级 |

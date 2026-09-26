@@ -6,6 +6,7 @@
     python apps/chat_data_app/tests/scan_cognitive_complexity.py --threshold 15 --top 40
     python apps/chat_data_app/tests/scan_cognitive_complexity.py --target apps/chat_data_app/services/sql_run
     python apps/chat_data_app/tests/scan_cognitive_complexity.py --explain _run_subagent_with_events
+    python apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt
 
 口径来源：SonarSource/sonar-python 仓库（SSAL v1，旧版 LGPL-3.0）
 ``python-frontend/src/main/java/org/sonar/python/metrics/CognitiveComplexityVisitor.java``，
@@ -27,6 +28,7 @@ elif 罚等），报 0 超标而 Sonar 实测超标——本地结论必须以�
 """
 import argparse
 import ast
+import sys
 from pathlib import Path
 
 
@@ -277,6 +279,12 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=20, help="显示前 N 个最高分")
     parser.add_argument("--target", type=str, default=str(script_dir.parent), help="扫描目标目录")
     parser.add_argument("--explain", type=str, default=None, help="输出指定函数的计分明细（对照 Sonar 面板）")
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="豁免清单文件，每行「相对路径:函数名」；baseline 外超标时退出码 1",
+    )
     args = parser.parse_args()
 
     root = Path(args.target).resolve()
@@ -293,12 +301,26 @@ def main() -> None:
         return
 
     over = [r for r in results if r[0] > args.threshold]
+    baseline_keys: set[str] = set()
+    if args.baseline and Path(args.baseline).is_file():
+        baseline_keys = {
+            line.strip()
+            for line in Path(args.baseline).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
     print(f"目标: {root}")
     print(f"函数总数: {len(results)}，超阈值(>{args.threshold})的: {len(over)} 个")
+    unresolved = 0
     if over:
         print("\n  分数  位置（全部超标项）")
         for score, f, ln, name, _ in over:
-            print(f"  {score:3d}  {f}:{ln} {name}")
+            exempt = f"{f}:{name}" in baseline_keys
+            if not exempt:
+                unresolved += 1
+            print(f"  {score:3d}  {f}:{ln} {name}" + ("  [baseline 豁免]" if exempt else ""))
+    if unresolved:
+        print(f"\nbaseline 外超标: {unresolved} 个，需修复或登记 baseline 后再提交")
+        sys.exit(1)
     results.sort(key=lambda x: -x[0])
     print(f"\n-- Top {args.top} --")
     for score, f, ln, name, _ in results[: args.top]:

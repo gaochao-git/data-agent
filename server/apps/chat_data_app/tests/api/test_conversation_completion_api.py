@@ -10,6 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import data_analyzing
 from apps.chat_data_app import agent_run_support
+from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
@@ -66,7 +67,7 @@ def _stub_conversation_event_writes(monkeypatch):
             # 对齐 Runtime 契约：生成器只产事实，结构化 done 由消费方（Runtime）收口发布。
             status = "finished"
             try:
-                async for payload in handler_module._generate_chat_data_stream(
+                async for payload in handler_module._generate_chat_data_stream(ChatDataStreamRequest(
                     thread_id=conversation_id,
                     user_query=context.get("query") or "",
                     datasource_id=context.get("datasource_id"),
@@ -76,7 +77,7 @@ def _stub_conversation_event_writes(monkeypatch):
                     semantic_config_id=context.get("semantic_config_id"),
                     request=None,
                     model_id=context.get("model_id"),
-                    semantic_config_selection=context.get("semantic_config_selection"),
+                    file_selections=context.get("file_selections"),
                     enable_thinking=context.get("enable_thinking"),
                     skill_names=context.get("skill_names") or [],
                     options=context.get("options") or {},
@@ -84,7 +85,7 @@ def _stub_conversation_event_writes(monkeypatch):
                     run_id=run_id,
                     owner_token="test-owner",
                     adopted_messages=[],
-                ):
+                )):
                     if payload.startswith("event: question_requested"):
                         status = "waiting_user"
                     await queue.put(payload)

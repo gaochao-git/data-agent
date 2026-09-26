@@ -16,6 +16,7 @@ from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..agent_run_support import materialize_conversation_semantic_models
 from ..services import conversation_service as conversation
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
@@ -28,6 +29,7 @@ from ..agent.run.agent_inbox_service import (
 )
 from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
+from ..agent.run.completion_options import parse_file_selections
 from .. import AGENT_ID
 
 logger = get_logger(__name__)
@@ -38,6 +40,7 @@ logger = get_logger(__name__)
 class CreateConversationRequest(BaseModel):
     """创建会话请求"""
     agent_id: str
+    datasource_id: Optional[str] = None  # 建会话即绑定的数据源组（问数 agent 用）
 
 
 class UpdateTitleRequest(BaseModel):
@@ -59,11 +62,24 @@ SteerQueueType = Literal["next-step", "next-turn"]
 
 
 class SteerRequest(BaseModel):
-    """运行中追加纯文本消息。"""
+    """运行中追加消息（正文 + 随行元数据）。
+
+    file_selections / file_ids 以引用形式存入 inbox 行 meta，续跑构建
+    HumanMessage 时还原进 additional_kwargs，由 agent_stream 采纳点统一
+    校验解析（白名单 + 引用短句 + 附件占位/视觉装载）——排队消息与
+    普通发送路径共享同一条「存引用、晚解析」语义。
+    """
     # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD 对齐：steering 语义是运行中追加短指令，
     # 超长输入会原样进 state/checkpoint 每步重复落库，必须在入口拦下
     query: str = Field(..., min_length=1, max_length=4000)
     queue_type: Optional[SteerQueueType] = None  # 缺省 next-turn：本轮结束后作为下一轮处理
+    file_selections: Optional[List[str]] = None  # @ 引用的会话工作区相对路径列表
+    file_ids: Optional[List[str]] = None  # 本次消息关联的上传文件ID列表（附件/截图）
+
+
+# 随行元数据单类引用数量上限：meta 列为 TEXT（64KB），引用均人工逐个添加，
+# 正常场景远低于上限；超出截断，防异常超大 payload 撞存储上限
+_STEER_META_MAX_ITEMS = 50
 
 
 class SteerMessageUpdateRequest(BaseModel):
@@ -71,6 +87,39 @@ class SteerMessageUpdateRequest(BaseModel):
     # 编辑后的内容同样经 inbox 进 state/checkpoint，与 SteerRequest 同限
     content: Optional[str] = Field(default=None, min_length=1, max_length=4000)
     queue_type: Optional[SteerQueueType] = None
+
+
+def _normalize_string_list(values: Optional[List[str]]) -> List[str]:
+    """strip、去空、按序去重的通用字符串列表归一。"""
+    if not values:
+        return []
+    normalized: List[str] = []
+    for value in values:
+        item = str(value or "").strip()
+        if item and item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+def _normalize_steer_meta(request: SteerRequest) -> Optional[Dict[str, List[str]]]:
+    """归一排队消息随行元数据；两类引用都为空时返回 None（不占列）。
+
+    file_selections 复用主链路的 parse_file_selections（strip/去重/首尾斜杠
+    容错）；存在性与白名单校验延后到消费时（agent_stream 采纳点，届时工作区
+    才就绪）——与普通发送路径同一条「存引用、晚解析」语义。
+    数量护栏：meta 列为 TEXT（64KB），异常超大 payload 会撞存储上限；附件/引用
+    均为人工逐个添加，正常场景远低于上限，超出部分直接截断（消费端无感）。
+    """
+    file_selections = parse_file_selections(request.file_selections)[:_STEER_META_MAX_ITEMS]
+    file_ids = _normalize_string_list(request.file_ids)[:_STEER_META_MAX_ITEMS]
+    if not file_selections and not file_ids:
+        return None
+    meta: Dict[str, List[str]] = {}
+    if file_selections:
+        meta["file_selections"] = file_selections
+    if file_ids:
+        meta["file_ids"] = file_ids
+    return meta
 
 
 class QuestionAnswerItem(BaseModel):
@@ -242,7 +291,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
     创建新会话
 
     POST /api/chatdata/conversations
-    Body: {"agent_id": "..."}
+    Body: {"agent_id": "...", "datasource_id": "..."}  # datasource_id 可选
 
     返回：
     {
@@ -256,14 +305,31 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         config = get_agent_config(request.agent_id)
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-        result = await conversation.create(request.agent_id, user_id)
+        normalized_datasource_id = str(request.datasource_id or "").strip()
+        result = await conversation.create(request.agent_id, user_id, datasource_id=normalized_datasource_id or None)
+        conversation_id = str(result.get("id") or "")
         if request.agent_id == AGENT_ID:
             # 创建会话即构建本会话全部可见技能的快照；构建失败不阻断会话创建，
             # 首次运行时 build_runtime_skill_snapshot_async 会幂等重试。
             try:
-                await build_runtime_skill_snapshot_async(user_id, str(result.get("id") or ""))
+                await build_runtime_skill_snapshot_async(user_id, conversation_id)
             except Exception as err:
                 logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
+            # 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在）：
+            # 建会话即物化启用语义模型到 workspace/semantic/，输入框 @ 引用
+            # 工作区文件从第一刻起就有语义模型可选。物化失败不阻断创建，
+            # 首轮 run 的预物化会幂等兜底。
+            if normalized_datasource_id:
+                materialized = await materialize_conversation_semantic_models(
+                    conversation_id,
+                    user_id=user_id,
+                    datasource_id=normalized_datasource_id,
+                )
+                if materialized.get("failed_ids"):
+                    logger.warning(
+                        "创建会话物化部分语义模型失败: conversation_id=%s failed_ids=%s",
+                        conversation_id, materialized["failed_ids"],
+                    )
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
@@ -641,7 +707,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
 @router.post("/{conversation_id}/steer")
 async def steer(conversation_id: str, request: SteerRequest, req: Request):
-    """向当前用户正在运行的 ChatData Agent 追加一条纯文本消息。"""
+    """向当前用户正在运行的 ChatData Agent 追加一条消息（正文 + 随行引用/附件元数据）。"""
     content = request.query.strip()
     if not content:
         return business_response(
@@ -666,6 +732,7 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
             username,
             content,
             queue_type=request.queue_type or "next-turn",
+            meta=_normalize_steer_meta(request),
         )
         return business_response(data={"message_id": message_id}, msg="消息已发送")
     except AgentRunNotActiveError as exc:

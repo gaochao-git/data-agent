@@ -17,6 +17,8 @@ import {
   deleteSemanticConfig,
   toggleAdminSemanticConfig,
   toggleSemanticConfig,
+  batchToggleAdminSemanticConfig,
+  batchToggleSemanticConfig,
   getDatasourceTableColumnDicts,
   getAdminDatasourceTableColumnDicts,
 } from '../api'
@@ -40,6 +42,7 @@ import AddFieldDialog from './semantic/AddFieldDialog.vue'
 import ExpressionEditorDialog from './semantic/ExpressionEditorDialog.vue'
 import RelationshipEditorDialog from './semantic/RelationshipEditorDialog.vue'
 import OssieImportDialog from './semantic/OssieImportDialog.vue'
+import SemanticBatchToggleDialog from './semantic/SemanticBatchToggleDialog.vue'
 import type {
   SemanticConfigItem,
   SemanticMetric,
@@ -51,7 +54,57 @@ import type {
   AddFieldTableOption,
 } from '../types'
 
-type SemanticLogicalType = NonNullable<SemanticDimension['logical_type']>
+// 领域纯函数与共享类型已抽至 semantic/panelModelUtils.ts（单一来源）
+import {
+  AGG_DISPLAY_SUFFIX_MAP,
+  EXPANDABLE_AGG_FUNCS,
+  LOGICAL_TYPE_OPTIONS,
+  atomicMetricColumn,
+  buildAliasAwareDefaultDisplayName,
+  buildConfigMaintainerTitle,
+  buildConfigSignature,
+  buildDimensionPreserveKey,
+  buildFieldRowKey,
+  buildFieldRows as buildFieldRowsForConfig,
+  buildMetricExpandDisplayName,
+  buildTablePrefixedDisplayName,
+  canManageConfig,
+  copyDimensionRuntimeConfig,
+  deriveScopeFromConfig,
+  extractExpressionColumns,
+  formatConfigOperator,
+  formatJoinTypeLabel,
+  formatRelationshipTypeLabel,
+  generateScopeAlias,
+  getConfigCreatorName,
+  getColumnDictKey,
+  getFieldColumnDictKey,
+  getFieldPhysicalColumn,
+  getFieldRowAlias,
+  getFieldTableAlias,
+  getMetricDataType,
+  getRelationshipLeftAlias,
+  getRelationshipRightAlias,
+  getScopeAlias,
+  getScopePhysicalTable,
+  hasColumnDictContent,
+  hasColumnDictEnumValues,
+  inferLogicalType,
+  isFieldRowInScope,
+  isNumericColumnType,
+  isNumericPhysicalTableName,
+  isRawColumnExpression,
+  expressionUsesColumn,
+  mergeFieldRowsWithDraft as mergeFieldRowsWithDraftUtil,
+  normalizeExpressionColumn,
+  normalizeFieldName,
+  normalizeScopeEntries,
+  normalizeSqlAliasBase,
+  parseAggFuncFromExpression,
+  parseSimpleMetricExpression,
+  toLetterSuffix,
+} from './semantic/panelModelUtils'
+import type { FieldConfigRow, SemanticLogicalType, TableScopeEntry } from './semantic/panelModelUtils'
 
 interface Props {
   datasourceId: string
@@ -82,12 +135,10 @@ const togglingEnabledId = ref<string | null>(null)
 const creatingConfig = ref(false)
 const generatingBasicConfigs = ref(false)
 const ossieImportVisible = ref(false)
+const batchToggleVisible = ref(false)
+const batchToggleEnabled = ref(true)
+const batchToggling = ref(false)
 const savedConfigSignatures = ref<Record<string, string>>({})
-
-interface TableScopeEntry {
-  table: string
-  alias: string
-}
 
 const tableScopes = ref<Record<string, TableScopeEntry[]>>({})
 const draggingTableName = ref('')
@@ -124,18 +175,6 @@ const getTableHoverTitle = (table: TableInfo) => {
   return [table.description || table.table_name, businessDesc].filter(Boolean).join('\n')
 }
 
-const buildConfigSignature = (config: SemanticConfigItem) => {
-  return JSON.stringify({
-    name: config.name || '',
-    description: config.description || '',
-    business_notes: config.business_notes || '',
-    enabled: !!config.enabled,
-    metrics: config.metrics || [],
-    dimensions: config.dimensions || [],
-    relationships: config.relationships || [],
-  })
-}
-
 const activeConfig = computed<SemanticConfigItem | null>(() => {
   if (configs.value.length === 0) return null
   const targetId = props.selectedConfigId || expandedId.value
@@ -153,105 +192,12 @@ const isActiveConfigDirty = computed(() => {
 const hasUnsavedSemanticConfig = computed(() => isActiveConfigDirty.value || isFieldRowsDirty.value)
 const canOpenEvaluation = computed(() => Boolean(activeConfig.value && props.datasourceId))
 
-const normalizeSqlAliasBase = (tableName: string) => {
-  const normalized = String(tableName || '').trim().replace(/[^\w]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
-  const base = normalized || 'table'
-  return /^[A-Za-z_]/.test(base) ? base : `t_${base}`
-}
-
-const isNumericPhysicalTableName = (tableName: string) => /^\d+$/.test(String(tableName || '').trim())
-
-const toLetterSuffix = (index: number) => {
-  let value = Math.max(1, index)
-  let suffix = ''
-  while (value > 0) {
-    value -= 1
-    suffix = String.fromCharCode(97 + (value % 26)) + suffix
-    value = Math.floor(value / 26)
-  }
-  return suffix
-}
-
-const getScopeAlias = (entry: TableScopeEntry | string | undefined | null) => {
-  if (!entry) return ''
-  if (typeof entry === 'string') return entry
-  return entry.alias || entry.table
-}
-
-const getScopePhysicalTable = (entry: TableScopeEntry | string | undefined | null) => {
-  if (!entry) return ''
-  if (typeof entry === 'string') return entry
-  return entry.table
-}
-
-const normalizeScopeEntries = (entries: Array<TableScopeEntry | string>) => {
-  const seenAliases = new Set<string>()
-  const result: TableScopeEntry[] = []
-  entries.forEach(item => {
-    const table = getScopePhysicalTable(item).trim()
-    const alias = (getScopeAlias(item) || table).trim()
-    if (!table || !alias || seenAliases.has(alias)) return
-    seenAliases.add(alias)
-    result.push({ table, alias })
-  })
-  return result
-}
-
-const getFieldTableAlias = (item: { table: string; table_alias?: string }) => {
-  return String(item.table_alias || item.table || '').trim()
-}
-
-const getRelationshipLeftAlias = (rel: SemanticRelationship) => String(rel.left_alias || rel.left_table || '').trim()
-const getRelationshipRightAlias = (rel: SemanticRelationship) => String(rel.right_alias || rel.right_table || '').trim()
-
-const deriveScopeFromConfig = (config: SemanticConfigItem) => {
-  const entries: TableScopeEntry[] = []
-  const addEntry = (table: string, alias?: string) => {
-    const physical = String(table || '').trim()
-    const effectiveAlias = String(alias || physical).trim()
-    if (!physical || !effectiveAlias || entries.some(item => item.alias === effectiveAlias)) return
-    entries.push({ table: physical, alias: effectiveAlias })
-  }
-  config.dimensions.forEach(item => addEntry(item.table, getFieldTableAlias(item)))
-  config.metrics.forEach(item => addEntry(item.table, getFieldTableAlias(item)))
-  config.relationships.forEach(item => {
-    addEntry(item.left_table, getRelationshipLeftAlias(item))
-    addEntry(item.right_table, getRelationshipRightAlias(item))
-  })
-  return entries
-}
-
-const canManageConfig = (config?: SemanticConfigItem | null) => {
-  if (!config) return false
-  return typeof config.can_manage === 'boolean' ? config.can_manage : true
-}
-
 const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticConfigs : getMySemanticConfigs)
 const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
 const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
 const semanticConfigToggleApi = computed(() => props.adminMode ? toggleAdminSemanticConfig : toggleSemanticConfig)
+const semanticConfigBatchToggleApi = computed(() => props.adminMode ? batchToggleAdminSemanticConfig : batchToggleSemanticConfig)
 const columnDictListApi = computed(() => props.adminMode ? getAdminDatasourceTableColumnDicts : getDatasourceTableColumnDicts)
-
-const formatConfigOperator = (value?: string) => {
-  const text = String(value || '').trim()
-  return text || '未知'
-}
-
-const getConfigCreatorName = (config: SemanticConfigItem) => {
-  return formatConfigOperator(config.create_by_name)
-}
-
-const getConfigUpdaterName = (config: SemanticConfigItem) => {
-  return formatConfigOperator(config.update_by_name)
-}
-
-const buildConfigMaintainerTitle = (config: SemanticConfigItem) => {
-  const creator = getConfigCreatorName(config)
-  const updater = getConfigUpdaterName(config)
-  const createTime = config.create_time || '-'
-  const updateTime = config.update_time || '-'
-  return `创建人：${creator}\n创建时间：${createTime}\n最近维护人：${updater}\n维护时间：${updateTime}`
-}
 
 const getConfigIndex = (config: SemanticConfigItem) => {
   return configs.value.findIndex(item => item.id === config.id)
@@ -311,31 +257,6 @@ const getScopeEntryLabel = (entry: TableScopeEntry | string | undefined | null) 
 
 const getScopeCountByPhysicalTable = (configId: string, tableName: string) => {
   return getScopeEntries(configId).filter(entry => entry.table === tableName).length
-}
-
-const isFieldRowInScope = (row: Pick<FieldConfigRow, 'table' | 'tableAlias'>, scopeEntries: TableScopeEntry[]) => {
-  const alias = getFieldRowAlias(row)
-  return scopeEntries.some(entry => entry.alias === alias && entry.table === row.table)
-}
-
-const generateScopeAlias = (tableName: string, entries: TableScopeEntry[]) => {
-  const base = normalizeSqlAliasBase(tableName)
-  const usedAliases = new Set(entries.map(item => item.alias))
-  if (!usedAliases.has(base)) return base
-  if (isNumericPhysicalTableName(tableName)) {
-    let index = 1
-    let candidate = `${base}_${toLetterSuffix(index)}`
-    while (usedAliases.has(candidate)) {
-      index += 1
-      candidate = `${base}_${toLetterSuffix(index)}`
-    }
-    return candidate
-  }
-  let index = 2
-  while (usedAliases.has(`${base}_${index}`)) {
-    index += 1
-  }
-  return `${base}_${index}`
 }
 
 const toggleScopeEntry = (configId: string, entry: TableScopeEntry, checked: boolean) => {
@@ -501,8 +422,8 @@ const generateBasicConfigs = async () => {
   if (!props.adminMode || generatingBasicConfigs.value || !props.datasourceId) return
   try {
     await ElMessageBox.confirm(
-      `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认禁用，需人工复核后逐个启用；已有模型不会被覆盖。`,
-      '生成基础模型',
+      `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认启用，可直接在会话中引用；生成结果只有字段骨架，建议复核后补充指标。已有模型不会被覆盖。`,
+      '模型初始化',
       {
         confirmButtonText: '开始生成',
         cancelButtonText: '取消',
@@ -618,6 +539,38 @@ const handleToggleEnabled = async (config: SemanticConfigItem) => {
   }
 }
 
+// 批量启动 / 批量暂停入口：目标状态由按钮决定，弹窗只负责选模型
+const openBatchToggle = (enabled: boolean) => {
+  if (batchToggling.value || configs.value.length === 0) return
+  batchToggleEnabled.value = enabled
+  batchToggleVisible.value = true
+}
+
+const applyBatchToggle = async (configIds: string[], enabled: boolean) => {
+  if (batchToggling.value || !props.datasourceId || configIds.length === 0) return
+  batchToggling.value = true
+  try {
+    const res = await semanticConfigBatchToggleApi.value(props.datasourceId, configIds, enabled)
+    if (res.status !== 'success' || !res.data) {
+      ElMessage.error(res.msg || '批量操作失败')
+      return
+    }
+    await fetchConfigs()
+    emit('configChange')
+    const message = res.msg || (enabled ? '批量启用成功' : '批量禁用成功')
+    if (res.data.updated_count > 0) {
+      ElMessage.success(message)
+    } else {
+      ElMessage.warning(message)
+    }
+  } catch (err) {
+    console.error('批量切换语义模型启用状态失败:', err)
+    ElMessage.error('批量操作失败')
+  } finally {
+    batchToggling.value = false
+  }
+}
+
 // 更新配置（本地）
 const updateConfig = (configId: string, updates: Partial<SemanticConfigItem>) => {
   configs.value = configs.value.map(c => c.id === configId ? { ...c, ...updates } : c)
@@ -671,25 +624,6 @@ const editingConfigId = ref<string | null>(null)
 
 // 编辑中的数据
 const editingRelationship = ref<SemanticRelationship | null>(null)
-
-interface FieldConfigRow {
-  key: string
-  table: string
-  tableAlias: string
-  column: string
-  sourceColumn?: string
-  columnType: string
-  displayName: string
-  columnComment?: string
-  description?: string
-  metadataSupplement?: string
-  logicalType: SemanticLogicalType
-  expression: string
-  /** 是否参与维度：未勾选行仅作占位展示，应用字段设置时不写入 dimensions */
-  isDimension: boolean
-  isCustom?: boolean
-  isMissingPhysical?: boolean
-}
 
 const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
@@ -752,14 +686,6 @@ const showMetricExpandDialog = ref(false)
 const metricExpandSourceIndex = ref(-1)
 const metricExpandOptions = ref<MetricExpandOption[]>([])
 const showBusinessNotesDialog = ref(false)
-const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
-  { value: 'text', label: '文本' },
-  { value: 'number', label: '数值' },
-  { value: 'date', label: '日期' },
-  { value: 'datetime', label: '日期时间' },
-  { value: 'enum', label: '枚举' },
-]
-
 const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(rows.map(row => ({
   key: row.key,
   table: row.table,
@@ -824,46 +750,9 @@ const activeConfigSaveDisabledReason = computed(() => {
 
 const canSaveActiveConfig = computed(() => !activeConfigSaveDisabledReason.value)
 
-const normalizeExpressionColumn = (value: string) => {
-  const cleaned = (value || '').trim().replace(/`/g, '')
-  if (!cleaned) return ''
-  const parts = cleaned.split('.')
-  return parts[parts.length - 1] || ''
-}
-
-const isCountAllExpression = (expression: string) => {
-  return ['COUNT(*)', 'COUNT(1)'].includes((expression || '').replace(/\s+/g, '').toUpperCase())
-}
-
 const hasPhysicalColumn = (tableName: string, columnName: string) => {
   const table = props.tables.find(t => t.table_name === tableName)
   return !!table?.columns?.some(col => col.name === columnName)
-}
-
-const expressionUsesColumn = (expression: string, column: string) => {
-  const expr = (expression || '').trim().replace(/`/g, '')
-  const col = (column || '').trim()
-  if (!expr || !col) return false
-
-  const escapedCol = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const directPattern = new RegExp(`(^|[^A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*\\.)?${escapedCol}([^A-Za-z0-9_]|$)`, 'i')
-  if (directPattern.test(expr)) return true
-
-  const aggMatch = expr.match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-  if (aggMatch?.[3]) {
-    return normalizeExpressionColumn(aggMatch[3]) === col
-  }
-
-  return normalizeExpressionColumn(expr) === col
-}
-
-const isRawColumnExpression = (expression: string | undefined, column: string) => {
-  const expr = (expression || '').trim().replace(/`/g, '').replace(/\s+/g, '')
-  const col = (column || '').trim()
-  if (!col) return false
-  if (!expr) return true
-  const escapedCol = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^(?:[A-Za-z_][A-Za-z0-9_]*\\.)?${escapedCol}$`, 'i').test(expr)
 }
 
 const validateFieldRowsBeforeApply = () => {
@@ -1274,18 +1163,6 @@ const activeRelationshipCards = computed(() => {
   return result
 })
 
-const formatJoinTypeLabel = (joinType?: string) => {
-  if (joinType === 'inner') return '内连接'
-  if (joinType === 'right') return '右连接'
-  return '左连接'
-}
-
-const formatRelationshipTypeLabel = (relationshipType?: string) => {
-  if (relationshipType === 'one_to_many') return '一对多'
-  if (relationshipType === 'many_to_one') return '多对一'
-  return '一对一'
-}
-
 const activeUnlinkedTables = computed(() => {
   if (!activeConfig.value) return [] as TableScopeEntry[]
   const scope = getScopeEntries(activeConfig.value.id)
@@ -1420,75 +1297,9 @@ const hasMultiTables = (configId: string) => {
   return getScopeEntries(configId).length > 1
 }
 
-const AGG_DISPLAY_SUFFIX_MAP: Record<string, string> = {
-  COUNT: '数量',
-  SUM: '合计',
-  AVG: '平均值',
-  MAX: '最大值',
-  MIN: '最小值',
-}
-
-const EXPANDABLE_AGG_FUNCS = ['SUM', 'AVG', 'MAX', 'MIN']
-
-const parseAggFuncFromExpression = (expression: string) => {
-  const match = (expression || '').trim().match(/^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$/i)
-  if (!match) return 'COUNT'
-  if (match[1]?.toUpperCase() === 'COUNT' && match[2]) return 'COUNT_DISTINCT'
-  return (match[1] || 'COUNT').toUpperCase()
-}
-
-const parseSimpleMetricExpression = (expression: string) => {
-  const match = (expression || '').trim().match(/^(COUNT|SUM|AVG|MAX|MIN)\(\s*(?:`?([A-Za-z_][A-Za-z0-9_]*)`?|`?([A-Za-z_][A-Za-z0-9_]*)`?\.`?([A-Za-z_][A-Za-z0-9_]*)`?)\s*\)$/i)
-  if (!match) return null
-  return {
-    aggFunc: (match[1] || 'COUNT').toUpperCase(),
-    column: match[4] || match[2] || '',
-  }
-}
-
-const extractExpressionColumns = (expression: string) => {
-  const text = (expression || '').trim()
-  if (!text) return []
-  const keywords = new Set([
-    'case', 'when', 'then', 'else', 'end', 'filter', 'where', 'distinct', 'count', 'sum', 'avg', 'max', 'min',
-    'and', 'or', 'not', 'null', 'is', 'in', 'as', 'on', 'if', 'cast', 'char', 'date', 'date_format', 'str_to_date',
-    'unix_timestamp', 'from_unixtime', 'year', 'month', 'day',
-    ...SQL_EXPRESSION_FUNCTION_KEYWORDS,
-  ])
-  const result = new Set<string>()
-  const pattern = /`([^`]+)`|(?<!['"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['"])/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(text)) !== null) {
-    if (text.slice(match.index + match[0].length).trimStart().startsWith('.')) continue
-    const isQuotedIdentifier = Boolean(match[1])
-    const token = (match[1] || match[2] || '').trim().split('.').pop() || ''
-    if (!token || (!isQuotedIdentifier && keywords.has(token.toLowerCase()))) continue
-    result.add(token)
-  }
-  return Array.from(result)
-}
-
 const getFirstPhysicalColumnFromExpression = (tableName: string, expression: string) => {
   const columns = extractExpressionColumns(expression)
   return columns.find(column => hasPhysicalColumn(tableName, column)) || ''
-}
-
-const isNumericColumnType = (columnType: string) => {
-  return /int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/i.test(columnType || '')
-}
-
-const inferLogicalType = (columnType: string): SemanticLogicalType => {
-  const normalized = (columnType || '').toLowerCase()
-  if (/timestamp|datetime/.test(normalized)) return 'datetime'
-  if (/date|year/.test(normalized)) return 'date'
-  if (isNumericColumnType(normalized)) return 'number'
-  return 'text'
-}
-
-const getMetricDataType = (columnType: string) => {
-  const normalized = (columnType || '').trim()
-  if (!normalized) return undefined
-  return normalized
 }
 
 const getTableColumnType = (tableName: string, columnName: string) => {
@@ -1509,47 +1320,9 @@ const getTableColumnDisplayName = (tableName: string, columnName: string) => {
   return getTableColumnComment(tableName, columnName) || (columnName || '').trim()
 }
 
-const getFieldRowAlias = (row: Pick<FieldConfigRow, 'table' | 'tableAlias'>) => row.tableAlias || row.table
-
-const buildFieldRowKey = (tableAlias: string, column: string, suffix = '') => {
-  const base = `${tableAlias}.${column}`
-  return suffix ? `${base}${suffix}` : base
-}
-
-const buildTablePrefixedDisplayName = (tableName: string, displayName: string) => {
-  const normalizedTable = (tableName || '').trim()
-  let normalizedName = (displayName || '').trim()
-  if (!normalizedTable || !normalizedName) return normalizedName
-  const repeatedPrefix = new RegExp(`^(?:${normalizedTable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[_.])+`)
-  normalizedName = normalizedName.replace(repeatedPrefix, '')
-  return `${normalizedTable}_${normalizedName}`
-}
-
-const buildAliasAwareDefaultDisplayName = (entry: TableScopeEntry, columnName: string, columnComment?: string) => {
-  const baseName = (columnComment || columnName || '').trim()
-  if (!baseName) return ''
-  return entry.alias && entry.alias !== entry.table ? buildTablePrefixedDisplayName(entry.alias, baseName) : baseName
-}
-
 const buildFieldRowDefaultDisplayName = (row: Pick<FieldConfigRow, 'table' | 'tableAlias' | 'column' | 'sourceColumn' | 'columnComment'>) => {
   const sourceColumn = row.sourceColumn || row.column
   return buildAliasAwareDefaultDisplayName({ table: row.table, alias: getFieldRowAlias(row) }, sourceColumn, row.columnComment || getTableColumnComment(row.table, sourceColumn))
-}
-
-const normalizeFieldName = (value: string) => (value || '').trim()
-
-const buildDimensionPreserveKey = (dimension: Pick<SemanticDimension, 'table' | 'table_alias' | 'column' | 'field_name'>) => {
-  const tableAlias = getFieldTableAlias(dimension)
-  return `${tableAlias}.${dimension.field_name || dimension.column || ''}.${dimension.column || ''}`
-}
-
-const copyDimensionRuntimeConfig = (dimension: SemanticDimension, source?: SemanticDimension) => {
-  if (!source) return dimension
-  const next = { ...dimension }
-  if (source.allowed_values) next.allowed_values = [...source.allowed_values]
-  if (source.mapping) next.mapping = { ...source.mapping }
-  if (source.allowed_operators) next.allowed_operators = [...source.allowed_operators]
-  return next
 }
 
 const getUniqueCustomFieldName = (tableAlias: string, baseColumn: string) => {
@@ -1774,12 +1547,6 @@ const confirmAddDimension = () => {
   addFieldDefaultDisplayName.value = ''
 }
 
-// 原子指标的物理列从表达式解析（AGG(col) / AGG(DISTINCT col)），复杂表达式返回空
-const atomicMetricColumn = (metric: SemanticMetric) => {
-  const parsed = parseSimpleMetricExpression(metric.expression || '')
-  return normalizeExpressionColumn(parsed?.column || metric.expression || '')
-}
-
 const canExpandMetricEntry = (metric: SemanticMetric) => {
   if (metric.metric_kind) return false
   const parsed = parseSimpleMetricExpression(metric.expression || '')
@@ -1794,14 +1561,6 @@ const metricAggExists = (tableAlias: string, sourceColumn: string, aggFunc: stri
     if (!parsed) return false
     return parsed.aggFunc === aggFunc && normalizeExpressionColumn(parsed.column) === normalizeExpressionColumn(sourceColumn)
   })
-}
-
-const buildMetricExpandDisplayName = (baseName: string, aggFunc: string) => {
-  const normalizedBase = (baseName || '').trim()
-  const suffix = AGG_DISPLAY_SUFFIX_MAP[aggFunc] || aggFunc
-  if (!normalizedBase) return suffix
-  if (normalizedBase.endsWith(suffix)) return normalizedBase
-  return `${normalizedBase}${suffix}`
 }
 
 const openMetricExpandDialog = (metric: SemanticMetric, index: number) => {
@@ -2019,29 +1778,6 @@ const previewTableData = (tableName: string) => {
   showTablePreviewDialog.value = true
 }
 
-const getFieldPhysicalColumn = (row: FieldConfigRow) => String(row.sourceColumn || row.column || '').trim()
-
-const getColumnDictKey = (tableName: string, columnName: string) => `${tableName}.${columnName}`
-
-const getFieldColumnDictKey = (row: FieldConfigRow) => {
-  const tableName = String(row.table || '').trim()
-  const columnName = getFieldPhysicalColumn(row)
-  return tableName && columnName ? getColumnDictKey(tableName, columnName) : ''
-}
-
-const hasColumnDictContent = (dict?: DatasourceColumnDictPayload | null) => {
-  if (!dict) return false
-  return Boolean(
-    (dict.enum_values || []).length > 0 ||
-    (dict.storage_format || '').trim() ||
-    (dict.unit || '').trim()
-  )
-}
-
-const hasColumnDictEnumValues = (dict?: DatasourceColumnDictPayload | null) => {
-  return Boolean(dict?.enum_values?.some(item => String(item.value || '').trim()))
-}
-
 const hasFieldColumnDict = (row: FieldConfigRow) => {
   const key = getFieldColumnDictKey(row)
   return Boolean(key && columnDictVisibleMap.value[key])
@@ -2119,140 +1855,21 @@ const handleColumnDictSaved = async () => {
 // 字段配置 = 维度勾选清单：作用域内每个物理列一行（一行=一列），勾选状态决定是否写入 dimensions；
 // 勾选态 = 持久化的 dimensions 有该物理列条目，或该表别名尚未持久化过配置（会话内默认全勾）；
 // 指标不回挂到字段行，统一在「指标」区管理。
-const buildFieldRows = (configId: string) => {
-  const config = configs.value.find(c => c.id === configId)
-  if (!config) return []
-  const scopeEntries = getScopeEntries(configId)
-  const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
-  const defaultDimensionAliasSet = getDefaultDimensionAliasSet(configId)
-
-  const dimensionSet = new Set<string>()
-  const dimensionByColumnMap = new Map<string, SemanticDimension>()
-  const customRowsMap = new Map<string, FieldConfigRow>()
-  const configuredKeys = new Set<string>()
-
-  config.dimensions.forEach(d => {
-    const tableAlias = getFieldTableAlias(d)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const physicalKey = `${tableAlias}.${d.column}`
-    const fieldName = (d.field_name || d.column || '').trim()
-    const expression = (d.expression || quoteIdentifier(d.column)).trim()
-    configuredKeys.add(physicalKey)
-    if (fieldName && d.column && fieldName !== d.column && !isRawColumnExpression(expression, d.column)) {
-      const customKey = buildFieldRowKey(tableAlias, fieldName)
-      const existed = customRowsMap.get(customKey)
-      customRowsMap.set(customKey, {
-        key: customKey,
-        table: d.table,
-        tableAlias,
-        column: fieldName,
-        sourceColumn: d.column,
-        columnType: existed?.columnType || '',
-        displayName: existed?.displayName || d.name || fieldName,
-        isDimension: true,
-        columnComment: getTableColumnComment(d.table, d.column),
-        description: existed?.description || d.description || '',
-        metadataSupplement: existed?.metadataSupplement || d.metadata_supplement || '',
-        logicalType: existed?.logicalType || d.logical_type || inferLogicalType(existed?.columnType || getTableColumnType(d.table, d.column)),
-        expression: existed?.expression || expression,
-        isCustom: true,
-      })
-      return
-    }
-    if (!dimensionByColumnMap.has(physicalKey)) {
-      dimensionByColumnMap.set(physicalKey, d)
-    }
-    dimensionSet.add(physicalKey)
-  })
-
-  const rows: FieldConfigRow[] = []
-  scopeEntries.forEach(entry => {
-    const table = getScopeTableInfo(entry)
-    if (!table) return
-    table.columns?.forEach(col => {
-      const key = buildFieldRowKey(entry.alias, col.name)
-      const dimInfo = dimensionByColumnMap.get(key)
-      const expression = dimInfo?.expression || quoteIdentifier(col.name)
-      const columnComment = (col.description || '').trim()
-      const displayName = dimInfo?.name || buildAliasAwareDefaultDisplayName(entry, col.name, columnComment)
-      const columnType = col.mysql_type || col.hive_type || col.type || ''
-      rows.push({
-        key,
-        table: table.table_name,
-        tableAlias: entry.alias,
-        column: col.name,
-        sourceColumn: col.name,
-        columnType,
-        isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
-        displayName,
-        columnComment,
-        description: dimInfo?.description || '',
-        metadataSupplement: dimInfo?.metadata_supplement || '',
-        logicalType: dimInfo?.logical_type || inferLogicalType(columnType),
-        expression,
-      })
-    })
-  })
-  customRowsMap.forEach(row => {
-    const tableInfo = getScopeTableInfo({ table: row.table, alias: row.tableAlias })
-    const sourceInfo = tableInfo?.columns?.find(c => c.name === (row.sourceColumn || row.column))
-    rows.push({
-      ...row,
-      columnType: row.columnType || sourceInfo?.mysql_type || sourceInfo?.type || '',
-      logicalType: row.logicalType || inferLogicalType(row.columnType || sourceInfo?.mysql_type || sourceInfo?.hive_type || sourceInfo?.type || ''),
-      expression: row.expression || quoteIdentifier(row.sourceColumn || row.column),
-      isCustom: true,
-      isMissingPhysical: !sourceInfo,
-    })
-  })
-  config.dimensions.forEach(d => {
-    const tableAlias = getFieldTableAlias(d)
-    if (!scopeAliasSet.has(tableAlias)) return
-    const key = `${tableAlias}.${d.column}`
-    if (!configuredKeys.has(key) || rows.some(row => getFieldRowAlias(row) === tableAlias && (row.sourceColumn || row.column) === d.column)) return
-    rows.push({
-      key,
-      table: d.table,
-      tableAlias,
-      column: d.field_name || d.column,
-      sourceColumn: d.column,
-      columnType: '',
-      isDimension: true,
-      displayName: d.name || d.field_name || d.column,
-      columnComment: getTableColumnComment(d.table, d.column),
-      description: d.description || '',
-      metadataSupplement: d.metadata_supplement || '',
-      logicalType: d.logical_type || inferLogicalType(getTableColumnType(d.table, d.column)),
-      expression: d.expression || quoteIdentifier(d.column),
-      isMissingPhysical: true,
-    })
-  })
-  return rows
-}
+// 字段行构建主体在 semantic/panelModelUtils.ts，此处注入组件上下文
+const buildFieldRows = (configId: string) => buildFieldRowsForConfig(configId, {
+  configs: configs.value,
+  getScopeEntries,
+  getScopeTableInfo,
+  getDefaultDimensionAliasSet,
+  getTableColumnComment,
+  getTableColumnType,
+})
 
 const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
-  const scopeEntries = getScopeEntries(activeConfig.value?.id || '')
-  const currentMap = new Map(fieldRows.value.map(row => [row.key, row]))
-  const nextKeySet = new Set(nextRows.map(row => row.key))
-  const mergedRows = nextRows.map(row => {
-    const draft = currentMap.get(row.key)
-    if (!draft) return row
-    return {
-      ...row,
-      isDimension: draft.isDimension,
-      displayName: draft.displayName,
-      description: draft.description ?? row.description,
-      metadataSupplement: draft.metadataSupplement,
-      logicalType: draft.logicalType,
-      expression: draft.expression,
-    }
+  return mergeFieldRowsWithDraftUtil(nextRows, {
+    scopeEntries: getScopeEntries(activeConfig.value?.id || ''),
+    currentRows: fieldRows.value,
   })
-  fieldRows.value
-    .filter(row => row.isCustom && !nextKeySet.has(row.key) && isFieldRowInScope(row, scopeEntries))
-    .forEach(row => {
-      mergedRows.push({ ...row })
-    })
-  return mergedRows
 }
 
 const loadFieldRows = (configId: string) => {
@@ -2476,12 +2093,30 @@ const saveBusinessNotes = (businessNotes: string) => {
         <button
           v-if="props.adminMode"
           class="h-8 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-lg bg-blue-50 px-3 text-[13px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="为尚未建模的物理表生成禁用的基础模型"
+          title="为尚未建模的物理表初始化基础模型（默认启用）"
           :disabled="generatingBasicConfigs || props.tables.length === 0"
           @click="generateBasicConfigs"
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          <span>生成基础模型</span>
+          <span>模型初始化</span>
+        </button>
+        <button
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+          title="批量启动选中的语义模型"
+          :disabled="batchToggling || configs.length === 0"
+          @click="openBatchToggle(true)"
+        >
+          <i :class="['fa-solid', 'fa-play']"></i>
+          <span>批量启动</span>
+        </button>
+        <button
+          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+          title="批量暂停选中的语义模型"
+          :disabled="batchToggling || configs.length === 0"
+          @click="openBatchToggle(false)"
+        >
+          <i :class="['fa-solid', 'fa-pause']"></i>
+          <span>批量暂停</span>
         </button>
         <button
           v-if="props.adminMode"
@@ -2513,7 +2148,7 @@ const saveBusinessNotes = (businessNotes: string) => {
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
         <p class="text-sm text-gray-500 m-0 mb-1">暂无语义模型</p>
-        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表生成待复核的基础模型' : '点击上方加号创建第一个语义模型' }}</span>
+        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表一键初始化基础模型' : '点击上方加号创建第一个语义模型' }}</span>
         <button
           v-if="props.adminMode"
           class="mt-4 h-9 flex items-center gap-2 border border-blue-200 rounded-md bg-blue-50 px-4 text-[13px] text-blue-600 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -2521,7 +2156,7 @@ const saveBusinessNotes = (businessNotes: string) => {
           @click="generateBasicConfigs"
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          生成基础模型
+          模型初始化
         </button>
       </div>
 
@@ -2564,12 +2199,30 @@ const saveBusinessNotes = (businessNotes: string) => {
                 <button
                   v-if="props.adminMode"
                   class="h-9 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-md bg-blue-50 px-3 text-[12px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="为尚未建模的物理表生成禁用的基础模型"
+                  title="为尚未建模的物理表初始化基础模型（默认启用）"
                   :disabled="generatingBasicConfigs || props.tables.length === 0"
                   @click="generateBasicConfigs"
                 >
                   <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-                  <span>生成基础模型</span>
+                  <span>模型初始化</span>
+                </button>
+                <button
+                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  title="批量启动选中的语义模型"
+                  :disabled="batchToggling || configs.length === 0"
+                  @click="openBatchToggle(true)"
+                >
+                  <i :class="['fa-solid', 'fa-play']"></i>
+                  <span>批量启动</span>
+                </button>
+                <button
+                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  title="批量暂停选中的语义模型"
+                  :disabled="batchToggling || configs.length === 0"
+                  @click="openBatchToggle(false)"
+                >
+                  <i :class="['fa-solid', 'fa-pause']"></i>
+                  <span>批量暂停</span>
                 </button>
                 <button
                   class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-md bg-blue-500 text-white text-[12px] cursor-pointer transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -3223,6 +2876,13 @@ const saveBusinessNotes = (businessNotes: string) => {
       :config="activeConfig"
       :can-manage="canManageConfig(activeConfig)"
       @save="saveBusinessNotes"
+    />
+
+    <SemanticBatchToggleDialog
+      v-model:visible="batchToggleVisible"
+      :configs="configs"
+      :enabled="batchToggleEnabled"
+      @confirm="applyBatchToggle"
     />
 
     <SemanticHistoryLearningDialog

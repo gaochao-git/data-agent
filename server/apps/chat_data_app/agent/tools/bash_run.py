@@ -5,7 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
-from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import truncate_output
 from .common import tool_result_payload
 
 

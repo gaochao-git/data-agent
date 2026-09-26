@@ -70,7 +70,7 @@ def test_data_analyzing_router_routes_to_every_capability_doc():
         "references/dashboard/guide.md",
         "references/governance/quality-check.md",
         "references/governance/quality-rules.md",
-        "references/governance/yaml-authoring.md",
+        "references/governance/model-template.md",
     ):
         assert relative_path in router, f"路由层未指向 {relative_path}"
 

@@ -41,6 +41,7 @@ class ConversationDao:
         thread_id: str,
         agent_id: str,
         title: Optional[str] = None,
+        datasource_id: str = "",
         now: datetime,
     ) -> UserThread:
         async with self._session_context() as session:
@@ -49,6 +50,7 @@ class ConversationDao:
                 thread_id=thread_id,
                 thread_title=title or "未命名会话",
                 agent_id=agent_id,
+                datasource_id=str(datasource_id or "").strip(),
                 delete_flag=0,
                 create_time=now,
                 update_time=now,
@@ -104,9 +106,9 @@ class ConversationDao:
             ChatDataAgentInbox.record_type == "run",
             ChatDataAgentInbox.delete_flag == 0,
             or_(
-                ChatDataAgentInbox.status.in_(("pending", "waiting_user")),
+                ChatDataAgentInbox.record_status.in_(("pending", "waiting_user")),
                 and_(
-                    ChatDataAgentInbox.status.in_(("active", "cancelling")),
+                    ChatDataAgentInbox.record_status.in_(("active", "cancelling")),
                     ChatDataAgentInbox.lease_expire_time > now,
                 ),
             ),
@@ -115,7 +117,7 @@ class ConversationDao:
             conditions.append(ChatDataAgentInbox.user_id == user_id)
         async with self._session_context() as session:
             result = await session.execute(
-                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.status)
+                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.record_status)
                 .where(*conditions)
             )
             statuses: dict[str, str] = {}

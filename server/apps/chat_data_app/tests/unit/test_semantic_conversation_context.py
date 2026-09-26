@@ -9,9 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.agent_run import conversation_context
 from apps.chat_data_app.services.semantic.run import semantic_conversation_context
-from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 
 
 class _FakeDatasourceManager:
@@ -65,33 +63,6 @@ async def test_prepare_context_only_loads_selected_authorized_members(monkeypatc
     assert context.semantic_config is None
     assert context.available_member_datasource_ids == ["m_hz", "m_nb"]
     assert context.matched_member_datasource_ids == ["m_nb"]
-    assert "按机构分库查询" in context.datasource_group_context
-    assert "杭州分公司" in context.datasource_group_context
-    assert "宁波分公司" in context.datasource_group_context
-
-
-@pytest.mark.asyncio
-async def test_build_agent_prompt_context_reuses_semantic_context_without_loading_data(monkeypatch):
-    manager = _FakeDatasourceManager()
-
-    monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
-    context = await semantic_conversation_context.prepare_semantic_conversation_context(
-        datasource_id="ds_1",
-        semantic_config_id=None,
-        member_datasource_ids=["m_hz"],
-        user_id="u_1",
-        username="测试用户",
-        user_query="查询杭州分公司订单",
-    )
-
-    prompt_context = semantic_conversation_context.build_agent_prompt_context(context)
-
-    assert prompt_context["datasource"] == {
-        "source_type": "",
-    }
-    assert prompt_context["datasource_group_context"] == context.datasource_group_context
-    assert "semantic_config_directory_info" not in prompt_context
-    assert prompt_context["selected_semantic_config"] is None
 
 
 @pytest.mark.asyncio
@@ -119,16 +90,6 @@ async def test_prepare_context_loads_selected_config_for_prompt(monkeypatch):
     assert context.semantic_config_id == "cfg_1"
     assert context.semantic_config["name"] == "订单指标集"
     assert context.matched_member_datasource_ids == ["m_hz"]
-
-    data_context = await conversation_context.build_conversation_prompt_context(
-        semantic_conversation_context.build_agent_prompt_context(context),
-    )
-
-    assert data_context["semantic_configs"] == [{
-        "id": "cfg_1",
-        "name": "订单指标集",
-        "selected": True,
-    }]
 
 
 @pytest.mark.asyncio
@@ -173,7 +134,6 @@ async def test_prepare_context_does_not_authorize_or_expand_empty_member_scope(m
     assert context.execution_targets == []
     assert context.available_member_datasource_ids == []
     assert context.matched_member_datasource_ids == []
-    assert context.datasource_group_context == "按机构分库查询"
 
 
 @pytest.mark.asyncio
@@ -192,25 +152,6 @@ async def test_prepare_context_handles_execution_authorization_failure(monkeypat
             username="测试用户",
             user_query="查询杭州分公司",
         )
-
-
-def test_execution_target_context_formats_only_selected_resolvable_members():
-    prompt = append_selected_execution_targets_to_context(
-        "",
-        [
-            {"member_datasource_id": "m1", "member_name": "投诉举报1", "org_code": "ORG_1"},
-            {"member_datasource_id": "m2", "name": "投诉举报2", "org_code": "ORG_2"},
-            {"member_name": "无稳定标识"},
-            {"member_name": "只有机构编码", "org_code": "ORG_ONLY"},
-        ],
-        ["m1", "m2", "missing"],
-    )
-
-    assert "当前用户已选择的执行对象数据源" in prompt
-    assert "投诉举报1" in prompt
-    assert "投诉举报2" in prompt
-    assert "无稳定标识" not in prompt
-    assert "只有机构编码" not in prompt
 
 
 def test_match_execution_targets_prefers_longer_overlapping_organization_name():

@@ -421,10 +421,8 @@ def test_context_compression_summary_output_max_tokens_reads_own_environment_var
 def test_context_compression_summary_output_max_tokens_rejects_invalid_values(monkeypatch, value):
     monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", value)
 
-    assert (
-        llm_config.get_context_compression_summary_output_max_tokens()
-        == llm_config.DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS
-    )
+    # 未显式配置（或缺省非法）返回 None，由调用侧按模型窗口动态计算摘要输出预算
+    assert llm_config.get_context_compression_summary_output_max_tokens() is None
 
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):

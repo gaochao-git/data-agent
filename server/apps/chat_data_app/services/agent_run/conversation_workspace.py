@@ -344,6 +344,34 @@ async def read_conversation_workspace_raw_file(
     )
 
 
+def normalize_archive_directory(directory: str | None) -> str:
+    """归一化打包目录参数：顶层目录名或其下的子目录路径（如 ``outputs/月报/2026``）。
+
+    放开到子目录后目录参数变成用户可控的路径，必须自己守住边界：
+    - 首段必须在 ``WORKSPACE_DIR_NAMES`` 内，避免把打包范围指到工作区之外；
+    - ``..`` / ``.`` / 空段一律拒绝（``..`` 直接报错，空段与 ``.`` 丢弃后重组）；
+    - 统一 Windows 分隔符并去掉首尾斜杠，使前后端口径一致。
+
+    可打包的顶层范围由前端白名单决定（当前只放开 outputs），这里只做路径合法性校验，
+    不在后端重复一份产品白名单。
+    """
+    normalized = str(directory or "").strip().replace("\\", "/").strip("/")
+    segments = [segment for segment in normalized.split("/") if segment and segment != "."]
+    if not segments:
+        raise ValueError("目录不能为空")
+    if any(segment == ".." for segment in segments):
+        raise ValueError(f"目录不支持打包: {directory}")
+    if segments[0] not in WORKSPACE_DIR_NAMES:
+        raise ValueError(f"目录不支持打包: {directory}")
+    return "/".join(segments)
+
+
+def _is_under_archive_directory(relative_path: str, directory: str) -> bool:
+    """判断文件相对路径是否落在待打包目录内（含其子目录）。"""
+    path = str(relative_path or "").strip().replace("\\", "/").strip("/")
+    return path == directory or path.startswith(f"{directory}/")
+
+
 def _archive_workspace_directory(
     conversation_id: str,
     directory: str,
@@ -351,7 +379,7 @@ def _archive_workspace_directory(
     *,
     created_date: str | None = None,
 ) -> dict[str, Any]:
-    """把会话工作区的单个顶层目录打成 zip，写入临时文件并返回其路径等信息。
+    """把会话工作区的目录（顶层目录或其下子目录）打成 zip，写入临时文件并返回其路径等信息。
 
     内容来源是 ``list_workspace_files`` 的白名单列表（已排除系统结果目录、内部文件与
     逃逸符号链接），**不重新遍历磁盘**——保证「单文件下载不了的，打包也下不到」，与
@@ -362,19 +390,20 @@ def _archive_workspace_directory(
     列表与打包之间文件可能被并发中的 Run 删除，消失的文件跳过而不失败；若因此
     一个文件都没打进包，按空目录处理报错。
     """
-    if directory not in WORKSPACE_DIR_NAMES:
-        raise ValueError(f"目录不支持打包: {directory}")
+    normalized_directory = normalize_archive_directory(directory)
     files = [
         item
         for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
-        if item["directory"] == directory
+        if _is_under_archive_directory(str(item["relative_path"]), normalized_directory)
     ]
     if not files:
-        raise FileNotFoundError(f"{directory} 目录下没有可打包的文件")
+        raise FileNotFoundError(f"{normalized_directory} 目录下没有可打包的文件")
 
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = str(Path(paths["root"]).resolve())
-    fd, tmp_path = tempfile.mkstemp(prefix=f"chatdata-{directory}-", suffix=".zip")
+    # 临时文件名与 zip 名只用末段：子目录打包时全路径含斜杠，不能进文件名
+    archive_name = normalized_directory.rsplit("/", 1)[-1]
+    fd, tmp_path = tempfile.mkstemp(prefix=f"chatdata-{archive_name}-", suffix=".zip")
     os.close(fd)
     written = 0
     try:
@@ -390,7 +419,7 @@ def _archive_workspace_directory(
                 if os.path.getsize(tmp_path) > WORKSPACE_ARCHIVE_MAX_BYTES:
                     raise WorkspaceArchiveTooLargeError(WORKSPACE_ARCHIVE_MAX_BYTES)
         if not written:
-            raise FileNotFoundError(f"{directory} 目录下没有可打包的文件")
+            raise FileNotFoundError(f"{normalized_directory} 目录下没有可打包的文件")
     except Exception:
         # 失败一律清理临时文件（含超限中止），不留半成品
         try:
@@ -400,7 +429,7 @@ def _archive_workspace_directory(
         raise
     return {
         "temp_path": tmp_path,
-        "filename": f"{directory}.zip",
+        "filename": f"{archive_name}.zip",
         "file_count": written,
         "size": os.path.getsize(tmp_path),
     }
@@ -412,7 +441,7 @@ async def archive_conversation_workspace_directory(
     user_id: str,
     directory: str,
 ) -> dict[str, Any]:
-    """打包当前用户会话工作区的单个顶层目录（异步包装，打包走线程）。"""
+    """打包当前用户会话工作区的目录（顶层目录或其下子目录，异步包装，打包走线程）。"""
     return await asyncio.to_thread(
         _archive_workspace_directory,
         conversation_id,

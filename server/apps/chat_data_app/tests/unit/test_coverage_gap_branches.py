@@ -134,9 +134,11 @@ async def test_normalizer_middleware_passthrough_when_result_empty():
 
 # ============ redis_event_bus ============
 
-def _bus_with(fake_redis) -> reb.RedisEventBus:
+def _bus_with(fake_redis, fake_read_redis=None) -> reb.RedisEventBus:
+    # __new__ 绕过 __init__，须补齐全部实例属性（含双档客户端）
     bus = reb.RedisEventBus.__new__(reb.RedisEventBus)
     bus._redis = fake_redis
+    bus._read_redis = fake_read_redis
     return bus
 
 
@@ -150,10 +152,13 @@ async def test_redis_event_bus_close_is_idempotent():
             self.closed = True
 
     fake = FakeRedis()
-    bus = _bus_with(fake)
+    fake_read = FakeRedis()
+    bus = _bus_with(fake, fake_read)
     await bus.close()
     assert fake.closed is True
+    assert fake_read.closed is True
     assert bus._redis is None
+    assert bus._read_redis is None
     await bus.close()
 
 

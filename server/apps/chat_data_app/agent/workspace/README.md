@@ -21,7 +21,12 @@
 | `runtime.py` | 后端协议（`WorkspaceBackend` / `ExecutableWorkspaceBackend`）、`ConversationWorkspaceRuntime` 门面、`resolve_workspace_path`、`WorkspacePathMapping`（虚拟↔物理翻译）、`create_workspace_backend` 工厂 |
 | `workspace_local_backend.py` | local 后端：路径校验后的宿主机文件系统实现 |
 | `workspace_sandbox_backend.py` | sandbox 后端：OpenSandbox 远程容器适配 |
-| `workspace_execution.py` | OpenSandbox 会话管理、Files API 适配、宿主↔沙箱双向同步、命令执行 |
+| `workspace_sandbox_paths.py` | sandbox 路径根、可见性映射、managed/unmanaged 谓词（原 workspace_execution.py） |
+| `workspace_sandbox_api.py` | OpenSandbox SDK 导入、Files API 原语、命令执行、`truncate_output`（原 workspace_execution.py） |
+| `workspace_sync.py` | manifest 指纹、会话初始化上传、持久化回写、working trees 同步（原 workspace_execution.py） |
+| `workspace_session.py` | OpenSandbox 会话缓存/生命周期 + prepare 专属的 env/network/connection 配置（原 workspace_execution.py） |
+| `workspace_ops.py` | 模型面文件操作（read/list/create/delete/move/copy/write）与 artifact/office 渲染（原 workspace_execution.py） |
+| `workspace_search.py` | rg 文本搜索 + glob（原 workspace_execution.py） |
 | `officecli_adapter.py` | OfficeCLI 参数解析、路径值提取、argv 翻译 |
 | `workspace_special_services.py` | 语义模型物料化、工具结果写入、产物加载、Office 预览四个 special service |
 | `workspace_text_budget.py` | 分页读取的行字符预算 |

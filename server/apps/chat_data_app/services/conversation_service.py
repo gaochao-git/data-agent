@@ -119,13 +119,14 @@ async def get_or_create_conversation(
     return conversation_id
 
 
-async def create(agent_id: str, user_id: str = "system") -> Dict[str, Any]:
+async def create(agent_id: str, user_id: str = "system", datasource_id: str | None = None) -> Dict[str, Any]:
     """
     创建新会话
 
     Args:
         agent_id: 代理标识
         user_id: 用户ID
+        datasource_id: 建会话即绑定的数据源组（空串/None 表示暂不绑定）
 
     Returns:
         {"id": thread_id, "create_time": create_time}
@@ -133,7 +134,13 @@ async def create(agent_id: str, user_id: str = "system") -> Dict[str, Any]:
     thread_id = str(uuid.uuid4())
     now = datetime.now()
 
-    await conversation_dao.create_thread(user_id=user_id, thread_id=thread_id, agent_id=agent_id, now=now)
+    await conversation_dao.create_thread(
+        user_id=user_id,
+        thread_id=thread_id,
+        agent_id=agent_id,
+        datasource_id=str(datasource_id or "").strip(),
+        now=now,
+    )
 
     logger.info(f"创建新对话: {thread_id}, agent: {agent_id}")
     return {"id": thread_id, "create_time": now.strftime('%Y-%m-%d %H:%M:%S')}
@@ -398,7 +405,11 @@ async def generate_title(
     conversation_id: str,
     user_id: Optional[str] = None
 ) -> Optional[str]:
-    """根据事件表中的第一条用户消息生成会话标题。"""
+    """根据事件表中的第一条用户消息生成会话标题。
+
+    标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
+    LLM 生成失败时抛异常且不落库（保持占位符，调用方可下一轮重试）。
+    """
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if not thread:
         return None
@@ -445,7 +456,9 @@ async def _generate_and_update_title(
             },
         )
         logger.warning(f"LLM生成标题失败: {e}")
-        title = _clean_title("", query)
+        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 终态时
+        # 前端会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
+        raise
 
     # 更新到数据库
     await update_title(conversation_id, title, user_id)

@@ -299,6 +299,20 @@ describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单�
     expect(isWorkspaceDirectoryArchiveDownloadable('uploads')).toBe(false)
   })
 
+  it('outputs 下的子目录也可打包（追加放开 2026-09-24，顶层范围不变）', () => {
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/月报')).toBe(true)
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/月报/2026')).toBe(true)
+    // 顶层范围没有跟着放开：其它顶层的子目录仍不可打包
+    expect(isWorkspaceDirectoryArchiveDownloadable('workspace/steps')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('uploads/batch')).toBe(false)
+    // 系统结果目录：包里本就不会有文件，给了入口只会得到一个空包报错
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/query_result')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/.tool-offload')).toBe(false)
+    // 带沙箱前缀 / Windows 分隔符归一到同一口径
+    expect(isWorkspaceDirectoryArchiveDownloadable('/mnt/user-data/outputs/月报')).toBe(true)
+    expect(isWorkspaceDirectoryArchiveDownloadable('\\outputs\\月报')).toBe(true)
+  })
+
   it('空值与未知目录保守返回 false', () => {
     expect(isWorkspaceDirectoryArchiveDownloadable('')).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable(null)).toBe(false)

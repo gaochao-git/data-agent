@@ -559,13 +559,15 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
   }
 }
 
-// 确保会话 ID 存在（懒创建模式，只在发送消息时才创建）
+// 确保会话 ID 存在（发送首条消息时兜底创建），创建即绑定当前数据源组；
+// 服务端建会话时同步物化启用语义模型到工作区，发送后 @ 引用即可选。
+// 选择器弹窗确认只记草稿不调本函数——与「新建任务」同口径，重活延迟到发送首条消息。
 const ensureConversationId = async (): Promise<string | null> => {
   if (currentConversationId.value) {
     return currentConversationId.value
   }
   try {
-    const res = await createConversation({ agent_id: 'chat_data' })
+    const res = await createConversation({ agent_id: 'chat_data', datasource_id: selectedDatasourceId.value || undefined })
     if (res.status === 'success' && res.data?.id) {
       currentConversationId.value = res.data.id
       currentConversationTitle.value = '新会话'
@@ -652,7 +654,7 @@ watch(visibleModes, () => {
   }
 })
 
-// 新建会话（只清空状态，不立即创建，等发送第一条消息时才创建）
+// 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
 const handleNewConversation = () => {
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
@@ -736,6 +738,36 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   }
 }
 
+// 会话标题占位符：与后端 generate_title 的占位符集合保持一致。
+// 命名只成功写库一次；失败时后端不落降级标题（保持占位符），
+// 由下一轮 Run 终态再次触发，直到成功自停。
+const CONVERSATION_TITLE_PLACEHOLDERS = new Set(['', '新会话', '未命名会话'])
+const titleRetryInFlight = new Set<string>()
+
+const retryConversationTitleIfNeeded = async (conversationId: string) => {
+  if (titleRetryInFlight.has(conversationId)) return
+  const currentTitle = currentConversationId.value === conversationId
+    ? currentConversationTitle.value
+    : conversations.value.find(item => item.id === conversationId)?.title || ''
+  if (!CONVERSATION_TITLE_PLACEHOLDERS.has(currentTitle.trim())) return
+  titleRetryInFlight.add(conversationId)
+  try {
+    const res = await generateConversationTitle(conversationId)
+    if (res?.status === 'success' && res.data?.title) {
+      if (currentConversationId.value === conversationId) {
+        currentConversationTitle.value = res.data.title
+      }
+      updateHistoryConversationTitle(conversationId, res.data.title)
+      invalidateInactiveView()
+    }
+  } catch (error) {
+    // 失败保持占位符，等下一轮 Run 终态再试
+    console.error('重试生成会话标题失败:', error)
+  } finally {
+    titleRetryInFlight.delete(conversationId)
+  }
+}
+
 const handleConversationRunStatusChanged = (
   conversationId: string,
   status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
@@ -744,6 +776,8 @@ const handleConversationRunStatusChanged = (
   if (status === null) {
     // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
     void ensureConversationsLoaded(true)
+    // 标题仍是占位符的会话借本轮终态重试命名（直到成功自停）
+    void retryConversationTitleIfNeeded(conversationId)
   }
 }
 
@@ -1093,21 +1127,24 @@ const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => (
   buildExecutionTargets({ datasource: draftDatasource.value, fallbackId: draftDatasource.value?.id })
 ))
 
-const canChangeDraftDatasource = computed(() => {
-  if (datasources.value.length <= 1) return false
-  return !isConversationContextMode.value || !currentConversationDatasourceId.value
-})
+const canChangeDraftDatasource = computed(() => datasources.value.length > 1)
 
-// 数据源组下拉被禁用时的原因提示：禁用控件若不说明原因，用户会误以为是故障；
-// 两条禁用路径（仅一个数据源组 / 对话已绑定数据源）原因不同，分开给文案
+// 数据源组下拉被禁用时的原因提示：仅剩「只有一个数据源组」一条路径；
+// 会话已绑定组不再锁死下拉——换组语义 = 基于新组新建任务（见 isGroupSwitchNewTask）
 const datasourceSelectLockReason = computed(() => {
   if (!showContextSelectorDialog.value) return ''
   if (datasources.value.length <= 1) return '当前仅有一个数据源组，无可切换项'
-  if (isConversationContextMode.value && currentConversationDatasourceId.value) {
-    return '对话已绑定当前数据源组，会话内不支持切换；如需使用其他数据源组，请新建会话'
-  }
   return ''
 })
+
+// 会话模式下把数据源组换成别的组 = 基于新组新建任务（与侧栏「新建任务」按钮同一条链路）：
+// 当前会话保留在历史列表，确认后进入绑定新组的新任务。同组确认仍只调整执行对象，不新建。
+const isGroupSwitchNewTask = computed(() => (
+  isConversationContextMode.value
+  && Boolean(currentConversationDatasourceId.value)
+  && Boolean(draftSelectedDatasourceId.value)
+  && draftSelectedDatasourceId.value !== currentConversationDatasourceId.value
+))
 
 const openContextSelector = () => {
   // 无数据源：不打开选择器（无可选项），提示原因；管理员可走旁边齿轮入口配置
@@ -1152,11 +1189,25 @@ const handleConfirmContextSelector = () => {
     true,
     draftDefaultAllExecutionTargets.value
   )
-  if (draftSelectedDatasourceId.value && draftSelectedDatasourceId.value !== selectedDatasourceId.value) {
+  const datasourceChanged = Boolean(draftSelectedDatasourceId.value && draftSelectedDatasourceId.value !== selectedDatasourceId.value)
+  if (datasourceChanged) {
     selectedDatasourceId.value = draftSelectedDatasourceId.value
   }
   if (isConversationContextMode.value) {
+    if (isGroupSwitchNewTask.value) {
+      // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
+      // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建
+      currentConversationId.value = null
+      currentConversationTitle.value = '新会话'
+      currentConversationDatasourceId.value = null
+      conversationKey.value++
+    }
     conversationMemberDatasourceIds.value = nextIds
+    // 确认 = 草稿记录，与「新建任务」「分析模式切组」同口径（0 请求瞬时完成）。
+    // 会话落库与语义模型物化延迟到发送首条消息时兜底发生，三条路径体感一致。
+    if (!currentConversationId.value) {
+      currentConversationDatasourceId.value = selectedDatasourceId.value || null
+    }
   } else {
     selectedMemberDatasourceIds.value = nextIds
   }
@@ -1295,15 +1346,6 @@ const handleBuilderSemanticConfigSelected = (configId: string) => {
   if (!enabledSemanticConfigs.value.some(config => config.id === normalizedId)) return
   selectedSemanticConfigId.value = normalizedId
 }
-
-/** 输入框 @ 引用的候选清单：与问数侧边栏同一份 enabled 模型，映射成引用弹层所需的展示子集。 */
-const semanticModelMentionOptions = computed(() => enabledSemanticConfigs.value.map(config => ({
-  id: config.id,
-  name: config.name,
-  description: config.description || config.business_notes || '',
-  metricsCount: config.metrics?.length || 0,
-  dimensionsCount: config.dimensions?.length || 0,
-})))
 
 // storage key 统一前缀改造后的一次性迁移：清掉历史版本的孤儿键，
 // 避免旧键里上一个账号的数据永久残留在浏览器
@@ -1743,7 +1785,6 @@ onMounted(async () => {
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"
                   :selected-datasource-id="selectedDatasourceId"
-                  :semantic-models="semanticModelMentionOptions"
                   :ensure-conversation-id="ensureConversationId"
                   :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"
@@ -1825,7 +1866,11 @@ onMounted(async () => {
       />
     </div>
 
-    <el-dialog v-model="showContextSelectorDialog" width="520px" title="选择执行对象">
+    <el-dialog
+      v-model="showContextSelectorDialog"
+      width="520px"
+      title="选择执行对象"
+    >
       <div class="space-y-4">
         <div>
           <div class="mb-2 text-[13px] font-medium text-slate-700">当前数据源组</div>
@@ -1873,13 +1918,13 @@ onMounted(async () => {
       <template #footer>
         <div class="flex items-center justify-end gap-2">
             <button
-              class="h-9 px-4 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600 transition-all hover:bg-slate-50"
+              class="h-9 px-4 rounded-lg border border-slate-200 bg-white text-[13px] text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               @click="showContextSelectorDialog = false"
             >
               取消
             </button>
             <button
-              class="h-9 px-4 rounded-lg border border-[#1677FF] bg-[#1677FF] text-[13px] text-white transition-all hover:bg-[#3d8bfd]"
+              class="h-9 px-4 rounded-lg border border-[#1677FF] bg-[#1677FF] text-[13px] text-white transition-all hover:bg-[#3d8bfd] disabled:cursor-not-allowed disabled:opacity-60"
               @click="handleConfirmContextSelector"
             >
               确定

@@ -16,11 +16,13 @@ CONTEXT_COMPRESSION_SUMMARY_PROMPT = """你负责将较早对话压缩为 ChatDa
 4. 有 result_path 时，完整大结果可在当前会话内通过 file_read 按行分段读取；只记录 result_id、result_path、总行数和关键结论，不复制行级明细或大段原始工具输出。
 5. 记录已执行查询和失败尝试及原因，避免重复执行已完成或已知无效的路径。未确认的信息写“未确认”，不能编造。
 6. 只输出以下 Markdown 结构。无内容的章节写“无”，不输出前言、解释或其他章节。
+7. “待办任务状态”来自实时 state 快照，必须逐字保留全部条目与状态标注，不得省略任何未完成项，也不得改写任务描述。
 
 ## 用户目标
 ## 已确认查询上下文
 ## 已执行查询与可复用结论
 ## 当前工作状态
+## 待办任务状态
 ## 未解决问题与后续约束
 ## 可回读引用"""
 
@@ -29,6 +31,7 @@ def build_context_compression_summary_prompt(
     messages: list[BaseMessage],
     *,
     previous_summary: str | None = None,
+    todo_snapshot: str | None = None,
 ) -> str:
     """构造上下文压缩模型的单轮摘要提示词。"""
     transcript = format_context_compression_messages(messages)
@@ -37,8 +40,12 @@ def build_context_compression_summary_prompt(
         f"\n\n[已有摘要数据开始]\n{existing_summary}\n[已有摘要数据结束]"
         if existing_summary else ""
     )
+    todo_section = (
+        f"\n\n[待办任务实时状态数据开始]\n{str(todo_snapshot).strip()}\n[待办任务实时状态数据结束]"
+        if str(todo_snapshot or "").strip() else ""
+    )
     return (
-        f"{CONTEXT_COMPRESSION_SUMMARY_PROMPT}{previous_summary_section}"
+        f"{CONTEXT_COMPRESSION_SUMMARY_PROMPT}{previous_summary_section}{todo_section}"
         f"\n\n[新增历史数据开始]\n{transcript}\n[新增历史数据结束]"
     )
 

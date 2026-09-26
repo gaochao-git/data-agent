@@ -35,10 +35,10 @@ class _InboxDao:
             pass
 
         row = Row()
-        row.status = self._status
+        row.record_status = self._status
         row.conversation_id = "conversation-1"
         row.user_id = "user-1"
-        row.content = json.dumps(self._content, ensure_ascii=False) if self._content is not None else ""
+        row.record_content = json.dumps(self._content, ensure_ascii=False) if self._content is not None else ""
         return row
 
 
@@ -550,3 +550,47 @@ async def test_get_run_snapshot_returns_none_for_missing_row(monkeypatch):
     )
 
     assert await service._get_run_snapshot("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_stream_fast_fallback_when_redis_unavailable_and_terminal(monkeypatch):
+    """Redis 读已不可用且 Run 已终态：单次短等即合成兜底 done，不等满 3s。"""
+
+    class DownBus:
+        def __init__(self):
+            self.reads = 0
+
+        async def read_run(self, _run_id, _cursor):
+            self.reads += 1
+            raise ConnectionError("redis down")
+
+        async def run_stream_exists(self, _run_id):
+            return False
+
+    down = DownBus()
+    service = AgentRunEventService(bus=down, inbox_dao=_InboxDao(content={}, status="failed"))
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.get_session",
+        lambda: _Session(),
+    )
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_event_service.asyncio.sleep", no_sleep)
+    # 故意把正常宽限调大：证明收窄来自 unavailable 感知而非默认值
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.TERMINAL_PERSISTENCE_GRACE_SECONDS",
+        100.0,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.agent_run_event_service.TERMINAL_UNAVAILABLE_GRACE_SECONDS",
+        0.0,
+    )
+
+    events = [event async for event in service.stream(run_id="run-1")]
+
+    assert down.reads == 1  # 不可用宽限期内不再重读，避免黑洞链路重付连接超时
+    assert len(events) == 1
+    assert events[0]["event_type"] == "done"
+    assert '"status": "failed"' in events[0]["payload"]

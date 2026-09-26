@@ -24,7 +24,14 @@ _EVENT_NAME_RE = re.compile(r"(?:^|\n)event:\s*([^\n]+)")
 logger = get_logger(__name__)
 QUESTION_DONE_WAIT_SECONDS = 10.0
 QUESTION_DONE_DURABLE_POLL_SECONDS = 0.5
-TERMINAL_PERSISTENCE_GRACE_SECONDS = 10.0
+# done 发布失败后等待 MySQL 兜底终态的宽限期。后端先 finish_run（MySQL 终态落库）
+# 再发布 done，兜底事件的状态永远准确；缩短只影响「done 只是慢而非失败」时直播
+# 流的提前收口（未读尾部事件靠刷新历史回放补全）。公网/劣化链路下 10s 白等体感
+# 过差，取 3s 平衡。
+TERMINAL_PERSISTENCE_GRACE_SECONDS = 3.0
+# Redis 读已判定不可用时，done 不可能再经流到达，兜底宽限可大幅缩短；
+# 保留 0.5s 吸收「读失败是瞬时抖动、done 其实已在失败前发布」的窗口。
+TERMINAL_UNAVAILABLE_GRACE_SECONDS = 0.5
 # Run 终态集合；"succeeded" 是防御性保留（当前收口只写 finished，历史数据可能存在）。
 TERMINAL_STATUSES = {
     RUN_STATUS_FINISHED,
@@ -248,7 +255,8 @@ class AgentRunEventService:
             await self._wait_between_polls(run_id, stream_exists)
             snapshot, loaded = await self._load_snapshot_with_retry(run_id)
             stop, terminal_detected_at, fallback = await self._terminal_grace_action(
-                run_id, cursor, snapshot, loaded, terminal_detected_at
+                run_id, cursor, snapshot, loaded, terminal_detected_at,
+                redis_unavailable=redis_unavailable,
             )
             for terminal_event in self._terminal_events(stop, fallback):
                 yield terminal_event
@@ -277,11 +285,16 @@ class AgentRunEventService:
         snapshot: dict | None,
         loaded: bool,
         terminal_detected_at: float | None,
+        *,
+        redis_unavailable: bool = False,
     ) -> tuple[bool, float | None, dict | None]:
         """终态宽限判定，返回 (是否结束订阅, 新的 terminal_detected_at, 兜底事件)。
 
         inbox 终态先于 done 事件发布提交；宽限期内继续读流（内部 sleep 0.2），
         等待终止事件到达后再结束订阅。快照非终态时重置检测时间戳。
+        Redis 读已不可用时 done 无法经流到达：单次短等（0.5s，吸收瞬时抖动）
+        后直接兜底，宽限期内不再重读——黑洞链路上每次重读要先付 ~5s 连接
+        超时，会把失败反馈拖回 15s+。状态取自 MySQL 权威终态，永远准确。
         """
         if not loaded:
             return False, terminal_detected_at, None
@@ -289,6 +302,14 @@ class AgentRunEventService:
             now = asyncio.get_running_loop().time()
             if terminal_detected_at is None:
                 terminal_detected_at = now
+            if redis_unavailable:
+                await asyncio.sleep(TERMINAL_UNAVAILABLE_GRACE_SECONDS)
+                fallback = (
+                    self._terminal_fallback_event(run_id, cursor, snapshot)
+                    if snapshot is not None
+                    else None
+                )
+                return True, terminal_detected_at, fallback
             if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
                 fallback = (
                     self._terminal_fallback_event(run_id, cursor, snapshot)
@@ -304,7 +325,7 @@ class AgentRunEventService:
         """读取 inbox Run 行记录的终止事件游标（done 发布成功后写入）。"""
         async with get_session() as session:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
-        content = load_run_content(row.content if row else None)
+        content = load_run_content(row.record_content if row else None)
         if not content:
             return None
         terminal_event = content.get("terminal_event")
@@ -315,10 +336,10 @@ class AgentRunEventService:
             row = await self._inbox_dao.get_run_by_id(session, run_id)
             if row is None:
                 return None
-            content = load_run_content(row.content)
+            content = load_run_content(row.record_content)
             next_run_id = content.get("next_run_id") or None
             return {
-                "status": row.status,
+                "status": row.record_status,
                 "conversation_id": row.conversation_id,
                 "user_id": row.user_id,
                 "next_run_id": str(next_run_id).strip() if next_run_id else None,

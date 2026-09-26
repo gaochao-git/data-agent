@@ -545,7 +545,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 回答
 ```
 
-系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过指标集配置维护；可用执行对象清单通过 `data_analyzing_tool` 的 `list_execution_targets` 实时获取（数据源组智能问数说明的系统提示词注入已默认关闭，见 `agent/prompts/chat_data.py` 的 `DATASOURCE_GROUP_CONTEXT_INJECTION_ENABLED`）。
+系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过指标集配置维护；可用执行对象清单、方言与智能问数说明通过 `data_analyzing_tool` 的 `list_execution_targets` 实时获取（静态注入系统提示词的链路已于 2026-09-24 整体下线删除）。
 
 指标集检索分两层：
 

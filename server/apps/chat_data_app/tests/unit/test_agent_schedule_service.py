@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.services.agent_schedule import schedule_service as service_module
 from apps.chat_data_app.services.agent_schedule.schedule_service import (
+    ScheduleFieldsUpdate,
+    UpdateOperator,
     AgentScheduleConversationInvalidError,
     AgentScheduleLimitExceededError,
     AgentScheduleNotFoundError,
@@ -158,15 +160,19 @@ async def test_update_job_rearms_next_trigger(harness):
         job_id=job["job_id"],
         title=None,
         prompt="改一下指令",
-        schedule_type=None,
-        cron_expr="30 10 * * *",
-        plan_time=None,
-        effective_end_time=None,
         enabled_flag=None,
         datasource_id=None,
         options=None,
-        user_id="user-1",
-        username="用户一",
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr="30 10 * * *",
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert updated["prompt"] == "改一下指令"
     json.dumps(updated)
@@ -185,16 +191,42 @@ async def test_update_job_toggle_enable_recomputes(harness):
     await create_conversation()
     job = await service.create_job(**_create_kwargs(create_payload()))
     disabled = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=0, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=0,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert disabled["enabled_flag"] == 0
     assert disabled["next_trigger_time"] is None
     enabled = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=1, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=1,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert enabled["enabled_flag"] == 1
     assert enabled["next_trigger_time"] is not None
@@ -207,9 +239,22 @@ async def test_update_job_requires_owner(harness):
     job = await service.create_job(**_create_kwargs(create_payload()))
     with pytest.raises(AgentScheduleNotFoundError):
         await service.update_job(
-            job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-            plan_time=None, effective_end_time=None, enabled_flag=0, datasource_id=None,
-            options=None, user_id="user-other", username="别人",
+            job_id=job["job_id"],
+            title=None,
+            prompt=None,
+            enabled_flag=0,
+            datasource_id=None,
+            options=None,
+            schedule=ScheduleFieldsUpdate(
+                schedule_type=None,
+                cron_expr=None,
+                plan_time=None,
+                effective_end_time=None,
+            ),
+            operator=UpdateOperator(
+                user_id="user-other",
+                username="别人",
+            ),
         )
 
 
@@ -252,10 +297,23 @@ async def test_update_switch_conversation_mode(harness):
 
     # fixed -> new_each_run：清空绑定会话
     switched = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
+        options=None,
         conversation_mode="new_each_run",
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert switched["conversation_mode"] == "new_each_run"
     assert switched["conversation_id"] == ""
@@ -263,19 +321,46 @@ async def test_update_switch_conversation_mode(harness):
     # new_each_run -> fixed：不传会话应报错
     with pytest.raises(AgentScheduleValidationError):
         await service.update_job(
-            job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-            plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
-            options=None, user_id="user-1", username="用户一",
+            job_id=job["job_id"],
+            title=None,
+            prompt=None,
+            enabled_flag=None,
+            datasource_id=None,
+            options=None,
             conversation_mode="fixed",
+            schedule=ScheduleFieldsUpdate(
+                schedule_type=None,
+                cron_expr=None,
+                plan_time=None,
+                effective_end_time=None,
+            ),
+            operator=UpdateOperator(
+                user_id="user-1",
+                username="用户一",
+            ),
         )
 
     # new_each_run -> fixed：指定存在的会话成功
     await create_conversation(conversation_id="conv-2")
     back = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
-        conversation_mode="fixed", conversation_id="conv-2",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
+        options=None,
+        conversation_mode="fixed",
+        conversation_id="conv-2",
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert back["conversation_mode"] == "fixed"
     assert back["conversation_id"] == "conv-2"
@@ -296,9 +381,22 @@ async def test_disable_job_cancels_pending_triggers(harness):
         ))
 
     await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=0, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=0,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
 
     async with get_session() as session:
@@ -332,8 +430,8 @@ async def test_list_job_runs_joins_agent_run_status(harness):
             run_id="run-1",
             message_id="run-1",
             record_type="run",
-            content="{}",
-            status="finished",
+            record_content="{}",
+            record_status="finished",
             delete_flag=0,
             create_time=now,
         ))
@@ -428,9 +526,22 @@ async def test_trigger_now_requires_enabled_and_owner(harness):
     with pytest.raises(AgentScheduleNotFoundError):
         await service.trigger_now(job_id=job["job_id"], user_id="user-other", username="别人")
     await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=0, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=0,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     with pytest.raises(AgentScheduleValidationError):
         await service.trigger_now(job_id=job["job_id"], user_id="user-1", username="用户一")
@@ -446,10 +557,22 @@ async def test_update_job_treats_options_as_patch(harness):
     )))
 
     updated = await service.update_job(
-        job_id=job["job_id"], title="改标题", prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
+        job_id=job["job_id"],
+        title="改标题",
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
         options={"model_id": "m2", "datasource_id": None},
-        user_id="user-1", username="用户一",
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
 
     # 表单掌管的键以补丁为准；未被表单掌管的键不能被顺手清空
@@ -488,9 +611,22 @@ async def test_update_expired_once_job_allows_title_edit(harness):
         row.next_trigger_time = None
 
     updated = await service.update_job(
-        job_id=job["job_id"], title="改个标题", prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, enabled_flag=None, datasource_id=None,
-        options=None, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title="改个标题",
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert updated["title"] == "改个标题"
     assert datetime.fromisoformat(updated["plan_time"]) == expired
@@ -508,10 +644,23 @@ async def test_update_job_clears_effective_end_time(harness):
     assert job["effective_end_time"] is not None
 
     cleared = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, schedule_type=None, cron_expr=None,
-        plan_time=None, effective_end_time=None, clear_effective_end_time=True,
-        enabled_flag=None, datasource_id=None, options=None,
-        user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            schedule_type=None,
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+            clear_effective_end_time=True,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     assert cleared["effective_end_time"] is None
     assert cleared["next_trigger_time"] is not None
@@ -634,15 +783,41 @@ async def test_update_job_rejects_invalid_mode_and_schedule_type(harness):
 
     with pytest.raises(AgentScheduleValidationError):
         await service.update_job(
-            job_id=job["job_id"], title=None, prompt=None, conversation_mode="bound",
-            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
-            datasource_id=None, options=None, user_id="user-1", username="用户一",
+            job_id=job["job_id"],
+            title=None,
+            prompt=None,
+            conversation_mode="bound",
+            enabled_flag=None,
+            datasource_id=None,
+            options=None,
+            schedule=ScheduleFieldsUpdate(
+                cron_expr=None,
+                plan_time=None,
+                effective_end_time=None,
+            ),
+            operator=UpdateOperator(
+                user_id="user-1",
+                username="用户一",
+            ),
         )
     with pytest.raises(AgentScheduleValidationError):
         await service.update_job(
-            job_id=job["job_id"], title=None, prompt=None, schedule_type="daily",
-            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
-            datasource_id=None, options=None, user_id="user-1", username="用户一",
+            job_id=job["job_id"],
+            title=None,
+            prompt=None,
+            enabled_flag=None,
+            datasource_id=None,
+            options=None,
+            schedule=ScheduleFieldsUpdate(
+                schedule_type="daily",
+                cron_expr=None,
+                plan_time=None,
+                effective_end_time=None,
+            ),
+            operator=UpdateOperator(
+                user_id="user-1",
+                username="用户一",
+            ),
         )
 
 
@@ -667,9 +842,22 @@ async def test_update_job_rejects_switching_to_foreign_conversation(harness):
 
     with pytest.raises(AgentScheduleConversationInvalidError):
         await service.update_job(
-            job_id=job["job_id"], title=None, prompt=None, conversation_id="conv-of-user-2",
-            cron_expr=None, plan_time=None, effective_end_time=None, enabled_flag=None,
-            datasource_id=None, options=None, user_id="user-1", username="用户一",
+            job_id=job["job_id"],
+            title=None,
+            prompt=None,
+            conversation_id="conv-of-user-2",
+            enabled_flag=None,
+            datasource_id=None,
+            options=None,
+            schedule=ScheduleFieldsUpdate(
+                cron_expr=None,
+                plan_time=None,
+                effective_end_time=None,
+            ),
+            operator=UpdateOperator(
+                user_id="user-1",
+                username="用户一",
+            ),
         )
 
 
@@ -681,9 +869,21 @@ async def test_update_job_accepts_datasource_id_without_options_patch(harness):
     job = await service.create_job(**_create_kwargs(create_payload()))
 
     updated = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
-        effective_end_time=None, enabled_flag=None, datasource_id="ds-2", options=None,
-        user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=None,
+        datasource_id="ds-2",
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
 
     assert updated["datasource_id"] == "ds-2"
@@ -702,9 +902,21 @@ async def test_update_job_degrades_on_corrupt_options_json(harness):
         row.options_json = "{坏掉的 JSON"
 
     updated = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
-        effective_end_time=None, enabled_flag=None, datasource_id=None,
-        options={"model_id": "m2"}, user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=None,
+        datasource_id=None,
+        options={"model_id": "m2"},
+        schedule=ScheduleFieldsUpdate(
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
 
     assert updated["options"] == {"model_id": "m2"}
@@ -718,14 +930,38 @@ async def test_update_job_reenable_keeps_recomputed_cursor(harness):
     job = await service.create_job(**_create_kwargs(create_payload()))
 
     await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, cron_expr=None, plan_time=None,
-        effective_end_time=None, enabled_flag=0, datasource_id=None, options=None,
-        user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=0,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            cron_expr=None,
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
     reenabled = await service.update_job(
-        job_id=job["job_id"], title=None, prompt=None, cron_expr="0 10 * * *", plan_time=None,
-        effective_end_time=None, enabled_flag=1, datasource_id=None, options=None,
-        user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        title=None,
+        prompt=None,
+        enabled_flag=1,
+        datasource_id=None,
+        options=None,
+        schedule=ScheduleFieldsUpdate(
+            cron_expr="0 10 * * *",
+            plan_time=None,
+            effective_end_time=None,
+        ),
+        operator=UpdateOperator(
+            user_id="user-1",
+            username="用户一",
+        ),
     )
 
     assert reenabled["enabled_flag"] == 1

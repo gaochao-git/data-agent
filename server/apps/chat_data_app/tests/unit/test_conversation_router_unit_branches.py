@@ -91,7 +91,7 @@ async def test_get_agent_config_by_conversation_branches(router_state, monkeypat
 async def test_conversation_crud_routes_success_and_errors(router_state, monkeypatch):
     request = FakeRequest()
 
-    async def fake_create(agent_id, user_id):
+    async def fake_create(agent_id, user_id, datasource_id=None):
         return {"id": "conv_new", "agent_id": agent_id, "user_id": user_id}
 
     monkeypatch.setattr(conversation_router.conversation, "create", fake_create)
@@ -484,13 +484,14 @@ def steer_router_state(router_state, monkeypatch):
     async def get_agent_id(_conversation_id, _user_id=None):
         return "chat_data"
 
-    async def enqueue(conversation_id, user_id, operator_name, content, queue_type="next-turn"):
+    async def enqueue(conversation_id, user_id, operator_name, content, queue_type="next-turn", meta=None):
         calls["enqueue"] = {
             "conversation_id": conversation_id,
             "user_id": user_id,
             "operator_name": operator_name,
             "content": content,
             "queue_type": queue_type,
+            "meta": meta,
         }
         return "message-1"
 
@@ -543,10 +544,55 @@ async def test_steer_enqueue_default_and_explicit_queue_type(steer_router_state)
     assert payload(response)["code"] == ErrorCode.SUCCESS
     assert calls["enqueue"]["content"] == "默认下轮"
     assert calls["enqueue"]["queue_type"] == "next-turn"
+    assert calls["enqueue"]["meta"] is None
 
     request = conversation_router.SteerRequest(query="立即插入", queue_type="next-step")
     response = await conversation_router.steer("conv-1", request, FakeRequest())
     assert calls["enqueue"]["queue_type"] == "next-step"
+
+
+@pytest.mark.asyncio
+async def test_steer_enqueue_normalizes_meta(steer_router_state):
+    """随行元数据归一：引用走 parse_file_selections（strip/去重/斜杠容错），ID 去重；全空不落 meta。"""
+    calls = steer_router_state
+    request = conversation_router.SteerRequest(
+        query="带引用",
+        file_selections=["uploads/a.pdf", "/workspace/semantic/a__1.yaml/", "uploads/a.pdf", " "],
+        file_ids=[" file-1 ", "file-2", "file-1", ""],
+    )
+    response = await conversation_router.steer("conv-1", request, FakeRequest())
+    assert payload(response)["code"] == ErrorCode.SUCCESS
+    assert calls["enqueue"]["meta"] == {
+        "file_selections": ["uploads/a.pdf", "workspace/semantic/a__1.yaml"],
+        "file_ids": ["file-1", "file-2"],
+    }
+
+    # 两类引用都为空（或全是空白）时不落 meta，与纯文本消息同形态
+    request = conversation_router.SteerRequest(query="纯文本", file_selections=[""], file_ids=[])
+    await conversation_router.steer("conv-1", request, FakeRequest())
+    assert calls["enqueue"]["meta"] is None
+
+
+def test_normalize_steer_meta_keeps_unvalidated_paths():
+    """入口只做格式归一：穿越路径原样保留进 meta，安全性由消费端
+    _validate_workspace_file_selections（WORKSPACE_PATH_POLICY）统一拦截——存引用、晚解析。"""
+    request = conversation_router.SteerRequest(query="x", file_selections=["../../etc/passwd", "uploads/a.pdf"])
+    meta = conversation_router._normalize_steer_meta(request)
+    assert meta == {"file_selections": ["../../etc/passwd", "uploads/a.pdf"]}
+
+
+def test_normalize_steer_meta_caps_item_count():
+    """数量护栏：meta 列 TEXT 64KB，单类引用超上限直接截断（防异常超大 payload）。"""
+    cap = conversation_router._STEER_META_MAX_ITEMS
+    request = conversation_router.SteerRequest(
+        query="x",
+        file_selections=[f"uploads/f{i}.pdf" for i in range(cap + 10)],
+        file_ids=[f"file-{i}" for i in range(cap + 10)],
+    )
+    meta = conversation_router._normalize_steer_meta(request)
+    assert len(meta["file_selections"]) == cap
+    assert len(meta["file_ids"]) == cap
+    assert meta["file_ids"][0] == "file-0"  # 截断保留先入队的
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# 本地验证唯一入口——聚合后端/前端全部可本地执行的检查。
+#
+# 用法:
+#   scripts/verify            # 等价 --fast
+#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + 前端类型检查
+#   scripts/verify --all      # 推送前：fast 全部 + 覆盖率 + openapi 快照漂移 + 前端单测 + 构建
+#
+# 环境前提: 后端必须用 conda env fxcjg 的解释器（conda run 在非交互 shell 下
+# 不可靠，直接用绝对路径）；前端命令走 npm scripts（见 web-vue/package.json）。
+#
+# 退出码: 任一步失败即非零；各步骤耗时与总耗时在输出中可见。
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="/Users/gaochao/work/miniconda3/envs/fxcjg/bin/python"
+MODE="${1:---fast}"
+FAILED=()
+START=$(date +%s)
+
+if [[ "$MODE" != "--fast" && "$MODE" != "--all" ]]; then
+  echo "用法: scripts/verify [--fast|--all]"
+  exit 2
+fi
+
+step() { # step <名称> <命令...>
+  local name="$1"; shift
+  echo ""
+  echo "==> [$name] $*"
+  local t0=$(date +%s)
+  if "$@"; then
+    echo "    [$name] 通过 ($(( $(date +%s) - t0 ))s)"
+  else
+    echo "    [$name] 失败 ($(( $(date +%s) - t0 ))s)"
+    FAILED+=("$name")
+  fi
+}
+
+cd "$ROOT"
+
+# ---- 后端 ----
+step "backend-import" bash -c "cd server && '$PY' -c 'import main'"
+step "backend-pytest" bash -c "cd server && '$PY' -m pytest -q"
+step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
+step "params"         bash -c "'$PY' scripts/checks/params.py"
+step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
+# baseline 防滥用报警：本轮改动触碰 scripts/checks/（含 baselines/）时提醒人工确认，不阻断。
+# 往 baseline 加一行即可让门禁变绿，所以动它们必须有人看过——合法修债（真实复杂度下降）也允许改。
+step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- scripts/checks; git diff --name-only HEAD -- scripts/checks; git ls-files --others --exclude-standard scripts/checks; } | sort -u | { grep . && echo '    ⚠ 本轮改动了 scripts/checks/：往 baseline 加行会使门禁失效，请人工确认登记是否合法（新文件不允许登记）' || true; }"
+
+# ---- 前端 ----
+step "frontend-type"  bash -c "cd web-vue && npm run type-check"
+
+if [[ "$MODE" == "--all" ]]; then
+  # 口径与 AGENTS.md §39 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置。
+  # 独立数据文件 .coverage.gate + 先擦除：防止与历史运行的数据叠加（否则行/分支阈值会读到被污染的合并数据）。
+  # 行/分支双门禁由 coverage_thresholds.py 校验（两阈值满足时合并必 ≥95，故无需 --cov-fail-under）
+  step "coverage"       bash -c "cd server && rm -f .coverage.gate && COVERAGE_FILE=.coverage.gate '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing && COVERAGE_FILE=.coverage.gate '$PY' ../scripts/checks/coverage_thresholds.py"
+  # openapi 快照漂移门禁：重新生成后与 HEAD 比对，改了路由没更新快照即失败
+  step "openapi"        bash -c "'$PY' server/apps/chat_data_app/tests/generate_openapi.py > /dev/null && git diff --exit-code -- server/apps/chat_data_app/tests/api/openapi.json"
+  step "frontend-test"  bash -c "cd web-vue && npm run test:unit -- --run"
+  step "frontend-build" bash -c "cd web-vue && npm run build-only"
+fi
+
+ELAPSED=$(( $(date +%s) - START ))
+echo ""
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  echo "verify[$MODE] 失败 (${ELAPSED}s): ${FAILED[*]}"
+  exit 1
+fi
+echo "verify[$MODE] 全部通过 (${ELAPSED}s)"

@@ -20,6 +20,8 @@ from utils.logger import get_logger
 from utils.response import business_response, safe_user_error_message
 from .. import agent as agent_module
 from ..agent.sql_assist_agent import create_sql_assist_agent
+# 思考内容提取/分段复用主会话链路的单一实现（三键兜底 + 段落聚合），避免两套口径。
+from ..agent_stream import _append_reasoning_segment, _extract_reasoning_content
 from ..services import conversation_service as conversation
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
@@ -119,9 +121,10 @@ async def _persist_quick_sql_assistant_turn(
     username: str,
     user_message: HumanMessage,
     content: str,
+    reasoning_segments: list[dict[str, Any]] | None = None,
 ) -> None:
-    """幂等保存 SQL 助手已输出的正文，包括异常中断时的部分内容。"""
-    if not content:
+    """幂等保存 SQL 助手已输出的正文与思考段，包括异常中断时的部分内容。"""
+    if not content and not reasoning_segments:
         return
     turn_id = str(user_message.id or "")
     await conversation_event_service.persist_turn(
@@ -137,7 +140,7 @@ async def _persist_quick_sql_assistant_turn(
                 additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             ),
         ],
-        reasoning_segments=[],
+        reasoning_segments=list(reasoning_segments or []),
     )
 
 
@@ -182,8 +185,16 @@ async def _stream_sql_assist_chunks(
             config=config,
             stream_mode="messages",
         ):
-            if metadata.get("langgraph_node") == "model" and getattr(chunk, "content", None):
-                yield chunk.content
+            if metadata.get("langgraph_node") != "model":
+                continue
+            # 思考增量与正文分开产出：enable_thinking 开启时模型会输出 reasoning_content，
+            # 旧实现只透传 content 导致思考被静默丢弃（前端无法展示且白耗 tokens）。
+            reasoning_content = _extract_reasoning_content(chunk)
+            if reasoning_content:
+                yield "thinking", reasoning_content
+            content = getattr(chunk, "content", None)
+            if content:
+                yield "chunk", content
 
 
 async def _generate_quick_sql_stream(
@@ -220,8 +231,10 @@ async def _generate_quick_sql_stream(
             message=user_message,
         )
         full_content = ""
+        reasoning_segments: list[dict[str, Any]] = []
+        reasoning_turn_id = str(user_message.id or "") or None
         try:
-            async for content in _stream_sql_assist_chunks(
+            async for event_type, content in _stream_sql_assist_chunks(
                 conversation_id=conversation_id,
                 user_message=user_message,
                 source_type=source_type or "",
@@ -230,6 +243,10 @@ async def _generate_quick_sql_stream(
                 enable_thinking=payload.enable_thinking,
                 thinking_effort=payload.thinking_effort,
             ):
+                if event_type == "thinking":
+                    _append_reasoning_segment(reasoning_segments, content, 0, reasoning_turn_id)
+                    yield _sse_event({"type": "thinking", "content": content})
+                    continue
                 full_content += content
                 yield _sse_event({"type": "chunk", "content": content})
         finally:
@@ -239,6 +256,7 @@ async def _generate_quick_sql_stream(
                 username=username,
                 user_message=user_message,
                 content=full_content,
+                reasoning_segments=reasoning_segments,
             )
         sql = _extract_sql_from_content(full_content)
         logger.info("生成的 SQL: %s...", sql[:200])

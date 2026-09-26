@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -11,6 +12,40 @@ AsyncHook = Callable[[], Awaitable[None]]
 AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]
 ResourceFinalizer = Callable[[bool], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class TurnPersistenceHooks:
+    """一轮 Turn 必需的持久化钩子（用户消息 / 完整历史 / 中断时的部分历史）。
+
+    三者总是同时由调用方提供，绑成一个对象以保证三者不被遗漏，并让
+    ``stream_agent_turn`` 的形参控制在 AGENTS.md §3 的阈值内。
+    """
+
+    persist_user_message: AsyncHook
+    persist_turn_history: AsyncHook
+    persist_partial_history: AsyncHook
+
+
+@dataclass(frozen=True)
+class TurnLifecycleHooks:
+    """Turn 生命周期上的可选钩子（全部可缺省，缺省即不执行该切面）。"""
+
+    before_stream: Callable[[], Awaitable[bool]] | None = None
+    after_finish: AsyncHook | None = None
+    after_turn: AsyncHook | None = None
+    after_stream: AsyncHook | None = None
+    on_interrupt: AsyncInterruptHook | None = None
+    on_disconnect: AsyncHook | None = None
+
+
+@dataclass(frozen=True)
+class TurnResourceOptions:
+    """资源收尾参数：跨生命周期的 finalizer、取消时的 success 语义、finish 附加参数。"""
+
+    finalize_resources: ResourceFinalizer | None = None
+    cleanup_success_on_cancel: bool = False
+    finalize_stream_kwargs: dict[str, Any] | None = None
 
 
 async def _run_optional_hook(hook: AsyncHook | None) -> None:
@@ -68,18 +103,9 @@ async def stream_agent_turn(
     *,
     stream_adapter: Any,
     format_sse: SseFormatter,
-    persist_user_message: AsyncHook,
-    persist_turn_history: AsyncHook,
-    persist_partial_history: AsyncHook,
-    before_stream: Callable[[], Awaitable[bool]] | None = None,
-    after_finish: AsyncHook | None = None,
-    after_turn: AsyncHook | None = None,
-    after_stream: AsyncHook | None = None,
-    on_interrupt: AsyncInterruptHook | None = None,
-    on_disconnect: AsyncHook | None = None,
-    finalize_stream_kwargs: dict[str, Any] | None = None,
-    finalize_resources: ResourceFinalizer | None = None,
-    cleanup_success_on_cancel: bool = False,
+    persistence: TurnPersistenceHooks,
+    hooks: TurnLifecycleHooks | None = None,
+    resources: TurnResourceOptions | None = None,
 ) -> AsyncIterator[str]:
     """Run the common persisted streaming lifecycle for one agent conversation turn.
 
@@ -88,6 +114,9 @@ async def stream_agent_turn(
     such as the DataAnalyze sandbox execution session. Resource finalization
     runs after the model stream but before ``message_end`` is emitted.
     """
+    lifecycle = hooks or TurnLifecycleHooks()
+    resource_options = resources or TurnResourceOptions()
+    finalize_resources = resource_options.finalize_resources
     resources_finalized = False
     user_persistence_task: asyncio.Task | None = None
 
@@ -95,8 +124,8 @@ async def stream_agent_turn(
         # The user message is already visible in the local UI. Persist it in
         # parallel with Agent startup, but wait before final history is saved
         # so the durable event order remains user -> assistant/tool events.
-        user_persistence_task = asyncio.create_task(persist_user_message())
-        if before_stream is not None and not await before_stream():
+        user_persistence_task = asyncio.create_task(persistence.persist_user_message())
+        if lifecycle.before_stream is not None and not await lifecycle.before_stream():
             await _stream_turn_wait_user_persistence(user_persistence_task)
             return
 
@@ -104,33 +133,34 @@ async def stream_agent_turn(
             yield sse_event
 
         await _stream_turn_wait_user_persistence(user_persistence_task)
-        end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
-        await _run_optional_hook(after_finish)
-        await persist_turn_history()
-        await _run_optional_hook(after_stream)
+        end_payload = await stream_adapter.finish(**(resource_options.finalize_stream_kwargs or {}))
+        await _run_optional_hook(lifecycle.after_finish)
+        await persistence.persist_turn_history()
+        await _run_optional_hook(lifecycle.after_stream)
         outcome, interrupt_payload = _resolve_turn_outcome(stream_adapter)
         if outcome == "interrupt":
-            await _maybe_invoke_interrupt_hook(on_interrupt, interrupt_payload)
+            await _maybe_invoke_interrupt_hook(lifecycle.on_interrupt, interrupt_payload)
             resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
             yield format_sse("question_requested", interrupt_payload)
             # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
             return
         if outcome == "disconnected":
-            await _maybe_invoke_disconnect_hook(on_disconnect)
+            await _maybe_invoke_disconnect_hook(lifecycle.on_disconnect)
             resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
             return
         resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
-        if after_turn is not None:
-            await after_turn()
+        if lifecycle.after_turn is not None:
+            await lifecycle.after_turn()
         yield format_sse("message_end", end_payload)
         # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
         await _abort_user_persistence(user_persistence_task)
-        resources_finalized = await _stream_turn_finalize_now(finalize_resources, cleanup_success_on_cancel)
+        cleanup_success = resource_options.cleanup_success_on_cancel
+        resources_finalized = await _stream_turn_finalize_now(finalize_resources, cleanup_success)
         raise
     except Exception:
         await _await_user_persistence_safely(user_persistence_task)
-        await persist_partial_history()
+        await persistence.persist_partial_history()
         raise
     finally:
         await _abort_user_persistence(user_persistence_task)

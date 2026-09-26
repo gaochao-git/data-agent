@@ -14,6 +14,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.services.dashboard import service as dashboard_service_module
 from apps.chat_data_app.services.dashboard.service import DashboardService
+from apps.chat_data_app.services.dashboard.service import PanelWritePayload
 from utils.models import Base
 
 
@@ -75,36 +76,42 @@ async def test_dashboard_service_panel_lifecycle_and_layout(dashboard_db):
 
     first_panel = await service.add_panel(
         dashboard_id=dashboard["id"],
-        name="城市销售额",
-        sql="select city, sum(amount) amount from orders group by city",
-        chart_type="bar",
-        chart_config={"color": "#1677ff"},
-        layout_w=6,
-        layout_h=4,
-        datasource_id="ds_a",
         user_id="user_a",
+        payload=PanelWritePayload(
+            name="城市销售额",
+            sql="select city, sum(amount) amount from orders group by city",
+            chart_type="bar",
+            chart_config={"color": "#1677ff"},
+            layout_w=6,
+            layout_h=4,
+            datasource_id="ds_a",
+        ),
     )
     second_panel = await service.add_panel(
         dashboard_id=dashboard["id"],
-        name="订单数",
-        sql="select count(*) cnt from orders",
-        chart_type="kpi",
-        layout_w=3,
-        layout_h=2,
         user_id="user_a",
+        payload=PanelWritePayload(
+            name="订单数",
+            sql="select count(*) cnt from orders",
+            chart_type="kpi",
+            layout_w=3,
+            layout_h=2,
+        ),
     )
     updated_panel = await service.update_panel(
         dashboard_id=dashboard["id"],
         panel_id=first_panel["id"],
-        name="城市销售额V2",
-        chart_type="line",
-        chart_config={"smooth": True},
-        layout_x=1,
-        layout_y=2,
-        layout_w=8,
-        layout_h=5,
-        refresh_interval=60,
         user_id="user_a",
+        payload=PanelWritePayload(
+            name="城市销售额V2",
+            chart_type="line",
+            chart_config={"smooth": True},
+            layout_x=1,
+            layout_y=2,
+            layout_w=8,
+            layout_h=5,
+            refresh_interval=60,
+        ),
     )
     updated_count = await service.update_panels_layout(
         dashboard_id=dashboard["id"],
@@ -140,8 +147,8 @@ async def test_dashboard_service_returns_none_or_false_for_missing_or_wrong_owne
 
     assert await service.set_dashboard_public("missing", user_id="user_a", is_public=True) is None
     assert await service.update_dashboard(dashboard["id"], name="无权", user_id="user_b") is None
-    assert await service.add_panel("missing", name="x", sql="select 1", user_id="user_a") is None
-    assert await service.update_panel(dashboard["id"], "missing", name="x", user_id="user_a") is None
+    assert await service.add_panel(dashboard_id="missing", user_id="user_a", payload=PanelWritePayload(name="x", sql="select 1",),) is None
+    assert await service.update_panel(dashboard_id=dashboard["id"], panel_id="missing", user_id="user_a", payload=PanelWritePayload(name="x",),) is None
     assert await service.update_panels_layout("missing", [], user_id="user_a") is None
     assert await service.delete_panel(dashboard["id"], "missing", user_id="user_a") is False
     assert await service.delete_dashboard(dashboard["id"], user_id="user_b") is False
@@ -186,31 +193,35 @@ async def test_dashboard_service_panel_explicit_layout_and_no_user_branches(dash
 
     explicit_panel = await service.add_panel(
         dashboard_id=dashboard["id"],
-        name="明细表",
-        sql="select * from orders",
-        chart_type="table",
-        chart_config=None,
-        layout_x=3,
-        layout_y=4,
-        layout_w=5,
-        layout_h=6,
-        refresh_interval=30,
-        source_thread_id="thread_a",
-        datasource_id="ds_a",
-        member_datasource_id="member_a",
+        payload=PanelWritePayload(
+            name="明细表",
+            sql="select * from orders",
+            chart_type="table",
+            chart_config=None,
+            layout_x=3,
+            layout_y=4,
+            layout_w=5,
+            layout_h=6,
+            refresh_interval=30,
+            source_thread_id="thread_a",
+            datasource_id="ds_a",
+            member_datasource_id="member_a",
+        ),
     )
     updated_panel = await service.update_panel(
         dashboard_id=dashboard["id"],
         panel_id=explicit_panel["id"],
-        name="明细表V2",
-        sql="select order_id from orders",
-        chart_type="bar",
-        chart_config={"x": "order_id"},
-        layout_x=1,
-        layout_y=2,
-        layout_w=7,
-        layout_h=8,
-        refresh_interval=60,
+        payload=PanelWritePayload(
+            name="明细表V2",
+            sql="select order_id from orders",
+            chart_type="bar",
+            chart_config={"x": "order_id"},
+            layout_x=1,
+            layout_y=2,
+            layout_w=7,
+            layout_h=8,
+            refresh_interval=60,
+        ),
     )
     layout_count = await service.update_panels_layout(
         dashboard_id=dashboard["id"],
@@ -285,21 +296,23 @@ async def test_dashboard_service_optional_false_and_audit_branches(dashboard_db)
     dashboard = await service.create_dashboard(name="经营看板", user_id="user_a")
     panel = await service.add_panel(
         dashboard_id=dashboard["id"],
-        name="明细表",
-        sql="select 1",
         user_id="user_a",
+        payload=PanelWritePayload(
+            name="明细表",
+            sql="select 1",
+        ),
     )
 
     unchanged_dashboard = await service.update_dashboard(dashboard["id"])
-    unchanged_panel = await service.update_panel(dashboard["id"], panel["id"])
+    unchanged_panel = await service.update_panel(dashboard_id=dashboard["id"], panel_id=panel["id"], payload=PanelWritePayload(),)
     empty_layout_count = await service.update_panels_layout(dashboard["id"], layouts=[])
-    missing_dashboard_panel_update = await service.update_panel("missing", panel["id"], name="x", user_id="user_a")
-    wrong_owner_panel_update = await service.update_panel(dashboard["id"], panel["id"], name="x", user_id="user_b")
+    missing_dashboard_panel_update = await service.update_panel(dashboard_id="missing", panel_id=panel["id"], user_id="user_a", payload=PanelWritePayload(name="x",),)
+    wrong_owner_panel_update = await service.update_panel(dashboard_id=dashboard["id"], panel_id=panel["id"], user_id="user_b", payload=PanelWritePayload(name="x",),)
     missing_dashboard_panel_delete = await service.delete_panel("missing", panel["id"], user_id="user_a")
     deleted_panel = await service.delete_panel(dashboard["id"], panel["id"], user_id="user_a", operator_name="操作员")
 
     dashboard_for_delete = await service.create_dashboard(name="待删看板", user_id="user_a")
-    await service.add_panel(dashboard_id=dashboard_for_delete["id"], name="面板", sql="select 1", user_id="user_a")
+    await service.add_panel(dashboard_id=dashboard_for_delete["id"], user_id="user_a", payload=PanelWritePayload(name="面板", sql="select 1",),)
     deleted_dashboard = await service.delete_dashboard(dashboard_for_delete["id"], user_id="user_a", operator_name="操作员")
 
     assert unchanged_dashboard["id"] == dashboard["id"]
@@ -316,7 +329,7 @@ async def test_dashboard_service_optional_false_and_audit_branches(dashboard_db)
 async def test_dashboard_service_public_panel_access_branch(dashboard_db):
     service = DashboardService()
     dashboard = await service.create_dashboard(name="公共看板", user_id="user_a")
-    panel = await service.add_panel(dashboard_id=dashboard["id"], name="公共面板", sql="select 1", user_id="user_a")
+    panel = await service.add_panel(dashboard_id=dashboard["id"], user_id="user_a", payload=PanelWritePayload(name="公共面板", sql="select 1",),)
 
     assert await service.get_panel(panel["id"], user_id="user_b", include_public=True) is None
     await service.set_dashboard_public(dashboard["id"], user_id="user_a", is_public=True)

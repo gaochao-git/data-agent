@@ -56,8 +56,8 @@ class SnapshotDao:
 class InboxDao:
     def __init__(self, run=None, *, run_error=None):
         self.run = run if run is not None else SimpleNamespace(
-            conversation_id="conv-1", user_id="user-1", status="active",
-            owner_token="tok-1", content="{}",
+            conversation_id="conv-1", user_id="user-1", record_status="active",
+            owner_token="tok-1", record_content="{}",
         )
         self.run_error = run_error
 
@@ -138,8 +138,8 @@ async def test_persist_turn_propagates_lease_lost_without_retry(no_retry_delay):
 async def test_persist_turn_rejects_run_owned_by_another_worker(no_retry_delay):
     dao = SnapshotDao()
     stale_run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", status="active",
-        owner_token="other-token", content="{}",
+        conversation_id="conv-1", user_id="user-1", record_status="active",
+        owner_token="other-token", record_content="{}",
     )
     with pytest.raises(AgentRunLeaseLostError, match="其他 Worker 接管"):
         await _persist(_service(dao, InboxDao(run=stale_run)))
@@ -149,8 +149,8 @@ async def test_persist_turn_rejects_run_owned_by_another_worker(no_retry_delay):
 async def test_persist_turn_rejects_finished_run():
     dao = SnapshotDao()
     finished = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", status="finished",
-        owner_token="tok-1", content="{}",
+        conversation_id="conv-1", user_id="user-1", record_status="finished",
+        owner_token="tok-1", record_content="{}",
     )
     with pytest.raises(AgentRunLeaseLostError, match="当前运行已结束"):
         await _persist(_service(dao, InboxDao(run=finished)))
@@ -188,8 +188,8 @@ async def test_persist_turn_gives_up_after_max_attempts(no_retry_delay):
 @pytest.mark.asyncio
 async def test_checkpoint_keeps_newer_previous_watermark():
     run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", status="active", owner_token="tok-1",
-        content=json.dumps({"history_checkpoint": {"run_id": "run-1", "stream_id": "9-0"}}),
+        conversation_id="conv-1", user_id="user-1", record_status="active", owner_token="tok-1",
+        record_content=json.dumps({"history_checkpoint": {"run_id": "run-1", "stream_id": "9-0"}}),
     )
     # 传入的 stream_id 比已记录的更旧：不回退，直接沿用旧水位
     checkpoint = await _persist(_service(inbox_dao=InboxDao(run=run)), stream_id="3-0")
@@ -199,8 +199,8 @@ async def test_checkpoint_keeps_newer_previous_watermark():
 @pytest.mark.asyncio
 async def test_checkpoint_rejects_foreign_run_watermark():
     run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", status="active", owner_token="tok-1",
-        content=json.dumps({"history_checkpoint": {"run_id": "run-other", "stream_id": "2-0"}}),
+        conversation_id="conv-1", user_id="user-1", record_status="active", owner_token="tok-1",
+        record_content=json.dumps({"history_checkpoint": {"run_id": "run-other", "stream_id": "2-0"}}),
     )
     with pytest.raises(AgentRunLeaseLostError, match="恢复水位归属已变化"):
         await _persist(_service(inbox_dao=InboxDao(run=run)))
@@ -211,7 +211,7 @@ async def test_validate_run_rejects_missing_or_mismatched_run():
     service = _service()
     with pytest.raises(AgentRunLeaseLostError, match="当前运行不存在"):
         service._validate_run_for_checkpoint(None, conversation_id="c", user_id="u", run_id="r", owner_token="t")
-    other = SimpleNamespace(conversation_id="other", user_id="u", status="active", owner_token="t", content="{}")
+    other = SimpleNamespace(conversation_id="other", user_id="u", record_status="active", owner_token="t", record_content="{}")
     with pytest.raises(AgentRunLeaseLostError, match="归属已变化"):
         service._validate_run_for_checkpoint(other, conversation_id="c", user_id="u", run_id="r", owner_token="t")
 
@@ -299,8 +299,8 @@ async def test_load_history_with_recovery_exposes_active_run_watermark():
             return '{"total": 5}'
 
     active_run = SimpleNamespace(
-        run_id="run-9", status="active", turn_id="turn-1",
-        content=json.dumps({"history_checkpoint": {"run_id": "run-9", "stream_id": "4-0"}}),
+        run_id="run-9", record_status="active", turn_id="turn-1",
+        record_content=json.dumps({"history_checkpoint": {"run_id": "run-9", "stream_id": "4-0"}}),
     )
 
     class SessionInboxDao(InboxDao):

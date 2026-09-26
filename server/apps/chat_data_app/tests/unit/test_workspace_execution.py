@@ -15,17 +15,26 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import bash_run
-from apps.chat_data_app.agent.workspace import workspace_execution
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
     WorkspacePathMapping,
     _absolute_command_path_tokens,
 )
-from apps.chat_data_app.agent.workspace.workspace_execution import (
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
+)
+from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
     sandbox_visible_path,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+    workspace_sandbox_api as we_api,
+    workspace_sandbox_paths as we_paths,
+    workspace_search as we_search,
+    workspace_session as we_session,
+    workspace_sync as we_sync,
 )
 
 
@@ -50,10 +59,10 @@ def test_validate_backend_requires_absolute_chat_data_home(monkeypatch):
     # sandbox 模式将应用侧会话目录通过 Files API 上传，仍要求持久化根为绝对路径。
     monkeypatch.setenv("CHAT_DATA_HOME", "uploads/chat_data")
     with pytest.raises(ValueError, match="绝对路径"):
-        workspace_execution._validate_workspace_backend_config()
+        we_session._validate_workspace_backend_config()
 
     monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")
-    workspace_execution._validate_workspace_backend_config()
+    we_session._validate_workspace_backend_config()
 
 
 def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
@@ -96,7 +105,7 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
         workspace_root="/host/user-data",
     )
 
-    payload = asyncio.run(workspace_execution.sandbox_artifact_payload(
+    payload = asyncio.run(we_ops.sandbox_artifact_payload(
         session_ref=session_ref,
         file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
     ))
@@ -159,14 +168,14 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
         captured["resolve"] = kwargs
         return "/mnt/user-data/workspace/report.txt"
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
 
     async def fake_line_count(**_kwargs):
         return 1
 
-    monkeypatch.setattr(workspace_execution, "_sandbox_text_line_count", fake_line_count)
+    monkeypatch.setattr(we_ops, "_sandbox_text_line_count", fake_line_count)
 
-    result = asyncio.run(workspace_execution.sandbox_read_text_file(
+    result = asyncio.run(we_ops.sandbox_read_text_file(
         session_ref=session_ref,
         file_path="/mnt/user-data/workspace/report.txt",
         offset=0,
@@ -222,10 +231,10 @@ def test_sandbox_read_text_file_keeps_content_when_line_count_fails(monkeypatch)
     async def fail_line_count(**_kwargs):
         raise RuntimeError("awk unavailable")
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(workspace_execution, "_sandbox_text_line_count", fail_line_count)
+    monkeypatch.setattr(we_api, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_sandbox_text_line_count", fail_line_count)
 
-    result = asyncio.run(workspace_execution.sandbox_read_text_file(
+    result = asyncio.run(we_ops.sandbox_read_text_file(
         session_ref=session_ref,
         file_path="/mnt/user-data/workspace/report.txt",
         offset=0,
@@ -250,17 +259,17 @@ def test_sandbox_text_line_count_uses_metadata_cache(monkeypatch):
         calls.append((session, command, timeout_seconds))
         return 0, "3\n", ""
 
-    monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run_command_in_sandbox)
+    monkeypatch.setattr(we_ops, "run_command_in_sandbox", fake_run_command_in_sandbox)
     path = "/mnt/user-data/workspace/report file.txt"
     first_entry = SimpleNamespace(size=20, modified_at="2026-08-10T00:00:00Z")
 
-    first = asyncio.run(workspace_execution._sandbox_text_line_count(
+    first = asyncio.run(we_ops._sandbox_text_line_count(
         session=session, path=path, entry=first_entry,
     ))
-    second = asyncio.run(workspace_execution._sandbox_text_line_count(
+    second = asyncio.run(we_ops._sandbox_text_line_count(
         session=session, path=path, entry=first_entry,
     ))
-    changed = asyncio.run(workspace_execution._sandbox_text_line_count(
+    changed = asyncio.run(we_ops._sandbox_text_line_count(
         session=session,
         path=path,
         entry=SimpleNamespace(size=24, modified_at="2026-08-10T00:00:01Z"),
@@ -289,10 +298,10 @@ def test_sandbox_text_line_count_rejects_command_failures(monkeypatch, command_r
     async def fake_run_command_in_sandbox(**_kwargs):
         return command_result
 
-    monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run_command_in_sandbox)
+    monkeypatch.setattr(we_ops, "run_command_in_sandbox", fake_run_command_in_sandbox)
 
     with pytest.raises(RuntimeError, match=expected_error):
-        asyncio.run(workspace_execution._sandbox_text_line_count(
+        asyncio.run(we_ops._sandbox_text_line_count(
             session=session,
             path="/mnt/user-data/workspace/report.txt",
             entry=SimpleNamespace(size=4, modified_at="2026-08-10T00:00:00Z"),
@@ -303,7 +312,7 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
     workspace_root = _workspace_root(tmp_path)
     target = workspace_root / "workspace" / "report.txt"
     target.write_text("status=old", encoding="utf-8")
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
 
     class FakeFiles:
         async def replace_contents(self, entries):
@@ -322,7 +331,7 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
         sandbox=SimpleNamespace(files=FakeFiles()),
         sandbox_id="sbx_1",
         workspace_root=str(workspace_root),
-        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+        application_manifest=we_sync._mutable_application_manifest(workspace_root),
     )
 
     async def fake_resolve(**_kwargs):
@@ -331,15 +340,15 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
     async def fake_read(**kwargs):
         return remote[kwargs["path"]]
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", fake_read)
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_content_replace_entry",
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_read_sandbox_file_bytes", fake_read)
+    # persist 下载走 sync 模块自己的绑定，需一并打桩
+    monkeypatch.setattr(we_sync, "_read_sandbox_file_bytes", fake_read)
+    monkeypatch.setattr(we_api, "_import_opensandbox_content_replace_entry",
         lambda: lambda **kwargs: SimpleNamespace(**kwargs),
     )
 
-    payload = asyncio.run(workspace_execution.sandbox_replace_text_file(
+    payload = asyncio.run(we_ops.sandbox_replace_text_file(
         session_ref=session_ref,
         file_path="/mnt/user-data/workspace/report.txt",
         old_content="old",
@@ -354,9 +363,9 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
 @pytest.mark.parametrize(
     ("writer", "file_path", "expected_mode"),
     [
-        (workspace_execution.sandbox_write_text_file, "/mnt/user-data/workspace/report.txt", 666),
+        (we_ops.sandbox_write_text_file, "/mnt/user-data/workspace/report.txt", 666),
         (
-            workspace_execution.sandbox_write_tool_result,
+            we_ops.sandbox_write_tool_result,
             "outputs/.tool-offload/result.txt",
             444,
         ),
@@ -388,13 +397,11 @@ def test_sandbox_writers_use_expected_file_mode(
     async def fake_persist(**_kwargs):
         return None
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(workspace_execution, "_write_sandbox_file", fake_write)
-    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", fake_read)
-    monkeypatch.setattr(workspace_execution, "_persist_sandbox_paths", fake_persist)
-    monkeypatch.setattr(
-        workspace_execution,
-        "_create_sandbox_directories",
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_write_sandbox_file", fake_write)
+    monkeypatch.setattr(we_ops, "_read_sandbox_file_bytes", fake_read)
+    monkeypatch.setattr(we_ops, "_persist_sandbox_paths", fake_persist)
+    monkeypatch.setattr(we_ops, "_create_sandbox_directories",
         lambda **_kwargs: asyncio.sleep(0),
     )
 
@@ -403,7 +410,7 @@ def test_sandbox_writers_use_expected_file_mode(
         "file_path": file_path,
         "content": "content",
     }
-    if writer is workspace_execution.sandbox_write_text_file:
+    if writer is we_ops.sandbox_write_text_file:
         kwargs["mode"] = "overwrite"
     asyncio.run(writer(**kwargs))
 
@@ -412,7 +419,7 @@ def test_sandbox_writers_use_expected_file_mode(
 
 def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tmp_path):
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
     remote = {"/mnt/user-data/uploads/source.docx": b"\x00docx"}
 
     class FakeFiles:
@@ -427,7 +434,7 @@ def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tm
         sandbox=SimpleNamespace(files=FakeFiles()),
         sandbox_id="sbx_copy",
         workspace_root=str(workspace_root),
-        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+        application_manifest=we_sync._mutable_application_manifest(workspace_root),
     )
 
     async def fake_kind(session, path, entry=None):
@@ -437,9 +444,9 @@ def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tm
             return "dir"
         raise FileNotFoundError(f"路径不存在: {path}")
 
-    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_kind)
+    monkeypatch.setattr(we_ops, "_sandbox_path_kind", fake_kind)
 
-    payload = asyncio.run(workspace_execution.sandbox_copy_path(
+    payload = asyncio.run(we_ops.sandbox_copy_path(
         session_ref=session_ref,
         source_path="/mnt/user-data/uploads/source.docx",
         destination_path="/mnt/user-data/workspace/copy.docx",
@@ -454,17 +461,17 @@ def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tm
 
 def test_sandbox_file_copy_rejects_tool_offload_source_and_existing_destination(monkeypatch, tmp_path):
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
     session_ref = SandboxExecutionSessionRef()
     session_ref.current = SandboxExecutionSession(
         sandbox=SimpleNamespace(files=SimpleNamespace()),
         sandbox_id="sbx_copy_guard",
         workspace_root=str(workspace_root),
-        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+        application_manifest=we_sync._mutable_application_manifest(workspace_root),
     )
 
     with pytest.raises(ValueError, match="tool-offload"):
-        asyncio.run(workspace_execution.sandbox_copy_path(
+        asyncio.run(we_ops.sandbox_copy_path(
             session_ref=session_ref,
             source_path="/mnt/user-data/outputs/.tool-offload/r.json",
             destination_path="/mnt/user-data/workspace/e.json",
@@ -473,9 +480,9 @@ def test_sandbox_file_copy_rejects_tool_offload_source_and_existing_destination(
     async def fake_kind(session, path, entry=None):
         return "file"
 
-    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_kind)
+    monkeypatch.setattr(we_ops, "_sandbox_path_kind", fake_kind)
     with pytest.raises(ValueError, match="目标路径已存在"):
-        asyncio.run(workspace_execution.sandbox_copy_path(
+        asyncio.run(we_ops.sandbox_copy_path(
             session_ref=session_ref,
             source_path="/mnt/user-data/uploads/a.bin",
             destination_path="/mnt/user-data/workspace/b.bin",
@@ -496,18 +503,18 @@ def test_sandbox_file_edit_rejects_missing_or_nonunique_content(monkeypatch):
     async def fake_read(**_kwargs):
         return b"old old"
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", fake_read)
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_read_sandbox_file_bytes", fake_read)
 
     with pytest.raises(ValueError, match="匹配多处"):
-        asyncio.run(workspace_execution.sandbox_replace_text_file(
+        asyncio.run(we_ops.sandbox_replace_text_file(
             session_ref=session_ref,
             file_path="/mnt/user-data/workspace/report.txt",
             old_content="old",
             new_content="new",
         ))
     with pytest.raises(ValueError, match="未在文件中找到"):
-        asyncio.run(workspace_execution.sandbox_replace_text_file(
+        asyncio.run(we_ops.sandbox_replace_text_file(
             session_ref=session_ref,
             file_path="/mnt/user-data/workspace/report.txt",
             old_content="missing",
@@ -543,14 +550,12 @@ def test_sandbox_file_glob_uses_native_files_search_and_includes_tool_results(mo
     async def fake_resolve(**_kwargs):
         return "/mnt/user-data/outputs"
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_filesystem_models",
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_import_opensandbox_filesystem_models",
         lambda: (None, FakeSearchEntry, None),
     )
 
-    results = asyncio.run(workspace_execution.sandbox_search_files(
+    results = asyncio.run(we_ops.sandbox_search_files(
         session_ref=session_ref,
         path="/mnt/user-data/outputs",
         pattern="*.json",
@@ -630,14 +635,12 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
         path = kwargs["file_path"]
         return "/mnt/skills/demo-skill" if path.startswith("/mnt/skills") else "/mnt/user-data/workspace"
 
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_directory_list_entry",
+    monkeypatch.setattr(we_ops, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(we_ops, "_import_opensandbox_directory_list_entry",
         lambda: FakeDirectoryListEntry,
     )
 
-    entries = asyncio.run(workspace_execution.sandbox_list_dir(
+    entries = asyncio.run(we_ops.sandbox_list_dir(
         session_ref=session_ref, path="/mnt/user-data/workspace", max_depth=2,
     ))
 
@@ -762,9 +765,7 @@ def test_sandbox_commands_run_as_unprivileged_user(monkeypatch):
             captured["opts"] = opts
             return SimpleNamespace(id="", logs=SimpleNamespace(stdout=[], stderr=[]), error=None)
 
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_sdk",
+    monkeypatch.setattr(we_api, "_import_opensandbox_sdk",
         lambda: (None, None, FakeRunCommandOpts, None),
     )
     session = SandboxExecutionSession(
@@ -774,7 +775,7 @@ def test_sandbox_commands_run_as_unprivileged_user(monkeypatch):
     )
 
     exit_code, stdout, stderr = asyncio.run(
-        workspace_execution.run_command_in_sandbox(
+        we_api.run_command_in_sandbox(
             session=session,
             command="id",
             timeout_seconds=5,
@@ -815,15 +816,13 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
 
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
     monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "600")
     monkeypatch.setenv("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", "7")
     monkeypatch.setenv("OPENSANDBOX_CREATE_TIMEOUT_SECONDS", "80")
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_sdk",
+    monkeypatch.setattr(we_session, "_import_opensandbox_sdk",
         lambda: (FakeSandbox, FakeConnectionConfig, None, (None, None)),
     )
     FakeSandbox.files = FakeFiles()
@@ -836,7 +835,7 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     (runtime_skills_dir / "demo-skill").mkdir(parents=True)
     (runtime_skills_dir / "demo-skill" / "SKILL.md").write_text("# Demo", encoding="utf-8")
 
-    session = asyncio.run(workspace_execution.prepare_workspace_execution_session(
+    session = asyncio.run(we_session.prepare_workspace_execution_session(
         str(workspace_root), runtime_skills_dir=runtime_skills_dir
     ))
 
@@ -872,17 +871,15 @@ def test_prepare_workspace_execution_session_reports_unreachable_control_plane(t
 
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.invalid")
     monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_sdk",
+    monkeypatch.setattr(we_session, "_import_opensandbox_sdk",
         lambda: (FakeSandbox, FakeConnectionConfig, None, (None, None)),
     )
 
     with pytest.raises(ValueError, match="OpenSandbox 服务不可达"):
-        asyncio.run(workspace_execution.prepare_workspace_execution_session(str(workspace_root)))
+        asyncio.run(we_session.prepare_workspace_execution_session(str(workspace_root)))
 
 
 def test_prepare_workspace_execution_session_has_total_create_timeout(tmp_path, monkeypatch):
@@ -904,28 +901,26 @@ def test_prepare_workspace_execution_session_has_total_create_timeout(tmp_path, 
 
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
     monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
     monkeypatch.setenv("OPENSANDBOX_READY_TIMEOUT_SECONDS", "60")
     monkeypatch.setenv("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", "10")
     monkeypatch.delenv("OPENSANDBOX_CREATE_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setattr(
-        workspace_execution,
-        "_import_opensandbox_sdk",
+    monkeypatch.setattr(we_session, "_import_opensandbox_sdk",
         lambda: (FakeSandbox, FakeConnectionConfig, None, (None, None)),
     )
-    monkeypatch.setattr(workspace_execution.asyncio, "wait_for", fail_on_wait)
+    monkeypatch.setattr(we_session.asyncio, "wait_for", fail_on_wait)
 
     with pytest.raises(ValueError, match="OpenSandbox 创建超时（100 秒）"):
-        asyncio.run(workspace_execution.prepare_workspace_execution_session(str(workspace_root)))
+        asyncio.run(we_session.prepare_workspace_execution_session(str(workspace_root)))
 
     assert captured["timeout"] == 100
 
 
 def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypatch):
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
     initial_upload = workspace_root / "uploads" / "old.txt"
     initial_upload.write_text("old", encoding="utf-8")
     uploaded_paths = []
@@ -938,7 +933,7 @@ def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypa
         sandbox=SimpleNamespace(files=FakeFiles()),
         sandbox_id="sbx_1",
         workspace_root=str(workspace_root),
-        uploads_manifest=workspace_execution._tree_manifest(workspace_root / "uploads", "uploads"),
+        uploads_manifest=we_sync._tree_manifest(workspace_root / "uploads", "uploads"),
     )
     (workspace_root / "workspace" / "unchanged.txt").write_text("workspace", encoding="utf-8")
     (workspace_root / "uploads" / "new.txt").write_text("new", encoding="utf-8")
@@ -949,10 +944,10 @@ def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypa
     async def no_remote_files(**_kwargs):
         return [], []
 
-    monkeypatch.setattr(workspace_execution, "_create_sandbox_directories", skip_create_directories)
-    monkeypatch.setattr(workspace_execution, "_walk_sandbox_tree", no_remote_files)
+    monkeypatch.setattr(we_sync, "_create_sandbox_directories", skip_create_directories)
+    monkeypatch.setattr(we_sync, "_walk_sandbox_tree", no_remote_files)
 
-    asyncio.run(workspace_execution._sync_sandbox_uploads(session))
+    asyncio.run(we_sync._sync_sandbox_uploads(session))
 
     assert uploaded_paths == [("/mnt/user-data/uploads/new.txt", b"new", 444)]
 
@@ -967,43 +962,41 @@ def test_mutable_application_manifest_excludes_hidden_results_and_semantic_model
         "result", encoding="utf-8"
     )
 
-    manifest = workspace_execution._mutable_application_manifest(workspace_root)
+    manifest = we_sync._mutable_application_manifest(workspace_root)
 
     assert set(manifest) == {"workspace/report.txt"}
 
 
 def test_cached_sandbox_is_reused_only_while_application_trees_match(tmp_path, monkeypatch):
     workspace_root = _workspace_root(tmp_path)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
     target = workspace_root / "workspace" / "report.txt"
     target.write_text("v1", encoding="utf-8")
     session = SandboxExecutionSession(
         sandbox=object(),
         sandbox_id="sbx_1",
         workspace_root=str(workspace_root),
-        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+        application_manifest=we_sync._mutable_application_manifest(workspace_root),
     )
-    monkeypatch.setattr(
-        workspace_execution,
-        "_file_fingerprint",
+    monkeypatch.setattr(we_sync, "_file_fingerprint",
         lambda _path: (_ for _ in ()).throw(AssertionError("cache validation must not hash files")),
     )
 
-    assert asyncio.run(workspace_execution._cached_session_matches_application(session)) is True
+    assert asyncio.run(we_session._cached_session_matches_application(session)) is True
 
     target.write_text("v2", encoding="utf-8")
     stat = target.stat()
     os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
 
-    assert asyncio.run(workspace_execution._cached_session_matches_application(session)) is False
+    assert asyncio.run(we_session._cached_session_matches_application(session)) is False
 
 
 def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
     # sandbox 模式下 CHAT_DATA_HOME 为绝对路径时应通过后端校验
     monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")
-    workspace_execution._validate_workspace_backend_config()
+    we_session._validate_workspace_backend_config()
 
-    chart = workspace_execution._artifact_payload_from_bytes(
+    chart = we_ops._artifact_payload_from_bytes(
         visible_path="/mnt/user-data/outputs/sales.chart.json",
         data=(
             b'{"version":"1.0","chart_type":"line","data":[{"month":"2026-01","sales":1}],'
@@ -1011,7 +1004,7 @@ def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
         ),
     )
     assert chart["artifact_type"] == "chart_spec"
-    skill = workspace_execution._artifact_payload_from_bytes(
+    skill = we_ops._artifact_payload_from_bytes(
         visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
         data=(
             b"---\nname: sales-analysis\ntitle: Sales Analysis\n"
@@ -1027,11 +1020,11 @@ def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
         "skill_title": "Sales Analysis",
         "description": "Analyze sales.",
     }
-    assert workspace_execution._artifact_payload_from_bytes(
+    assert we_ops._artifact_payload_from_bytes(
         visible_path="/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
         data=b"---\nname: sales-analysis\n---\n# Sales Analysis\n",
     ) == {}
-    assert workspace_execution.truncate_output("abcdef", limit=3) == ("abc\n...[truncated]", True)
+    assert we_api.truncate_output("abcdef", limit=3) == ("abc\n...[truncated]", True)
 
 
 # ---------------------------------------------------------------------------
@@ -1131,7 +1124,7 @@ def test_parse_rg_output_single_file_target():
     had a trailing slash that rg's path.text never includes, so every
     match was silently filtered out.
     """
-    from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
+    from apps.chat_data_app.agent.workspace.workspace_search import parse_rg_output
 
     target = "/mnt/user-data/outputs/dashboard.dashboard.json"
     stdout = _rg_match_line(target, '{"metric": "订单数量"}', 1)
@@ -1145,7 +1138,7 @@ def test_parse_rg_output_single_file_target():
 
 def test_parse_rg_output_directory_target():
     """file_grep on a directory still strips the prefix correctly."""
-    from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
+    from apps.chat_data_app.agent.workspace.workspace_search import parse_rg_output
 
     target = "/mnt/user-data/outputs"
     file_path = f"{target}/dashboard.dashboard.json"

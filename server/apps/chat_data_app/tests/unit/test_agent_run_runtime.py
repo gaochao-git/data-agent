@@ -506,6 +506,106 @@ async def test_cancelling_at_claim_still_closes_run_and_releases_owner(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_claim_owner_failure_finalizes_unexecuted_run(monkeypatch):
+    """claim_owner 失败（典型为 Redis 不可达）：prepare 已把行置为 ACTIVE，
+    必须立即 finish_run("failed") 收口，否则行成为无主僵尸、SSE 一直假进行中。"""
+    order = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, run_id, status, user_id, operator_name, owner_token=None):
+            assert (run_id, status, user_id, operator_name, owner_token) == (
+                "run-1",
+                "failed",
+                "user-1",
+                "用户一",
+                "1:owner",
+            )
+            order.append("run_failed")
+            return "failed"
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            raise TimeoutError("Timeout reading from redis")
+
+        async def release_owner(self, _run_id, _owner_token):  # pragma: no cover
+            raise AssertionError("未认领成功不应释放 owner")
+
+        async def append(self, **_kwargs):  # pragma: no cover
+            raise AssertionError("未执行不应发布事件")
+
+    async def stream():  # pragma: no cover
+        raise AssertionError("认领失败不应进入流消费")
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    # _execute 对普通异常记 ERROR 后吞掉；关键断言是失败收口已执行
+    await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    assert order == ["run_failed"]
+
+
+@pytest.mark.asyncio
+async def test_claim_owner_failure_propagates_original_error_when_finish_also_fails(monkeypatch, caplog):
+    """finish_run 收口自身也失败时只记日志，不得掩盖原始 claim 异常。"""
+    import asyncio
+    import logging
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, *_args, **_kwargs):
+            raise ConnectionError("mysql also down")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            raise TimeoutError("Timeout reading from redis")
+
+        async def release_owner(self, _run_id, _owner_token):  # pragma: no cover
+            raise AssertionError("未认领成功不应释放 owner")
+
+        async def append(self, **_kwargs):  # pragma: no cover
+            raise AssertionError("未执行不应发布事件")
+
+    async def stream():  # pragma: no cover
+        raise AssertionError("认领失败不应进入流消费")
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+    # get_logger 默认 propagate=False，caplog 收不到记录；测试期临时放开
+    from apps.chat_data_app.agent.run import agent_run_runtime as runtime_module
+    monkeypatch.setattr(runtime_module.logger, "propagate", True)
+
+    # _execute 对普通异常记 ERROR 后吞掉；断言顶层日志携带的异常是原始
+    # TimeoutError（而非被 finish 的 ConnectionError 掩盖）
+    with caplog.at_level(logging.ERROR):
+        await runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name="")
+
+    error_records = [r for r in caplog.records if "后台运行失败" in r.getMessage()]
+    assert error_records, "顶层失败日志缺失"
+    assert all(rec.exc_info and rec.exc_info[0] is TimeoutError for rec in error_records)
+    # 收口失败也应有独立日志（含 ConnectionError），两条异常都可查
+    finish_logs = [r for r in caplog.records if "收口也失败" in r.getMessage()]
+    assert finish_logs and all(rec.exc_info and rec.exc_info[0] is ConnectionError for rec in finish_logs)
+
+
+@pytest.mark.asyncio
 async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
     """租约丢失的取消不收口也不发布——流已归新 Worker 所有。"""
     import asyncio
@@ -607,8 +707,13 @@ def test_build_stream_factory_requires_injected_stream_generator():
 def test_set_stream_generator_is_used_by_stream_factory():
     captured = {}
 
-    def fake_stream_generator(**kwargs):
-        captured.update(kwargs)
+    def fake_stream_generator(request):
+        # 流式执行入参已收敛为 ChatDataStreamRequest（单一对象）
+        captured.update({
+            "thread_id": request.thread_id,
+            "run_id": request.run_id,
+            "owner_token": request.owner_token,
+        })
 
         async def stream():
             yield "event: done\ndata: [DONE]\n\n"

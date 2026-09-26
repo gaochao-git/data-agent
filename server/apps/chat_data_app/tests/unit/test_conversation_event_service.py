@@ -368,8 +368,8 @@ async def _create_run(get_session, conversation_id: str, run_id: str, owner_toke
             owner_token=owner_token,
             message_id=run_id,
             record_type="run",
-            content=json.dumps({"turn_id": "turn-checkpoint"}, ensure_ascii=False),
-            status="active",
+            record_content=json.dumps({"turn_id": "turn-checkpoint"}, ensure_ascii=False),
+            record_status="active",
             delete_flag=0,
             create_time=now,
             update_time=now,
@@ -383,8 +383,8 @@ async def _create_run(get_session, conversation_id: str, run_id: str, owner_toke
 async def _update_run_content(get_session, run_id: str, content: dict, *, status: str = "active") -> None:
     async with get_session() as session:
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id))
-        run.content = json.dumps(content, ensure_ascii=False)
-        run.status = status
+        run.record_content = json.dumps(content, ensure_ascii=False)
+        run.record_status = status
 
 
 @pytest.mark.asyncio
@@ -416,7 +416,7 @@ async def test_turn_checkpoint_is_committed_with_history(conversation_event_serv
         rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-checkpoint"))
     assert len(rows) == 2
-    assert json.loads(run.content)["history_checkpoint"] == checkpoint
+    assert json.loads(run.record_content)["history_checkpoint"] == checkpoint
 
 
 @pytest.mark.asyncio
@@ -443,7 +443,7 @@ async def test_checkpoint_failure_rolls_back_history(conversation_event_service)
         rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-rollback"))
     assert rows == []
-    assert "history_checkpoint" not in json.loads(run.content)
+    assert "history_checkpoint" not in json.loads(run.record_content)
 
 
 @pytest.mark.asyncio
@@ -466,7 +466,7 @@ async def test_checkpoint_is_not_written_without_redis_cursor(conversation_event
     ) is None
     async with get_session() as session:
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-no-cursor"))
-    assert "history_checkpoint" not in json.loads(run.content)
+    assert "history_checkpoint" not in json.loads(run.record_content)
 
 
 @pytest.mark.asyncio
@@ -492,7 +492,7 @@ async def test_checkpoint_requires_published_redis_cursor_and_worker_owner(conve
         rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-invalid-cursor"))
     assert len(rows) == 2
-    assert "history_checkpoint" not in json.loads(run.content)
+    assert "history_checkpoint" not in json.loads(run.record_content)
 
     with pytest.raises(AgentRunLeaseLostError):
         await service.persist_turn_with_checkpoint(
@@ -634,7 +634,7 @@ async def test_checkpoint_does_not_move_backwards(conversation_event_service):
     assert second == first
     async with get_session() as session:
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-cursor-order"))
-    assert json.loads(run.content)["history_checkpoint"] == first
+    assert json.loads(run.record_content)["history_checkpoint"] == first
 
 
 @pytest.mark.asyncio

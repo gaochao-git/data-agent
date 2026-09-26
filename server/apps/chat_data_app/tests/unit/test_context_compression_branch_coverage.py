@@ -49,6 +49,9 @@ async def test_summarize_messages_joins_list_content_blocks(monkeypatch):
             return AIMessage(content=[{"type": "text", "text": "第一段"}, {"type": "text", "text": "第二段"}])
 
     monkeypatch.setattr(context_compression, "get_chat_data_llm", lambda **_kwargs: BlockLLM())
+    monkeypatch.setattr(
+        context_compression, "get_context_window", lambda _model_id: 256000
+    )
     summary = await context_compression._summarize_messages_with_llm(
         [HumanMessage(content="历史")], model_id="m",
     )
@@ -270,7 +273,47 @@ async def test_middleware_reports_empty_summary_without_breaking(monkeypatch):
     assert calls["count"] >= 1
     report = update["context_compression"]
     assert report["compression_skipped_reason"] == "empty_summary"
+    # fail-closed：未超硬限安全水位时保留原样，不产生 state 写更新，等下轮重试
+    assert report["summary_retry_next_turn"] is True
     assert "messages" not in update or update.get("messages") is None
+
+
+@pytest.mark.asyncio
+async def test_middleware_empty_summary_near_hard_limit_still_enforces_hard_limit(monkeypatch):
+    # 摘要失败且逼近硬限：fail-closed 让位给可用性，仍走确定性收缩兜底
+    messages = []
+    for index in range(4):
+        messages.extend([
+            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300, id=f"u-{index}"),
+            AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 300, id=f"a-{index}"),
+        ])
+    messages.append(HumanMessage(content="当前问题", id="turn-current"))
+
+    middleware, calls = _middleware(
+        monkeypatch, trigger_tokens=1, target_tokens=1, hard_limit=1_000, summarizer_result="",
+    )
+    update = await middleware.abefore_model(_state(messages), SimpleNamespace())
+    assert calls["count"] >= 1
+    report = update["context_compression"]
+    assert report["compression_skipped_reason"] == "empty_summary"
+    assert "summary_retry_next_turn" not in report or report["summary_retry_next_turn"] is False
+    assert report.get("estimated_tokens_after") is not None
+
+
+def test_resolve_summary_output_max_tokens_prefers_explicit_config(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", "1536")
+    monkeypatch.setattr(context_compression, "get_context_window", lambda _m: 256000)
+    assert context_compression._resolve_summary_output_max_tokens("any") == 1536
+
+
+def test_resolve_summary_output_max_tokens_dynamic_by_window(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", raising=False)
+    # 大窗口：5% = 12800 → 截到上限 12000
+    monkeypatch.setattr(context_compression, "get_context_window", lambda _m: 256000)
+    assert context_compression._resolve_summary_output_max_tokens("any") == 12000
+    # 小窗口：5% 不足下限 → 抬到 2000
+    monkeypatch.setattr(context_compression, "get_context_window", lambda _m: 8000)
+    assert context_compression._resolve_summary_output_max_tokens("any") == 2000
 
 
 # 说明：多轮压缩迭代体（compression_passes>1）与 "no_completed_message_groups"

@@ -14,7 +14,7 @@
 ## 必读资料
 
 - 执行质量检查前，读取：`/mnt/skills/data-analyzing/references/governance/quality-rules.md`（检查项清单、严重度与修复指引，与平台导入预览的机器检查同源）。
-- 产出/修改 YAML 前，读取：`/mnt/skills/data-analyzing/references/governance/yaml-authoring.md`（可回导的 YAML 格式要求）与 `/mnt/skills/data-analyzing/references/governance/model-template.md`（标准骨架与报告输出模板，直接照抄填空）。
+- 产出/修改 YAML 前，读取：`/mnt/skills/data-analyzing/references/governance/model-template.md`（标准骨架直接照抄填空，附可回导规则备注与自检清单）。
 
 ## 标准流程
 
@@ -39,7 +39,7 @@
 
 ### 4. 产出新 YAML
 
-1. **拷贝后局部修改，禁止整份重写**：先用 `file_copy` 把定位到的原模型 YAML（`/mnt/user-data/workspace/semantic/` 下的文件）拷贝到当前会话 `outputs/` 目录，之后只对这份拷贝件做 `file_edit` 局部修改。禁止不读原文、凭记忆重写整份 YAML；未调整的部分必须与原文件逐字一致（最小 diff）。新增指标/维度/关系一律追加到对应数组**末尾**，既有元素顺序与 mapping 键位置保持原样，让导入 diff 只呈现真实改动。按 `references/governance/yaml-authoring.md` 补齐可回导所需的字段与 CHAT_DATA 扩展。
+1. **拷贝后局部修改，禁止整份重写**：先用 `file_copy` 把定位到的原模型 YAML（`/mnt/user-data/workspace/semantic/` 下的文件）拷贝到当前会话 `outputs/` 目录，之后只对这份拷贝件做 `file_edit` 局部修改。禁止不读原文、凭记忆重写整份 YAML；未调整的部分必须与原文件逐字一致（最小 diff）。新增指标/维度/关系一律追加到对应数组**末尾**，既有元素顺序与 mapping 键位置保持原样，让导入 diff 只呈现真实改动。按 `references/governance/model-template.md` 的规则备注补齐可回导所需的字段与 CHAT_DATA 扩展。
 2. **交付前必须自检**：先用 `file_diff` 对比原模型 YAML 与产出拷贝件（`file_a=原文件路径, file_b=产出文件路径`），确认 added/removed 行数与实际改动一致、没有误删或误改既有内容；再用 `data_analyzing_tool(action="check_yaml", action_payload={"file_path": <产出文件的工作区路径>})` 执行与导入接口相同的四道检查（schema、结构映射、物理字段、质量报告）。返回 `all_importable=false` 或存在 error 级 finding 时，按 errors/findings 修正后重新 file_diff 与 check_yaml，直到两项都通过；禁止跳过自检直接交付。docx/xlsx/pptx 等 Office 文件的改动自查同样用 `file_diff`，但 view 的 text/annotated 输出只走 stdout、`-o` 无效，必须先用 `officecli_run` 生成转存文本再对比：对修改前后两个 Office 文件分别执行 `officecli_run(command_args=["view", <文件路径>, "text"], save_stdout_to="/mnt/user-data/workspace/diff_<文件名>.txt")`（需核对加粗、样式等纯格式改动时把 `text` 换成 `annotated`），然后用 `file_diff` 对比两个转存文本；转存文件属于临时产物，交付说明里提醒用户可删除。
 3. 自检通过后，产出文件即第 1 步的拷贝件，已在当前会话 `outputs/` 目录；告知用户文件路径，由用户下载后走「语义配置 → 导入」回流。
 4. 在最终回复中简述自检结果（可导入与否、遗留 error/warning），说明导入时平台还会做同样的机器校验，最终以导入校验为准。

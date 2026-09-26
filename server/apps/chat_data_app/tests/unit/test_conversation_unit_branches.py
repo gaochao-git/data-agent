@@ -308,7 +308,11 @@ async def test_conversation_generate_title_from_event_history(conversation_db, m
 
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
     await conversation_module.update_title("conv_graph", "未命名会话", "u1")
-    assert await conversation_module.generate_title("conv_graph", "u1") == "请分析订单销售趋势"
+    # 命名失败不写降级标题：异常上抛且标题保持占位符，下一轮可重试
+    with pytest.raises(RuntimeError, match="llm down"):
+        await conversation_module.generate_title("conv_graph", "u1")
+    thread = await conversation_module.conversation_dao.get_thread("conv_graph", "u1")
+    assert thread.thread_title == "未命名会话"
 
 
 @pytest.mark.asyncio
@@ -421,7 +425,9 @@ async def test_conversation_title_failure_alarm_carries_model_id(conversation_db
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
     monkeypatch.setattr(conversation_module, "emit_llm_connection_alarm_if_needed", fake_alarm)
 
-    assert await conversation_module.generate_title("conv_title_alarm", "u1") == "请分析订单销售趋势"
+    # 告警之后异常上抛，不落降级标题
+    with pytest.raises(RuntimeError, match="Connection error."):
+        await conversation_module.generate_title("conv_title_alarm", "u1")
     assert captured["ext1"] == {
         "purpose": "conversation_title",
         "conversation_id": "conv_title_alarm",

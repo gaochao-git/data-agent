@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 
@@ -126,3 +126,118 @@ def test_cached_tokens_from_openai_usage_falls_back_to_prompt_details():
     usage = {"prompt_tokens_details": {"cached_tokens": 7}}
     assert _cached_tokens_from_openai_usage(usage) == 7
     assert _cached_tokens_from_openai_usage("bad") is None
+
+
+# ---------------------------------------------------------------------------
+# 待办实时状态注入（TodoListMiddleware 的待办被 OmitFromInput，需每轮手动注入）
+# ---------------------------------------------------------------------------
+
+def test_format_todo_status_lists_items_and_unfinished_reminder():
+    status = cu._format_todo_status([
+        {"content": "确认指标口径", "status": "completed"},
+        {"content": "按月聚合 GMV", "status": "in_progress"},
+        {"content": "与看板对齐", "status": "pending"},
+    ])
+    assert status is not None
+    assert '<todo_status source="state" fresh="true">' in status
+    assert "1. [已完成] 确认指标口径" in status
+    assert "2. [进行中] 按月聚合 GMV" in status
+    assert "3. [待办] 与看板对齐" in status
+    assert "未完成任务 2 个" in status
+    assert "write_todos" in status
+
+
+def test_format_todo_status_all_completed_uses_reversed_reminder():
+    status = cu._format_todo_status([{"content": "唯一任务", "status": "completed"}])
+    assert status is not None
+    assert "[已完成] 唯一任务" in status
+    assert "全部任务已完成" in status
+
+
+def test_format_todo_status_empty_or_invalid_returns_none():
+    assert cu._format_todo_status([]) is None
+    assert cu._format_todo_status([{"status": "pending"}, {"content": "   ", "status": "pending"}]) is None
+
+
+def test_request_todos_validates_state_and_items():
+    assert cu._request_todos(SimpleNamespace()) == []
+    assert cu._request_todos(SimpleNamespace(state=None)) == []
+    assert cu._request_todos(SimpleNamespace(state={"todos": "oops"})) == []
+    todos = cu._request_todos(SimpleNamespace(state={"todos": [
+        {"content": "有效任务", "status": "pending"},
+        "not-a-dict",
+        {"status": "pending"},
+        {"content": "", "status": "pending"},
+    ]}))
+    assert todos == [{"content": "有效任务", "status": "pending"}]
+
+
+def test_build_agent_context_usage_appends_todo_status_and_counts_it(monkeypatch):
+    from apps.chat_data_app.agent.context.context_budget import ContextBudget
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: ContextBudget(
+            context_window=100000,
+            max_output_tokens=20000,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=80000,
+            compression_trigger_tokens=56000,
+            compression_target_tokens=20000,
+        ),
+    )
+    kwargs = dict(
+        system_prompt="系统提示词",
+        messages=[HumanMessage(content="你好")],
+        tools=[],
+        model_id=None,
+        request_budget=cu.ContextRequestBudget("tiny"),
+    )
+    base_prompt, _messages, base_usage = cu._build_agent_context_usage(**kwargs)
+    todo_prompt, _messages, todo_usage = cu._build_agent_context_usage(
+        **kwargs,
+        todo_status="<todo_status source=\"state\" fresh=\"true\">\n1. [待办] 任务A\n</todo_status>",
+    )
+    assert todo_prompt.startswith(base_prompt)
+    assert todo_prompt.endswith("1. [待办] 任务A\n</todo_status>")
+    # 待办块参与本轮输入计量
+    assert todo_usage["input_tokens"] > base_usage["input_tokens"]
+
+
+def test_build_agent_context_usage_neutralizes_stale_todo_tool_results(monkeypatch):
+    """出站消息里历史 write_todos 快照被替换为占位文本，其余消息原样、tool_call 配对保留。"""
+    from langchain_core.messages import ToolMessage
+
+    from apps.chat_data_app.agent.context.context_budget import ContextBudget
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.context.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: ContextBudget(
+            context_window=100000,
+            max_output_tokens=20000,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=80000,
+            compression_trigger_tokens=56000,
+            compression_target_tokens=20000,
+        ),
+    )
+    ai = AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": []}, "id": "call-1"}])
+    stale = ToolMessage("Updated todo list to [...]", tool_call_id="call-1", name="write_todos")
+    human = HumanMessage(content="继续")
+    kwargs = dict(
+        system_prompt="系统提示词",
+        messages=[human, ai, stale],
+        tools=[],
+        model_id=None,
+        request_budget=cu.ContextRequestBudget("tiny"),
+    )
+    _prompt, outbound, _usage = cu._build_agent_context_usage(**kwargs)
+    assert outbound[0] is human and outbound[1] is ai
+    assert outbound[2] is not stale
+    assert outbound[2].content.startswith("[todo 列表已由实时 state 快照另行提供")
+    assert outbound[2].tool_call_id == "call-1"
+
+
+def test_format_todo_status_declares_precedence_over_stale_snapshots():
+    status = cu._format_todo_status([{"content": "任务A", "status": "pending"}])
+    assert status is not None
+    assert "fresh=\"true\"" in status
+    assert "以本块为准" in status

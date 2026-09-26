@@ -16,6 +16,7 @@ from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
     extract_metric_source_column,
+    merge_carried_column_dicts,
 )
 
 logger = get_logger(__name__)
@@ -42,6 +43,62 @@ def can_mutate_semantic_config(config: Dict[str, Any], user_id: str, admin_manag
     return is_public_semantic_config(config) if admin_manage else is_private_semantic_config_owner(config, user_id)
 
 
+def dedupe_semantic_config_ids(config_ids: Optional[List[str]]) -> List[str]:
+    """清洗并去重指标集 ID，保持传入顺序，空值与重复项丢弃。"""
+    result: List[str] = []
+    seen: Set[str] = set()
+    for config_id in config_ids or []:
+        normalized = str(config_id or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def empty_batch_toggle_result() -> Dict[str, Any]:
+    """批量切换启用状态的空结果，保证路由返回字段口径恒定。"""
+    return {"updated_ids": [], "skipped_ids": [], "not_found_ids": [], "updated_count": 0}
+
+
+def classify_batch_toggle_ids(
+    requested: List[str],
+    current_map: Dict[str, Dict[str, Any]],
+    enabled: bool,
+    user_id: str,
+    admin_manage: bool,
+) -> Dict[str, List[str]]:
+    """把请求 ID 按「不存在 / 无权限 / 已处于目标状态 / 需要变更」分类，全部保持请求顺序。
+
+    ``settled`` 指已处于目标状态的 ID：算成功但不写库。MySQL 的 UPDATE rowcount
+    只统计「值真的变了」的行，把它们一起发到库里会让整批全选时得到 rowcount=0，
+    前端成功数与 updated_ids 对不上，后端还会刷误导性的行数不一致告警。
+    ``updated`` = updatable + settled，按请求顺序合并，便于前端逐条对照。
+    """
+    updatable: List[str] = []
+    settled: List[str] = []
+    skipped: List[str] = []
+    not_found: List[str] = []
+    for config_id in requested:
+        config = current_map.get(config_id)
+        if not config:
+            not_found.append(config_id)
+        elif not can_mutate_semantic_config(config, user_id, admin_manage):
+            skipped.append(config_id)
+        elif bool(config.get("enabled", True)) == enabled:
+            settled.append(config_id)
+        else:
+            updatable.append(config_id)
+    excluded = set(skipped) | set(not_found)
+    return {
+        "updatable": updatable,
+        "settled": settled,
+        "skipped": skipped,
+        "not_found": not_found,
+        "updated": [config_id for config_id in requested if config_id not in excluded],
+    }
+
+
 def column_dict_has_enum_mapping(column_dict: Optional[Dict[str, Any]]) -> bool:
     enum_values = (column_dict or {}).get("enum_values") if isinstance(column_dict, dict) else []
     if not isinstance(enum_values, list):
@@ -53,13 +110,28 @@ def column_dict_has_enum_mapping(column_dict: Optional[Dict[str, Any]]) -> bool:
     )
 
 
-async def validate_semantic_logical_types(ds_manager: Any, datasource_id: str, dimensions: List[Dict]) -> Optional[str]:
+async def validate_semantic_logical_types(
+    ds_manager: Any,
+    datasource_id: str,
+    dimensions: List[Dict],
+    *,
+    column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+) -> Optional[str]:
+    """校验枚举维度都已在字段字典维护枚举值。
+
+    ``column_dicts`` 传入数据源级字典映射（键为 (table, column)）时本地匹配，
+    不再逐维度回源——批量校验（Ossie 导入预览/导入）下逐维度查询会放大成
+    N×(整份数据源重载+单字典查询) 的数据库压力；不传时保持逐条查询（单模型保存链路）。
+    """
     for dim in dimensions or []:
         if str((dim or {}).get("logical_type") or "").strip().lower() != "enum":
             continue
         table_name = str((dim or {}).get("table") or "").strip()
         column_name = str((dim or {}).get("column") or "").strip()
-        column_dict = await ds_manager.get_column_dict_async(datasource_id, table_name, column_name)
+        if column_dicts is not None:
+            column_dict = column_dicts.get((table_name, column_name))
+        else:
+            column_dict = await ds_manager.get_column_dict_async(datasource_id, table_name, column_name)
         if not column_dict_has_enum_mapping(column_dict):
             return f"维度 {dim.get('name', '')} 选择了枚举逻辑类型，请先维护字段字典枚举值: {table_name}.{column_name}"
     return None
@@ -74,6 +146,7 @@ async def validate_semantic_config_for_save(
     relationships: Optional[List[Dict]] = None,
     *,
     table_columns_map: Optional[Dict[str, Set[str]]] = None,
+    column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
 ) -> Optional[str]:
     validation_error = validate_semantic_fields(
         datasource,
@@ -84,7 +157,7 @@ async def validate_semantic_config_for_save(
     )
     if validation_error:
         return validation_error
-    return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions)
+    return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions, column_dicts=column_dicts)
 
 
 class SemanticConfigService:
@@ -306,16 +379,31 @@ class SemanticConfigService:
         result["metrics"] = metrics
         return result
 
-    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_runtime_bundle_async(
+        self,
+        datasource_id: str,
+        user_id: str = "",
+    ) -> tuple[List[Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
+        """一次加载「全量可见配置 + 字段字典」，供批量链路复用。
+
+        批量物化（预物化/按需物化）既要配置也要字典；分开取会让字典查库次数
+        随调用次数翻倍。字典读取失败降级为空 dict（与 get_runtime_config_async
+        的容错口径一致：字典只做补充标注，缺了不影响模型可用）。
+
+        返回的 configs **已完成字段字典合并**，与逐条 get_runtime_config_async
+        的结果同构：批量链路直接复用它们物化，产出的 YAML 才不会丢掉枚举取值、
+        logical_type 与补充说明（这些由 _merge_column_dict 填充，导出标注用的
+        annotate_export_column_dicts 只挂 _column_dict 原文，不能替代）。
+        """
         configs = await self.get_configs_async(datasource_id, user_id)
         if not configs:
-            return []
-        try:
-            column_dicts = await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
-        except Exception as exc:
-            logger.warning("读取字段数据字典失败，指标集选择降级使用原始配置: datasource_id=%s error=%s", datasource_id, exc)
-            column_dicts = {}
-        return [self._merge_column_dict(config, column_dicts) for config in configs]
+            return [], {}
+        column_dicts = await self.get_column_dicts_async(datasource_id)
+        return [self._merge_column_dict(config, column_dicts) for config in configs], column_dicts
+
+    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+        configs, _ = await self.get_runtime_bundle_async(datasource_id, user_id)
+        return configs
 
     async def get_column_dicts_async(self, datasource_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
         """读取数据源字段字典；失败降级为空 dict（与 get_runtime_config_async 的容错口径一致）。"""
@@ -512,7 +600,7 @@ class SemanticConfigService:
         create_by: str = "",
         create_by_name: str = "",
     ) -> Dict[str, Any]:
-        """为尚未建模的物理表创建禁用的公共基础单表模型。"""
+        """为尚未建模的物理表创建公共基础单表模型（默认启用）。"""
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         if not datasource:
             raise ValueError(f"数据源不存在: {datasource_id}")
@@ -603,7 +691,7 @@ class SemanticConfigService:
     @staticmethod
     def _basic_single_table_description(table_name: str) -> str:
         prefix = "基于物理表 "
-        suffix = " 自动生成，待人工复核后启用"
+        suffix = " 自动生成，建议复核"
         available = max(128 - len(prefix) - len(suffix), 0)
         return f"{prefix}{table_name[:available]}{suffix}"[:128]
 
@@ -661,7 +749,9 @@ class SemanticConfigService:
             "name": name,
             "description": cls._basic_single_table_description(table_name),
             "business_notes": "",
-            "enabled": False,
+            # 产品决策：基础模型默认启用。生成物只是字段骨架（metrics/relationships 为空），
+            # 业务口径仍需人工补充，但不再阻塞会话引用。
+            "enabled": True,
             "metrics": [],
             "dimensions": dimensions,
             "relationships": [],
@@ -735,6 +825,51 @@ class SemanticConfigService:
             return False
         await self.dao.soft_delete_async(config_id, update_by=update_by or config.get("update_by") or "", update_by_name=update_by_name or config.get("update_by_name") or "")
         return True
+
+    async def batch_toggle_enabled_async(
+        self,
+        datasource_id: str,
+        config_ids: List[str],
+        enabled: bool,
+        user_id: str = "",
+        username: str = "",
+        admin_manage: bool = False,
+    ) -> Dict[str, Any]:
+        """批量切换指标集启用状态。
+
+        越权与不存在的 ID 分别计入 skipped_ids / not_found_ids 并跳过，不中断整批；
+        可维护的 ID 走一次批量 UPDATE，避免逐条往返。
+
+        已处于目标状态的 ID 视为幂等成功（计入 updated_ids 与 updated_count 但不写库）：
+        MySQL 的 UPDATE rowcount 只统计「值真的变了」的行，若把它们也发到库里，
+        整批全选同态模型时会得到 rowcount=0 —— 前端据此判定的成功数会和
+        updated_ids 对不上，后端也会刷一条误导性的行数不一致告警。
+        """
+        datasource = await self.datasource_manager.get_datasource_async(datasource_id)
+        group_id = str((datasource or {}).get("group_id") or "").strip()
+        if not datasource or not group_id:
+            return empty_batch_toggle_result()
+        requested = dedupe_semantic_config_ids(config_ids)
+        if not requested:
+            return empty_batch_toggle_result()
+        current_map = {
+            str(config.get("id") or ""): config
+            for config in await self.dao.get_by_group_id_async(group_id, user_id)
+        }
+        classified = classify_batch_toggle_ids(requested, current_map, enabled, user_id, admin_manage)
+        updatable = classified["updatable"]
+        updated_count = len(classified["settled"])
+        if updatable:
+            changed = await self.dao.batch_update_enabled_async(group_id, updatable, enabled, user_id, username)
+            if changed != len(updatable):
+                logger.warning(f"批量切换启用状态实际行数与预期不一致: 预期={len(updatable)}, 实际={changed}")
+            updated_count += changed
+        return {
+            "updated_ids": classified["updated"],
+            "skipped_ids": classified["skipped"],
+            "not_found_ids": classified["not_found"],
+            "updated_count": updated_count,
+        }
 
 
 _semantic_config_service: Optional[SemanticConfigService] = None
@@ -863,8 +998,18 @@ async def _apply_physical_validation(
 ) -> None:
     """逐个可导入模型做物理校验（复用 validate_semantic_config_for_save），并落同名标记。
 
-    错误写入 item.errors 并使 importable=False。
+    错误写入 item.errors 并使 importable=False。枚举维度的字典校验用整批一次
+    拉取的字段映射在本地匹配，并按「仅填空」并入 YAML 携带的字典条目
+    （merge_carried_column_dicts）——新枚举维度随 YAML 带枚举值时首次导入即可通过；
+    逐维度回源会让每个枚举维度都重载整份数据源
+    （get_column_dict_async 每次都 get_datasource_async），模型多时是校验慢的主因。
+    读取失败降级为 None（回落逐维度查询），与字典只做补充标注的容错口径一致。
     """
+    try:
+        column_dicts = await ds_manager.get_datasource_column_dicts_async(datasource_id)
+    except Exception as exc:
+        logger.warning("批量读取字段数据字典失败，枚举校验降级逐维度查询: datasource_id=%s error=%s", datasource_id, exc)
+        column_dicts = None
     for item in imports:
         if not item.importable:
             continue
@@ -876,6 +1021,9 @@ async def _apply_physical_validation(
             item.metrics,
             item.dimensions,
             item.relationships,
+            # YAML 携带的字典条目按「仅填空」并入：新枚举维度首次导入即可自足通过，
+            # 与落库时仅填空回填的最终状态一致（既有字典值不覆盖）
+            column_dicts=merge_carried_column_dicts(column_dicts, item.column_dicts),
         )
         if validation_error:
             item.errors.append(validation_error)

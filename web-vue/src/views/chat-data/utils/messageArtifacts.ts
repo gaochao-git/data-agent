@@ -160,10 +160,10 @@ export const parseChartSpecValue = (value: unknown): Record<string, unknown> | n
   return spec
 }
 
-/** 把 workspace/outputs/uploads 相对路径补全成模型可见的 /mnt/user-data 形式（仅展示用）。 */
+/** 把 workspace/outputs/uploads/memory 相对路径补全成模型可见的 /mnt/user-data 形式（仅展示用）。 */
 export const replaceVisiblePathsForDisplay = (text: string): string => {
   return String(text || '')
-    .replace(/(?<!\/mnt\/user-data)\/(workspace|outputs|uploads)(?=\/|["'\s,}\]]|$)/g, '/mnt/user-data/$1')
+    .replace(/(?<!\/mnt\/user-data)\/(workspace|outputs|uploads|memory)(?=\/|["'\s,}\]]|$)/g, '/mnt/user-data/$1')
 }
 
 export const isDashboardSpecArtifactTool = (tool: ToolCallInfo): boolean => {

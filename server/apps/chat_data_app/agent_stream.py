@@ -38,16 +38,26 @@ from .agent import (
     get_checkpointer,
 )
 from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
-from .agent.run.conversation_runtime import stream_agent_turn
+from .agent.run.conversation_runtime import (
+    TurnLifecycleHooks,
+    TurnPersistenceHooks,
+    stream_agent_turn,
+)
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
-from .agent.run.completion_options import parse_completion_run_options
+from .agent.run.chat_data_stream_request import ChatDataStreamRequest
+from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.mcp.manager import get_mcp_tool_display_name
-from .services.agent_run.conversation_context import build_conversation_prompt_context
+from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
+from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.memory.conversation_memory_service import (
+    after_agent_turn_with_memory,
+    render_session_memory_block,
+)
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
@@ -146,32 +156,22 @@ def _format_sse(event: str, data: dict | str) -> str:
 
 
 
-def _semantic_selection_mention_suffix(semantic_selection_events: List[Dict[str, Any]]) -> str:
-    """用户在输入框 @ 引用语义模型时，给 Human 消息追加模型可见的指定短句。
+def _file_selection_mention_suffix(file_selections: List[str]) -> str:
+    """用户在输入框 @ 引用工作区文件时，给 Human 消息追加模型可见的引用短句。
 
-    前端已改为 @ 引用（chip 随消息传 semantic_config_selection 列表），系统提示词
-    不再有「当前语义模型」段（见 prompts/chat_data.py 开关）；模型对本轮指定的
-    感知完全靠这行短句。未指定（智能选择）时不追加任何内容。
+    前端 @ 菜单数据源是会话工作区（uploads/outputs/workspace）文件树，chip 随
+    消息传 file_selections（相对路径列表）；引用的感知完全靠这行短句，模型从
+    对话即可看到本轮用户点名了哪些文件。未引用时不追加任何内容。
     """
-    labels: List[str] = []
-    for event in semantic_selection_events:
-        if not isinstance(event, dict) or not event.get("user_selected"):
-            continue
-        name = str(event.get("semantic_config_name") or "").strip()
-        config_id = str(event.get("semantic_config_id") or "").strip()
-        label = name or config_id
-        if not label:
-            continue
-        id_part = f"（semantic_config_id: {config_id}）" if config_id and name else ""
-        labels.append(f"{label}{id_part}")
-    if not labels:
+    if not file_selections:
         return ""
-    return f"\n\n[本轮指定语义模型：{'、'.join(labels)}]"
+    references = "、".join(f"{USER_DATA_VIRTUAL_ROOT}/{path}" for path in file_selections)
+    return f"\n\n[引用文件：{references}]"
 
 
 def _build_user_message(
     content: str | list[dict[str, Any]],
-    semantic_selection_events: List[Dict[str, Any]] | None = None,
+    file_selections: List[str] | None = None,
     *,
     message_id: str | None = None,
     **extra_kwargs: Any,
@@ -180,9 +180,9 @@ def _build_user_message(
 
     content 为纯字符串（正文 + 附件占位行）；图片附件经 additional_kwargs
     的 ``vision_attachments`` 路径标记由 middleware 在请求层装载。
-    用户 @ 引用语义模型时在正文末尾追加指定短句（多选逐一列出），模型从对话即可看到本轮指定。
+    用户 @ 引用工作区文件时在正文末尾追加引用短句（多选逐一列出），模型从对话即可看到本轮引用。
     """
-    mention_suffix = _semantic_selection_mention_suffix(semantic_selection_events or [])
+    mention_suffix = _file_selection_mention_suffix(file_selections or [])
     if mention_suffix and isinstance(content, str):
         content = f"{content}{mention_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
@@ -190,8 +190,8 @@ def _build_user_message(
         "timestamp": _get_timestamp(),
         "reasoning_turn_id": reasoning_turn_id,
     }
-    if semantic_selection_events:
-        additional_kwargs["semantic_config_selection"] = semantic_selection_events
+    if file_selections:
+        additional_kwargs["file_selections"] = list(file_selections)
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -451,52 +451,30 @@ def _format_tool_lifecycle_event(
     return _format_sse(event_type, data)
 
 
-def _normalize_str_list(value: Any) -> List[str]:
-    """字符串列表规整：非列表回退为空，成员去空白后丢弃空串。"""
-    if not isinstance(value, list):
-        return []
-    return [str(m).strip() for m in value if str(m).strip()]
+def _validate_workspace_file_selections(file_selections: List[str], workspace_root: str) -> List[str]:
+    """校验 @ 引用文件：必须落在当前会话工作区白名单目录内且真实存在。
 
-
-def _normalize_one_selection_event(item: dict[str, Any]) -> Dict[str, Any]:
-    """单条语义模型引用留痕的字段规范化，无效字段回退为空。"""
-    semantic_config_id = str(item.get("semantic_config_id") or "").strip()
-    return {
-        "semantic_config_id": semantic_config_id,
-        "semantic_config_name": str(item.get("semantic_config_name") or semantic_config_id).strip(),
-        "confidence": str(item.get("confidence") or "").strip(),
-        "reason": str(item.get("reason") or "").strip(),
-        "matched_metrics": _normalize_str_list(item.get("matched_metrics")),
-        "matched_dimensions": _normalize_str_list(item.get("matched_dimensions")),
-        "auto_selected": bool(item.get("auto_selected")),
-        "user_selected": bool(item.get("user_selected")),
-    }
-
-
-def _normalize_semantic_selection_events(value: Any) -> List[Dict[str, Any]]:
-    """标准化前端传入的语义模型引用留痕（@ 引用多选：dict 或 dict 列表均兼容）。
-
-    返回按 semantic_config_id 去重后的事件列表，无效条目直接丢弃。
+    白名单校验复用 WORKSPACE_PATH_POLICY（拒越界/裸别名），系统结果区
+    （outputs/query_result、outputs/.tool-offload）不可引用；不存在的文件
+    （@ 后被删除）丢弃。无效条目记日志后跳过，不阻断本轮。
     """
-    raw_items: list[Any]
-    if isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, dict):
-        raw_items = [value]
-    else:
+    if not file_selections:
         return []
-    events: List[Dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for item in raw_items:
-        if not isinstance(item, dict):
+    valid: List[str] = []
+    for relative_path in file_selections:
+        try:
+            logical = WORKSPACE_PATH_POLICY.parse(f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}")
+            target = resolve_workspace_path(workspace_root, f"{USER_DATA_VIRTUAL_ROOT}/{logical.normalized}")
+            if is_system_result_workspace_path(workspace_root, target):
+                raise ValueError("系统结果区文件不可引用")
+            if not target.is_file():
+                raise FileNotFoundError(relative_path)
+        except (ValueError, OSError) as err:
+            logger.warning("忽略无效的引用文件 %r: %s", relative_path, err)
             continue
-        event = _normalize_one_selection_event(item)
-        semantic_config_id = event["semantic_config_id"]
-        if not semantic_config_id or semantic_config_id in seen_ids:
-            continue
-        seen_ids.add(semantic_config_id)
-        events.append(event)
-    return events
+        if logical.normalized not in valid:
+            valid.append(logical.normalized)
+    return valid
 
 
 def _coerce_tool_args(value: Any) -> dict[str, Any] | None:
@@ -1166,32 +1144,35 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
 
 
 async def _generate_chat_data_stream(
-    thread_id: str,
-    user_query: str,
-    datasource_id: str | None = None,
-    user_id: str | None = None,
-    username: str | None = None,
-    member_datasource_ids: list[str] | None = None,
-    semantic_config_id: str | None = None,
-    request: Request | None = None,
-    model_id: str | None = None,
-    semantic_config_selection: Any | None = None,
-    enable_thinking: bool | None = None,
-    thinking_effort: str | None = None,
-    skill_names: list[str] | None = None,
-    options: Optional[Dict[str, Any]] = None,
-    file_ids: list[str] | None = None,
-    run_id: str | None = None,
-    adopted_messages: list[HumanMessage] | None = None,
-    resume_answer: dict[str, Any] | None = None,
-    resume_started: bool = False,
-    resume_turn_id: str | None = None,
-    turn_id: str | None = None,
-    recovering: bool = False,
-    owner_token: str | None = None,
-    stream_event_id_provider: Callable[[], str | None] | None = None,
+    req: ChatDataStreamRequest,
 ):
     """流式执行单一 ChatData Agent。"""
+    # 入参对象在此拆成局部变量：函数体与拆分前保持一致，避免大范围表达式改写造成的
+    # 语义漂移；签名的收窄已经让「一次执行的完整入参」成为可复用的一等公民。
+    thread_id = req.thread_id
+    user_query = req.user_query
+    datasource_id = req.datasource_id
+    user_id = req.user_id
+    username = req.username
+    member_datasource_ids = req.member_datasource_ids
+    semantic_config_id = req.semantic_config_id
+    request = req.request
+    model_id = req.model_id
+    file_selections = req.file_selections
+    enable_thinking = req.enable_thinking
+    thinking_effort = req.thinking_effort
+    skill_names = req.skill_names
+    options = req.options
+    file_ids = req.file_ids
+    run_id = req.run_id
+    adopted_messages = req.adopted_messages
+    resume_answer = req.resume_answer
+    resume_started = req.resume_started
+    resume_turn_id = req.resume_turn_id
+    turn_id = req.turn_id
+    recovering = req.recovering
+    owner_token = req.owner_token
+    stream_event_id_provider = req.stream_event_id_provider
     started_at = time.perf_counter()
     last_phase_at = started_at
 
@@ -1226,30 +1207,32 @@ async def _generate_chat_data_stream(
     # done 发布统一由 AgentRunRuntime（唯一生命周期 owner）完成。
     try:
         async for event in _run_chat_data_agent_stream(
-            thread_id=thread_id,
-            user_query=user_query,
-            datasource_id=datasource_id,
-            user_id=user_id,
-            username=username,
-            member_datasource_ids=member_datasource_ids,
-            semantic_config_id=semantic_config_id,
-            request=request,
-            model_id=model_id,
-            semantic_config_selection=semantic_config_selection,
-            enable_thinking=enable_thinking,
-            thinking_effort=thinking_effort,
-            skill_names=normalized_skill_names,
-            options=options,
-            file_ids=file_ids,
-            run_id=run_id,
-            adopted_messages=adopted_messages,
-            resume_answer=resume_answer,
-            resume_started=resume_started,
-            resume_turn_id=resume_turn_id,
-            turn_id=turn_id,
-            recovering=recovering,
-            owner_token=owner_token,
-            stream_event_id_provider=stream_event_id_provider,
+            req=ChatDataStreamRequest(
+                thread_id=thread_id,
+                user_query=user_query,
+                datasource_id=datasource_id,
+                user_id=user_id,
+                username=username,
+                member_datasource_ids=member_datasource_ids,
+                semantic_config_id=semantic_config_id,
+                request=request,
+                model_id=model_id,
+                file_selections=file_selections,
+                enable_thinking=enable_thinking,
+                thinking_effort=thinking_effort,
+                skill_names=normalized_skill_names,
+                options=options,
+                file_ids=file_ids,
+                run_id=run_id,
+                adopted_messages=adopted_messages,
+                resume_answer=resume_answer,
+                resume_started=resume_started,
+                resume_turn_id=resume_turn_id,
+                turn_id=turn_id,
+                recovering=recovering,
+                owner_token=owner_token,
+                stream_event_id_provider=stream_event_id_provider,
+            ),
             log_phase=log_phase,
         ):
             yield event
@@ -1354,10 +1337,55 @@ def _create_agent_stream_adapter(
     return adapter
 
 
-async def _admit_agent_inbox_messages(
+async def _resolve_inbox_message_references(
+    message: HumanMessage,
+    *,
+    workspace_root: str,
+    user_id: str | None,
+    thread_id: str,
+) -> HumanMessage:
+    """把排队消息 additional_kwargs 里的引用/附件解析为与普通发送同构的形态。
+
+    「存引用、晚解析」的消费端：@ 引用在校验工作区白名单后追加引用短句，
+    附件 file_id 解析为附件占位行与 vision 标记——与首条用户消息
+    （_build_user_message + 附件文本）同一条代码语义。必须在 workspace
+    就绪之后、进入 initial_state 之前调用（图输入与持久化共享解析结果）；
+    失效条目记日志跳过，不阻断消息。
+    """
+    kwargs = getattr(message, "additional_kwargs", None) or {}
+    selections = kwargs.get("file_selections") or []
+    file_ids = kwargs.get("file_ids") or []
+    if not selections and not file_ids:
+        return message
+    valid_selections = (
+        _validate_workspace_file_selections(selections, workspace_root)
+        if selections else []
+    )
+    file_attachments = (
+        await _resolve_file_attachments(
+            file_ids, user_id=user_id, thread_id=thread_id,
+        )
+        if file_ids else []
+    )
+    new_kwargs = dict(kwargs)
+    if selections:
+        new_kwargs["file_selections"] = valid_selections
+    vision_attachments = select_vision_attachments(file_attachments)
+    if vision_attachments:
+        new_kwargs["vision_attachments"] = vision_attachments
+    new_content = (
+        f"{message.content}"
+        f"{_file_selection_mention_suffix(valid_selections)}"
+        f"{build_file_attachment_text(file_attachments)}"
+    )
+    return message.model_copy(update={"content": new_content, "additional_kwargs": new_kwargs})
+
+
+async def _persist_admitted_inbox_messages(
     callbacks: _AgentRunStreamCallbacks,
     messages: list[HumanMessage],
 ) -> None:
+    """把已解析的排队消息持久化为 admitted 用户历史（上屏与回放的依据）。"""
     for message in messages:
         await conversation_event_service.persist_user_message(
             conversation_id=callbacks.thread_id,
@@ -1365,6 +1393,25 @@ async def _admit_agent_inbox_messages(
             operator_name=callbacks.username or callbacks.user_id or "system",
             message=message,
         )
+
+
+async def _admit_agent_inbox_messages(
+    callbacks: _AgentRunStreamCallbacks,
+    messages: list[HumanMessage],
+) -> None:
+    """steering 中间件认领路径：解析随行引用/附件后持久化。
+
+    就地替换列表元素：中间件随后把同一列表注入图 state，替换后图输入
+    拿到的即是解析后的消息（与持久化内容一致）。
+    """
+    for index, message in enumerate(messages):
+        messages[index] = await _resolve_inbox_message_references(
+            message,
+            workspace_root=callbacks.workspace_root,
+            user_id=callbacks.user_id,
+            thread_id=callbacks.thread_id,
+        )
+    await _persist_admitted_inbox_messages(callbacks, messages)
 
 
 async def _log_agent_stream_done(callbacks: _AgentRunStreamCallbacks) -> None:
@@ -1409,53 +1456,98 @@ async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
 
 
 async def _prepare_agent_prompt_bundle(
-    prompt_context: dict[str, Any],
     semantic_materialize_note: str,
     user_id: str | None,
     thread_id: str,
     workspace_runtime: ConversationWorkspaceRuntime,
 ) -> tuple[Any, str]:
-    """构建数据上下文与会话技能提示词清单。"""
-    data_context = await build_conversation_prompt_context(prompt_context)
-    if semantic_materialize_note and isinstance(data_context, dict):
-        data_context["semantic_materialize_note"] = semantic_materialize_note
+    """构建数据上下文与会话技能提示词清单。
+
+    静态注入下线后，数据上下文区唯一有效字段是物化说明；恒传 dict 以兼容
+    build_unified_system_prompt 的既有口径（无说明时为空 dict → 空文本）。
+    """
+    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
     available_skills_xml = await _load_runtime_skills_xml(
         user_id or "system", thread_id, workspace_runtime,
     )
     return data_context, available_skills_xml
 
 
+@dataclass(frozen=True)
+class TurnUserInput:
+    """本轮用户侧输入：消息素材与上一轮遗留的排队消息。"""
+
+    user_query: str
+    message_content: str
+    file_selections: List[str]
+    vision_attachments: list[dict[str, Any]]
+    skill_names: list[str]
+    adopted_messages: list[HumanMessage] | None = None
+
+
+@dataclass(frozen=True)
+class TurnResumeContext:
+    """checkpoint 恢复相关的上下文（是否恢复、恢复答案、所属 turn/run 与租约 token）。"""
+
+    recovering: bool
+    resume_answer: dict[str, Any] | None
+    resume_started: bool
+    turn_id: str | None
+    run_id: str | None
+    owner_token: str | None
+
+
+@dataclass(frozen=True)
+class TurnRuntimeContext:
+    """本轮执行所需的不变上下文：操作人、会话、数据源、语义、运行时与提示素材。"""
+
+    user_id: str | None
+    username: str | None
+    thread_id: str
+    datasource_id: str | None
+    semantic_context: Any
+    runtime_options: Any
+    workspace_root: str
+    data_context: Any
+    available_skills_xml: str
+    memory_block: str
+
+
 async def _resolve_agent_turn_inputs(
     checkpointer: Any,
     config: dict[str, Any],
     *,
-    user_query: str,
-    message_content: str,
-    semantic_selection_events: List[Dict[str, Any]],
-    vision_attachments: list[dict[str, Any]],
-    skill_names: list[str],
-    recovering: bool,
-    resume_answer: dict[str, Any] | None,
-    resume_started: bool,
-    turn_id: str | None,
-    run_id: str | None,
-    owner_token: str | None,
-    adopted_messages: list[HumanMessage] | None,
-    user_id: str | None,
-    username: str | None,
-    thread_id: str,
-    datasource_id: str | None,
-    semantic_context: Any,
-    runtime_options: Any,
-    workspace_root: str,
-    prompt_context: dict[str, Any],
-    data_context: Any,
-    available_skills_xml: str,
+    user_input: TurnUserInput,
+    resume: TurnResumeContext,
+    runtime: TurnRuntimeContext,
 ) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
     """解析 checkpoint 恢复状态，构建用户消息、initial_state 与系统提示词。
 
     `adopted_messages` 可能在恢复对齐时被重置为空列表，须回传给主流程继续使用。
     """
+    # 三个入参对象在此还原为局部变量：函数体与拆分前保持一致，避免表达式级改写。
+    user_query = user_input.user_query
+    message_content = user_input.message_content
+    file_selections = user_input.file_selections
+    vision_attachments = user_input.vision_attachments
+    skill_names = user_input.skill_names
+    adopted_messages = user_input.adopted_messages
+    recovering = resume.recovering
+    resume_answer = resume.resume_answer
+    resume_started = resume.resume_started
+    turn_id = resume.turn_id
+    run_id = resume.run_id
+    owner_token = resume.owner_token
+    user_id = runtime.user_id
+    username = runtime.username
+    thread_id = runtime.thread_id
+    datasource_id = runtime.datasource_id
+    semantic_context = runtime.semantic_context
+    runtime_options = runtime.runtime_options
+    workspace_root = runtime.workspace_root
+    data_context = runtime.data_context
+    available_skills_xml = runtime.available_skills_xml
+    memory_block = runtime.memory_block
     message_kwargs: dict[str, Any] = {}
     if skill_names:
         message_kwargs["skill_names"] = skill_names
@@ -1476,7 +1568,7 @@ async def _resolve_agent_turn_inputs(
     if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
         user_message = _build_user_message(
             message_content,
-            semantic_selection_events,
+            file_selections,
             message_id=turn_id,
             vision_attachments=vision_attachments,
             **message_kwargs,
@@ -1499,8 +1591,8 @@ async def _resolve_agent_turn_inputs(
         runtime_options,
         data_context=data_context,
         workspace_root=workspace_root,
-        datasource_group_context=prompt_context["datasource_group_context"],
         available_skills_xml=available_skills_xml,
+        memory_block=memory_block,
     )
     return user_message, initial_state, system_prompt, adopted_messages
 
@@ -1512,8 +1604,9 @@ async def _admit_adopted_messages(
     adopted_messages: list[HumanMessage] | None,
 ) -> None:
     """上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
-    先持久化并通知前端上屏，再随 initial_state 进入本轮对话。"""
-    await _admit_agent_inbox_messages(callbacks, adopted_messages or [])
+    先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
+    消息的随行引用/附件已在 workspace 就绪后统一解析（见主流程），此处只持久化。"""
+    await _persist_admitted_inbox_messages(callbacks, adopted_messages or [])
     if adopted_messages:
         adopted_ids = [str(message.id or "") for message in adopted_messages]
         steering_tracker.record(adopted_ids)
@@ -1524,41 +1617,38 @@ async def _admit_adopted_messages(
 
 async def _run_chat_data_agent_stream(
     *,
-    thread_id: str,
-    user_query: str,
-    datasource_id: str | None,
-    user_id: str | None,
-    username: str | None,
-    member_datasource_ids: list[str] | None,
-    semantic_config_id: str | None,
-    request: Request | None,
-    model_id: str | None,
-    semantic_config_selection: Any | None,
-    enable_thinking: bool | None,
-    thinking_effort: str | None,
-    skill_names: list[str],
-    options: Optional[Dict[str, Any]],
-    file_ids: list[str] | None,
-    run_id: str | None,
-    adopted_messages: list[HumanMessage] | None = None,
-    resume_answer: dict[str, Any] | None = None,
-    resume_started: bool = False,
-    resume_turn_id: str | None = None,
-    turn_id: str | None = None,
-    recovering: bool = False,
-    owner_token: str | None = None,
-    stream_event_id_provider: Callable[[], str | None] | None = None,
+    req: ChatDataStreamRequest,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
-    semantic_selection_events = _normalize_semantic_selection_events(semantic_config_selection)
-    # 单引用自动绑定：前端只发 @ 引用列表，恰好引用一个时由服务端推导单值
-    # semantic_config_id（驱动语义工作区物化）；多引用/未引用交给模型检索（智能选择）。
-    # 显式传入的 semantic_config_id（API/定时任务/评测）优先，不被推导覆盖。
-    if not semantic_config_id and len(semantic_selection_events) == 1:
-        semantic_config_id = semantic_selection_events[0]["semantic_config_id"]
+    # 与 _generate_chat_data_stream 同一口径：入参对象在此还原为局部变量，函数体保持不变。
+    thread_id = req.thread_id
+    user_query = req.user_query
+    datasource_id = req.datasource_id
+    user_id = req.user_id
+    username = req.username
+    member_datasource_ids = req.member_datasource_ids
+    semantic_config_id = req.semantic_config_id
+    request = req.request
+    model_id = req.model_id
+    file_selections = req.file_selections
+    enable_thinking = req.enable_thinking
+    thinking_effort = req.thinking_effort
+    skill_names = req.skill_names
+    options = req.options
+    file_ids = req.file_ids
+    run_id = req.run_id
+    adopted_messages = req.adopted_messages
+    resume_answer = req.resume_answer
+    resume_started = req.resume_started
+    resume_turn_id = req.resume_turn_id
+    turn_id = req.turn_id
+    recovering = req.recovering
+    owner_token = req.owner_token
+    stream_event_id_provider = req.stream_event_id_provider
+    selected_files = parse_file_selections(file_selections)
     try:
-        semantic_context, prompt_context = await _prepare_agent_semantic_context(
+        semantic_context = await _prepare_agent_semantic_context(
             thread_id=thread_id,
             user_query=user_query,
             datasource_id=datasource_id,
@@ -1585,9 +1675,28 @@ async def _run_chat_data_agent_stream(
         yield _format_sse("error", {"error": exc.message})
         raise AgentRunStreamFailedError from None
     log_phase("prepare_semantic_context")
+    # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
+    valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
+
+    # 排队消息（续跑接管）随行引用/附件的「晚解析」：workspace 就绪后、进入
+    # initial_state 前完成，图输入与后续持久化共享同一份解析结果。
+    if adopted_messages:
+        for adopted_index, adopted_message in enumerate(adopted_messages):
+            adopted_messages[adopted_index] = await _resolve_inbox_message_references(
+                adopted_message,
+                workspace_root=workspace_paths["root"],
+                user_id=user_id,
+                thread_id=thread_id,
+            )
 
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
-        prompt_context, semantic_materialize_note, user_id, thread_id, workspace_runtime,
+        semantic_materialize_note, user_id, thread_id, workspace_runtime,
+    )
+    # 会话记忆注入段（每轮构建时读取）：由系统自动维护，主图 system prompt
+    # 与子图只读段共用同一份渲染产物；空串时各消费方自动省略整段。
+    memory_block = render_session_memory_block(
+        workspace_paths["root"],
+        conversation_id=thread_id,
     )
 
     config = {
@@ -1628,31 +1737,37 @@ async def _run_chat_data_agent_stream(
 
             user_message, initial_state, system_prompt, adopted_messages = (
                 await _resolve_agent_turn_inputs(
-                checkpointer,
-                config,
-                user_query=user_query,
-                message_content=message_content,
-                semantic_selection_events=semantic_selection_events,
-                vision_attachments=vision_attachments,
-                skill_names=skill_names,
-                recovering=recovering,
-                resume_answer=resume_answer,
-                resume_started=resume_started,
-                turn_id=turn_id,
-                run_id=run_id,
-                owner_token=owner_token,
-                adopted_messages=adopted_messages,
-                user_id=user_id,
-                username=username,
-                thread_id=thread_id,
-                datasource_id=datasource_id,
-                semantic_context=semantic_context,
-                runtime_options=runtime_options,
-                workspace_root=workspace_paths["root"],
-                prompt_context=prompt_context,
-                data_context=data_context,
-                available_skills_xml=available_skills_xml,
-            )
+                    checkpointer,
+                    config,
+                    user_input=TurnUserInput(
+                        user_query=user_query,
+                        message_content=message_content,
+                        file_selections=valid_file_selections,
+                        vision_attachments=vision_attachments,
+                        skill_names=skill_names,
+                        adopted_messages=adopted_messages,
+                    ),
+                    resume=TurnResumeContext(
+                        recovering=recovering,
+                        resume_answer=resume_answer,
+                        resume_started=resume_started,
+                        turn_id=turn_id,
+                        run_id=run_id,
+                        owner_token=owner_token,
+                    ),
+                    runtime=TurnRuntimeContext(
+                        user_id=user_id,
+                        username=username,
+                        thread_id=thread_id,
+                        datasource_id=datasource_id,
+                        semantic_context=semantic_context,
+                        runtime_options=runtime_options,
+                        workspace_root=workspace_paths["root"],
+                        data_context=data_context,
+                        available_skills_xml=available_skills_xml,
+                        memory_block=memory_block,
+                    ),
+                )
             )
             log_phase("build_system_prompt")
 
@@ -1669,6 +1784,7 @@ async def _run_chat_data_agent_stream(
                 stream_event_id_provider=stream_event_id_provider,
                 log_phase=log_phase,
                 steering_tracker=steering_tracker,
+                workspace_root=workspace_paths["root"],
                 adopted_messages=adopted_messages,
                 user_message=user_message,
                 recovering=recovering,
@@ -1683,6 +1799,7 @@ async def _run_chat_data_agent_stream(
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
+                conversation_id=thread_id,
                 identity_context=IdentityContext(
                     user_id=user_id,
                     operator_name=username,
@@ -1690,7 +1807,6 @@ async def _run_chat_data_agent_stream(
                 datasource_context=DatasourceContext(
                     datasource_id=datasource_id,
                     source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
-                    datasource_group_context=prompt_context["datasource_group_context"],
                 ),
                 model_invocation=ModelInvocationConfig(
                     system_prompt=system_prompt,
@@ -1698,7 +1814,7 @@ async def _run_chat_data_agent_stream(
                     enable_thinking=enable_thinking,
                     thinking_effort=thinking_effort,
                     available_skills_xml=available_skills_xml,
-                    datasource_group_context=prompt_context["datasource_group_context"],
+                    memory_block=memory_block,
                 ),
                 workspace_runtime=workspace_runtime,
                 run_controls=AgentRunControls(
@@ -1722,14 +1838,29 @@ async def _run_chat_data_agent_stream(
             async for sse_event in stream_agent_turn(
                 stream_adapter=stream_adapter,
                 format_sse=_format_sse,
-                persist_user_message=partial(_persist_agent_user_message, callbacks),
-                persist_turn_history=partial(_persist_agent_turn_history_snapshot, callbacks),
-                persist_partial_history=partial(_persist_agent_partial_history, callbacks),
-                before_stream=partial(_before_agent_stream, callbacks),
-                after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
-                after_turn=partial(_log_agent_stream_done, callbacks),
-                after_stream=partial(_confirm_agent_consumed_messages, callbacks),
-                on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
+                persistence=TurnPersistenceHooks(
+                    persist_user_message=partial(_persist_agent_user_message, callbacks),
+                    persist_turn_history=partial(_persist_agent_turn_history_snapshot, callbacks),
+                    persist_partial_history=partial(_persist_agent_partial_history, callbacks),
+                ),
+                hooks=TurnLifecycleHooks(
+                    before_stream=partial(_before_agent_stream, callbacks),
+                    after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
+                    # 会话记忆收尾钩子下沉到服务层：先同步打点，再调度防抖抽取
+                    # （仅整轮正常结束时触发；interrupt/disconnected 不抽取）。
+                    after_turn=partial(
+                        after_agent_turn_with_memory,
+                        partial(_log_agent_stream_done, callbacks),
+                        stream_adapter,
+                        conversation_id=thread_id,
+                        workspace_root=workspace_paths["root"],
+                        user_id=user_id,
+                        username=username,
+                        model_id=model_id,
+                    ),
+                    after_stream=partial(_confirm_agent_consumed_messages, callbacks),
+                    on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
+                ),
             ):
                 yield sse_event
 
@@ -1769,7 +1900,7 @@ async def sql_completion_handler(
         "member_datasource_ids": run_options.member_datasource_ids,
         "semantic_config_id": run_options.semantic_config_id,
         "model_id": run_options.model_id,
-        "semantic_config_selection": run_options.semantic_config_selection,
+        "file_selections": run_options.file_selections,
         "enable_thinking": run_options.enable_thinking,
         "thinking_effort": run_options.thinking_effort,
         "skill_names": run_options.skill_names,

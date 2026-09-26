@@ -22,6 +22,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app import agent_run_support, agent_stream
 from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
+from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 
 
 def _adapter(**kwargs):
@@ -272,17 +273,12 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
     async def fake_workspace(*_args, **_kwargs):
         return {"root": workspace_root}
 
-    async def fake_build_prompt_context(_ctx):
-        return {}
-
     async def fake_snapshot(*_args, **_kwargs):
         return None
 
     # 运行准备逻辑已下沉 agent_run_support：相关桩打在消费方命名空间。
     monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fake_prepare_semantic)
     monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_workspace)
-    monkeypatch.setattr(agent_stream, "build_conversation_prompt_context", fake_build_prompt_context)
-    monkeypatch.setattr(agent_run_support, "build_agent_prompt_context", lambda _ctx: {})
     monkeypatch.setattr(
         agent_stream, "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
@@ -330,14 +326,25 @@ async def test_stream_fails_fast_on_semantic_config_error(monkeypatch):
         workspace_root="/tmp/unused",
     )
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(
-            thread_id="t1", user_query="今天销量", datasource_id=None, user_id="u1",
-            username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
-            enable_thinking=None, thinking_effort=None, skill_names=[], options={},
-            file_ids=None, run_id=None,
-            log_phase=lambda *_a, **_k: None,
-        )
+        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
+            thread_id="t1",
+            user_query="今天销量",
+            datasource_id=None,
+            user_id="u1",
+            username="张三",
+            member_datasource_ids=None,
+            semantic_config_id=None,
+            request=None,
+            model_id=None,
+            file_selections=None,
+            enable_thinking=None,
+            thinking_effort=None,
+            skill_names=[],
+            options={},
+            file_ids=None,
+            run_id=None,
+        ),
+        log_phase=lambda *_a, **_k: None,)
     )
     assert any("指标集不存在" in event for event in events)
 
@@ -358,14 +365,25 @@ async def test_stream_rejects_datasource_binding_conflict(monkeypatch, tmp_path)
     monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
 
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(
-            thread_id="t1", user_query="今天销量", datasource_id="ds-2", user_id="u1",
-            username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
-            enable_thinking=None, thinking_effort=None, skill_names=[], options={},
-            file_ids=None, run_id=None,
-            log_phase=lambda *_a, **_k: None,
-        )
+        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
+            thread_id="t1",
+            user_query="今天销量",
+            datasource_id="ds-2",
+            user_id="u1",
+            username="张三",
+            member_datasource_ids=None,
+            semantic_config_id=None,
+            request=None,
+            model_id=None,
+            file_selections=None,
+            enable_thinking=None,
+            thinking_effort=None,
+            skill_names=[],
+            options={},
+            file_ids=None,
+            run_id=None,
+        ),
+        log_phase=lambda *_a, **_k: None,)
     )
     assert any("已绑定其他数据源组" in event for event in events)
     # 必须在 checkpointer 之前退出
@@ -410,14 +428,25 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
 
     long_query = "销" * (agent_stream.USER_INPUT_OFFLOAD_THRESHOLD + 10)
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(
-            thread_id="t1", user_query=long_query, datasource_id=None, user_id="u1",
-            username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
-            enable_thinking=None, thinking_effort=None, skill_names=["demo-skill"],
-            options={}, file_ids=["f-ok", "f-missing", "f-other"], run_id=None,
-            log_phase=lambda *_a, **_k: None,
-        )
+        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
+            thread_id="t1",
+            user_query=long_query,
+            datasource_id=None,
+            user_id="u1",
+            username="张三",
+            member_datasource_ids=None,
+            semantic_config_id=None,
+            request=None,
+            model_id=None,
+            file_selections=None,
+            enable_thinking=None,
+            thinking_effort=None,
+            skill_names=["demo-skill"],
+            options={},
+            file_ids=["f-ok", "f-missing", "f-other"],
+            run_id=None,
+        ),
+        log_phase=lambda *_a, **_k: None,)
     )
     assert events  # 至少产出了兜底 error 事件
     # 确实走完了附件解析与超长输入转写，才到达 checkpointer
@@ -450,14 +479,25 @@ async def test_stream_without_attachments_skips_offload(monkeypatch, tmp_path):
     checkpointer = _ExplodingCheckpointer("短输入不应写文件")
     monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
     await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(
-            thread_id="t1", user_query="短问题", datasource_id=None, user_id="u1",
-            username="张三", member_datasource_ids=None, semantic_config_id=None,
-            request=None, model_id=None, semantic_config_selection=None,
-            enable_thinking=None, thinking_effort=None, skill_names=[], options={},
-            file_ids=None, run_id=None,
-            log_phase=lambda *_a, **_k: None,
-        )
+        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
+            thread_id="t1",
+            user_query="短问题",
+            datasource_id=None,
+            user_id="u1",
+            username="张三",
+            member_datasource_ids=None,
+            semantic_config_id=None,
+            request=None,
+            model_id=None,
+            file_selections=None,
+            enable_thinking=None,
+            thinking_effort=None,
+            skill_names=[],
+            options={},
+            file_ids=None,
+            run_id=None,
+        ),
+        log_phase=lambda *_a, **_k: None,)
     )
     # 走完了前段流程，但短输入没有触发任何转写
     assert checkpointer.entered is True

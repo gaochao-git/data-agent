@@ -320,10 +320,10 @@ class ConversationEventService:
     def _active_run_payload(run: Any | None) -> dict[str, Any] | None:
         if run is None:
             return None
-        content = _load_run_content(run.content)
+        content = _load_run_content(run.record_content)
         return {
             "run_id": run.run_id,
-            "status": run.status,
+            "status": run.record_status,
             "turn_id": str(content.get("turn_id") or "") or None,
             "is_continuation": content.get("run_kind") == "continuation",
             "history_checkpoint": normalize_history_checkpoint(content, run.run_id),
@@ -392,7 +392,7 @@ class ConversationEventService:
         """在同一事务内推进当前 Run 的历史水位。"""
         if not stream_id:
             return None
-        content = _load_run_content(run.content)
+        content = _load_run_content(run.record_content)
         previous = content.get("history_checkpoint")
         if isinstance(previous, dict) and str(previous.get("run_id") or "") not in {"", run_id}:
             raise AgentRunLeaseLostError(f"当前运行恢复水位归属已变化: {run_id}")
@@ -406,7 +406,7 @@ class ConversationEventService:
             "stream_id": stream_id,
         }
         content["history_checkpoint"] = checkpoint
-        run.content = json.dumps(content, ensure_ascii=False)
+        run.record_content = json.dumps(content, ensure_ascii=False)
         return checkpoint
 
     @staticmethod
@@ -425,14 +425,14 @@ class ConversationEventService:
     ) -> None:
         if run is None or run.conversation_id != conversation_id or run.user_id != user_id:
             raise AgentRunLeaseLostError(f"当前运行不存在或归属已变化: {run_id}")
-        if run.status not in {"pending", "active"}:
+        if run.record_status not in {"pending", "active"}:
             raise AgentRunLeaseLostError(f"当前运行已结束，禁止追加历史: {run_id}")
         # An active Run must still be owned by the Worker writing its snapshot.
         # A missing owner is only tolerated for a pending compatibility path;
         # the runtime claims the Run before it starts producing events.
-        if run.status == "active" and (not owner_token or run.owner_token != owner_token):
+        if run.record_status == "active" and (not owner_token or run.owner_token != owner_token):
             raise AgentRunLeaseLostError(f"当前运行已由其他 Worker 接管: {run_id}")
-        content = _load_run_content(run.content)
+        content = _load_run_content(run.record_content)
         previous = content.get("history_checkpoint")
         if isinstance(previous, dict) and str(previous.get("run_id") or "") not in {"", run_id}:
             raise AgentRunLeaseLostError(f"当前运行恢复水位归属已变化: {run_id}")
@@ -755,7 +755,7 @@ def _serialize_human_message(message: HumanMessage) -> dict[str, Any]:
     }
     # vision_attachments 与 message_compose.select_vision_attachments 对应；
     # 不直接 import 是为了避免 services 反向依赖 agent.middleware。
-    for key in ("file_ids", "semantic_config_selection", "reasoning_turn_id", "vision_attachments"):
+    for key in ("file_ids", "file_selections", "reasoning_turn_id", "vision_attachments"):
         if additional_kwargs.get(key):
             payload[key] = additional_kwargs[key]
     return payload

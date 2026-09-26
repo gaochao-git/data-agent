@@ -386,7 +386,7 @@ class AgentScheduleRuntime:
             "member_datasource_ids": run_options.member_datasource_ids,
             "semantic_config_id": run_options.semantic_config_id,
             "model_id": run_options.model_id,
-            "semantic_config_selection": run_options.semantic_config_selection,
+            "file_selections": run_options.file_selections,
             "enable_thinking": run_options.enable_thinking,
             "thinking_effort": run_options.thinking_effort,
             "skill_names": run_options.skill_names,

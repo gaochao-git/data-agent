@@ -5,15 +5,15 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useDeepThinking } from '../../composables/useDeepThinking'
 import { useModelOptions } from '../../composables/useModelOptions'
 import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
-import { useSemanticModelMention, type SemanticModelPick } from '../../composables/useSemanticModelMention'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
+import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
 import type { ChatDataRuntimeOptions } from '../../api'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
@@ -25,7 +25,7 @@ import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
-import SemanticModelMentionMenu from './SemanticModelMentionMenu.vue'
+import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime } from '../../utils'
@@ -62,8 +62,6 @@ interface Props {
   datasource?: DataSource | null
   conversationId?: string | null
   selectedDatasourceId?: string
-  /** 输入框 @ 引用的候选语义模型（与问数侧边栏同一份 enabled 清单）。 */
-  semanticModels?: SemanticModelPick[]
   ensureConversationId?: () => Promise<string | null>
   ensureConversationDatasource?: () => Promise<boolean>
   executionTargets?: ExecutionTargetOption[]
@@ -74,7 +72,6 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   datasource: null,
-  semanticModels: () => [],
   executionTargets: () => [],
   executionTargetMultiple: true,
   selectedMemberDatasourceIds: () => [],
@@ -118,7 +115,9 @@ const editingSteerId = ref<string | null>(null)
 const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
-const activeRunStatus = ref<string | null>(null)
+/** Run 活跃状态的合法取值：与 runStatusChanged emit 的契约保持一致。 */
+type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'waiting_user'
+const activeRunStatus = ref<RunActiveStatus | null>(null)
 const activeRunTurnId = ref<string | null>(null)
 const activeRunIsContinuation = ref(false)
 const ownedRunStorageKey = 'chatdata:active-run-conversation'
@@ -214,6 +213,10 @@ const applyRunDoneState = (
   if (status === 'waiting_user') {
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
+    // 兜底 done（如 Redis 劣化时 question 事件未被读到）也可能走这里：
+    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「等待回答」
+    // 状态却没有可回答的卡片
+    if (!pendingUserQuestion.value) void restorePendingUserQuestion()
     emit('runStatusChanged', conversationId, 'waiting_user')
     return
   }
@@ -255,15 +258,13 @@ const restorePendingSteerQueue = async (options?: {
     const serverMessages = response.data?.messages ?? []
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
-    activeRunStatus.value = response.data?.run_status ?? null
+    activeRunStatus.value = (response.data?.run_status ?? null) as RunActiveStatus | null
     activeRunTurnId.value = response.data?.turn_id || null
     activeRunIsContinuation.value = Boolean(response.data?.is_continuation)
     emit(
       'runStatusChanged',
       conversationId,
-      hasActiveRun.value
-        ? activeRunStatus.value as 'pending' | 'active' | 'cancelling' | 'waiting_user' | null
-        : null,
+      hasActiveRun.value ? activeRunStatus.value : null,
     )
     if (activeRunId.value) {
       if (activeRunResumeRunId.value !== activeRunId.value || !options?.preserveResumeCursor) {
@@ -659,8 +660,8 @@ const handleOversizedInputAuto = async (text: string) => {
 }
 
 type AnalysisSubmitOptions = {
-  /** @ 引用清单快照（多选）；未传时按当前 chip 状态构建。 */
-  semanticSelections?: SemanticConfigSelectionInfo[] | null
+  /** @ 引用文件快照（相对路径列表）；未传时按当前 chip 状态构建。 */
+  fileSelections?: string[] | null
   assistantMessageId?: string
   appendUserMessage?: boolean
   fileIds?: string[]
@@ -787,46 +788,71 @@ const {
   enabled: computed(() => true),
 })
 
-// ---- 输入框 @ 引用语义模型（多选，智能选择的显式覆盖）----
-// 选中后模型进 chip 列表并随消息走 semantic_config_selection 列表通道；
-// 无 chip 即智能选择（默认态，输入 @ 即可指定，不需要任何点击）。
-// 服务端单值绑定（semantic_config_id）仅在恰好引用一个模型时生效，多引用交给模型检索。
+// ---- 输入框 @ 引用工作区文件（多选）----
+// @ 菜单数据源是当前会话工作区（uploads/outputs/workspace）可见文件，平铺展示（文件名 + 目录路径）；
+// 「工作区有什么就能引用什么」：新建会话工作区为空时菜单给空态说明，物化/产出后即可引用。
+// 选中信息随消息走 file_selections（相对路径列表），服务端校验白名单后并入正文短句。
+const mentionWorkspaceFiles = ref<WorkspaceFilePick[]>([])
+
+const resolveMentionConversationId = () => props.conversationId || localConversationId.value || ''
+
+const loadMentionWorkspaceFiles = async () => {
+  const conversationId = resolveMentionConversationId()
+  if (!conversationId) {
+    mentionWorkspaceFiles.value = []
+    return
+  }
+  try {
+    const res = await getConversationWorkspaceFiles(conversationId)
+    if (res.status === 'success') {
+      mentionWorkspaceFiles.value = (res.data?.files || []).map(file => ({
+        relativePath: file.relative_path,
+        name: file.name,
+      }))
+    }
+  } catch (err) {
+    console.error('加载工作区文件列表失败:', err)
+  }
+}
+
 const {
-  mentionedModels,
-  displayedMentionModels,
+  mentionedFiles,
+  displayedMentionFiles,
   showMentionMenu,
-  highlightedModelIndex,
-  selectMentionModel,
-  removeMentionModel,
-  clearMentionModels,
+  highlightedFileIndex,
+  selectMentionFile,
+  removeMentionFile,
+  clearMentionFiles,
   handleMentionMenuKeyDown,
-} = useSemanticModelMention({
+} = useWorkspaceFileMention({
   input,
-  models: toRef(props, 'semanticModels'),
+  files: mentionWorkspaceFiles,
+})
+
+// 菜单打开（输入 @）时刷新文件清单，保证引用的是工作区最新内容。
+// 不在此触发建会话/物化：@ 只引用当前工作区已有文件，没有就走空态提示；
+// 会话落库与物化统一由发送首条消息的兜底链路完成。
+watch(showMentionMenu, (open) => {
+  if (open) void loadMentionWorkspaceFiles()
+})
+
+watch(() => resolveMentionConversationId(), () => {
+  mentionWorkspaceFiles.value = []
 })
 
 /** @ 引用选中：进 chip 列表（可重复 @ 追加多个）。 */
-const handleMentionModelSelect = (model: SemanticModelPick) => {
-  selectMentionModel(model)
+const handleMentionFileSelect = (file: WorkspaceFilePick) => {
+  selectMentionFile(file)
 }
 
 /** 移除单个 @ 引用 chip。 */
-const handleMentionModelClear = (modelId: string) => {
-  removeMentionModel(modelId)
+const handleMentionFileClear = (relativePath: string) => {
+  removeMentionFile(relativePath)
 }
 
-/** 发送链路用的引用清单快照：只来自输入框 @ 引用 chip，空清单即智能选择。 */
-const buildMentionSelections = (): SemanticConfigSelectionInfo[] => {
-  return mentionedModels.value.map(model => ({
-    semantic_config_id: model.id,
-    semantic_config_name: model.name,
-    confidence: '',
-    reason: '输入框 @ 引用',
-    matched_metrics: [],
-    matched_dimensions: [],
-    auto_selected: false,
-    user_selected: true,
-  }))
+/** 发送链路用的引用快照：只含输入框 @ 引用 chip 的相对路径。 */
+const buildMentionFileSelections = (): string[] => {
+  return mentionedFiles.value.map(file => file.relativePath)
 }
 
 const findToolCallById = (id: string | null) => {
@@ -985,14 +1011,10 @@ const isDashboardPreviewWritable = (tool: ToolCallInfo, payload: DashboardSpecPa
   return tool.status === 'completed' && getDashboardPreviewWritableCount(payload) > 0 && !createdDashboardByToolId.value[tool.tool_call_id]
 }
 
-const resolveDashboardPreviewSemanticConfigId = (message: Message, payload: DashboardSpecPayload): string | null => {
+const resolveDashboardPreviewSemanticConfigId = (payload: DashboardSpecPayload): string | null => {
   const specId = String(payload.dashboard_spec?.semantic_config_id || '').trim()
   if (specId) return specId
-  const payloadId = String(payload.semantic_config_id || '').trim()
-  if (payloadId) return payloadId
-  return String(message.semanticConfigSelections?.[0]?.semantic_config_id
-    || message.semanticConfigSelection?.semantic_config_id
-    || '').trim() || null
+  return String(payload.semantic_config_id || '').trim() || null
 }
 
 const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCallInfo) => {
@@ -1004,7 +1026,7 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
     const res = await createDashboardFromSpec({
       dashboard_spec: payload.dashboard_spec,
       datasource_id: payload.datasource_id || selectedDatasource.value,
-      semantic_config_id: resolveDashboardPreviewSemanticConfigId(message, payload),
+      semantic_config_id: resolveDashboardPreviewSemanticConfigId(payload),
       conversation_id: payload.conversation_id || props.conversationId || localConversationId.value || null,
     })
     if (res.status !== 'success') {
@@ -1164,7 +1186,7 @@ const {
   tokenUsage,
   onActiveRunLoaded: (activeRun) => {
     activeRunId.value = activeRun?.run_id || null
-    activeRunStatus.value = activeRun?.status || null
+    activeRunStatus.value = (activeRun?.status || null) as RunActiveStatus | null
     activeRunTurnId.value = activeRun?.turn_id || null
     activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
     activeRunResumeRunId.value = activeRun?.run_id || null
@@ -1846,12 +1868,10 @@ const submitAnalysisQuery = async (
   if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory && !options.queuedMessageId) || isGenerating.value) return
   const isFirstMessage = options.appendUserMessage !== false
     && !messages.value.some(item => item.role === 'user')
-  // @ 引用清单：chip 列表优先（多选），宿主嵌入的单选 prop 兜底；
-  // options.semanticSelections 是调用方（重试/排队消息）传入的快照
-  const mentionSelections = options.semanticSelections !== undefined
-    ? (options.semanticSelections || [])
-    : buildMentionSelections()
-  const effectiveSemanticConfigSelection = mentionSelections[0] ?? null
+  // @ 引用文件快照：options.fileSelections 是调用方（重试/排队消息）传入的快照
+  const mentionFileSelections = options.fileSelections !== undefined
+    ? (options.fileSelections || [])
+    : buildMentionFileSelections()
   const userMessage: Message = {
     id: options.userMessageId || `user-${Date.now()}`,
     role: 'user',
@@ -1860,9 +1880,9 @@ const submitAnalysisQuery = async (
     skills: options.messageSkills,
     attachments: options.attachments,
   }
-  // 本轮显式引用了语义模型（@ 引用 chip 或宿主透传）时，随用户消息留痕供气泡展示
-  if (mentionSelections.length > 0) {
-    userMessage.semanticConfigSelections = mentionSelections
+  // 本轮 @ 引用了工作区文件时，随用户消息留痕供气泡 chip 展示
+  if (mentionFileSelections.length > 0) {
+    userMessage.fileSelections = mentionFileSelections
   }
   if (options.appendUserMessage !== false) {
     messages.value.push(userMessage)
@@ -1878,18 +1898,16 @@ const submitAnalysisQuery = async (
       assistantMessage.thinkingSegments = []
       assistantMessage.segments = []
     }
-    assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
     assistantMessage.isStreaming = true
   } else {
     activeAssistantMessageId.value = null
     assistantMessage = ensureAssistantMessage()
-    assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
   }
   const assistantMessageId = assistantMessage.id
   if (options.appendUserMessage !== false) {
     input.value = ''
     clearSelectedSkills()
-    clearMentionModels()
+    clearMentionFiles()
   }
   isGenerating.value = true
   activeToolCallId.value = null
@@ -1966,8 +1984,7 @@ const submitAnalysisQuery = async (
           }
           upsertToolMessage(updated)
         },
-        // 单值 semantic_config_id 绑定由服务端从 @ 引用列表推导（恰好引用一个时）；
-        // 多引用/未引用交给模型检索（智能选择），前端不再重复发单值字段。
+        // 引用文件的白名单校验与 Human 消息短句由服务端完成，前端只传相对路径列表。
         modelId: selectedModelValue.value,
         memberDatasourceIds: selectedMemberDatasourceIds.value,
         agentId: 'chat_data',
@@ -1979,7 +1996,7 @@ const submitAnalysisQuery = async (
         onTokenUsage: (usage) => {
           tokenUsage.value = usage
         },
-        semanticConfigSelections: mentionSelections,
+        fileSelections: mentionFileSelections,
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
         runtimeOptions: selectedRuntimeOptions.value,
@@ -2163,6 +2180,10 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
         userMessageId: queuedMessage.messageId,
         queuedMessageId: queuedMessage.messageId,
         preserveQueuedMessages: true,
+        // 队列消息的随行快照：入队时捕获；恢复自服务端且无 meta 的项显式传空，
+        // 绝不兜底取当前输入框状态（执行时点的 chip/附件属于之后的新消息）
+        fileSelections: queuedMessage.fileSelections ?? [],
+        fileIds: queuedMessage.fileIds ?? [],
       })
     } finally {
       executingQueueMessageId.value = null
@@ -2175,17 +2196,31 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     const conversationId = localConversationId.value || props.conversationId
     if (!query || !conversationId || isSteering.value) return
     const temporaryId = `steer-${Date.now()}`
+    // 入队瞬间捕获随行快照：执行时间点与入队时间点之间输入框状态可能已变化，
+    // 引用/附件必须随消息走（服务端存引用，续跑执行时统一校验解析）。
+    const mentionFileSelectionsSnapshot = buildMentionFileSelections()
+    const queuedFileIds = pendingFiles.value
+      .filter(f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'))
+      .map(f => f.file_id!)
+    // 技能沿用普通发送口径：入队时拼进正文（技能激活靠文本，无独立通道）
+    const queuedSkillNames = selectedSkills.value.map(skill => skill.name)
+    const bakedQuery = buildSkillRequestText(query, queuedSkillNames)
     pendingSteerMessages.value.push({
       clientId: temporaryId,
-      content: query,
+      content: bakedQuery,
       queueType: 'next-turn',
       status: 'submitting',
       timestamp: new Date(),
+      fileSelections: mentionFileSelectionsSnapshot,
+      fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
     })
     input.value = ''
     isSteering.value = true
     try {
-      const response = await steerConversation(conversationId, query, 'next-turn')
+      const response = await steerConversation(conversationId, bakedQuery, 'next-turn', {
+        file_selections: mentionFileSelectionsSnapshot,
+        file_ids: queuedFileIds,
+      })
       const queuedMessage = pendingSteerMessages.value.find(item => item.clientId === temporaryId)
       if (queuedMessage && response.data?.message_id) {
         queuedMessage.messageId = response.data.message_id
@@ -2194,13 +2229,29 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
           admitPendingMessages([queuedMessage.messageId])
         }
       }
+      // 随行内容已入队：只释放已随消息入队的那批引用/附件/技能（快照精确释放）；
+      // API 往返期间新加的保留给下一条消息（失败分支全部保留供重试）
+      mentionFileSelectionsSnapshot.forEach(path => removeMentionFile(path))
+      if (queuedFileIds.length > 0) {
+        const queuedFileIdSet = new Set(queuedFileIds)
+        pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
+      }
+      queuedSkillNames.forEach(name => removeSelectedSkill(name))
     } catch (error) {
       pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
       input.value = query
       await restorePendingSteerQueue({ restartPolling: false })
       if (!hasActiveRun.value) {
         if (isStoppingRun.value) return // 停止竞态下不得重新发起任务
-        void submitAnalysisQuery(query)
+        // 降级为直接发送：submit 内会清空 chip 与技能，这里同步释放已发送的附件
+        if (queuedFileIds.length > 0) {
+          const queuedFileIdSet = new Set(queuedFileIds)
+          pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
+        }
+        void submitAnalysisQuery(bakedQuery, {
+          fileSelections: mentionFileSelectionsSnapshot,
+          fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
+        })
         return
       }
       ElMessage.error(error instanceof Error ? error.message : '追加消息失败')
@@ -2229,8 +2280,8 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
 
   const queryText = input.value.trim()
   const skillNames = selectedSkills.value.map(skill => skill.name)
-  // @ 引用清单快照（发送瞬间捕获，发送后 chip 会被清空）；绑定与留痕都在 submit 内按清单决策
-  const mentionSelectionsSnapshot = buildMentionSelections()
+  // @ 引用文件快照（发送瞬间捕获，发送后 chip 会被清空）；留痕在 submit 内按快照决策
+  const mentionFileSelectionsSnapshot = buildMentionFileSelections()
   const messageSkills: Message['skills'] = selectedSkills.value.map(skill => ({
     name: skill.name,
     title: skill.title,
@@ -2279,7 +2330,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     skillNames,
     messageSkills,
     restoreInputText: queryText,
-    semanticSelections: mentionSelectionsSnapshot,
+    fileSelections: mentionFileSelectionsSnapshot,
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
     preserveQueuedMessages: pendingSteerMessages.value.length > 0,
     attachments: attachments.length > 0 ? attachments : undefined,
@@ -2292,20 +2343,31 @@ const handleStop = async () => {
   const runId = activeRunId.value
   if (!conversationId || !runId) return
   isStoppingRun.value = true
+  // 乐观反馈：点击立即显示「停止中」。取消链路含多次远程存储操作，链路劣化时
+  // HTTP 响应可能秒级，等待期间无反馈像「点了没反应」。done 先到的竞态由下方
+  // activeRunId 守卫 + done 回调清空 activeRunId 双重防护，不会覆盖已收口状态。
+  const previousRunStatus = activeRunStatus.value
+  if (hasActiveRun.value && activeRunId.value === runId) {
+    activeRunStatus.value = 'cancelling'
+    emit('runStatusChanged', conversationId, 'cancelling')
+  }
   try {
     const response = await cancelConversationRun(conversationId, runId)
     if (!response.data?.cancelled) {
+      // 后端明确说没有运行中任务：以服务端快照恢复真实状态（同时回滚乐观置位）
       await restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
       isStoppingRun.value = false
       return
     }
-    // 接口响应只代表后端已接受取消。若 done 尚未先到达，则显示停止中；
+    // 接口响应只代表后端已接受取消。「停止中」已在点击时乐观置位；
     // 气泡、工具和历史终态全部由结构化 done 的统一回调收口。
-    if (hasActiveRun.value && activeRunId.value === runId) {
-      activeRunStatus.value = 'cancelling'
-      emit('runStatusChanged', conversationId, 'cancelling')
-    }
   } catch (error) {
+    // 回滚乐观状态：仅当 done 尚未收口（activeRunId 未变）时恢复原状态，
+    // 避免「实际已受理取消但响应丢失」时把 UI 改回运行中造成误导
+    if (hasActiveRun.value && activeRunId.value === runId) {
+      activeRunStatus.value = previousRunStatus
+      emit('runStatusChanged', conversationId, previousRunStatus)
+    }
     isStoppingRun.value = false
     ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
   }
@@ -2688,9 +2750,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             v-model:selected-model="selectedModel"
             v-model:enable-deep-thinking="enableDeepThinking"
             v-model:thinking-effort="thinkingEffort"
-            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用语义模型' : '请输入任务，输入 / 可选择技能，@ 可引用语义模型'"
+            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件'"
             :selected-skills="selectedSkills"
-            :selected-semantic-models="mentionedModels"
+            :selected-mention-files="mentionedFiles"
             :runtime-options="selectedRuntimeOptions"
             :user-overridable="userOverridable"
             :model-options="modelOptions"
@@ -2702,7 +2764,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="handleSubmit"
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
-            @clear-semantic-model="handleMentionModelClear"
+            @clear-mention-file="handleMentionFileClear"
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
@@ -2729,11 +2791,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 :highlighted-index="highlightedSkillIndex"
                 @select="selectCommandSkill"
               />
-              <SemanticModelMentionMenu
+              <WorkspaceFileMentionMenu
                 :open="showMentionMenu"
-                :models="displayedMentionModels"
-                :highlighted-index="highlightedModelIndex"
-                @select="handleMentionModelSelect"
+                :files="displayedMentionFiles"
+                :highlighted-index="highlightedFileIndex"
+                :empty-hint="resolveMentionConversationId() ? '工作区还没有可引用的文件，发送消息后即可引用' : '发送消息后即可引用工作区文件'"
+                @select="handleMentionFileSelect"
               />
             </template>
           </ConversationInputBar>

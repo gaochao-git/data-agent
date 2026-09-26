@@ -35,6 +35,21 @@ HARD_INPUT_GUARD_RATIO = 0.95
 # 单张图片的保守 token 预估值：取主流 vision 模型单图上限口径
 # （Anthropic ~1600、OpenAI ~1536），宁可高估不误放行。
 IMAGE_TOKEN_ESTIMATE = 1600
+# 摘要输出预算：未显式配置时按模型窗口动态计算 min(窗口/20, 上限)，并设下限防小窗口模型摘要过短
+SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR = 20
+SUMMARY_OUTPUT_TOKENS_FLOOR = 2000
+SUMMARY_OUTPUT_TOKENS_CAP = 12000
+
+
+def resolve_summary_output_budget(configured: int | None, context_window: int) -> int:
+    """摘要输出预算唯一口径：显式配置优先，否则按窗口动态计算。"""
+    if configured is not None:
+        return max(int(configured), 1)
+    window = max(int(context_window), 1)
+    return min(
+        max(window // SUMMARY_OUTPUT_TOKENS_WINDOW_DIVISOR, SUMMARY_OUTPUT_TOKENS_FLOOR),
+        SUMMARY_OUTPUT_TOKENS_CAP,
+    )
 
 
 class ContextInputLimitExceededError(ValueError):
@@ -220,10 +235,20 @@ def validate_context_budget_startup_config() -> None:
                 f"模型 {model_id} 的 CHAT_DATA_OUTPUT_MAX_TOKENS={output_tokens} "
                 f"必须小于上下文窗口 {context_window}（可在注册表为该模型配置 max_output_tokens）"
             )
-        if summary_output_tokens >= context_window:
+        if summary_output_tokens is not None and summary_output_tokens >= context_window:
             errors.append(
                 f"模型 {model_id} 的 CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS="
                 f"{summary_output_tokens} 必须小于上下文窗口 {context_window}"
+            )
+        budget = get_model_context_budget(model_id)
+        summary_budget = resolve_summary_output_budget(summary_output_tokens, context_window)
+        if budget.compression_target_tokens <= summary_budget:
+            # 自洽性：压缩目标小于摘要输出预算时，摘要文本本身就会超出目标，
+            # 压缩轮次永远达不到 target，静默退化为多次重摘甚至确定性裁剪。
+            errors.append(
+                f"模型 {model_id} 的压缩目标 {budget.compression_target_tokens} tokens"
+                f"（触发阈值的 30%）必须大于摘要输出预算 {summary_budget}，"
+                f"否则压缩无法收敛，请调大触发比例或调小摘要输出上限"
             )
     if errors:
         raise RuntimeError("ChatData 上下文预算配置无效: " + "; ".join(errors))

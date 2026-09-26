@@ -66,8 +66,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
   `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
-  `content` mediumtext NOT NULL COMMENT '追加消息内容，运行记录为空',
-  `status` varchar(16) NOT NULL COMMENT '运行或消息状态',
+  `record_content` mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
+  `record_status` varchar(16) NOT NULL COMMENT '运行或消息状态',
   `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',
   `consumed_time` datetime DEFAULT NULL COMMENT '消息注入时间',
   `lease_expire_time` datetime DEFAULT NULL COMMENT '领取租约过期时间',
@@ -80,8 +80,8 @@ CREATE TABLE `chat_data_agent_inbox` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`, `message_id`),
-  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `status`),
-  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
+  KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `record_status`),
+  KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `record_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 """
 

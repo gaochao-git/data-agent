@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any
 
 from utils.logger import get_logger
 
 from ...datasource.manager import get_datasource_manager
 from ...datasource.target_context import (
-    append_selected_execution_targets_to_context,
     get_execution_target_member_id,
     get_execution_target_name,
     get_execution_target_org_code,
@@ -35,54 +34,7 @@ class SemanticConversationContext:
     available_member_datasource_ids: list[str]
     matched_member_datasource_ids: list[str]
     selected_member_datasource_ids: list[str]
-    datasource_group_context: str
     semantic_config_error: str = ""
-
-    @property
-    def has_selected_semantic_config(self) -> bool:
-        return self.semantic_config is not None
-
-
-class AgentPromptContext(TypedDict):
-    """Shared prompt inputs derived from one semantic conversation context."""
-
-    datasource: dict[str, Any] | None
-    datasource_group_context: str
-    selected_semantic_config: dict[str, str] | None
-
-
-def build_agent_prompt_context(context: SemanticConversationContext) -> AgentPromptContext:
-    """Build the common prompt contract consumed by both conversation agents."""
-    datasource_meta = context.datasource_meta or {}
-    datasource: dict[str, Any] | None = None
-    if context.datasource_id:
-        if context.datasource_meta is None:
-            datasource = {"missing": True}
-        else:
-            datasource = {
-                "source_type": datasource_meta.get("source_type") or "",
-            }
-
-    return {
-        "datasource": datasource,
-        "datasource_group_context": context.datasource_group_context,
-        "selected_semantic_config": _selected_semantic_config_prompt_ref(context),
-    }
-
-
-def _selected_semantic_config_prompt_ref(
-    context: SemanticConversationContext,
-) -> dict[str, str] | None:
-    """Expose only a selected-config reference to the system prompt layer."""
-    if context.semantic_config is None:
-        return None
-    config_id = str(context.semantic_config_id or context.semantic_config.get("id") or "").strip()
-    config_name = str(
-        context.semantic_config.get("name")
-        or context.semantic_config.get("semantic_config_name")
-        or config_id
-    ).strip()
-    return {"id": config_id, "name": config_name}
 
 
 def _normalize_context_inputs(
@@ -163,12 +115,6 @@ async def prepare_semantic_conversation_context(
     )
     available_member_ids = _target_member_ids(execution_targets)
     matched_member_ids = match_execution_targets_from_query(execution_targets, user_query)
-    base_query_context = str((datasource_meta or {}).get("query_context") or "").strip()
-    datasource_group_context = append_selected_execution_targets_to_context(
-        base_query_context,
-        execution_targets,
-        selected_member_ids,
-    )
 
     return SemanticConversationContext(
         datasource_id=normalized_datasource_id,
@@ -179,7 +125,6 @@ async def prepare_semantic_conversation_context(
         available_member_datasource_ids=available_member_ids,
         matched_member_datasource_ids=matched_member_ids,
         selected_member_datasource_ids=selected_member_ids,
-        datasource_group_context=datasource_group_context,
         semantic_config_error=semantic_error,
     )
 
@@ -270,7 +215,6 @@ def _empty_context(
         available_member_datasource_ids=[],
         matched_member_datasource_ids=[],
         selected_member_datasource_ids=selected_member_datasource_ids,
-        datasource_group_context="",
         semantic_config_error=semantic_config_error,
     )
 

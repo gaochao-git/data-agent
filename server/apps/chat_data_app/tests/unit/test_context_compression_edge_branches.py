@@ -499,3 +499,89 @@ async def test_middleware_skips_started_event_when_compression_not_triggered(mon
     await middleware.abefore_model({"messages": messages, "context_summary": None}, None)
 
     assert not [payload for payload in captured if payload.get("type") == "context_compression"]
+
+
+# ---------------------------------------------------------------------------
+# 待办快照注入摘要 + 陈旧 write_todos 工具结果占位
+# ---------------------------------------------------------------------------
+
+def test_neutralize_stale_todo_tool_messages_replaces_only_write_todos():
+    human = HumanMessage(content="开始任务")
+    ai = AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": []}, "id": "call-1"}])
+    stale_todo = ToolMessage("Updated todo list to [...]", tool_call_id="call-1", name="write_todos")
+    other = ToolMessage('{"rows": 1}', tool_call_id="call-2", name="execute_sql")
+    neutralized = context_compression.neutralize_stale_todo_tool_messages([human, ai, stale_todo, other])
+    # 只替换 write_todos 的内容，消息本体保留（tool_call 配对不破坏），其余原样
+    assert neutralized[0] is human and neutralized[1] is ai
+    assert neutralized[2] is not stale_todo
+    assert neutralized[2].content.startswith("[todo 列表已由实时 state 快照另行提供")
+    assert neutralized[2].tool_call_id == "call-1"
+    assert neutralized[3] is other
+    # 无 write_todos 时原列表原对象返回
+    untouched = context_compression.neutralize_stale_todo_tool_messages([human, other])
+    assert untouched[0] is human and untouched[1] is other
+
+
+def test_summary_prompt_includes_todo_snapshot_section():
+    from apps.chat_data_app.agent.prompts.context_compression import CONTEXT_COMPRESSION_SUMMARY_PROMPT
+
+    messages = [HumanMessage(content="历史消息")]
+    without = context_compression.build_context_compression_summary_prompt(messages)
+    assert "待办任务实时状态数据" not in without
+    with_snapshot = context_compression.build_context_compression_summary_prompt(
+        messages,
+        todo_snapshot="1. [待办] 按月聚合 GMV",
+    )
+    assert "[待办任务实时状态数据开始]\n1. [待办] 按月聚合 GMV\n[待办任务实时状态数据结束]" in with_snapshot
+    assert "## 待办任务状态" in CONTEXT_COMPRESSION_SUMMARY_PROMPT
+
+
+def test_compress_passes_todo_snapshot_to_llm_summarizer(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_summarize_llm(messages, *, model_id=None, previous_summary=None, todo_snapshot=None):
+        captured["todo_snapshot"] = todo_snapshot
+        return "## 用户目标\n测试\n## 待办任务状态\n1. [待办] 按月聚合 GMV"
+
+    monkeypatch.setattr(context_compression, "_summarize_messages_with_llm", fake_summarize_llm)
+    # 必须含一轮「更早的完整回合」：当前回合受 _partition_messages_for_compression
+    # 保护，仅一轮消息时无可压缩对象，摘要器不会被调用（todo_snapshot 也就传不到）。
+    messages = [
+        HumanMessage(content="第一轮问题"),
+        AIMessage(content="", tool_calls=[{"name": "execute_sql", "args": {"sql": "SELECT 1"}, "id": "c0"}]),
+        ToolMessage("第一轮结果", tool_call_id="c0", name="execute_sql"),
+        HumanMessage(content="帮我分析"),
+        AIMessage(content="好的"),
+        ToolMessage("结果数据", tool_call_id="c1", name="execute_sql"),
+    ]
+    compressed, summary, report = asyncio_run(
+        context_compression.compress_messages_for_state(
+            messages,
+            static_input_tokens=0,
+            compression_trigger_tokens=1,
+            hard_input_limit_tokens=100000,
+            compression_target_tokens=1,
+            todo_snapshot="1. [待办] 按月聚合 GMV",
+        )
+    )
+    assert captured["todo_snapshot"] == "1. [待办] 按月聚合 GMV"
+    assert "按月聚合 GMV" in (summary or "")
+
+
+def test_read_middleware_todos_and_format_snapshot():
+    assert context_compression._read_middleware_todos(None) is None
+    assert context_compression._read_middleware_todos({"todos": []}) is None
+    assert context_compression._read_middleware_todos({"todos": "oops"}) is None
+    todos = context_compression._read_middleware_todos({"todos": [
+        {"content": "任务A", "status": "pending"},
+        {"content": "任务B", "status": "in_progress"},
+        "bad",
+    ]})
+    assert todos == [{"content": "任务A", "status": "pending"}, {"content": "任务B", "status": "in_progress"}]
+    assert context_compression._format_todo_snapshot(todos) == "1. [待办] 任务A\n2. [进行中] 任务B"
+    assert context_compression._format_todo_snapshot(None) is None
+
+
+def asyncio_run(coro):
+    import asyncio
+    return asyncio.run(coro)

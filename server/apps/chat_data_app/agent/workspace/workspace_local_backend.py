@@ -36,7 +36,7 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
     parse_officecli_args,
     translate_command_args,
 )
-from apps.chat_data_app.agent.workspace.workspace_execution import parse_rg_output
+from apps.chat_data_app.agent.workspace.workspace_search import parse_rg_output
 from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
 
 logger = get_logger(__name__)

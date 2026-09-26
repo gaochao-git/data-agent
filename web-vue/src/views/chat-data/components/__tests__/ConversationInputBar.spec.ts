@@ -39,10 +39,12 @@ describe('ConversationInputBar actions', () => {
   })
 })
 
-describe('ConversationInputBar deep thinking switch', () => {
+describe('ConversationInputBar thinking level menu', () => {
+  // 模型设置已重构为两级菜单（ModelPicker）：主面板「推理等级」行 → 二级档位列表，
+  // 档位按钮 title 前缀为「思考档位」。旧版开关（role="switch"）已被取代。
   const mountWithThinking = (
     enableDeepThinking: boolean | null,
-    thinking?: { mode: 'none' | 'optional' | 'forced'; efforts: string[]; default_on: boolean; default_effort: string | null },
+    thinking: { mode: 'none' | 'optional' | 'forced'; efforts: string[]; default_on: boolean; default_effort: string | null },
     thinkingEffort: string | null = null,
   ) => mount(ConversationInputBar, {
     props: {
@@ -57,48 +59,64 @@ describe('ConversationInputBar deep thinking switch', () => {
     },
   })
 
-  const findSwitch = async (wrapper: ReturnType<typeof mountWithThinking>) => {
-    // 思考开关位于模型设置下拉内，需先展开
+  const openLevelList = async (wrapper: ReturnType<typeof mountWithThinking>) => {
     await wrapper.find('[title="模型设置"]').trigger('click')
-    return wrapper.find('button[role="switch"]')
+    const entry = wrapper.find('[data-model-picker-menu]').findAll('button')
+      .find(button => button.text().startsWith('推理等级'))
+    await entry!.trigger('click')
+    return wrapper.find('[data-model-picker-menu]').findAll('button')
+      .filter(button => (button.attributes('title') ?? '').startsWith('思考档位'))
   }
 
   it('falls back to model default_on for display when user has not touched the switch', async () => {
     const wrapper = mountWithThinking(null, { mode: 'optional', efforts: [], default_on: true, default_effort: null })
 
-    expect((await findSwitch(wrapper)).attributes('aria-checked')).toBe('true')
+    // 未触碰时展示态回退 default_on：触发器内联档位文案为「开启」，菜单高亮「开启」
+    expect(wrapper.find('[title="模型设置"]').text()).toContain('开启')
+
+    const levels = await openLevelList(wrapper)
+    const highlighted = levels.find(button => button.classes().includes('text-blue-600'))
+    expect(highlighted?.text()).toBe('开启')
   })
 
   it('emits an explicit boolean on first click from untouched state', async () => {
     const wrapper = mountWithThinking(null, { mode: 'optional', efforts: [], default_on: false, default_effort: null })
 
-    await (await findSwitch(wrapper)).trigger('click')
+    const levels = await openLevelList(wrapper)
+    await levels.find(button => button.text() === '开启')!.trigger('click')
 
     expect(wrapper.emitted('update:enableDeepThinking')?.[0]).toEqual([true])
   })
 
-  it('locks the switch for forced models and never emits', async () => {
-    const wrapper = mountWithThinking(false, { mode: 'forced', efforts: ['high'], default_on: false, default_effort: 'high' })
+  it('emits false when the user picks 关闭', async () => {
+    const wrapper = mountWithThinking(null, { mode: 'optional', efforts: ['low'], default_on: true, default_effort: 'low' })
 
-    const sw = await findSwitch(wrapper)
-    expect(sw.attributes('aria-checked')).toBe('true')
-    expect(sw.attributes('aria-disabled')).toBe('true')
+    const levels = await openLevelList(wrapper)
+    await levels.find(button => button.text() === '关闭')!.trigger('click')
 
-    await sw.trigger('click')
-
-    expect(wrapper.emitted('update:enableDeepThinking')).toBeUndefined()
+    expect(wrapper.emitted('update:enableDeepThinking')?.[0]).toEqual([false])
+    expect(wrapper.emitted('update:thinkingEffort')).toBeUndefined()
   })
 
-  it('locks the switch for none models and never emits', async () => {
+  it('offers no 关闭 level for forced models', async () => {
+    const wrapper = mountWithThinking(false, { mode: 'forced', efforts: ['high'], default_on: false, default_effort: 'high' })
+
+    const levels = await openLevelList(wrapper)
+
+    // forced 恒开：档位列表只有模型声明的 efforts，没有「关闭」可点
+    expect(levels.map(button => button.text())).toEqual(['高'])
+  })
+
+  it('disables the level entry for none models', async () => {
     const wrapper = mountWithThinking(true, { mode: 'none', efforts: [], default_on: false, default_effort: null })
 
-    const sw = await findSwitch(wrapper)
-    expect(sw.attributes('aria-checked')).toBe('false')
-    expect(sw.attributes('aria-disabled')).toBe('true')
+    await wrapper.find('[title="模型设置"]').trigger('click')
 
-    await sw.trigger('click')
-
-    expect(wrapper.emitted('update:enableDeepThinking')).toBeUndefined()
+    // none 模型不支持思考：推理等级行禁用且显示「不支持」，二级列表不可进
+    const entry = wrapper.find('[data-model-picker-menu]').findAll('button')
+      .find(button => button.text().startsWith('推理等级'))
+    expect(entry!.attributes('disabled')).toBeDefined()
+    expect(entry!.text()).toContain('不支持')
   })
 })
 
@@ -124,33 +142,14 @@ describe('ConversationInputBar thinking effort selector', () => {
   })
 
   const openMenuAndFindSelector = async (wrapper: ReturnType<typeof mountWithEfforts>) => {
-    // 档位选择器位于模型设置下拉内，需先展开
+    // 两级菜单：模型设置 → 推理等级 → 档位按钮 title 前缀「思考档位」
     await wrapper.find('[title="模型设置"]').trigger('click')
-    return wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考等级'))
+    const entry = wrapper.find('[data-model-picker-menu]').findAll('button')
+      .find(button => button.text().startsWith('推理等级'))
+    await entry!.trigger('click')
+    return wrapper.find('[data-model-picker-menu]').findAll('button')
+      .filter(button => (button.attributes('title') ?? '').startsWith('思考档位'))
   }
-
-  it('hides the selector when model declares no efforts', async () => {
-    const wrapper = mount(ConversationInputBar, {
-      props: {
-        input: '',
-        placeholder: '输入问题',
-        selectedModel: 'model-a',
-        modelOptions: [{
-          id: 'model-a',
-          label: '模型 A',
-          thinking: { mode: 'optional', efforts: [], default_on: false, default_effort: null },
-        }],
-        enableDeepThinking: null,
-        thinkingEffort: null,
-        isGenerating: false,
-        canSubmit: false,
-      },
-    })
-
-    await wrapper.find('[title="模型设置"]').trigger('click')
-
-    expect((await openMenuAndFindSelector(wrapper)).length).toBe(0)
-  })
 
   it('falls back to default_effort for highlight when user has not chosen', async () => {
     const wrapper = mountWithEfforts(null)
@@ -170,5 +169,6 @@ describe('ConversationInputBar thinking effort selector', () => {
     await low.trigger('click')
 
     expect(wrapper.emitted('update:thinkingEffort')?.[0]).toEqual(['low'])
+    expect(wrapper.emitted('update:enableDeepThinking')?.[0]).toEqual([true])
   })
 })

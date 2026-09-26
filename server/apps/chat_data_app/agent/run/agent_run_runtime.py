@@ -13,6 +13,7 @@ from uuid import uuid4
 from utils.logger import get_logger
 from .agent_inbox_service import AgentRunLeaseLostError, AgentInboxService, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
+from .chat_data_stream_request import ChatDataStreamRequest
 from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
@@ -262,31 +263,35 @@ class AgentRunRuntime:
             raise RuntimeError("AgentRunRuntime 未装配 stream_generator，请在启动时调用 set_stream_generator()")
 
         def factory() -> AsyncIterator[str]:
+            # 流式执行入参统一走 ChatDataStreamRequest：字段列表/默认值单一来源，
+            # 生成器签名收窄后无需再在这里罗列二十余个关键字参数。
             return stream_generator(
-                thread_id=prepared["conversation_id"],
-                user_query=str(context.get("query") or ""),
-                datasource_id=context.get("datasource_id"),
-                user_id=prepared["user_id"],
-                username=prepared.get("operator_name") or prepared["user_id"],
-                member_datasource_ids=context.get("member_datasource_ids") or [],
-                semantic_config_id=context.get("semantic_config_id"),
-                request=None,
-                model_id=context.get("model_id"),
-                semantic_config_selection=context.get("semantic_config_selection"),
-                enable_thinking=context.get("enable_thinking"),
-                thinking_effort=context.get("thinking_effort"),
-                skill_names=context.get("skill_names") or [],
-                options=context.get("options") or {},
-                file_ids=context.get("file_ids"),
-                run_id=prepared["run_id"],
-                owner_token=prepared["owner_token"],
-                stream_event_id_provider=prepared.get("stream_event_id_provider"),
-                adopted_messages=prepared.get("messages") or [],
-                resume_answer=prepared.get("resume_answer"),
-                resume_started=bool(prepared.get("resume_started")),
-                resume_turn_id=prepared.get("resume_turn_id"),
-                turn_id=prepared.get("turn_id"),
-                recovering=bool(prepared.get("recovering")),
+                ChatDataStreamRequest(
+                    thread_id=prepared["conversation_id"],
+                    user_query=str(context.get("query") or ""),
+                    datasource_id=context.get("datasource_id"),
+                    user_id=prepared["user_id"],
+                    username=prepared.get("operator_name") or prepared["user_id"],
+                    member_datasource_ids=context.get("member_datasource_ids") or [],
+                    semantic_config_id=context.get("semantic_config_id"),
+                    request=None,
+                    model_id=context.get("model_id"),
+                    file_selections=context.get("file_selections"),
+                    enable_thinking=context.get("enable_thinking"),
+                    thinking_effort=context.get("thinking_effort"),
+                    skill_names=context.get("skill_names") or [],
+                    options=context.get("options") or {},
+                    file_ids=context.get("file_ids"),
+                    run_id=prepared["run_id"],
+                    owner_token=prepared["owner_token"],
+                    stream_event_id_provider=prepared.get("stream_event_id_provider"),
+                    adopted_messages=prepared.get("messages") or [],
+                    resume_answer=prepared.get("resume_answer"),
+                    resume_started=bool(prepared.get("resume_started")),
+                    resume_turn_id=prepared.get("resume_turn_id"),
+                    turn_id=prepared.get("turn_id"),
+                    recovering=bool(prepared.get("recovering")),
+                )
             )
 
         return factory
@@ -299,7 +304,27 @@ class AgentRunRuntime:
         state.conversation_id = prepared["conversation_id"]
         state.user_id = prepared["user_id"]
         state.operator_name = prepared.get("operator_name") or state.operator_name or state.user_id
-        await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
+        try:
+            await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
+        except Exception:
+            # prepare 已把 Run 行置为 ACTIVE（租约 120s）；claim_owner 失败
+            # （典型为 Redis 不可达）若不收口，行会作为无主 ACTIVE 僵尸挂到
+            # 租约过期被 reaper 回收，期间 SSE 一直显示「进行中」假状态。
+            # finish_run("failed") 断言 DB owner（prepare 已写入）并重排队消息，
+            # 纯 MySQL；SSE 经 MySQL 终态兜底立刻拿到 done(failed)，用户可重发。
+            try:
+                await self._inbox_service.finish_run(
+                    state.run_id,
+                    "failed",
+                    state.user_id,
+                    state.operator_name,
+                    prepared["owner_token"],
+                )
+            except Exception:
+                # 收口失败（同样多为存储异常）只记日志，不掩盖原始 claim 异常；
+                # 此时僵尸行退回租约 reaper 兜底回收
+                logger.exception("Run claim 失败后收口也失败 run_id=%s", state.run_id)
+            raise
         self._owned_runs.add(state.run_id)
         if await self._inbox_service.heartbeat_run(state.run_id, prepared["owner_token"]) == "cancelling":
             state.cancelled_prepared = prepared

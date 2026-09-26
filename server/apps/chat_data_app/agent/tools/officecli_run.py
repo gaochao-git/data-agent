@@ -9,7 +9,7 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
     command_path_values,
     parse_officecli_args,
 )
-from apps.chat_data_app.agent.workspace.workspace_execution import truncate_output
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import truncate_output
 from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
 from utils.logger import get_logger
 from .common import tool_result_payload

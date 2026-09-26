@@ -31,6 +31,7 @@ class _FakeDatasourceManager:
         }
         self.column_dicts = {}
         self.column_dict_error = None
+        self.column_dict_calls = 0
 
     async def get_datasource_async(self, datasource_id):
         return dict(self.datasource) if datasource_id == "ds_a" else None
@@ -42,6 +43,7 @@ class _FakeDatasourceManager:
 
     async def get_datasource_column_dicts_async(self, datasource_id):
         assert datasource_id == "ds_a"
+        self.column_dict_calls += 1
         if self.column_dict_error:
             raise self.column_dict_error
         return self.column_dicts
@@ -109,6 +111,19 @@ class _FakeSemanticConfigDao:
                 break
         else:
             self.configs.append(next_config)
+
+    async def batch_update_enabled_async(self, group_id, config_ids, enabled, update_by="", update_by_name=""):
+        self.batch_toggle_calls = getattr(self, "batch_toggle_calls", [])
+        self.batch_toggle_calls.append((group_id, list(config_ids), enabled, update_by, update_by_name))
+        if getattr(self, "batch_update_enabled_result", None) is not None:
+            return self.batch_update_enabled_result
+        target_ids = set(config_ids)
+        updated = 0
+        for index, config in enumerate(self.configs):
+            if config.get("id") in target_ids and config.get("group_id", "group_a") == group_id:
+                self.configs[index] = {**config, "enabled": enabled}
+                updated += 1
+        return updated
 
     async def soft_delete_async(self, config_id, update_by="", update_by_name=""):
         self.deleted = (config_id, update_by, update_by_name)
@@ -218,6 +233,56 @@ def test_runtime_config_falls_back_when_column_dictionary_fails():
     assert asyncio.run(service.get_runtime_config_async("ds_a", "missing")) is None
 
 
+def test_runtime_bundle_returns_configs_and_dictionary_in_one_pass():
+    """批量入口只查一次字典：批量物化依赖它避免字典被重复拉取。"""
+    service, datasource_manager, _ = _build_service([_base_config()])
+    datasource_manager.column_dicts = {("orders", "city"): {"unit": "个"}}
+
+    configs, column_dicts = asyncio.run(service.get_runtime_bundle_async("ds_a"))
+
+    assert [config["id"] for config in configs] == ["sc_a"]
+    assert column_dicts == {("orders", "city"): {"unit": "个"}}
+    assert datasource_manager.column_dict_calls == 1
+
+
+def test_runtime_bundle_configs_match_per_model_runtime_config():
+    """批量入口返回的配置必须与逐条加载同构：都已合并字段字典。
+
+    物化链路直接复用 bundle 的配置渲染 YAML。若少了 _merge_column_dict，
+    枚举取值 / logical_type / 补充说明会丢失，模型读到的维度退化成裸字段；
+    导出用的 annotate_export_column_dicts 只挂 _column_dict 原文，不能替代。
+    """
+    service, datasource_manager, _ = _build_service([_base_config()])
+    datasource_manager.column_dicts = {
+        ("orders", "status"): {
+            "enum_values": [{"label": "已支付", "value": "PAID"}],
+            "storage_format": "编码",
+        },
+    }
+
+    async def run():
+        configs, column_dicts = await service.get_runtime_bundle_async("ds_a")
+        return configs, await service.get_runtime_config_async("ds_a", "sc_a", column_dicts=column_dicts)
+
+    configs, per_model = asyncio.run(run())
+
+    assert configs[0] == per_model, "bundle 配置必须与逐条加载结果一致，否则物化 YAML 会丢字典合并结果"
+    dimension = configs[0]["dimensions"][0]
+    # 枚举取值取 label（展示口径），映射 label -> value
+    assert dimension["allowed_values"] == ["已支付"]
+    assert dimension["mapping"] == {"已支付": "PAID"}
+    assert dimension["logical_type"] == "enum"
+    assert "编码" in dimension["metadata_supplement"]
+
+
+def test_runtime_bundle_short_circuits_without_configs():
+    """没有可见配置时不再查字典，避免空数据源组白白多一次 DB 往返。"""
+    service, datasource_manager, _ = _build_service([])
+
+    assert asyncio.run(service.get_runtime_bundle_async("ds_a")) == ([], {})
+    assert datasource_manager.column_dict_calls == 0
+
+
 def test_column_dictionary_helper_branches():
     assert SemanticConfigService._extract_metric_source_column({"expression": "SUM(orders.amount)"}) == "amount"
     assert SemanticConfigService._extract_metric_source_column({"expression": "`orders.status`"}) == "status"
@@ -288,7 +353,7 @@ def test_persistence_failure_is_reported_as_empty_result():
     assert asyncio.run(service.update_async("ds_a", "sc_a", description="更新")) is None
 
 
-def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idempotent(monkeypatch):
+def test_generate_basic_single_table_configs_creates_enabled_models_and_is_idempotent(monkeypatch):
     service, datasource_manager, dao = _build_service()
     build_map_calls = 0
     original_build_table_columns_map = semantic_config_service_module.build_table_columns_map
@@ -341,7 +406,7 @@ def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idem
         ],
     }
     orders = next(config for config in dao.configs if config["name"] == "orders基础模型")
-    assert orders["enabled"] is False
+    assert orders["enabled"] is True
     assert orders["scope_type"] == "public"
     assert orders["create_by"] == "u1"
     assert orders["metrics"] == []
@@ -399,4 +464,101 @@ def test_basic_single_table_text_is_stable_and_within_database_limits():
     assert generated_name != another_name
     assert len(description) == 128
     assert description.startswith("基于物理表 ")
-    assert description.endswith(" 自动生成，待人工复核后启用")
+    assert description.endswith(" 自动生成，建议复核")
+
+
+def test_dedupe_semantic_config_ids_keeps_order_and_drops_blank():
+    assert semantic_config_service_module.dedupe_semantic_config_ids(["b", "a", "b", "  ", "", None]) == ["b", "a"]
+    assert semantic_config_service_module.dedupe_semantic_config_ids([]) == []
+    assert semantic_config_service_module.dedupe_semantic_config_ids(None) == []
+    assert semantic_config_service_module.empty_batch_toggle_result() == {
+        "updated_ids": [],
+        "skipped_ids": [],
+        "not_found_ids": [],
+        "updated_count": 0,
+    }
+
+
+def test_batch_toggle_enabled_async_splits_updated_skipped_and_not_found():
+    public = _base_config(id="sc_public", name="公共模型")
+    own = _base_config(id="sc_own", name="本人私有", scope_type="private", create_by="u1")
+    service, _, dao = _build_service([public, own])
+
+    result = asyncio.run(service.batch_toggle_enabled_async(
+        "ds_a",
+        ["sc_own", "sc_public", "sc_missing", "sc_own", "  "],
+        False,
+        user_id="u1",
+        username="张三",
+        admin_manage=False,
+    ))
+
+    assert result["updated_ids"] == ["sc_own"]
+    assert result["skipped_ids"] == ["sc_public"]
+    assert result["not_found_ids"] == ["sc_missing"]
+    assert result["updated_count"] == 1
+    assert dao.batch_toggle_calls[0] == ("group_a", ["sc_own"], False, "u1", "张三")
+    assert next(config for config in dao.configs if config["id"] == "sc_own")["enabled"] is False
+    assert next(config for config in dao.configs if config["id"] == "sc_public")["enabled"] is True
+
+
+def test_batch_toggle_enabled_async_treats_same_state_as_idempotent_success():
+    """已处于目标状态的模型算成功但不写库。
+
+    MySQL 的 UPDATE rowcount 只统计「值真的变了」的行。若把同态模型一起发到库里，
+    全选批量操作会得到 rowcount=0：前端成功数与 updated_ids 对不上，后端还会刷
+    一条误导性的行数不一致告警。
+    """
+    service, _, dao = _build_service([
+        _base_config(id="sc_already", enabled=True),
+        _base_config(id="sc_off", enabled=False),
+    ])
+
+    result = asyncio.run(service.batch_toggle_enabled_async(
+        "ds_a", ["sc_already", "sc_off"], True, admin_manage=True,
+    ))
+
+    assert result["updated_ids"] == ["sc_already", "sc_off"], "幂等项也要计入成功，保持请求顺序"
+    assert result["updated_count"] == 2
+    assert dao.batch_toggle_calls == [("group_a", ["sc_off"], True, "", "")], "只把需要变更的 ID 发到库里"
+
+
+def test_batch_toggle_enabled_async_admin_only_mutates_public_configs():
+    public = _base_config(id="sc_public", name="公共模型", enabled=False)
+    own = _base_config(id="sc_own", name="本人私有", scope_type="private", create_by="u1")
+    service, _, dao = _build_service([public, own])
+
+    result = asyncio.run(service.batch_toggle_enabled_async(
+        "ds_a",
+        ["sc_public", "sc_own"],
+        True,
+        user_id="u1",
+        username="张三",
+        admin_manage=True,
+    ))
+
+    assert result["updated_ids"] == ["sc_public"]
+    assert result["skipped_ids"] == ["sc_own"]
+    assert result["not_found_ids"] == []
+    assert dao.batch_toggle_calls[0][2] is True
+
+
+def test_batch_toggle_enabled_async_returns_empty_result_for_missing_inputs():
+    service, _, dao = _build_service([_base_config(id="sc_public")])
+
+    missing_datasource = asyncio.run(service.batch_toggle_enabled_async("missing", ["sc_public"], True))
+    empty_ids = asyncio.run(service.batch_toggle_enabled_async("ds_a", ["  "], True))
+
+    assert missing_datasource == semantic_config_service_module.empty_batch_toggle_result()
+    assert empty_ids == semantic_config_service_module.empty_batch_toggle_result()
+    assert not getattr(dao, "batch_toggle_calls", [])
+
+
+def test_batch_toggle_enabled_async_warns_on_rowcount_mismatch():
+    service, _, dao = _build_service([_base_config(id="sc_public", scope_type="public")])
+    dao.batch_update_enabled_result = 0
+
+    result = asyncio.run(service.batch_toggle_enabled_async("ds_a", ["sc_public"], False, admin_manage=True))
+
+    assert result["updated_ids"] == ["sc_public"]
+    assert result["updated_count"] == 0

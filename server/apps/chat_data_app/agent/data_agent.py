@@ -19,6 +19,7 @@ from ..agent.context.context_budget import (
     count_tools_tokens,
     get_model_context_budget,
 )
+from ..services.memory.conversation_memory_service import schedule_memory_extraction_now
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
@@ -95,7 +96,6 @@ class DatasourceContext:
 
     datasource_id: str | None = None
     source_type: str | None = None
-    datasource_group_context: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,10 +109,10 @@ class ModelInvocationConfig:
     # 会话技能清单（<available_skills> XML，agent_stream 每轮构建）。
     # 归「模型怎么调」组：目录本是系统提示的一部分，子智能体与主智能体一致继承。
     available_skills_xml: str | None = None
-    # 会话数据源组上下文（含「当前用户已选择的执行对象数据源」成员清单）。
-    # 归「模型怎么调」组：查询工具要求模型显式传 member_datasource_ids，
-    # 子智能体与主智能体一致继承该清单。
-    datasource_group_context: str | None = None
+    # 会话记忆内容段（conversation_memory_service.render_session_memory_block 产物）。
+    # 主图 system prompt 由 agent_stream 预先拼好（本字段已并入其中），此处仅供
+    # 子图 spec 注入只读记忆段；空串时子图不注入。
+    memory_block: str = ""
 
 
 @dataclass(frozen=True)
@@ -132,13 +132,13 @@ class AgentAssemblySpec:
       全量（ToolNode），仅模型可见工具列表按"始终挂载 + 已发现"过滤。
     - ``always_mounted_tools``：检索模式下始终对模型可见的 MCP 限定工具名
       （``mcp_<server>_<tool>``），用于核心高频工具免检索直出。
-    - ``build_system_prompt``：``(runtime_options, workspace_root) -> prompt``，
+    - ``build_system_prompt``：``(runtime_options, workspace_root, memory_block="") -> prompt``，
       每次装配都会调用，prompt 必须由规格自身决定。
     """
 
     agent_id: str
     agent_name: str
-    build_system_prompt: Callable[[AgentRuntimeOptions, str], str]
+    build_system_prompt: Callable[..., str]
     tool_includes: frozenset[str] | None = None
     tool_excludes: frozenset[str] = frozenset()
     enable_mcp_tools: bool = True
@@ -271,7 +271,7 @@ def build_subagent_middleware(
     model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
     available_skills_xml: str | None = None,
-    datasource_group_context: str | None = None,
+    memory_block: str | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -281,9 +281,8 @@ def build_subagent_middleware(
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
     system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
-    ``datasource_group_context`` 与主智能体同一会话数据源组上下文（含已选
-    执行对象成员清单）：查询工具要求模型显式传 member_datasource_ids，
-    清单不进子图提示词则查询派发无从得知合法 ID；未传或为空则不注入。
+    ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
+    prompt 由此注入只读记忆段；未传或为空则不注入。
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -298,7 +297,7 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
-            datasource_group_context=datasource_group_context or "",
+            memory_block=memory_block or "",
         ))
     if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
@@ -312,15 +311,19 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
-            datasource_group_context=datasource_group_context or "",
+            memory_block=memory_block or "",
         ))
     if not specs:
         return None
     return SubagentMiddleware(specs, run_controls=run_controls)
 
 
-def _chat_data_system_prompt(options: AgentRuntimeOptions, workspace_root: str) -> str:
-    return build_unified_system_prompt(options, workspace_root=workspace_root)
+def _chat_data_system_prompt(
+    options: AgentRuntimeOptions,
+    workspace_root: str,
+    memory_block: str = "",
+) -> str:
+    return build_unified_system_prompt(options, workspace_root=workspace_root, memory_block=memory_block)
 
 
 MCP_TOOL_SEARCH_ENV = "CHAT_DATA_AGENT_MCP_TOOL_SEARCH"
@@ -390,11 +393,39 @@ def _resolve_mcp_tool_search_service(
     return MCPToolSearchService(get_mcp_tool_manager())
 
 
+def _build_memory_compression_hook(
+    conversation_id: str | None,
+    *,
+    workspace_root: str,
+    user_id: str | None,
+    username: str | None,
+    model_id: str | None,
+) -> Callable[[list[Any]], None] | None:
+    """构造压缩丢弃消息时的会话记忆立即抽取回调；无会话标识时返回 None。
+
+    仅闭包绑定定位记忆文件所需的最小上下文，调度侧的开关与空快照守卫在
+    ``schedule_memory_extraction_now`` 内统一执行。
+    """
+    if not str(conversation_id or "").strip():
+        return None
+
+    def _on_dropped_messages(dropped: list[Any]) -> None:
+        schedule_memory_extraction_now(
+            conversation_id=conversation_id,
+            workspace_root=workspace_root,
+            model_id=model_id,
+            messages=dropped,
+        )
+
+    return _on_dropped_messages
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
+    conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
@@ -407,9 +438,11 @@ def create_agent_from_spec(
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
-
     子智能体只继承内置工具（不含 MCP 等动态工具），且各子智能体的排除集策略
     仍由 ``tools/registry.py`` 单一事实源约束。
+
+    ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
+    记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。
     """
     validate_agent_assembly_spec(spec)
     options = runtime_options or get_chat_data_default_runtime_options()
@@ -456,7 +489,8 @@ def create_agent_from_spec(
     )
     effective_system_prompt = invocation.system_prompt or spec.build_system_prompt(
         options,
-        runtime.workspace_root,
+        workspace_root=runtime.workspace_root,
+        memory_block=invocation.memory_block,
     )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
@@ -470,7 +504,7 @@ def create_agent_from_spec(
     subagent_middleware = build_subagent_middleware(
         options, builtin_tools, model=model, model_id=model_id, run_controls=run_controls,
         available_skills_xml=invocation.available_skills_xml,
-        datasource_group_context=invocation.datasource_group_context,
+        memory_block=invocation.memory_block,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
@@ -484,6 +518,13 @@ def create_agent_from_spec(
         model_id=model_id,
         context_request_budget=context_request_budget,
         state_schema=ChatDataAgentState,
+        on_dropped_messages=_build_memory_compression_hook(
+            conversation_id,
+            workspace_root=runtime.workspace_root,
+            user_id=identity.user_id,
+            username=identity.operator_name,
+            model_id=model_id,
+        ),
     )
     tool_result_middleware = create_tool_result_middleware()
     image_injection_middleware = create_image_injection_middleware(

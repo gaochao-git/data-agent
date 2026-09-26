@@ -24,7 +24,7 @@ from ..schema import (
 )
 from ..services.dashboard import runtime as dashboard_runtime
 from ..services.dashboard.spec_service import create_dashboard_from_spec_payload
-from ..services.dashboard.service import get_dashboard_service
+from ..services.dashboard.service import PanelWritePayload, get_dashboard_service
 from ..services.dashboard.query_metadata import generate_query_metadata
 from .dependencies import _get_current_user
 
@@ -395,18 +395,20 @@ async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request
         panel_name = _truncate_text(request.name or "", 24) or _build_panel_name_fallback(request.chart_type, 24)
         panel = await service.add_panel(
             dashboard_id=dashboard_id,
-            name=panel_name,
-            sql=request.sql,
-            chart_type=request.chart_type,
-            chart_config=request.chart_config,
-            layout_x=request.layout_x,
-            layout_y=request.layout_y,
-            layout_w=request.layout_w,
-            layout_h=request.layout_h,
-            refresh_interval=request.refresh_interval,
-            source_thread_id=request.source_thread_id,
-            datasource_id=request.datasource_id,
-            member_datasource_id=request.member_datasource_id,
+            payload=PanelWritePayload(
+                name=panel_name,
+                sql=request.sql,
+                chart_type=request.chart_type,
+                chart_config=request.chart_config,
+                layout_x=request.layout_x,
+                layout_y=request.layout_y,
+                layout_w=request.layout_w,
+                layout_h=request.layout_h,
+                refresh_interval=request.refresh_interval,
+                source_thread_id=request.source_thread_id,
+                datasource_id=request.datasource_id,
+                member_datasource_id=request.member_datasource_id,
+            ),
             user_id=str(current_user.user_id),
             operator_name=operator_name,
         )
@@ -475,16 +477,18 @@ async def update_panel(dashboard_id: str, panel_id: str, request: PanelUpdateReq
         panel = await service.update_panel(
             dashboard_id=dashboard_id,
             panel_id=panel_id,
-            name=request.name,
-            sql=request.sql,
-            chart_type=request.chart_type,
-            chart_config=request.chart_config,
-            layout_x=request.layout_x,
-            layout_y=request.layout_y,
-            layout_w=request.layout_w,
-            layout_h=request.layout_h,
-            refresh_interval=request.refresh_interval,
-            member_datasource_id=request.member_datasource_id,
+            payload=PanelWritePayload(
+                name=request.name,
+                sql=request.sql,
+                chart_type=request.chart_type,
+                chart_config=request.chart_config,
+                layout_x=request.layout_x,
+                layout_y=request.layout_y,
+                layout_w=request.layout_w,
+                layout_h=request.layout_h,
+                refresh_interval=request.refresh_interval,
+                member_datasource_id=request.member_datasource_id,
+            ),
             user_id=str(current_user.user_id),
             operator_name=operator_name,
         )

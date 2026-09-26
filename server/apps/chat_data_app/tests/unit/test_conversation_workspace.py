@@ -29,7 +29,7 @@ from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
-from apps.chat_data_app.agent.workspace.workspace_execution import _artifact_payload_from_bytes
+from apps.chat_data_app.agent.workspace.workspace_ops import _artifact_payload_from_bytes
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
@@ -46,6 +46,22 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 from apps.chat_data_app.agent.workspace.workspace_special_services import (
     WorkspaceOfficePreviewService,
     stabilize_office_preview_html,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+    workspace_sandbox_api as we_api,
+    workspace_sandbox_paths as we_paths,
+    workspace_search as we_search,
+    workspace_session as we_session,
+    workspace_sync as we_sync,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+    workspace_sandbox_api as we_api,
+    workspace_sandbox_paths as we_paths,
+    workspace_search as we_search,
+    workspace_session as we_session,
+    workspace_sync as we_sync,
 )
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
@@ -732,9 +748,9 @@ async def test_file_write_and_edit_reject_uploads(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_write_uploads_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_write"].ainvoke({"file_path": "/mnt/user-data/uploads/a.txt", "content": "x"})
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_edit"].ainvoke({
             "file_path": "/mnt/user-data/uploads/a.txt",
             "old_content": "x",
@@ -1488,7 +1504,7 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
     target = Path(paths["uploads"]) / "demo.txt"
     target.write_text("old", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_edit"].ainvoke({
             "file_path": "/mnt/user-data/uploads/demo.txt",
             "old_content": "old",
@@ -2000,7 +2016,7 @@ def test_resolve_workspace_path_opens_uploads_only_for_explicit_switch(monkeypat
     """uploads 写权限只能由人侧删除接口显式打开，模型工具链路始终被拒。"""
     paths = _isolated_workspace(monkeypatch, tmp_path, f"conv_uploads_switch_{uuid.uuid4().hex}")
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         resolve_workspace_path(paths["root"], "/mnt/user-data/uploads/a.txt", writable=True)
 
     target = resolve_workspace_path(
@@ -2069,7 +2085,7 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
             paths["root"], "/mnt/user-data/outputs/query_result/result_1.json", allow_uploads=True,
         )
     # 不开开关时（模型工具链路）uploads 同样不可删
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         workspace_local_backend_module.delete_local_workspace_file(
             paths["root"], "/mnt/user-data/uploads/a.txt",
         )
@@ -2319,6 +2335,52 @@ def test_archive_rejects_unknown_and_empty_directory(monkeypatch, tmp_path):
 
     with pytest.raises(FileNotFoundError, match="没有可打包的文件"):
         conversation_workspace_module._archive_workspace_directory("conv_zip_c", "outputs", "user_a")
+
+
+def test_normalize_archive_directory_rejects_escape_variants():
+    """目录参数是可控路径，逃逸写法必须全部拦在服务边界内（首段白名单 + 拒绝 ..）。"""
+    normalize = conversation_workspace_module.normalize_archive_directory
+
+    assert normalize("outputs") == "outputs"
+    assert normalize("outputs/月报") == "outputs/月报"
+    assert normalize("/outputs/月报/") == "outputs/月报"
+    assert normalize("outputs\\月报") == "outputs/月报"
+
+    for escaped in ("../uploads", "outputs/../../uploads", "..", "/../etc", "not_a_workspace_dir"):
+        with pytest.raises(ValueError, match="目录不支持打包|目录不能为空"):
+            normalize(escaped)
+
+
+def test_archive_supports_subdirectory_and_rejects_escape(monkeypatch, tmp_path):
+    """打包放开到 outputs 下的子目录：只收该子目录的文件，同时拒绝路径逃逸。
+
+    目录参数变成用户可控的路径后，边界只能靠后端自己守：首段必须属于工作区目录，
+    且不允许用 `..` 把打包范围指到 outputs 之外（否则 uploads 的原件会被打进 outputs 的包）。
+    """
+    paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_sub")
+    root = Path(paths["root"])
+    (root / "outputs" / "月报").mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / "月报" / "明细.csv").write_text("id\n1\n", encoding="utf-8")
+    (root / "outputs" / "other.txt").write_text("outside", encoding="utf-8")
+    (root / "uploads" / "raw.txt").write_text("uploaded", encoding="utf-8")
+
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "outputs/月报", "user_a")
+
+    assert payload["filename"] == "月报.zip", "zip 名取末段，不能把斜杠带进文件名"
+    assert payload["file_count"] == 1
+    with zipfile.ZipFile(payload["temp_path"]) as zf:
+        assert zf.namelist() == ["outputs/月报/明细.csv"]
+    os.unlink(payload["temp_path"])
+
+    # 首尾斜杠与 Windows 分隔符归一到同一口径
+    payload = conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "/outputs\\月报/", "user_a")
+    assert payload["filename"] == "月报.zip"
+    os.unlink(payload["temp_path"])
+
+    with pytest.raises(ValueError, match="目录不支持打包"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "outputs/../uploads", "user_a")
+    with pytest.raises(ValueError, match="目录不能为空"):
+        conversation_workspace_module._archive_workspace_directory("conv_zip_sub", "  ", "user_a")
 
 
 def test_archive_aborts_and_cleans_up_when_zip_exceeds_limit(monkeypatch, tmp_path):

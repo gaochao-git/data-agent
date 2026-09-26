@@ -128,15 +128,22 @@ export function isWorkspaceFileDownloadable(relativePath: string | null | undefi
  *
  * 用户拍板（2026-09-19）先只放开 outputs：它是「智能体产出」的汇聚地，是打包下载
  * 的真实诉求；workspace 是过程中间文件、uploads 内容用户本就有原件，暂不放开。
- * 后端 archive 接口按 WORKSPACE_DIR_NAMES 白名单校验目录名，但打包内容仍走
+ * 2026-09-24 追加放开 outputs 下的**任意层级子目录**（顶层范围不变）。
+ * 后端 archive 接口按 WORKSPACE_DIR_NAMES 校验路径首段并拒绝 `..` 逃逸，打包内容仍走
  * list_workspace_files 的可见清单——系统结果目录（query_result / .tool-offload）
  * 即便在 outputs 下也不会进包，与单文件下载同一防泄漏口径。
  */
 export const ARCHIVE_DOWNLOADABLE_DIRECTORIES: readonly string[] = ['outputs']
 
-/** 判断顶层目录是否提供打包下载入口。 */
-export function isWorkspaceDirectoryArchiveDownloadable(directoryName: string | null | undefined): boolean {
-  return ARCHIVE_DOWNLOADABLE_DIRECTORIES.includes(String(directoryName || ''))
+/**
+ * 判断目录是否提供打包下载入口：顶层目录名或其下子目录路径（如 `outputs/月报`）都算。
+ *
+ * 系统结果目录即便在 outputs 下也拒绝：包里不会有任何文件，给了入口只会得到一个空包报错。
+ */
+export function isWorkspaceDirectoryArchiveDownloadable(directoryPath: string | null | undefined): boolean {
+  const path = normalizeWorkspaceRelativePath(directoryPath)
+  if (!path || isSystemResultWorkspacePath(path)) return false
+  return ARCHIVE_DOWNLOADABLE_DIRECTORIES.includes(path.split('/')[0] ?? '')
 }
 
 /**
@@ -234,11 +241,12 @@ export interface ProducedFileDirectory extends ProducedFileTreeNode {
   label: string
 }
 
-/** 面板固定展示的三个顶层目录（顺序即渲染顺序）。 */
+/** 面板固定展示的四个顶层目录（顺序即渲染顺序）。 */
 export const PRODUCED_FILE_DIRECTORIES: Array<{ name: string; label: string }> = [
   { name: 'uploads', label: '用户上传文件' },
   { name: 'workspace', label: '智能体中间文件' },
   { name: 'outputs', label: '智能体输出文件' },
+  { name: 'memory', label: '会话记忆' },
 ]
 
 /**

@@ -588,6 +588,20 @@
         "title": "ApiResponse",
         "type": "object"
       },
+      "Body_install_plugin_api_chatdata_admin_plugins_install_post": {
+        "properties": {
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_install_plugin_api_chatdata_admin_plugins_install_post",
+        "type": "object"
+      },
       "Body_upload_chatdata_file": {
         "properties": {
           "file": {
@@ -721,6 +735,17 @@
           "agent_id": {
             "title": "Agent Id",
             "type": "string"
+          },
+          "datasource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datasource Id"
           }
         },
         "required": [
@@ -1764,6 +1789,20 @@
         "title": "PanelUpdateRequest",
         "type": "object"
       },
+      "PluginEnabledRequest": {
+        "description": "插件启停请求。",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "PluginEnabledRequest",
+        "type": "object"
+      },
       "QueryFavoriteCreateRequest": {
         "description": "创建查询收藏请求",
         "properties": {
@@ -2172,6 +2211,29 @@
           "datasource_id"
         ],
         "title": "QuickSqlRequest",
+        "type": "object"
+      },
+      "SemanticConfigBatchToggleRequest": {
+        "description": "批量切换语义配置启用状态请求",
+        "properties": {
+          "config_ids": {
+            "description": "待切换的指标集 ID 列表",
+            "items": {
+              "type": "string"
+            },
+            "title": "Config Ids",
+            "type": "array"
+          },
+          "enabled": {
+            "description": "目标启用状态",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SemanticConfigBatchToggleRequest",
         "type": "object"
       },
       "SemanticConfigCreateRequest": {
@@ -3296,8 +3358,36 @@
         "type": "object"
       },
       "SteerRequest": {
-        "description": "运行中追加纯文本消息。",
+        "description": "运行中追加消息（正文 + 随行元数据）。\n\nfile_selections / file_ids 以引用形式存入 inbox 行 meta，续跑构建\nHumanMessage 时还原进 additional_kwargs，由 agent_stream 采纳点统一\n校验解析（白名单 + 引用短句 + 附件占位/视觉装载）——排队消息与\n普通发送路径共享同一条「存引用、晚解析」语义。",
         "properties": {
+          "file_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Ids"
+          },
+          "file_selections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Selections"
+          },
           "query": {
             "maxLength": 4000,
             "minLength": 1,
@@ -4258,9 +4348,67 @@
         ]
       }
     },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/batch-toggle": {
+      "patch": {
+        "description": "后台批量切换公共指标集启用状态。",
+        "operationId": "batch_toggle_admin_semantic_configs_api_chatdata_admin_datasources__datasource_id__semantic_configs_batch_toggle_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigBatchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Batch Toggle Admin Semantic Configs",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
     "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/generate-basic": {
       "post": {
-        "description": "后台按物理表批量创建禁用的公共基础模型。",
+        "description": "后台按物理表批量创建公共基础模型（默认启用）。",
         "operationId": "generate_admin_basic_semantic_configs_api_chatdata_admin_datasources__datasource_id__semantic_configs_generate_basic_post",
         "parameters": [
           {
@@ -5868,6 +6016,218 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins": {
+      "get": {
+        "description": "已安装插件分页列表（含禁用项），启停与审计字段来自 DB。",
+        "operationId": "list_plugins_api_chatdata_admin_plugins_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Plugins",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/install": {
+      "post": {
+        "description": "上传插件 zip 安装（manifest 校验 + 安全解压 + 写 DB；同名插件需先卸载）。",
+        "operationId": "install_plugin_api_chatdata_admin_plugins_install_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_install_plugin_api_chatdata_admin_plugins_install_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Install Plugin",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/{plugin_id}": {
+      "delete": {
+        "description": "卸载插件：删除磁盘目录并软删 DB 记录。",
+        "operationId": "remove_plugin_api_chatdata_admin_plugins__plugin_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Remove Plugin",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/{plugin_id}/enabled": {
+      "put": {
+        "description": "启用/禁用插件（写 DB，立即影响新会话快照与新装配）。",
+        "operationId": "update_plugin_enabled_api_chatdata_admin_plugins__plugin_id__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginEnabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Update Plugin Enabled",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/query-history": {
       "get": {
         "description": "获取后台全局 SQL 查询历史。",
@@ -6697,7 +7057,7 @@
         ]
       },
       "post": {
-        "description": "创建新会话\n\nPOST /api/chatdata/conversations\nBody: {\"agent_id\": \"...\"}\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"create_time\": \"...\"}\n}",
+        "description": "创建新会话\n\nPOST /api/chatdata/conversations\nBody: {\"agent_id\": \"...\", \"datasource_id\": \"...\"}  # datasource_id 可选\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"create_time\": \"...\"}\n}",
         "operationId": "create_conversation_api_chatdata_conversations_post",
         "requestBody": {
           "content": {
@@ -7401,7 +7761,7 @@
         ]
       },
       "post": {
-        "description": "向当前用户正在运行的 ChatData Agent 追加一条纯文本消息。",
+        "description": "向当前用户正在运行的 ChatData Agent 追加一条消息（正文 + 随行引用/附件元数据）。",
         "operationId": "steer_api_chatdata_conversations__conversation_id__steer_post",
         "parameters": [
           {
@@ -7788,7 +8148,7 @@
     },
     "/api/chatdata/conversations/{conversation_id}/workspace-files/archive": {
       "get": {
-        "description": "把会话工作区的单个顶层目录（当前仅放开 outputs）打包为 zip 下载。\n\n内容与权限口径复用文件列表的白名单（见 service 层注释）；大小限制针对 zip\n产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。\n临时 zip 通过 BackgroundTask 在响应发送后删除。",
+        "description": "把会话工作区的目录（顶层目录或其下子目录，UI 当前只放开 outputs）打包为 zip 下载。\n\n目录合法性由 service 层 ``normalize_archive_directory`` 单点校验（首段必须在工作区\n目录白名单内、拒绝 ``..`` 逃逸），路由不再重复一份白名单，非法目录走 ValueError\n分支返回业务错误。内容与权限口径复用文件列表的白名单（见 service 层注释）；大小\n限制针对 zip 产物（CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB，默认 50MB），超限返回业务错误。\n临时 zip 通过 BackgroundTask 在响应发送后删除。",
         "operationId": "download_conversation_workspace_archive",
         "parameters": [
           {
@@ -9103,6 +9463,64 @@
           }
         ],
         "summary": "Create Semantic Config",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/datasources/{datasource_id}/semantic-configs/batch-toggle": {
+      "patch": {
+        "description": "批量切换个人指标集启用状态。",
+        "operationId": "batch_toggle_semantic_configs_api_chatdata_datasources__datasource_id__semantic_configs_batch_toggle_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigBatchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Batch Toggle Semantic Configs",
         "tags": [
           "ChatData 语义模型"
         ]

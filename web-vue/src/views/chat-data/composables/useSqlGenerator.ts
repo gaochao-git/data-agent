@@ -28,7 +28,6 @@ import type {
   ChatDataTokenUsage,
   ChatDataContextCompressionEvent,
   ChatDataMessageEndPayload,
-  SemanticConfigSelectionInfo,
   ToolLifecycleEventData,
   PendingUserQuestion,
 } from '../types'
@@ -121,7 +120,7 @@ export function useSqlGenerator() {
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
-      semanticConfigSelections?: SemanticConfigSelectionInfo[]
+      fileSelections?: string[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
@@ -154,7 +153,7 @@ export function useSqlGenerator() {
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
-      semanticConfigSelections,
+      fileSelections,
       enableThinking,
       thinkingEffort,
       runtimeOptions,
@@ -210,10 +209,9 @@ export function useSqlGenerator() {
         options.model_id = modelId
       }
 
-      // @ 引用清单（多选）：后端兼容 dict 与 list 两种留痕格式，统一以列表传输；
-      // 单引用绑定的 semantic_config_id 由服务端从该列表推导，前端不重复发送
-      if (semanticConfigSelections?.length) {
-        options.semantic_config_selection = semanticConfigSelections
+      // @ 引用工作区文件（相对路径列表）：白名单校验与 Human 消息短句由服务端完成
+      if (fileSelections?.length) {
+        options.file_selections = fileSelections
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {
