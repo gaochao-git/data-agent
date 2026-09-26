@@ -10,12 +10,12 @@ from urllib.parse import unquote
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
-WorkspacePathKind = Literal["workspace", "outputs", "uploads", "skills"]
+WorkspacePathKind = Literal["workspace", "outputs", "uploads", "memory", "skills"]
 
 # 工作区规范虚拟前缀（模型/前端唯一合法形式），与沙箱挂载路径字面一致。
 USER_DATA_VIRTUAL_ROOT = "/mnt/user-data"
 
-_WORKSPACE_ROOTS = frozenset({"workspace", "outputs", "uploads"})
+_WORKSPACE_ROOTS = frozenset({"workspace", "outputs", "uploads", "memory"})
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,10 @@ class WorkspacePathPolicy:
             raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
         kind = parts[0]
         if kind not in _WORKSPACE_ROOTS:
-            raise ValueError("只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs 或 /mnt/user-data/uploads")
+            raise ValueError(
+                "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
+                "/mnt/user-data/uploads 或 /mnt/user-data/memory"
+            )
         relative = "/".join(parts[1:])
         normalized = kind if not relative else f"{kind}/{relative}"
         return LogicalWorkspacePath(
@@ -113,10 +116,10 @@ class WorkspacePathPolicy:
         默认为 False：uploads 在沙箱内是只读挂载，智能体的 file_write/file_edit 不应拿到写权限。
         绝不要用「把 uploads 加进白名单」的方式实现，否则等于顺带把写权限也给了模型工具。
         """
-        if logical_path.kind not in {"workspace", "outputs"} and not (
+        if logical_path.kind not in {"workspace", "outputs", "memory"} and not (
             allow_uploads_write and logical_path.kind == "uploads"
         ):
-            raise ValueError("只允许写入 workspace/ 或 outputs/")
+            raise ValueError("只允许写入 workspace/、outputs/ 或 memory/")
         if logical_path.is_system_result:
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if logical_path.is_semantic_model and not allow_managed_semantic_model_write:

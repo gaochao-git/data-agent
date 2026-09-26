@@ -300,7 +300,7 @@ def _application_path_for_sandbox_path(session: SandboxExecutionSession, sandbox
         relative = target.relative_to(sandbox_root)
     except ValueError as exc:
         raise ValueError(f"沙箱路径不属于当前会话: {sandbox_path}") from exc
-    if not relative.parts or relative.parts[0] not in {"workspace", "outputs"}:
+    if not relative.parts or relative.parts[0] not in {"workspace", "outputs", "memory"}:
         raise ValueError(f"沙箱路径不属于允许同步目录: {sandbox_path}")
     local_path = (root / relative.as_posix()).resolve()
     if root not in local_path.parents:

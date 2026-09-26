@@ -63,6 +63,7 @@ async def compress_messages_for_state(
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
     on_compression_started: Callable[[], None] | None = None,
+    on_dropped_messages: Callable[[list[BaseMessage]], None] | None = None,
     todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], str | None, dict[str, Any]]:
     """压缩旧历史和当前回合较早的完整工具链。"""
@@ -164,6 +165,7 @@ async def compress_messages_for_state(
             static_input_tokens=static_tokens,
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
+    _notify_dropped_messages_hook(on_dropped_messages, messages_to_summarize)
     _notify_compression_started(on_compression_started)
     summary_text, summary_input_report = await _summarize_for_compression(
         messages_to_summarize,
@@ -217,6 +219,7 @@ async def compress_messages_for_state(
         summary_input_limit_tokens,
         summary_model_id,
         report,
+        on_dropped_messages=on_dropped_messages,
         todo_snapshot=todo_snapshot,
     )
 
@@ -255,6 +258,23 @@ def _notify_compression_started(on_compression_started: Callable[[], None] | Non
             logger.debug("推送压缩开始事件失败，不影响压缩主流程", exc_info=True)
 
 
+def _notify_dropped_messages_hook(
+    on_dropped_messages: Callable[[list[BaseMessage]], None] | None,
+    dropped: list[BaseMessage],
+) -> None:
+    """把即将退出上下文的消息交给外部监听者（会话记忆抽取）。
+
+    传入拷贝隔离；监听者异常只告警，不影响压缩主流程。摘要失败走 fail-closed
+    保留消息时，本轮提前通知造成的少量重复抽取由记忆合并去重兜底。
+    """
+    if not on_dropped_messages or not dropped:
+        return
+    try:
+        on_dropped_messages(list(dropped))
+    except Exception:
+        logger.warning("上下文压缩丢弃消息回调失败，不影响压缩主流程", exc_info=True)
+
+
 async def _run_compression_passes(
     compressed_messages: list[BaseMessage],
     summary_text: str | None,
@@ -265,6 +285,7 @@ async def _run_compression_passes(
     summary_input_limit_tokens: int | None,
     summary_model_id: str | None,
     report: dict[str, Any],
+    on_dropped_messages: Callable[[list[BaseMessage]], None] | None = None,
     todo_snapshot: str | None = None,
 ) -> tuple[list[BaseMessage], str | None, int, int, int]:
     """迭代执行多轮摘要压缩，返回 (压缩后消息, 摘要, 压缩消息数, after_tokens, 轮数)。"""
@@ -300,6 +321,8 @@ async def _run_compression_passes(
         compressed_count += additional_count
         after_tokens = next_tokens
         compression_passes += 1
+        # 后续 pass 丢弃的是上一轮保留集合的子集，首轮回调未覆盖，需补交。
+        _notify_dropped_messages_hook(on_dropped_messages, additional_messages)
     return compressed_messages, summary_text, compressed_count, after_tokens, compression_passes
 
 
@@ -316,6 +339,7 @@ async def build_context_compression_update(
     summary_input_limit_tokens: int | None = None,
     summary_model_id: str | None = None,
     on_compression_started: Callable[[], None] | None = None,
+    on_dropped_messages: Callable[[list[BaseMessage]], None] | None = None,
     todos: list[dict[str, Any]] | None = None,
 ) -> tuple[list[BaseMessage] | None, str | None, dict[str, Any]]:
     """构造可写入 LangGraph state 的压缩消息更新。"""
@@ -331,6 +355,7 @@ async def build_context_compression_update(
         summary_input_limit_tokens=summary_input_limit_tokens,
         summary_model_id=summary_model_id,
         on_compression_started=on_compression_started,
+        on_dropped_messages=on_dropped_messages,
         todo_snapshot=_format_todo_snapshot(todos),
     )
     if not report.get("triggered") and not report.get("legacy_summary_migrated"):
@@ -406,8 +431,13 @@ def create_context_compression_middleware(
     model_id: str | None = None,
     context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
+    on_dropped_messages: Callable[[list[BaseMessage]], None] | None = None,
 ) -> Any:
-    """创建模型调用前的状态级上下文压缩 middleware。"""
+    """创建模型调用前的状态级上下文压缩 middleware。
+
+    ``on_dropped_messages`` 在压缩即将丢弃消息时同步回调（拷贝传入），供
+    会话记忆等外部监听者抢救信息；回调异常不影响压缩主流程。
+    """
     compression_budget = context_request_budget or ContextRequestBudget(model_id)
     request_tools = list(tools or [])
 
@@ -432,6 +462,7 @@ def create_context_compression_middleware(
             summary_input_limit_tokens=_get_summary_input_limit_tokens(model_id),
             summary_model_id=model_id,
             on_compression_started=_notify_compression_started,
+            on_dropped_messages=on_dropped_messages,
             todos=_read_middleware_todos(state),
         )
         if report["estimated_tokens_after"] > budget.hard_input_limit_tokens:

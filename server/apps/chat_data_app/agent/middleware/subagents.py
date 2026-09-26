@@ -165,6 +165,10 @@ class SubagentSpec:
     # 与主智能体保持一致继承：子图 system prompt 由此注入目录段，正文仍按需
     # file_read /mnt/skills/<name>/SKILL.md；空串或空目录时不注入。
     available_skills_xml: str = ""
+    # 主智能体同一会话的记忆条目文本（conversation_memory_service.render_session_memory_block
+    # 产物，已逐条转义）。子智能体看不到主对话历史，注入记忆帮助它沿用已确认的
+    # 口径与偏好；子任务只引用不写入，注入为只读段，空串时不注入。
+    memory_block: str = ""
     # 预算告警的口径来源：默认与主图同一 model_id，取同一 ContextBudget 的压缩触发
     # 阈值作为「上下文将尽」的告警线（与主图同源）；压测/调试可用
     # CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 单独覆盖子图告警线
@@ -391,16 +395,26 @@ _SUBAGENT_SKILLS_SECTION_TEMPLATE = """## 可用技能
 SKILL.md 并严格按其执行：
 {skills_xml}"""
 
+# 子图会话记忆只读段：条目与主图同源（同一渲染入口，已转义）。子智能体没有
+# 维护记忆的职责，声明只读，避免子任务写主对话的记忆文件。
+_SUBAGENT_MEMORY_SECTION_TEMPLATE = """## 会话记忆（只读）
+以下是主对话中已沉淀的本会话记忆条目，供你沿用已确认的口径、纠错结论与偏好：
+{memory_block}
+子任务只引用以上记忆，不写入、不修改记忆文件（`/mnt/user-data/memory/memory.md`）。"""
+
 def _subagent_system_prompt(spec: SubagentSpec) -> str:
     """返回子图实际生效的 system prompt：spec.system_prompt + 会话级共享段。
 
-    共享段为技能目录（``<available_skills>``，与主图同源）；为空（未传或
-    本轮无内容）时不追加空块。
+    共享段为技能目录（``<available_skills>``，与主图同源）与会话记忆只读段
+    （``spec.memory_block``，与主图同源）；为空（未传或本轮无内容）时不追加空块。
     """
     prompt = spec.system_prompt
     xml = str(spec.available_skills_xml or "").strip()
     if "<skill>" in xml:
         prompt += "\n\n" + _SUBAGENT_SKILLS_SECTION_TEMPLATE.format(skills_xml=xml)
+    memory = str(spec.memory_block or "").strip()
+    if memory:
+        prompt += "\n\n" + _SUBAGENT_MEMORY_SECTION_TEMPLATE.format(memory_block=memory)
     return prompt
 
 

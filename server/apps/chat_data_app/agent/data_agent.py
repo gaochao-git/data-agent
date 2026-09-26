@@ -1,11 +1,12 @@
 """ChatData 单一 Agent 的构建与工具装配。"""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from langchain.agents import create_agent
 
 from ..agent.context.context_budget import ContextRequestBudget
+from ..services.memory.conversation_memory_service import schedule_memory_extraction_now
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
@@ -92,6 +93,10 @@ class ModelInvocationConfig:
     # 会话技能清单（<available_skills> XML，agent_stream 每轮构建）。
     # 归「模型怎么调」组：目录本是系统提示的一部分，子智能体与主智能体一致继承。
     available_skills_xml: str | None = None
+    # 会话记忆内容段（conversation_memory_service.render_session_memory_block 产物）。
+    # 主图 system prompt 由 agent_stream 预先拼好（本字段已并入其中），此处仅供
+    # 子图 spec 注入只读记忆段；空串时子图不注入。
+    memory_block: str = ""
 
 
 def assemble_tools(
@@ -151,6 +156,7 @@ def build_subagent_middleware(
     model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
     available_skills_xml: str | None = None,
+    memory_block: str | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -160,6 +166,8 @@ def build_subagent_middleware(
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
     system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
+    ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
+    prompt 由此注入只读记忆段；未传或为空则不注入。
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -174,6 +182,7 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
+            memory_block=memory_block or "",
         ))
     if runtime_options.plan_subagent_enabled:
         specs.append(SubagentSpec(
@@ -187,16 +196,45 @@ def build_subagent_middleware(
             model=model,
             model_id=model_id,
             available_skills_xml=available_skills_xml or "",
+            memory_block=memory_block or "",
         ))
     if not specs:
         return None
     return SubagentMiddleware(specs, run_controls=run_controls)
 
 
+def _build_memory_compression_hook(
+    conversation_id: str | None,
+    *,
+    workspace_root: str,
+    user_id: str | None,
+    username: str | None,
+    model_id: str | None,
+) -> Callable[[list[Any]], None] | None:
+    """构造压缩丢弃消息时的会话记忆立即抽取回调；无会话标识时返回 None。
+
+    仅闭包绑定定位记忆文件所需的最小上下文，调度侧的开关与空快照守卫在
+    ``schedule_memory_extraction_now`` 内统一执行。
+    """
+    if not str(conversation_id or "").strip():
+        return None
+
+    def _on_dropped_messages(dropped: list[Any]) -> None:
+        schedule_memory_extraction_now(
+            conversation_id=conversation_id,
+            workspace_root=workspace_root,
+            model_id=model_id,
+            messages=dropped,
+        )
+
+    return _on_dropped_messages
+
+
 def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
+    conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
@@ -209,6 +247,8 @@ def create_data_agent(
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
+    ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
+    记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。
     """
     options = runtime_options or get_chat_data_default_runtime_options()
     identity = identity_context or IdentityContext()
@@ -237,6 +277,7 @@ def create_data_agent(
     effective_system_prompt = invocation.system_prompt or build_unified_system_prompt(
         options,
         workspace_root=runtime.workspace_root,
+        memory_block=invocation.memory_block,
     )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
@@ -250,6 +291,7 @@ def create_data_agent(
     subagent_middleware = build_subagent_middleware(
         options, tools, model=model, model_id=model_id, run_controls=run_controls,
         available_skills_xml=invocation.available_skills_xml,
+        memory_block=invocation.memory_block,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
@@ -263,6 +305,13 @@ def create_data_agent(
         model_id=model_id,
         context_request_budget=context_request_budget,
         state_schema=ChatDataAgentState,
+        on_dropped_messages=_build_memory_compression_hook(
+            conversation_id,
+            workspace_root=runtime.workspace_root,
+            user_id=identity.user_id,
+            username=identity.operator_name,
+            model_id=model_id,
+        ),
     )
     tool_result_middleware = create_tool_result_middleware()
     image_injection_middleware = create_image_injection_middleware(

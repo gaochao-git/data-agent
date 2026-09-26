@@ -241,11 +241,12 @@ export interface ProducedFileDirectory extends ProducedFileTreeNode {
   label: string
 }
 
-/** 面板固定展示的三个顶层目录（顺序即渲染顺序）。 */
+/** 面板固定展示的四个顶层目录（顺序即渲染顺序）。 */
 export const PRODUCED_FILE_DIRECTORIES: Array<{ name: string; label: string }> = [
   { name: 'uploads', label: '用户上传文件' },
   { name: 'workspace', label: '智能体中间文件' },
   { name: 'outputs', label: '智能体输出文件' },
+  { name: 'memory', label: '会话记忆' },
 ]
 
 /**

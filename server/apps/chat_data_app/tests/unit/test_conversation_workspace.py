@@ -748,9 +748,9 @@ async def test_file_write_and_edit_reject_uploads(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_write_uploads_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_write"].ainvoke({"file_path": "/mnt/user-data/uploads/a.txt", "content": "x"})
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_edit"].ainvoke({
             "file_path": "/mnt/user-data/uploads/a.txt",
             "old_content": "x",
@@ -1504,7 +1504,7 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
     target = Path(paths["uploads"]) / "demo.txt"
     target.write_text("old", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_edit"].ainvoke({
             "file_path": "/mnt/user-data/uploads/demo.txt",
             "old_content": "old",
@@ -2016,7 +2016,7 @@ def test_resolve_workspace_path_opens_uploads_only_for_explicit_switch(monkeypat
     """uploads 写权限只能由人侧删除接口显式打开，模型工具链路始终被拒。"""
     paths = _isolated_workspace(monkeypatch, tmp_path, f"conv_uploads_switch_{uuid.uuid4().hex}")
 
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         resolve_workspace_path(paths["root"], "/mnt/user-data/uploads/a.txt", writable=True)
 
     target = resolve_workspace_path(
@@ -2085,7 +2085,7 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
             paths["root"], "/mnt/user-data/outputs/query_result/result_1.json", allow_uploads=True,
         )
     # 不开开关时（模型工具链路）uploads 同样不可删
-    with pytest.raises(ValueError, match="只允许写入 workspace/ 或 outputs/"):
+    with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         workspace_local_backend_module.delete_local_workspace_file(
             paths["root"], "/mnt/user-data/uploads/a.txt",
         )

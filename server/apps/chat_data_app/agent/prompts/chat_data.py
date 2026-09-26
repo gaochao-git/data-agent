@@ -102,14 +102,16 @@ ENVIRONMENT_BLOCK = """## 环境
 
 # 会话记忆约定（仅主智能体）：独立成块，不得并入 ENVIRONMENT_BLOCK——
 # 子智能体 prompt 以 f-string 引用 ENVIRONMENT_BLOCK，会连带拿到本段。
-# 条目不要求带日期：主提示词不注入当前时间，弱模型会编造日期；文件内顺序即新旧。
-MEMORY_BLOCK = """## 会话记忆
-本会话确认过的口径、偏好与纠错结论沉淀在 `/mnt/user-data/workspace/memory.md`（仅本会话可见）：
-- 用户确认了数据口径、纠正过你的错误、或交代了格式/习惯偏好时，把结论追加到该文件：优先用 `file_edit` 追加——先 `file_read` 读到文件末尾，取最后一条作 `old_content`（若该行在文件中不唯一，连带前面几行一起取，直到全文唯一），`new_content` 为这段原文加换行再加新条目。`file_edit` 是精确替换：原文找不到或匹配多处时会直接报错且不修改文件，此时加长原文重试即可，不要改用整文件覆盖。
-- 仅当文件不存在、或需要合并/淘汰条目而整份重写时，才用 `file_write`（它是整文件覆盖，覆盖前必须先 `file_read` 读全，否则会丢失已有记录）。
-- 每条一行写清结论与适用范围；同一口径发生变化时追加新条目而不改旧条目，读取时以文件中更靠后的条目为准。整份文件控制在 20 行以内，超出时合并同类或淘汰最早的条目。
-- 再次执行同类任务（如再生成一期报告）前，或对口径、格式拿不准时，先读取该文件再动手，避免向用户重复追问。
-- 闲聊、一次性查询和过程性中间结果不记，只记后续还会用到的结论。"""
+# 记忆内容由系统自动抽取写入并经 build_unified_system_prompt 的 memory_block
+# 参数注入（紧跟本约定块之后的「## 会话记忆」内容段）；条目不要求带日期：
+# 主提示词不注入当前时间，弱模型会编造日期；文件内顺序即新旧。
+MEMORY_BLOCK = """## 会话记忆约定
+本会话的结论性记忆由系统自动维护：每轮结束后系统抽取用户确认过的口径、纠错结论与
+格式偏好，写入 `/mnt/user-data/memory/memory.md`（仅本会话可见），并在下方「会话记忆」区自动注入。
+- 你无需主动整理记忆，但在对话中发现应记未记的结论时，可以用 `file_edit` 向该文件追加一行补充（格式 `- [类别] 结论（适用范围）`，类别如：口径、纠错、偏好、约定）；优先追加在文件末尾——先 `file_read` 读到末尾，取最后一条作 `old_content`（若该行不唯一，连带前面几行直到全文唯一），`new_content` 为该原文加换行再加新条目。
+- 同一口径发生变化时追加新条目而不改旧条目，以文件中更靠后的条目为准；仅当需要合并/淘汰条目时才用 `file_write` 整文件重写（重写前必须先 `file_read` 读全，否则会丢失已有记录）。
+- 再次执行同类任务（如再生成一期报告）前，或对口径、格式拿不准时，先查看下方会话记忆与该文件，避免向用户重复追问。
+- 该文件用户可见、可编辑、可删除；删除后系统会在后续轮次按需重建。"""
 
 PRIORITY_BLOCK = """## 优先级
 1. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
@@ -212,8 +214,13 @@ def build_unified_system_prompt(
     data_context: dict | None = None,
     workspace_root: str | None = None,
     available_skills_xml: str | None = None,
+    memory_block: str | None = None,
 ) -> str:
-    """构造单一 Agent 的系统提示词。"""
+    """构造单一 Agent 的系统提示词。
+
+    ``memory_block`` 为会话记忆内容段（服务端渲染的已转义条目文本，不含段落
+    标题）；为空（开关关闭/无记忆）时省略该段，只保留上方约定块。
+    """
     context_text = build_data_context_text(data_context=data_context)
 
     sections: list[str] = [ROLE_BLOCK]
@@ -222,8 +229,12 @@ def build_unified_system_prompt(
     sections.append(ENVIRONMENT_BLOCK)
 
     # 会话记忆约定仅挂主智能体：子智能体是受委派的一次性执行者，
-    # 看不到主对话历史，也没有维护会话记忆的职责。
+    # 看不到主对话历史，也没有维护会话记忆的职责（子图只读记忆段由
+    # middleware/subagents.py 按 spec.memory_block 独立注入）。
     sections.append(MEMORY_BLOCK)
+    memory_content = str(memory_block or "").strip()
+    if memory_content:
+        sections.append("## 会话记忆\n" + memory_content)
 
     sections.append("# 数据上下文\n\n" + context_text)
 

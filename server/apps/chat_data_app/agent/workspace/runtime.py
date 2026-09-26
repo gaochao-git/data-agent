@@ -43,7 +43,7 @@ from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
 
 logger = get_logger(__name__)
 
-WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
+WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads", "memory")
 OFFICE_PREVIEW_MAX_CHARS = 12 * 1024 * 1024
 
 
@@ -482,7 +482,10 @@ def resolve_workspace_path(
 
     visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
     if not any(target == item or item in target.parents for item in visible_roots):
-        raise ValueError("只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs 或 /mnt/user-data/uploads")
+        raise ValueError(
+            "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
+            "/mnt/user-data/uploads 或 /mnt/user-data/memory"
+        )
 
     if writable:
         if is_system_result_workspace_path(str(root), target):
@@ -587,6 +590,7 @@ class WorkspacePathMapping:
             "workspace": f"{root}/workspace",
             "outputs": f"{root}/outputs",
             "uploads": f"{root}/uploads",
+            "memory": f"{root}/memory",
         }
         # /mnt/skills/<name> -> 本会话快照目录/<name>；从快照目录直接枚举，无需逐技能登记。
         # runtime_skills_dir 为 None 表示本映射不绑定技能快照（仅工作区路径翻译）。
@@ -625,8 +629,8 @@ class WorkspacePathMapping:
             if physical:
                 out = out.replace(physical, virtual_root)
         # 2) 工作区物理 → 虚拟。
-        for name in ("workspace", "outputs", "uploads"):
-            out = out.replace(self._physical_workspace[name], f"/mnt/user-data/{name}")
+        for name, physical in self._physical_workspace.items():
+            out = out.replace(physical, f"/mnt/user-data/{name}")
         return out
 
 

@@ -52,6 +52,10 @@ from .agent.middleware.steering import SteeringMessageTracker
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
 from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
 from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.memory.conversation_memory_service import (
+    after_agent_turn_with_memory,
+    render_session_memory_block,
+)
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
@@ -1500,6 +1504,7 @@ class TurnRuntimeContext:
     workspace_root: str
     data_context: Any
     available_skills_xml: str
+    memory_block: str
 
 
 async def _resolve_agent_turn_inputs(
@@ -1536,6 +1541,7 @@ async def _resolve_agent_turn_inputs(
     workspace_root = runtime.workspace_root
     data_context = runtime.data_context
     available_skills_xml = runtime.available_skills_xml
+    memory_block = runtime.memory_block
     message_kwargs: dict[str, Any] = {}
     if skill_names:
         message_kwargs["skill_names"] = skill_names
@@ -1580,6 +1586,7 @@ async def _resolve_agent_turn_inputs(
         data_context=data_context,
         workspace_root=workspace_root,
         available_skills_xml=available_skills_xml,
+        memory_block=memory_block,
     )
     return user_message, initial_state, system_prompt, adopted_messages
 
@@ -1679,6 +1686,12 @@ async def _run_chat_data_agent_stream(
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
         semantic_materialize_note, user_id, thread_id, workspace_runtime,
     )
+    # 会话记忆注入段（每轮构建时读取）：由系统自动维护，主图 system prompt
+    # 与子图只读段共用同一份渲染产物；空串时各消费方自动省略整段。
+    memory_block = render_session_memory_block(
+        workspace_paths["root"],
+        conversation_id=thread_id,
+    )
 
     config = {
         # 子智能体（subagents.py::build_subagent_invocation_config）读同一常量，
@@ -1746,6 +1759,7 @@ async def _run_chat_data_agent_stream(
                         workspace_root=workspace_paths["root"],
                         data_context=data_context,
                         available_skills_xml=available_skills_xml,
+                        memory_block=memory_block,
                     ),
                 )
             )
@@ -1778,6 +1792,7 @@ async def _run_chat_data_agent_stream(
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
+                conversation_id=thread_id,
                 identity_context=IdentityContext(
                     user_id=user_id,
                     operator_name=username,
@@ -1792,6 +1807,7 @@ async def _run_chat_data_agent_stream(
                     enable_thinking=enable_thinking,
                     thinking_effort=thinking_effort,
                     available_skills_xml=available_skills_xml,
+                    memory_block=memory_block,
                 ),
                 workspace_runtime=workspace_runtime,
                 run_controls=AgentRunControls(
@@ -1823,7 +1839,18 @@ async def _run_chat_data_agent_stream(
                 hooks=TurnLifecycleHooks(
                     before_stream=partial(_before_agent_stream, callbacks),
                     after_finish=partial(_mark_agent_resume_checkpointed, callbacks),
-                    after_turn=partial(_log_agent_stream_done, callbacks),
+                    # 会话记忆收尾钩子下沉到服务层：先同步打点，再调度防抖抽取
+                    # （仅整轮正常结束时触发；interrupt/disconnected 不抽取）。
+                    after_turn=partial(
+                        after_agent_turn_with_memory,
+                        partial(_log_agent_stream_done, callbacks),
+                        stream_adapter,
+                        conversation_id=thread_id,
+                        workspace_root=workspace_paths["root"],
+                        user_id=user_id,
+                        username=username,
+                        model_id=model_id,
+                    ),
                     after_stream=partial(_confirm_agent_consumed_messages, callbacks),
                     on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
                 ),
