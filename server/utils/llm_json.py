@@ -17,7 +17,7 @@ class JSONParseError(Exception):
     pass
 
 
-def parse_llm_json(content: str, strict: bool = False) -> Dict[str, Any]:
+def parse_llm_json(content: str, strict: bool = True) -> Dict[str, Any]:
     """
     解析 LLM 返回的 JSON 内容
 
@@ -29,13 +29,15 @@ def parse_llm_json(content: str, strict: bool = False) -> Dict[str, Any]:
 
     Args:
         content: LLM 返回的原始内容
-        strict: 是否严格模式（严格模式下解析失败会抛出异常）
+        strict: 是否严格模式（默认 True，解析失败抛出异常）；显式传
+            ``strict=False`` 表示调用方明确接受"失败静默回退空 dict"
+            的宽松口径（如后台任务、可选生成类功能）
 
     Returns:
         解析后的字典
 
     Raises:
-        JSONParseError: 解析失败时抛出（仅在 strict=True 时）
+        JSONParseError: 解析失败时抛出（默认行为；仅 strict=False 时改为返回 {}）
     """
     if not content or not content.strip():
         if strict:

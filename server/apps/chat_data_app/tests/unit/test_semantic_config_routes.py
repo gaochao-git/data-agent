@@ -26,6 +26,7 @@ from apps.chat_data_app.schema import (
 )
 from apps.chat_data_app.services.semantic.run import semantic_config_service
 from apps.chat_data_app.services.semantic.run import semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run import semantic_prefill_service
 from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import build_semantic_history_learning_service
 
 
@@ -414,7 +415,7 @@ def test_prefill_helpers_use_business_context(monkeypatch):
             "metrics": [{"table": "orders", "table_alias": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"}],
         }
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_metric_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_metric_recommendation)
     default_result = asyncio.run(semantic_config._prefill_by_llm(tables))
     contextual_result = asyncio.run(semantic_config._prefill_by_llm(tables, business_context="订单金额常做汇总"))
 
@@ -1058,14 +1059,14 @@ def test_prefill_parse_and_error_branches(monkeypatch):
     async def fake_raise(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_raise)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_raise)
     fallback_result = asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}]))
     assert fallback_result == {"fields": [{"table": "orders", "table_alias": "orders", "column": "id", "role": "dimension", "expression": "`id`", "name": "id"}]}
 
     async def fake_incomplete(*_args, **_kwargs):
         return []
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_incomplete)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_incomplete)
     assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}])) == fallback_result
 
 
@@ -1078,7 +1079,7 @@ def test_prefill_prompt_includes_business_context(monkeypatch):
         captured["max_metrics"] = max_metrics
         return [{"table": "orders", "column": "amount_sum", "source_column": "amount_sum", "role": "metric", "field_name": "amount_sum_sum", "name": "销售额合计", "agg": "SUM", "expression": "SUM(`amount_sum`)"}]
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
     result = asyncio.run(semantic_config._prefill_by_llm(
         [{"table_name": "orders", "columns": [{"name": "amount_sum", "type": "decimal"}]}],
         business_context="销售额用于经营分析",
@@ -1196,7 +1197,7 @@ def test_prefill_dimension_names_are_deduped_by_table_alias(monkeypatch):
             "metrics": [],
         }
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
     result = asyncio.run(semantic_config._prefill_by_llm([
         {"table_name": "orders", "table_alias": "orders", "columns": [{"name": "order_id", "description": "订单编号"}]},
         {"table_name": "order_items", "table_alias": "order_items", "columns": [{"name": "order_id", "description": "订单编号"}]},
@@ -1503,14 +1504,14 @@ def test_prefill_by_llm_handles_empty_recommendation_list_and_failure(monkeypatc
     async def fake_list_recommendation(*_args, **_kwargs):
         return [{"table": "orders", "table_alias": "orders", "column": "amount", "role": "metric", "name": "销售额", "expression": "SUM(`amount`)"}]
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_list_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_list_recommendation)
     list_result = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert [item["role"] for item in list_result["fields"]].count("metric") == 1
 
     async def raise_recommendation(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", raise_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", raise_recommendation)
     fallback = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert fallback["fields"]
     assert all(item["role"] == "dimension" for item in fallback["fields"])
@@ -1682,8 +1683,8 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
                 "metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"}],
             }, ensure_ascii=False))
 
-    monkeypatch.setattr(semantic_config, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
-    recommendation = asyncio.run(semantic_config._call_metric_recommendation_llm(
+    monkeypatch.setattr(semantic_prefill_service, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
+    recommendation = asyncio.run(semantic_prefill_service._call_metric_recommendation_llm(
         table_payload,
         business_context="经营分析",
         max_metrics=1,

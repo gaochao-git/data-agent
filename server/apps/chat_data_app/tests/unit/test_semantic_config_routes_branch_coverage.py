@@ -20,6 +20,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.routers import semantic_config
+from apps.chat_data_app.services.semantic.run import semantic_config_service
 
 _REQUEST = SimpleNamespace()
 _USER = SimpleNamespace(user_id="u1", username="张三")
@@ -154,7 +155,7 @@ async def test_import_route_rolls_back_when_replace_write_fails(monkeypatch):
 
     monkeypatch.setattr(semantic_config, "_prepare_ossie_import", _fake_prepare)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: _Service())
-    monkeypatch.setattr(semantic_config, "transaction_scope", _fake_scope)
+    monkeypatch.setattr(semantic_config_service, "transaction_scope", _fake_scope)
 
     payload = SimpleNamespace(conflict_actions={"产品分类模型": "replace"})
     resp = await semantic_config.import_admin_ossie_semantic_configs("ds_a", payload, _REQUEST)

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from utils.logger import get_logger
+from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
@@ -1030,3 +1031,147 @@ async def _apply_physical_validation(
             item.validation_error = validation_error
         item.existing_config = configs_by_name.get(item.name)
         item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+
+
+# ---------------------------------------------------------------------------
+# Ossie 导入落库（自 routers/semantic_config.py 下沉：事务边界归属 service 层）
+# ---------------------------------------------------------------------------
+
+
+class OssieImportWriteError(Exception):
+    """Ossie 导入落库失败：用于触发整批回滚，并携带面向用户的具体原因。"""
+
+
+async def persist_one_ossie_model(
+    item: Any,
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
+    if item.conflict_locked:
+        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+        # 也不透出其 config_id 等元信息
+        return "skipped", {"name": item.name, "reason": "存在同名配置且无操作权限，已忽略"}
+    if not item.existing_config:
+        config = await semantic_service.create_async(
+            datasource_id=datasource_id,
+            scope_type="public",
+            create_by=user_id,
+            create_by_name=username,
+            **item.to_config_payload(),
+        )
+        if not config:
+            raise OssieImportWriteError(f"创建配置失败: {item.name}")
+        return "created", {"config_id": config.get("id"), "name": config.get("name")}
+
+    existing_config_id = str(item.existing_config["config_id"])
+    if conflict_actions.get(item.name, "skip") != "replace":
+        return "skipped", {
+            "name": item.name,
+            "config_id": existing_config_id,
+            "reason": "同名配置已存在，未导入",
+        }
+    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
+    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    config = await semantic_service.update_async(
+        datasource_id,
+        existing_config_id,
+        description=item.description or "",
+        business_notes=item.business_notes or "",
+        metrics=item.metrics,
+        dimensions=item.dimensions,
+        relationships=item.relationships,
+        update_by=user_id,
+        update_by_name=username,
+    )
+    if not config:
+        raise OssieImportWriteError(f"更新配置失败: {item.name}")
+    return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
+
+
+async def fill_ossie_column_dicts(
+    item: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> List[Dict[str, Any]]:
+    """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
+
+    只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
+    「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
+    """
+    filled: List[Dict[str, Any]] = []
+    for entry in item.column_dicts:
+        fields = await ds_manager.fill_column_dict_async(
+            datasource_id,
+            entry["table"],
+            entry["column"],
+            entry["dict"],
+            operator=user_id,
+            operator_name=username,
+        )
+        if fields is None:
+            raise OssieImportWriteError(f"写入数据字典失败: {entry['table']}.{entry['column']}（物理字段不存在）")
+        if fields:
+            filled.append({"table": entry["table"], "column": entry["column"], "fields": fields})
+    return filled
+
+
+async def persist_ossie_imports(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
+
+    created/replaced 的模型随后在同一事务内执行字典仅填空写入，
+    实际填充明细挂在各自 payload 的 column_dict_filled 上。
+    """
+    created: List[Dict[str, Any]] = []
+    replaced: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    buckets = {"created": created, "replaced": replaced, "skipped": skipped}
+    for item in imports:
+        kind, payload = await persist_one_ossie_model(
+            item, conflict_actions, semantic_service, datasource_id, user_id, username
+        )
+        if kind in ("created", "replaced") and item.column_dicts:
+            payload["column_dict_filled"] = await fill_ossie_column_dicts(
+                item, ds_manager, datasource_id, user_id, username,
+            )
+        buckets[kind].append(payload)
+    return created, replaced, skipped
+
+
+async def persist_ossie_imports_in_transaction(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库的事务边界（全有或全无）：任一模型写入失败即整体回滚，不留半批草稿。
+
+    字典仅填空写入与模型写入在同一事务内，模型与字典要么一起落库、要么一起回滚。
+    OssieImportWriteError / ValueError 原样上抛，由路由层翻译为对应错误响应。
+    """
+    async with transaction_scope():
+        return await persist_ossie_imports(
+            imports,
+            conflict_actions,
+            semantic_service,
+            ds_manager,
+            datasource_id,
+            user_id,
+            username,
+        )

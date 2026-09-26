@@ -22,11 +22,13 @@ from apps.chat_data_app import routes
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
+from apps.chat_data_app.services.datasource import column_dict_generate
 from apps.chat_data_app.routers import datasource_helpers as datasource_helper_routes
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
+from apps.chat_data_app.services.semantic.run import semantic_prefill_service
 from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime, spec_service as dashboard_spec_service
 from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
 from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
@@ -1532,7 +1534,7 @@ def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
             "metrics": [],
         }
 
-    monkeypatch.setattr(semantic_config_routes, "_call_metric_recommendation_llm", _fake_recommend)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", _fake_recommend)
 
     result = asyncio.run(semantic_config_routes._prefill_by_llm([{
         "table_name": "orders",
@@ -2873,7 +2875,7 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_generator", username="字典生成人")
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(datasource_admin_routes, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
+    monkeypatch.setattr(column_dict_generate, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
 
     body = DatasourceColumnDictGenerateRequest(text="status 字段：1 表示有效，0 表示无效")
     resp = asyncio.run(generate_datasource_column_dict("ds_a", "t_a", "status", body, SimpleNamespace()))
@@ -2897,7 +2899,7 @@ def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatc
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_generator", username="字典生成人")
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(datasource_admin_routes, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
+    monkeypatch.setattr(column_dict_generate, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
 
     resp = asyncio.run(generate_datasource_column_dict("ds_a", "t_a", "status", DatasourceColumnDictGenerateRequest(text="1 有效"), SimpleNamespace()))
     data = _payload(resp)
@@ -4593,7 +4595,7 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
             raise RuntimeError("llm failed")
 
     _mock_datasource_manager(monkeypatch, GenerateManager())
-    monkeypatch.setattr(datasource_admin_routes, "get_chat_data_llm", lambda **_kwargs: BadLlm())
+    monkeypatch.setattr(column_dict_generate, "get_chat_data_llm", lambda **_kwargs: BadLlm())
     generated = _payload(asyncio.run(datasource_admin_routes.generate_datasource_column_dict(
         "ds_a",
         "t_a",

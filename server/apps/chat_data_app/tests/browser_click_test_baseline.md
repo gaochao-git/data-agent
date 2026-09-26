@@ -1903,3 +1903,11 @@ ChatData
 | 背景 | 用户指出整体体验不一致：新建任务/分析模式切组都是 0 请求瞬时，唯独会话模式确认绑定/换组要等「初始化空间中…」（建会话+同步物化秒级慢请求）。定稿统一往「瞬时」方向对齐：`handleConfirmContextSelector` 改为同步纯草稿记录（绑定/换组/执行对象全部 0 请求）；会话落库与语义模型物化延迟到发送首条消息的兜底链路（Conversation.vue:597/1914，唯一初始化入口）。`isSwitchingContext`/「初始化空间中…」冻结机制整体删除（§5.20 被取代）；曾实现「首次输入 @ 时兜底建会话+物化」，用户 11:10 拍板简化删除——@ 只引用当前工作区已有文件（有则引用、无则空态「发送消息后即可引用工作区文件」），不为 @ 增加初始化复杂度。11:26 再简化：§5.21 的换组蓝色提示行（groupSwitchHint）与确认按钮「新建任务」文案删除——换组 UI 与普通确认无差异，仅 handler 内 isGroupSwitchNewTask 分支保留（重置会话态后记新草稿）。 |
 | 实测 | ①确认绑定/换组前后 `performance` conversations 请求数不变（0 请求），弹窗瞬时关闭、底部条立即切组；②新建任务（纯重置）后草稿换组仅改草稿；③草稿态输入 @：conversations 请求数不变（0 请求），菜单空态显示「发送消息后即可引用工作区文件」；④真实会话换组：弹窗无提示行、按钮恒为「确定」，确认后底部条切组。截图 `.workbuddy/screenshots/context_feedback_e2e_0925/06_switch_group_plain_confirm.png`。`vue-tsc` 0 错误、vitest 423 passed。 |
 | 边界与已知 | 草稿态（确认绑定但未发送消息）不持久化：刷新/切走后回到未绑定（WorkBuddy 同款，未发消息的新任务不落库）；物化错误暴露点从确认时移到首次使用时（两处均有错误兜底）；首条消息/首次 @ 承接建会话+物化耗时，治本依赖后端物化 N+1 优化（另线待办）。 |
+### §5.23 LLM 编排/事务下沉 service 后的定向点击回归（2026-09-26 18:40，agent-browser）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | master 上未提交重构（`parse_llm_json` 默认 strict=True；预填→`semantic_prefill_service`、OSSIE 落库+事务→`semantic_config_service.persist_ossie_imports_in_transaction`、评测草稿→`evaluation_service.generate_draft_case_by_llm`、字段字典生成→`datasource/column_dict_generate`；router 保留兼容 re-export）后，对新 dev 后端（18:34 重启实例）做四链路定向回归。方法：页面挂 `window.__errs` + XHR 探针（仅记 URL+status），配合真实点击。 |
+| 实测 | ①**Ossie 导入**（SEM-18 主链路）：上传 `~/Desktop/产品分类模型.yaml` → 模型校验 → preview 200，行=替换/通过、`查看详情`+`查看差异` 齐全、radio=0、footer「将新建 0 · 替换 1」；查看差异 → `.cm-editor`=2、按钮翻转「收起差异」；取消关闭未落库。②**字段字典生成**（SEM 相关/字典）：空文本点「生成候选」被禁用门禁拦住（设计如此）；填说明文本后 generate 200（真实 LLM），toast「已生成候选，新增枚举 4 个」，4 对值/含义输入框填充正确，取消不保存。③**评测草稿**：抽屉 UI 无草稿入口（见下），改接口探针：聚合类问题 success（gold_dsl 编译通过、source=llm、query_type=aggregation、business_domain 正确）。④**语义自动预填**：前端无调用点（纯 API 通道），接口探针 success（LLM 推荐中文显示名+COUNT 指标）。全程 `window.__errs` 恒空。 |
+| 边界与已知 | ①**草稿 filter 类 LLM 输出会被既有编译校验拒绝**（「无效的过滤条件格式」，40001）——该路由代码 0 diff，属 Qwen 输出质量问题非本次重构回归；聚合类正常。②draft-case 弹窗（`draftEditingCaseByLlm`/`showCaseEditorDialog`）在 composable 里导出但**抽屉组件未解构挂载**，UI 当前不可达（重构无关的既有状态，如需恢复另立需求）。③**未覆盖编号需发布前全量执行**：本记录仅为上述四链路定向回归，不构成发布裁决。 |
+

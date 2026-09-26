@@ -19,6 +19,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
+from apps.chat_data_app.services import evaluation_service as evaluation_llm_service
 from apps.chat_data_app.services.evaluation_service import build_evaluation_service
 from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
@@ -344,8 +345,8 @@ def test_generate_draft_case_by_llm_handles_nl_and_sql(monkeypatch):
                 "difficulty": "easy",
             }, ensure_ascii=False))
 
-    monkeypatch.setattr(evaluation, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
-    monkeypatch.setattr(evaluation.time, "time", lambda: 123.456)
+    monkeypatch.setattr(evaluation_llm_service, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
+    monkeypatch.setattr(evaluation_llm_service.time, "time", lambda: 123.456)
     config = {"id": "cfg_a", "name": "订单分析", "metrics": [{"name": "销售额"}], "dimensions": []}
 
     nl_case = asyncio.run(evaluation._generate_draft_case_by_llm(
@@ -371,7 +372,7 @@ def test_generate_draft_case_by_llm_rejects_empty_or_invalid_response(monkeypatc
         async def ainvoke(self, _messages):
             return SimpleNamespace(content='{"nl": "", "gold_dsl": []}')
 
-    monkeypatch.setattr(evaluation, "get_chat_data_llm", lambda **_kwargs: BadLLM())
+    monkeypatch.setattr(evaluation_llm_service, "get_chat_data_llm", lambda **_kwargs: BadLLM())
 
     for request in [
         AccuracyEvaluationDraftCaseRequest(hint="", existing_questions=[]),

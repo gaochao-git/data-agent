@@ -5,11 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from langchain_core.messages import HumanMessage
+
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session as default_get_session
+from utils.llm_json import parse_llm_json
+
+from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
+from ..schema import AccuracyEvaluationDraftCaseRequest
+from .llm_config import get_chat_data_llm
 from utils.models import ChatDataEvalCase, ChatDataEvalRun, ChatDataEvalRunCase
 
 from ..daos.evaluation_dao import EvaluationDao
@@ -339,3 +348,64 @@ class EvaluationService:
 def build_evaluation_service(session_context: Optional[Callable] = None) -> EvaluationService:
     """构建评测服务。"""
     return EvaluationService(session_context=session_context or default_get_session)
+
+
+# ---------------------------------------------------------------------------
+# 评测用例草稿生成（自 routers/evaluation.py 下沉的 LLM 编排）
+# ---------------------------------------------------------------------------
+
+ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
+ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
+
+
+def looks_like_sql(text: str) -> bool:
+    """判断用户输入是否更像 SQL。"""
+    normalized = str(text or "").strip().lower()
+    return bool(re.search(r"^\s*(select|with)\b", normalized) or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL))
+
+
+async def invoke_evaluation_draft_llm(prompt: str, config_id: str):
+    """调用评测用例草稿生成模型，失败时上报连接报警。"""
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
+    try:
+        return await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
+        )
+        raise
+
+
+async def generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], payload) -> Dict[str, Any]:
+    """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
+    user_input = str(payload.hint or "").strip()
+    if not user_input:
+        raise ValueError("请先输入自然语言问题或 SQL，再生成 gold_dsl")
+    is_sql_input = looks_like_sql(user_input)
+    nl_example = json.dumps("请基于 SQL 生成自然语言问题" if is_sql_input else user_input, ensure_ascii=False)
+    business_domain = sanitize_scene_segment(config.get("name") or config_id, "scene")
+    prompt = build_evaluation_draft_case_prompt(
+        user_input=user_input,
+        is_sql_input=is_sql_input,
+        nl_example=nl_example,
+        business_domain=business_domain,
+        existing_questions=payload.existing_questions,
+        semantic_config_payload=config,
+    )
+    response = await invoke_evaluation_draft_llm(prompt, config_id)
+    content = getattr(response, "content", response)
+    parsed = parse_llm_json(str(content), strict=False)
+    if not isinstance(parsed, dict) or not parsed.get("nl") or not isinstance(parsed.get("gold_dsl"), dict):
+        raise ValueError("大模型未返回合法评测用例 JSON")
+    case_id = f"{sanitize_scene_segment(config_id, 'scene')}_{int(time.time() * 1000)}"
+    return {
+        "id": case_id,
+        "nl": str(parsed.get("nl") or "").strip() if is_sql_input else user_input,
+        "gold_dsl": parsed.get("gold_dsl") or {},
+        "gold_sql": user_input if is_sql_input else "",
+        "query_type": parsed.get("query_type") if parsed.get("query_type") in ACCURACY_QUERY_TYPES else "aggregation",
+        "difficulty": parsed.get("difficulty") if parsed.get("difficulty") in ACCURACY_DIFFICULTIES else "medium",
+        "source": "llm",
+        "business_domain": business_domain,
+    }
