@@ -11,7 +11,6 @@ export {
   resolveSidebarTab,
 } from './sidebarTab'
 export type { SidebarTabMemory } from './sidebarTab'
-export { formatSql, parseSqlStatements } from './sqlFormatter'
 export { cleanDisplayError, dedupeRepeatedErrorText, normalizeErrorKey, stripAnsiErrorText } from './errorText'
 export { normalizeMarkdownFences, renderMarkdown } from './markdown'
 export { parseStructuredContent } from './parseContent'
