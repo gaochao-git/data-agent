@@ -307,9 +307,20 @@ export function buildProducedFiles(files: ProducedFileInput[]): ProducedFile[] {
   return produced
 }
 
+/** 同级节点排序：目录在前、文件在后，各自按名称升序（码点序，与后端 Path 排序口径一致）。 */
+function sortTreeNodes(nodes: ProducedFileTreeNode[]): ProducedFileTreeNode[] {
+  const byName = (a: ProducedFileTreeNode, b: ProducedFileTreeNode) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  const directories = nodes.filter(node => !node.file).sort(byName)
+  const files = nodes.filter(node => node.file).sort(byName)
+  directories.forEach((node) => { node.children = sortTreeNodes(node.children) })
+  return [...directories, ...files]
+}
+
 /**
  * 把文件条目按相对路径挂到三个固定顶层目录下，逐级建立中间目录节点。
- * 固定目录常驻（空也有上传入口等行级交互），额外顶层归入「其他文件」。
+ * 固定目录常驻（空也有上传入口等行级交互），额外顶层归入「其他文件」；
+ * 每级子节点按「目录在上、文件在下」排序（顶层固定目录的常驻顺序不受影响）。
  */
 export function buildProducedFileTree(files: ProducedFile[]): {
   root: string
@@ -361,9 +372,11 @@ export function buildProducedFileTree(files: ProducedFile[]): {
     })
   }
 
+  const directories = Array.from(directoryMap.values())
+  directories.forEach((directory) => { directory.children = sortTreeNodes(directory.children) })
   return {
     root: '/mnt/user-data',
-    directories: Array.from(directoryMap.values()),
+    directories,
   }
 }
 

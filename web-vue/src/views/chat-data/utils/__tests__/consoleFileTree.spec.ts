@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildProducedFileTree,
+  buildProducedFiles,
   collapseAllDirectories,
   collectCollapsibleDirectoryPaths,
   DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES,
@@ -12,6 +14,7 @@ import {
   isWorkspaceFileDownloadable,
   syncTruncatedTitle,
   type FileTreeCollapseNode,
+  type ProducedFileInput,
 } from '../consoleFileTree'
 
 const file = (path: string): FileTreeCollapseNode => ({ path, children: [], file: {} })
@@ -318,5 +321,43 @@ describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单�
     expect(isWorkspaceDirectoryArchiveDownloadable(null)).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable(undefined)).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable('outputs/query_result')).toBe(false)
+  })
+})
+
+describe('buildProducedFileTree 同级排序', () => {
+  const entry = (relativePath: string): ProducedFileInput => ({ relative_path: relativePath, size: 1, mtime: 0 })
+  const tree = (inputs: ProducedFileInput[]) => buildProducedFileTree(buildProducedFiles(inputs))
+
+  it('目录在上、文件在下，各自按名称升序', () => {
+    const { directories } = tree([
+      entry('outputs/报表.docx'),
+      entry('outputs/月报/11月.docx'),
+      entry('outputs/analysis/a.csv'),
+      entry('outputs/汇总.xlsx'),
+    ])
+    const outputs = directories.find(node => node.path === 'outputs')!
+    // 目录（analysis、月报）在前且名称升序，文件（报表、汇总）在后且名称升序
+    expect(outputs.children.map(node => node.name)).toEqual(['analysis', '月报', '报表.docx', '汇总.xlsx'])
+  })
+
+  it('深层子目录同样生效', () => {
+    const { directories } = tree([
+      entry('outputs/月报/z.csv'),
+      entry('outputs/月报/子目录/a.csv'),
+      entry('outputs/月报/a.csv'),
+    ])
+    const nested = directories.find(node => node.path === 'outputs')!.children[0]!
+    expect(nested.children.map(node => node.name)).toEqual(['子目录', 'a.csv', 'z.csv'])
+  })
+
+  it('文件与同名目录并列时目录在前', () => {
+    const { directories } = tree([
+      entry('outputs/data/a.csv'),
+      entry('outputs/data.txt'),
+    ])
+    const outputs = directories.find(node => node.path === 'outputs')!
+    expect(outputs.children.map(node => node.name)).toEqual(['data', 'data.txt'])
+    expect(outputs.children[0]!.children.length).toBeGreaterThan(0)
+    expect(outputs.children[1]!.file).toBeTruthy()
   })
 })
