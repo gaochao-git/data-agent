@@ -11,7 +11,6 @@ ChatData 唯一的业务 Agent。本目录承载 Agent 的全部运行域实现�
 | `agent_state.py` | LangGraph 状态定义（`ChatDataAgentState`） |
 | `agent_runtime.py` | 共享运行时工具（模型获取等） |
 | `runtime_options.py` | 运行选项：`workspace_backend`（local/sandbox）、`bash_enabled`（默认 False） |
-| `sql_assist_agent.py` | SQL 辅助小 Agent |
 | `tool_results.py` | 工具结果通用结构 |
 | `tools/` | 模型可见工具（见 `tools/README.md`） |
 | `middleware/` | create_agent 中间件（上下文压缩、工具结果卸载、图片注入等） |

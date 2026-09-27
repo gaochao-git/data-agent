@@ -7,13 +7,11 @@ from .context_compression import (
 from .dim_metric_auto_prefill import build_metric_recommendation_prompt
 from .generate_evaluate_set import build_evaluation_draft_case_prompt
 from .history_learning import build_history_learning_prompt
-from .nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from .security_prompt import SECURITY_PROMPT
 
 __all__ = [
     "CONTEXT_COMPRESSION_SUMMARY_PROMPT",
     "SECURITY_PROMPT",
-    "SQL_GENERATOR_PROMPT_GENERATE",
     "build_context_compression_summary_prompt",
     "build_evaluation_draft_case_prompt",
     "build_history_learning_prompt",

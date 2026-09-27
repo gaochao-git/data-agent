@@ -183,15 +183,6 @@ export interface NL2SQLResult {
   is_qa?: boolean
 }
 
-// NL2SQL 请求
-export interface NL2SQLRequest {
-  query: string
-  return_metadata: boolean
-  datasource_id?: string | null
-  conversation_id?: string | null
-  enable_thinking?: boolean
-}
-
 // API 响应
 export interface ApiResponse<T> {
   status: 'success' | 'error'

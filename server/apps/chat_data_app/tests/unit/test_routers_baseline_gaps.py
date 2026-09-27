@@ -17,11 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
-from apps.chat_data_app.agent import sql_assist_agent
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes
 from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import evaluation as evaluation_routes
@@ -32,7 +30,6 @@ from apps.chat_data_app.routers import skills as skills_routes
 from apps.chat_data_app.schema import (
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
-    QuickSqlRequest,
     SemanticConfigCreateRequest,
     SkillCreateRequest,
     SkillFileUpsertRequest,
@@ -241,165 +238,6 @@ def test_current_user_identity_falls_back_to_username_as_user_id(monkeypatch):
     )
 
     assert query_execution_routes._current_user_identity(REQUEST) == ("tester", "tester")
-
-
-@pytest.mark.asyncio
-async def test_load_quick_sql_context_reports_missing_table_schema(monkeypatch):
-    class _EmptySchemaManager:
-        async def get_datasource_async(self, datasource_id):
-            return {"source_type": "hive"}
-
-    async def _no_tables(_datasource_id):
-        return []
-
-    monkeypatch.setattr(query_execution_routes, "get_datasource_manager", lambda: _EmptySchemaManager())
-    monkeypatch.setattr(query_execution_routes, "get_all_tables_async", _no_tables)
-
-    source_type, schema, error = await query_execution_routes._load_quick_sql_context(
-        QuickSqlRequest(query="查一下销量", datasource_id="ds-1")
-    )
-
-    assert (source_type, schema) == (None, None)
-    assert error == "数据源暂无表结构信息"
-
-
-@pytest.mark.asyncio
-async def test_persist_quick_sql_assistant_turn_skips_empty_content():
-    """未输出任何正文时不该落库一条空消息。"""
-    await query_execution_routes._persist_quick_sql_assistant_turn(
-        conversation_id="c1",
-        user_id="u1",
-        username="tester",
-        user_message=HumanMessage(content="hi"),
-        content="",
-    )
-
-
-@pytest.mark.asyncio
-async def test_persist_shielded_logs_inner_failure_then_reraises_cancel(monkeypatch):
-    """流被取消时仍要等权威历史写入完成，写失败要记录日志再重抛 CancelledError。"""
-
-    async def _boom(**_kwargs):
-        raise RuntimeError("persist down")
-
-    monkeypatch.setattr(query_execution_routes, "_persist_quick_sql_assistant_turn", _boom)
-
-    async def _runner():
-        await query_execution_routes._persist_quick_sql_assistant_turn_shielded(conversation_id="c1")
-
-    task = asyncio.ensure_future(_runner())
-    await asyncio.sleep(0)
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-
-@pytest.mark.asyncio
-async def test_sse_error_sanitizes_internal_error_details(monkeypatch):
-    """SSE 错误事件必须走统一脱敏入口，异常堆栈/连接细节不得直接下发前端。"""
-    body = json.loads(
-        query_execution_routes._sse_error("sqlalchemy.exc.OperationalError: (2003, ...)")
-        .removeprefix("data: ")
-    )
-    assert body == {"type": "error", "message": "后端服务异常，请稍后重试"}
-
-    plain = json.loads(query_execution_routes._sse_error("数据源不存在").removeprefix("data: "))
-    assert plain["message"] == "数据源不存在"
-
-    async def _explode(_payload, **_kwargs):
-        raise RuntimeError("pymysql.err.OperationalError: access denied for user 'x'@'%'")
-
-    monkeypatch.setattr(query_execution_routes, "_load_quick_sql_context", _explode)
-    chunks = [
-        chunk
-        async for chunk in query_execution_routes._generate_quick_sql_stream(
-            QuickSqlRequest(query="查销量", datasource_id="ds-1"),
-            user_id="u1",
-            username="tester",
-            datasource_manager=SimpleNamespace(),
-        )
-    ]
-    assert all("pymysql" not in chunk and "access denied" not in chunk for chunk in chunks)
-    assert any("后端服务异常，请稍后重试" in chunk for chunk in chunks)
-
-
-@pytest.mark.asyncio
-async def test_stream_sql_assist_chunks_threads_model_options(monkeypatch):
-    """SQL 助手的模型/思考参数必须从请求一路贯通到 agent 工厂。"""
-
-    class _FakeCheckpointer:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-    class _FakeAgent:
-        async def astream(self, _input, config=None, stream_mode=None):
-            yield (SimpleNamespace(content="select 1"), {"langgraph_node": "model"})
-            yield (SimpleNamespace(content="!"), {"langgraph_node": "tools"})
-
-    captured = {}
-
-    def _fake_create_agent(_checkpointer, **kwargs):
-        captured.update(kwargs)
-        return _FakeAgent()
-
-    monkeypatch.setattr(query_execution_routes.agent_module, "get_checkpointer", lambda: _FakeCheckpointer())
-    monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", _fake_create_agent)
-
-    events = [
-        (kind, text)
-        async for kind, text in query_execution_routes._stream_sql_assist_chunks(
-            "c1",
-            HumanMessage(content="查销量"),
-            source_type="hive",
-            tables_ddl_info="CREATE TABLE t (...)  ",
-            model="qwen-max",
-            enable_thinking=True,
-            thinking_effort="high",
-        )
-    ]
-
-    assert events == [("chunk", "select 1")]
-    assert captured["model"] == "qwen-max"
-    assert captured["enable_thinking"] is True
-    assert captured["thinking_effort"] == "high"
-
-
-def test_create_sql_assist_agent_threads_model_options(monkeypatch):
-    """agent 工厂把模型/思考参数原样交给 get_chat_data_llm（缺省保持 None 走系统默认）。"""
-    captured = {}
-
-    def _fake_get_llm(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace()
-
-    monkeypatch.setattr(sql_assist_agent, "get_chat_data_llm", _fake_get_llm)
-    monkeypatch.setattr(sql_assist_agent, "create_agent", lambda **kwargs: SimpleNamespace(**kwargs))
-
-    sql_assist_agent.create_sql_assist_agent(
-        model="qwen-max",
-        enable_thinking=True,
-        thinking_effort="high",
-    )
-
-    assert captured == {
-        "model": "qwen-max",
-        "streaming": True,
-        "enable_thinking": True,
-        "thinking_effort": "high",
-    }
-
-    sql_assist_agent.create_sql_assist_agent()
-
-    assert captured == {
-        "model": None,
-        "streaming": True,
-        "enable_thinking": None,
-        "thinking_effort": None,
-    }
 
 
 # --------------------------------------------------------------------------

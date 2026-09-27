@@ -22,7 +22,6 @@ from .routers.setting_admin import router as setting_admin_router
 
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"
-SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 # 创建路由器
 async def require_service_token(service_token: str | None = Depends(service_token_header)) -> None:

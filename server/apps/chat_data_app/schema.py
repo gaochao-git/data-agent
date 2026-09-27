@@ -66,42 +66,6 @@ def _normalize_recommended_questions(value: Any) -> List[str]:
     return result
 
 
-# ============ NL2SQL 请求模型 ============
-
-class NL2SQLRequest(BaseModel):
-    """NL2SQL 请求模型"""
-    query: str = Field(..., min_length=1, description="用户的自然语言查询")
-    datasource_id: Optional[str] = Field(
-        default=None,
-        description="指定使用的数据源ID"
-    )
-    conversation_id: Optional[str] = Field(
-        default=None,
-        description="对话ID（用于多轮对话）"
-    )
-    mode: Optional[str] = Field(
-        default="generate",
-        description="执行模式：generate（仅生成SQL）或 query（生成并执行）"
-    )
-    semantic_config_id: Optional[str] = Field(
-        default=None,
-        description="语义配置ID（指定使用哪个语义配置）"
-    )
-
-# ============ SQL 编辑器相关模型 ============
-
-class QuickSqlRequest(BaseModel):
-    """快速 SQL 生成请求（用于 SQL 编辑器的 AI 辅助）"""
-    # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD(4000) 对齐，防止超长输入进 checkpoint 膨胀
-    query: str = Field(..., min_length=1, max_length=4000, description="自然语言查询")
-    datasource_id: str = Field(..., description="数据源ID")
-    member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
-    conversation_id: Optional[str] = Field(default=None, description="SQL 辅助会话ID")
-    model_id: Optional[str] = Field(default=None, description="指定生成模型；缺省用系统默认模型")
-    enable_thinking: Optional[bool] = Field(default=None, description="用户显式开关深度思考；None 跟随模型默认")
-    thinking_effort: Optional[str] = Field(default=None, description="思考档位；None 跟随模型默认")
-
-
 class ExecuteSqlRequest(BaseModel):
     """SQL 执行运行时请求（供异步任务、智能体和内部复用）"""
     sql: str = Field(..., min_length=1, description="要执行的 SQL 语句")

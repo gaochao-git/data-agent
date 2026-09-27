@@ -1636,29 +1636,6 @@ export function cancelUserQuestion(
   })
 }
 
-/** 流式快速生成 SQL */
-export function streamQuickSql(data: {
-  query: string
-  datasource_id: string
-  member_datasource_ids?: string[]
-  semantic_config_id?: string
-  session_id?: string
-  conversation_id?: string
-  /** 指定生成模型；缺省用系统默认模型 */
-  model_id?: string
-  /** 用户显式开关深度思考；缺省跟随模型默认 */
-  enable_thinking?: boolean
-  /** 思考档位；缺省跟随模型默认 */
-  thinking_effort?: string
-}, signal?: AbortSignal): Promise<Response> {
-  return requestStream({
-    url: '/agents/api/chatdata/nl2sql',
-    method: 'POST',
-    data,
-    signal
-  })
-}
-
 /** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
 export function getConversationHistory(
   conversationId: string,
