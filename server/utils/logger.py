@@ -82,9 +82,18 @@ def get_current_log_level() -> str:
     return _env_text("LOG_LEVEL", "INFO")
 
 
+def _default_log_dir() -> str:
+    """默认日志目录：锚定 server/logs，不随进程 cwd 漂移。
+
+    防止从仓库根等任意 cwd import 本模块时把日志散落到 <cwd>/logs。
+    显式设置 LOG_DIR 时行为不受影响（绝对路径原样、相对路径按 cwd 解析）。
+    """
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+
+
 def get_current_log_dir() -> str:
-    """读取当前日志目录。"""
-    return _env_text("LOG_DIR", "logs")
+    """读取当前日志目录；未设置 LOG_DIR 时锚定 server/logs。"""
+    return _env_text("LOG_DIR", "") or _default_log_dir()
 
 
 def get_current_log_file() -> str:
@@ -126,10 +135,10 @@ def get_current_log_idc() -> str:
 
 
 def resolve_log_path(path: str) -> str:
-    """将日志路径规范为绝对路径。"""
+    """将日志路径规范为绝对路径；空值锚定 server/logs（不随 cwd 漂移）。"""
     raw = str(path or "").strip()
     if not raw:
-        return os.path.abspath("logs")
+        return _default_log_dir()
     if os.path.isabs(raw):
         return raw
     return os.path.abspath(raw)

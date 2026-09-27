@@ -95,10 +95,6 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'settin
     <template #header>
       <div class="flex items-center justify-between">
         <div class="flex min-w-0 items-center gap-3">
-          <h3 class="m-0 flex shrink-0 items-center text-sm font-medium text-slate-700">
-            <i class="fa-solid fa-sliders mr-2 text-blue-500"></i>
-            智能问数后台管理
-          </h3>
           <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
             <button
               v-for="tab in tabs"
