@@ -1961,3 +1961,34 @@ def test_semantic_config_batch_toggle_routes(monkeypatch):
         object(),
     )))
     assert error_payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+
+
+def test_semantic_config_validate_route(monkeypatch):
+    """保存前校验端点：结构错误拦截、跨模型口径提示、数据源缺失映射。"""
+    _patch_semantic_route_user_and_manager(monkeypatch)
+
+    payload = SemanticConfigCreateRequest(
+        name="订单分析",
+        enabled=True,
+        metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
+        relationships=[],
+    )
+    ok = _response_payload(asyncio.run(semantic_config.validate_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
+    admin_ok = _response_payload(asyncio.run(semantic_config.validate_admin_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
+    missing_ds = _response_payload(asyncio.run(semantic_config.validate_semantic_config("missing", payload, object())))
+    bad = SemanticConfigCreateRequest(
+        name="坏模型",
+        enabled=True,
+        metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}],
+        dimensions=[],
+        relationships=[],
+    )
+    structure_failed = _response_payload(asyncio.run(semantic_config.validate_semantic_config("ds_a", bad, object())))
+
+    assert ok["data"]["structure_error"] == ""
+    assert "CON_CROSS_MODEL_METRIC_DUPLICATE" in {item["code"] for item in ok["data"]["quality_findings"]}
+    assert admin_ok["data"]["structure_error"] == ""
+    assert missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert structure_failed["data"]["structure_error"]
+    assert structure_failed["data"]["quality_findings"] == []

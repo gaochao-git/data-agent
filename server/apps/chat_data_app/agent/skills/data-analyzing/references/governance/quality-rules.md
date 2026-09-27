@@ -31,8 +31,8 @@
 
 | 编码 | 严重度 | 判定 |
 |------|--------|------|
-| COV_NO_METRICS | warning | 配置只有维度没有指标，无法回答聚合类问题 |
-| COV_NO_DIMENSIONS | warning | 配置只有指标没有维度，无法分组或过滤 |
+| COV_NO_METRICS | warning | 配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标 |
+| COV_NO_DIMENSIONS | warning | 配置只有指标没有维度，聚合只能看总量，分组/过滤/明细分析受限，建议补充常用分析维度 |
 | COV_DUPLICATE_DIMENSION_COLUMN | warning | 同一物理列被建模为多个维度 |
 | COV_UNMODELED_COLUMNS | info | 已建模表中存在未纳入任何维度/指标的物理列（会话内按 YAML 字段与表达式人工核对，机器检查依赖物理列清单） |
 
@@ -44,11 +44,28 @@
 |------|--------|------|
 | CON_DUPLICATE_METRIC_EXPRESSION | info | 多个原子指标使用相同表达式（重复口径） |
 | CON_NAME_DUPLICATE | warning | 指标内 / 维度内存在重名（指标与维度跨命名空间同名不判；对齐 Ossie 唯一名检查） |
+| CON_NAME_CHARS | warning | 指标/维度名称含白名单外字符（仅允许中文、英文、数字、下划线）。名称是复合公式 {引用}、base_metric、filters 维度引用的精确查找键，空格/花括号等字符不破坏匹配但让引用难写、显示混乱、YAML 导入类型漂移 |
 | CON_RELATIONSHIP_DUPLICATE | warning | 同一对表、同一组关联字段重复定义关系 |
 | CON_RELATIONSHIP_SELF | info | 关系左右为同一张表 |
 | CON_RELATIONSHIP_TABLE_UNREFERENCED | warning | 关系引用的表没有任何维度或指标建模 |
 | CON_RELATIONSHIP_CYCLE | warning | 表关系图存在环（A→B→A 这类循环依赖） |
 | CON_RELATIONSHIP_KEY_UNCOVERED | warning | one 端（right_table）的 join 列未覆盖该表在 tables 元数据中声明的 primary/unique key（对齐 Ossie 的 to_columns/声明键覆盖检查；覆盖任一声明键即可，表无声明键或 many_to_many 跳过） |
+
+### 跨模型口径 cross-model（第二层校验）
+
+以下检查的比较域是**数据源组内多个模型之间**（单模型层只保证模型内部自洽；
+多模型 @ 引用会把多份模型一起注入会话，同名异式的指标只能靠模型自行裁决，
+必须机器提示）。只比较原子指标——派生/复合口径由 base_metric/formula 决定，不可直接比。
+check_yaml / 导入预览按模型归因（只报告与当前模型相关的冲突）；数据源组质量
+报告输出全量两两冲突。这两条不参与单模型评分。
+
+只判同名指标：异名同表达式不判——COUNT(id)、SUM(xxx) 这类通用表达式跨表
+撞车太常见（不同表各自的 id 计数是两个正当指标），判了全是噪音。
+
+| 编码 | 严重度 | 判定 |
+|------|--------|------|
+| CON_CROSS_MODEL_NAME_CONFLICT | error | 同名指标在多个模型中表达式不同（真口径冲突，同名异义） |
+| CON_CROSS_MODEL_METRIC_DUPLICATE | warning | 同名指标在多个模型中表达式完全相同（重复定义，宜合并或引用同一模型） |
 
 ### 文档完备性 documentation
 
@@ -89,9 +106,12 @@ references/governance/model-template.md 的规则备注在拷贝件上 file_edit
 | EXE_UNKNOWN_COLUMN | 物理列名是写错还是表结构变了：先查数据源 schema，确认不了再问用户，不猜列名 |
 | EXE_DERIVED_NO_CONSTRAINT | 时间窗 / 过滤的具体口径（确认后补 period 或 filters，改法本身是机械的） |
 | CON_NAME_DUPLICATE | 重名对象哪个是真口径、如何改名；改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |
+| CON_NAME_CHARS | 改名为仅含中文/英文/数字/下划线的名称；改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |
 | CON_DUPLICATE_METRIC_EXPRESSION | 两个同表达式指标保留哪个，保留者的口径描述 |
 | COV_DUPLICATE_DIMENSION_COLUMN | 同一物理列保留哪个维度建模（另一个删除或换列） |
 | CON_RELATIONSHIP_KEY_UNCOVERED | join 列与声明键不一致：是 join 配错还是键元数据过时；确认后改 join 列，或提示用户在数据源侧更新键信息 |
+| CON_CROSS_MODEL_NAME_CONFLICT | 同名指标两个口径哪个是真口径：确认后改表达式，或给其中之一改名（改名必须同步该模型内所有引用方）；禁止两模型口径 silently 漂移 |
+| CON_CROSS_MODEL_METRIC_DUPLICATE | 同一指标两个模型都定义：保留哪个模型作为权威来源，另一个删除或改名；确认后落字 |
 
 ### 只提示不修（信息项 / 需更大动作）
 

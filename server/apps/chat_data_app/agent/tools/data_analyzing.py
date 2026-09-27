@@ -48,6 +48,7 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     build_model_checklist,
 )
 from apps.chat_data_app.services.semantic.run.semantic_config_service import (
+    cross_model_findings_for_imports,
     get_semantic_config_service,
     load_semantic_physical_columns,
     prepare_ossie_import_models,
@@ -552,6 +553,10 @@ async def _run_check_yaml(
 
     physical_columns = await load_semantic_physical_columns(ds_manager, datasource_id)
     checker = get_semantic_quality_checker()
+    # 跨模型口径检查：与组内公共/本人私有配置及同批其他模型比较（与导入预览同源，提示不阻断）
+    cross_findings_by_model = await cross_model_findings_for_imports(
+        imports, datasource_id, user_id=str(user_id or "")
+    )
     models = []
     for item in imports:
         model_payload: dict[str, Any] = {
@@ -577,7 +582,8 @@ async def _run_check_yaml(
                 physical_columns=physical_columns,
             )
             # 只透出触发的 findings：评分无法指导动作，自检链路不输出 score/grade
-            findings = report.to_payload()["findings"]
+            # 跨模型口径 findings 并入同一清单，靠 CON_CROSS_MODEL_* 编码区分层级
+            findings = report.to_payload()["findings"] + cross_findings_by_model.get(item.name, [])
             model_payload["quality"] = {"findings": findings}
         model_payload["checklist"] = build_model_checklist(
             item,

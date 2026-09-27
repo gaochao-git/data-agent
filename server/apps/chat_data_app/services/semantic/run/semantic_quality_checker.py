@@ -7,6 +7,9 @@
 - 只做确定性检查（覆盖度/可执行性/一致性/来源/文档五类），规则与
   agent/skills/data-analyzing/references/governance/quality-rules.md 保持同一套
   编码与口径；会话内技能按该清单分析，导入 preview 按本模块机器把关；
+- 校验分两层：check_config 面向单个配置（模型内部自洽）；check_cross_model_metrics
+  面向数据源组内多个配置之间的同名指标口径冲突（CON_CROSS_MODEL_* 两条，独立函数
+  产出，不参与单模型评分）；
 - 不依赖数据库：config 是 SemanticConfigService 返回的配置字典，
   物理列清单 physical_columns 为可选的 {(table, column)} 集合
   （来自数据源管理器的 get_cached_schema_async 全量表结构；注意不是
@@ -38,18 +41,23 @@ RULES: Dict[str, Tuple[str, str, str]] = {
     "EXE_COMPOSITE_FORMULA_MISSING": ("error", "executability", "复合指标缺少 formula"),
     "EXE_COMPOSITE_UNRESOLVED": ("warning", "executability", "复合指标 formula 存在无法对应到已知指标的片段"),
     # 覆盖度 coverage
-    "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，无法回答聚合类问题"),
-    "COV_NO_DIMENSIONS": ("warning", "coverage", "配置只有指标没有维度，无法分组或过滤"),
+    "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标"),
+    "COV_NO_DIMENSIONS": ("warning", "coverage", "配置只有指标没有维度，聚合只能看总量，分组/过滤/明细分析受限，建议补充常用分析维度"),
     "COV_DUPLICATE_DIMENSION_COLUMN": ("warning", "coverage", "同一物理列被建模为多个维度"),
     "COV_UNMODELED_COLUMNS": ("info", "coverage", "已建模表存在未纳入任何维度/指标的物理列"),
     # 一致性 consistency
     "CON_DUPLICATE_METRIC_EXPRESSION": ("info", "consistency", "多个原子指标使用相同表达式"),
     "CON_NAME_DUPLICATE": ("warning", "consistency", "指标/维度存在重名"),
+    "CON_NAME_CHARS": ("warning", "consistency", "指标/维度名称含白名单外字符（仅允许中文、英文、数字、下划线）"),
     "CON_RELATIONSHIP_DUPLICATE": ("warning", "consistency", "表关系重复定义"),
     "CON_RELATIONSHIP_SELF": ("info", "consistency", "表关系左右为同一张表"),
     "CON_RELATIONSHIP_TABLE_UNREFERENCED": ("warning", "consistency", "关系引用的表没有任何维度或指标建模"),
     "CON_RELATIONSHIP_CYCLE": ("warning", "consistency", "表关系存在循环依赖"),
     "CON_RELATIONSHIP_KEY_UNCOVERED": ("warning", "consistency", "关系 one 端 join 列未覆盖该表声明的 primary/unique key"),
+    # 一致性（跨模型层：比较域为数据源组内多个模型之间，只由 check_cross_model_metrics
+    # 产出，单模型 check_config 永不触发；评分也不参与单模型报告扣分）
+    "CON_CROSS_MODEL_NAME_CONFLICT": ("error", "consistency", "同名指标在多个模型中表达式不同（口径冲突）"),
+    "CON_CROSS_MODEL_METRIC_DUPLICATE": ("warning", "consistency", "同名指标在多个模型中重复定义"),
     # 文档完备性 documentation
     "DOC_METRIC_NO_DESCRIPTION": ("info", "documentation", "指标缺少描述"),
     "DOC_DIMENSION_NO_DESCRIPTION": ("info", "documentation", "维度缺少描述"),
@@ -62,6 +70,8 @@ _SIMPLE_AGG_COLUMN = re.compile(
     re.IGNORECASE,
 )
 _PLAIN_COLUMN = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$")
+#: 指标/维度名称白名单：中文、英文、数字、下划线（名称是公式 {引用} 等链路的查找键）。
+_VALID_NAME_PATTERN = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9_]+$")
 
 
 def _clean(value: Any) -> str:
@@ -335,12 +345,13 @@ class SemanticQualityChecker:
         relationships: List[Dict[str, Any]],
         raw: List[Tuple[str, str]],
     ) -> None:
-        """一致性检查：重名、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
+        """一致性检查：重名、名称白名单、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
 
         键覆盖检查依赖 config.tables 里的声明键（主键/唯一索引元数据，属可选信息），
         表没有声明键时跳过该条关系；不依赖任何外部物理清单。
         """
         self._collect_duplicate_names(metrics, dimensions, raw)
+        self._collect_name_chars(metrics, dimensions, raw)
         self._collect_duplicate_expressions(metrics, raw)
         modeled_tables = {_clean(item.get("table")) for item in [*metrics, *dimensions] if _clean(item.get("table"))}
         seen_pairs, edges = self._collect_relationship_edges(relationships, modeled_tables, raw)
@@ -377,6 +388,24 @@ class SemanticQualityChecker:
                     raw.append(("CON_NAME_DUPLICATE", f"{label}:{name}"))
                 else:
                     seen.add(name)
+
+    @staticmethod
+    def _collect_name_chars(
+        metrics: List[Dict[str, Any]],
+        dimensions: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+    ) -> None:
+        """名称白名单检查（warning 提示，不阻断）：仅允许中文/英文/数字/下划线。
+
+        名称是复合公式 {引用}、派生指标 base_metric、修饰词过滤维度引用的精确
+        查找键，特殊字符不破坏匹配但让引用难写；空格/花括号/不可见字符还会让
+        显示混乱、YAML 导入类型漂移，统一提示（用户 09-27 拍板一刀切 warning）。
+        """
+        for label, items in (("指标", metrics), ("维度", dimensions)):
+            for item in items:
+                name = _clean(item.get("name"))
+                if name and not _VALID_NAME_PATTERN.fullmatch(name):
+                    raw.append(("CON_NAME_CHARS", f"{label}:{name}"))
 
     @staticmethod
     def _collect_table_raw_keys(table: Dict[str, Any]) -> List[Any]:
@@ -605,6 +634,107 @@ class SemanticQualityChecker:
         }
 
 
+def _normalize_metric_expression(metric: Dict[str, Any]) -> str:
+    """原子指标表达式的跨模型归一化形式：去全部空白、大写。
+
+    比单模型查重（仅压空白）更严：跨模型同名异式是 error 级结论，
+    `SUM( a ) + SUM( b )` 与 `SUM(a)+SUM(b)` 这类纯排版差异不得判成口径冲突。
+    """
+    return "".join(str(metric.get("expression") or "").split()).upper()
+
+
+def _add_config_metric_owners(
+    config: Dict[str, Any],
+    name_owners: Dict[str, Dict[str, str]],
+) -> None:
+    """把单个配置的原子指标写入归属索引（派生/复合与空名/空表达式跳过）。"""
+    model_name = str(config.get("name") or "").strip()
+    if not model_name:
+        return
+    for metric in config.get("metrics") or []:
+        if not isinstance(metric, dict) or metric.get("metric_kind"):
+            continue
+        name = _clean(metric.get("name"))
+        expression = _normalize_metric_expression(metric)
+        if not (name and expression):
+            continue
+        # 模型内同名指标取首条（单模型层会另行报 CON_NAME_DUPLICATE，不在此重复结论）
+        name_owners.setdefault(name, {}).setdefault(model_name, expression)
+
+
+def _collect_metric_owners(configs: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    """扫描各配置的原子指标，构建 指标名->模型->表达式 归属索引。"""
+    name_owners: Dict[str, Dict[str, str]] = {}
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        _add_config_metric_owners(config, name_owners)
+    return name_owners
+
+
+def _involves_focus(owners: Dict[str, str], focus_config_name: Optional[str]) -> bool:
+    """该冲突组是否与 focus 模型相关；未指定 focus 时全量报告。"""
+    return focus_config_name is None or focus_config_name in owners
+
+
+def _append_cross_name_findings(
+    name_owners: Dict[str, Dict[str, str]],
+    focus_config_name: Optional[str],
+    raw: List[Tuple[str, str]],
+) -> None:
+    """同名指标跨模型两组规则：表达式一致记重复定义，不一致记口径冲突。"""
+    for name, owners in name_owners.items():
+        if len(owners) < 2 or not _involves_focus(owners, focus_config_name):
+            continue
+        participants = ", ".join(sorted(owners))
+        if len(set(owners.values())) == 1:
+            raw.append(("CON_CROSS_MODEL_METRIC_DUPLICATE", f"{name}({participants})"))
+        else:
+            raw.append(("CON_CROSS_MODEL_NAME_CONFLICT", f"{name}({participants})"))
+
+
+def check_cross_model_metrics(
+    configs: List[Dict[str, Any]],
+    *,
+    focus_config_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """跨模型指标口径检查：只判同名指标，比较域为组内多个模型的原子指标之间。
+
+    与单模型 check_config 互补的第二层校验——单模型层保证「模型内部自洽」，
+    本层保证「多个模型挂进同一会话时同名指标不互相打架」（多模型 @ 引用会把
+    多份模型一起注入上下文，同名异式的指标只能靠模型自行裁决，必须机器提示）。
+
+    只判同名的理由：异名同表达式不判——COUNT(id)、SUM(xxx) 这类通用表达式
+    跨表撞车太常见（不同表各自的 id 计数是两个正当指标），判了全是噪音。
+
+    规则（只比较原子指标；派生/复合口径由 base_metric/formula 决定，不可直接比）：
+    - CON_CROSS_MODEL_NAME_CONFLICT  error    同名指标表达式不同（真口径冲突）
+    - CON_CROSS_MODEL_METRIC_DUPLICATE warning 同名指标表达式相同（重复定义，宜合并）
+
+    focus_config_name：只报告与该模型相关的冲突（导入预览/check_yaml 按模型归因时用）；
+    缺省时报告全部两两冲突（数据源组级质量报告用）。
+
+    返回与 ConfigQualityReport.to_payload()["findings"] 同构的字典列表，可直接并入
+    单模型 findings；本函数不参与任何评分。
+    """
+    name_owners = _collect_metric_owners(configs)
+    raw: List[Tuple[str, str]] = []
+    _append_cross_name_findings(name_owners, focus_config_name, raw)
+    if not raw:
+        return []
+    findings = SemanticQualityChecker()._aggregate(raw)
+    return [
+        {
+            "code": item.code,
+            "severity": item.severity,
+            "category": item.category,
+            "message": item.message,
+            "targets": list(item.targets),
+        }
+        for item in findings
+    ]
+
+
 def get_semantic_quality_checker() -> SemanticQualityChecker:
     return SemanticQualityChecker()
 
@@ -613,6 +743,7 @@ __all__ = [
     "ConfigQualityReport",
     "QualityFinding",
     "SemanticQualityChecker",
+    "check_cross_model_metrics",
     "get_semantic_quality_checker",
     "grade_for_score",
 ]

@@ -686,6 +686,21 @@ export interface SemanticRelationship {
   join_type: 'inner' | 'left' | 'right'
 }
 
+export interface SemanticQualityFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  category: string
+  message: string
+  targets?: string[]
+}
+
+/** 保存前校验（dry-run）结果 */
+export interface SemanticConfigValidateResult {
+  /** 结构校验错误消息；空串表示通过 */
+  structure_error: string
+  quality_findings: SemanticQualityFinding[]
+}
+
 export interface SemanticConfigItem {
   id: string
   name: string
@@ -789,6 +804,8 @@ export interface AddFieldForm {
   fieldName: string
   // 原子指标模式：聚合表达式（如 SUM(`amount`)）；字段名由系统自动生成
   expression?: string
+  // 原子指标模式：字段备注（派生/复合指标的备注由弹窗内部 ref 管理，不经此模型）
+  description?: string
   displayName: string
   mode: 'dimension' | 'metric' | 'derived' | 'composite'
 }

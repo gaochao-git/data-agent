@@ -9,6 +9,7 @@ import {
   type OssieImportModelPreview,
 } from '../../api'
 import type { SemanticConfigItem } from '../../types'
+import { QualityFindingsList } from './qualityFindings'
 import OssieMergeDiff from './OssieMergeDiff.vue'
 
 const props = defineProps<{
@@ -129,9 +130,6 @@ const footerHint = computed((): { text: string; tone: FooterTone } | null => {
   if (!allImportable.value) return { text: '存在阻断问题，修正后重新校验', tone: 'text-red-500' }
   return null
 })
-
-const severityTextClass = (severity: string) =>
-  severity === 'error' ? 'text-red-500' : severity === 'warning' ? 'text-amber-500' : 'text-gray-500'
 
 const statusTextClass = (status: OssieChecklistRow['status']) =>
   status === 'pass'
@@ -960,19 +958,11 @@ const diffExistingFor = (muid: string) => {
                   {{ warning }}
                 </li>
               </ul>
-              <div v-if="model.quality?.findings?.length" class="mt-1.5 rounded border border-gray-100 bg-gray-50/60 px-2 py-1.5">
-                <div class="text-[11px] font-medium text-gray-400">触发的质量规则</div>
-                <ul class="mt-1 space-y-0.5">
-                  <li
-                    v-for="finding in model.quality.findings"
-                    :key="finding.code"
-                    class="text-[11px] leading-4"
-                    :class="severityTextClass(finding.severity)"
-                  >
-                    [{{ finding.code }}] {{ finding.message }}
-                  </li>
-                </ul>
-              </div>
+              <QualityFindingsList
+                v-if="model.quality?.findings?.length"
+                class="mt-1.5"
+                :findings="model.quality.findings"
+              />
             </div>
           </div>
           </template>

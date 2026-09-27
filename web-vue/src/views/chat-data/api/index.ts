@@ -13,6 +13,7 @@ import type {
   ConversationItem,
   ConversationGroupPage,
   SemanticConfigItem,
+  SemanticConfigValidateResult,
   SemanticMetric,
   SemanticDimension,
   SemanticRelationship,
@@ -1235,6 +1236,34 @@ export function updateAdminSemanticConfig(datasourceId: string, configId: string
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}`,
     method: 'put',
+    data
+  })
+}
+
+/** 语义配置保存前校验（dry-run，不落库）：结构校验 + 质量/跨模型口径提示 */
+export function validateSemanticConfig(
+  datasourceId: string,
+  data: Partial<SemanticConfigItem>,
+  excludeConfigId?: string
+): Promise<ApiResponse<SemanticConfigValidateResult>> {
+  return request({
+    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/validate`,
+    method: 'post',
+    params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
+    data
+  })
+}
+
+/** 后台公共语义配置保存前校验（dry-run，不落库） */
+export function validateAdminSemanticConfig(
+  datasourceId: string,
+  data: Partial<SemanticConfigItem>,
+  excludeConfigId?: string
+): Promise<ApiResponse<SemanticConfigValidateResult>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/validate`,
+    method: 'post',
+    params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
     data
   })
 }

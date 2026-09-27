@@ -19,6 +19,7 @@ from .chat_data_ossie_importer import (
     extract_metric_source_column,
     merge_carried_column_dicts,
 )
+from .semantic_quality_checker import check_cross_model_metrics, get_semantic_quality_checker
 
 logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -1031,6 +1032,142 @@ async def _apply_physical_validation(
             item.validation_error = validation_error
         item.existing_config = configs_by_name.get(item.name)
         item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+
+
+def _cross_model_comparison_pool(existing_configs: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
+    """跨模型比较池：公共配置 + 当前用户自己的私有配置。
+
+    他人私有模型的指标名属业务元信息，不得泄进报告；自己的私有模型
+    返回给自己无泄露，且个人模型之间的口径冲突同样需要提示。
+    user_id 未知（空）时只收录公共配置。
+    """
+    normalized_user_id = str(user_id or "").strip()
+    return [
+        config
+        for config in existing_configs
+        if is_public_semantic_config(config)
+        or (normalized_user_id and is_private_semantic_config_owner(config, normalized_user_id))
+    ]
+
+
+async def cross_model_findings_for_imports(
+    imports: List[OssieSemanticModelImport],
+    datasource_id: str,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """导入链路的跨模型指标口径检查（ossie-import/preview 与 check_yaml 工具共用）。
+
+    对每个可导入模型，计算它与「组内其他公共配置 + 同批其他导入模型」之间的
+    指标口径冲突，返回 {模型名: findings}。要点：
+    - 比较池=公共配置 + 当前用户自己的私有配置（user_id 已知时）：他人私有模型的
+      指标名不得泄进报告，自己的私有模型参与比较（个人模型间冲突同样要提示）；
+    - 排除与导入模型同名的存量配置：replace 场景下旧配置会被整体覆盖，
+      新模型与它比较没有意义（会误报同名冲突）；
+    - findings 不影响 importable（提示不阻断），与 quality-rules.md 跨模型节同源。
+    """
+    service = semantic_service or get_semantic_config_service()
+    importable = [item for item in imports if item.importable]
+    if not importable:
+        return {}
+    try:
+        existing_configs = await service.get_configs_async(datasource_id, user_id) or []
+    except Exception as exc:
+        logger.warning("跨模型口径检查读取存量配置失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
+        return {}
+    import_names = {item.name for item in importable}
+    comparison_pool: List[Dict[str, Any]] = [
+        {**item.to_config_payload(), "enabled": False}
+        for item in importable
+    ]
+    comparison_pool.extend(
+        config
+        for config in _cross_model_comparison_pool(existing_configs, user_id)
+        if str(config.get("name") or "").strip() not in import_names
+    )
+    return {
+        item.name: check_cross_model_metrics(comparison_pool, focus_config_name=item.name)
+        for item in importable
+    }
+
+
+async def quality_findings_for_save(
+    ds_manager: Any,
+    datasource_id: str,
+    *,
+    name: str,
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+    relationships: Optional[List[Dict[str, Any]]] = None,
+    exclude_config_id: Optional[str] = None,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> List[Dict[str, Any]]:
+    """编辑器保存链路的质量检查（单模型 5 维规则 + 跨模型口径，与导入/工具同源）。
+
+    校验方法多处统一的单一入口：导入 preview、check_yaml 工具、admin 质量报告
+    与本函数共用同一套 RULES 与跨模型比较逻辑。要点：
+    - 单模型层与 preview/check_yaml 完全同一 check_config（enabled/scope_type 仅占位）；
+    - 跨模型层比较池=公共配置 + 自己的私有配置，update 场景按 exclude_config_id
+      排除自身（不与自己比较）；
+    - 提示不阻断：返回 findings 列表由端点附进保存响应，任一读取失败降级为空列表，
+      质量提示不因基础设施抖动挡保存。
+    """
+    service = semantic_service or get_semantic_config_service()
+    try:
+        physical_columns = await load_semantic_physical_columns(ds_manager, datasource_id)
+    except Exception as exc:
+        logger.warning("保存链路质量检查加载物理列失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
+        return []
+    try:
+        checker = get_semantic_quality_checker()
+        single_findings = checker.check_config(
+            {
+                "name": name,
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "relationships": relationships or [],
+                "enabled": False,
+                "scope_type": "public",
+            },
+            physical_columns=physical_columns,
+        ).to_payload()["findings"]
+    except Exception as exc:
+        logger.warning("保存链路单模型质量检查失败，已跳过: name=%s error=%s", name, exc)
+        single_findings = []
+
+    cross_findings: List[Dict[str, Any]] = []
+    try:
+        existing_configs = await service.get_configs_async(datasource_id, user_id) or []
+        comparison_pool = [
+            config
+            for config in _cross_model_comparison_pool(existing_configs, user_id)
+            if str(config.get("id") or "") != str(exclude_config_id or "")
+        ]
+        comparison_pool.append(
+            {"name": name, "metrics": metrics, "dimensions": dimensions, "relationships": relationships or []}
+        )
+        cross_findings = check_cross_model_metrics(comparison_pool, focus_config_name=name)
+    except Exception as exc:
+        logger.warning("保存链路跨模型口径检查失败，已跳过: name=%s error=%s", name, exc)
+
+    return _strip_self_name_from_messages(single_findings + cross_findings, name)
+
+
+def _strip_self_name_from_messages(findings: List[Dict[str, Any]], config_name: str) -> List[Dict[str, Any]]:
+    """单模型保存上下文里，目标是配置名本身的提示去掉消息尾部的配置名。
+
+    保存前校验弹窗就挂在被编辑的模型之下，「…: auth_group_permissions基础模型」这类
+    尾缀是重复信息；但指标/维度级 target（如「指标缺少描述: 集群数量1」）与跨模型的
+    「模型.指标」目标仍然保留——导入预览等多模型场景不加此处理，名称在那里是有用定位。
+    """
+    suffix = f": {config_name}"
+    stripped: List[Dict[str, Any]] = []
+    for item in findings:
+        if list(item.get("targets") or []) == [config_name] and str(item.get("message") or "").endswith(suffix):
+            item = {**item, "message": item["message"][: -len(suffix)]}
+        stripped.append(item)
+    return stripped
 
 
 # ---------------------------------------------------------------------------

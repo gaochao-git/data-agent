@@ -8,6 +8,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import (
+    check_cross_model_metrics,
     get_semantic_quality_checker,
     grade_for_score,
 )
@@ -224,6 +225,27 @@ def test_cross_namespace_same_name_not_flagged():
     assert _find(report, "CON_NAME_DUPLICATE") is None
 
 
+def test_name_chars_valid_names_not_flagged():
+    """中/英/数字/下划线组合的名称不触发 CON_NAME_CHARS。"""
+    config = _good_config()
+    config["metrics"][0]["name"] = "销售总额_2026_amount"
+    config["dimensions"][0]["name"] = "下单时间2"
+    report = get_semantic_quality_checker().check_config(config)
+    assert _find(report, "CON_NAME_CHARS") is None
+
+
+def test_name_chars_flags_special_characters():
+    """空格/括号/花括号等白名单外字符触发 warning，指标维度分别报。"""
+    config = _good_config()
+    config["metrics"][0]["name"] = "订单 数量"
+    config["dimensions"][0]["name"] = "下单时间(日期)"
+    report = get_semantic_quality_checker().check_config(config)
+    finding = _find(report, "CON_NAME_CHARS")
+    assert finding is not None and finding.severity == "warning"
+    assert "指标:订单 数量" in finding.targets
+    assert "维度:下单时间(日期)" in finding.targets
+
+
 def test_relationship_key_uncovered():
     config = _good_config()
     config["tables"] = [
@@ -387,3 +409,95 @@ def test_derived_and_composite_missing_table_not_flagged():
     report = get_semantic_quality_checker().check_config(config)
     finding = _find(report, "PROV_METRIC_MISSING_TABLE")
     assert finding is None
+
+
+# ---------------------------------------------------------------------------
+# 跨模型指标口径检查（第二层校验：check_cross_model_metrics）
+# ---------------------------------------------------------------------------
+
+
+def _model(name: str, metrics: list) -> dict:
+    return {"name": name, "metrics": metrics}
+
+
+def test_cross_model_name_conflict_is_error_and_names_both_models():
+    configs = [
+        _model("订单分析", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("销售主题", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert [item["code"] for item in findings] == ["CON_CROSS_MODEL_NAME_CONFLICT"]
+    assert findings[0]["severity"] == "error"
+    assert findings[0]["category"] == "consistency"
+    assert "订单分析" in findings[0]["targets"][0] and "销售主题" in findings[0]["targets"][0]
+
+
+def test_cross_model_same_name_same_expression_is_warning():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "sum( orders.amount )"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert [item["code"] for item in findings] == ["CON_CROSS_MODEL_METRIC_DUPLICATE"]
+    assert findings[0]["severity"] == "warning"
+
+
+def test_cross_model_same_expression_different_names_not_flagged():
+    """异名同表达式不判：COUNT(id)/SUM(xxx) 类通用表达式跨模型撞车太常见，判了全是噪音。"""
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("模型B", [{"name": "成交额", "expression": "SUM(ORDERS.AMOUNT)"}]),
+    ]
+    assert check_cross_model_metrics(configs) == []
+
+
+def test_cross_model_focus_only_reports_involving_focus():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}, {"name": "订单量", "expression": "COUNT(orders.id)"}]),
+        _model("模型C", [{"name": "成交量", "expression": "count( orders.id )"}]),
+    ]
+    focus_a = check_cross_model_metrics(configs, focus_config_name="模型A")
+    assert {item["code"] for item in focus_a} == {"CON_CROSS_MODEL_NAME_CONFLICT"}
+    # 模型C 与模型B 异名同表达式：不再判（只判同名）
+    assert check_cross_model_metrics(configs, focus_config_name="模型C") == []
+    all_findings = check_cross_model_metrics(configs)
+    assert {item["code"] for item in all_findings} == {"CON_CROSS_MODEL_NAME_CONFLICT"}
+
+
+def test_cross_model_skips_derived_composite_and_blank():
+    configs = [
+        _model("模型A", [
+            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+            {"name": "空表达式", "expression": "  "},
+            {"name": "", "expression": "SUM(x)"},
+        ]),
+        _model("模型B", [
+            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+        ]),
+    ]
+    assert check_cross_model_metrics(configs) == []
+
+
+def test_cross_model_three_models_same_name_aggregates_participants():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(a.amount)"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(b.amount)"}]),
+        _model("模型C", [{"name": "销售额", "expression": "SUM(c.amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert len(findings) == 1
+    for participant in ("模型A", "模型B", "模型C"):
+        assert participant in findings[0]["targets"][0]
+
+
+def test_single_model_check_never_emits_cross_model_codes():
+    config = _good_config()
+    config["metrics"].append({"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
+                              "description": "与首条重复口径，触发模型内 CON_DUPLICATE_METRIC_EXPRESSION"})
+    report = get_semantic_quality_checker().check_config(config)
+    codes = set(_codes(report))
+    assert "CON_DUPLICATE_METRIC_EXPRESSION" in codes
+    assert not any(code.startswith("CON_CROSS_MODEL_") for code in codes)

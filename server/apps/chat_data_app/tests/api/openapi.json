@@ -4527,6 +4527,74 @@
         ]
       }
     },
+    "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/validate": {
+      "post": {
+        "description": "公共指标集保存前校验（dry-run，不落库）。",
+        "operationId": "validate_admin_semantic_config_api_chatdata_admin_datasources__datasource_id__semantic_configs_validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_config_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Exclude Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Validate Admin Semantic Config",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
     "/api/chatdata/admin/datasources/{datasource_id}/semantic-configs/{config_id}": {
       "delete": {
         "description": "后台删除公共指标集。",
@@ -9402,6 +9470,74 @@
           }
         ],
         "summary": "Batch Toggle Semantic Configs",
+        "tags": [
+          "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/datasources/{datasource_id}/semantic-configs/validate": {
+      "post": {
+        "description": "个人指标集保存前校验（dry-run，不落库）。",
+        "operationId": "validate_semantic_config_api_chatdata_datasources__datasource_id__semantic_configs_validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "datasource_id",
+            "required": true,
+            "schema": {
+              "title": "Datasource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_config_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Exclude Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticConfigCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Validate Semantic Config",
         "tags": [
           "ChatData 语义模型"
         ]

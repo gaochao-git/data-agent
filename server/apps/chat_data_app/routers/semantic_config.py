@@ -30,10 +30,11 @@ from ..services.semantic.run.semantic_history_learning_service import (
     build_semantic_history_learning_service,
 )
 from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist
-from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
+from ..services.semantic.run.semantic_quality_checker import check_cross_model_metrics, get_semantic_quality_checker, grade_for_score
 from ..services.semantic.run.semantic_config_service import (
     OssieImportWriteError as _OssieImportWriteError,
     can_mutate_semantic_config,
+    cross_model_findings_for_imports,
     dedupe_semantic_config_ids,
     get_semantic_config_service,
     is_private_semantic_config_owner,
@@ -41,6 +42,7 @@ from ..services.semantic.run.semantic_config_service import (
     load_semantic_physical_columns as _load_physical_columns,
     persist_ossie_imports_in_transaction,
     prepare_ossie_import_models,
+    quality_findings_for_save,
     validate_semantic_config_for_save,
 )
 from ..services.semantic.run.chat_data_ossie_importer import plan_column_dict_fills
@@ -358,10 +360,13 @@ async def preview_admin_ossie_semantic_import(
         imports, error = await _prepare_ossie_import(datasource_id, payload, request)
         if error is not None:
             return error
+        user_id = str(_get_current_user(request).user_id)
         physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
         checker = get_semantic_quality_checker()
         # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
         existing_column_dicts = await get_semantic_config_service().get_column_dicts_async(datasource_id)
+        # 跨模型口径检查：与组内公共/本人私有配置及同批导入模型比较（提示不阻断，不参与 importable）
+        cross_findings_by_model = await cross_model_findings_for_imports(imports, datasource_id, user_id=user_id)
         models = []
         for item in imports:
             model = item.to_preview_payload()
@@ -375,7 +380,8 @@ async def preview_admin_ossie_semantic_import(
                     physical_columns=physical_columns,
                 )
                 # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
-                findings = report.to_payload()["findings"]
+                # 跨模型口径 findings 并入同一清单，靠 CON_CROSS_MODEL_* 编码区分层级
+                findings = report.to_payload()["findings"] + cross_findings_by_model.get(item.name, [])
                 model["quality"] = {"findings": findings}
             model["checklist"] = build_model_checklist(
                 item,
@@ -454,6 +460,8 @@ async def check_admin_semantic_config_quality(
         modeled_tables = _collect_modeled_tables(configs)
         inventory_tables = {table for table, _column in physical_columns} if physical_columns is not None else set()
         unmodeled_tables = sorted(inventory_tables - modeled_tables)
+        # 跨模型口径检查（第二层）：组内公共配置之间的指标冲突，独立于单模型评分
+        cross_model_findings = check_cross_model_metrics(configs)
         avg_score = round(sum(report["score"] for report in reports) / len(reports)) if reports else 100
         overall = {
             "config_count": len(reports),
@@ -464,6 +472,7 @@ async def check_admin_semantic_config_quality(
             "unmodeled_tables": unmodeled_tables[:10],
             "unmodeled_table_count": len(unmodeled_tables),
             "inventory_available": physical_columns is not None,
+            "cross_model_findings": cross_model_findings,
         }
         return business_response(data={"configs": reports, "overall": overall}, msg="质量检查完成")
     except Exception as e:
@@ -740,6 +749,82 @@ async def _update_semantic_config(
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+async def _validate_semantic_config_with_scope(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    *,
+    exclude_config_id: str = "",
+):
+    """保存前校验（dry-run）：结构校验 + 质量/跨模型口径检查，不落库。
+
+    校验方法多处统一的编辑器入口：与导入 preview / check_yaml / admin 质量报告
+    共用同一套 RULES。structure_error 非空表示结构校验未过（保存会被拦截）；
+    quality_findings 为质量提示（弹窗展示后由用户决定是否仍要保存）。
+    """
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        ds_manager = get_datasource_manager()
+        datasource = await ds_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        metrics = [m.model_dump() for m in payload.metrics]
+        dimensions = [d.model_dump() for d in payload.dimensions]
+        relationships = [r.model_dump() for r in payload.relationships]
+        structure_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            metrics,
+            dimensions,
+            relationships,
+        )
+        quality_findings: list = []
+        if not structure_error:
+            quality_findings = await quality_findings_for_save(
+                ds_manager,
+                datasource_id,
+                name=payload.name,
+                metrics=metrics,
+                dimensions=dimensions,
+                relationships=relationships,
+                exclude_config_id=exclude_config_id or None,
+                semantic_service=get_semantic_config_service(),
+                user_id=user_id,
+            )
+        return business_response(
+            data={"structure_error": structure_error or "", "quality_findings": quality_findings},
+            msg="校验完成",
+        )
+    except Exception as e:
+        logger.error(f"保存前校验失败: {str(e)}", exc_info=True)
+        return business_response(msg=f"校验失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/validate")
+async def validate_semantic_config(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    exclude_config_id: str = "",
+):
+    """个人指标集保存前校验（dry-run，不落库）。"""
+    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/validate")
+async def validate_admin_semantic_config(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    exclude_config_id: str = "",
+):
+    """公共指标集保存前校验（dry-run，不落库）。"""
+    _get_current_user(request)
+    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
 
 
 async def _delete_semantic_config(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):

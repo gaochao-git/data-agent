@@ -5,6 +5,7 @@
  */
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { confirmSaveQualityFindings } from './semantic/qualityFindings'
 import {
   getMySemanticConfigs,
   getAdminSemanticConfigs,
@@ -21,6 +22,8 @@ import {
   batchToggleSemanticConfig,
   getDatasourceTableColumnDicts,
   getAdminDatasourceTableColumnDicts,
+  validateAdminSemanticConfig,
+  validateSemanticConfig,
 } from '../api'
 import {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
@@ -460,10 +463,27 @@ const generateBasicConfigs = async () => {
   }
 }
 
-// 保存配置
+// 保存配置：先校验（dry-run）后保存，与导入「先校验再确认」同一交互
 const saveConfig = async (config: SemanticConfigItem) => {
   savingId.value = config.id
   try {
+    // 1. 保存前校验：结构错误直接拦截；质量提示弹窗列出，由用户决定是否仍要保存
+    const validateApi = props.adminMode ? validateAdminSemanticConfig : validateSemanticConfig
+    const vres = await validateApi(props.datasourceId, config, config.id)
+    if (vres.status !== 'success' || !vres.data) {
+      ElMessage.error(vres.msg || '保存前校验失败')
+      return
+    }
+    if (vres.data.structure_error) {
+      ElMessage.error(vres.data.structure_error)
+      return
+    }
+    const findings = vres.data.quality_findings || []
+    // 与导入预览同一呈现（QualityFindingsList）；false=用户选择「去修改」
+    if (findings.length && !(await confirmSaveQualityFindings(findings))) {
+      return
+    }
+    // 2. 真正保存
     const res = await semanticConfigUpdateApi.value(props.datasourceId, config.id, config)
     if (res.status === 'success' && res.data) {
       configs.value = configs.value.map(c => c.id === config.id ? res.data! : c)
@@ -928,9 +948,9 @@ const confirmAtomicMetric = () => {
         expression,
         data_type: getMetricDataType(columnType),
         filter: '',
-        description: '',
         metadata_supplement: '',
       }
+  metric.description = (addFieldForm.value.description || '').trim() // 备注统一取弹窗表单；回填/重置由弹窗自理
   const isEdit = editingAtomicMetricIndex.value >= 0
   const newMetrics = [...config.metrics]
   if (isEdit) {

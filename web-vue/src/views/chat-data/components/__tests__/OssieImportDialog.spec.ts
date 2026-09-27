@@ -52,7 +52,7 @@ const importableModel = {
     { group: 'mapping', name: '表归属确定', status: 'warn', message: '1 个对象未声明归属表，按唯一 dataset 推断' },
     { group: 'mapping', name: '派生 / 复合指标还原', status: 'pass', message: '模型内无派生/复合指标' },
     { group: 'physical', name: '物理字段校验', status: 'pass', message: '全部命中数据源物理元数据' },
-    { group: 'quality', name: '质量规则核对', status: 'pass', message: '20 条质量规则全部未触发' },
+    { group: 'quality', name: '质量规则核对', status: 'pass', message: '25 条质量规则全部未触发' },
   ],
 }
 
@@ -250,7 +250,7 @@ describe('OssieImportDialog', () => {
             code: 'COV_NO_METRICS',
             severity: 'warning',
             category: 'coverage',
-            message: '配置只有维度没有指标，无法回答聚合类问题: 空指标模型',
+            message: '配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标: 空指标模型',
             targets: ['空指标模型'],
           },
         ],
