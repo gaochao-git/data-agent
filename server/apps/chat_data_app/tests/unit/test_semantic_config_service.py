@@ -6,7 +6,6 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.services.semantic.core import config_validator as config_validator_module
 from apps.chat_data_app.services.semantic.run import semantic_config_service as semantic_config_service_module
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import OssieSemanticModelImport
 from apps.chat_data_app.services.semantic.run.semantic_config_service import SemanticConfigService
@@ -365,11 +364,6 @@ def test_generate_basic_single_table_configs_creates_enabled_models_and_is_idemp
         return original_build_table_columns_map(datasource)
 
     monkeypatch.setattr(semantic_config_service_module, "build_table_columns_map", tracked_build_table_columns_map)
-    monkeypatch.setattr(
-        config_validator_module,
-        "build_table_columns_map",
-        lambda _datasource: pytest.fail("批量校验不应重复构建字段映射"),
-    )
     datasource_manager.datasource["ds_tables"] = [
         {
             "table_name": "orders",

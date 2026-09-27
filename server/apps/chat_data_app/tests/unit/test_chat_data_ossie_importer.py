@@ -763,7 +763,7 @@ def test_checklist_quality_findings_counts():
     assert by_name["质量规则核对"]["status"] == "warn"
     assert "1 条警告 · 2 条建议" in by_name["质量规则核对"]["message"]
 
-    error_findings = [{"code": "EXE_UNKNOWN_COLUMN", "severity": "error", "message": "m"}]
+    error_findings = [{"code": "STR_METRIC_INVALID", "severity": "error", "message": "m"}]
     rows = build_model_checklist(item, quality_findings=error_findings)
     by_name = _checklist_by_name(rows)
     assert by_name["质量规则核对"]["status"] == "fail"

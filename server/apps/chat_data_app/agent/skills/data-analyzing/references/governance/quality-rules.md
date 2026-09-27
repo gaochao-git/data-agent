@@ -7,6 +7,20 @@
 
 ## 检查项
 
+### 结构校验 structure
+
+阻断级硬门槛：保存/导入链路的结构校验（`first_structure_error`）从本域提取第一条错误拦截保存；
+质量报告里同样呈现。判定逻辑与错误文案单点在 `core/config_validator.py`，由 checker 复用。
+
+| 编码 | 严重度 | 判定 |
+|------|--------|------|
+| STR_FIELD_NAME_INVALID | error | 字段显示名称为空或重复（message 为完整错误句子，如「字段显示名称重复: X」） |
+| STR_DIMENSION_INVALID | error | 维度所属表/字段不存在、allowed_operators 非法（依赖物理列清单，缺清单时跳过） |
+| STR_METRIC_INVALID | error | 指标所属表不存在、表达式未锚定物理字段、表达式引用不存在的列（表达式级全量校验） |
+| STR_DERIVED_INVALID | error | 派生指标结构不合法（禁配 expression、base_metric 缺失/类型/非聚合） |
+| STR_COMPOSITE_INVALID | error | 复合指标结构不合法（禁配 expression、缺 formula、公式语法、成员存在性/类型/同表约束） |
+| STR_RELATIONSHIP_INVALID | error | 表关系配置不合法（表/列不存在、别名冲突、缺关联条件、字段缺少关联路径） |
+
 ### 来源完整性 provenance
 
 | 编码 | 严重度 | 判定 |
@@ -21,10 +35,7 @@
 
 | 编码 | 严重度 | 判定 |
 |------|--------|------|
-| EXE_UNKNOWN_COLUMN | error | 维度/指标引用的物理列在数据源中不存在（会话内无法核对物理清单时不判此项） |
-| EXE_DERIVED_BASE_MISSING | error | 派生指标的 base_metric 在当前配置中不存在 |
 | EXE_DERIVED_NO_CONSTRAINT | info | 派生指标未设置 period 时间窗或 filters 过滤，口径可能与基础指标重复 |
-| EXE_COMPOSITE_FORMULA_MISSING | error | 复合指标缺少 formula |
 | EXE_COMPOSITE_UNRESOLVED | warning | formula 中存在无法对应到已知指标名的片段 |
 
 ### 覆盖度 coverage
@@ -93,8 +104,11 @@ references/governance/model-template.md 的规则备注在拷贝件上 file_edit
 | DOC_NO_BUSINESS_NOTES | 补模型 ai_context；内容结构参考 Ossie 规范推荐字段（instructions 使用说明 / synonyms 同义词 / examples 示例问题） |
 | PROV_METRIC_MISSING_TABLE / PROV_DIMENSION_MISSING_TABLE | 补 CHAT_DATA 扩展声明归属表；多 dataset 模型禁止省略 |
 | PROV_DIMENSION_MISSING_COLUMN | 维度补 column（推荐显式声明，不要依赖单 dataset 推断） |
-| EXE_DERIVED_BASE_MISSING | base_metric 改成同模型内已存在的指标名；基础指标本身缺失时先走差距对话，不要硬指 |
-| EXE_COMPOSITE_FORMULA_MISSING | 补 formula，成员用 {指标名} 花括号引用；禁止用代入后的 SQL 表达式反推 |
+| STR_FIELD_NAME_INVALID | 空名补名称；重名对象哪个是真口径、如何改名，改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |
+| STR_DIMENSION_INVALID / STR_METRIC_INVALID | 物理表/列名是写错还是表结构变了：先查数据源 schema，确认不了再问用户，不猜列名 |
+| STR_DERIVED_INVALID | base_metric 改成同模型内已存在的指标名；基础指标本身缺失时先走差距对话，不要硬指 |
+| STR_COMPOSITE_INVALID | 补 formula（成员用 {指标名} 花括号引用，禁止用代入后的 SQL 表达式反推）；公式成员改为同表聚合原子指标 |
+| STR_RELATIONSHIP_INVALID | 补/修关系行：表名、关联列、别名冲突按数据源 schema 修正；缺关联路径时补一条桥接关系 |
 | EXE_COMPOSITE_UNRESOLVED | formula 中未知片段改成已存在的指标名或数字/运算符 |
 | CON_RELATIONSHIP_DUPLICATE / CON_RELATIONSHIP_SELF | 删除重复或自环的关系行，保留声明方向完整的一条 |
 
@@ -103,7 +117,6 @@ references/governance/model-template.md 的规则备注在拷贝件上 file_edit
 | 编码 | 要问什么 |
 |------|----------|
 | COV_NO_METRICS / COV_NO_DIMENSIONS | 该主题需要哪些聚合口径 / 按什么看数（公式、周期、过滤）；一次只问最关键的一个 |
-| EXE_UNKNOWN_COLUMN | 物理列名是写错还是表结构变了：先查数据源 schema，确认不了再问用户，不猜列名 |
 | EXE_DERIVED_NO_CONSTRAINT | 时间窗 / 过滤的具体口径（确认后补 period 或 filters，改法本身是机械的） |
 | CON_NAME_DUPLICATE | 重名对象哪个是真口径、如何改名；改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |
 | CON_NAME_CHARS | 改名为仅含中文/英文/数字/下划线的名称；改名必须同步所有引用方（base_metric、formula 成员、filters 的 dimension） |

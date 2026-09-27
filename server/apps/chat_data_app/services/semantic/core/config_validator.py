@@ -1,9 +1,15 @@
-"""语义模型配置的纯结构校验。"""
+"""语义模型配置的结构校验原子件与编排函数。
+
+判定与错误文案的单点来源：本模块的编排函数（_validate_* / validate_semantic_relationships）
+被 run 层质量检查器的 structure 域复用；保存链路的结构硬门槛走
+run/semantic_quality_checker.first_structure_error（本模块不再提供独立入口）。
+表达式解析原子件（expression_uses_physical_column 等）同时供 service 层直接使用。
+"""
 
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from .common import build_table_columns_map, is_time_logical_dimension
+from .common import is_time_logical_dimension
 from .input_validator import FILTER_OPERATORS, _NO_VALUE_FILTER_OPERATORS
 from .query_plan import (
     DERIVED_PERIOD_KINDS,
@@ -347,41 +353,6 @@ def _validate_composite_member(
     if member_table and ref_table != member_table:
         return f"复合指标 {name} 的成员指标跨表（{member_table} / {ref_table}），暂不支持"
     return None
-
-
-def validate_semantic_fields(
-    datasource: Dict,
-    metrics: List[Dict],
-    dimensions: List[Dict],
-    relationships: Optional[List[Dict]] = None,
-    *,
-    table_columns_map: Optional[Dict[str, Set[str]]] = None,
-) -> Optional[str]:
-    effective_table_columns_map = table_columns_map if table_columns_map is not None else build_table_columns_map(datasource)
-    if not effective_table_columns_map:
-        return "当前数据源缺少表结构信息，请先完成数据源同步"
-
-    display_name_error = _validate_field_display_names(dimensions, metrics)
-    if display_name_error:
-        return display_name_error
-    dimension_error = _validate_dimensions_against_tables(dimensions, effective_table_columns_map)
-    if dimension_error:
-        return dimension_error
-    metric_error = _validate_metrics_against_tables(metrics, effective_table_columns_map)
-    if metric_error:
-        return metric_error
-    derived_error = _validate_derived_metrics(metrics, dimensions)
-    if derived_error:
-        return derived_error
-    composite_error = _validate_composite_metrics(metrics)
-    if composite_error:
-        return composite_error
-    return validate_semantic_relationships(
-        effective_table_columns_map,
-        metrics or [],
-        dimensions or [],
-        relationships or [],
-    )
 
 
 def _validate_allowed_operators(dimension: Dict[str, Any]) -> Optional[str]:

@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 from apps.chat_data_app.services.semantic.core import config_validator as cv
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 
 
 # ---------------------------------------------------------------------------
@@ -420,41 +422,43 @@ def test_multiple_relationships_report_failing_index():
 
 
 # ---------------------------------------------------------------------------
-# validate_semantic_fields 入口：table_columns_map 显式传入 / None 参
+# 结构硬门槛入口（first_structure_error，checker 薄壳）：map 显式传入 / datasource 构建
 # ---------------------------------------------------------------------------
 
 
-def test_validate_semantic_fields_accepts_explicit_table_columns_map():
-    """显式传 table_columns_map 时不再调用 build_table_columns_map。"""
-    assert cv.validate_semantic_fields(
-        {},
+def test_first_structure_error_accepts_explicit_table_columns_map():
+    """显式传 table_columns_map 时直接使用，不再构建。"""
+    assert first_structure_error(
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
+        relationships=[],
         table_columns_map=TABLE_COLUMNS,
     ) is None
 
 
-def test_validate_semantic_fields_accepts_none_dimensions_and_metrics():
-    assert cv.validate_semantic_fields(
-        DATASOURCE, dimensions=None, metrics=None, relationships=None
+def test_first_structure_error_accepts_none_dimensions_and_metrics():
+    assert first_structure_error(
+        [], [], [], table_columns_map=build_table_columns_map(DATASOURCE)
     ) is None
 
 
-def test_validate_semantic_fields_builds_map_from_datasource():
-    """不传 table_columns_map 时走 build_table_columns_map。"""
-    assert cv.validate_semantic_fields(
-        DATASOURCE,
+def test_first_structure_error_builds_map_from_datasource():
+    """datasource 形态由调用方经 build_table_columns_map 转换。"""
+    assert first_structure_error(
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
+        relationships=[],
+        table_columns_map=build_table_columns_map(DATASOURCE),
     ) is None
 
 
-def test_validate_semantic_fields_rejects_non_list_allowed_operators():
-    error = cv.validate_semantic_fields(
-        DATASOURCE,
+def test_first_structure_error_rejects_non_list_allowed_operators():
+    error = first_structure_error(
         metrics=[],
         dimensions=[
             {"name": "城市", "table": "orders", "column": "city", "allowed_operators": "=,IN"}
         ],
+        relationships=[],
+        table_columns_map=TABLE_COLUMNS,
     )
     assert "allowed_operators 必须是数组" in error

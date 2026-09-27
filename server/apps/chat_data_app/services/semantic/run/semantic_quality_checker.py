@@ -4,9 +4,12 @@
 "能不能导入"（四道闸门）互补——闸门管合法性，本模块管好坏。
 
 设计约束：
-- 只做确定性检查（覆盖度/可执行性/一致性/来源/文档五类），规则与
+- 只做确定性检查（结构/覆盖度/可执行性/一致性/来源/文档六类），规则与
   agent/skills/data-analyzing/references/governance/quality-rules.md 保持同一套
   编码与口径；会话内技能按该清单分析，导入 preview 按本模块机器把关；
+- structure 域是阻断级硬门槛：判定逻辑与错误文案单点复用 core/config_validator
+  的编排函数，check_config 把它们并入同一份报告；保存链路的
+  first_structure_error 从该域提取第一条错误句子做拦截；
 - 校验分两层：check_config 面向单个配置（模型内部自洽）；check_cross_model_metrics
   面向数据源组内多个配置之间的同名指标口径冲突（CON_CROSS_MODEL_* 两条，独立函数
   产出，不参与单模型评分）；
@@ -25,20 +28,35 @@ import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ..core.config_validator import (
+    _validate_composite_metrics,
+    _validate_derived_metrics,
+    _validate_dimensions_against_tables,
+    _validate_field_display_names,
+    _validate_metrics_against_tables,
+    validate_semantic_relationships,
+)
+
 SCORE_DEDUCTION = {"error": 8, "warning": 3, "info": 1}
 MAX_TARGET_EXAMPLES = 5
 
 # 规则目录：code -> (severity, category, label)。与技能 references/governance/quality-rules.md 同源。
 RULES: Dict[str, Tuple[str, str, str]] = {
+    # 结构校验 structure：阻断级硬门槛（保存链路 first_structure_error 从本域提取第一条错误）。
+    # 判定逻辑与用户文案单点复用 core/config_validator 的编排函数，message 即完整错误句子，
+    # RULES 第三位的 label 仅作目录用途、不拼进 message。
+    "STR_FIELD_NAME_INVALID": ("error", "structure", "字段显示名称不合法"),
+    "STR_DIMENSION_INVALID": ("error", "structure", "维度结构校验未通过"),
+    "STR_METRIC_INVALID": ("error", "structure", "指标物理引用校验未通过"),
+    "STR_DERIVED_INVALID": ("error", "structure", "派生指标结构校验未通过"),
+    "STR_COMPOSITE_INVALID": ("error", "structure", "复合指标结构校验未通过"),
+    "STR_RELATIONSHIP_INVALID": ("error", "structure", "表关系校验未通过"),
     # 来源完整性 provenance
     "PROV_METRIC_MISSING_TABLE": ("error", "provenance", "原子指标缺少归属表 table"),
     "PROV_DIMENSION_MISSING_TABLE": ("error", "provenance", "维度缺少归属表 table"),
     "PROV_DIMENSION_MISSING_COLUMN": ("warning", "provenance", "维度缺少物理字段 column"),
     # 可执行性 executability
-    "EXE_UNKNOWN_COLUMN": ("error", "executability", "引用的物理列在数据源中不存在"),
-    "EXE_DERIVED_BASE_MISSING": ("error", "executability", "派生指标的 base_metric 在当前配置中不存在"),
     "EXE_DERIVED_NO_CONSTRAINT": ("info", "executability", "派生指标未设置时间窗 period 或过滤 filters，口径可能与基础指标重复"),
-    "EXE_COMPOSITE_FORMULA_MISSING": ("error", "executability", "复合指标缺少 formula"),
     "EXE_COMPOSITE_UNRESOLVED": ("warning", "executability", "复合指标 formula 存在无法对应到已知指标的片段"),
     # 覆盖度 coverage
     "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标"),
@@ -162,8 +180,9 @@ class SemanticQualityChecker:
         dimensions = [item for item in config.get("dimensions") or [] if isinstance(item, dict)]
         relationships = [item for item in config.get("relationships") or [] if isinstance(item, dict)]
 
+        self._check_structure(config, metrics, dimensions, relationships, raw, physical_columns)
         self._check_provenance(metrics, dimensions, raw)
-        self._check_executability(config, metrics, raw, physical_columns)
+        self._check_executability(metrics, raw)
         self._check_coverage(metrics, dimensions, raw, physical_columns)
         self._check_consistency(config, metrics, dimensions, relationships, raw)
         self._check_documentation(config, metrics, dimensions, raw)
@@ -182,6 +201,46 @@ class SemanticQualityChecker:
 
     # ---- 检查项 ----
 
+    def _check_structure(
+        self,
+        config: Dict[str, Any],
+        metrics: List[Dict[str, Any]],
+        dimensions: List[Dict[str, Any]],
+        relationships: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+        physical_columns: Optional[Set[Tuple[str, str]]],
+    ) -> None:
+        """结构校验：阻断级硬门槛，判定与文案单点复用 core/config_validator 编排函数。
+
+        raw 的 target 直接承载完整错误句子（_aggregate 对 structure 域不套 label）。
+        物理列缺失时跳过依赖表结构的检查（与可执行性检查的降级口径一致）。
+        """
+        error = _validate_field_display_names(dimensions, metrics)
+        if error:
+            raw.append(("STR_FIELD_NAME_INVALID", error))
+        table_columns_map: Dict[str, Set[str]] = {}
+        if physical_columns is not None:
+            for table, column in physical_columns:
+                table_columns_map.setdefault(table, set()).add(column)
+            error = _validate_dimensions_against_tables(dimensions, table_columns_map)
+            if error:
+                raw.append(("STR_DIMENSION_INVALID", error))
+            error = _validate_metrics_against_tables(metrics, table_columns_map)
+            if error:
+                raw.append(("STR_METRIC_INVALID", error))
+        error = _validate_derived_metrics(metrics, dimensions)
+        if error:
+            raw.append(("STR_DERIVED_INVALID", error))
+        error = _validate_composite_metrics(metrics)
+        if error:
+            raw.append(("STR_COMPOSITE_INVALID", error))
+        if physical_columns is not None:
+            error = validate_semantic_relationships(
+                table_columns_map, metrics, dimensions, relationships,
+            )
+            if error:
+                raw.append(("STR_RELATIONSHIP_INVALID", error))
+
     def _check_provenance(self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], raw: List[Tuple[str, str]]) -> None:
         for metric in metrics:
             if metric.get("metric_kind"):
@@ -197,82 +256,38 @@ class SemanticQualityChecker:
 
     def _check_executability(
         self,
-        config: Dict[str, Any],
         metrics: List[Dict[str, Any]],
         raw: List[Tuple[str, str]],
-        physical_columns: Optional[Set[Tuple[str, str]]],
     ) -> None:
+        """可执行性提示（结构硬门槛已由 _check_structure 承载，这里只做质量提示）。"""
         metric_names = {_clean(metric.get("name")) for metric in metrics if _clean(metric.get("name"))}
         for metric in metrics:
-            name = _clean(metric.get("name")) or "<未命名>"
             kind = str(metric.get("metric_kind") or "").strip()
-            if self._check_derived_or_composite(metric, metric_names, raw):
-                continue  # 公式缺失的复合指标不再参与物理列校验
-            if physical_columns is not None:
-                column = _metric_source_column(metric) if not kind else _clean(metric.get("column"))
-                self._append_unknown_column(
-                    raw, "EXE_UNKNOWN_COLUMN", name,
-                    _clean(metric.get("table")), column, physical_columns,
-                )
-        if physical_columns is not None:
-            self._check_dimension_columns(config, raw, physical_columns)
+            if kind:
+                self._check_derived_or_composite(metric, metric_names, raw)
 
     @staticmethod
     def _check_derived_or_composite(
         metric: Dict[str, Any],
         metric_names: Set[str],
         raw: List[Tuple[str, str]],
-    ) -> bool:
-        """派生/复合指标的可执行性：来源指标缺失、无约束、公式缺失或公式不可解析。
-
-        返回 True 表示应跳过该指标的后续物理列校验（对应原 composite 缺公式时的 continue）。
-        """
+    ) -> None:
+        """派生/复合指标的可执行性提示（基础缺失/公式缺失属于结构硬门槛，由 structure 域承载）。"""
         name = _clean(metric.get("name")) or "<未命名>"
         kind = str(metric.get("metric_kind") or "").strip()
         if kind == "derived":
             base = _clean(metric.get("base_metric"))
-            if not base or base not in metric_names:
-                raw.append(("EXE_DERIVED_BASE_MISSING", name))
-            elif not (metric.get("period") or metric.get("filters")):
+            if base and base in metric_names and not (metric.get("period") or metric.get("filters")):
                 raw.append(("EXE_DERIVED_NO_CONSTRAINT", name))
-            return False
+            return
         if kind != "composite":
-            return False
+            return
         formula = str(metric.get("formula") or "").strip()
         if not formula:
-            raw.append(("EXE_COMPOSITE_FORMULA_MISSING", name))
-            return True
+            return
         unresolved = SemanticQualityChecker._unresolved_formula_tokens(formula, metric_names)
         if unresolved:
             raw.append(("EXE_COMPOSITE_UNRESOLVED", f"{name}({','.join(unresolved[:3])})"))
-        return False
-
-    @staticmethod
-    def _append_unknown_column(
-        raw: List[Tuple[str, str]],
-        code: str,
-        target: str,
-        table: str,
-        column: str,
-        physical_columns: Set[Tuple[str, str]],
-    ) -> None:
-        """已给出物理列但该 (table, column) 不在库表清单中时记一条问题。"""
-        if table and column and (table, column) not in physical_columns:
-            raw.append((code, f"{target}({table}.{column})"))
-
-    @staticmethod
-    def _check_dimension_columns(
-        config: Dict[str, Any],
-        raw: List[Tuple[str, str]],
-        physical_columns: Set[Tuple[str, str]],
-    ) -> None:
-        """维度侧未知物理列检查。"""
-        for dimension in [item for item in config.get("dimensions") or [] if isinstance(item, dict)]:
-            SemanticQualityChecker._append_unknown_column(
-                raw, "EXE_UNKNOWN_COLUMN", _clean(dimension.get("name")),
-                _clean(dimension.get("table")), _clean(dimension.get("column")),
-                physical_columns,
-            )
 
     @staticmethod
     def _unresolved_formula_tokens(formula: str, metric_names: Set[str]) -> List[str]:
@@ -602,14 +617,18 @@ class SemanticQualityChecker:
         for code, target in raw:
             grouped.setdefault(code, []).append(target)
         findings: List[QualityFinding] = []
-        # 按 category -> severity 稳定排序，报告可读性优先
-        category_order = {name: index for index, name in enumerate(("provenance", "executability", "coverage", "consistency", "documentation"))}
+        # 按 category -> severity 稳定排序，报告可读性优先；structure 是阻断级门槛排最前
+        category_order = {name: index for index, name in enumerate(("structure", "provenance", "executability", "coverage", "consistency", "documentation"))}
         severity_order = {"error": 0, "warning": 1, "info": 2}
         for code, targets in grouped.items():
             severity, category, label = RULES[code]
             examples = targets[:MAX_TARGET_EXAMPLES]
             suffix = f" 等 {len(targets)} 处" if len(targets) > MAX_TARGET_EXAMPLES else ""
-            message = f"{label}: {', '.join(examples)}{suffix}" if targets and targets != ["-"] else label
+            if category == "structure":
+                # structure 域 target 本身是完整错误句子，不再套 label 前缀
+                message = f"{'；'.join(examples)}{suffix}"
+            else:
+                message = f"{label}: {', '.join(examples)}{suffix}" if targets and targets != ["-"] else label
             findings.append(QualityFinding(code=code, severity=severity, category=category, message=message, targets=targets))
         findings.sort(key=lambda item: (category_order.get(item.category, 99), severity_order.get(item.severity, 99), item.code))
         return findings
@@ -739,11 +758,50 @@ def get_semantic_quality_checker() -> SemanticQualityChecker:
     return SemanticQualityChecker()
 
 
+#: structure 域规则的提取顺序 = 结构校验的检查阶段序（与 config_validator 编排一致），
+#: 保证保存链路拦截的第一条错误与历史行为一致。
+_STRUCTURE_RULE_ORDER = (
+    "STR_FIELD_NAME_INVALID",
+    "STR_DIMENSION_INVALID",
+    "STR_METRIC_INVALID",
+    "STR_DERIVED_INVALID",
+    "STR_COMPOSITE_INVALID",
+    "STR_RELATIONSHIP_INVALID",
+)
+
+
+def first_structure_error(
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+    relationships: List[Dict[str, Any]],
+    *,
+    table_columns_map: Optional[Dict[str, Set[str]]] = None,
+) -> Optional[str]:
+    """保存/导入前的结构硬门槛薄壳：跑 check_config，返回第一条结构错误句子。
+
+    判定与文案单点在 core/config_validator 编排函数（由 _check_structure 复用），
+    本函数只负责守卫、形态转换与按阶段序提取，不再持有任何校验逻辑。
+    """
+    if not table_columns_map:
+        return "当前数据源缺少表结构信息，请先完成数据源同步"
+    physical_columns = {(table, column) for table, columns in table_columns_map.items() for column in columns}
+    report = get_semantic_quality_checker().check_config(
+        {"metrics": metrics, "dimensions": dimensions, "relationships": relationships},
+        physical_columns=physical_columns,
+    )
+    by_code = {item.code: item for item in report.findings if item.category == "structure"}
+    for code in _STRUCTURE_RULE_ORDER:
+        if code in by_code:
+            return by_code[code].message
+    return None
+
+
 __all__ = [
     "ConfigQualityReport",
     "QualityFinding",
     "SemanticQualityChecker",
     "check_cross_model_metrics",
+    "first_structure_error",
     "get_semantic_quality_checker",
     "grade_for_score",
 ]

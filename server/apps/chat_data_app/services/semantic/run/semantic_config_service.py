@@ -12,7 +12,8 @@ from utils.logger import get_logger
 from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
-from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
+from ..core.config_validator import expression_uses_physical_column
+from .semantic_quality_checker import first_structure_error
 from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
@@ -150,15 +151,14 @@ async def validate_semantic_config_for_save(
     table_columns_map: Optional[Dict[str, Set[str]]] = None,
     column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    validation_error = validate_semantic_fields(
-        datasource,
+    structure_error = first_structure_error(
         metrics,
         dimensions,
-        relationships,
-        table_columns_map=table_columns_map,
+        relationships or [],
+        table_columns_map=table_columns_map if table_columns_map is not None else build_table_columns_map(datasource),
     )
-    if validation_error:
-        return validation_error
+    if structure_error:
+        return structure_error
     return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions, column_dicts=column_dicts)
 
 
@@ -903,7 +903,7 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
 
     导入预览 / 质量检查 / semantic_yaml_check 工具共用，保证物理清单口径一致。
     注意不能用 get_column_dicts_async——那是只含枚举/单位注释的稀疏字段字典，
-    当作物理清单会把正常列全部误判为 EXE_UNKNOWN_COLUMN。
+    当作物理清单会把正常列全部误判为 STR_METRIC_INVALID 未知列。
     失败时返回 None（调用方质量检查跳过依赖清单的检查项）。
     """
     try:
