@@ -268,6 +268,89 @@ async def test_file_grep_tool_splits_or_patterns_and_reports_skips():
         await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "max_results": 500})
 
 
+@pytest.mark.asyncio
+async def test_file_grep_tool_regex_case_context_options():
+    """file_grep 新旋钮：use_regex/ignore_case/context_lines 透传，content 模式带 before/after。"""
+    runtime = StubRuntime()
+    runtime.results["grep_text"] = {
+        "matches": [{
+            "path": "/mnt/user-data/workspace/a.py", "line_number": 2, "line": "def two_impl():",
+            "before": ["    return 1"], "after": ["    return 2"],
+        }],
+        "has_more": False, "skipped_binary": 0, "skipped_large": 0,
+    }
+    payload = _payload(await _invoke(runtime, "file_grep", {
+        "pattern": r"def \w+_impl", "use_regex": True, "ignore_case": True,
+        "context_lines": 2, "output_mode": "content",
+    }))
+    assert payload["output_mode"] == "content"
+    assert payload["matches"][0]["before"] == ["    return 1"]
+    assert payload["matches"][0]["after"] == ["    return 2"]
+    call = runtime.calls[0][1]
+    assert call["use_regex"] is True
+    assert call["ignore_case"] is True
+    assert call["context_lines"] == 2
+    assert call["output_mode"] == "content"
+
+    with pytest.raises(ValueError, match="output_mode"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "output_mode": "bogus"})
+    with pytest.raises(ValueError, match="context_lines 必须在 0-10 之间"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "context_lines": 11})
+    with pytest.raises(ValueError, match="context_lines 必须在 0-10 之间"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "x", "context_lines": -1})
+
+
+@pytest.mark.asyncio
+async def test_file_grep_regex_mode_keeps_pipe_as_alternation():
+    """正则模式不按 | 拆分：(a|b) 分组、[a|b] 字符类整体交给 rg，| 就是正则交替。"""
+    runtime = StubRuntime()
+    runtime.results["grep_text"] = {"matches": [], "has_more": False, "skipped_binary": 0, "skipped_large": 0}
+    await _invoke(runtime, "file_grep", {"pattern": r"(def|class) \w+", "use_regex": True})
+    call = runtime.calls[0][1]
+    assert call["patterns"] == [r"(def|class) \w+"]
+
+    # 字面模式维持既有拆分语义
+    runtime2 = StubRuntime()
+    runtime2.results["grep_text"] = {"matches": [], "has_more": False, "skipped_binary": 0, "skipped_large": 0}
+    await _invoke(runtime2, "file_grep", {"pattern": "error|warn"})
+    assert runtime2.calls[0][1]["patterns"] == ["error", "warn"]
+
+    # 正则模式下 pattern 不能整体为空
+    with pytest.raises(ValueError, match="pattern 不能为空"):
+        await _invoke(StubRuntime(), "file_grep", {"pattern": "  ", "use_regex": True})
+
+
+@pytest.mark.asyncio
+async def test_file_grep_tool_files_and_count_modes():
+    """files_with_matches / count 模式返回 entries 而非 matches，count 带每文件计数。"""
+    runtime = StubRuntime()
+    runtime.results["grep_text"] = {
+        "entries": [
+            {"path": "/mnt/user-data/workspace/a.py", "match_count": 3},
+            {"path": "/mnt/user-data/workspace/b.md"},
+        ],
+        "has_more": False, "skipped_binary": 0, "skipped_large": 0,
+    }
+    payload = _payload(await _invoke(runtime, "file_grep", {
+        "pattern": "error", "ignore_case": True, "output_mode": "count", "max_results": 50,
+    }))
+    assert payload["output_mode"] == "count"
+    assert "matches" not in payload
+    assert payload["entries"][0]["match_count"] == 3
+    assert payload["count"] == 2
+
+    files_runtime = StubRuntime()
+    files_runtime.results["grep_text"] = {
+        "entries": [{"path": "/mnt/user-data/workspace/a.py"}],
+        "has_more": True, "skipped_binary": 0, "skipped_large": 0,
+    }
+    files_payload = _payload(await _invoke(files_runtime, "file_grep", {
+        "pattern": "error", "output_mode": "files_with_matches",
+    }))
+    assert files_payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
+    assert files_payload["has_more"] is True
+
+
 # ---------------------------------------------------------------------------
 # dir_list
 # ---------------------------------------------------------------------------

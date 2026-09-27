@@ -1408,9 +1408,22 @@ def test_build_rg_command_str():
     command = we_search.build_rg_command_str(
         "/mnt/user-data/workspace", ["hello world", "foo"], glob="**/*.py",
     )
-    assert command.startswith("rg -F --json --hidden")
+    assert command.startswith("rg --json --hidden -F")
     assert "--glob '**/*.py'" in command
     assert command.endswith("-e 'hello world' -e foo")
+
+    # 新旋钮：正则去 -F、忽略大小写加 -i、上下文加 --context、聚合模式不带 --context
+    regex_cmd = we_search.build_rg_command_str(
+        "/tmp/x", ["a|b"], use_regex=True, ignore_case=True, context_lines=2,
+    )
+    assert "-F" not in regex_cmd.split()
+    assert "-i" in regex_cmd.split()
+    assert "--context 2" in regex_cmd
+    count_cmd = we_search.build_rg_command_str(
+        "/tmp/x", ["a"], output_mode="count", context_lines=3,
+    )
+    assert "--context" not in count_cmd
+    assert "-F" in count_cmd.split()
 
 
 def test_parse_rg_output():

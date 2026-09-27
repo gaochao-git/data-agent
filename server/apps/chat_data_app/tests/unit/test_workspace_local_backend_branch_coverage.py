@@ -368,6 +368,56 @@ def test_grep_local_workspace_text_skill_paths(tmp_path, monkeypatch):
     assert payload["matches"][0]["path"].startswith("/mnt/skills/demo-skill")
 
 
+def test_grep_local_workspace_text_regex_case_context_and_modes(tmp_path, monkeypatch):
+    """file_grep 增强：正则/忽略大小写/上下文归属与 files/count 聚合（真实 rg 验证）。"""
+    runtime, root = _runtime_with_skill(tmp_path)
+    ws = root / "workspace"
+    (ws / "a.py").write_text(
+        "def one():\n    return 1\n\ndef two_impl():\n    return 2\n\ndef three_impl():\n    return 3\n",
+        encoding="utf-8",
+    )
+    (ws / "b.md").write_text("some Error here\nand error there\n", encoding="utf-8")
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    # 正则：-F 字面量模式下无法命中的 \w+ 模式
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", [r"def \w+_impl"], "**/*", 10, 20000,
+        use_regex=True,
+    )
+    assert [m["line_number"] for m in payload["matches"]] == [4, 7]
+
+    # 忽略大小写：字面 error 命中 Error/error 两行
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["error"], "*.md", 10, 20000,
+        ignore_case=True,
+    )
+    assert [m["line_number"] for m in payload["matches"]] == [1, 2]
+
+    # 上下文归属：前 1 行是空行（第 3 行），后 1 行是 return 2
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["two_impl"], "*.py", 10, 20000,
+        context_lines=1,
+    )
+    match = payload["matches"][0]
+    assert match["line_number"] == 4
+    assert match["before"] == [""]
+    assert match["after"] == ["    return 2"]
+
+    # count 模式：可见路径 + 每文件命中计数
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        output_mode="count",
+    )
+    assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py", "match_count": 2}]
+
+    # files_with_matches 模式：仅命中文件清单
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        output_mode="files_with_matches",
+    )
+    assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
+
+
 # ---------------------------------------------------------------------------
 # 后端异步入口
 # ---------------------------------------------------------------------------

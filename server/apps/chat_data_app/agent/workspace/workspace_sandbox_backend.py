@@ -262,6 +262,10 @@ class SandboxWorkspaceBackend:
         glob: str,
         max_results: int,
         max_chars: int,
+        use_regex: bool = False,
+        ignore_case: bool = False,
+        context_lines: int = 0,
+        output_mode: str = "content",
     ) -> dict[str, Any]:
         return await sandbox_grep_text(
             session_ref=await self._session_ref(runtime),
@@ -270,6 +274,10 @@ class SandboxWorkspaceBackend:
             glob=glob,
             max_results=max_results,
             max_chars=max_chars,
+            use_regex=use_regex,
+            ignore_case=ignore_case,
+            context_lines=context_lines,
+            output_mode=output_mode,
         )
 
     async def validate_bash_paths(
