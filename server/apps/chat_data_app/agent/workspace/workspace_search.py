@@ -7,6 +7,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import shlex
+from collections import deque
 from typing import Any
 
 from utils.logger import get_logger
@@ -129,29 +130,64 @@ def _parse_rg_match(
 class _RgContextAccumulator:
     """rg -C 上下文流的流式归属状态机。
 
-    match 前紧邻的 context 行缓冲进 before（上限 context_lines）；match 后的
+    match 前紧邻的 context 行用滑动窗口保留「最近的 N 行」（窗口满后新行挤掉
+    最旧行——语义要求紧邻命中，而不是命中间最早出现的那批）；match 后的
     context 行追加给最近一条命中（重叠行 rg 会为相邻 match 各输出一次，两侧
-    各自吸收即可）。take_before 在命中新 match 时快照并重置。
+    各自吸收即可）。文件边界（rg --json 的 ``begin`` 事件）处必须整体重置，
+    否则上一文件的尾部 context 行会污染下一文件的首个命中。
     """
 
     def __init__(self, context_lines: int) -> None:
         self.context_lines = context_lines
-        self.pending_before: list[str] = []
+        # maxlen=0（context_lines=0）时 append 即丢弃，天然退化为无上下文
+        self.pending_before: deque[str] = deque(maxlen=context_lines)
+        self.after_count = 0
+
+    def reset(self) -> None:
+        """文件边界处清空跨文件残留（begin 事件时调用）。"""
+        self.pending_before.clear()
         self.after_count = 0
 
     def absorb(self, content: str, matches: list[dict[str, Any]]) -> int:
-        """归属一条 context 行，返回其字符开销（内容长度 + 换行 1）。"""
-        if len(self.pending_before) < self.context_lines:
-            self.pending_before.append(content)
+        """归属一条 context 行，返回其计入 max_chars 预算的字符开销。
+
+        预算按「实际进入结果的内容」计费：只有行被挂到某条命中的 after 时才
+        计费；仅进 before 缓冲的行不计——它们可能随窗口滑动被丢弃、可能到流
+        结束都等不到命中。若该行随后成为下一命中的 before，会在命中处按
+        :func:`_rg_match_cost` 计费（相邻命中的重叠行 rg 发射两次、结果出现
+        两次、计费两次，三者一致）。
+        """
+        self.pending_before.append(content)
         if matches and self.after_count < self.context_lines:
             matches[-1].setdefault("after", []).append(content)
             self.after_count += 1
-        return len(content) + 1
+            return len(content) + 1
+        return 0
+
+    def observe(
+        self,
+        line: str,
+        normalized_target: str,
+        prefix: str,
+        prefix_len: int,
+        matches: list[dict[str, Any]],
+    ) -> int:
+        """处理一条非 match 的 JSON 行：begin 事件重置 / context 行归属。
+
+        返回计入 max_chars 预算的字符开销（仅 context 进入结果时非零）。
+        """
+        if _is_rg_file_begin(line):
+            self.reset()
+            return 0
+        context = _parse_rg_entry(line, normalized_target, prefix, prefix_len, expected_type="context")
+        if context is None:
+            return 0
+        return self.absorb(context[2], matches)
 
     def take_before(self) -> list[str]:
         """快照当前 before 缓冲并重置 after 计数（新 match 到来时调用）。"""
         before = list(self.pending_before)
-        self.pending_before = []
+        self.pending_before.clear()
         self.after_count = 0
         return before
 
@@ -170,6 +206,15 @@ def _build_rg_match_entry(parsed: tuple[str, Any, str], before: list[str]) -> di
     return entry
 
 
+def _is_rg_file_begin(line: str) -> bool:
+    """判断一行是否为 rg --json 的 ``begin`` 事件（文件边界信号）。"""
+    try:
+        data = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return data.get("type") == "begin"
+
+
 def parse_rg_output(
     stdout: str,
     target: str,
@@ -186,7 +231,8 @@ def parse_rg_output(
     in each match is relative to the search root.
 
     context_lines > 0 时（rg -C），相邻 ``type == "context"`` 条目按流式顺序
-    归属（见 :class:`_RgContextAccumulator`），上下文行计入 max_chars 预算。
+    归属（见 :class:`_RgContextAccumulator`），并在文件边界（begin 事件）重置；
+    预算按实际进入结果的内容计费（before/after/正文各计一次，重叠行按出现次数计）。
     """
     normalized_target = target.rstrip("/")
     prefix = normalized_target + "/"
@@ -210,9 +256,7 @@ def parse_rg_output(
             body_chars += cost
             continue
         if context_lines > 0:
-            context = _parse_rg_entry(line, normalized_target, prefix, prefix_len, expected_type="context")
-            if context is not None:
-                body_chars += accumulator.absorb(context[2], matches)
+            body_chars += accumulator.observe(line, normalized_target, prefix, prefix_len, matches)
     return matches, has_more
 
 

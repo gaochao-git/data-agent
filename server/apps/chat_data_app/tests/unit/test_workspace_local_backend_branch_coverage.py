@@ -418,6 +418,46 @@ def test_grep_local_workspace_text_regex_case_context_and_modes(tmp_path, monkey
     assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
 
 
+def test_grep_context_multi_file_multi_hit_no_pollution(tmp_path, monkeypatch):
+    """真实 rg 多文件多命中回归：before 取紧邻行、跨文件不污染、预算按结果计费。"""
+    runtime, root = _runtime(tmp_path)
+    ws = root / "workspace"
+    # 多命中同文件：HIT-1 与 HIT-2 相距 2×context，旧实现的「保留最早 N 行」会取错
+    (ws / "code.txt").write_text("HIT\nL2\nL3\nL4\nL5\nHIT\n", encoding="utf-8")
+    # 前一文件尾部 context 行（c3/c4）曾会污染下一文件的首个命中
+    (ws / "zzz.txt").write_text("c1\nc2\nHIT\nc3\nc4\n", encoding="utf-8")
+    (ws / "aaa.txt").write_text("HIT\n", encoding="utf-8")
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 100000,
+        context_lines=2,
+    )
+    by_key = {(m["path"].rsplit("/", 1)[-1], m["line_number"]): m for m in payload["matches"]}
+    # 滑动窗口：第二处命中拿到的是紧邻的 L4/L5，而不是命中间最早的 L2/L3
+    assert by_key[("code.txt", 6)].get("before") == ["L4", "L5"]
+    assert by_key[("code.txt", 6)].get("after") is None
+    # 文件边界重置：code.txt 首个命中不挂 zzz.txt 的尾部行
+    assert by_key[("code.txt", 1)].get("before") is None
+    assert by_key[("zzz.txt", 3)].get("before") == ["c1", "c2"]
+    assert by_key[("zzz.txt", 3)].get("after") == ["c3", "c4"]
+    assert by_key[("aaa.txt", 1)].get("before") is None
+
+    # 预算按结果计费：紧预算（30 字符，足够 3-4 条命中）下截断发生在贴近预算处，
+    # 而不是被上下文行重复计费提前腰斩
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 30,
+        context_lines=2,
+    )
+    assert payload["has_more"] is True
+    used = sum(
+        len(m["line"]) + 1 + sum(len(x) + 1 for x in m.get("before", []) + m.get("after", []))
+        for m in payload["matches"]
+    )
+    assert used <= 30
+    assert used >= 30 * 0.6  # 旧实现同预算下有效载荷不足一半
+
+
 # ---------------------------------------------------------------------------
 # 后端异步入口
 # ---------------------------------------------------------------------------
