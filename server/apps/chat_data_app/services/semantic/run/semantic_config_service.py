@@ -13,14 +13,13 @@ from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import expression_uses_physical_column
-from .semantic_quality_checker import first_structure_error
 from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
     extract_metric_source_column,
     merge_carried_column_dicts,
 )
-from .semantic_quality_checker import check_cross_model_metrics, get_semantic_quality_checker
+from .semantic_quality_checker import check_cross_model_metrics, first_structure_error, get_semantic_quality_checker
 
 logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"

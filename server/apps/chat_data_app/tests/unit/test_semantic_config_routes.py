@@ -64,7 +64,7 @@ def test_semantic_permission_helpers():
     assert semantic_config._with_semantic_config_permissions(public, "user_a", admin_manage=True)["can_manage"] is True
 
 
-def test_validate_semantic_fields_checks_dimensions_and_metrics():
+def test_first_structure_error_checks_dimensions_and_metrics():
     datasource = {
         "ds_tables": [
             {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]},
@@ -97,7 +97,7 @@ def test_validate_semantic_fields_checks_dimensions_and_metrics():
     assert "缺少表结构" in _structure_error({"ds_tables": []}, [], [])
 
 
-def test_validate_semantic_fields_checks_operators_and_relationships():
+def test_first_structure_error_checks_operators_and_relationships():
     datasource = {
         "ds_tables": [
             {"table_name": "orders", "columns": [{"name": "user_id"}, {"name": "status"}]},
