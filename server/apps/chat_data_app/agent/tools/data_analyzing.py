@@ -48,10 +48,10 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     build_model_checklist,
 )
 from apps.chat_data_app.services.semantic.run.semantic_config_service import (
-    cross_model_findings_for_imports,
     get_semantic_config_service,
     load_semantic_physical_columns,
     prepare_ossie_import_models,
+    quality_findings_for_imports,
 )
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import (
     load_runtime_semantic_config,
@@ -64,7 +64,6 @@ from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     normalize_member_datasource_ids,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
-from apps.chat_data_app.services.semantic.run.semantic_quality_checker import get_semantic_quality_checker
 from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload, tool_result_payload
 from .filesystem import read_text_file_full
@@ -552,10 +551,9 @@ async def _run_check_yaml(
         })
 
     physical_columns = await load_semantic_physical_columns(ds_manager, datasource_id)
-    checker = get_semantic_quality_checker()
-    # 跨模型口径检查：与组内公共/本人私有配置及同批其他模型比较（与导入预览同源，提示不阻断）
-    cross_findings_by_model = await cross_model_findings_for_imports(
-        imports, datasource_id, user_id=str(user_id or "")
+    # 质量检查（单模型 5 维 + 跨模型口径）统一编排入口，与导入预览同源
+    findings_by_model = await quality_findings_for_imports(
+        imports, datasource_id, physical_columns=physical_columns, user_id=str(user_id or "")
     )
     models = []
     for item in imports:
@@ -573,17 +571,8 @@ async def _run_check_yaml(
         }
         findings = None
         if item.importable:
-            report = checker.check_config(
-                {
-                    **item.to_config_payload(),
-                    "enabled": False,
-                    "scope_type": "public",
-                },
-                physical_columns=physical_columns,
-            )
             # 只透出触发的 findings：评分无法指导动作，自检链路不输出 score/grade
-            # 跨模型口径 findings 并入同一清单，靠 CON_CROSS_MODEL_* 编码区分层级
-            findings = report.to_payload()["findings"] + cross_findings_by_model.get(item.name, [])
+            findings = findings_by_model.get(item.name, [])
             model_payload["quality"] = {"findings": findings}
         model_payload["checklist"] = build_model_checklist(
             item,

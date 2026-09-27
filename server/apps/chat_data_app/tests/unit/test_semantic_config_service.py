@@ -650,6 +650,36 @@ def test_cross_model_findings_for_imports_empty_imports_returns_empty():
 
 
 # ---------------------------------------------------------------------------
+# 导入链路质量检查编排（quality_findings_for_imports：preview 与 check_yaml 共用）
+# ---------------------------------------------------------------------------
+
+
+def test_quality_findings_for_imports_merges_single_and_cross():
+    """编排入口：importable 模型合并单模型规则与跨模型口径两层 findings。"""
+    imports = [_import_model("模型A", "销售额", "SUM(orders.amount)")]
+    existing = [_public_config("模型B", [{"name": "销售额", "expression": "SUM(orders.other)"}])]
+    result = asyncio.run(
+        semantic_config_service_module.quality_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService(existing)
+        )
+    )
+    assert set(result) == {"模型A"}
+    codes = {item["code"] for item in result["模型A"]}
+    assert "DOC_METRIC_NO_DESCRIPTION" in codes      # 单模型层（指标缺描述）
+    assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes  # 跨模型层（同名异式）
+
+
+def test_quality_findings_for_imports_skips_non_importable():
+    """不可导入模型不产出 findings（checklist 由调用方基于 validation_error 生成）。"""
+    imports = [_import_model("坏模型", "销售额", "SUM(orders.x)", importable=False)]
+    assert asyncio.run(
+        semantic_config_service_module.quality_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService([])
+        )
+    ) == {}
+
+
+# ---------------------------------------------------------------------------
 # 编辑器保存链路质量检查（quality_findings_for_save：多处校验统一的单一入口）
 # ---------------------------------------------------------------------------
 

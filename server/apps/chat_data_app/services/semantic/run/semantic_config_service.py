@@ -1091,6 +1091,37 @@ async def cross_model_findings_for_imports(
     }
 
 
+async def quality_findings_for_imports(
+    imports: List[OssieSemanticModelImport],
+    datasource_id: str,
+    *,
+    physical_columns: Optional[Set[Tuple[str, str]]] = None,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """导入链路逐模型质量检查编排（ossie-import/preview 与 check_yaml 工具共用）。
+
+    单模型 5 维规则（check_config）与跨模型口径（cross_model_findings_for_imports）
+    并入同一 findings 清单，靠 CON_CROSS_MODEL_* 编码区分层级。物理列由调用方加载
+    并传入（调用方的 checklist 还需要 inventory_available 口径，避免重复加载）；
+    不可导入模型跳过（其 checklist 由调用方基于 validation_error 生成）。
+    提示不阻断：存量读取失败已在 cross_model_findings_for_imports 内降级为空。
+    """
+    cross_by_model = await cross_model_findings_for_imports(
+        imports, datasource_id, semantic_service=semantic_service, user_id=user_id
+    )
+    checker = get_semantic_quality_checker()
+    return {
+        item.name: checker.check_config(
+            # enabled/scope_type 仅占位，不参与检查项（与保存链路占位口径一致）
+            {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
+            physical_columns=physical_columns,
+        ).to_payload()["findings"] + cross_by_model.get(item.name, [])
+        for item in imports
+        if item.importable
+    }
+
+
 async def quality_findings_for_save(
     ds_manager: Any,
     datasource_id: str,

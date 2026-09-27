@@ -34,7 +34,6 @@ from ..services.semantic.run.semantic_quality_checker import check_cross_model_m
 from ..services.semantic.run.semantic_config_service import (
     OssieImportWriteError as _OssieImportWriteError,
     can_mutate_semantic_config,
-    cross_model_findings_for_imports,
     dedupe_semantic_config_ids,
     get_semantic_config_service,
     is_private_semantic_config_owner,
@@ -42,6 +41,7 @@ from ..services.semantic.run.semantic_config_service import (
     load_semantic_physical_columns as _load_physical_columns,
     persist_ossie_imports_in_transaction,
     prepare_ossie_import_models,
+    quality_findings_for_imports,
     quality_findings_for_save,
     validate_semantic_config_for_save,
 )
@@ -362,11 +362,12 @@ async def preview_admin_ossie_semantic_import(
             return error
         user_id = str(_get_current_user(request).user_id)
         physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
-        checker = get_semantic_quality_checker()
         # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
         existing_column_dicts = await get_semantic_config_service().get_column_dicts_async(datasource_id)
-        # 跨模型口径检查：与组内公共/本人私有配置及同批导入模型比较（提示不阻断，不参与 importable）
-        cross_findings_by_model = await cross_model_findings_for_imports(imports, datasource_id, user_id=user_id)
+        # 质量检查（单模型 5 维 + 跨模型口径）统一编排入口，与 check_yaml 工具同源
+        findings_by_model = await quality_findings_for_imports(
+            imports, datasource_id, physical_columns=physical_columns, user_id=user_id
+        )
         models = []
         for item in imports:
             model = item.to_preview_payload()
@@ -374,14 +375,8 @@ async def preview_admin_ossie_semantic_import(
             model["column_dict_fill_plan"] = dict_fill_plan
             findings = None
             if item.importable:
-                # 质量检查输入与 check_yaml 工具完全一致（enabled 仅占位，不参与检查项）
-                report = checker.check_config(
-                    {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
-                    physical_columns=physical_columns,
-                )
                 # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
-                # 跨模型口径 findings 并入同一清单，靠 CON_CROSS_MODEL_* 编码区分层级
-                findings = report.to_payload()["findings"] + cross_findings_by_model.get(item.name, [])
+                findings = findings_by_model.get(item.name, [])
                 model["quality"] = {"findings": findings}
             model["checklist"] = build_model_checklist(
                 item,
