@@ -1498,12 +1498,19 @@ def test_datasource_manager_get_schema_timeout_and_connection_error(monkeypatch)
             return self.adapter
 
     async def run_checks():
-        monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
+        # 同步超时运行期经配置服务读取，patch get_datasource_sync_timeout_seconds 注入极小值
+        async def tiny_sync_timeout():
+            return 0.001
+
+        async def default_sync_timeout():
+            return 30
+
+        monkeypatch.setattr(datasource_manager_module, "get_datasource_sync_timeout_seconds", tiny_sync_timeout)
         manager.metadata_adapter_registry = FakeRegistry(TimeoutAdapter())
         with pytest.raises(ConnectionError, match="数据库连接超时"):
             await manager.get_live_schema_async("ds_a")
 
-        monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
+        monkeypatch.setattr(datasource_manager_module, "get_datasource_sync_timeout_seconds", default_sync_timeout)
         manager.metadata_adapter_registry = FakeRegistry(FailingAdapter())
         with pytest.raises(ConnectionError, match="数据库连接失败"):
             await manager.get_live_schema_async("ds_a")

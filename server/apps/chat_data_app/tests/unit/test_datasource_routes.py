@@ -3519,8 +3519,12 @@ def test_query_runtime_helper_functions(monkeypatch):
     assert identity["datasource_id"] == "ds"
     assert identity["cache_key"]
 
-    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", lambda skip: calls.append(("enabled", skip)) or (not skip))
-    assert query_cache.is_sql_result_cache_enabled(False) is True
+    async def fake_cache_enabled(skip):
+        calls.append(("enabled", skip))
+        return not skip
+
+    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", fake_cache_enabled)
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(False)) is True
 
     monkeypatch.setattr(query_runtime, "get_execution_id_by_member", lambda execution_map, target: calls.append(("execution_id", execution_map, target)) or "exec_1")
     assert query_runtime.get_execution_id_by_member({"m1": "exec_1"}, {"member_datasource_id": "m1"}) == "exec_1"

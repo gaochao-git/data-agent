@@ -626,6 +626,23 @@
         "title": "Body_upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post",
         "type": "object"
       },
+      "ChatDataSettingUpsertRequest": {
+        "description": "后台配置变量覆盖请求（key 限注册表白名单；已软删的 key 自动复用原行恢复）",
+        "properties": {
+          "setting_value": {
+            "description": "变量值（字符串存储，按注册类型解析）",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Setting Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting_value"
+        ],
+        "title": "ChatDataSettingUpsertRequest",
+        "type": "object"
+      },
       "CompileSemanticBuilderSqlRequest": {
         "description": "编译语义可视化 DSL 请求（仅生成 SQL，不执行）。",
         "properties": {
@@ -1942,8 +1959,7 @@
                 "type": "null"
               }
             ],
-            "default": 10000,
-            "description": "结果行数限制",
+            "description": "结果行数限制；为空时由服务端按运行时配置解析默认值",
             "title": "Limit"
           },
           "member_datasource_ids": {
@@ -6290,6 +6306,190 @@
         "summary": "Admin Semantic Prefill",
         "tags": [
           "ChatData 语义模型"
+        ]
+      }
+    },
+    "/api/chatdata/admin/settings": {
+      "delete": {
+        "description": "全部重置：软删所有覆盖行，所有变量回退 env / 代码默认。",
+        "operationId": "reset_all_chat_data_settings_api_chatdata_admin_settings_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Reset All Chat Data Settings",
+        "tags": [
+          "ChatData 运行配置（Admin）"
+        ]
+      },
+      "get": {
+        "description": "配置变量列表（= 注册表白名单全量），含生效值与来源徽标（table/env/default）。",
+        "operationId": "list_chat_data_settings_api_chatdata_admin_settings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keyword"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Chat Data Settings",
+        "tags": [
+          "ChatData 运行配置（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/settings/{setting_key}": {
+      "delete": {
+        "description": "重置单个变量：软删覆盖行，该变量回退 env / 代码默认值。",
+        "operationId": "reset_chat_data_setting_api_chatdata_admin_settings__setting_key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "setting_key",
+            "required": true,
+            "schema": {
+              "title": "Setting Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Reset Chat Data Setting",
+        "tags": [
+          "ChatData 运行配置（Admin）"
+        ]
+      },
+      "put": {
+        "description": "覆盖已注册变量（key 限注册白名单）；已重置的 key 自动复用原行恢复。",
+        "operationId": "upsert_chat_data_setting_api_chatdata_admin_settings__setting_key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "setting_key",
+            "required": true,
+            "schema": {
+              "title": "Setting Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataSettingUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Chat Data Setting",
+        "tags": [
+          "ChatData 运行配置（Admin）"
         ]
       }
     },

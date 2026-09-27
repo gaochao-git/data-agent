@@ -34,6 +34,28 @@ def test_get_default_runtime_options_reads_runtime_config(monkeypatch):
     assert options.plan_subagent_enabled is True
 
 
+def test_resolve_applies_hot_subagent_defaults(monkeypatch):
+    """async 调用方经 get_runtime_setting 解析的子智能体开关经参数透传为默认值。"""
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "local")
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_BASH_ENABLED", False)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
+
+    options = ro.resolve_agent_runtime_options(
+        explore_subagent_enabled=True, plan_subagent_enabled=True
+    )
+    assert options.explore_subagent_enabled is True
+    assert options.plan_subagent_enabled is True
+
+    # 用户覆盖仍优先于热值默认；未传的开关沿用 base 快照
+    monkeypatch.setattr(ro, "_is_runtime_option_user_overridable", lambda: True)
+    options = ro.resolve_agent_runtime_options(
+        explore_subagent_enabled=True, override={"explore_subagent_enabled": False}
+    )
+    assert options.explore_subagent_enabled is False
+    assert options.plan_subagent_enabled is False
+
+
 def test_resolve_returns_base_without_override(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_BASH_ENABLED", True)

@@ -68,6 +68,9 @@ def read_bool_env(name: str, default: bool = False) -> bool:
     )
 
 
+# 查询结果行数上限的同步签名兜底值；运行期热值以 get_runtime_setting("CHATDATA_ROW_LIMIT")
+# 为准（表 > env > 注册表默认），async 调用方解析后经 max_rows 参数下传，本常量仅兜底
+# 同步深层调用（语义编译 sync 链等未接热值的路径）。
 DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)
 # 单条查询超时的硬上限（秒）：请求显式传参超过该值一律封顶，防止实质关闭超时
 MAX_QUERY_TIMEOUT_SECONDS = 3600
@@ -89,9 +92,11 @@ SUBAGENT_THINKING_PREVIEW_MAX_CHARS = read_positive_int_env("CHAT_DATA_SUBAGENT_
 # langgraph 未显式设置时默认仅 25 个 super-step（约 12 轮工具循环），复杂分析
 # 任务会抛 GraphRecursionError，故显式抬到 40。
 AGENT_RECURSION_LIMIT = read_positive_int_env("CHAT_DATA_AGENT_RECURSION_LIMIT", 40)
+# 子图调用配置的兜底口径（agent/middleware/subagents.py::build_subagent_invocation_config）；
+# 主图装配已改为运行期经后台配置变量表读取（CHAT_DATA_AGENT_RECURSION_LIMIT），见 agent_stream。
 FILE_READ_MAX_CHARS = max(4096, read_positive_int_env("CHAT_DATA_FILE_READ_MAX_CHARS", 25000))
-QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
-QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
+# SQL 查询缓存开关/过期时间已迁移到后台配置变量表（CHAT_DATA_QUERY_CACHE_ENABLED / _TTL_SECONDS），
+# 运行期读取见 sql_run/cache.py；前端 runtime_config 展示值同样走配置服务。
 # 会话工作区文件预览源文件上限（MB）：文本预览与 Office 预览各一档，消费者为
 # conversation_workspace（字节值在彼处由 MB 派生）。注意与 OFFICE_PREVIEW_MAX_CHARS
 # （Office 转出 HTML 的字符上限，12MB，独立配置）是两回事。
@@ -209,12 +214,10 @@ def read_compression_trigger_ratio_env() -> float:
 CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHAT_DATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
 LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
 # 单会话工具调用频率告警（合规要求）：同一个会话在统计窗口内的工具调用数超过阈值
-# 即写一条 alarm 日志，不阻断工具执行。阈值默认 100 次、窗口默认 60 秒，即「每分钟 100 次」。
-# 注意：计数在**单个 worker 进程内**按会话聚合（GUNICORN_WORKERS 默认 4），同一会话的
-# 单次运行（一次 SSE 长连接由同一 worker 处理）计数是精确的；若同一会话在多进程间
-# 并发运行，计数会被拆分而只可能低估（漏报，不会误报）。
-TOOL_CALL_RATE_ALERT_THRESHOLD = read_positive_int_env("CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD", 100)
-TOOL_CALL_RATE_ALERT_WINDOW_SECONDS = read_positive_int_env("CHAT_DATA_TOOL_CALL_RATE_ALERT_WINDOW_SECONDS", 60)
+# 即写一条 alarm 日志，不阻断工具执行。已迁移到后台配置变量表（运行期读取），见
+# agent/middleware/tool_call_rate_alert.py。计数在**单个 worker 进程内**按会话聚合
+# （GUNICORN_WORKERS 默认 4）：同一会话单次运行（一次 SSE 长连接由同一 worker 处理）
+# 计数精确；若同一会话在多进程间并发运行，计数会被拆分而只可能低估（漏报，不会误报）。
 
 
 def get_context_window(model_id: str | None) -> int:
@@ -237,9 +240,10 @@ def is_context_usage_system_prompt_visible() -> bool:
     return CONTEXT_USAGE_SHOW_SYSTEM_PROMPT
 
 
-def get_chat_data_runtime_config() -> dict:
+async def get_chat_data_runtime_config() -> dict:
     """读取智能问数前端运行时配置。"""
     from .llm_config import get_chat_data_model_options
+    from .setting_service import get_runtime_setting
 
     model_options = get_chat_data_model_options()
     default_model = model_options.get("default_model")
@@ -252,8 +256,8 @@ def get_chat_data_runtime_config() -> dict:
             "plan_subagent_enabled": CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
         },
         "user_overridable": CHAT_DATA_CAPABILITY_USER_OVERRIDABLE,
-        "default_row_limit": DEFAULT_ROW_LIMIT,
-        "query_cache_enabled": QUERY_CACHE_ENABLED,
+        "default_row_limit": await get_runtime_setting("CHATDATA_ROW_LIMIT"),
+        "query_cache_enabled": await get_runtime_setting("CHAT_DATA_QUERY_CACHE_ENABLED"),
         "context_window": get_context_window(default_model),
     }
 
@@ -263,12 +267,13 @@ def is_chat_data_runtime_option_user_overridable() -> bool:
     return CHAT_DATA_CAPABILITY_USER_OVERRIDABLE
 
 
-def normalize_row_limit(limit: int | None) -> int:
-    """读取请求行数限制，未传时使用全局配置。"""
+def normalize_row_limit(limit: int | None, max_rows: int | None = None) -> int:
+    """读取请求行数限制，未传时使用全局配置；校验上限默认同全局配置，可由调用方传入热值覆盖。"""
+    effective_max = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
     if limit is None:
-        return DEFAULT_ROW_LIMIT
+        return effective_max
     if not isinstance(limit, int) or limit < 1:
         raise ValueError(f"查询结果行数限制必须为正整数，当前值：{limit}")
-    if limit > DEFAULT_ROW_LIMIT:
-        raise ValueError(f"查询结果最多返回 {DEFAULT_ROW_LIMIT} 条，请调整查询条件")
+    if limit > effective_max:
+        raise ValueError(f"查询结果最多返回 {effective_max} 条，请调整查询条件")
     return limit

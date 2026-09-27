@@ -222,6 +222,7 @@ def _fake_runtime_execute_sql_for_member(handler):
         execution_id: str | None = None,
         skip_query_cache: bool = False,
         datasource_id: str | None = None,
+        max_rows: int | None = None,
     ) -> dict:
         member_id = execution_target.get("member_datasource_id")
         member_name = execution_target.get("member_name")

@@ -906,3 +906,19 @@ export interface AgentSchedulePayload {
   datasource_id?: string | null
   options?: Record<string, unknown>
 }
+
+// 后台配置变量条目（可动态修改变量白名单，标注生效值与来源；分类由注册表统一管理）
+export interface ChatDataSettingItem {
+  setting_key: string
+  setting_desc: string
+  category: string
+  category_label: string
+  value_type: 'int' | 'bool' | 'float' | 'string'
+  effect_label: string
+  setting_value: string | null
+  source: 'table' | 'env' | 'default'
+  effective_value: unknown
+  value_invalid: boolean
+  update_time: string
+  update_by_name: string
+}

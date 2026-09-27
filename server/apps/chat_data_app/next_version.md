@@ -5,6 +5,25 @@
 上线前执行：
 
 ```sql
+-- 后台配置变量表：运行期参数的表级覆盖（表覆盖行 > env > 代码默认）。
+-- 只允许 SETTING_REGISTRY 注册的「可动态修改」类 env 变量进表（白名单见
+-- chat_data_app/services/setting_service.py），连接与凭据类留在 env；说明不落表（来源=注册表）。
+-- 重置（删除）= 软删覆盖行，变量回退 env/代码默认；重新覆盖由服务层 upsert 复用原行。
+CREATE TABLE `chat_data_setting` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `setting_key` varchar(128) NOT NULL COMMENT '变量名，与 env 同名',
+  `setting_value` varchar(2048) NOT NULL COMMENT '变量值（字符串存储，按注册类型解析）',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识 0未删除 1已删除（即重置回退）',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_setting_key` (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 后台配置变量表';
+
 CREATE TABLE `chat_data_conversation_event` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',

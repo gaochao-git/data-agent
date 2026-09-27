@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from utils.logger import get_logger
+
+from ..setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
@@ -20,30 +21,13 @@ _semaphores: dict[tuple[int, str, int], asyncio.Semaphore] = {}
 _semaphores_lock = asyncio.Lock()
 
 
-def get_sql_user_datasource_max_concurrency() -> int:
-    """读取同一用户同一数据源 SQL 最大并发数。"""
-    raw_value = str(os.getenv(SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV) or "").strip()
-    if not raw_value:
-        return DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
-    try:
-        value = int(raw_value)
-    except ValueError:
-        logger.warning(
-            "环境变量 %s=%r 不是合法整数，回退默认值 %s",
-            SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV,
-            raw_value,
-            DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY,
-        )
-        return DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
-    if value < 1:
-        logger.warning(
-            "环境变量 %s=%s 小于 1，回退默认值 %s",
-            SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV,
-            value,
-            DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY,
-        )
-        return DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
-    return value
+async def get_sql_user_datasource_max_concurrency() -> int:
+    """读取同一用户同一数据源 SQL 最大并发数（运行期经后台配置变量表）。
+
+    信号量按 (loop, key, limit) 维度缓存：改值后新 limit 生成新信号量，
+    旧信号量随旧查询释放自然淘汰。
+    """
+    return await get_runtime_setting(SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV)
 
 
 def build_sql_concurrency_key(user_id: str | None, execution_target: dict[str, Any] | None) -> str:
@@ -66,7 +50,7 @@ async def run_with_sql_user_datasource_limit(
     operation: Callable[[], Awaitable[T]],
 ) -> T:
     """按用户和数据源维度限制 SQL 查询并发。"""
-    max_concurrency = get_sql_user_datasource_max_concurrency()
+    max_concurrency = await get_sql_user_datasource_max_concurrency()
     limiter_key = build_sql_concurrency_key(user_id, execution_target)
     semaphore_key = (id(asyncio.get_running_loop()), limiter_key, max_concurrency)
     async with _semaphores_lock:

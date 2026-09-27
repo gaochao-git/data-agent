@@ -48,14 +48,14 @@ from apps.chat_data_app.daos.agent_schedule_dao import (
 )
 from apps.chat_data_app.services.conversation_service import conversation_dao as bound_conversation_dao
 from apps.chat_data_app.services.runtime_config import read_bool_env, read_positive_int_env
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from apps.chat_data_app.services.agent_schedule.trigger_time import SCHEDULE_TYPE_ONCE, compute_next_trigger
 
 logger = get_logger(__name__)
 
-SCHEDULE_POLL_SECONDS = read_positive_int_env("CHAT_DATA_SCHEDULE_POLL_SECONDS", 30)
-SCHEDULE_DISPATCH_BATCH_SIZE = read_positive_int_env("CHAT_DATA_SCHEDULE_DISPATCH_BATCH_SIZE", 10)
-# 同一用户同时在途（已派发未收口）的定时执行上限，防止单用户占满全局执行资源
-SCHEDULE_USER_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY", 2)
+# 轮询间隔 / 派发批量 / 单用户在途上限（CHAT_DATA_SCHEDULE_*）走运行时热值
+# （get_runtime_setting：表覆盖 > env > 注册默认），调度器是常驻循环，每轮
+# tick 前解析，改配置无需重启；构造参数仅保留给测试显式注入覆盖。
 # 错过触发窗口：停机/主库切换期间过期的计划触发时间直接快进跳过，不补跑
 SCHEDULE_MISFIRE_WINDOW_SECONDS = read_positive_int_env("CHAT_DATA_SCHEDULE_MISFIRE_WINDOW_SECONDS", 3600)
 # 单个触发实例的最大派发尝试次数（会话占用等冲突每轮重试，耗尽置 skipped）
@@ -118,9 +118,10 @@ class AgentScheduleRuntime:
         node_id: str | None = None,
     ) -> None:
         self.enabled = read_bool_env("CHAT_DATA_SCHEDULE_ENABLED", False) if enabled is None else enabled
-        self._poll_seconds = poll_seconds if poll_seconds is not None else SCHEDULE_POLL_SECONDS
-        self._dispatch_batch_size = dispatch_batch_size or SCHEDULE_DISPATCH_BATCH_SIZE
-        self._user_max_concurrency = user_max_concurrency or SCHEDULE_USER_MAX_CONCURRENCY
+        # 三项调度参数：None=走运行时热值（表覆盖 > env > 注册默认），测试注入显式值则固定
+        self._poll_seconds = poll_seconds
+        self._dispatch_batch_size = dispatch_batch_size
+        self._user_max_concurrency = user_max_concurrency
         self._misfire_window = timedelta(seconds=misfire_window_seconds or SCHEDULE_MISFIRE_WINDOW_SECONDS)
         self._max_dispatch_attempts = max_dispatch_attempts or SCHEDULE_MAX_DISPATCH_ATTEMPTS
         self._claim_timeout = timedelta(seconds=claim_timeout_seconds or SCHEDULE_CLAIM_TIMEOUT_SECONDS)
@@ -128,6 +129,21 @@ class AgentScheduleRuntime:
         self._inbox_service = inbox_service
         self._node_id = node_id or f"{socket.gethostname()}:{os.getpid()}"
         self._poll_task: asyncio.Task | None = None
+
+    async def _resolve_poll_seconds(self) -> float:
+        if self._poll_seconds is not None:
+            return self._poll_seconds
+        return await get_runtime_setting("CHAT_DATA_SCHEDULE_POLL_SECONDS")
+
+    async def _resolve_dispatch_batch_size(self) -> int:
+        if self._dispatch_batch_size is not None:
+            return self._dispatch_batch_size
+        return await get_runtime_setting("CHAT_DATA_SCHEDULE_DISPATCH_BATCH_SIZE")
+
+    async def _resolve_user_max_concurrency(self) -> int:
+        if self._user_max_concurrency is not None:
+            return self._user_max_concurrency
+        return await get_runtime_setting("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY")
 
     async def start(self) -> None:
         if not self.enabled:
@@ -150,7 +166,7 @@ class AgentScheduleRuntime:
         while True:
             try:
                 await self.tick()
-                await asyncio.sleep(self._poll_seconds)
+                await asyncio.sleep(await self._resolve_poll_seconds())
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -186,10 +202,11 @@ class AgentScheduleRuntime:
         循环释放回 pending 重试；attempt_count 在抢占时已累加，耗尽自动
         转 skipped，不会无限循环。时钟与 tick 注入时间同源，保证可测。
         """
+        batch_size = await self._resolve_dispatch_batch_size()
         async with get_session() as session:
             current = now or await self._dao.now(session)
             before = current - self._claim_timeout
-            stale_ids = await self._dao.list_stale_claimed_ids(session, before, self._dispatch_batch_size * 3)
+            stale_ids = await self._dao.list_stale_claimed_ids(session, before, batch_size * 3)
         for trigger_id in stale_ids:
             await self._release(trigger_id, SCHEDULE_RUN_STATUS_PENDING, "节点中断后超时回收，重新排队")
 
@@ -253,12 +270,13 @@ class AgentScheduleRuntime:
     # ---- 2. 派发 ----
 
     async def _dispatch_pending(self, now: datetime | None = None) -> None:
+        batch_size = await self._resolve_dispatch_batch_size()
         async with get_session() as session:
             current = now or await self._dao.now(session)
-            candidates = await self._dao.list_claimable_runs(session, current, self._dispatch_batch_size * 3)
+            candidates = await self._dao.list_claimable_runs(session, current, batch_size * 3)
             claimed: list[ChatDataAgentScheduleRun] = []
             for run in candidates:
-                if len(claimed) >= self._dispatch_batch_size:
+                if len(claimed) >= batch_size:
                     break
                 run.trigger_status = SCHEDULE_RUN_STATUS_CLAIMED
                 run.attempt_count = (run.attempt_count or 0) + 1
@@ -356,9 +374,10 @@ class AgentScheduleRuntime:
         return conversation_id
 
     async def _user_has_slot(self, user_id: str) -> bool:
+        user_max_concurrency = await self._resolve_user_max_concurrency()
         async with get_session() as session:
             counts = await self._dao.count_dispatched_by_users(session, [user_id])
-        return counts.get(user_id, 0) < self._user_max_concurrency
+        return counts.get(user_id, 0) < user_max_concurrency
 
     async def _load_job(self, job_id: str) -> dict | None:
         """读取派发所需的任务字段快照；属性访问必须留在事务内（提交后 ORM 属性过期）。"""
@@ -450,8 +469,9 @@ class AgentScheduleRuntime:
         return await self._dispatch_single(snapshot)
 
     async def _finalize_dispatched(self) -> None:
+        batch_size = await self._resolve_dispatch_batch_size()
         async with get_session() as session:
-            dispatched = await self._dao.list_dispatched_runs(session, self._dispatch_batch_size * 3)
+            dispatched = await self._dao.list_dispatched_runs(session, batch_size * 3)
             run_statuses = await self._dao.list_run_statuses(
                 session, [run.run_id for run in dispatched if run.run_id]
             )

@@ -57,10 +57,12 @@ from apps.chat_data_app.services.semantic.run.semantic_model_repository import (
     load_semantic_model,
 )
 from apps.chat_data_app.services.semantic.run.semantic_query_service import (
+    SemanticCompileOptions,
     compile_semantic_ai_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
 )
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import get_semantic_quality_checker
 from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload, tool_result_payload
@@ -260,6 +262,7 @@ async def _compile_tool_query(
     compile_result = compile_semantic_ai_dsl(
         config,
         request.dsl or {},
+        options=SemanticCompileOptions(max_rows=await get_runtime_setting("CHATDATA_ROW_LIMIT")),
     )
     if not compile_result.get("success"):
         raise ValueError(compile_result.get("error") or "DSL2SQL 编译失败")
@@ -432,6 +435,7 @@ async def _run_validate_dsl(
     result = compile_semantic_ai_dsl(
         semantic_config,
         payload,
+        options=SemanticCompileOptions(max_rows=await get_runtime_setting("CHATDATA_ROW_LIMIT")),
     )
     return tool_result_payload(
         DATA_ANALYZING_TOOL_NAME,

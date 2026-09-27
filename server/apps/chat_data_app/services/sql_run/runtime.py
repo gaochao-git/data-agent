@@ -24,8 +24,8 @@ from ...daos.query_task_dao import QueryTaskDao
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from . import cache as query_cache
 from ..datasource.manager import get_datasource_manager
-from ..runtime_config import DEFAULT_ROW_LIMIT
 from ..semantic.run.semantic_query_service import compile_semantic_builder_sql
+from ..setting_service import get_runtime_setting
 from .concurrency import run_with_sql_user_datasource_limit
 from .executor import build_effective_sql, fetch_http_query_task_result, get_executor
 from .sql_guard import run_sql_guard
@@ -537,7 +537,7 @@ async def _execute_query_and_save_cache(
     username: Optional[str],
 ) -> Dict[str, Any]:
     query_result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
-    if not query_cache.is_sql_result_cache_enabled(skip_query_cache):
+    if not await query_cache.is_sql_result_cache_enabled(skip_query_cache):
         return query_result
     try:
         if http_target:
@@ -628,6 +628,7 @@ async def execute_sql_for_member(
     statement_index: Optional[int] = None,
     skip_query_cache: bool = False,
     datasource_id: Optional[str] = None,
+    max_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
     """执行单个成员数据源 SQL。"""
     member_datasource_id = execution_target.get("member_datasource_id")
@@ -669,7 +670,8 @@ async def execute_sql_for_member(
 
     try:
         effective_sql = build_effective_sql(
-            sql, limit, source_type=execution_target.get("source_type"), datasource_id=datasource_id, user_id=user_id
+            sql, limit, source_type=execution_target.get("source_type"), datasource_id=datasource_id, user_id=user_id,
+            max_rows=max_rows,
         )
         cache_identity = query_cache.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
         if execution_id and await _guard_running_execution(execution_id):
@@ -686,7 +688,7 @@ async def execute_sql_for_member(
             username,
         )
 
-        if query_cache.is_sql_result_cache_enabled(skip_query_cache):
+        if await query_cache.is_sql_result_cache_enabled(skip_query_cache):
             cached_result = await _fetch_sql_cached_result(cache_identity)
             if cached_result:
                 result = await _resolve_cached_query_result(
@@ -740,13 +742,15 @@ async def build_execute_sql_result_data(
         user_id=request.user_id,
         username=username,
     )
+    # 行数上限热值：未显式传 limit 的请求用其作默认值，同时作为 SQL LIMIT 校验上限
+    row_limit_cap = await get_runtime_setting("CHATDATA_ROW_LIMIT")
     results = [
         _coerce_member_result(item)
         for item in await asyncio.gather(*[
             execute_sql_for_member(
                 execution_target=target,
                 sql=request.sql,
-                limit=request.limit or DEFAULT_ROW_LIMIT,
+                limit=request.limit or row_limit_cap,
                 timeout=request.timeout,
                 user_id=request.user_id,
                 username=username,
@@ -755,6 +759,7 @@ async def build_execute_sql_result_data(
                 statement_index=statement_index,
                 skip_query_cache=request.skip_query_cache,
                 datasource_id=request.datasource_id,
+                max_rows=row_limit_cap,
             )
             for target in execution_targets
         ], return_exceptions=True)
@@ -1487,18 +1492,20 @@ async def _run_agent_sql_execution(
         user_id=user_id,
         username=operator_name,
     )
+    row_limit_cap = await get_runtime_setting("CHATDATA_ROW_LIMIT")
     member_results = [
         _coerce_member_result(item)
         for item in await asyncio.gather(*[
             execute_sql_for_member(
                 execution_target=target,
                 sql=sql,
-                limit=DEFAULT_ROW_LIMIT,
+                limit=row_limit_cap,
                 timeout=None,
                 user_id=user_id,
                 username=operator_name,
                 execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
                 datasource_id=datasource_id,
+                max_rows=row_limit_cap,
             )
             for target in execution_targets
         ], return_exceptions=True)

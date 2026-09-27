@@ -50,8 +50,10 @@ from .agent.run.chat_data_stream_request import ChatDataStreamRequest
 from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
+from .agent.workspace.uploaded_file_parser import get_image_size_limit
 from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
-from .services.runtime_config import AGENT_RECURSION_LIMIT, LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.setting_service import get_runtime_setting
 from .services.memory.conversation_memory_service import (
     after_agent_turn_with_memory,
     render_session_memory_block,
@@ -1364,7 +1366,8 @@ async def _resolve_inbox_message_references(
     new_kwargs = dict(kwargs)
     if selections:
         new_kwargs["file_selections"] = valid_selections
-    vision_attachments = select_vision_attachments(file_attachments)
+    _, max_image_size = await get_image_size_limit()
+    vision_attachments = select_vision_attachments(file_attachments, max_image_size=max_image_size)
     if vision_attachments:
         new_kwargs["vision_attachments"] = vision_attachments
     new_content = (
@@ -1655,6 +1658,12 @@ async def _run_chat_data_agent_stream(
         runtime_options = resolve_agent_runtime_options(
             user_id=user_id,
             override=(options or {}).get("runtime_options"),
+            explore_subagent_enabled=bool(
+                await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")
+            ),
+            plan_subagent_enabled=bool(
+                await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")
+            ),
         )
         workspace_paths, workspace_runtime, semantic_materialize_note = (
             await _prepare_agent_workspace_runtime(
@@ -1694,9 +1703,10 @@ async def _run_chat_data_agent_stream(
     )
 
     config = {
-        # 子智能体（subagents.py::build_subagent_invocation_config）读同一常量，
-        # 主/子图口径同源；不设置时 langgraph 默认仅 25 个 super-step。
-        "recursion_limit": AGENT_RECURSION_LIMIT,
+        # 子智能体（subagents.py::build_subagent_invocation_config）读同一配置，
+        # 主/子图口径同源；运行期经后台配置变量表读取（新会话装配时生效），
+        # 不设置时 langgraph 默认仅 25 个 super-step。
+        "recursion_limit": await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": ""
@@ -1725,7 +1735,9 @@ async def _run_chat_data_agent_stream(
             # 用户消息保持纯文本（正文 + 附件占位行）；合规图片附件只打
             # vision_attachments 路径标记，由 ImageInjectionMiddleware 在模型
             # 请求层按当轮 vlm 能力位装载——base64 不进入 state/checkpoint/事件表。
-            vision_attachments = select_vision_attachments(file_attachments)
+            vision_attachments = select_vision_attachments(
+                file_attachments, max_image_size=(await get_image_size_limit())[1]
+            )
             attachment_text = build_file_attachment_text(file_attachments)
             message_content = f"{user_message_content}{attachment_text}"
 

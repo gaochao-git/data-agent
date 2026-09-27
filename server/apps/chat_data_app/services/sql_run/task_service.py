@@ -82,6 +82,7 @@ class QueryTaskService:
         execution_id: Optional[str] = None,
         skip_query_cache: bool = False,
         datasource_id: Optional[str] = None,
+        max_rows: Optional[int] = None,
     ) -> Dict[str, Any]:
         """执行单个成员数据源 SQL。"""
         return await query_runtime.execute_sql_for_member(
@@ -95,6 +96,7 @@ class QueryTaskService:
             execution_id=execution_id,
             skip_query_cache=skip_query_cache,
             datasource_id=datasource_id,
+            max_rows=max_rows,
         )
 
     async def update_query_execution(

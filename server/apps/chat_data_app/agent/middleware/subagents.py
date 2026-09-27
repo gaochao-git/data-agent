@@ -43,12 +43,12 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from apps.chat_data_app.services.runtime_config import (
-    AGENT_RECURSION_LIMIT,
     SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO,
     SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
     SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
     SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
 )
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
@@ -174,8 +174,9 @@ class SubagentSpec:
     # CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 单独覆盖子图告警线
     # （窗口比例口径，只影响子图，主图压缩不受影响，见 runtime_config.py 常量注释）。
     model_id: str | None = None
-    # None 表示跟随全局 AGENT_RECURSION_LIMIT（主图同源码）；在 dataclass 默认值里
-    # 直接写死常量会在 import 时固化取值，运行时改 env / monkeypatch 都不生效。
+    # None 表示跟随调用方传入的运行期配置（CHAT_DATA_AGENT_RECURSION_LIMIT，
+    # 主图同源）；在 dataclass 默认值里直接写死常量会在 import 时固化取值，
+    # 运行时改配置表 / env / monkeypatch 都不生效。
     recursion_limit: int | None = None
 
 
@@ -524,11 +525,20 @@ def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
     )
 
 
-def build_subagent_invocation_config(spec: SubagentSpec) -> dict[str, Any]:
-    """构造子图调用配置：切断回调继承，避免子图 token 进入主 SSE 流。"""
+def build_subagent_invocation_config(
+    spec: SubagentSpec,
+    *,
+    default_recursion_limit: int | None = None,
+) -> dict[str, Any]:
+    """构造子图调用配置：切断回调继承，避免子图 token 进入主 SSE 流。
+
+    default_recursion_limit 由调用方（异步装配链路）运行期经配置服务解析后传入
+    （get_runtime_setting 对注册 key 恒返回 int，不会为 None）；两者都缺省时
+    langgraph 默认 25 个 super-step，不低于 1 的下限由 max 保证。
+    """
     return {
         "callbacks": [],
-        "recursion_limit": max(int(spec.recursion_limit or AGENT_RECURSION_LIMIT), 1),
+        "recursion_limit": max(int(spec.recursion_limit or default_recursion_limit or 0), 1),
         "configurable": {"chatdata_subagent": spec.name},
     }
 
@@ -1174,7 +1184,10 @@ async def _build_task_tool_impl(
         messages = await _run_subagent_with_events(
             runnable,
             _build_subagent_state(runtime, description),
-            build_subagent_invocation_config(spec),
+            build_subagent_invocation_config(
+                spec,
+                default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
+            ),
             writer,
             runtime.tool_call_id,
             collected=collected,

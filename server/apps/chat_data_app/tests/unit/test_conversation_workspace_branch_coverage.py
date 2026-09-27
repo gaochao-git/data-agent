@@ -570,7 +570,7 @@ def test_render_local_office_html_success_and_truncation(tmp_path, monkeypatch):
 async def test_render_conversation_workspace_office_preview_branches(tmp_path, monkeypatch):
     ensure_conversation_workspace("conv_preview", "user_a")
     monkeypatch.setattr(cw, "get_conversation_created_date", _stub_created_date_none)
-    monkeypatch.setattr(cw, "_validate_office_preview_source", lambda *_args: None)
+    monkeypatch.setattr(cw, "_validate_office_preview_source", lambda *_args, **_kwargs: None)
 
     async def fake_render(_runtime, **_kwargs):
         return fake_render.payload

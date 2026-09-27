@@ -840,7 +840,10 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda target: FakeExecutor(target))
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", lambda source_type: 600)
+    async def _fake_timeout_600(source_type):
+        return 600
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", _fake_timeout_600)
 
     assert asyncio.run(execute_dashboard_panel_sql_preflight("empty", "select 1")) == (False, "当前数据源组下没有可执行的数据源")
     assert asyncio.run(execute_dashboard_panel_sql_preflight("ok", "select 1", user_id="u1", username="测试用户")) == (True, "")
@@ -1208,7 +1211,10 @@ def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda _target: FakeExecutor())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", lambda _source_type: 60)
+    async def _fake_timeout_60(_source_type):
+        return 60
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", _fake_timeout_60)
 
     ok, error = asyncio.run(execute_dashboard_panel_sql_preflight("ds_a", "select 1", user_id="u1", username="用户1"))
 

@@ -17,7 +17,10 @@ def _payload(resp):
 
 @pytest.mark.asyncio
 async def test_get_chat_data_config_success(monkeypatch):
-    monkeypatch.setattr(config_router, "get_chat_data_runtime_config", lambda: {"model": "qwen"})
+    async def fake_runtime_config():
+        return {"model": "qwen"}
+
+    monkeypatch.setattr(config_router, "get_chat_data_runtime_config", fake_runtime_config)
     payload = _payload(await config_router.get_chat_data_config())
     assert payload["status"] == "success"
     assert payload["data"] == {"model": "qwen"}

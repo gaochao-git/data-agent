@@ -957,3 +957,37 @@ async def test_mark_dispatched_keeps_snapshot_conversation_without_override(harn
     assert row.trigger_status == "dispatched"
     assert row.run_id == "run-y"
     assert row.conversation_id == CONVERSATION_ID
+
+
+@pytest.mark.asyncio
+async def test_schedule_settings_resolve_hot_values_from_env(monkeypatch):
+    """构造参数缺省时三项调度参数走运行时热值（表>env>默认；单测桩下降级到 env）。"""
+    monkeypatch.setenv("CHAT_DATA_SCHEDULE_POLL_SECONDS", "7")
+    monkeypatch.setenv("CHAT_DATA_SCHEDULE_DISPATCH_BATCH_SIZE", "3")
+    monkeypatch.setenv("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY", "4")
+    runtime = AgentScheduleRuntime(
+        enabled=True,
+        dao=AgentScheduleDao(),
+        inbox_service=AgentInboxService(),
+        node_id="node-test",
+    )
+    assert await runtime._resolve_poll_seconds() == 7
+    assert await runtime._resolve_dispatch_batch_size() == 3
+    assert await runtime._resolve_user_max_concurrency() == 4
+
+
+@pytest.mark.asyncio
+async def test_schedule_settings_explicit_injection_overrides_hot_values():
+    """测试注入的构造参数固定取值，不经运行时热值解析。"""
+    runtime = AgentScheduleRuntime(
+        enabled=True,
+        poll_seconds=99,
+        dispatch_batch_size=11,
+        user_max_concurrency=5,
+        dao=AgentScheduleDao(),
+        inbox_service=AgentInboxService(),
+        node_id="node-test",
+    )
+    assert await runtime._resolve_poll_seconds() == 99
+    assert await runtime._resolve_dispatch_batch_size() == 11
+    assert await runtime._resolve_user_max_concurrency() == 5

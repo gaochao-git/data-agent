@@ -25,10 +25,10 @@ def test_default_allowed_sql_types_only_select():
 
 
 def test_serialize_value_formats_datetime_without_iso_t_separator():
-    assert sql_executor.resolve_query_timeout("mysql", 12) == 12
-    assert sql_executor.resolve_query_timeout("mysql", 0) == sql_executor.DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
-    assert sql_executor.resolve_query_timeout("hive", None) == sql_executor.DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS
-    assert sql_executor.resolve_query_timeout("sqlite", None) == sql_executor.DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
+    assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 12)) == 12
+    assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 0)) == 60
+    assert asyncio.run(sql_executor.resolve_query_timeout("hive", None)) == 600
+    assert asyncio.run(sql_executor.resolve_query_timeout("sqlite", None)) == 60
     assert sql_executor._friendly_sql_error("MySQL", RuntimeError("Query execution was interrupted")) == "已人工取消"
     assert sql_executor._serialize_value(Decimal("12.50")) == "12.50"
     assert sql_executor._serialize_value(Decimal("1E+3")) == "1E+3"
@@ -611,7 +611,16 @@ def test_hive_http_executor_polls_running_then_success_and_async_callback(monkey
 
     monkeypatch.setattr(sql_executor, "HTTP_SUBMIT_URL", "http://hive/query-tasks")
     monkeypatch.setattr(sql_executor, "HTTP_STATUS_URL", "http://hive/query-tasks/{task_id}")
-    monkeypatch.setattr(sql_executor, "DEFAULT_HTTP_POLL_INTERVAL_MS", 1)
+
+    async def fake_runtime_setting(key, default=None):
+        # 非目标 key 返回注册表默认口径（轮询 1ms 加速、Hive 超时 600s、行上限 100）
+        return {
+            "CHAT_DATA_HTTP_POLL_INTERVAL_MS": 1,
+            "CHAT_DATA_HIVE_QUERY_TIMEOUT_SECONDS": 600,
+            "CHATDATA_ROW_LIMIT": 100,
+        }.get(key, default)
+
+    monkeypatch.setattr(sql_executor, "get_runtime_setting", fake_runtime_setting)
     monkeypatch.setattr(sql_executor.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
 
@@ -1174,7 +1183,10 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
     assert dangerous_alarms[0][1]["datasource_id"] == "ds_7"
     assert dangerous_alarms[0][1]["user_id"] == "u_9"
 
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *_args, **_kwargs: 0.001)
+    async def _fake_timeout(*_args, **_kwargs):
+        return 0.001
+
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout)
     monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"status": "succeeded"})
     timeout = asyncio.run(executor.execute("select 1"))
     assert timeout["status"] != "succeeded"
@@ -1383,7 +1395,10 @@ def test_hive_http_execute_deadline_timeout_and_value_error(monkeypatch):
 
     monkeypatch.setattr(sql_executor, "HTTP_SUBMIT_URL", "http://submit")
     monkeypatch.setattr(sql_executor, "HTTP_STATUS_URL", "http://status/{task_id}")
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *_args, **_kwargs: 0)
+    async def _fake_timeout_zero(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout_zero)
     monkeypatch.setattr(sql_executor.asyncio, "get_running_loop", lambda: FakeLoop())
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
 

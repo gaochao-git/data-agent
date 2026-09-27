@@ -431,7 +431,9 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
 
-    result = get_chat_data_runtime_config()
+    import asyncio
+
+    result = asyncio.run(get_chat_data_runtime_config())
 
     assert result["models"][0]["id"] == "stealth/ox-alpha"
     assert "default_model" not in result

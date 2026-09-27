@@ -27,7 +27,7 @@ from utils.alarm import (
     SQL_BLOCK_SELECT_INTO,
     SQL_BLOCK_TYPE_NOT_ALLOWED,
 )
-from ..runtime_config import DEFAULT_ROW_LIMIT
+from ..runtime_config import DEFAULT_ROW_LIMIT  # noqa: F401  同步签名兜底；热值由调用方经 max_rows 传入
 from .parser import _parse_sql, _strip_comments_by_scan, extract_top_level_limit_count, validate_raw_single_sql_statement
 
 # 命令类型白名单：默认仅 SELECT，可按部署需要放开 SHOW/DESCRIBE 等只读命令。
@@ -98,7 +98,7 @@ def check_single_statement(sql: str, source_type: Optional[str] = None) -> Optio
     return _violation("single_statement", error, syntax_error=True)
 
 
-def check_select_into(sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
+def check_select_into(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
     """SELECT ... INTO OUTFILE/DUMPFILE/@var：写出服务器文件或服务端变量。
 
     sqlglot 对该族语法解析失败，因此基于剥离注释与字面量后的文本识别，
@@ -115,7 +115,7 @@ def check_select_into(sql: str, source_type: Optional[str] = None, max_rows: int
     return None
 
 
-def check_command_type(sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
+def check_command_type(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
     """命令类型白名单（默认仅 SELECT，可按部署放开只读命令）。"""
     operation_type = sql_operation_type(sql, source_type)
     if operation_type and operation_type.upper() in ALLOWED_SQL_TYPES:
@@ -127,7 +127,7 @@ def check_command_type(sql: str, source_type: Optional[str] = None, max_rows: in
     )
 
 
-def check_dangerous_functions(sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
+def check_dangerous_functions(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
     """高危函数黑名单：LOAD_FILE/SLEEP/BENCHMARK/GET_LOCK/RELEASE_LOCK。"""
     try:
         expressions = _parse_sql(sql, source_type)
@@ -148,7 +148,7 @@ def check_dangerous_functions(sql: str, source_type: Optional[str] = None, max_r
     return None
 
 
-def check_locking_reads(sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
+def check_locking_reads(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
     """锁定读（FOR UPDATE/FOR SHARE）属于写意图，只读链路一律拒绝。"""
     try:
         expressions = _parse_sql(sql, source_type)
@@ -165,19 +165,23 @@ def check_locking_reads(sql: str, source_type: Optional[str] = None, max_rows: i
     return None
 
 
-def check_limit_bound(sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
-    """显式 LIMIT 超过系统行数上限：响亮拒绝，不做静默截断。"""
+def check_limit_bound(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
+    """显式 LIMIT 超过系统行数上限：响亮拒绝，不做静默截断。
+
+    max_rows 由调用方传入运行时热值；未传时回退导入期兜底值。
+    """
+    effective_max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
     count = extract_top_level_limit_count(sql, source_type=source_type)
-    if count is not None and count > max_rows:
+    if count is not None and count > effective_max_rows:
         return _violation(
             "limit_bound",
-            _LIMIT_MESSAGE_TEMPLATE.format(max_rows=max_rows),
+            _LIMIT_MESSAGE_TEMPLATE.format(max_rows=effective_max_rows),
             reason_code=SQL_BLOCK_ROW_LIMIT,
         )
     return None
 
 
-def check_effective_limit_gate(effective_sql: str, source_type: Optional[str] = None, max_rows: int = DEFAULT_ROW_LIMIT) -> Optional[SqlGuardViolation]:
+def check_effective_limit_gate(effective_sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Optional[SqlGuardViolation]:
     """终检门：进入执行的 SELECT 产物必须带合法最外层 LIMIT。
 
     与 check_limit_bound 的差别：LIMIT 缺失在这里是违规（补全阶段应已写入；
@@ -185,8 +189,9 @@ def check_effective_limit_gate(effective_sql: str, source_type: Optional[str] = 
     """
     if sql_operation_type(effective_sql, source_type) != "SELECT":
         return None  # SHOW/DESCRIBE 等无行数语义
+    effective_max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
     count = extract_top_level_limit_count(effective_sql, source_type=source_type)
-    if count is None or count > max_rows:
+    if count is None or count > effective_max_rows:
         return _violation("limit_gate", _GATE_INTERNAL_MESSAGE, internal=True, reason_code=SQL_BLOCK_LIMIT_GATE)
     return None
 
@@ -205,12 +210,13 @@ _GUARD_RULES = (
 def run_sql_guard(
     sql: str,
     source_type: Optional[str] = None,
-    max_rows: int = DEFAULT_ROW_LIMIT,
+    max_rows: Optional[int] = None,
     *,
     defer_syntax_error: bool = False,
 ) -> Optional[SqlGuardViolation]:
     """按序执行全部规则，首个违规即返回；全部通过返回 None。
 
+    max_rows 为行数上限热值（调用方从配置变量表解析后传入；未传回退兜底值）。
     defer_syntax_error=True 时单条语法解析失败不视为违规（提交阶段语义：
     语法错误由每个执行对象生成独立失败结果），多语句仍当场拦截。
     """

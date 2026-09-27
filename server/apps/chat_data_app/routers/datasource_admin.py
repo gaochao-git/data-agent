@@ -24,7 +24,7 @@ from ..schema import (
     DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
 )
-from ..services.datasource.manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager, get_datasource_sync_timeout_seconds
 from ..services.semantic.run.semantic_config_service import get_semantic_config_service
 from .dependencies import _get_current_user
 from .datasource_helpers import (
@@ -246,9 +246,10 @@ async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGro
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except asyncio.TimeoutError:
-        logger.error("同步数据源组元数据超时: datasource_id=%s timeout=%ss", datasource_id, DATASOURCE_SYNC_TIMEOUT_SECONDS)
+        sync_timeout = await get_datasource_sync_timeout_seconds()
+        logger.error("同步数据源组元数据超时: datasource_id=%s timeout=%ss", datasource_id, sync_timeout)
         return business_response(
-            msg=f"同步超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒），请检查模板数据源配置或稍后重试",
+            msg=f"同步超时（{sync_timeout}秒），请检查模板数据源配置或稍后重试",
             code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
             status="error",
         )
@@ -672,16 +673,17 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request):
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except asyncio.TimeoutError:
+        sync_timeout = await get_datasource_sync_timeout_seconds()
         logger.error(
             "获取表列表超时: source_type=%s host=%s port=%s database=%s timeout=%ss",
             request.source_type,
             request.host,
             port,
             request.database,
-            DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            sync_timeout,
         )
         return business_response(
-            msg=f"连接超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒），请检查数据源配置或稍后重试",
+            msg=f"连接超时（{sync_timeout}秒），请检查数据源配置或稍后重试",
             code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
             status="error"
         )

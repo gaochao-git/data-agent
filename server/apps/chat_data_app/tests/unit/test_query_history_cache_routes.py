@@ -905,7 +905,7 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
 
 
 def test_sql_result_cache_insert_update_hit_and_invalid_payload(route_db, monkeypatch):
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_TTL_SECONDS", 60)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", "60")
     identity = query_cache.build_sql_result_cache_identity(
         {"id": "m1", "member_datasource_id": "m1", "query_executor_type": "direct", "source_type": "hive"},
         "select * from orders limit 10",
@@ -955,7 +955,7 @@ def test_sql_result_cache_insert_update_hit_and_invalid_payload(route_db, monkey
 
 
 def test_http_sql_result_cache_stores_remote_ref_only(route_db, monkeypatch):
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_TTL_SECONDS", 60)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", "60")
     identity = query_cache.build_sql_result_cache_identity(
         {"id": "m_http", "member_datasource_id": "m_http", "query_executor_type": "http", "source_type": "hive"},
         "select * from orders limit 10",
@@ -989,11 +989,11 @@ def test_http_sql_result_cache_stores_remote_ref_only(route_db, monkeypatch):
 
 
 def test_sql_result_cache_helpers_handle_disabled_and_noop(route_db, monkeypatch):
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
-    assert query_cache.is_sql_result_cache_enabled(skip_query_cache=False) is True
-    assert query_cache.is_sql_result_cache_enabled(skip_query_cache=True) is False
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", False)
-    assert query_cache.is_sql_result_cache_enabled(skip_query_cache=False) is False
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(skip_query_cache=False)) is True
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(skip_query_cache=True)) is False
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "false")
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(skip_query_cache=False)) is False
 
     assert asyncio.run(query_cache.get_sql_result_cache({})) is None
     asyncio.run(query_cache.save_sql_result_cache({}, {"success": True, "total_count": 1}))
@@ -1294,7 +1294,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
 
     async def fake_update_from_result(execution_id, result, **kwargs):
         result_updates.append((execution_id, result, kwargs))
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", False)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "false")
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", fake_limiter)
     monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "update_query_execution", fake_update_execution)
@@ -1423,7 +1423,7 @@ def test_execute_sql_for_member_uses_http_remote_ref_cache(monkeypatch):
     async def raise_limiter(_user_id, _target, _operation):
         raise AssertionError("HTTP remote-ref cache hit should not submit a new query")
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
     monkeypatch.setattr(query_runtime, "fetch_http_query_task_result", fake_fetch)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", raise_limiter)

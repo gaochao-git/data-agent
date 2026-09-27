@@ -15,7 +15,8 @@ from ..semantic.run.semantic_model_repository import load_semantic_model
 from ..semantic.core.query_plan import is_composite_metric, is_derived_metric
 from ..semantic.run.semantic_config_service import get_semantic_config_service
 from ..semantic.run.semantic_query_service import compile_semantic_ai_dsl
-from ..semantic.run.semantic_query_service import SemanticAIQueryAdapter
+from ..semantic.run.semantic_query_service import SemanticAIQueryAdapter, SemanticCompileOptions
+from ..setting_service import get_runtime_setting
 from ..sql_run.executor import get_executor, resolve_query_timeout
 
 logger = get_logger(__name__)
@@ -248,12 +249,14 @@ def build_panel_sql_from_dashboard_card(
     card: Dict[str, Any],
     generator: SemanticAIQueryAdapter,
     warnings: Optional[List[str]] = None,
+    max_rows: Optional[int] = None,
 ) -> str:
     """将看板卡片 DSL 转为面板 SQL。
 
     卡片字段合并走 `_merge_card_dsl_payload` 单一入口；混合指标剔除的警告通过
     `warnings` 列表输出（传 None 表示不收集）。预检（build_dashboard_panel_plans）
     与 SQL 生成共用同一份合并结果，避免两套合并逻辑产生口径分歧。
+    max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
     """
     dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     if dsl.get("compare") or card.get("compare"):
@@ -266,6 +269,7 @@ def build_panel_sql_from_dashboard_card(
         getattr(generator, "semantic_config", {}),
         payload,
         generator=generator,
+        options=SemanticCompileOptions(max_rows=max_rows),
     )
     if not result.get("success"):
         raise ValueError(str(result.get("error") or "SQL 生成失败"))
@@ -406,8 +410,12 @@ def build_dashboard_panel_plans(
     *,
     semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]] = None,
     default_semantic_config_id: Optional[str] = None,
+    max_rows: Optional[int] = None,
 ) -> tuple[List[Dict[str, Any]], List[str]]:
-    """预生成看板面板 SQL，避免无有效卡片时先创建空看板。"""
+    """预生成看板面板 SQL，避免无有效卡片时先创建空看板。
+
+    max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
+    """
     panel_plans: List[Dict[str, Any]] = []
     warnings: List[str] = []
     generators = semantic_config_generators or {}
@@ -418,7 +426,7 @@ def build_dashboard_panel_plans(
             semantic_config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
             generator = _resolve_panel_generator(generators, semantic_config_generators, sql_generator, semantic_config_id)
             card_warnings: List[str] = []
-            sql = build_panel_sql_from_dashboard_card(card, generator, warnings=card_warnings)
+            sql = build_panel_sql_from_dashboard_card(card, generator, warnings=card_warnings, max_rows=max_rows)
             for warning in card_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
             if not sql:
@@ -455,7 +463,7 @@ async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, us
         execute_kwargs = {
             "sql": sql,
             "limit": 1,
-            "timeout": min(resolve_query_timeout(execution_target.get("source_type")), 30),
+            "timeout": min(await resolve_query_timeout(execution_target.get("source_type")), 30),
             "user_id": user_id,
             "datasource_id": datasource_id,
         }
@@ -579,6 +587,7 @@ async def validate_dashboard_spec_payload(
         cards,
         semantic_config_generators=semantic_config_generators,
         default_semantic_config_id=default_semantic_config_id,
+        max_rows=await get_runtime_setting("CHATDATA_ROW_LIMIT"),
     )
     if execute_sql and panel_plans:
         panel_plans, execution_warnings = await filter_executable_dashboard_panel_plans(

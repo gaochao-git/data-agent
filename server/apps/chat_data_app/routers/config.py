@@ -18,7 +18,7 @@ router = APIRouter(tags=["ChatData 配置与模型"], responses=JSON_API_RESPONS
 async def get_chat_data_config():
     """获取智能问数前端运行时配置。"""
     try:
-        return business_response(data=get_chat_data_runtime_config(), msg="获取成功")
+        return business_response(data=await get_chat_data_runtime_config(), msg="获取成功")
     except Exception as e:
         logger.error("获取智能问数运行时配置失败: %s", e, exc_info=True)
         return business_response(msg="获取运行时配置失败，请稍后重试", code=ErrorCode.CHATDATA_CONFIG_RUNTIME_FAILED, status="error")

@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ...datasource.manager import get_datasource_manager
 from ...sql_run.result import query_result_status
-from ...runtime_config import DEFAULT_ROW_LIMIT
+from ...setting_service import get_runtime_setting
 from .semantic_bi_query_adapter import (  # noqa: F401  历史兼容 re-export，存量调用方与测试从本模块导入
     FORBIDDEN_SEMANTIC_BUILDER_KEYS,
     SemanticBIQueryAdapter,
@@ -61,7 +61,11 @@ async def compile_semantic_builder_sql(
     user_id: str | None = None,
 ) -> Dict[str, Any]:
     semantic_config = await load_runtime_semantic_config_strict(datasource_id, semantic_config_id, user_id=user_id)
-    result = compile_semantic_bi_dsl(semantic_config, semantic_builder_config)
+    result = compile_semantic_bi_dsl(
+        semantic_config,
+        semantic_builder_config,
+        max_rows=await get_runtime_setting("CHATDATA_ROW_LIMIT"),
+    )
     if not result.get("success"):
         raise ValueError(str(result.get("error") or "BI 语义 DSL 编译失败"))
     return result
@@ -112,14 +116,19 @@ def compile_semantic_ai_dsl(
 def compile_semantic_bi_dsl(
     semantic_config: Dict[str, Any],
     dsl: Dict[str, Any],
+    *,
+    max_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """编译 BI 可视化语义 DSL，返回 SQL 和内部查询计划。"""
+    """编译 BI 可视化语义 DSL，返回 SQL 和内部查询计划。
+
+    max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
+    """
     if not isinstance(semantic_config, dict):
         return {"success": False, "sql": "", "error": "语义模型必须是对象"}
     if not isinstance(dsl, dict):
         return {"success": False, "sql": "", "error": "BI 语义 DSL 必须是对象"}
     try:
-        result = SemanticBIQueryAdapter(semantic_config, max_rows=DEFAULT_ROW_LIMIT).compile(dsl)
+        result = SemanticBIQueryAdapter(semantic_config, max_rows=max_rows).compile(dsl)
     except (TypeError, ValueError) as exc:
         return {"success": False, "sql": "", "error": str(exc)}
     return {

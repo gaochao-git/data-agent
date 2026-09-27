@@ -1911,3 +1911,11 @@ ChatData
 | 实测 | ①**Ossie 导入**（SEM-18 主链路）：上传 `~/Desktop/产品分类模型.yaml` → 模型校验 → preview 200，行=替换/通过、`查看详情`+`查看差异` 齐全、radio=0、footer「将新建 0 · 替换 1」；查看差异 → `.cm-editor`=2、按钮翻转「收起差异」；取消关闭未落库。②**字段字典生成**（SEM 相关/字典）：空文本点「生成候选」被禁用门禁拦住（设计如此）；填说明文本后 generate 200（真实 LLM），toast「已生成候选，新增枚举 4 个」，4 对值/含义输入框填充正确，取消不保存。③**评测草稿**：抽屉 UI 无草稿入口（见下），改接口探针：聚合类问题 success（gold_dsl 编译通过、source=llm、query_type=aggregation、business_domain 正确）。④**语义自动预填**：前端无调用点（纯 API 通道），接口探针 success（LLM 推荐中文显示名+COUNT 指标）。全程 `window.__errs` 恒空。 |
 | 边界与已知 | ①**草稿 filter 类 LLM 输出会被既有编译校验拒绝**（「无效的过滤条件格式」，40001）——该路由代码 0 diff，属 Qwen 输出质量问题非本次重构回归；聚合类正常。②draft-case 弹窗（`draftEditingCaseByLlm`/`showCaseEditorDialog`）在 composable 里导出但**抽屉组件未解构挂载**，UI 当前不可达（重构无关的既有状态，如需恢复另立需求）。③**未覆盖编号需发布前全量执行**：本记录仅为上述四链路定向回归，不构成发布裁决。 |
 
+### §5.24 配置变量面板（SettingAdminPanel）DDL 后端到端定向回归（2026-09-26 22:20，agent-browser）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | 用户执行 `chat_data_setting` 等 3 表 DDL 后，对运行配置面板做首次真实写库的端到端验证（会话页 → 后台管理 → 运行配置 tab），覆盖列表/分页/搜索/覆盖/编辑/重置/全部重置/类型控件/热值链路。中途用户两轮 UI 反馈（操作列换行、最近更新拆两列）已修复后复验。 |
+| 实测 | ①列表 23 key 按分类排序（上传与预览/查询执行/并发控制/定时调度/智能体运行/同步与元数据/监控告警），分页 20/页×2 页正确，来源徽标全 env（无覆盖）；搜索 SCHEDULE 过滤 4 行。②覆盖 `CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY=9`：toast「已覆盖该变量」，行=表覆盖+生效值 9+修改时间/人员落库；**独立进程 `get_runtime_setting` 返回 7（表覆盖 > env=2）链路实锤**（先编辑 9→7 后取值）。③编辑路径：toast「已更新变量覆盖」，生效值同步。④非法值 999：后端 40059「变量值非法：不能大于 64」（前端 Notification 展示具体原因），弹窗不关。⑤单条重置：确认框文案正确，回退 env=2，重置按钮消失。⑥全部重置：空态 info 提示不弹确认框；有覆盖时确认框列出 key（当时用户自建覆盖 CHAT_DATA_MAX_IMAGE_SIZE_MB=5，已由用户自行重置）。⑦bool 类型渲染 el-select、int 渲染文本框。⑧全程 `window.__errs` 恒空。截图 `.workbuddy/screenshots/setting_admin_0926/`。`vue-tsc` 0 错误。 |
+| 修复（本轮） | DEF：操作列 110px 下「编辑+重置」两按钮折行 → 列宽 140 + `:deep(.setting-op-col .cell){white-space:nowrap}` 双保险；「最近更新」单列拆「修改时间(150)/修改人员(100)」两列（用户拍板不合并）。 |
+| 边界与已知 | ①业务错误（如值非法）会双重提示：拦截器 ElNotification（具体原因）+ 面板 catch ElMessage（通用文案）——信息不丢但有冗余，后续可收敛。②el-table fixed-right 列存在镜像副本，`agent-browser click` 会命中主表被覆盖的按钮而静默落空（已知陷阱），验证时用 eval `el.click()` 复核。③测试覆盖已全部重置清理，终态表内 0 覆盖行。④**未覆盖编号需发布前全量执行**：本记录仅为运行配置面板定向回归，不构成发布裁决。 |

@@ -19,10 +19,7 @@ from typing import Any
 
 from langchain.agents.middleware import wrap_tool_call
 
-from apps.chat_data_app.services.runtime_config import (
-    TOOL_CALL_RATE_ALERT_THRESHOLD,
-    TOOL_CALL_RATE_ALERT_WINDOW_SECONDS,
-)
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.alarm import emit_tool_call_rate_alarm
 from utils.logger import get_logger
 
@@ -150,13 +147,14 @@ def create_tool_call_rate_alert_middleware(
 ):
     """创建会话级工具调用频率告警 middleware。
 
-    默认阈值与窗口取环境变量（见 ``runtime_config``）；两参数仅供测试注入更小值。
+    默认阈值与窗口运行期经后台配置变量表读取（表覆盖 > env > 默认，TTL 缓存内
+    基本无开销）；两参数仅供测试注入更小值。
     """
-    resolved_threshold = TOOL_CALL_RATE_ALERT_THRESHOLD if threshold is None else threshold
-    resolved_window = TOOL_CALL_RATE_ALERT_WINDOW_SECONDS if window_seconds is None else window_seconds
 
     @wrap_tool_call(name="ToolCallRateAlertMiddleware")
     async def tool_call_rate_alert_middleware(request, handler):
+        resolved_threshold = threshold if threshold is not None else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD")
+        resolved_window = window_seconds if window_seconds is not None else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_WINDOW_SECONDS")
         record_tool_call_and_alert(request, threshold=resolved_threshold, window_seconds=resolved_window)
         return await handler(request)
 

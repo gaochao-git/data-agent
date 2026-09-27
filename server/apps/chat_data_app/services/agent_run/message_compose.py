@@ -19,7 +19,6 @@ from utils.logger import get_logger
 from .uploaded_file_service import (
     IMAGE_EXTENSIONS,
     MAX_IMAGES_PER_MESSAGE,
-    MAX_IMAGE_SIZE,
 )
 
 logger = get_logger(__name__)
@@ -44,21 +43,26 @@ def build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def is_image_attachment(item: dict[str, Any]) -> bool:
-    """判断附件是否为可作为 vision 输入的图片类型。"""
+def is_image_attachment(item: dict[str, Any], *, max_image_size: int) -> bool:
+    """判断附件是否为可作为 vision 输入的图片类型（大小上限由调用方传入）。"""
     file_type = str(item.get("file_type") or "").lower()
     if file_type not in IMAGE_EXTENSIONS or item.get("file_id") is None:
         return False
     try:
-        return int(item.get("file_size") or 0) <= MAX_IMAGE_SIZE
+        return int(item.get("file_size") or 0) <= max_image_size
     except (TypeError, ValueError):
         return False
 
 
-def select_vision_attachments(file_attachments: list[dict[str, Any]]) -> list[str]:
+def select_vision_attachments(
+    file_attachments: list[dict[str, Any]],
+    *,
+    max_image_size: int,
+) -> list[str]:
     """选出可注入视觉的图片附件虚拟路径（纯元数据判断，不读文件、不判 vlm）。
 
-    准入规则：类型 ∈ IMAGE_EXTENSIONS、携带 file_id、大小 ≤ MAX_IMAGE_SIZE，
+    准入规则：类型 ∈ IMAGE_EXTENSIONS、携带 file_id、大小 ≤ max_image_size
+    （运行期经配置服务读取，见 uploaded_file_parser.get_image_size_limit），
     数量上限 MAX_IMAGES_PER_MESSAGE。返回虚拟路径列表（可能为空）；调用方
     将其写入消息 additional_kwargs 的 ``vision_attachments`` 标记，由
     ImageInjectionMiddleware 在模型请求层按当轮 vlm 能力位装载图片。
@@ -67,7 +71,7 @@ def select_vision_attachments(file_attachments: list[dict[str, Any]]) -> list[st
     for item in file_attachments:
         if len(paths) >= MAX_IMAGES_PER_MESSAGE:
             break
-        if not is_image_attachment(item):
+        if not is_image_attachment(item, max_image_size=max_image_size):
             continue
         path = item.get("virtual_path") or item.get("parsed_path")
         if path:

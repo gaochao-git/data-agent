@@ -28,6 +28,7 @@ import type {
   AgentScheduleOverview,
   AgentSchedulePayload,
   AgentScheduleRunItem,
+  ChatDataSettingItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1776,5 +1777,39 @@ export function getAdminAgentScheduleRuns(jobId: string, params?: { limit?: numb
     url: `${CHATDATA_API_PREFIX}/admin/agent-schedules/${jobId}/runs`,
     method: 'get',
     params
+  })
+}
+
+/** 后台：配置变量列表（= 可动态修改变量白名单全量，含生效值与来源徽标） */
+export function getAdminSettings(params?: { keyword?: string }): Promise<ApiResponse<{ items: ChatDataSettingItem[]; total: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：覆盖已注册变量（key 限白名单；已重置的 key 自动复用原行恢复） */
+export function upsertAdminSetting(settingKey: string, data: { setting_value: string }): Promise<ApiResponse<{ setting_key: string; action: 'created' | 'updated' | 'restored' }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings/${settingKey}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：重置单个变量（软删覆盖行，回退 env/代码默认值） */
+export function deleteAdminSetting(settingKey: string): Promise<ApiResponse<{ setting_key: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings/${settingKey}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：全部重置（软删所有覆盖行，所有变量回退 env/代码默认值） */
+export function resetAllAdminSettings(): Promise<ApiResponse<{ reset_count: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings`,
+    method: 'delete'
   })
 }

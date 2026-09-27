@@ -11,16 +11,19 @@ from markitdown import MarkItDown
 
 from utils.logger import get_logger
 
-from apps.chat_data_app.services.runtime_config import read_positive_int_env
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
-# 图片读取/注入的扩展名与单张大小上限（agent 视觉链路唯一口径）。
-# 配置用 MB（CHAT_DATA_MAX_IMAGE_SIZE_MB，正整数），字节值由它派生；
-# 模块级求值，改 env 后需重启进程。
+# 图片读取/注入的扩展名（agent 视觉链路唯一口径）。单张大小上限（MB）运行期
+# 读取配置服务（表覆盖 > env > 默认），见 get_image_size_limit。
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
-MAX_IMAGE_SIZE_MB = read_positive_int_env("CHAT_DATA_MAX_IMAGE_SIZE_MB", 5)
-MAX_IMAGE_SIZE = MAX_IMAGE_SIZE_MB * 1024 * 1024
+
+
+async def get_image_size_limit() -> tuple[int, int]:
+    """图片单张大小上限便捷读取：返回 (MB, 字节)。"""
+    size_mb = await get_runtime_setting("CHAT_DATA_MAX_IMAGE_SIZE_MB")
+    return size_mb, size_mb * 1024 * 1024
 
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset({
     ".txt", ".md", ".sql", ".pdf", ".docx", ".xlsx", ".pptx",

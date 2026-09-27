@@ -2415,20 +2415,16 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
         </div>
-        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex justify-center pt-8 md:pt-10">
-          <div class="w-[774px] max-w-[90%]">
-            <div class="mb-5 rounded-2xl bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/80 px-5 py-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-              <div class="text-[17px] font-semibold leading-7 text-slate-800">你好，我是数据智能体</div>
+        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex items-center justify-center">
+          <div class="w-[774px] max-w-[90%] flex flex-col items-center pb-4">
+            <div class="flex flex-col items-center text-center">
+              <div class="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-[32px] font-bold leading-tight text-transparent">嗨，我是 DataBuddy</div>
+              <div class="mt-2 text-[14px] text-slate-500">你的专属数据伙伴，让洞察触手可及</div>
             </div>
 
-            <div v-if="selectedDatasource" class="max-w-[560px]">
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <div class="flex items-center gap-1.5 text-[13px] font-medium text-slate-400">
-                  <i class="fa-regular fa-lightbulb text-[12px] text-amber-400"></i>
-                  <span>你可以这样问：</span>
-                </div>
+            <div v-if="selectedDatasource" class="mt-8 w-full max-w-[560px]">
+              <div v-if="canRefreshRecommendations" class="mb-2.5 flex items-center justify-end">
                 <button
-                  v-if="canRefreshRecommendations"
                   type="button"
                   class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 text-[12px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-blue-600"
                   title="换一批推荐问题"

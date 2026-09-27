@@ -13,7 +13,7 @@ from utils.logger import get_logger
 
 from ...daos.sql_result_cache_dao import SqlResultCacheDao
 from .result import query_result_status, query_result_succeeded
-from ..runtime_config import QUERY_CACHE_ENABLED, QUERY_CACHE_TTL_SECONDS
+from ..setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
@@ -73,9 +73,10 @@ def build_sql_result_cache_identity(
     }
 
 
-def is_sql_result_cache_enabled(skip_query_cache: bool) -> bool:
-    """Return whether SQL result cache is enabled for this execution."""
-    return QUERY_CACHE_ENABLED and not skip_query_cache
+async def is_sql_result_cache_enabled(skip_query_cache: bool) -> bool:
+    """Return whether SQL result cache is enabled for this execution（运行期经配置服务读取）."""
+    cache_enabled = await get_runtime_setting("CHAT_DATA_QUERY_CACHE_ENABLED")
+    return bool(cache_enabled) and not skip_query_cache
 
 
 async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -266,7 +267,7 @@ async def _upsert_sql_result_cache_payload(
         payload_json=json.dumps(payload, ensure_ascii=False),
         result_row_count=int(result_row_count or 0),
         now=now,
-        expire_time=now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS),
+        expire_time=now + timedelta(seconds=await get_runtime_setting("CHAT_DATA_QUERY_CACHE_TTL_SECONDS")),
         operator_user_id=str(operator_id or "").strip(),
         operator_name=str(operator_name or "").strip(),
     )

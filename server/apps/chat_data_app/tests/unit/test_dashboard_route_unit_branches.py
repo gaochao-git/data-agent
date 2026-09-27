@@ -395,7 +395,10 @@ async def test_dashboard_batch_shared_sql_semaphore_caps_panel_and_member_querie
     active_count = 0
     max_active_count = 0
 
-    monkeypatch.setattr(dashboard_runtime, "DASHBOARD_PANEL_MAX_CONCURRENCY", 2)
+    async def fake_panel_max_concurrency(key, default=None):
+        return 2 if key == "CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY" else default
+
+    monkeypatch.setattr(dashboard_runtime, "get_runtime_setting", fake_panel_max_concurrency)
     monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
 
     async def execute_sql_for_member(**kwargs):

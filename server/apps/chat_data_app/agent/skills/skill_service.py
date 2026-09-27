@@ -17,17 +17,14 @@ from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physic
 from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 from apps.chat_data_app.daos.skill_dao import SkillDao
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
-    WORKSPACE_OFFICE_SOURCE_MAX_BYTES,
     WORKSPACE_RAW_PREVIEW_MAX_BYTES,
-    WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
     _format_size_limit,
 )
 from apps.chat_data_app.services.agent_run.uploaded_file_service import (
     ALLOWED_FILE_EXTENSIONS,
-    MAX_UPLOAD_SIZE,
-    MAX_UPLOAD_SIZE_MB,
     UPLOAD_CHUNK_SIZE,
 )
+from apps.chat_data_app.services.setting_service import get_runtime_setting, get_upload_size_limit
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
@@ -42,7 +39,8 @@ SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_FIXED_DIRS = ("references", "assets")
 
 # 技能文件上传大小上限：直接复用主对话上传口径（CHAT_DATA_MAX_UPLOAD_SIZE_MB，
-# 见 services/agent_run/uploaded_file_service.py），与主对话上传体验保持一致。
+# 经后台配置变量表读取，见 services/setting_service.py 的 get_upload_size_limit），
+# 与主对话上传体验保持一致。
 # 预览各项上限（文本/原始字节/Office 源文件）同样复用主对话工作区预览端点的常量，
 # env 单一来源在 services/runtime_config.py，此处不重复定义。
 
@@ -811,12 +809,16 @@ class SkillService:
         version_dir = await self._get_readable_version_dir_async(skill_id, skill_version_no, user_id)
         return await asyncio.to_thread(_list_skill_files, str(version_dir / "SKILL.md"))
 
-    async def read_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, max_bytes: int = WORKSPACE_TEXT_PREVIEW_MAX_BYTES) -> Dict[str, Any]:
+    async def read_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, max_bytes: int | None = None) -> Dict[str, Any]:
         """异步读取用户技能版本目录文件。
 
         上限语义与主对话工作区文本预览（read_workspace_text_file）对齐：
-        超过 max_bytes 直接拒绝预览，不做截断。
+        超过 max_bytes 直接拒绝预览，不做截断；None=运行期经配置服务解析
+        （CHAT_DATA_TEXT_PREVIEW_MAX_MB，表覆盖 > env > 默认）。
         """
+        if max_bytes is None:
+            text_preview_max_mb = await get_runtime_setting("CHAT_DATA_TEXT_PREVIEW_MAX_MB")
+            max_bytes = text_preview_max_mb * 1024 * 1024
         target = await self._resolve_readable_skill_file_path_async(skill_id, skill_version_no, dir_name, file_path, user_id)
         if not target.exists() or not target.is_file():
             raise ValueError("文件不存在")
@@ -869,9 +871,12 @@ class SkillService:
             raise ValueError("文件不存在")
         if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
             raise ValueError("Office 预览仅支持 .docx、.xlsx、.pptx 文件")
-        if target.stat().st_size > WORKSPACE_OFFICE_SOURCE_MAX_BYTES:
-            # 源文件上限与主对话 Office 预览校验（_validate_office_preview_source）同源
-            raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(WORKSPACE_OFFICE_SOURCE_MAX_BYTES)} 的 Office 文件")
+        # 源文件上限与主对话 Office 预览校验（_validate_office_preview_source）同源：
+        # 运行期经配置服务读取（CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB）。
+        office_source_max_mb = await get_runtime_setting("CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB")
+        office_source_max_bytes = office_source_max_mb * 1024 * 1024
+        if target.stat().st_size > office_source_max_bytes:
+            raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(office_source_max_bytes)} 的 Office 文件")
         # 局部导入：agent.workspace 链路较重，且避免 agent/skills 与 agent/workspace 潜在循环导入
         from apps.chat_data_app.agent.workspace.runtime import OFFICE_PREVIEW_MAX_CHARS, ConversationWorkspaceRuntime
         from apps.chat_data_app.agent.workspace.workspace_special_services import workspace_office_preview_service
@@ -960,12 +965,13 @@ class SkillService:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = target.parent / f".{target.name}.{uuid.uuid4().hex}.upload"
         file_size = 0
+        max_upload_size_mb, max_upload_size = await get_upload_size_limit()
         try:
             with temporary_path.open("xb") as output:
                 while chunk := await file_stream.read(UPLOAD_CHUNK_SIZE):
                     file_size += len(chunk)
-                    if file_size > MAX_UPLOAD_SIZE:
-                        raise ValueError(f"文件大小不能超过{MAX_UPLOAD_SIZE_MB}MB")
+                    if file_size > max_upload_size:
+                        raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
                     output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
