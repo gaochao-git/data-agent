@@ -458,6 +458,30 @@ def test_grep_context_multi_file_multi_hit_no_pollution(tmp_path, monkeypatch):
     assert used >= 30 * 0.6  # 旧实现同预算下有效载荷不足一半
 
 
+def test_grep_context_trailing_after_respects_max_chars(tmp_path, monkeypatch):
+    """真实 rg 回归：尾随 after 上下文受 max_chars 硬上限，不得顶破预算。"""
+    runtime, root = _runtime(tmp_path)
+    ws = root / "workspace"
+    (ws / "tail.txt").write_text(
+        "HIT\n" + "A" * 100 + "\n" + "B" * 100 + "\n" + "C" * 100 + "\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "tail.txt", 50, 50,
+        context_lines=3,
+    )
+    # 剩余预算装不下任何一条 after 行：全部不进入结果，has_more 置位
+    assert len(payload["matches"]) == 1
+    assert payload["matches"][0].get("after") is None
+    assert payload["has_more"] is True
+    used = sum(
+        len(m["line"]) + 1 + sum(len(x) + 1 for x in m.get("before", []) + m.get("after", []))
+        for m in payload["matches"]
+    )
+    assert used <= 50
+
+
 # ---------------------------------------------------------------------------
 # 后端异步入口
 # ---------------------------------------------------------------------------

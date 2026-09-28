@@ -142,26 +142,36 @@ class _RgContextAccumulator:
         # maxlen=0（context_lines=0）时 append 即丢弃，天然退化为无上下文
         self.pending_before: deque[str] = deque(maxlen=context_lines)
         self.after_count = 0
+        # begin 事件后、本文件首个 match 前，context 行不得挂到上一文件末条
+        # 命中的 after——matches 列表跨文件共享，靠此标志隔离（与 before 的
+        # 跨文件污染同源：单纯清零 after_count 会重新打开 after 吸收）
+        self.after_blocked = True
 
     def reset(self) -> None:
         """文件边界处清空跨文件残留（begin 事件时调用）。"""
         self.pending_before.clear()
         self.after_count = 0
+        self.after_blocked = True
 
-    def absorb(self, content: str, matches: list[dict[str, Any]]) -> int:
+    def absorb(self, content: str, matches: list[dict[str, Any]], *, budget_left: int) -> int:
         """归属一条 context 行，返回其计入 max_chars 预算的字符开销。
 
         预算按「实际进入结果的内容」计费：只有行被挂到某条命中的 after 时才
         计费；仅进 before 缓冲的行不计——它们可能随窗口滑动被丢弃、可能到流
         结束都等不到命中。若该行随后成为下一命中的 before，会在命中处按
         :func:`_rg_match_cost` 计费（相邻命中的重叠行 rg 发射两次、结果出现
-        两次、计费两次，三者一致）。
+        两次、计费两次，三者一致）。剩余预算装不下该行（cost > budget_left）
+        时行不进入结果、原样返回 cost，由调用方截断——max_chars 对尾随 after
+        行同样是硬上限。
         """
         self.pending_before.append(content)
-        if matches and self.after_count < self.context_lines:
+        if matches and not self.after_blocked and self.after_count < self.context_lines:
+            cost = len(content) + 1
+            if cost > budget_left:
+                return cost
             matches[-1].setdefault("after", []).append(content)
             self.after_count += 1
-            return len(content) + 1
+            return cost
         return 0
 
     def observe(
@@ -171,10 +181,13 @@ class _RgContextAccumulator:
         prefix: str,
         prefix_len: int,
         matches: list[dict[str, Any]],
+        *,
+        budget_left: int,
     ) -> int:
         """处理一条非 match 的 JSON 行：begin 事件重置 / context 行归属。
 
-        返回计入 max_chars 预算的字符开销（仅 context 进入结果时非零）。
+        返回计入 max_chars 预算的字符开销（仅 context 进入结果时非零）；
+        剩余预算装不下该行时返回其开销但行不进入结果（调用方据此截断）。
         """
         if _is_rg_file_begin(line):
             self.reset()
@@ -182,13 +195,14 @@ class _RgContextAccumulator:
         context = _parse_rg_entry(line, normalized_target, prefix, prefix_len, expected_type="context")
         if context is None:
             return 0
-        return self.absorb(context[2], matches)
+        return self.absorb(context[2], matches, budget_left=budget_left)
 
     def take_before(self) -> list[str]:
         """快照当前 before 缓冲并重置 after 计数（新 match 到来时调用）。"""
         before = list(self.pending_before)
         self.pending_before.clear()
         self.after_count = 0
+        self.after_blocked = False
         return before
 
 
@@ -232,7 +246,9 @@ def parse_rg_output(
 
     context_lines > 0 时（rg -C），相邻 ``type == "context"`` 条目按流式顺序
     归属（见 :class:`_RgContextAccumulator`），并在文件边界（begin 事件）重置；
-    预算按实际进入结果的内容计费（before/after/正文各计一次，重叠行按出现次数计）。
+    预算按实际进入结果的内容计费（before/after/正文各计一次，重叠行按出现次数
+    计），``max_chars`` 是硬上限——装不下的尾随 after 行不进入结果并置
+    ``has_more``。
     """
     normalized_target = target.rstrip("/")
     prefix = normalized_target + "/"
@@ -256,7 +272,14 @@ def parse_rg_output(
             body_chars += cost
             continue
         if context_lines > 0:
-            body_chars += accumulator.observe(line, normalized_target, prefix, prefix_len, matches)
+            remaining = max_chars - body_chars
+            cost = accumulator.observe(
+                line, normalized_target, prefix, prefix_len, matches, budget_left=remaining,
+            )
+            if cost > remaining:
+                has_more = True
+                break
+            body_chars += cost
     return matches, has_more
 
 
