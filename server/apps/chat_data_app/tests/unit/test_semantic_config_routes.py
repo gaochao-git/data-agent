@@ -25,17 +25,14 @@ def _structure_error(datasource, metrics=None, dimensions=None, relationships=No
         metrics or [], dimensions or [], relationships or [],
         table_columns_map=build_table_columns_map(datasource),
     )
-from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from apps.chat_data_app.schema import (
     SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
-    SemanticPrefillRequest,
 )
 from apps.chat_data_app.services.semantic.run import semantic_config_service
 from apps.chat_data_app.services.semantic.run import semantic_history_learning_service
-from apps.chat_data_app.services.semantic.run import semantic_prefill_service
 from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import build_semantic_history_learning_service
 
 
@@ -360,139 +357,6 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
     assert result["dimensions"][0]["needs_review"] is True
     assert result["issues"][0]["title"] == "缺少枚举"
 
-
-def test_prefill_parse_and_alias_helpers_cover_edge_cases():
-    tables = [
-        {"table_name": "orders", "table_alias": "buyer_orders", "columns": [{"name": "amount", "mysql_type": "decimal"}, {"name": ""}]},
-        {"table_name": "orders", "table_alias": "seller_orders", "columns": [{"name": "amount"}]},
-        {"table_name": "", "columns": [{"name": "skip"}]},
-    ]
-    table_payload = semantic_config._build_prefill_table_payload(tables)
-    alias_map = semantic_config._build_prefill_alias_map(tables)
-    parsed = {
-        "fields": [
-            {"table": "orders", "column": "amount", "name": "金额，后续说明"},
-            {"table": "missing", "column": "amount", "name": "跳过"},
-            "skip",
-        ],
-        "metrics": [
-            {"table": "orders", "column": "amount", "agg": "SUM", "name": "金额"},
-            {"table": "orders", "source_column": "amount", "agg": "SUM", "name": "重复"},
-            {"table": "orders", "column": "missing", "agg": "SUM", "name": "跳过"},
-            {"table": "orders", "column": "amount", "agg": "UNSAFE", "name": "跳过"},
-            "skip",
-        ],
-    }
-
-    assert semantic_config._normalize_prefill_display_name("订单金额，越长越好", "amount") == "订单金额"
-    assert semantic_config._normalize_prefill_display_name("关联 orders.amount 的金额", "amount") == "关联ordersamount的"
-    assert semantic_config._normalize_prefill_display_name("", "amount") == "amount"
-    deduped_long_name = semantic_config._dedupe_prefill_display_names([
-        {"table_alias": "long_alias", "name": "字段名很长很长很长很长很长很长很长很长很长"},
-        {"table_alias": "other_alias", "name": "字段名很长很长很长很长很长很长很长很长很长"},
-    ])
-    assert len(deduped_long_name[0]["name"]) == semantic_config.PREFILL_DISPLAY_NAME_MAX_LENGTH
-    assert deduped_long_name[0]["name"] != deduped_long_name[1]["name"]
-    assert semantic_config._build_prefill_alias_map(tables) == {"orders": ["buyer_orders", "seller_orders"]}
-    assert table_payload == [{"table": "orders", "description": "", "columns": [{"name": "amount", "type": "decimal", "description": ""}]}]
-    assert semantic_config._parse_prefill_dimension_name_map({"fields": "bad"}, table_payload) == {}
-    assert semantic_config._parse_prefill_dimension_name_map(parsed, table_payload) == {"orders.amount": "金额"}
-    dimension_fields = semantic_config._build_prefill_dimension_fields(table_payload, alias_map, {"orders.amount": "金额"})
-    metrics = semantic_config._parse_metric_items(parsed, table_payload, max_metrics=5, table_alias_map=alias_map)
-    assert [item["table_alias"] for item in dimension_fields] == ["buyer_orders", "seller_orders"]
-    assert [item["table_alias"] for item in metrics] == ["buyer_orders", "seller_orders"]
-    assert len(metrics) == 2
-    assert semantic_config._parse_metric_items({"metrics": "bad"}, table_payload) == []
-    assert semantic_history_learning_service._extract_expression_columns("SUM(.amount) + ` ` + t.price + orders.") == {"amount", "price"}
-
-
-def test_prefill_helpers_use_business_context(monkeypatch):
-    tables = [{"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]}]
-    calls = []
-
-    async def fake_metric_recommendation(table_payload, business_context="", max_metrics=10, **_kwargs):
-        calls.append({"table_payload": table_payload, "business_context": business_context, "max_metrics": max_metrics})
-        return {
-            "fields": [
-                {"table": "orders", "table_alias": "orders", "column": "amount", "role": "dimension", "expression": "`amount`", "name": "订单金额"},
-                {"table": "orders", "table_alias": "orders", "column": "city", "role": "dimension", "expression": "`city`", "name": "城市"},
-            ],
-            "metrics": [{"table": "orders", "table_alias": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"}],
-        }
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_metric_recommendation)
-    default_result = asyncio.run(semantic_config._prefill_by_llm(tables))
-    contextual_result = asyncio.run(semantic_config._prefill_by_llm(tables, business_context="订单金额常做汇总"))
-
-    assert len(calls) == 2
-    assert calls[1]["business_context"] == "订单金额常做汇总"
-    assert default_result["fields"] == [
-        {"table": "orders", "table_alias": "orders", "column": "amount", "role": "dimension", "expression": "`amount`", "name": "订单金额"},
-        {"table": "orders", "table_alias": "orders", "column": "city", "role": "dimension", "expression": "`city`", "name": "城市"},
-        {"table": "orders", "table_alias": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"},
-    ]
-    assert contextual_result["fields"][0]["role"] == "dimension"
-    assert contextual_result["fields"][-1]["role"] == "metric"
-
-
-def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch):
-    class FakeManager:
-        async def get_datasource_async(self, datasource_id):
-            return {"id": datasource_id}
-
-        async def get_config_async(self, datasource_id, config_id):
-            return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
-
-    manager = FakeManager()
-    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
-
-    response = asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_a",
-        tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
-    ), object()))
-    payload = json.loads(response.body.decode("utf-8"))
-
-    assert payload["status"] == "error"
-    assert payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-
-
-def test_semantic_prefill_additional_edge_branches(monkeypatch):
-    table_payload = [
-        {"table": "", "columns": [{"name": "skip"}]},
-        {"table": "orders", "columns": [{"name": ""}, {"name": "amount"}]},
-    ]
-    assert semantic_config._build_prefill_dimension_fields(table_payload) == [
-        {
-            "table": "orders",
-            "table_alias": "orders",
-            "column": "amount",
-            "role": "dimension",
-            "expression": "`amount`",
-            "name": "amount",
-        }
-    ]
-    assert semantic_config._normalize_prefill_display_name("", "") == ""
-    assert semantic_config._normalize_prefill_display_name("超长别名前缀_字段名", "字段名")[:2]
-
-    duplicate_items = semantic_config._dedupe_prefill_display_names([
-        {"name": "金额", "table_alias": "买方订单"},
-        {"name": "金额", "table_alias": "卖方订单"},
-        {"name": "金额", "table_alias": ""},
-    ])
-    assert len({item["name"] for item in duplicate_items}) == 3
-
-    parsed = {"metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "金额"}]}
-    metrics = semantic_config._parse_metric_items(
-        parsed,
-        [{"table": "orders", "columns": [{"name": "amount"}]}],
-        max_metrics=1,
-        table_alias_map={"orders": ["买方订单", "卖方订单"]},
-    )
-    assert len(metrics) == 1
 
 def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
@@ -892,7 +756,6 @@ def test_semantic_helper_edge_cases():
     assert semantic_config_service.expression_uses_physical_column("", {"amount"}) is False
     assert semantic_config_service.expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
     assert semantic_config_service.expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
-    assert semantic_config._quote_identifier("a`b") == "`a``b`"
     assert semantic_history_learning_service._parse_json_object({"a": 1}) == {"a": 1}
     assert semantic_history_learning_service._parse_json_object("{bad") == {}
     assert semantic_history_learning_service._parse_json_object("[1]") == {}
@@ -1057,200 +920,6 @@ def test_generate_history_learning_suggestions_by_llm(monkeypatch):
     assert suggestions["metrics"][0]["name"] == "客单价"
 
 
-def test_prefill_parse_and_error_branches(monkeypatch):
-    assert asyncio.run(semantic_config._prefill_by_llm([])) == {"fields": []}
-    assert asyncio.run(semantic_config._prefill_by_llm([{"columns": [{"name": "id"}]}])) == {"fields": []}
-
-    async def fake_raise(*_args, **_kwargs):
-        raise RuntimeError("llm failed")
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_raise)
-    fallback_result = asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}]))
-    assert fallback_result == {"fields": [{"table": "orders", "table_alias": "orders", "column": "id", "role": "dimension", "expression": "`id`", "name": "id"}]}
-
-    async def fake_incomplete(*_args, **_kwargs):
-        return []
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_incomplete)
-    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}])) == fallback_result
-
-
-def test_prefill_prompt_includes_business_context(monkeypatch):
-    captured = {}
-
-    async def fake_recommend(table_payload, business_context="", max_metrics=10, **_kwargs):
-        captured["table_payload"] = table_payload
-        captured["business_context"] = business_context
-        captured["max_metrics"] = max_metrics
-        return [{"table": "orders", "column": "amount_sum", "source_column": "amount_sum", "role": "metric", "field_name": "amount_sum_sum", "name": "销售额合计", "agg": "SUM", "expression": "SUM(`amount_sum`)"}]
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
-    result = asyncio.run(semantic_config._prefill_by_llm(
-        [{"table_name": "orders", "columns": [{"name": "amount_sum", "type": "decimal"}]}],
-        business_context="销售额用于经营分析",
-    ))
-
-    assert result["fields"][0]["role"] == "dimension"
-    assert result["fields"][1]["role"] == "metric"
-    assert captured["business_context"] == "销售额用于经营分析"
-    assert captured["max_metrics"] == semantic_config.PREFILL_MAX_RECOMMENDED_METRICS
-
-
-def test_prefill_prompt_builders_cover_guidance_branches():
-    prompt = build_metric_recommendation_prompt(
-        table_payload=[{"table": "orders", "columns": [{"name": "amount", "type": "decimal"}]}],
-        business_context="金额按元统计",
-        max_metrics=3,
-    )
-    assert "金额按元统计" in prompt
-    assert "最多推荐 3 个" in prompt
-    assert '"tables"' in prompt
-
-
-def test_metric_recommendation_parser_filters_invalid_items():
-    table_payload = [{"table": "orders", "columns": [
-        {"name": "amount"},
-        {"name": "price"},
-        {"name": "order_id"},
-    ]}]
-    raw_metrics = [
-        {"table": "orders", "column": "amount", "name": "金额合计", "agg": "SUM", "expression": "DROP TABLE x"},
-        {"table": "orders", "column": "missing", "name": "缺失字段", "agg": "SUM"},
-        {"table": "orders", "column": "price", "name": "价格中位数", "agg": "MEDIAN"},
-        {"table": "orders", "column": "amount", "name": "重复金额", "agg": "SUM"},
-        {"table": "orders", "column": "order_id", "name": "订单数", "agg": "COUNT"},
-    ]
-    parsed = semantic_config._parse_metric_recommendation_response(json.dumps({"metrics": raw_metrics}, ensure_ascii=False), table_payload, max_metrics=10)
-
-    assert parsed == [{
-        "table": "orders",
-        "table_alias": "orders",
-        "column": "amount",
-        "source_column": "amount",
-        "role": "metric",
-        "field_name": "amount_sum",
-        "name": "金额合计",
-        "agg": "SUM",
-        "expression": "SUM(`amount`)",
-    }, {
-        "table": "orders",
-        "table_alias": "orders",
-        "column": "order_id",
-        "source_column": "order_id",
-        "role": "metric",
-        "field_name": "order_id_count",
-        "name": "订单数",
-        "agg": "COUNT",
-        "expression": "COUNT(`order_id`)",
-    }]
-
-
-def test_metric_recommendation_parser_normalizes_display_name():
-    table_payload = [{"table": "enrollments", "columns": [{"name": "student_id"}]}]
-    parsed = semantic_config._parse_metric_recommendation_response(
-        json.dumps({
-            "metrics": [
-                {
-                    "table": "enrollments",
-                    "column": "student_id",
-                    "name": "选课学生ID，关联 students.student_id",
-                    "agg": "COUNT",
-                    "expression": "COUNT(`student_id`)",
-                }
-            ]
-        }, ensure_ascii=False),
-        table_payload,
-        max_metrics=10,
-    )
-
-    assert parsed[0]["name"] == "选课学生ID"
-    assert len(parsed[0]["name"]) <= semantic_config.PREFILL_DISPLAY_NAME_MAX_LENGTH
-
-
-def test_metric_recommendation_parser_dedupes_names_by_table_alias():
-    table_payload = [{"table": "users", "columns": [{"name": "score"}]}]
-    parsed = semantic_config._parse_metric_recommendation_response(
-        json.dumps({
-            "metrics": [
-                {
-                    "table": "users",
-                    "column": "score",
-                    "name": "分数",
-                    "agg": "SUM",
-                    "expression": "SUM(`score`)",
-                }
-            ]
-        }, ensure_ascii=False),
-        table_payload,
-        max_metrics=10,
-        table_alias_map={"users": ["users", "users_2"]},
-    )
-
-    assert [item["table_alias"] for item in parsed] == ["users", "users_2"]
-    assert parsed[0]["name"] != parsed[1]["name"]
-    assert parsed[0]["name"].endswith("分数")
-    assert parsed[1]["name"].endswith("分数")
-
-
-def test_prefill_dimension_names_are_deduped_by_table_alias(monkeypatch):
-    async def fake_recommend(*_args, **_kwargs):
-        return {
-            "fields": [
-                {"table": "orders", "table_alias": "orders", "column": "order_id", "role": "dimension", "expression": "`order_id`", "name": "订单编号"},
-                {"table": "order_items", "table_alias": "order_items", "column": "order_id", "role": "dimension", "expression": "`order_id`", "name": "订单编号"},
-            ],
-            "metrics": [],
-        }
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
-    result = asyncio.run(semantic_config._prefill_by_llm([
-        {"table_name": "orders", "table_alias": "orders", "columns": [{"name": "order_id", "description": "订单编号"}]},
-        {"table_name": "order_items", "table_alias": "order_items", "columns": [{"name": "order_id", "description": "订单编号"}]},
-    ]))
-
-    names = [item["name"] for item in result["fields"]]
-    assert len(names) == len(set(names))
-    assert all(name.endswith("订单编号") or name.endswith("订单编号2") for name in names)
-
-
-def test_semantic_prefill_routes_missing_and_success(monkeypatch):
-    manager = _patch_semantic_route_user_and_manager(monkeypatch)
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
-
-    short_missing_ds = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="missing",
-        config_id="cfg_a",
-        tables=[],
-    ), object())))
-    short_missing_config = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="missing",
-        tables=[],
-    ), object())))
-    short_success = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_a",
-        tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
-    ), object())))
-    public_denied = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_public",
-        tables=[],
-    ), object())))
-    admin_public_success = _response_payload(asyncio.run(semantic_config.admin_semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_public",
-        tables=[],
-    ), object())))
-
-    assert manager.config["id"] == "cfg_a"
-    assert short_missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert short_missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert short_success["data"]["total"] == 1
-    assert public_denied["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
-    assert admin_public_success["data"]["total"] == 1
-
-
 def test_semantic_config_route_failure_branches(monkeypatch):
     class FailingCreateManager(_FakeSemanticManager):
         async def create_async(self, **kwargs):
@@ -1309,15 +978,9 @@ def test_semantic_route_exception_branches(monkeypatch):
         SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
         object(),
     )))
-    short_prefill_error = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_a",
-        tables=[],
-    ), object())))
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
     assert list_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert create_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-    assert short_prefill_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert update_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     class RaisingMutationManager(_FakeSemanticManager):
@@ -1469,61 +1132,6 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
     assert asyncio.run(semantic_config._load_history_conversation_context("conv_agent", "user_a")) is None
 
 
-def test_prefill_dedupe_and_recommendation_parse_extra_branches():
-    long_alias = "ods_marketing_channel_role_name"
-    items = [
-        {"name": "金额", "table_alias": long_alias, "table": "orders"},
-        {"name": "金额", "table_alias": "seller_orders", "table": "orders"},
-        {"name": "金额", "table_alias": "", "table": "orders"},
-        {"name": "", "table_alias": "orders", "table": "orders"},
-        {"name": "", "table_alias": "orders", "table": "orders"},
-    ]
-    deduped = semantic_config._dedupe_prefill_display_names(items)
-    names = [item["name"] for item in deduped]
-
-    assert names[0] == "name_金额"
-    assert names[1] == "orders_金额"
-    assert names[2] == "orders_金额2"
-    assert names[3] == ""
-    assert names[4] == "2"
-    table_payload = [{"table": "orders", "columns": [{"name": "amount"}]}]
-    recommendation = semantic_config._parse_prefill_recommendation_response(json.dumps({
-        "fields": [{"table": "orders", "column": "amount", "name": "订单金额"}],
-        "metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"}],
-    }, ensure_ascii=False), table_payload, max_metrics=1)
-    metric_only = semantic_config._parse_metric_recommendation_response(json.dumps({
-        "metrics": [
-            {"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"},
-            {"table": "orders", "column": "amount", "agg": "AVG", "name": "均额"},
-        ],
-    }, ensure_ascii=False), table_payload, max_metrics=1)
-
-    assert recommendation["fields"][0]["name"] == "订单金额"
-    assert recommendation["metrics"][0]["name"] == "销售额"
-    assert len(metric_only) == 1
-
-
-def test_prefill_by_llm_handles_empty_recommendation_list_and_failure(monkeypatch):
-    tables = [{"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]}]
-
-    async def fake_list_recommendation(*_args, **_kwargs):
-        return [{"table": "orders", "table_alias": "orders", "column": "amount", "role": "metric", "name": "销售额", "expression": "SUM(`amount`)"}]
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_list_recommendation)
-    list_result = asyncio.run(semantic_config._prefill_by_llm(tables))
-    assert [item["role"] for item in list_result["fields"]].count("metric") == 1
-
-    async def raise_recommendation(*_args, **_kwargs):
-        raise RuntimeError("llm failed")
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", raise_recommendation)
-    fallback = asyncio.run(semantic_config._prefill_by_llm(tables))
-    assert fallback["fields"]
-    assert all(item["role"] == "dimension" for item in fallback["fields"])
-    assert asyncio.run(semantic_config._prefill_by_llm([])) == {"fields": []}
-    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "", "columns": []}])) == {"fields": []}
-
-
 def test_history_learning_normalization_duplicate_and_review_branches():
     datasource = {
         "ds_tables": [
@@ -1614,26 +1222,6 @@ def test_semantic_config_remaining_helper_branch_edges():
     )
     assert table_context[0]["columns"] == [{"name": "id", "type": "bigint", "description": ""}]
 
-    assert semantic_config._build_prefill_alias_map([
-        {"table_name": "", "table_alias": "skip"},
-        {"table_name": "orders", "table_alias": ""},
-        {"table_name": "orders", "table_alias": "orders"},
-        {"table_name": "orders", "table_alias": "orders"},
-    ]) == {"orders": ["orders"]}
-
-    long_name = "字段名" * 12
-    deduped = semantic_config._dedupe_prefill_display_names([
-        {"name": long_name, "table_alias": "别名", "table": "t"},
-        {"name": long_name, "table_alias": "", "table": "t"},
-        {"name": "指标", "table_alias": "!!!", "table": "t"},
-        {"name": "指标", "table_alias": "!!!", "table": "t"},
-    ])
-    assert deduped[0]["name"] == long_name[:semantic_config.PREFILL_DISPLAY_NAME_MAX_LENGTH]
-    assert deduped[1]["name"].endswith("2")
-    assert len(deduped[1]["name"]) == semantic_config.PREFILL_DISPLAY_NAME_MAX_LENGTH
-    assert deduped[2]["name"] == "指标"
-    assert deduped[3]["name"] == "指标2"
-
     assert semantic_history_learning_service._extract_expression_columns("SUM() + orders. + `amount`") == {"amount"}
     indexes = semantic_history_learning_service._build_existing_semantic_indexes({
         "metrics": ["bad", {"name": "", "table": "orders", "expression": ""}],
@@ -1674,40 +1262,6 @@ def test_semantic_config_remaining_helper_branch_edges():
         "content": "说明",
         "reason": "历史反馈",
     }, "issues", sample_map, datasource)["title"] == "问题"
-
-
-def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
-    table_payload = [{"table": "orders", "columns": [{"name": "amount"}]}]
-    captured = {}
-
-    class FakeLlm:
-        async def ainvoke(self, messages):
-            captured["message_type"] = getattr(messages[0], "type", "")
-            return SimpleNamespace(content=json.dumps({
-                "fields": [{"table": "orders", "column": "amount", "name": "金额"}],
-                "metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"}],
-            }, ensure_ascii=False))
-
-    monkeypatch.setattr(semantic_prefill_service, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
-    recommendation = asyncio.run(semantic_prefill_service._call_metric_recommendation_llm(
-        table_payload,
-        business_context="经营分析",
-        max_metrics=1,
-        table_alias_map={"orders": ["orders"]},
-    ))
-    assert captured["message_type"] == "human"
-    assert recommendation["metrics"][0]["name"] == "销售额"
-
-    manager = _patch_semantic_route_user_and_manager(monkeypatch)
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
-    short_incomplete = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="cfg_a",
-        tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
-    ), object())))
-    assert short_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-
-    assert manager.config["id"] == "cfg_a"
 
 
 def test_semantic_config_route_optional_update_and_missing_current_branches(monkeypatch):
@@ -1850,15 +1404,6 @@ def test_semantic_config_remaining_history_helper_edges():
         "dimensions": [{"table": ""}],
         "relationships": [{"left_table": "orders", "right_table": ""}],
     }) == {"orders"}
-
-    duplicate_items = [
-        {"name": "金额", "table_alias": "a", "table": "orders"},
-        {"name": "金额", "table_alias": "long_alias", "table": "orders"},
-    ]
-    deduped = semantic_config._dedupe_prefill_display_names(duplicate_items)
-    assert deduped[0]["name"].endswith("金额")
-    assert deduped[1]["name"].endswith("金额")
-    assert deduped[0]["name"] != deduped[1]["name"]
 
     assert "amount" in semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + t.price + 'literal_text'")
 

@@ -652,31 +652,6 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
     existing_questions: List[str] = Field(default_factory=list, description="已有问题，用于避免重复")
 
 
-class SemanticPrefillColumn(BaseModel):
-    """语义预填列信息"""
-    name: str = Field(..., description="字段名")
-    type: Optional[str] = Field(default=None, description="字段类型")
-    mysql_type: Optional[str] = Field(default=None, description="MySQL 字段类型")
-    hive_type: Optional[str] = Field(default=None, description="Hive 字段类型")
-    description: Optional[str] = Field(default=None, description="字段描述")
-
-
-class SemanticPrefillTable(BaseModel):
-    """语义预填表信息"""
-    table_name: str = Field(..., description="表名")
-    table_alias: Optional[str] = Field(default=None, description="当前指标集中的表角色别名")
-    description: Optional[str] = Field(default=None, description="表描述")
-    columns: List[SemanticPrefillColumn] = Field(default_factory=list, description="字段列表")
-
-
-class SemanticPrefillRequest(BaseModel):
-    """语义字段预填请求（短路由版）"""
-    datasource_id: str = Field(..., description="数据源 ID")
-    config_id: str = Field(..., description="语义配置 ID")
-    tables: List[SemanticPrefillTable] = Field(default_factory=list, description="当前待预填的数据表列表")
-    business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
-
-
 # ============ 树形过滤条件模型（参考 Cube.js 设计）============
 
 # 使用 ForwardRef 解决循环引用

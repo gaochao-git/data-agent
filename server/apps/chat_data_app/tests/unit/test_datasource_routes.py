@@ -27,7 +27,6 @@ from apps.chat_data_app.routers import datasource_public as datasource_public_ro
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
-from apps.chat_data_app.services.semantic.run import semantic_prefill_service
 from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime, spec_service as dashboard_spec_service
 from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
 from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
@@ -1166,71 +1165,6 @@ def test_datasource_semantic_health_reports_physical_schema_drift(monkeypatch):
     assert "physical_column_removed" in schema_issue_types
     assert "physical_column_added" not in schema_issue_types
     assert "physical_table_added" not in schema_issue_types
-
-
-def test_semantic_prefill_passes_tables_and_business_context_to_llm(monkeypatch):
-    from apps.chat_data_app.schema import SemanticPrefillRequest
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["semantic_configs"] = [{"id": "sc_a", "name": "订单分析", "scope_type": "private", "create_by": "u1"}]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(semantic_config_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1"))
-
-    captured = {}
-
-    async def _fake_prefill(tables, business_context=""):
-        captured["tables"] = tables
-        captured["business_context"] = business_context
-        return {"fields": [{"table": "orders", "column": "amount_sum", "role": "metric", "expression": "`amount_sum`"}]}
-
-    monkeypatch.setattr(semantic_config_routes, "_prefill_by_llm", _fake_prefill)
-
-    resp = asyncio.run(semantic_config_routes.semantic_prefill(SemanticPrefillRequest(
-        datasource_id="ds_a",
-        config_id="sc_a",
-        business_context="销售额用于经营分析",
-        tables=[{
-            "table_name": "orders",
-            "columns": [{"name": "amount_sum", "type": "decimal", "description": "销售额合计"}],
-        }],
-    ), object()))
-    data = _payload(resp)
-
-    assert data["status"] == "success"
-    assert captured["tables"][0]["table_name"] == "orders"
-    assert captured["business_context"] == "销售额用于经营分析"
-
-
-def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
-    captured = {}
-
-    async def _fake_recommend(table_payload, business_context="", max_metrics=10, **_kwargs):
-        captured["table_payload"] = table_payload
-        captured["business_context"] = business_context
-        captured["max_metrics"] = max_metrics
-        return {
-            "fields": [
-                {"table": "orders", "table_alias": "orders", "column": "order_id", "role": "dimension", "expression": "`order_id`", "name": "订单编号"},
-                {"table": "orders", "table_alias": "orders", "column": "amount", "role": "dimension", "expression": "`amount`", "name": "订单金额"},
-            ],
-            "metrics": [],
-        }
-
-    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", _fake_recommend)
-
-    result = asyncio.run(semantic_config_routes._prefill_by_llm([{
-        "table_name": "orders",
-        "columns": [
-            {"name": "order_id", "type": "bigint"},
-            {"name": "amount", "type": "decimal"},
-        ],
-    }]))
-
-    assert captured["table_payload"][0]["table"] == "orders"
-    assert result["fields"] == [
-        {"table": "orders", "table_alias": "orders", "column": "order_id", "role": "dimension", "expression": "`order_id`", "name": "订单编号"},
-        {"table": "orders", "table_alias": "orders", "column": "amount", "role": "dimension", "expression": "`amount`", "name": "订单金额"},
-    ]
 
 
 def test_create_query_task_schedules_background_run(monkeypatch):

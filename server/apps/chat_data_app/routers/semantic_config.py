@@ -18,7 +18,6 @@ from ..schema import (
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
     SemanticOssieImportRequest,
-    SemanticPrefillRequest,
 )
 from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
@@ -54,9 +53,6 @@ from . import JSON_API_RESPONSES
 
 router = APIRouter(tags=["ChatData 语义模型"], responses=JSON_API_RESPONSES)
 
-PREFILL_MAX_RECOMMENDED_METRICS = 10
-PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
-PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
 # 单次批量切换的指标集数量上限：限制 UPDATE ... IN 的规模与整批回滚成本。
 SEMANTIC_BATCH_TOGGLE_MAX_IDS = 200
 
@@ -137,26 +133,6 @@ def _build_history_learning_service() -> SemanticHistoryLearningService:
         suggestion_loader=_generate_history_learning_suggestions_by_llm,
         history_matcher=_history_belongs_to_config,
     )
-
-
-# 自动预填实现已下沉 semantic_prefill_service；此处保留兼容导出，
-# 供既有测试与端点内部按原模块属性名引用（monkeypatch 语义不变）。
-from ..services.semantic.run.semantic_prefill_service import (  # noqa: E402
-    PREFILL_ALLOWED_METRIC_AGGS,
-    PREFILL_DISPLAY_NAME_MAX_LENGTH,
-    PREFILL_MAX_RECOMMENDED_METRICS,
-    _build_prefill_alias_map,
-    _build_prefill_dimension_fields,
-    _build_prefill_table_payload,
-    _dedupe_prefill_display_names,
-    _normalize_prefill_display_name,
-    _parse_metric_items,
-    _parse_metric_recommendation_response,
-    _parse_prefill_dimension_name_map,
-    _parse_prefill_recommendation_response,
-    _quote_identifier,
-    prefill_by_llm as _prefill_by_llm,
-)
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs")
@@ -546,37 +522,6 @@ async def import_admin_ossie_semantic_configs(
         return business_response(msg="Ossie 导入失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
-async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):
-    """语义字段预填短路由，前端直接传待预填表结构。"""
-    try:
-        current_user = _get_current_user(request)
-        user_id = str(current_user.user_id)
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(payload.datasource_id)
-        if not datasource:
-            return business_response(msg=f"数据源不存在: {payload.datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        config = await get_semantic_config_service().get_config_async(payload.datasource_id, payload.config_id)
-        if not config:
-            return business_response(msg=f"语义配置不存在: {payload.config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not can_mutate_semantic_config(config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
-
-        target_tables = [table.model_dump() for table in payload.tables]
-        prefill_result = await _prefill_by_llm(
-            target_tables,
-            payload.business_context or "",
-        )
-        if prefill_result is None:
-            return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-        fields = prefill_result.get("fields", [])
-
-        return business_response(data={"fields": fields, "total": len(fields)}, msg="自动预填完成")
-    except Exception as e:
-        logger.error(f"语义字段预填失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
 def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Dict[str, str], Optional[str]]:
     """归一化 conflict_actions 为「模型名 -> 小写动作」。
 
@@ -590,19 +535,6 @@ def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Di
     if invalid_actions:
         return actions, f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}"
     return actions, None
-
-
-@router.post("/semantic/prefill")
-async def semantic_prefill(payload: SemanticPrefillRequest, request: Request):
-    """按个人指标集预填语义字段。"""
-    return await _semantic_prefill_route(payload, request, admin_manage=False)
-
-
-@router.post("/admin/semantic/prefill")
-async def admin_semantic_prefill(payload: SemanticPrefillRequest, request: Request):
-    """后台按公共指标集预填语义字段。"""
-    _get_current_user(request)
-    return await _semantic_prefill_route(payload, request, admin_manage=True)
 
 
 async def _learn_semantic_config_from_history_route(
