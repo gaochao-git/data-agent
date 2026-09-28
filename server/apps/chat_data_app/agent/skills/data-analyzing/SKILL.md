@@ -18,7 +18,7 @@ metadata:
 |---|---|---|---|
 | 查询与分析 | 查个数、看明细、统计、汇总、趋势、排行、对比、同环比、占比、Top N | `references/analysis/query.md` | 系统落盘的查询结果，前端按 `result_id` 展示 |
 | 看板生成 | 生成看板、做分析面板、看板草案、预览看板、沉淀分析视图 | `references/dashboard/workflow.md` + `references/dashboard/guide.md` | `outputs/*.dashboard.json` |
-| 质量检查与治理 | 检查语义模型质量、覆盖度、口径一致性、补齐指标维度、优化模型、产出模型 YAML | `references/governance/quality-check.md` | 质量报告 / `outputs/*.yaml` |
+| 质量检查与治理 | 检查语义模型质量、覆盖度、口径一致性、补齐指标维度、优化模型、产出模型 YAML | `references/governance/quality-check.md` | 质量报告 / `outputs/governance/` 下交付的模型 YAML |
 
 三类任务一次只走一条主路径。「先查数，满意后再沉淀成看板」是两个连续轮次，各自按对应能力文档执行，不要在一条路径里预读另一条路径的资料。
 
@@ -69,7 +69,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 ## 通用边界
 
 - 不编造指标、维度、表、字段、枚举或查询结果；确认不了的口径就问，不猜。
-- 产物只写入当前会话 `outputs/`，不改写 `/mnt/user-data/workspace/semantic/` 下已物化的原模型文件。
+- 治理修改在统一治理目录 `/mnt/user-data/workspace/governance/` 下的拷贝件上进行，不改写 `/mnt/user-data/workspace/semantic/` 下已物化的原模型文件；自检通过后把文件复制到 `outputs/governance/` 交付，治理中间态文件不进 `outputs/`。
 - 每次调用工具前先输出一句短句说明当前动作，工具返回后用一句短句概括发现；不把参数、JSON、DSL、SQL 或原始工具返回原文写进用户正文，除非用户明确要求解释技术原因。
 
 ## 完成判定
