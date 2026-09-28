@@ -2,4 +2,5 @@
 # 扫描工具：server/apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline
 # 路径相对 server/apps/chat_data_app；每行「相对路径:函数名」，# 开头为注释。
 # 规则：存量债务只能收敛不能增长——新函数不允许登记；修掉一处就删一行。
-services/semantic/run/chat_data_ossie_importer.py:merge_carried_column_dicts
+# 2026-09-28 清空：merge_carried_column_dicts 已重构达标（16→门禁内），当前扫描 0 超标。
+# 此后新增函数不得登记。

@@ -52,7 +52,7 @@ step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- sc
 step "frontend-type"  bash -c "cd web-vue && npm run type-check"
 
 if [[ "$MODE" == "--all" ]]; then
-  # 口径与 AGENTS.md §39 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置。
+  # 口径与 AGENTS.md §3 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置。
   # 独立数据文件 .coverage.gate + 先擦除：防止与历史运行的数据叠加（否则行/分支阈值会读到被污染的合并数据）。
   # 行/分支双门禁由 coverage_thresholds.py 校验（两阈值满足时合并必 ≥95，故无需 --cov-fail-under）
   step "coverage"       bash -c "cd server && rm -f .coverage.gate && COVERAGE_FILE=.coverage.gate '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing && COVERAGE_FILE=.coverage.gate '$PY' ../scripts/checks/coverage_thresholds.py"
