@@ -47,6 +47,7 @@ def test_load_injection_images_records_empty_path_and_resolve_failures(tmp_path)
     blocks, sources, failures = ii._load_injection_images(
         str(tmp_path),
         [(ii.READ_IMAGE_TOOL_NAME, ""), (ii.READ_IMAGE_TOOL_NAME, "nonexistent/a.png")],
+        max_image_size=5 * 1024 * 1024,
     )
     assert blocks == []
     assert sources == {ii.USER_UPLOAD_SOURCE: [], ii.READ_IMAGE_TOOL_NAME: []}
@@ -58,7 +59,7 @@ def test_load_injection_images_records_empty_path_and_resolve_failures(tmp_path)
 
 def test_load_injection_images_size_suffix_and_dedup_guards(tmp_path, monkeypatch):
     """超限（218->219）、不支持格式（221->222）、同路径去重都按预期跳过。"""
-    monkeypatch.setattr(ii, "MAX_IMAGE_SIZE", 100)  # 1x1 PNG 约 70 字节，200 字节文件超限
+    # 大小上限由调用方传参（运行期经配置服务读取）：1x1 PNG 约 70 字节，200 字节文件超限
     # 可见路径 /mnt/user-data/workspace/* 映射到 {workspace_root}/workspace/*
     ws = tmp_path / "workspace"
     ws.mkdir()
@@ -75,6 +76,7 @@ def test_load_injection_images_size_suffix_and_dedup_guards(tmp_path, monkeypatc
             (ii.USER_UPLOAD_SOURCE, f"{visible}/ok.png"),
             (ii.USER_UPLOAD_SOURCE, f"{visible}/ok.png"),
         ],
+        max_image_size=100,
     )
     assert len(blocks) == 1
     assert sources[ii.USER_UPLOAD_SOURCE] == [f"{visible}/ok.png"]

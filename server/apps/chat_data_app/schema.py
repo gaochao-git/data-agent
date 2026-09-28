@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 from .chart_types import ChartType
-from .services.runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS
+from .services.runtime_config import MAX_QUERY_TIMEOUT_SECONDS
 from .services.semantic.core.input_validator import FILTER_OPERATORS
 
 
@@ -66,42 +66,6 @@ def _normalize_recommended_questions(value: Any) -> List[str]:
     return result
 
 
-# ============ NL2SQL 请求模型 ============
-
-class NL2SQLRequest(BaseModel):
-    """NL2SQL 请求模型"""
-    query: str = Field(..., min_length=1, description="用户的自然语言查询")
-    datasource_id: Optional[str] = Field(
-        default=None,
-        description="指定使用的数据源ID"
-    )
-    conversation_id: Optional[str] = Field(
-        default=None,
-        description="对话ID（用于多轮对话）"
-    )
-    mode: Optional[str] = Field(
-        default="generate",
-        description="执行模式：generate（仅生成SQL）或 query（生成并执行）"
-    )
-    semantic_config_id: Optional[str] = Field(
-        default=None,
-        description="语义配置ID（指定使用哪个语义配置）"
-    )
-
-# ============ SQL 编辑器相关模型 ============
-
-class QuickSqlRequest(BaseModel):
-    """快速 SQL 生成请求（用于 SQL 编辑器的 AI 辅助）"""
-    # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD(4000) 对齐，防止超长输入进 checkpoint 膨胀
-    query: str = Field(..., min_length=1, max_length=4000, description="自然语言查询")
-    datasource_id: str = Field(..., description="数据源ID")
-    member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
-    conversation_id: Optional[str] = Field(default=None, description="SQL 辅助会话ID")
-    model_id: Optional[str] = Field(default=None, description="指定生成模型；缺省用系统默认模型")
-    enable_thinking: Optional[bool] = Field(default=None, description="用户显式开关深度思考；None 跟随模型默认")
-    thinking_effort: Optional[str] = Field(default=None, description="思考档位；None 跟随模型默认")
-
-
 class ExecuteSqlRequest(BaseModel):
     """SQL 执行运行时请求（供异步任务、智能体和内部复用）"""
     sql: str = Field(..., min_length=1, description="要执行的 SQL 语句")
@@ -111,7 +75,7 @@ class ExecuteSqlRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, description="来源会话ID")
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
-    limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
+    limit: Optional[int] = Field(default=None, description="结果行数限制；为空时由服务端按运行时配置解析默认值")
     timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
     query_type: Optional[str] = Field(default="sql", description="内部查询类型: sql | builder | agent")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
@@ -129,7 +93,7 @@ class QueryTaskCreateRequest(BaseModel):
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     sql: List[str] = Field(default_factory=list, description="要执行的 SQL 语句列表；builder 查询由服务端根据 DSL 编译")
-    limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
+    limit: Optional[int] = Field(default=None, description="结果行数限制；为空时由服务端按运行时配置解析默认值")
     timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
     query_type: Literal["sql", "builder"] = Field(default="sql", description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
@@ -224,6 +188,12 @@ class AgentScheduleEnabledRequest(BaseModel):
     """后台强制启停单个定时任务请求"""
 
     enabled_flag: int = Field(..., ge=0, le=1, description="启用状态：1-启用，0-停用")
+
+
+class ChatDataSettingUpsertRequest(BaseModel):
+    """后台配置变量覆盖请求（key 限注册表白名单；已软删的 key 自动复用原行恢复）"""
+
+    setting_value: str = Field(..., min_length=1, max_length=2048, description="变量值（字符串存储，按注册类型解析）")
 
 
 # ============ 表管理相关模型 ============

@@ -15,24 +15,19 @@ from fastapi import UploadFile
 from utils.logger import get_logger
 
 from ...daos.uploaded_file_dao import UploadedFileDao
-from ..runtime_config import read_positive_int_env
+from ..setting_service import get_upload_size_limit
 from .conversation_workspace import get_conversation_created_date, resolve_uploads_root
 
 logger = get_logger(__name__)
 
-# 单文件上传上限：配置用 MB（CHAT_DATA_MAX_UPLOAD_SIZE_MB，正整数），字节值由它派生；
-# 模块级求值，改 env 后需重启进程。
+# 单文件上传上限：配置用 MB（CHAT_DATA_MAX_UPLOAD_SIZE_MB，正整数），运行期经
+# 后台配置变量表读取（表覆盖 > env > 默认 50），改后最迟 30s 生效，无需重启。
 # 前端 AnalysisConversation.vue 另有一份 50MB 的**客户端预检**（MAX_FILE_SIZE），
 # 只用于提前给出提示、不代替本处校验；把上限调大时须同步前端，否则大文件会在前端被拦。
-MAX_UPLOAD_SIZE_MB = read_positive_int_env("CHAT_DATA_MAX_UPLOAD_SIZE_MB", 50)
-MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # 多模态图片附件限制：作为 content blocks 直接进入模型消息的准入条件
-from apps.chat_data_app.agent.workspace.uploaded_file_parser import (  # noqa: F401
-    IMAGE_EXTENSIONS,
-    MAX_IMAGE_SIZE,
-)
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS  # noqa: F401
 MAX_IMAGES_PER_MESSAGE = 4
 
 # 允许上传的文件类型白名单（唯一来源；与前端 AnalysisConversation.vue 的 ACCEPTED_FILE_TYPES
@@ -104,12 +99,13 @@ class UploadedFileService:
         full_path = uploads_root / storage_name
         temporary_path = uploads_root / f".{storage_name}.{uuid.uuid4().hex}.upload"
         file_size = 0
+        max_upload_size_mb, max_upload_size = await get_upload_size_limit()
         try:
             with temporary_path.open("xb") as output:
                 while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                     file_size += len(chunk)
-                    if file_size > MAX_UPLOAD_SIZE:
-                        raise ValueError(f"文件大小不能超过{MAX_UPLOAD_SIZE_MB}MB")
+                    if file_size > max_upload_size:
+                        raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
                     output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())

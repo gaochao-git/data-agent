@@ -40,7 +40,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 以下硬约束不因走哪条路径而放宽：
 
-- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`。先用 `dir_list` 浏览清单，再用 `file_grep` 按业务关键词定位候选，只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
+- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`。先用 `dir_list` 浏览清单，再用 `file_grep` 按业务关键词定位候选（宽泛词命中过多时先 `output_mode="files_with_matches"` 收敛到文件），只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
 - 指标、维度、业务口径不明确时必须澄清，不能凭常识编造，也不能用 SQL 绕过。
 - 当前用户的可用执行对象清单不进系统提示词：涉及查询时先调 `data_analyzing_tool` 的 `list_execution_targets` 实时获取，`member_datasource_ids` 只能从返回清单中选（细则见 `references/analysis/query.md`「1. 获取执行对象清单」）。
 - 一次 `data_analyzing_tool` 调用只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。

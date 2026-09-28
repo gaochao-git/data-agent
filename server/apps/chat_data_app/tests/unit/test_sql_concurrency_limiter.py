@@ -71,17 +71,21 @@ def test_sql_user_datasource_limiter_allows_different_users(monkeypatch):
 
 
 def test_sql_user_datasource_limiter_env_and_key_helpers(monkeypatch):
-    monkeypatch.delenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, raising=False)
-    assert limiter.get_sql_user_datasource_max_concurrency() == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
+    async def _get_max_concurrency():
+        return await limiter.get_sql_user_datasource_max_concurrency()
 
+    monkeypatch.delenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, raising=False)
+    assert asyncio.run(_get_max_concurrency()) == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
+
+    # 非法/越界 env 值经配置服务解析失败后回退注册表默认（2）
     monkeypatch.setenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, "bad")
-    assert limiter.get_sql_user_datasource_max_concurrency() == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
+    assert asyncio.run(_get_max_concurrency()) == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
 
     monkeypatch.setenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, "0")
-    assert limiter.get_sql_user_datasource_max_concurrency() == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
+    assert asyncio.run(_get_max_concurrency()) == limiter.DEFAULT_SQL_USER_DATASOURCE_MAX_CONCURRENCY
 
     monkeypatch.setenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, "3")
-    assert limiter.get_sql_user_datasource_max_concurrency() == 3
+    assert asyncio.run(_get_max_concurrency()) == 3
 
     assert limiter.build_sql_concurrency_key(None, None) == "anonymous:unknown"
     assert limiter.build_sql_concurrency_key("  ", {}) == "anonymous:unknown"

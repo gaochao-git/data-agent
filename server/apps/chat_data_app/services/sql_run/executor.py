@@ -32,6 +32,7 @@ from ..datasource.credentials import (
 _apply_socket_timeout = apply_hive_socket_timeout
 SOCKET_TIMEOUT_SECONDS = HIVE_SOCKET_TIMEOUT_SECONDS
 from ..runtime_config import DEFAULT_ROW_LIMIT, MAX_QUERY_TIMEOUT_SECONDS, normalize_row_limit
+from ..setting_service import get_runtime_setting
 from .parser import extract_top_level_limit_count
 from .sql_guard import (  # noqa: F401  ALLOWED_SQL_TYPES 为历史兼容 re-export，测试与外部仍从本模块引用
     ALLOWED_SQL_TYPES,
@@ -43,11 +44,10 @@ from .sql_guard import (  # noqa: F401  ALLOWED_SQL_TYPES 为历史兼容 re-exp
 
 logger = get_logger(__name__)
 
-# ============ 可配置参数（从环境变量读取） ============
+# ============ 可配置参数 ============
 
-DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_MYSQL_QUERY_TIMEOUT_SECONDS", "60"))
-DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_HIVE_QUERY_TIMEOUT_SECONDS", "600"))
-DEFAULT_HTTP_POLL_INTERVAL_MS = int(os.getenv("CHAT_DATA_HTTP_POLL_INTERVAL_MS", "1500"))
+# MySQL/Hive 查询默认超时已迁移到后台配置变量表（CHAT_DATA_MYSQL/HIVE_QUERY_TIMEOUT_SECONDS，
+# 运行期热值经 resolve_query_timeout 读取）；HTTP 轮询间隔同（CHAT_DATA_HTTP_POLL_INTERVAL_MS）。
 
 # 允许的 SQL 操作类型（从环境变量读取，默认仅 SELECT；定义与规则实现在 sql_guard）
 #
@@ -118,8 +118,9 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
     return {key: value for key, value in summary.items() if value is not None}
 
 
-def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> int:
-    """解析查询超时时间，优先使用显式传参（封顶 MAX_QUERY_TIMEOUT_SECONDS），其次按数据源类型取默认值。"""
+async def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> int:
+    """解析查询超时时间：显式传参优先（封顶 MAX_QUERY_TIMEOUT_SECONDS），
+    否则按数据源类型读配置变量表热值（表 > env > 注册表默认 60/600 秒）。"""
     if timeout is not None:
         normalized_timeout = int(timeout)
         if normalized_timeout > 0:
@@ -127,10 +128,8 @@ def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> in
 
     normalized_source_type = str(source_type or "").strip().lower()
     if normalized_source_type == "hive":
-        return DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS
-    if normalized_source_type == "mysql":
-        return DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
-    return DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
+        return await get_runtime_setting("CHAT_DATA_HIVE_QUERY_TIMEOUT_SECONDS")
+    return await get_runtime_setting("CHAT_DATA_MYSQL_QUERY_TIMEOUT_SECONDS")
 
 
 def _friendly_sql_error(engine: str, err: Exception) -> str:
@@ -367,17 +366,19 @@ def _get_sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
     return sql_operation_type(sql, source_type)
 
 
-def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str]:
+def validate_sql(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Tuple[bool, str]:
     """
     验证 SQL 是否安全（历史兼容门面，规则实现在 sql_guard 管线）
 
     Args:
         sql: SQL 语句
+        source_type: 数据源方言
+        max_rows: 行数上限热值（未传回退导入期兜底值）
 
     Returns:
         (is_valid, error_message) - 如果验证通过返回 (True, "")，否则返回 (False, 错误信息)
     """
-    violation = run_sql_guard(sql, source_type=source_type)
+    violation = run_sql_guard(sql, source_type=source_type, max_rows=max_rows)
     if violation is not None:
         return False, violation.message
     return True, ""
@@ -434,12 +435,15 @@ def _append_limit(sql: str, limit: int) -> str:
     return f"{base_sql}{separator}LIMIT {limit}"
 
 
-def _add_limit_if_needed(sql: str, limit: int, source_type: Optional[str] = None) -> str:
-    """仅对查询型 SQL 自动追加 LIMIT。"""
-    normalized_limit = normalize_row_limit(limit)
+def _add_limit_if_needed(
+    sql: str, limit: int, source_type: Optional[str] = None, max_rows: Optional[int] = None
+) -> str:
+    """仅对查询型 SQL 自动追加 LIMIT；max_rows 为行数上限热值（未传回退兜底值）。"""
+    effective_max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
+    normalized_limit = normalize_row_limit(limit, max_rows=effective_max_rows)
     top_level_limit_count = extract_top_level_limit_count(str(sql or ""), source_type=source_type)
-    if top_level_limit_count is not None and top_level_limit_count > DEFAULT_ROW_LIMIT:
-        raise ValueError(f"查询结果最多返回 {DEFAULT_ROW_LIMIT} 条，请调整 SQL LIMIT")
+    if top_level_limit_count is not None and top_level_limit_count > effective_max_rows:
+        raise ValueError(f"查询结果最多返回 {effective_max_rows} 条，请调整 SQL LIMIT")
     return _append_limit(sql, normalized_limit) if _should_auto_add_limit(sql, source_type=source_type) else sql
 
 
@@ -450,16 +454,18 @@ def build_effective_sql(
     *,
     datasource_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    max_rows: Optional[int] = None,
 ) -> str:
     """生成真实执行 SQL：仅按需追加 LIMIT，出口终检强制行数上限。
 
+    max_rows 为行数上限热值（调用方从配置变量表解析后传入；未传回退兜底值）。
     终检门是"进入数据库的 SELECT 必须带合法 LIMIT"的硬保证：补全阶段的任何
     缺陷（如注释吞掉追加文本）在这里从静默无界查询变成响亮拒绝。拒绝时按
     原因分叉——末行注释导致补全失效给可行动文案；其余属系统内部缺陷，
     记 error 日志并走高危 SQL 报警。
     """
-    effective_sql = _add_limit_if_needed(sql, limit, source_type=source_type)
-    gate = check_effective_limit_gate(effective_sql, source_type=source_type, max_rows=DEFAULT_ROW_LIMIT)
+    effective_sql = _add_limit_if_needed(sql, limit, source_type=source_type, max_rows=max_rows)
+    gate = check_effective_limit_gate(effective_sql, source_type=source_type, max_rows=max_rows)
     if gate is None:
         return effective_sql
     base_sql = str(sql or "").rstrip().rstrip(";").rstrip()
@@ -668,9 +674,11 @@ class MySQLExecutor(SQLExecutor):
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         import time
-        resolved_timeout = resolve_query_timeout("mysql", timeout)
+        resolved_timeout = await resolve_query_timeout("mysql", timeout)
+        # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置
+        max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         # SQL 安全验证
-        is_valid, error_msg = validate_sql(sql, source_type="mysql")
+        is_valid, error_msg = validate_sql(sql, source_type="mysql", max_rows=max_rows)
         if not is_valid:
             _emit_sql_execution_validation_alarm(
                 sql,
@@ -690,7 +698,7 @@ class MySQLExecutor(SQLExecutor):
                     await self._maybe_invoke_db_connection_callback(connection_id, db_connection_callback)
 
                     sql_with_limit = build_effective_sql(
-                        sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id
+                        sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
                     )
                     logger.debug(f"[MySQL] 执行 SQL: {sql_with_limit[:200]}...")
                     # 添加超时控制：execute 与 fetchall 都必须在保护区内，
@@ -819,9 +827,11 @@ class HiveExecutor(SQLExecutor):
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
-        resolved_timeout = resolve_query_timeout("hive", timeout)
+        resolved_timeout = await resolve_query_timeout("hive", timeout)
+        # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置（同步线程路径经参数下传）
+        max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         # SQL 安全验证
-        is_valid, error_msg = validate_sql(sql, source_type="hive")
+        is_valid, error_msg = validate_sql(sql, source_type="hive", max_rows=max_rows)
         if not is_valid:
             _emit_sql_execution_validation_alarm(
                 sql,
@@ -844,6 +854,7 @@ class HiveExecutor(SQLExecutor):
                     limit,
                     datasource_id or "",
                     user_id or "",
+                    max_rows,
                 ),
                 timeout=resolved_timeout
             )
@@ -851,15 +862,17 @@ class HiveExecutor(SQLExecutor):
             logger.error(f"[Hive] 执行 SQL 超时（{resolved_timeout}s）")
             return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
 
-    def _execute_sync(self, sql: str, limit: int, datasource_id: str = "", user_id: str = "") -> Dict[str, Any]:
-        """同步执行 SQL（在线程池中运行）"""
+    def _execute_sync(
+        self, sql: str, limit: int, datasource_id: str = "", user_id: str = "", max_rows: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """同步执行 SQL（在线程池中运行；max_rows 为异步侧解析的热值）"""
         import time
         conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             sql_with_limit = build_effective_sql(
-                sql, limit, source_type="hive", datasource_id=datasource_id, user_id=user_id
+                sql, limit, source_type="hive", datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
             )
             logger.debug(f"[Hive] 执行 SQL: {sql_with_limit[:200]}...")
             start_time = time.time()
@@ -956,7 +969,7 @@ class HiveHttpExecutor(SQLExecutor):
         )
         try:
             async with open_http_client(
-                timeout_seconds=max(CONNECT_TIMEOUT_SECONDS, resolve_query_timeout(self.source_type)),
+                timeout_seconds=max(CONNECT_TIMEOUT_SECONDS, await resolve_query_timeout(self.source_type)),
                 headers=self._build_headers(),
             ) as client:
                 response = await client.request(method.upper(), request_url, **request_kwargs)
@@ -1046,9 +1059,11 @@ class HiveHttpExecutor(SQLExecutor):
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
-        resolved_timeout = resolve_query_timeout(self.source_type, timeout)
+        resolved_timeout = await resolve_query_timeout(self.source_type, timeout)
+        # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置
+        max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         # 前置检查保持在 try 之外：异常直接向上传播，不落入兜底 except 转成错误结果（与拆分前行为一致）
-        validation_error = self._http_validation_error(sql, datasource_id=datasource_id, user_id=user_id)
+        validation_error = self._http_validation_error(sql, datasource_id=datasource_id, user_id=user_id, max_rows=max_rows)
         if validation_error:
             return validation_error
         if not self.namespace:
@@ -1058,7 +1073,7 @@ class HiveHttpExecutor(SQLExecutor):
             return config_error
         try:
             submit_error, task_id = await self._submit_http_query(
-                sql, limit, user_id, username, remote_task_callback, datasource_id=datasource_id
+                sql, limit, user_id, username, remote_task_callback, datasource_id=datasource_id, max_rows=max_rows
             )
             if submit_error:
                 return submit_error
@@ -1080,9 +1095,10 @@ class HiveHttpExecutor(SQLExecutor):
         *,
         datasource_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        max_rows: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """SQL 校验失败时告警并返回错误结果；合法返回 None。"""
-        is_valid, error_msg = validate_sql(sql, source_type=self.source_type)
+        is_valid, error_msg = validate_sql(sql, source_type=self.source_type, max_rows=max_rows)
         if is_valid:
             return None
         _emit_sql_execution_validation_alarm(
@@ -1110,10 +1126,11 @@ class HiveHttpExecutor(SQLExecutor):
         username: Optional[str],
         remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]],
         datasource_id: Optional[str] = None,
+        max_rows: Optional[int] = None,
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         """提交查询并认领远端任务；返回 (错误结果, None) 或 (None, task_id)。"""
         sql_with_limit = build_effective_sql(
-            sql, limit, source_type=self.source_type, datasource_id=datasource_id, user_id=user_id
+            sql, limit, source_type=self.source_type, datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
         )
         submit_payload = await self._request_json(
             "POST",
@@ -1139,6 +1156,8 @@ class HiveHttpExecutor(SQLExecutor):
         """轮询远端任务直到成功、失败或超时，返回结构化结果。"""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + resolved_timeout
+        # 轮询间隔运行期经后台配置变量表读取（CHAT_DATA_HTTP_POLL_INTERVAL_MS），每轮循环取最新值
+        poll_interval_ms = await get_runtime_setting("CHAT_DATA_HTTP_POLL_INTERVAL_MS")
         while True:
             if loop.time() >= deadline:
                 return _http_error_result(f"查询超时（{resolved_timeout}秒）")
@@ -1161,7 +1180,7 @@ class HiveHttpExecutor(SQLExecutor):
                 return result
             if normalized_status in ("cancelled", "failed"):
                 return self._cancelled_or_failed_result(status_payload, normalized_status)
-            await asyncio.sleep(max(0.2, DEFAULT_HTTP_POLL_INTERVAL_MS / 1000))
+            await asyncio.sleep(max(0.2, poll_interval_ms / 1000))
 
     def _cancelled_or_failed_result(self, status_payload: Dict[str, Any], normalized_status: str) -> Dict[str, Any]:
         default_message = "查询已取消" if normalized_status == "cancelled" else "HTTP 查询失败"

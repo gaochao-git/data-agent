@@ -12,8 +12,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic.core.config_validator import validate_semantic_fields
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.core.query_plan import is_derived_metric
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
@@ -223,7 +224,7 @@ DATASOURCE = {"ds_tables": [{"table_name": "orders", "columns": [
 
 
 def validate(metrics, dimensions):
-    return validate_semantic_fields(DATASOURCE, metrics, dimensions, [])
+    return first_structure_error(metrics, dimensions, [], table_columns_map=build_table_columns_map(DATASOURCE))
 
 
 def base_dimensions():

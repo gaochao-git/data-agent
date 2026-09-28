@@ -368,6 +368,120 @@ def test_grep_local_workspace_text_skill_paths(tmp_path, monkeypatch):
     assert payload["matches"][0]["path"].startswith("/mnt/skills/demo-skill")
 
 
+def test_grep_local_workspace_text_regex_case_context_and_modes(tmp_path, monkeypatch):
+    """file_grep 增强：正则/忽略大小写/上下文归属与 files/count 聚合（真实 rg 验证）。"""
+    runtime, root = _runtime_with_skill(tmp_path)
+    ws = root / "workspace"
+    (ws / "a.py").write_text(
+        "def one():\n    return 1\n\ndef two_impl():\n    return 2\n\ndef three_impl():\n    return 3\n",
+        encoding="utf-8",
+    )
+    (ws / "b.md").write_text("some Error here\nand error there\n", encoding="utf-8")
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    # 正则：-F 字面量模式下无法命中的 \w+ 模式
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", [r"def \w+_impl"], "**/*", 10, 20000,
+        use_regex=True,
+    )
+    assert [m["line_number"] for m in payload["matches"]] == [4, 7]
+
+    # 忽略大小写：字面 error 命中 Error/error 两行
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["error"], "*.md", 10, 20000,
+        ignore_case=True,
+    )
+    assert [m["line_number"] for m in payload["matches"]] == [1, 2]
+
+    # 上下文归属：前 1 行是空行（第 3 行），后 1 行是 return 2
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["two_impl"], "*.py", 10, 20000,
+        context_lines=1,
+    )
+    match = payload["matches"][0]
+    assert match["line_number"] == 4
+    assert match["before"] == [""]
+    assert match["after"] == ["    return 2"]
+
+    # count 模式：可见路径 + 每文件命中计数
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        output_mode="count",
+    )
+    assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py", "match_count": 2}]
+
+    # files_with_matches 模式：仅命中文件清单
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        output_mode="files_with_matches",
+    )
+    assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
+
+
+def test_grep_context_multi_file_multi_hit_no_pollution(tmp_path, monkeypatch):
+    """真实 rg 多文件多命中回归：before 取紧邻行、跨文件不污染、预算按结果计费。"""
+    runtime, root = _runtime(tmp_path)
+    ws = root / "workspace"
+    # 多命中同文件：HIT-1 与 HIT-2 相距 2×context，旧实现的「保留最早 N 行」会取错
+    (ws / "code.txt").write_text("HIT\nL2\nL3\nL4\nL5\nHIT\n", encoding="utf-8")
+    # 前一文件尾部 context 行（c3/c4）曾会污染下一文件的首个命中
+    (ws / "zzz.txt").write_text("c1\nc2\nHIT\nc3\nc4\n", encoding="utf-8")
+    (ws / "aaa.txt").write_text("HIT\n", encoding="utf-8")
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 100000,
+        context_lines=2,
+    )
+    by_key = {(m["path"].rsplit("/", 1)[-1], m["line_number"]): m for m in payload["matches"]}
+    # 滑动窗口：第二处命中拿到的是紧邻的 L4/L5，而不是命中间最早的 L2/L3
+    assert by_key[("code.txt", 6)].get("before") == ["L4", "L5"]
+    assert by_key[("code.txt", 6)].get("after") is None
+    # 文件边界重置：code.txt 首个命中不挂 zzz.txt 的尾部行
+    assert by_key[("code.txt", 1)].get("before") is None
+    assert by_key[("zzz.txt", 3)].get("before") == ["c1", "c2"]
+    assert by_key[("zzz.txt", 3)].get("after") == ["c3", "c4"]
+    assert by_key[("aaa.txt", 1)].get("before") is None
+
+    # 预算按结果计费：紧预算（30 字符，足够 3-4 条命中）下截断发生在贴近预算处，
+    # 而不是被上下文行重复计费提前腰斩
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 30,
+        context_lines=2,
+    )
+    assert payload["has_more"] is True
+    used = sum(
+        len(m["line"]) + 1 + sum(len(x) + 1 for x in m.get("before", []) + m.get("after", []))
+        for m in payload["matches"]
+    )
+    assert used <= 30
+    assert used >= 30 * 0.6  # 旧实现同预算下有效载荷不足一半
+
+
+def test_grep_context_trailing_after_respects_max_chars(tmp_path, monkeypatch):
+    """真实 rg 回归：尾随 after 上下文受 max_chars 硬上限，不得顶破预算。"""
+    runtime, root = _runtime(tmp_path)
+    ws = root / "workspace"
+    (ws / "tail.txt").write_text(
+        "HIT\n" + "A" * 100 + "\n" + "B" * 100 + "\n" + "C" * 100 + "\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(lb, "_rg_available", True)
+
+    payload = lb._grep_local_workspace_text(
+        runtime, "/mnt/user-data/workspace", ["HIT"], "tail.txt", 50, 50,
+        context_lines=3,
+    )
+    # 剩余预算装不下任何一条 after 行：全部不进入结果，has_more 置位
+    assert len(payload["matches"]) == 1
+    assert payload["matches"][0].get("after") is None
+    assert payload["has_more"] is True
+    used = sum(
+        len(m["line"]) + 1 + sum(len(x) + 1 for x in m.get("before", []) + m.get("after", []))
+        for m in payload["matches"]
+    )
+    assert used <= 50
+
+
 # ---------------------------------------------------------------------------
 # 后端异步入口
 # ---------------------------------------------------------------------------

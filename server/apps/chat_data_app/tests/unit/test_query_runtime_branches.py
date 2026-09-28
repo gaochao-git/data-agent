@@ -19,7 +19,7 @@ from apps.chat_data_app.services.sql_run import cache as query_cache, runtime as
 
 
 def test_query_runtime_cache_identity_and_flags(monkeypatch):
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
 
     identity = query_cache.build_sql_result_cache_identity(
         {
@@ -44,8 +44,8 @@ def test_query_runtime_cache_identity_and_flags(monkeypatch):
     assert identity["source_type"] == "hive"
     assert identity["sql_text"] == " select 1 "
     assert fallback_identity["datasource_id"] == "ds_fallback"
-    assert query_cache.is_sql_result_cache_enabled(False) is True
-    assert query_cache.is_sql_result_cache_enabled(True) is False
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(False)) is True
+    assert asyncio.run(query_cache.is_sql_result_cache_enabled(True)) is False
 
 
 def test_load_remote_tasks_and_query_task_response_branches():
@@ -815,7 +815,7 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
     async def execution_status(_execution_id):
         return next(status_values)
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", execution_status)
@@ -900,7 +900,7 @@ def test_execute_sql_for_member_http_remote_ref_cache_hit(monkeypatch):
     async def update_query_execution(_execution_id, **_kwargs):
         return None
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_cache, "get_sql_result_cache", get_sql_result_cache)
     monkeypatch.setattr(query_runtime, "fetch_http_remote_ref_cache_result", fetch_remote_ref)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: (_ for _ in ()).throw(AssertionError("cache hit should not execute")))
@@ -983,7 +983,7 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
     async def save_sql_result_cache(_cache_identity, _query_result, operator_id=None, operator_name=None):
         cache_writes.append(("direct", operator_id, operator_name))
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", running_status)
@@ -1053,7 +1053,7 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
     async def run_with_limit(_user_id, _execution_target, query_fn):
         return await query_fn()
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_cache, "get_sql_result_cache", get_sql_result_cache)
     monkeypatch.setattr(query_cache, "save_sql_result_cache", save_sql_result_cache)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
@@ -1142,7 +1142,7 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     async def update_query_execution_from_result(execution_id, result, store_result_payload=True):
         final_updates.append((execution_id, result, store_result_payload))
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", False)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "false")
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FailingExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", running_status)
@@ -1595,7 +1595,7 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
     async def update_query_execution_from_result(execution_id, result, store_result_payload=True):
         final_updates.append((execution_id, result, store_result_payload))
 
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "true")
     monkeypatch.setattr(query_cache, "get_sql_result_cache", non_ref_cache)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
@@ -1631,7 +1631,7 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
 
     enabled_values = iter([True, False])
 
-    def cache_enabled(_skip_query_cache):
+    async def cache_enabled(_skip_query_cache):
         return next(enabled_values)
 
     async def run_with_limit(_user_id, _execution_target, query_fn):

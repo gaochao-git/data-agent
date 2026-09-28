@@ -69,7 +69,16 @@ def _read_positive_int_env(name: str, default: int) -> int:
     return value
 
 
+# 同步总超时已迁移到后台配置变量表（CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS，运行期读取），
+# 统一从 get_datasource_sync_timeout_seconds 取值；本模块常量仅保留导入期兜底快照。
 DATASOURCE_SYNC_TIMEOUT_SECONDS = _read_positive_int_env("CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
+
+
+async def get_datasource_sync_timeout_seconds() -> int:
+    """数据源同步任务总超时（秒）：表覆盖 > env > 代码默认。"""
+    from ..setting_service import get_runtime_setting
+
+    return await get_runtime_setting("CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS")
 
 
 def _validate_table_index_name(index_type: str, index_name: Any, physical_names: set[str]) -> str:
@@ -421,7 +430,7 @@ class DataSourceManager:
         )
         return await asyncio.wait_for(
             adapter.load_schema(table_names),
-            timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            timeout=await get_datasource_sync_timeout_seconds(),
         )
 
     async def _load_physical_table_names_async(
@@ -441,7 +450,7 @@ class DataSourceManager:
         )
         return await asyncio.wait_for(
             adapter.list_tables(),
-            timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            timeout=await get_datasource_sync_timeout_seconds(),
         )
 
     async def _save_datasource_async(
@@ -1346,6 +1355,7 @@ class DataSourceManager:
 
         source_type = datasource.get("source_type")
         source_config = self._build_physical_metadata_source_config(datasource)
+        sync_timeout = await get_datasource_sync_timeout_seconds()
 
         try:
             return await self._load_physical_schema_async(
@@ -1356,8 +1366,8 @@ class DataSourceManager:
                 username=username,
             )
         except asyncio.TimeoutError as err:
-            logger.error("异步获取表结构超时: datasource_id=%s source_type=%s timeout=%ss", datasource_id, source_type, DATASOURCE_SYNC_TIMEOUT_SECONDS)
-            raise ConnectionError(f"数据库连接超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒）") from err
+            logger.error("异步获取表结构超时: datasource_id=%s source_type=%s timeout=%ss", datasource_id, source_type, sync_timeout)
+            raise ConnectionError(f"数据库连接超时（{sync_timeout}秒）") from err
         except ValueError:
             raise
         except Exception as err:
@@ -1372,6 +1382,7 @@ class DataSourceManager:
         username: Optional[str] = None,
     ) -> List[Any]:
         """从物理源实时读取表名列表。"""
+        sync_timeout = await get_datasource_sync_timeout_seconds()
         try:
             return await self._load_physical_table_names_async(
                 source_type,
@@ -1380,7 +1391,7 @@ class DataSourceManager:
                 username=username,
             )
         except asyncio.TimeoutError:
-            logger.error("获取表列表超时: source_type=%s timeout=%ss", source_type, DATASOURCE_SYNC_TIMEOUT_SECONDS)
+            logger.error("获取表列表超时: source_type=%s timeout=%ss", source_type, sync_timeout)
             raise
         except ValueError:
             raise

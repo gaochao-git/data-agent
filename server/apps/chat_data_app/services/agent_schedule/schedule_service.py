@@ -18,7 +18,7 @@ from apps.chat_data_app.daos.agent_schedule_dao import (
     TRIGGER_TYPE_MANUAL,
     agent_schedule_dao,
 )
-from apps.chat_data_app.services.runtime_config import read_positive_int_env
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from .trigger_time import (
     SCHEDULE_TYPES,
     SCHEDULE_TYPE_CRON,
@@ -60,8 +60,8 @@ CONVERSATION_MODE_FIXED = "fixed"
 CONVERSATION_MODE_NEW_EACH_RUN = "new_each_run"
 CONVERSATION_MODES = (CONVERSATION_MODE_FIXED, CONVERSATION_MODE_NEW_EACH_RUN)
 
-# 单个用户可创建的定时任务上限，防止任务表被无界增长
-MAX_JOBS_PER_USER = read_positive_int_env("CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER", 20)
+# 单个用户可创建的定时任务上限（CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER）走运行时
+# 热值（get_runtime_setting：表覆盖 > env > 注册默认），改配置无需重启。
 
 
 class AgentScheduleNotFoundError(LookupError):
@@ -190,8 +190,9 @@ class AgentScheduleService:
                 raise AgentScheduleConversationInvalidError("会话不存在或不属于当前用户")
             # count 与 insert 非同一原子操作，并发创建存在小幅竞态（可能超出上限 1~2 个）；
             # 无用户级行可锁，引入分布式锁不值当，超限后果轻微（可被后台清理），接受该竞态
-            if await self._dao.count_jobs_by_user(session, user_id) >= MAX_JOBS_PER_USER:
-                raise AgentScheduleLimitExceededError(f"最多创建 {MAX_JOBS_PER_USER} 个定时任务")
+            max_jobs_per_user = await get_runtime_setting("CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER")
+            if await self._dao.count_jobs_by_user(session, user_id) >= max_jobs_per_user:
+                raise AgentScheduleLimitExceededError(f"最多创建 {max_jobs_per_user} 个定时任务")
             job = ChatDataAgentSchedule(
                 job_id=uuid4().hex,
                 user_id=user_id,

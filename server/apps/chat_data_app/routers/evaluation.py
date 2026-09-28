@@ -13,14 +13,10 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 from fastapi import APIRouter, HTTPException, Request, status as http_status
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
 
-from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
-from utils.llm_json import parse_llm_json
 from utils.response import business_response
-from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from ..services.datasource.manager import get_datasource_manager
 from ..services.evaluation_service import (
@@ -38,7 +34,6 @@ from ..services.evaluation_service import (
     scene_case_set_id,
     validate_eval_case_ids,
 )
-from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
 from ..services.semantic.run.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
 from ..services.semantic.core.common import is_time_logical_dimension
@@ -398,57 +393,14 @@ def _build_seed_case_candidates(config_id: str, config: Dict[str, Any], business
     return _dedupe_seed_cases(cases)
 
 
-def _looks_like_sql(text: str) -> bool:
-    """判断用户输入是否更像 SQL。"""
-    normalized = str(text or "").strip().lower()
-    return bool(re.search(r"^\s*(select|with)\b", normalized) or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL))
-
-
-async def _invoke_evaluation_draft_llm(prompt: str, config_id: str):
-    """调用评测用例草稿生成模型，失败时上报连接报警。"""
-    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    try:
-        return await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
-        )
-        raise
-
-
-async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], payload: AccuracyEvaluationDraftCaseRequest) -> Dict[str, Any]:
-    """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
-    user_input = str(payload.hint or "").strip()
-    if not user_input:
-        raise ValueError("请先输入自然语言问题或 SQL，再生成 gold_dsl")
-    is_sql_input = _looks_like_sql(user_input)
-    nl_example = json.dumps("请基于 SQL 生成自然语言问题" if is_sql_input else user_input, ensure_ascii=False)
-    business_domain = _sanitize_scene_segment(config.get("name") or config_id, "scene")
-    prompt = build_evaluation_draft_case_prompt(
-        user_input=user_input,
-        is_sql_input=is_sql_input,
-        nl_example=nl_example,
-        business_domain=business_domain,
-        existing_questions=payload.existing_questions,
-        semantic_config_payload=config,
-    )
-    response = await _invoke_evaluation_draft_llm(prompt, config_id)
-    content = getattr(response, "content", response)
-    parsed = parse_llm_json(str(content), strict=False)
-    if not isinstance(parsed, dict) or not parsed.get("nl") or not isinstance(parsed.get("gold_dsl"), dict):
-        raise ValueError("大模型未返回合法评测用例 JSON")
-    case_id = f"{_sanitize_scene_segment(config_id, 'scene')}_{int(time.time() * 1000)}"
-    return {
-        "id": case_id,
-        "nl": str(parsed.get("nl") or "").strip() if is_sql_input else user_input,
-        "gold_dsl": parsed.get("gold_dsl") or {},
-        "gold_sql": user_input if is_sql_input else "",
-        "query_type": parsed.get("query_type") if parsed.get("query_type") in ACCURACY_QUERY_TYPES else "aggregation",
-        "difficulty": parsed.get("difficulty") if parsed.get("difficulty") in ACCURACY_DIFFICULTIES else "medium",
-        "source": "llm",
-        "business_domain": business_domain,
-    }
+# 草稿生成的 LLM 编排已下沉 evaluation_service；此处保留兼容导出，
+# 供端点与既有测试按原模块属性名引用（monkeypatch 语义不变）。
+from ..services.evaluation_service import (  # noqa: E402
+    ACCURACY_DIFFICULTIES,
+    ACCURACY_QUERY_TYPES,
+    looks_like_sql as _looks_like_sql,
+    generate_draft_case_by_llm as _generate_draft_case_by_llm,
+)
 
 
 async def _build_accuracy_runner_args(payload: AccuracyEvaluationRunRequest, current_user: Any):

@@ -12,7 +12,7 @@
 本地 Bash 不提供隔离，只能在受信任的开发或测试部署显式开启。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 WorkspaceBackend = Literal["local", "sandbox"]
@@ -53,14 +53,24 @@ def resolve_agent_runtime_options(
     *,
     user_id: str | None = None,
     override: dict | None = None,
+    explore_subagent_enabled: bool | None = None,
+    plan_subagent_enabled: bool | None = None,
 ) -> AgentRuntimeOptions:
     """解析最终运行选项。
 
     仅在 ``CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=true`` 时接受请求覆盖。生产环境
     关闭该变量后，前端传入的任何值都不会改变服务端默认配置。
+
+    两个子智能体开关的默认值（``CHAT_DATA_DEFAULT_*_SUBAGENT_ENABLED``）支持
+    运行时热值：async 调用方经 ``get_runtime_setting`` 解析后经参数传入，未传
+    （None）则回落 env 快照（sync 兜底路径，如 ``create_data_agent`` 默认装配）。
     """
     _ = user_id
     base = get_chat_data_default_runtime_options()
+    if explore_subagent_enabled is not None:
+        base = replace(base, explore_subagent_enabled=explore_subagent_enabled)
+    if plan_subagent_enabled is not None:
+        base = replace(base, plan_subagent_enabled=plan_subagent_enabled)
     if override and _is_runtime_option_user_overridable():
         backend = str(override.get("workspace_backend", base.workspace_backend) or base.workspace_backend)
         if backend not in ("local", "sandbox"):

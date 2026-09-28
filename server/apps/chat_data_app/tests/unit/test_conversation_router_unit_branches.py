@@ -848,12 +848,3 @@ def test_steer_message_update_request_rejects_overlong_content():
     assert conversation_router.SteerMessageUpdateRequest(content="x" * 4000).content == "x" * 4000
     # 可选字段缺省不受影响
     assert conversation_router.SteerMessageUpdateRequest().content is None
-
-
-def test_quick_sql_request_rejects_overlong_query():
-    from apps.chat_data_app.schema import QuickSqlRequest
-
-    kwargs = {"datasource_id": "ds-1"}
-    with pytest.raises(ValidationError):
-        QuickSqlRequest(query="x" * 4001, **kwargs)
-    assert QuickSqlRequest(query="x" * 4000, **kwargs).query == "x" * 4000

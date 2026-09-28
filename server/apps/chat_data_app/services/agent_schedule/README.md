@@ -71,6 +71,8 @@ pending --抢占(行锁)--> claimed --start_run成功--> dispatched --Run终态-
 | `CHAT_DATA_SCHEDULE_CLAIM_TIMEOUT_SECONDS` | `300` | claimed 悬挂回收阈值（秒） |
 | `CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER` | `20` | 单用户任务数上限 |
 
+其中 `CHAT_DATA_SCHEDULE_POLL_SECONDS` / `DISPATCH_BATCH_SIZE` / `USER_MAX_CONCURRENCY` / `MAX_JOBS_PER_USER` 四项已注册为后台配置变量（chat_data_setting 表），可在管理页动态修改，调度循环每轮/创建任务时读取，无需重启；其余变量仍为静态 env（改后需重启）。
+
 ## 上线步骤
 
 1. 在全局唯一写主库执行 `apps/chat_data_app/next_version.md` 数据库变更中的建表 SQL（`chat_data_agent_schedule` / `chat_data_agent_schedule_run` / `chat_data_schedule_control`）。

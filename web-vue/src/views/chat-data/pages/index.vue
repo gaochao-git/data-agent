@@ -2068,6 +2068,25 @@ body.is-resizing {
 }
 
 /*
+ * 需较宽内容区的 MessageBox 变体（与 chatdata-message-box 叠加使用）：
+ * 保存前校验的质量提示消息较长，默认 420px 下换行破碎难读。
+ * 不直接改 chatdata-message-box 宽度——那是多处共用的 customClass，会连带加宽无关弹窗。
+ */
+.chatdata-message-box-wide {
+  --el-messagebox-width: 640px;
+}
+
+/*
+ * 弹窗内质量提示卡片固定占满内容区宽度（不随最长一行文字伸缩）：
+ * EP 的 .el-message-box__container 是 flex 行，__message 作为 flex 项默认按内容收缩，
+ * 导致 findings 卡片宽度跟内容走。仅在保存前校验弹窗的 -wide 作用域内修复，
+ * 不动全局 MessageBox 布局。
+ */
+.chatdata-message-box-wide .el-message-box__message {
+  flex: 1;
+}
+
+/*
  * Element Plus MessageBox 全局层级修复（本文件 style 非 scoped，规则随 chat-data 目录走）。
  * 根因：语义配置等整页容器 z-index 高达 2050（var(--z-page-overlay)，见 styles/z-index.css），
  * 而 MessageBox 默认 z-index 从 ~2001 起动态分配，整层弹窗（含遮罩）会被压在整页容器之下，

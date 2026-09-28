@@ -2,10 +2,13 @@ from apps.chat_data_app.routers import config as config_routes
 
 
 def test_runtime_config_api_contract(client, auth_headers, monkeypatch):
+    async def fake_runtime_config():
+        return {"enableDataAnalyze": True, "defaultRowLimit": 100}
+
     monkeypatch.setattr(
         config_routes,
         "get_chat_data_runtime_config",
-        lambda: {"enableDataAnalyze": True, "defaultRowLimit": 100},
+        fake_runtime_config,
     )
 
     response = client.get("/api/chatdata/config", headers=auth_headers)

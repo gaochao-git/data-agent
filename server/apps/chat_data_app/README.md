@@ -471,7 +471,6 @@ chat_data_app/
 ├── agent/
 │   ├── chat_data_agent.py # 智能问数 create_agent 组装和状态定义
 │   ├── analyze_data_agent.py # 智能分析 create_agent 组装和状态定义
-│   ├── sql_assist_agent.py# SQL 辅助 create_agent 组装和状态定义
 │   ├── agent_runtime.py   # 问数和分析共用运行时工具
 │   ├── middleware/        # create_agent middleware、上下文编辑和 token usage
 │   ├── tools/             # 工具包

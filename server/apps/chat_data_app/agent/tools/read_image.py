@@ -20,7 +20,7 @@ from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
     to_visible_path,
 )
-from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, get_image_size_limit
 from .common import tool_result_payload
 
 logger = get_logger(__name__)
@@ -61,12 +61,13 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
         except OSError as exc:
             logger.error("read_image 读取文件信息失败: %s", exc, exc_info=True)
             return tool_result_payload("read_image", {"success": False, "error": "读取文件信息失败"})
-        if size_bytes > MAX_IMAGE_SIZE:
+        _, max_image_size = await get_image_size_limit()
+        if size_bytes > max_image_size:
             return tool_result_payload(
                 "read_image",
                 {
                     "success": False,
-                    "error": f"图片超过大小上限（{size_bytes} > {MAX_IMAGE_SIZE} 字节）",
+                    "error": f"图片超过大小上限（{size_bytes} > {max_image_size} 字节）",
                 },
             )
 

@@ -304,6 +304,16 @@ async def _file_glob_impl(
     return tool_result_payload("file_glob", payload)
 
 
+def _validate_grep_options(*, max_results: int, output_mode: str, context_lines: int) -> None:
+    """校验 file_grep 的输出模式与数量/上下文参数，非法时抛 ValueError。"""
+    if max_results < 1 or max_results > MAX_GREP_RESULTS:
+        raise ValueError(f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间")
+    if output_mode not in ("content", "files_with_matches", "count"):
+        raise ValueError("output_mode 必须是 content / files_with_matches / count 之一")
+    if context_lines < 0 or context_lines > 10:
+        raise ValueError("context_lines 必须在 0-10 之间")
+
+
 async def _file_grep_impl(
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
@@ -311,30 +321,48 @@ async def _file_grep_impl(
     path: str,
     glob: str,
     max_results: int,
+    use_regex: bool = False,
+    ignore_case: bool = False,
+    context_lines: int = 0,
+    output_mode: str = "content",
 ) -> str:
-    patterns = [p for p in str(pattern or "").split("|") if p]
-    if not patterns:
+    # 字面模式：| 是多关键词 OR 分隔符（既有约定）；正则模式：pattern 整体交给 rg，
+    # 其中的 | 是正则交替语法——若再拆分，(a|b) 分组、[a|b] 字符类会被拆成非法正则。
+    if use_regex:
+        patterns = [str(pattern or "").strip()]
+    else:
+        patterns = [p for p in str(pattern or "").split("|") if p]
+    if not patterns or not patterns[0]:
         raise ValueError("pattern 不能为空")
     normalized_glob = _validate_relative_glob(glob, field_name="glob")
-    if max_results < 1 or max_results > MAX_GREP_RESULTS:
-        raise ValueError(f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间")
+    _validate_grep_options(
+        max_results=max_results, output_mode=output_mode, context_lines=context_lines,
+    )
     result = await workspace_runtime.grep_text(
         path=str(path or "/mnt/user-data/workspace").strip(),
         patterns=patterns,
         glob=normalized_glob,
         max_results=max_results,
         max_chars=FILE_READ_MAX_CHARS,
+        use_regex=use_regex,
+        ignore_case=ignore_case,
+        context_lines=context_lines,
+        output_mode=output_mode,
     )
     payload = {
         "path": str(path or "/mnt/user-data/workspace").strip(),
         "pattern": pattern,
         "glob": normalized_glob,
-        "count": len(result.get("matches") or []),
+        "output_mode": output_mode,
+        "count": len(result.get("matches") or result.get("entries") or []),
         "has_more": bool(result.get("has_more")),
         "skipped_binary": int(result.get("skipped_binary") or 0),
         "skipped_large": int(result.get("skipped_large") or 0),
-        "matches": result.get("matches") or [],
     }
+    if "matches" in result:
+        payload["matches"] = result.get("matches") or []
+    else:
+        payload["entries"] = result.get("entries") or []
     return tool_result_payload("file_grep", payload)
 
 
@@ -571,22 +599,32 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         path: str = "/mnt/user-data/workspace",
         glob: str = "**/*",
         max_results: int = _DEFAULT_GREP_RESULTS,
+        use_regex: bool = False,
+        ignore_case: bool = False,
+        context_lines: int = 0,
+        output_mode: str = "content",
         intent: str = "",
     ) -> str:
         """
-        在文本文件中按字面内容查找，默认递归搜索 /mnt/user-data/workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail），不支持正则；glob 可限定文件范围，例如 `**/*.md`。
+        在文本文件中查找内容，默认递归搜索 /mnt/user-data/workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail）；use_regex=true 时 pattern 按正则解释（如 `def \\w+_impl`）；glob 可限定文件范围，例如 `**/*.md`。
 
         最多返回 200 条匹配，每条最多 500 字符，整体正文受 CHAT_DATA_FILE_READ_MAX_CHARS 限制；二进制文件和超过 2 MiB 的文件会跳过。
+        大结果集先用 output_mode="files_with_matches" 看哪些文件命中，再用 output_mode="count" 看热点分布，最后收敛 path/glob 后取 content。
 
         Args:
-            pattern: 要查找的字面内容，可用 | 分隔多个关键词做 OR 匹配，不支持正则。
+            pattern: 要查找的内容。默认按字面匹配，可用 | 分隔多个关键词做 OR（如 error|warn）；use_regex=true 时整个 pattern 按 ripgrep 正则解释，| 是正则交替语法（如 (a|b)+c），不再按 | 拆分。
             path: 搜索起始目录，默认 /mnt/user-data/workspace。
             glob: 文件范围过滤模式，例如 `**/*.md`，默认匹配全部文件。
-            max_results: 最多返回的匹配条数，范围 1-200。
+            max_results: 最多返回的条数（content 为匹配条数，其余模式为文件条数），范围 1-200。
+            use_regex: true 时 pattern 按正则匹配（rg 引擎），默认 false 按字面匹配。
+            ignore_case: true 时忽略大小写，默认 false。
+            context_lines: content 模式下每条命中附带的前后上下文行数，0-10，默认 0。
+            output_mode: 输出模式：content（默认，逐条匹配）、files_with_matches（命中文件清单）、count（每文件命中计数）。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _file_grep_impl(
-            workspace_runtime, pattern=pattern, path=path, glob=glob, max_results=max_results
+            workspace_runtime, pattern=pattern, path=path, glob=glob, max_results=max_results,
+            use_regex=use_regex, ignore_case=ignore_case, context_lines=context_lines, output_mode=output_mode,
         )
 
     @tool("file_diff", parse_docstring=True)

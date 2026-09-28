@@ -54,6 +54,7 @@ dmypy.json
 
 # Python 日志
 *.log
+*.log.*
 *.pid
 
 # ===== Node.js 前端 (web-vue/) =====

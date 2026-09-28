@@ -34,7 +34,7 @@ from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
     workspace_runtime_from_state,
 )
-from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, MAX_IMAGE_SIZE
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS, get_image_size_limit
 from apps.chat_data_app.services.llm_config import get_chat_data_model_config
 
 logger = get_logger(__name__)
@@ -78,7 +78,8 @@ def create_image_injection_middleware(
                 messages=_append_vlm_disabled_notes(messages, read_image_pendings),
             ))
 
-        injection = _build_image_injection_message(request, pending_requests)
+        _, max_image_size = await get_image_size_limit()
+        injection = _build_image_injection_message(request, pending_requests, max_image_size=max_image_size)
         if injection is None:
             return await handler(request)
         return await handler(_override_request(request, messages=[*messages, injection]))
@@ -154,6 +155,8 @@ def _tool_file_paths_by_call_id(messages: list[Any]) -> dict[str, str]:
 def _build_image_injection_message(
     request: Any,
     pending_requests: list[tuple[str, str]],
+    *,
+    max_image_size: int,
 ) -> HumanMessage | None:
     """构造携带图片 block 的隐藏 HumanMessage；全部失败时返回仅含说明的文本。"""
     if not pending_requests:
@@ -162,7 +165,9 @@ def _build_image_injection_message(
     runtime = workspace_runtime_from_state(state if isinstance(state, dict) else {})
     workspace_root = runtime.workspace_root
 
-    image_blocks, loaded_sources, failures = _load_injection_images(workspace_root, pending_requests)
+    image_blocks, loaded_sources, failures = _load_injection_images(
+        workspace_root, pending_requests, max_image_size=max_image_size
+    )
     total = len(image_blocks)
     if total == 0 and not failures:
         return None
@@ -188,6 +193,8 @@ def _build_image_injection_message(
 def _load_injection_images(
     workspace_root: Any,
     pending_requests: list[tuple[str, str]],
+    *,
+    max_image_size: int,
 ) -> tuple[list[dict[str, Any]], dict[str, list[str]], list[str]]:
     """按逆序加载待注入图片（上限 MAX_INJECTED_IMAGES，按物理路径去重）。
 
@@ -210,7 +217,7 @@ def _load_injection_images(
         physical_key = str(physical)
         if physical_key in loaded_paths:
             continue
-        block, failure = _read_image_block(physical, file_path)
+        block, failure = _read_image_block(physical, file_path, max_image_size=max_image_size)
         if failure:
             failures.append(failure)
             continue
@@ -229,14 +236,19 @@ def _resolve_injection_image_path(workspace_root: Any, file_path: str, failures:
         return None
 
 
-def _read_image_block(physical: Any, file_path: str) -> tuple[dict[str, Any] | None, str | None]:
+def _read_image_block(
+    physical: Any,
+    file_path: str,
+    *,
+    max_image_size: int,
+) -> tuple[dict[str, Any] | None, str | None]:
     """读取单张图片并编码为 base64 block；超限/格式不支持返回失败原因（文案用原始 file_path）。"""
     try:
         data = physical.read_bytes()
     except OSError as exc:
         logger.warning("图片注入读取失败: %s", exc)
         return None, f"{file_path}: 读取文件失败"
-    if len(data) > MAX_IMAGE_SIZE:
+    if len(data) > max_image_size:
         return None, f"{file_path}: 图片超过大小上限"
     suffix = physical.suffix.lower().lstrip(".")
     if suffix not in IMAGE_EXTENSIONS:

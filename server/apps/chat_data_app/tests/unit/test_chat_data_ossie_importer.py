@@ -501,7 +501,7 @@ _DATASOURCE = {"id": "ds1", "ds_tables": [
 
 @pytest.fixture(autouse=True)
 def _passthrough_import_transaction(monkeypatch):
-    """导入路由用 transaction_scope 包裹整批落库；单测不连数据库，这里退化为直接执行。
+    """导入落库事务边界在 semantic_config_service；单测不连数据库，这里退化为直接执行。
 
     回滚行为单独由 test_import_route_rolls_back_all_models_on_write_failure 用记录型桩验证。
     """
@@ -510,7 +510,7 @@ def _passthrough_import_transaction(monkeypatch):
     async def _passthrough():
         yield None
 
-    monkeypatch.setattr(semantic_config, "transaction_scope", _passthrough)
+    monkeypatch.setattr(semantic_config_service, "transaction_scope", _passthrough)
 
 
 class FakeManager:
@@ -763,7 +763,7 @@ def test_checklist_quality_findings_counts():
     assert by_name["质量规则核对"]["status"] == "warn"
     assert "1 条警告 · 2 条建议" in by_name["质量规则核对"]["message"]
 
-    error_findings = [{"code": "EXE_UNKNOWN_COLUMN", "severity": "error", "message": "m"}]
+    error_findings = [{"code": "STR_METRIC_INVALID", "severity": "error", "message": "m"}]
     rows = build_model_checklist(item, quality_findings=error_findings)
     by_name = _checklist_by_name(rows)
     assert by_name["质量规则核对"]["status"] == "fail"
@@ -994,7 +994,7 @@ class _FailingCreateManager(FakeManager):
 
 
 class _RecordingTransaction:
-    """记录提交/回滚的事务桩：替换路由的 transaction_scope 以观察外层行为。"""
+    """记录提交/回滚的事务桩：替换 service 的 transaction_scope 以观察外层行为。"""
 
     def __init__(self):
         self.committed = False
@@ -1016,7 +1016,7 @@ def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
     transaction = _RecordingTransaction()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "transaction_scope", transaction)
+    monkeypatch.setattr(semantic_config_service, "transaction_scope", transaction)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
     response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
@@ -1689,7 +1689,7 @@ def test_import_route_rolls_back_when_dict_fill_fails(monkeypatch):
             rollback_calls.append("rolled_back")
             raise
 
-    monkeypatch.setattr(semantic_config, "transaction_scope", recording_scope)
+    monkeypatch.setattr(semantic_config_service, "transaction_scope", recording_scope)
     response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
         "ds1", SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()), _request(),
     )))

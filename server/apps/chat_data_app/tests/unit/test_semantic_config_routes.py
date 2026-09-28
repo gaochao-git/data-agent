@@ -16,6 +16,16 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
+
+
+def _structure_error(datasource, metrics=None, dimensions=None, relationships=None):
+    """结构硬门槛薄壳测试辅助：datasource 形态转 table_columns_map 后走统一入口。"""
+    return first_structure_error(
+        metrics or [], dimensions or [], relationships or [],
+        table_columns_map=build_table_columns_map(datasource),
+    )
 from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from apps.chat_data_app.schema import (
     SemanticConfigBatchToggleRequest,
@@ -26,6 +36,7 @@ from apps.chat_data_app.schema import (
 )
 from apps.chat_data_app.services.semantic.run import semantic_config_service
 from apps.chat_data_app.services.semantic.run import semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run import semantic_prefill_service
 from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import build_semantic_history_learning_service
 
 
@@ -53,40 +64,40 @@ def test_semantic_permission_helpers():
     assert semantic_config._with_semantic_config_permissions(public, "user_a", admin_manage=True)["can_manage"] is True
 
 
-def test_validate_semantic_fields_checks_dimensions_and_metrics():
+def test_first_structure_error_checks_dimensions_and_metrics():
     datasource = {
         "ds_tables": [
             {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]},
         ]
     }
 
-    assert semantic_config_service.validate_semantic_fields(
+    assert _structure_error(
         datasource,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
     ) is None
-    assert "所属表不存在" in semantic_config_service.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
-    assert "字段不存在" in semantic_config_service.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
-    assert "必须引用表" in semantic_config_service.validate_semantic_fields(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
-    assert "字段显示名称重复" in semantic_config_service.validate_semantic_fields(
+    assert "所属表不存在" in _structure_error(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
+    assert "字段不存在" in _structure_error(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
+    assert "必须引用表" in _structure_error(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
+    assert "字段显示名称重复" in _structure_error(
         datasource,
         metrics=[{"name": "数量", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "数量", "table": "orders", "column": "city"}],
     )
-    assert "字段显示名称不能为空" in semantic_config_service.validate_semantic_fields(
+    assert "字段显示名称不能为空" in _structure_error(
         datasource,
         metrics=[{"name": " ", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "所属表不存在" in semantic_config_service.validate_semantic_fields(
+    assert "所属表不存在" in _structure_error(
         datasource,
         metrics=[{"name": "销售额", "table": "missing", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "缺少表结构" in semantic_config_service.validate_semantic_fields({"ds_tables": []}, [], [])
+    assert "缺少表结构" in _structure_error({"ds_tables": []}, [], [])
 
 
-def test_validate_semantic_fields_checks_operators_and_relationships():
+def test_first_structure_error_checks_operators_and_relationships():
     datasource = {
         "ds_tables": [
             {"table_name": "orders", "columns": [{"name": "user_id"}, {"name": "status"}]},
@@ -105,22 +116,20 @@ def test_validate_semantic_fields_checks_operators_and_relationships():
         "right_column": "id",
     }]
 
-    assert semantic_config_service.validate_semantic_fields(
-        datasource, [], dimensions, valid_relationship,
-    ) is None
-    assert "不支持的过滤操作符" in semantic_config_service.validate_semantic_fields(
+    assert _structure_error(datasource, [], dimensions, valid_relationship) is None
+    assert "不支持的过滤操作符" in _structure_error(
         datasource,
         [],
         [{**dimensions[0], "allowed_operators": ["contains"]}],
         [],
     )
-    assert "右字段不存在" in semantic_config_service.validate_semantic_fields(
+    assert "右字段不存在" in _structure_error(
         datasource,
         [],
         dimensions,
         [{**valid_relationship[0], "right_column": "missing"}],
     )
-    assert "缺少关联条件" in semantic_config_service.validate_semantic_fields(
+    assert "缺少关联条件" in _structure_error(
         datasource,
         [],
         dimensions,
@@ -132,9 +141,7 @@ def test_validate_semantic_fields_checks_operators_and_relationships():
             "right_column": "",
         }],
     )
-    assert "缺少关联路径" in semantic_config_service.validate_semantic_fields(
-        datasource, [], dimensions, [],
-    )
+    assert "缺少关联路径" in _structure_error(datasource, [], dimensions, [])
 
 
 def test_validate_semantic_logical_types_requires_enum_column_dict():
@@ -414,7 +421,7 @@ def test_prefill_helpers_use_business_context(monkeypatch):
             "metrics": [{"table": "orders", "table_alias": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"}],
         }
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_metric_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_metric_recommendation)
     default_result = asyncio.run(semantic_config._prefill_by_llm(tables))
     contextual_result = asyncio.run(semantic_config._prefill_by_llm(tables, business_context="订单金额常做汇总"))
 
@@ -1058,14 +1065,14 @@ def test_prefill_parse_and_error_branches(monkeypatch):
     async def fake_raise(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_raise)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_raise)
     fallback_result = asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}]))
     assert fallback_result == {"fields": [{"table": "orders", "table_alias": "orders", "column": "id", "role": "dimension", "expression": "`id`", "name": "id"}]}
 
     async def fake_incomplete(*_args, **_kwargs):
         return []
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_incomplete)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_incomplete)
     assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}])) == fallback_result
 
 
@@ -1078,7 +1085,7 @@ def test_prefill_prompt_includes_business_context(monkeypatch):
         captured["max_metrics"] = max_metrics
         return [{"table": "orders", "column": "amount_sum", "source_column": "amount_sum", "role": "metric", "field_name": "amount_sum_sum", "name": "销售额合计", "agg": "SUM", "expression": "SUM(`amount_sum`)"}]
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
     result = asyncio.run(semantic_config._prefill_by_llm(
         [{"table_name": "orders", "columns": [{"name": "amount_sum", "type": "decimal"}]}],
         business_context="销售额用于经营分析",
@@ -1196,7 +1203,7 @@ def test_prefill_dimension_names_are_deduped_by_table_alias(monkeypatch):
             "metrics": [],
         }
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_recommend)
     result = asyncio.run(semantic_config._prefill_by_llm([
         {"table_name": "orders", "table_alias": "orders", "columns": [{"name": "order_id", "description": "订单编号"}]},
         {"table_name": "order_items", "table_alias": "order_items", "columns": [{"name": "order_id", "description": "订单编号"}]},
@@ -1503,14 +1510,14 @@ def test_prefill_by_llm_handles_empty_recommendation_list_and_failure(monkeypatc
     async def fake_list_recommendation(*_args, **_kwargs):
         return [{"table": "orders", "table_alias": "orders", "column": "amount", "role": "metric", "name": "销售额", "expression": "SUM(`amount`)"}]
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_list_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", fake_list_recommendation)
     list_result = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert [item["role"] for item in list_result["fields"]].count("metric") == 1
 
     async def raise_recommendation(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", raise_recommendation)
+    monkeypatch.setattr(semantic_prefill_service, "_call_metric_recommendation_llm", raise_recommendation)
     fallback = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert fallback["fields"]
     assert all(item["role"] == "dimension" for item in fallback["fields"])
@@ -1682,8 +1689,8 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
                 "metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"}],
             }, ensure_ascii=False))
 
-    monkeypatch.setattr(semantic_config, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
-    recommendation = asyncio.run(semantic_config._call_metric_recommendation_llm(
+    monkeypatch.setattr(semantic_prefill_service, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
+    recommendation = asyncio.run(semantic_prefill_service._call_metric_recommendation_llm(
         table_payload,
         business_context="经营分析",
         max_metrics=1,
@@ -1960,3 +1967,34 @@ def test_semantic_config_batch_toggle_routes(monkeypatch):
         object(),
     )))
     assert error_payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+
+
+def test_semantic_config_validate_route(monkeypatch):
+    """保存前校验端点：结构错误拦截、跨模型口径提示、数据源缺失映射。"""
+    _patch_semantic_route_user_and_manager(monkeypatch)
+
+    payload = SemanticConfigCreateRequest(
+        name="订单分析",
+        enabled=True,
+        metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
+        relationships=[],
+    )
+    ok = _response_payload(asyncio.run(semantic_config.validate_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
+    admin_ok = _response_payload(asyncio.run(semantic_config.validate_admin_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
+    missing_ds = _response_payload(asyncio.run(semantic_config.validate_semantic_config("missing", payload, object())))
+    bad = SemanticConfigCreateRequest(
+        name="坏模型",
+        enabled=True,
+        metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}],
+        dimensions=[],
+        relationships=[],
+    )
+    structure_failed = _response_payload(asyncio.run(semantic_config.validate_semantic_config("ds_a", bad, object())))
+
+    assert ok["data"]["structure_error"] == ""
+    assert "CON_CROSS_MODEL_METRIC_DUPLICATE" in {item["code"] for item in ok["data"]["quality_findings"]}
+    assert admin_ok["data"]["structure_error"] == ""
+    assert missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert structure_failed["data"]["structure_error"]
+    assert structure_failed["data"]["quality_findings"] == []

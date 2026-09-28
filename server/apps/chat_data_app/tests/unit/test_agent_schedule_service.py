@@ -145,7 +145,7 @@ async def test_create_job_validation_errors(harness):
 async def test_create_job_respects_per_user_limit(monkeypatch, harness):
     service, create_conversation, create_payload, _session = harness
     await create_conversation()
-    monkeypatch.setattr(service_module, "MAX_JOBS_PER_USER", 1)
+    monkeypatch.setenv("CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER", "1")
     await service.create_job(**_create_kwargs(create_payload()))
     with pytest.raises(AgentScheduleLimitExceededError):
         await service.create_job(**_create_kwargs(create_payload(title="第二个")))

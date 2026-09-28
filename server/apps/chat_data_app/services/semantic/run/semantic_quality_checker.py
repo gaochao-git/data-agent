@@ -4,9 +4,15 @@
 "能不能导入"（四道闸门）互补——闸门管合法性，本模块管好坏。
 
 设计约束：
-- 只做确定性检查（覆盖度/可执行性/一致性/来源/文档五类），规则与
+- 只做确定性检查（结构/覆盖度/可执行性/一致性/来源/文档六类），规则与
   agent/skills/data-analyzing/references/governance/quality-rules.md 保持同一套
   编码与口径；会话内技能按该清单分析，导入 preview 按本模块机器把关；
+- structure 域是阻断级硬门槛：判定逻辑与错误文案单点复用 core/config_validator
+  的编排函数，check_config 把它们并入同一份报告；保存链路的
+  first_structure_error 从该域提取第一条错误句子做拦截；
+- 校验分两层：check_config 面向单个配置（模型内部自洽）；check_cross_model_metrics
+  面向数据源组内多个配置之间的同名指标口径冲突（CON_CROSS_MODEL_* 两条，独立函数
+  产出，不参与单模型评分）；
 - 不依赖数据库：config 是 SemanticConfigService 返回的配置字典，
   物理列清单 physical_columns 为可选的 {(table, column)} 集合
   （来自数据源管理器的 get_cached_schema_async 全量表结构；注意不是
@@ -22,34 +28,54 @@ import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ..core.config_validator import (
+    _validate_composite_metrics,
+    _validate_derived_metrics,
+    _validate_dimensions_against_tables,
+    _validate_field_display_names,
+    _validate_metrics_against_tables,
+    validate_semantic_relationships,
+)
+
 SCORE_DEDUCTION = {"error": 8, "warning": 3, "info": 1}
 MAX_TARGET_EXAMPLES = 5
 
 # 规则目录：code -> (severity, category, label)。与技能 references/governance/quality-rules.md 同源。
 RULES: Dict[str, Tuple[str, str, str]] = {
+    # 结构校验 structure：阻断级硬门槛（保存链路 first_structure_error 从本域提取第一条错误）。
+    # 判定逻辑与用户文案单点复用 core/config_validator 的编排函数，message 即完整错误句子，
+    # RULES 第三位的 label 仅作目录用途、不拼进 message。
+    "STR_FIELD_NAME_INVALID": ("error", "structure", "字段显示名称不合法"),
+    "STR_DIMENSION_INVALID": ("error", "structure", "维度结构校验未通过"),
+    "STR_METRIC_INVALID": ("error", "structure", "指标物理引用校验未通过"),
+    "STR_DERIVED_INVALID": ("error", "structure", "派生指标结构校验未通过"),
+    "STR_COMPOSITE_INVALID": ("error", "structure", "复合指标结构校验未通过"),
+    "STR_RELATIONSHIP_INVALID": ("error", "structure", "表关系校验未通过"),
     # 来源完整性 provenance
     "PROV_METRIC_MISSING_TABLE": ("error", "provenance", "原子指标缺少归属表 table"),
     "PROV_DIMENSION_MISSING_TABLE": ("error", "provenance", "维度缺少归属表 table"),
     "PROV_DIMENSION_MISSING_COLUMN": ("warning", "provenance", "维度缺少物理字段 column"),
     # 可执行性 executability
-    "EXE_UNKNOWN_COLUMN": ("error", "executability", "引用的物理列在数据源中不存在"),
-    "EXE_DERIVED_BASE_MISSING": ("error", "executability", "派生指标的 base_metric 在当前配置中不存在"),
     "EXE_DERIVED_NO_CONSTRAINT": ("info", "executability", "派生指标未设置时间窗 period 或过滤 filters，口径可能与基础指标重复"),
-    "EXE_COMPOSITE_FORMULA_MISSING": ("error", "executability", "复合指标缺少 formula"),
     "EXE_COMPOSITE_UNRESOLVED": ("warning", "executability", "复合指标 formula 存在无法对应到已知指标的片段"),
     # 覆盖度 coverage
-    "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，无法回答聚合类问题"),
-    "COV_NO_DIMENSIONS": ("warning", "coverage", "配置只有指标没有维度，无法分组或过滤"),
+    "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标"),
+    "COV_NO_DIMENSIONS": ("warning", "coverage", "配置只有指标没有维度，聚合只能看总量，分组/过滤/明细分析受限，建议补充常用分析维度"),
     "COV_DUPLICATE_DIMENSION_COLUMN": ("warning", "coverage", "同一物理列被建模为多个维度"),
     "COV_UNMODELED_COLUMNS": ("info", "coverage", "已建模表存在未纳入任何维度/指标的物理列"),
     # 一致性 consistency
     "CON_DUPLICATE_METRIC_EXPRESSION": ("info", "consistency", "多个原子指标使用相同表达式"),
     "CON_NAME_DUPLICATE": ("warning", "consistency", "指标/维度存在重名"),
+    "CON_NAME_CHARS": ("warning", "consistency", "指标/维度名称含白名单外字符（仅允许中文、英文、数字、下划线）"),
     "CON_RELATIONSHIP_DUPLICATE": ("warning", "consistency", "表关系重复定义"),
     "CON_RELATIONSHIP_SELF": ("info", "consistency", "表关系左右为同一张表"),
     "CON_RELATIONSHIP_TABLE_UNREFERENCED": ("warning", "consistency", "关系引用的表没有任何维度或指标建模"),
     "CON_RELATIONSHIP_CYCLE": ("warning", "consistency", "表关系存在循环依赖"),
     "CON_RELATIONSHIP_KEY_UNCOVERED": ("warning", "consistency", "关系 one 端 join 列未覆盖该表声明的 primary/unique key"),
+    # 一致性（跨模型层：比较域为数据源组内多个模型之间，只由 check_cross_model_metrics
+    # 产出，单模型 check_config 永不触发；评分也不参与单模型报告扣分）
+    "CON_CROSS_MODEL_NAME_CONFLICT": ("error", "consistency", "同名指标在多个模型中表达式不同（口径冲突）"),
+    "CON_CROSS_MODEL_METRIC_DUPLICATE": ("warning", "consistency", "同名指标在多个模型中重复定义"),
     # 文档完备性 documentation
     "DOC_METRIC_NO_DESCRIPTION": ("info", "documentation", "指标缺少描述"),
     "DOC_DIMENSION_NO_DESCRIPTION": ("info", "documentation", "维度缺少描述"),
@@ -62,6 +88,8 @@ _SIMPLE_AGG_COLUMN = re.compile(
     re.IGNORECASE,
 )
 _PLAIN_COLUMN = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$")
+#: 指标/维度名称白名单：中文、英文、数字、下划线（名称是公式 {引用} 等链路的查找键）。
+_VALID_NAME_PATTERN = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9_]+$")
 
 
 def _clean(value: Any) -> str:
@@ -152,8 +180,9 @@ class SemanticQualityChecker:
         dimensions = [item for item in config.get("dimensions") or [] if isinstance(item, dict)]
         relationships = [item for item in config.get("relationships") or [] if isinstance(item, dict)]
 
+        self._check_structure(config, metrics, dimensions, relationships, raw, physical_columns)
         self._check_provenance(metrics, dimensions, raw)
-        self._check_executability(config, metrics, raw, physical_columns)
+        self._check_executability(metrics, raw)
         self._check_coverage(metrics, dimensions, raw, physical_columns)
         self._check_consistency(config, metrics, dimensions, relationships, raw)
         self._check_documentation(config, metrics, dimensions, raw)
@@ -172,6 +201,46 @@ class SemanticQualityChecker:
 
     # ---- 检查项 ----
 
+    def _check_structure(
+        self,
+        config: Dict[str, Any],
+        metrics: List[Dict[str, Any]],
+        dimensions: List[Dict[str, Any]],
+        relationships: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+        physical_columns: Optional[Set[Tuple[str, str]]],
+    ) -> None:
+        """结构校验：阻断级硬门槛，判定与文案单点复用 core/config_validator 编排函数。
+
+        raw 的 target 直接承载完整错误句子（_aggregate 对 structure 域不套 label）。
+        物理列缺失时跳过依赖表结构的检查（与可执行性检查的降级口径一致）。
+        """
+        error = _validate_field_display_names(dimensions, metrics)
+        if error:
+            raw.append(("STR_FIELD_NAME_INVALID", error))
+        table_columns_map: Dict[str, Set[str]] = {}
+        if physical_columns is not None:
+            for table, column in physical_columns:
+                table_columns_map.setdefault(table, set()).add(column)
+            error = _validate_dimensions_against_tables(dimensions, table_columns_map)
+            if error:
+                raw.append(("STR_DIMENSION_INVALID", error))
+            error = _validate_metrics_against_tables(metrics, table_columns_map)
+            if error:
+                raw.append(("STR_METRIC_INVALID", error))
+        error = _validate_derived_metrics(metrics, dimensions)
+        if error:
+            raw.append(("STR_DERIVED_INVALID", error))
+        error = _validate_composite_metrics(metrics)
+        if error:
+            raw.append(("STR_COMPOSITE_INVALID", error))
+        if physical_columns is not None:
+            error = validate_semantic_relationships(
+                table_columns_map, metrics, dimensions, relationships,
+            )
+            if error:
+                raw.append(("STR_RELATIONSHIP_INVALID", error))
+
     def _check_provenance(self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], raw: List[Tuple[str, str]]) -> None:
         for metric in metrics:
             if metric.get("metric_kind"):
@@ -187,82 +256,38 @@ class SemanticQualityChecker:
 
     def _check_executability(
         self,
-        config: Dict[str, Any],
         metrics: List[Dict[str, Any]],
         raw: List[Tuple[str, str]],
-        physical_columns: Optional[Set[Tuple[str, str]]],
     ) -> None:
+        """可执行性提示（结构硬门槛已由 _check_structure 承载，这里只做质量提示）。"""
         metric_names = {_clean(metric.get("name")) for metric in metrics if _clean(metric.get("name"))}
         for metric in metrics:
-            name = _clean(metric.get("name")) or "<未命名>"
             kind = str(metric.get("metric_kind") or "").strip()
-            if self._check_derived_or_composite(metric, metric_names, raw):
-                continue  # 公式缺失的复合指标不再参与物理列校验
-            if physical_columns is not None:
-                column = _metric_source_column(metric) if not kind else _clean(metric.get("column"))
-                self._append_unknown_column(
-                    raw, "EXE_UNKNOWN_COLUMN", name,
-                    _clean(metric.get("table")), column, physical_columns,
-                )
-        if physical_columns is not None:
-            self._check_dimension_columns(config, raw, physical_columns)
+            if kind:
+                self._check_derived_or_composite(metric, metric_names, raw)
 
     @staticmethod
     def _check_derived_or_composite(
         metric: Dict[str, Any],
         metric_names: Set[str],
         raw: List[Tuple[str, str]],
-    ) -> bool:
-        """派生/复合指标的可执行性：来源指标缺失、无约束、公式缺失或公式不可解析。
-
-        返回 True 表示应跳过该指标的后续物理列校验（对应原 composite 缺公式时的 continue）。
-        """
+    ) -> None:
+        """派生/复合指标的可执行性提示（基础缺失/公式缺失属于结构硬门槛，由 structure 域承载）。"""
         name = _clean(metric.get("name")) or "<未命名>"
         kind = str(metric.get("metric_kind") or "").strip()
         if kind == "derived":
             base = _clean(metric.get("base_metric"))
-            if not base or base not in metric_names:
-                raw.append(("EXE_DERIVED_BASE_MISSING", name))
-            elif not (metric.get("period") or metric.get("filters")):
+            if base and base in metric_names and not (metric.get("period") or metric.get("filters")):
                 raw.append(("EXE_DERIVED_NO_CONSTRAINT", name))
-            return False
+            return
         if kind != "composite":
-            return False
+            return
         formula = str(metric.get("formula") or "").strip()
         if not formula:
-            raw.append(("EXE_COMPOSITE_FORMULA_MISSING", name))
-            return True
+            return
         unresolved = SemanticQualityChecker._unresolved_formula_tokens(formula, metric_names)
         if unresolved:
             raw.append(("EXE_COMPOSITE_UNRESOLVED", f"{name}({','.join(unresolved[:3])})"))
-        return False
-
-    @staticmethod
-    def _append_unknown_column(
-        raw: List[Tuple[str, str]],
-        code: str,
-        target: str,
-        table: str,
-        column: str,
-        physical_columns: Set[Tuple[str, str]],
-    ) -> None:
-        """已给出物理列但该 (table, column) 不在库表清单中时记一条问题。"""
-        if table and column and (table, column) not in physical_columns:
-            raw.append((code, f"{target}({table}.{column})"))
-
-    @staticmethod
-    def _check_dimension_columns(
-        config: Dict[str, Any],
-        raw: List[Tuple[str, str]],
-        physical_columns: Set[Tuple[str, str]],
-    ) -> None:
-        """维度侧未知物理列检查。"""
-        for dimension in [item for item in config.get("dimensions") or [] if isinstance(item, dict)]:
-            SemanticQualityChecker._append_unknown_column(
-                raw, "EXE_UNKNOWN_COLUMN", _clean(dimension.get("name")),
-                _clean(dimension.get("table")), _clean(dimension.get("column")),
-                physical_columns,
-            )
 
     @staticmethod
     def _unresolved_formula_tokens(formula: str, metric_names: Set[str]) -> List[str]:
@@ -335,12 +360,13 @@ class SemanticQualityChecker:
         relationships: List[Dict[str, Any]],
         raw: List[Tuple[str, str]],
     ) -> None:
-        """一致性检查：重名、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
+        """一致性检查：重名、名称白名单、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
 
         键覆盖检查依赖 config.tables 里的声明键（主键/唯一索引元数据，属可选信息），
         表没有声明键时跳过该条关系；不依赖任何外部物理清单。
         """
         self._collect_duplicate_names(metrics, dimensions, raw)
+        self._collect_name_chars(metrics, dimensions, raw)
         self._collect_duplicate_expressions(metrics, raw)
         modeled_tables = {_clean(item.get("table")) for item in [*metrics, *dimensions] if _clean(item.get("table"))}
         seen_pairs, edges = self._collect_relationship_edges(relationships, modeled_tables, raw)
@@ -377,6 +403,24 @@ class SemanticQualityChecker:
                     raw.append(("CON_NAME_DUPLICATE", f"{label}:{name}"))
                 else:
                     seen.add(name)
+
+    @staticmethod
+    def _collect_name_chars(
+        metrics: List[Dict[str, Any]],
+        dimensions: List[Dict[str, Any]],
+        raw: List[Tuple[str, str]],
+    ) -> None:
+        """名称白名单检查（warning 提示，不阻断）：仅允许中文/英文/数字/下划线。
+
+        名称是复合公式 {引用}、派生指标 base_metric、修饰词过滤维度引用的精确
+        查找键，特殊字符不破坏匹配但让引用难写；空格/花括号/不可见字符还会让
+        显示混乱、YAML 导入类型漂移，统一提示（用户 09-27 拍板一刀切 warning）。
+        """
+        for label, items in (("指标", metrics), ("维度", dimensions)):
+            for item in items:
+                name = _clean(item.get("name"))
+                if name and not _VALID_NAME_PATTERN.fullmatch(name):
+                    raw.append(("CON_NAME_CHARS", f"{label}:{name}"))
 
     @staticmethod
     def _collect_table_raw_keys(table: Dict[str, Any]) -> List[Any]:
@@ -573,14 +617,18 @@ class SemanticQualityChecker:
         for code, target in raw:
             grouped.setdefault(code, []).append(target)
         findings: List[QualityFinding] = []
-        # 按 category -> severity 稳定排序，报告可读性优先
-        category_order = {name: index for index, name in enumerate(("provenance", "executability", "coverage", "consistency", "documentation"))}
+        # 按 category -> severity 稳定排序，报告可读性优先；structure 是阻断级门槛排最前
+        category_order = {name: index for index, name in enumerate(("structure", "provenance", "executability", "coverage", "consistency", "documentation"))}
         severity_order = {"error": 0, "warning": 1, "info": 2}
         for code, targets in grouped.items():
             severity, category, label = RULES[code]
             examples = targets[:MAX_TARGET_EXAMPLES]
             suffix = f" 等 {len(targets)} 处" if len(targets) > MAX_TARGET_EXAMPLES else ""
-            message = f"{label}: {', '.join(examples)}{suffix}" if targets and targets != ["-"] else label
+            if category == "structure":
+                # structure 域 target 本身是完整错误句子，不再套 label 前缀
+                message = f"{'；'.join(examples)}{suffix}"
+            else:
+                message = f"{label}: {', '.join(examples)}{suffix}" if targets and targets != ["-"] else label
             findings.append(QualityFinding(code=code, severity=severity, category=category, message=message, targets=targets))
         findings.sort(key=lambda item: (category_order.get(item.category, 99), severity_order.get(item.severity, 99), item.code))
         return findings
@@ -605,14 +653,155 @@ class SemanticQualityChecker:
         }
 
 
+def _normalize_metric_expression(metric: Dict[str, Any]) -> str:
+    """原子指标表达式的跨模型归一化形式：去全部空白、大写。
+
+    比单模型查重（仅压空白）更严：跨模型同名异式是 error 级结论，
+    `SUM( a ) + SUM( b )` 与 `SUM(a)+SUM(b)` 这类纯排版差异不得判成口径冲突。
+    """
+    return "".join(str(metric.get("expression") or "").split()).upper()
+
+
+def _add_config_metric_owners(
+    config: Dict[str, Any],
+    name_owners: Dict[str, Dict[str, str]],
+) -> None:
+    """把单个配置的原子指标写入归属索引（派生/复合与空名/空表达式跳过）。"""
+    model_name = str(config.get("name") or "").strip()
+    if not model_name:
+        return
+    for metric in config.get("metrics") or []:
+        if not isinstance(metric, dict) or metric.get("metric_kind"):
+            continue
+        name = _clean(metric.get("name"))
+        expression = _normalize_metric_expression(metric)
+        if not (name and expression):
+            continue
+        # 模型内同名指标取首条（单模型层会另行报 CON_NAME_DUPLICATE，不在此重复结论）
+        name_owners.setdefault(name, {}).setdefault(model_name, expression)
+
+
+def _collect_metric_owners(configs: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    """扫描各配置的原子指标，构建 指标名->模型->表达式 归属索引。"""
+    name_owners: Dict[str, Dict[str, str]] = {}
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        _add_config_metric_owners(config, name_owners)
+    return name_owners
+
+
+def _involves_focus(owners: Dict[str, str], focus_config_name: Optional[str]) -> bool:
+    """该冲突组是否与 focus 模型相关；未指定 focus 时全量报告。"""
+    return focus_config_name is None or focus_config_name in owners
+
+
+def _append_cross_name_findings(
+    name_owners: Dict[str, Dict[str, str]],
+    focus_config_name: Optional[str],
+    raw: List[Tuple[str, str]],
+) -> None:
+    """同名指标跨模型两组规则：表达式一致记重复定义，不一致记口径冲突。"""
+    for name, owners in name_owners.items():
+        if len(owners) < 2 or not _involves_focus(owners, focus_config_name):
+            continue
+        participants = ", ".join(sorted(owners))
+        if len(set(owners.values())) == 1:
+            raw.append(("CON_CROSS_MODEL_METRIC_DUPLICATE", f"{name}({participants})"))
+        else:
+            raw.append(("CON_CROSS_MODEL_NAME_CONFLICT", f"{name}({participants})"))
+
+
+def check_cross_model_metrics(
+    configs: List[Dict[str, Any]],
+    *,
+    focus_config_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """跨模型指标口径检查：只判同名指标，比较域为组内多个模型的原子指标之间。
+
+    与单模型 check_config 互补的第二层校验——单模型层保证「模型内部自洽」，
+    本层保证「多个模型挂进同一会话时同名指标不互相打架」（多模型 @ 引用会把
+    多份模型一起注入上下文，同名异式的指标只能靠模型自行裁决，必须机器提示）。
+
+    只判同名的理由：异名同表达式不判——COUNT(id)、SUM(xxx) 这类通用表达式
+    跨表撞车太常见（不同表各自的 id 计数是两个正当指标），判了全是噪音。
+
+    规则（只比较原子指标；派生/复合口径由 base_metric/formula 决定，不可直接比）：
+    - CON_CROSS_MODEL_NAME_CONFLICT  error    同名指标表达式不同（真口径冲突）
+    - CON_CROSS_MODEL_METRIC_DUPLICATE warning 同名指标表达式相同（重复定义，宜合并）
+
+    focus_config_name：只报告与该模型相关的冲突（导入预览/check_yaml 按模型归因时用）；
+    缺省时报告全部两两冲突（数据源组级质量报告用）。
+
+    返回与 ConfigQualityReport.to_payload()["findings"] 同构的字典列表，可直接并入
+    单模型 findings；本函数不参与任何评分。
+    """
+    name_owners = _collect_metric_owners(configs)
+    raw: List[Tuple[str, str]] = []
+    _append_cross_name_findings(name_owners, focus_config_name, raw)
+    if not raw:
+        return []
+    findings = SemanticQualityChecker()._aggregate(raw)
+    return [
+        {
+            "code": item.code,
+            "severity": item.severity,
+            "category": item.category,
+            "message": item.message,
+            "targets": list(item.targets),
+        }
+        for item in findings
+    ]
+
+
 def get_semantic_quality_checker() -> SemanticQualityChecker:
     return SemanticQualityChecker()
+
+
+#: structure 域规则的提取顺序 = 结构校验的检查阶段序（与 config_validator 编排一致），
+#: 保证保存链路拦截的第一条错误与历史行为一致。
+_STRUCTURE_RULE_ORDER = (
+    "STR_FIELD_NAME_INVALID",
+    "STR_DIMENSION_INVALID",
+    "STR_METRIC_INVALID",
+    "STR_DERIVED_INVALID",
+    "STR_COMPOSITE_INVALID",
+    "STR_RELATIONSHIP_INVALID",
+)
+
+
+def first_structure_error(
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+    relationships: List[Dict[str, Any]],
+    *,
+    table_columns_map: Optional[Dict[str, Set[str]]] = None,
+) -> Optional[str]:
+    """保存/导入前的结构硬门槛薄壳：跑 check_config，返回第一条结构错误句子。
+
+    判定与文案单点在 core/config_validator 编排函数（由 _check_structure 复用），
+    本函数只负责守卫、形态转换与按阶段序提取，不再持有任何校验逻辑。
+    """
+    if not table_columns_map:
+        return "当前数据源缺少表结构信息，请先完成数据源同步"
+    physical_columns = {(table, column) for table, columns in table_columns_map.items() for column in columns}
+    report = get_semantic_quality_checker().check_config(
+        {"metrics": metrics, "dimensions": dimensions, "relationships": relationships},
+        physical_columns=physical_columns,
+    )
+    by_code = {item.code: item for item in report.findings if item.category == "structure"}
+    for code in _STRUCTURE_RULE_ORDER:
+        if code in by_code:
+            return by_code[code].message
+    return None
 
 
 __all__ = [
     "ConfigQualityReport",
     "QualityFinding",
     "SemanticQualityChecker",
+    "check_cross_model_metrics",
+    "first_structure_error",
     "get_semantic_quality_checker",
     "grade_for_score",
 ]

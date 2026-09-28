@@ -3,12 +3,10 @@
  * SQL 编辑器组件
  * 使用 CodeMirror 实现语法高亮和代码补全
  * 支持多条 SQL 语句执行，各自显示结果集
- * 支持 AI 生成 SQL
  */
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
-import { useModelOptions } from '../composables/useModelOptions'
+import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, getChatDataConfig, getQueryHistory, getQueryHistoryResult } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
@@ -17,16 +15,11 @@ import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
-import AiGeneratedNotice from './AiGeneratedNotice.vue'
-import ChatInputBox from './ChatInputBox.vue'
-import ModelPicker from './ModelPicker.vue'
-import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded, renderMarkdown } from '../utils'
-import useUserStore from '@/store/modules/user'
+import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded } from '../utils'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
 import { buildExecutionTargets, isSameStringArray, normalizeSelectedMemberDatasourceIds } from '../utils/executionTargets'
-import { parseSseChunk } from '../utils/sse'
 import { isAbortError } from '../utils/abort'
 import { parseSQLStatements } from '../utils/sqlStatements'
 import { appleTheme } from './sqlEditorTheme'
@@ -34,7 +27,6 @@ import { appleTheme } from './sqlEditorTheme'
 const { submitSqlTask } = useQueryTask()
 // 当前查询任务轮询的取消通道:组件卸载时中止,避免销毁后仍继续轮询/写状态
 let queryTaskAbortController: AbortController | null = null
-const SQL_ASSIST_AGENT_ID = 'chat_data_sql_assist'
 const isMacPlatform = /Mac|iPhone|iPad|iPod/i.test(globalThis.navigator?.platform || '')
 const primaryShortcutLabel = isMacPlatform ? '⌘' : 'Ctrl'
 const optionShortcutLabel = isMacPlatform ? 'Option' : 'Alt'
@@ -51,22 +43,6 @@ import { EditorSelection } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import IconPlay from './icons/IconPlay.vue'
 
-const safeRandomId = (): string => {
-  const c = (globalThis as any)?.crypto
-  if (typeof c?.randomUUID === 'function') {
-    return c.randomUUID()
-  }
-  if (typeof c?.getRandomValues === 'function') {
-    const bytes = new Uint8Array(16)
-    c.getRandomValues(bytes)
-    return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-  }
-  return `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
-}
-
-type SqlEditorSSEEventType = 'message' | 'error'
-type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean; reasoning?: string; reasoningExpanded?: boolean }
-type AiMessageSegment = { type: 'markdown' | 'sql'; content: string }
 type QueryResultPanelItem = {
   key?: string | number
   title?: string
@@ -75,64 +51,6 @@ type QueryResultPanelItem = {
   memberDatasourceId?: string
   memberName?: string
   status?: 'success' | 'error' | 'none'
-}
-type AiConversationRecord = {
-  id: string
-  datasourceId: string
-  datasourceName: string
-  title: string
-  updatedAt: string
-  messages: AiChatMessage[]
-}
-
-// storage key 统一 chatdata: 前缀,按数据源 + 用户隔离(共享浏览器多账号不互相可见)
-const aiConversationHistoryKey = () =>
-  `chatdata:sql-ai-history:${props.datasourceId || 'default'}:${String(userStore.id || '').trim() || 'anonymous'}`
-const AI_CONVERSATION_HISTORY_LIMIT = 50
-
-const splitAiMessageSegments = (content: string): AiMessageSegment[] => {
-  if (!content) return []
-  const segments: AiMessageSegment[] = []
-  const codeBlockPattern = /```(?:sql|mysql|hive)?\s*([\s\S]*?)```/gi
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = codeBlockPattern.exec(content)) !== null) {
-    const markdown = content.slice(lastIndex, match.index).trim()
-    if (markdown) {
-      segments.push({ type: 'markdown', content: markdown })
-    }
-    const sqlContent = (match[1] || '').trim()
-    if (sqlContent) {
-      segments.push({ type: 'sql', content: sqlContent })
-    }
-    lastIndex = match.index + match[0].length
-  }
-
-  const remaining = content.slice(lastIndex).trim()
-  if (remaining) {
-    segments.push({ type: 'markdown', content: remaining })
-  }
-
-  return segments.length ? segments : [{ type: 'markdown', content }]
-}
-
-/**
- * 字节级分帧与字段解析收敛到共享 parseSseChunk(唯一实现),本组件只保留
- * 自身的事件类型体系:该接口仅区分 error 与默认 message 两类事件。
- * 多行 data 语义与共享实现一致(按规范 "\n" 连接),与旧实现相同,无行为变化。
- */
-function parseSSEEvents(buffer: string): {
-  events: Array<{ event: SqlEditorSSEEventType; data: string }>
-  remaining: string
-} {
-  const { events, rest } = parseSseChunk(buffer)
-  return {
-    events: events
-      .filter(item => Boolean(item.data))
-      .map(item => ({ event: item.event === 'error' ? 'error' : 'message', data: item.data })),
-    remaining: rest,
-  }
 }
 
 interface TableInfo {
@@ -190,7 +108,6 @@ const props = withDefaults(defineProps<Props>(), {
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false
 })
-const userStore = useUserStore()
 const attrs = useAttrs()
 
 // 表结构面板（搜索/展开/悬浮标题，与 QueryBuilder 共享逻辑）
@@ -897,326 +814,7 @@ const isResizing = ref(false)
 const DEFAULT_EDITOR_HEIGHT_RATIO = 0.55
 
 // 编辑器/AI面板宽度
-const editorWidthPercent = ref(50)
-const isHorizontalResizing = ref(false)
 
-// AI 生成 SQL 状态
-const showAiPanel = ref(false)
-const aiQuery = ref('')
-const isAiGenerating = ref(false)
-const aiMessages = ref<AiChatMessage[]>([])
-
-// 思考区交互口径与主会话一致：默认收起，流式思考中同行走马灯预览尾部文字。
-const THINKING_PREVIEW_TAIL_LENGTH = 80
-
-const isAiThinking = (msg: AiChatMessage): boolean => Boolean(msg.isStreaming && !msg.content)
-
-const getAiThinkingPreview = (reasoning: string): string => {
-  const singleLine = reasoning.replace(/\s+/g, ' ').trim()
-  if (!singleLine) return ''
-  return singleLine.length > THINKING_PREVIEW_TAIL_LENGTH
-    ? `…${singleLine.slice(-THINKING_PREVIEW_TAIL_LENGTH)}`
-    : singleLine
-}
-const aiInputRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
-// AI 生成模型选择：与主对话口径一致，模型必选并回填默认模型
-const aiModelId = ref('')
-const aiEnableDeepThinking = ref<boolean | null>(null)
-const aiThinkingEffort = ref<string | null>(null)
-const { modelOptions, defaultModelId, load: loadModelOptions } = useModelOptions()
-// 模型加载完成后回填默认模型；选中模型失效（配置变更）时同样回退
-watch(defaultModelId, (id) => {
-  if (id && !modelOptions.value.some(model => model.id === aiModelId.value)) {
-    aiModelId.value = id
-  }
-})
-const aiOutputRef = ref<HTMLDivElement | null>(null)
-const isAiOutputNearBottom = ref(true)
-let abortController: AbortController | null = null
-const aiGenerationSeq = ref(0)
-// 多轮对话 session
-const aiSessionId = ref<string>('')
-const showAiConversationHistoryPopover = ref(false)
-const aiConversationHistoryItems = ref<AiConversationRecord[]>([])
-const isLoadingAiConversationHistory = ref(false)
-const isLoadingMoreAiConversationHistory = ref(false)
-const aiConversationHistoryPage = ref(1)
-const aiConversationHistoryPageSize = 20
-const hasMoreAiConversationHistory = ref(false)
-const aiConversationBackendReady = ref(false)
-
-const readAiConversationHistory = (): AiConversationRecord[] => {
-  try {
-    const raw = localStorage.getItem(aiConversationHistoryKey())
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter(item => item?.id && Array.isArray(item?.messages))
-  } catch (err) {
-    console.error('读取 AI 辅助历史对话失败:', err)
-    return []
-  }
-}
-
-const writeAiConversationHistory = (items: AiConversationRecord[]) => {
-  try {
-    localStorage.setItem(aiConversationHistoryKey(), JSON.stringify(items.slice(0, AI_CONVERSATION_HISTORY_LIMIT)))
-  } catch (err) {
-    console.error('保存 AI 辅助历史对话失败:', err)
-  }
-}
-
-const getAiConversationTitle = (messages: AiChatMessage[]) => {
-  const firstUserMessage = messages.find(item => item.role === 'user' && item.content.trim())
-  const title = firstUserMessage?.content.trim() || '未命名会话'
-  return title.length > 32 ? `${title.slice(0, 32)}...` : title
-}
-
-const defaultAiConversationTitles = new Set(['', '新会话', '未命名会话'])
-const normalizeAiConversationTitle = (value: unknown) => {
-  const title = String(value || '').trim()
-  return title.length > 32 ? `${title.slice(0, 32)}...` : title
-}
-
-const isDefaultAiConversationTitle = (value: unknown) => {
-  return defaultAiConversationTitles.has(String(value || '').trim())
-}
-
-const normalizeAiConversationMessages = (messages: unknown): AiChatMessage[] => {
-  if (!Array.isArray(messages)) return []
-  return messages
-    .filter((message: any) => message?.role === 'user' || message?.role === 'assistant')
-    .map((message: any) => ({
-      role: message.role,
-      content: String(message.content || ''),
-      time: message.time,
-      isStreaming: false,
-    }))
-}
-
-const loadAiConversationMessages = async (conversationId: string) => {
-  const response = await getConversationHistory(conversationId)
-  const data = await response.json()
-  return normalizeAiConversationMessages(data?.data?.messages)
-}
-
-const getAiConversationHistoryItems = () => {
-  const currentDatasourceId = props.datasourceId || ''
-  return readAiConversationHistory().filter(item => item.datasourceId === currentDatasourceId)
-}
-
-const normalizeConversationResponse = (response: any): { items: AiConversationRecord[]; hasMore: boolean } => {
-  const raw = response?.data
-  const conversations = Array.isArray(raw)
-    ? raw
-    : Array.isArray(raw?.conversations)
-      ? raw.conversations
-      : []
-  const localHistoryMap = new Map(readAiConversationHistory().map(item => [item.id, item]))
-  const items = conversations.map((item: any) => {
-    const id = String(item?.id || item?.conversation_id || '').trim()
-    const localItem = localHistoryMap.get(id)
-    const messages = normalizeAiConversationMessages(item?.messages || localItem?.messages)
-    const messageTitle = messages.length > 0 ? getAiConversationTitle(messages) : ''
-    const titleCandidate = [item?.title, item?.first_message_preview, localItem?.title, messageTitle]
-      .map(normalizeAiConversationTitle)
-      .find(title => title && !isDefaultAiConversationTitle(title))
-    return {
-      id,
-      datasourceId: props.datasourceId || localItem?.datasourceId || '',
-      datasourceName: props.datasource?.group_name || localItem?.datasourceName || '',
-      title: titleCandidate || '未命名会话',
-      updatedAt: item?.update_time || item?.updated_at || item?.create_time || item?.created_at || localItem?.updatedAt || new Date().toISOString(),
-      messages,
-    }
-  }).filter((item: AiConversationRecord) => item.id)
-  return { items, hasMore: !Array.isArray(raw) && Boolean(raw?.has_more) }
-}
-
-const groupedAiConversationHistory = computed(() => {
-  const groupMap: Record<string, AiConversationRecord[]> = {}
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const weekAgo = new Date(today)
-  weekAgo.setDate(today.getDate() - 7)
-
-  for (const item of aiConversationHistoryItems.value) {
-    const date = new Date(item.updatedAt)
-    const label = Number.isNaN(date.getTime()) || date >= weekAgo ? '7天内' : '更早'
-    if (!groupMap[label]) groupMap[label] = []
-    groupMap[label].push(item)
-  }
-
-  return ['7天内', '更早']
-    .filter(label => groupMap[label]?.length)
-    .map(label => ({ label, items: groupMap[label] }))
-})
-
-const refreshAiConversationHistoryItems = () => {
-  aiConversationHistoryItems.value = getAiConversationHistoryItems()
-  hasMoreAiConversationHistory.value = false
-}
-
-const hydrateAiConversationTitles = async (items: AiConversationRecord[]) => {
-  const targets = items.filter(item => isDefaultAiConversationTitle(item.title) && item.messages.length === 0)
-  if (targets.length === 0) return items
-  const titleEntries = await Promise.all(targets.map(async (item) => {
-    try {
-      const messages = await loadAiConversationMessages(item.id)
-      return [item.id, { title: getAiConversationTitle(messages), messages }] as const
-    } catch (err) {
-      console.error('加载 AI 辅助历史标题失败:', err)
-      return [item.id, null] as const
-    }
-  }))
-  const titleMap = new Map(titleEntries.filter(([, value]) => value).map(([id, value]) => [id, value!]))
-  return items.map(item => {
-    const hydrated = titleMap.get(item.id)
-    return hydrated ? { ...item, title: hydrated.title, messages: hydrated.messages } : item
-  })
-}
-
-const mergeAiConversationHistoryItems = (items: AiConversationRecord[]) => {
-  return Array.from(new Map(items.map(item => [item.id, item])).values())
-}
-
-const updateAiConversationTitleCache = (conversationId: string, title: string) => {
-  const normalizedTitle = normalizeAiConversationTitle(title)
-  if (!conversationId || !normalizedTitle || isDefaultAiConversationTitle(normalizedTitle)) return
-  aiConversationHistoryItems.value = aiConversationHistoryItems.value.map(item => (
-    item.id === conversationId ? { ...item, title: normalizedTitle } : item
-  ))
-  const updatedHistory = readAiConversationHistory().map(item => (
-    item.id === conversationId ? { ...item, title: normalizedTitle } : item
-  ))
-  writeAiConversationHistory(updatedHistory)
-}
-
-const generateAiConversationTitle = async (conversationId: string) => {
-  try {
-    const response = await generateConversationTitle(conversationId)
-    if (response.status === 'success' && response.data?.title) {
-      updateAiConversationTitleCache(conversationId, response.data.title)
-      return response.data.title
-    }
-  } catch (err) {
-    console.error('生成 AI 辅助历史标题失败:', err)
-  }
-  return ''
-}
-
-const loadAiConversationHistoryItems = async (page = 1) => {
-  const isFirstPage = page === 1
-  if (isFirstPage ? isLoadingAiConversationHistory.value : isLoadingMoreAiConversationHistory.value) return
-  if (isFirstPage) {
-    isLoadingAiConversationHistory.value = true
-  } else {
-    isLoadingMoreAiConversationHistory.value = true
-  }
-  try {
-    const response = await getConversations(SQL_ASSIST_AGENT_ID, {
-      page,
-      page_size: aiConversationHistoryPageSize,
-    })
-    const { items, hasMore } = normalizeConversationResponse(response)
-    const hydratedItems = await hydrateAiConversationTitles(items)
-    aiConversationHistoryItems.value = isFirstPage
-      ? mergeAiConversationHistoryItems(hydratedItems)
-      : mergeAiConversationHistoryItems([...aiConversationHistoryItems.value, ...hydratedItems])
-    aiConversationHistoryPage.value = page
-    hasMoreAiConversationHistory.value = hasMore
-    aiConversationBackendReady.value = true
-  } catch (err) {
-    console.error('获取 AI 辅助历史对话失败:', err)
-    aiConversationBackendReady.value = false
-    if (isFirstPage) {
-      refreshAiConversationHistoryItems()
-    }
-  } finally {
-    if (isFirstPage) {
-      isLoadingAiConversationHistory.value = false
-    } else {
-      isLoadingMoreAiConversationHistory.value = false
-    }
-  }
-}
-
-const loadMoreAiConversationHistoryItems = async () => {
-  if (
-    isLoadingAiConversationHistory.value ||
-    isLoadingMoreAiConversationHistory.value ||
-    !hasMoreAiConversationHistory.value
-  ) {
-    return
-  }
-  await loadAiConversationHistoryItems(aiConversationHistoryPage.value + 1)
-}
-
-const handleAiConversationHistoryScroll = (event: Event) => {
-  const container = event.currentTarget as HTMLElement | null
-  if (!container) return
-  const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
-  if (distanceToBottom <= 40) {
-    void loadMoreAiConversationHistoryItems()
-  }
-}
-
-const ensureAiConversationId = async () => {
-  if (aiSessionId.value && aiConversationBackendReady.value) return aiSessionId.value
-  try {
-    const response = await createConversation({ agent_id: SQL_ASSIST_AGENT_ID })
-    const conversationId = response.data?.id || response.data?.conversation?.id
-    if (conversationId) {
-      aiSessionId.value = conversationId
-      aiConversationBackendReady.value = true
-      return conversationId
-    }
-  } catch (err) {
-    console.error('创建 AI 辅助会话失败:', err)
-  }
-  if (!aiSessionId.value) {
-    aiSessionId.value = safeRandomId()
-  }
-  return aiSessionId.value
-}
-
-const saveCurrentAiConversation = (datasourceId = props.datasourceId, datasourceName = props.datasource?.group_name || '') => {
-  // 思考-only 消息（正文为空但有思考段）也要保留，与后端 persist_turn 落历史口径一致。
-  const messages = aiMessages.value
-    .filter(item => item.content.trim() || item.role === 'user' || item.reasoning)
-    .map(item => ({ ...item, isStreaming: false }))
-
-  if (!datasourceId || messages.length === 0) return
-
-  const record: AiConversationRecord = {
-    id: aiSessionId.value,
-    datasourceId,
-    datasourceName,
-    title: getAiConversationTitle(messages),
-    updatedAt: new Date().toISOString(),
-    messages,
-  }
-  const rest = readAiConversationHistory().filter(item => item.id !== record.id)
-  writeAiConversationHistory([record, ...rest])
-  refreshAiConversationHistoryItems()
-}
-
-const handleAiOutputScroll = () => {
-  const container = aiOutputRef.value
-  if (!container) return
-  const { scrollTop, scrollHeight, clientHeight } = container
-  isAiOutputNearBottom.value = scrollHeight - scrollTop - clientHeight < 100
-}
-
-const scrollAiOutputToBottom = (force = false) => {
-  nextTick(() => {
-    const container = aiOutputRef.value
-    if (!container) return
-    if (!force && !isAiOutputNearBottom.value) return
-    container.scrollTop = container.scrollHeight
-    isAiOutputNearBottom.value = true
-  })
-}
 
 // CodeMirror 主题 - Apple 风格（配置体较大，抽至 sqlEditorTheme.ts）
 
@@ -1427,7 +1025,7 @@ const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
     tagName === 'textarea' ||
     tagName === 'select' ||
     target.isContentEditable ||
-    Boolean(target.closest('.el-dialog, .el-popper, .ai-history-popover'))
+    Boolean(target.closest('.el-dialog, .el-popper'))
   )
 }
 
@@ -1441,10 +1039,6 @@ const closeTopOverlay = (): boolean => {
     closeSqlContextMenu()
     return true
   }
-  if (showAiConversationHistoryPopover.value) {
-    showAiConversationHistoryPopover.value = false
-    return true
-  }
   if (showHistoryDialog.value) {
     showHistoryDialog.value = false
     return true
@@ -1455,10 +1049,6 @@ const closeTopOverlay = (): boolean => {
   }
   if (showSaveModal.value) {
     showSaveModal.value = false
-    return true
-  }
-  if (showAiPanel.value) {
-    showAiPanel.value = false
     return true
   }
   return false
@@ -1516,19 +1106,10 @@ const onMouseMove = (e: MouseEvent) => {
     const maxH = rect.height * 0.8
     editorHeight.value = Math.max(minH, Math.min(maxH, mouseY))
   }
-
-  if (isHorizontalResizing.value && editorContainerRef.value) {
-    const rect = editorContainerRef.value.getBoundingClientRect()
-    const mouseX = e.clientX - rect.left
-    let newPercent = (mouseX / rect.width) * 100
-    newPercent = Math.max(30, Math.min(70, newPercent))
-    editorWidthPercent.value = newPercent
-  }
 }
 
 const onMouseUp = () => {
   isResizing.value = false
-  isHorizontalResizing.value = false
 }
 
 const syncEditorHeight = (forceDefault = false) => {
@@ -1547,262 +1128,6 @@ const handleWindowResize = () => {
   syncEditorHeight(false)
 }
 
-// AI 生成 SQL
-const handleAiGenerate = async () => {
-  if (!aiQuery.value.trim()) {
-    ElMessage.warning('请输入查询描述')
-    return
-  }
-
-  if (!props.datasourceId) {
-    ElMessage.warning('请先选择数据源')
-    return
-  }
-
-  const userMessage = aiQuery.value.trim()
-  const generationSeq = aiGenerationSeq.value + 1
-  const isFirstAiMessage = aiMessages.value.filter(item => item.role === 'user').length === 0
-  aiGenerationSeq.value = generationSeq
-  const now = new Date()
-  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
-  aiMessages.value.push({ role: 'user', content: userMessage, time: timeStr })
-  aiMessages.value.push({ role: 'assistant', content: '', isStreaming: true })
-  saveCurrentAiConversation()
-  scrollAiOutputToBottom(true)
-  aiQuery.value = ''
-
-  abortController = new AbortController()
-  isAiGenerating.value = true
-
-  let fullContent = ''
-
-  try {
-    const conversationId = await ensureAiConversationId()
-    const response = await streamQuickSql({
-      query: userMessage,
-      datasource_id: props.datasourceId,
-      member_datasource_ids: selectedMemberDatasourceIds.value,
-      session_id: aiSessionId.value,
-      conversation_id: conversationId,
-      model_id: aiModelId.value || undefined,
-      enable_thinking: aiEnableDeepThinking.value ?? undefined,
-      thinking_effort: aiThinkingEffort.value ?? undefined,
-    }, abortController.signal)
-
-    if (aiGenerationSeq.value !== generationSeq) return
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) {
-      throw new Error('无法获取响应流')
-    }
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let streamEnded = false
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (aiGenerationSeq.value !== generationSeq) return
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const { events, remaining } = parseSSEEvents(buffer)
-      buffer = remaining
-
-      for (const { event, data: dataStr } of events) {
-        if (dataStr === '[DONE]') {
-          streamEnded = true
-          break
-        }
-
-        try {
-          const data = JSON.parse(dataStr)
-          if (event === 'error' || data.type === 'error') {
-            throw new Error(data.message || '生成失败')
-          }
-          if (data.type === 'thinking') {
-            const reasoningText = String(data.content || '')
-            if (reasoningText && aiGenerationSeq.value === generationSeq) {
-              const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-              if (lastMessage?.role === 'assistant') {
-                lastMessage.reasoning = `${lastMessage.reasoning || ''}${reasoningText}`
-                scrollAiOutputToBottom()
-              }
-            }
-            continue
-          }
-          if (data.type === 'chunk') {
-            fullContent += data.content || ''
-            if (aiGenerationSeq.value === generationSeq) {
-              const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-              if (lastMessage?.role === 'assistant') {
-                lastMessage.content = fullContent
-                lastMessage.isStreaming = true
-                scrollAiOutputToBottom()
-              }
-            }
-            continue
-          }
-          if (data.type === 'complete') {
-            streamEnded = true
-            break
-          }
-        } catch (err) {
-          console.error('解析 AI SQL SSE 数据失败:', err, dataStr)
-          if (err instanceof Error) {
-            throw err
-          }
-        }
-      }
-
-      if (streamEnded) break
-    }
-
-    if (fullContent) {
-      if (aiGenerationSeq.value === generationSeq) {
-        const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-        if (lastMessage?.role === 'assistant') {
-          lastMessage.content = fullContent
-          lastMessage.isStreaming = false
-        }
-        saveCurrentAiConversation()
-        if (isFirstAiMessage && conversationId) {
-          void generateAiConversationTitle(conversationId)
-        }
-        scrollAiOutputToBottom()
-      }
-    }
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      if (fullContent) {
-        if (aiGenerationSeq.value === generationSeq) {
-          const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-          if (lastMessage?.role === 'assistant') {
-            lastMessage.content = fullContent
-            lastMessage.isStreaming = false
-          }
-          saveCurrentAiConversation()
-          scrollAiOutputToBottom()
-        }
-      }
-    } else {
-      console.error('AI 生成 SQL 失败:', err)
-      ElMessage.error('生成失败，请重试')
-      if (aiGenerationSeq.value === generationSeq) {
-        const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-        if (lastMessage?.role === 'assistant') {
-          lastMessage.content = '抱歉，生成失败，请重试。'
-          lastMessage.isStreaming = false
-        }
-        saveCurrentAiConversation()
-        scrollAiOutputToBottom()
-      }
-    }
-  } finally {
-    if (aiGenerationSeq.value === generationSeq) {
-      isAiGenerating.value = false
-      const lastMessage = aiMessages.value[aiMessages.value.length - 1]
-      if (lastMessage?.role === 'assistant') {
-        lastMessage.isStreaming = false
-      }
-      saveCurrentAiConversation()
-      abortController = null
-    }
-  }
-}
-
-// 停止生成
-const handleStopGenerate = () => {
-  if (abortController) {
-    abortController.abort()
-  }
-}
-
-// 复制文本到剪贴板
-const copyToClipboard = (text: string) => {
-  navigator.clipboard.writeText(text)
-  ElMessage.success('已复制')
-}
-
-// 提取 SQL 并添加到编辑器
-const extractAndAddSql = (content: string) => {
-  // 提取 markdown 代码块中的 SQL
-  const sqlMatch = content.match(/```sql\s*([\s\S]*?)```/i) ?? content.match(/```\s*([\s\S]*?)```/)
-  const sqlContent = sqlMatch?.[1]?.trim() ?? content.trim()
-
-  const trimmed = sqlCode.value.trim()
-  if (trimmed && !trimmed.endsWith(';')) {
-    sqlCode.value = trimmed + ';\n\n' + sqlContent
-  } else if (trimmed) {
-    sqlCode.value = trimmed + '\n\n' + sqlContent
-  } else {
-    sqlCode.value = sqlContent
-  }
-
-  ElMessage.success('已添加到编辑器')
-}
-
-// 清空 AI 对话
-const clearAiMessages = () => {
-  saveCurrentAiConversation()
-  aiGenerationSeq.value += 1
-  if (isAiGenerating.value) {
-    handleStopGenerate()
-  }
-  isAiGenerating.value = false
-  abortController = null
-  aiMessages.value = []
-  aiQuery.value = ''
-  aiSessionId.value = safeRandomId()
-  aiConversationBackendReady.value = false
-  ElMessage.success('已新建会话')
-}
-
-const handleAiConversationHistoryPopoverShow = () => {
-  saveCurrentAiConversation()
-  void loadAiConversationHistoryItems(1)
-}
-
-const handleLoadAiConversation = async (item: AiConversationRecord) => {
-  saveCurrentAiConversation()
-  aiGenerationSeq.value += 1
-  if (isAiGenerating.value) {
-    handleStopGenerate()
-  }
-  isAiGenerating.value = false
-  abortController = null
-  aiSessionId.value = item.id
-  aiConversationBackendReady.value = true
-  if (item.messages.length > 0) {
-    aiMessages.value = item.messages.map(message => ({ ...message, isStreaming: false }))
-  } else {
-    try {
-      aiMessages.value = await loadAiConversationMessages(item.id)
-    } catch (err) {
-      console.error('加载 AI 辅助历史对话失败:', err)
-      aiMessages.value = []
-    }
-  }
-  aiQuery.value = ''
-  showAiConversationHistoryPopover.value = false
-  showAiPanel.value = true
-  scrollAiOutputToBottom(true)
-}
-
-// 数据源切换时保存并重置 AI 会话（表结构变了，历史上下文无意义）
-watch(() => props.datasourceId, (_newId, oldId) => {
-  saveCurrentAiConversation(oldId || '', '')
-  aiMessages.value = []
-  aiQuery.value = ''
-  aiSessionId.value = safeRandomId()
-  aiConversationBackendReady.value = false
-  refreshAiConversationHistoryItems()
-})
-
 // 外部更新初始化 SQL 时同步到编辑器
 watch(() => props.initialSql, () => {
   const next = resolveInitialSql()
@@ -1815,16 +1140,8 @@ watch(() => props.initialSql, () => {
   savedSqlCode.value = next
 })
 
-// 显示 AI 面板时自动聚焦
-watch(showAiPanel, (show) => {
-  if (show && aiInputRef.value) {
-    setTimeout(() => aiInputRef.value?.focus(), 100)
-  }
-})
-
 onMounted(() => {
   loadRuntimeConfig()
-  loadModelOptions()
   document.addEventListener('click', handleDocumentClick)
   document.addEventListener('mousemove', onMouseMove)
   document.addEventListener('mouseup', onMouseUp)
@@ -1987,14 +1304,6 @@ defineExpose({
             <i class="fa-solid fa-indent"></i>
             <span>格式化</span>
           </button>
-          <button
-            class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded text-[12px] font-semibold cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]"
-            :class="showAiPanel ? 'bg-[#E8F3FF] border-[#165DFF] text-[#165DFF]' : 'bg-white text-[#21252C]'"
-            @click="showAiPanel = !showAiPanel"
-          >
-            <i class="fa-regular fa-lightbulb"></i>
-            <span>SQL助手</span>
-          </button>
           <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="openFavoriteModal">
             <i class="fa-regular fa-star"></i>
             <span>收藏</span>
@@ -2022,7 +1331,7 @@ defineExpose({
       <!-- 编辑器区域（左右分屏） -->
       <div ref="editorContainerRef" class="flex-1 min-h-0 flex overflow-hidden">
         <!-- 左侧：SQL 编辑器 -->
-        <div class="overflow-hidden bg-white editor-wrapper" :style="{ width: showAiPanel ? `${editorWidthPercent}%` : '100%' }">
+        <div class="overflow-hidden bg-white editor-wrapper">
           <Codemirror
             ref="codemirrorRef"
             v-model="sqlCode"
@@ -2034,217 +1343,6 @@ defineExpose({
             :tab-size="2"
             @ready="handleEditorReady"
           />
-        </div>
-
-        <!-- 横向拖动分隔条 -->
-        <div
-          v-if="showAiPanel"
-          :class="[
-            'w-1.5 cursor-col-resize flex items-center justify-center bg-transparent transition-colors duration-150',
-            isHorizontalResizing && 'bg-[#1677FF]/[0.05]'
-          ]"
-          @mousedown.prevent="isHorizontalResizing = true"
-        >
-          <div :class="[
-            'w-0.5 h-6 rounded-sm bg-black/15 transition-all duration-150',
-            isHorizontalResizing && 'bg-[#1677FF]'
-          ]"></div>
-        </div>
-
-        <!-- 右侧：AI 辅助面板 -->
-        <div v-if="showAiPanel" class="relative flex flex-col min-h-0 overflow-hidden bg-[#FAFAFA] border-l border-black/[0.06]" :style="{ width: `${100 - editorWidthPercent}%` }">
-          <!-- AI 面板工具按钮 -->
-          <div class="absolute top-3 left-3 flex items-center gap-3 z-10">
-            <el-popover
-              v-model:visible="showAiConversationHistoryPopover"
-              trigger="hover"
-              placement="bottom-start"
-              :width="360"
-              :show-after="120"
-              :hide-after="150"
-              :offset="10"
-              popper-class="ai-history-popover"
-              @show="handleAiConversationHistoryPopoverShow"
-            >
-              <template #reference>
-                <button
-                  class="w-8 h-8 flex items-center justify-center border border-black/[0.08] rounded-[15px] bg-white text-[#64748b] shadow-[0_4px_12px_rgba(15,23,42,0.12)] cursor-pointer transition-all duration-150 hover:-translate-y-px hover:text-[#1677FF]"
-                  title="历史对话"
-                >
-                  <i class="fa-solid fa-clock-rotate-left text-[16px]"></i>
-                </button>
-              </template>
-
-              <div class="ai-history-panel">
-                <div class="px-4 py-3 border-b border-slate-100 text-base font-semibold text-slate-800">AI 生成 SQL 历史会话</div>
-                <div class="ai-history-list" @scroll="handleAiConversationHistoryScroll">
-                  <div v-if="isLoadingAiConversationHistory" class="flex flex-col items-center justify-center gap-2 px-4 py-10 text-gray-400 text-xs">
-                    <i class="fa-solid fa-spinner fa-spin text-lg opacity-70"></i>
-                    <span>加载中...</span>
-                  </div>
-                  <div v-else-if="aiConversationHistoryItems.length === 0" class="flex flex-col items-center justify-center gap-2 px-4 py-10 text-gray-400 text-xs">
-                    <i class="fa-regular fa-comments text-2xl opacity-50"></i>
-                    <span>暂无会话</span>
-                  </div>
-
-                  <template v-else>
-                    <template v-for="group in groupedAiConversationHistory" :key="group.label">
-                      <div class="mb-2">
-                        <div class="px-2 py-1 text-[11px] text-gray-400 font-medium">{{ group.label }}</div>
-                        <div
-                          v-for="item in group.items"
-                          :key="item.id"
-                          :class="[
-                            'group flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-150',
-                            aiSessionId === item.id ? 'bg-gradient-to-br from-[#1f82d9]/10 to-[#1f82d9]/[0.05]' : 'hover:bg-black/[0.04]'
-                          ]"
-                          @click="handleLoadAiConversation(item)"
-                        >
-                          <i :class="['fa-regular fa-message text-sm shrink-0', aiSessionId === item.id ? 'text-[#1f82d9]' : 'text-gray-400']"></i>
-                          <span
-                            :class="[
-                              'flex-1 text-[13px] overflow-hidden text-ellipsis whitespace-nowrap',
-                              aiSessionId === item.id ? 'text-[#1f82d9] font-medium' : 'text-gray-700'
-                            ]"
-                            :title="item.title"
-                          >
-                            {{ item.title }}
-                          </span>
-                        </div>
-                      </div>
-                    </template>
-                    <div v-if="isLoadingMoreAiConversationHistory" class="flex items-center justify-center gap-2 px-4 py-3 text-gray-400 text-xs">
-                      <i class="fa-solid fa-spinner fa-spin opacity-70"></i>
-                      <span>加载中...</span>
-                    </div>
-                  </template>
-                </div>
-              </div>
-            </el-popover>
-            <button
-              class="w-8 h-8 flex items-center justify-center border border-black/[0.08] rounded-[15px] bg-white text-[#334155] shadow-[0_4px_12px_rgba(15,23,42,0.12)] cursor-pointer transition-all duration-150 hover:-translate-y-px hover:text-[#1677FF]"
-              title="新建会话"
-              @click="clearAiMessages"
-            >
-              <i class="fa-solid fa-plus text-[15px]"></i>
-            </button>
-          </div>
-          <button class="absolute top-3 right-3 w-7 h-7 flex items-center justify-center border-none rounded-md bg-black/[0.04] text-gray-400 cursor-pointer transition-all duration-150 z-10 hover:bg-black/[0.04] hover:text-gray-700" @click="showAiPanel = false">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-
-          <!-- AI 消息区域 -->
-          <div ref="aiOutputRef" class="flex-1 min-h-0 overflow-y-auto px-3 pb-3 pt-20" @scroll="handleAiOutputScroll">
-            <div v-if="aiMessages.length === 0 && !isAiGenerating" class="flex flex-col items-center justify-center h-full text-gray-400">
-              <i class="fa-solid fa-wand-magic-sparkles text-2xl mb-3 text-[#1677FF] opacity-50"></i>
-              <p class="text-[13px] m-0">输入自然语言描述</p>
-              <p class="text-[11px] mt-1 text-gray-400">AI 将为你生成 SQL 语句</p>
-            </div>
-            <template v-else>
-              <!-- 历史消息 -->
-              <div v-for="(msg, idx) in aiMessages" :key="idx" class="mb-3" :class="msg.role === 'user' ? 'flex flex-col items-end' : ''">
-                <div v-if="msg.role === 'assistant'" class="max-w-[85%]">
-                  <div class="ai-assistant-message px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
-                    <div v-if="msg.reasoning" class="min-w-0">
-                      <button
-                        type="button"
-                        class="group inline-flex max-w-full items-center gap-2 rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
-                        @click="msg.reasoningExpanded = !msg.reasoningExpanded"
-                      >
-                        <i
-                          :class="[
-                            'fa-solid fa-brain text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600',
-                            isAiThinking(msg) ? 'fa-fade' : ''
-                          ]"
-                        ></i>
-                        <span>{{ isAiThinking(msg) ? '思考中' : '思考' }}</span>
-                        <i
-                          :class="[
-                            'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
-                            msg.reasoningExpanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100'
-                          ]"
-                        ></i>
-                        <span
-                          v-if="isAiThinking(msg) && !msg.reasoningExpanded && getAiThinkingPreview(msg.reasoning)"
-                          class="min-w-0 flex-1 truncate text-xs font-normal text-slate-400/80"
-                        >{{ getAiThinkingPreview(msg.reasoning) }}</span>
-                      </button>
-                      <div
-                        v-if="msg.reasoningExpanded"
-                        class="mb-1.5 max-h-[210px] overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-400"
-                      >{{ msg.reasoning }}</div>
-                    </div>
-                    <template v-if="msg.content">
-                      <template v-for="(segment, segmentIdx) in splitAiMessageSegments(msg.content)" :key="segmentIdx">
-                        <div v-if="segment.type === 'markdown'" class="ai-message-markdown" v-html="renderMarkdown(segment.content)"></div>
-                        <div v-else class="ai-sql-block">
-                          <div class="ai-sql-actions">
-                            <button class="ai-sql-action-btn" title="复制 SQL" @click="copyToClipboard(segment.content)">
-                              <i class="fa-regular fa-copy"></i>
-                              复制
-                            </button>
-                            <button class="ai-sql-action-btn" title="添加到编辑器" @click="extractAndAddSql(segment.content)">
-                              <i class="fa-solid fa-check"></i>
-                              接受
-                            </button>
-                          </div>
-                          <pre><code>{{ segment.content }}</code></pre>
-                        </div>
-                      </template>
-                      <span v-if="msg.isStreaming" class="animate-pulse text-gray-400">▌</span>
-                    </template>
-                    <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
-                      <i class="fa-solid fa-spinner fa-spin"></i>
-                      <span>正在思考...</span>
-                    </div>
-                  </div>
-                  <div v-if="!msg.isStreaming" class="flex items-center gap-2 mt-2 pl-1">
-                    <button class="flex items-center gap-1 px-2 py-1 border-none rounded bg-transparent text-[11px] text-gray-400 cursor-pointer transition-all duration-150 hover:bg-black/[0.04] hover:text-[#1677FF]" title="复制" @click="copyToClipboard(msg.content)">
-                      <i class="fa-regular fa-copy"></i>
-                    </button>
-                    <AiGeneratedNotice class="ml-auto" />
-                  </div>
-                  <div v-if="msg.isStreaming" class="flex items-center gap-2 py-1 pl-1">
-                    <span class="text-xs font-medium text-gray-500">正在生成</span>
-                    <div class="flex gap-1">
-                      <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
-                    </div>
-                  </div>
-                </div>
-                <div v-if="msg.role === 'user'" class="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br bg-[#1677FF]/10 text-[#1F3A56] text-[13px] leading-relaxed">{{ msg.content }}</div>
-                <div v-if="msg.role === 'user' && msg.time" class="text-[11px] text-gray-400 mt-1">{{ msg.time }}</div>
-              </div>
-            </template>
-          </div>
-
-          <!-- AI 输入区域：与主对话共用输入壳与模型选择 -->
-          <div class="p-3 bg-[#FAFAFA] border-t border-black/[0.06]">
-            <ChatInputBox
-              ref="aiInputRef"
-              v-model:input="aiQuery"
-              placeholder="描述你想查询的数据..."
-              :is-generating="isAiGenerating"
-              :can-submit="!!aiQuery.trim()"
-              submit-title="生成 SQL (Enter)"
-              :max-height="120"
-              :maxlength="4000"
-              @submit="!isAiGenerating && handleAiGenerate()"
-              @stop="handleStopGenerate"
-            >
-              <template #actions>
-                <ModelPicker
-                  :selected-model="aiModelId"
-                  :model-options="modelOptions"
-                  :enable-deep-thinking="aiEnableDeepThinking"
-                  :thinking-effort="aiThinkingEffort"
-                  :is-generating="isAiGenerating"
-                  @update:selected-model="aiModelId = $event"
-                  @update:enable-deep-thinking="aiEnableDeepThinking = $event"
-                  @update:thinking-effort="aiThinkingEffort = $event"
-                />
-              </template>
-            </ChatInputBox>
-          </div>
         </div>
 	      </div>
 
@@ -2604,132 +1702,6 @@ defineExpose({
   margin-right: 0;
 }
 
-.ai-history-list {
-  max-height: 420px;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-:global(.ai-history-popover.el-popper) {
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
-}
-
-/* Markdown 渲染样式 - 需要 :deep() 穿透 */
-.ai-assistant-message {
-  color: #1f2937;
-}
-
-.ai-message-markdown {
-  color: #1f2937;
-}
-
-.ai-message-markdown + .ai-sql-block,
-.ai-sql-block + .ai-message-markdown {
-  margin-top: 10px;
-}
-
-.markdown-body :deep(p) {
-  margin: 0 0 8px 0;
-  color: #1f2937;
-}
-.markdown-body :deep(p:last-child) {
-  margin-bottom: 0;
-}
-.markdown-body :deep(strong) {
-  font-weight: 600;
-  color: #1f2937;
-}
-.markdown-body :deep(em) {
-  font-style: italic;
-  color: #374151;
-}
-.markdown-body :deep(code) {
-  background-color: #f3f4f6;
-  color: #e11d48;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-}
-.markdown-body :deep(pre) {
-  border: 1px solid #e2e8f0;
-  background-color: #f8fafc;
-  color: #334155;
-  border-radius: 10px;
-  padding: 14px 16px;
-  overflow-x: auto;
-  margin: 8px 0;
-}
-.markdown-body :deep(pre code) {
-  background: none;
-  color: inherit;
-  padding: 0;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ai-sql-block {
-  position: relative;
-  margin: 10px 0;
-}
-
-.ai-sql-block pre {
-  margin: 0;
-  padding: 34px 16px 14px;
-  overflow-x: auto;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  background-color: #f8fafc;
-  color: #334155;
-}
-
-.ai-sql-block code {
-  background: none;
-  color: inherit;
-  padding: 0;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ai-sql-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ai-sql-action-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid #dbe3ef;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #475569;
-  cursor: pointer;
-  font-size: 11px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  transition: all 0.15s ease;
-}
-
-.ai-sql-action-btn:hover {
-  border-color: rgba(59, 130, 246, 0.35);
-  background: #eff6ff;
-  color: #2563eb;
-}
-
 .sql-context-menu {
   position: fixed;
   z-index: var(--z-context-menu);
@@ -2808,35 +1780,4 @@ defineExpose({
   color: #94a3b8;
 }
 
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  padding-left: 20px;
-  margin: 4px 0 8px 0;
-}
-.markdown-body :deep(li) {
-  margin: 2px 0;
-  color: #1f2937;
-}
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-  font-weight: 600;
-  color: #111827;
-  margin: 8px 0 4px 0;
-}
-.markdown-body :deep(h1) { font-size: 16px; }
-.markdown-body :deep(h2) { font-size: 15px; }
-.markdown-body :deep(h3) { font-size: 14px; }
-.markdown-body :deep(blockquote) {
-  border-left: 3px solid #d1d5db;
-  padding-left: 12px;
-  color: #6b7280;
-  margin: 8px 0;
-}
-.markdown-body :deep(hr) {
-  border: none;
-  border-top: 1px solid #e5e7eb;
-  margin: 8px 0;
-}
 </style>

@@ -9,15 +9,17 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from utils.logger import get_logger
+from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
-from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
+from ..core.config_validator import expression_uses_physical_column
 from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
     extract_metric_source_column,
     merge_carried_column_dicts,
 )
+from .semantic_quality_checker import check_cross_model_metrics, first_structure_error, get_semantic_quality_checker
 
 logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -148,15 +150,14 @@ async def validate_semantic_config_for_save(
     table_columns_map: Optional[Dict[str, Set[str]]] = None,
     column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    validation_error = validate_semantic_fields(
-        datasource,
+    structure_error = first_structure_error(
         metrics,
         dimensions,
-        relationships,
-        table_columns_map=table_columns_map,
+        relationships or [],
+        table_columns_map=table_columns_map if table_columns_map is not None else build_table_columns_map(datasource),
     )
-    if validation_error:
-        return validation_error
+    if structure_error:
+        return structure_error
     return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions, column_dicts=column_dicts)
 
 
@@ -901,7 +902,7 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
 
     导入预览 / 质量检查 / semantic_yaml_check 工具共用，保证物理清单口径一致。
     注意不能用 get_column_dicts_async——那是只含枚举/单位注释的稀疏字段字典，
-    当作物理清单会把正常列全部误判为 EXE_UNKNOWN_COLUMN。
+    当作物理清单会把正常列全部误判为 STR_METRIC_INVALID 未知列。
     失败时返回 None（调用方质量检查跳过依赖清单的检查项）。
     """
     try:
@@ -1030,3 +1031,314 @@ async def _apply_physical_validation(
             item.validation_error = validation_error
         item.existing_config = configs_by_name.get(item.name)
         item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
+
+
+def _cross_model_comparison_pool(existing_configs: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
+    """跨模型比较池：公共配置 + 当前用户自己的私有配置。
+
+    他人私有模型的指标名属业务元信息，不得泄进报告；自己的私有模型
+    返回给自己无泄露，且个人模型之间的口径冲突同样需要提示。
+    user_id 未知（空）时只收录公共配置。
+    """
+    normalized_user_id = str(user_id or "").strip()
+    return [
+        config
+        for config in existing_configs
+        if is_public_semantic_config(config)
+        or (normalized_user_id and is_private_semantic_config_owner(config, normalized_user_id))
+    ]
+
+
+async def cross_model_findings_for_imports(
+    imports: List[OssieSemanticModelImport],
+    datasource_id: str,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """导入链路的跨模型指标口径检查（ossie-import/preview 与 check_yaml 工具共用）。
+
+    对每个可导入模型，计算它与「组内其他公共配置 + 同批其他导入模型」之间的
+    指标口径冲突，返回 {模型名: findings}。要点：
+    - 比较池=公共配置 + 当前用户自己的私有配置（user_id 已知时）：他人私有模型的
+      指标名不得泄进报告，自己的私有模型参与比较（个人模型间冲突同样要提示）；
+    - 排除与导入模型同名的存量配置：replace 场景下旧配置会被整体覆盖，
+      新模型与它比较没有意义（会误报同名冲突）；
+    - findings 不影响 importable（提示不阻断），与 quality-rules.md 跨模型节同源。
+    """
+    service = semantic_service or get_semantic_config_service()
+    importable = [item for item in imports if item.importable]
+    if not importable:
+        return {}
+    try:
+        existing_configs = await service.get_configs_async(datasource_id, user_id) or []
+    except Exception as exc:
+        logger.warning("跨模型口径检查读取存量配置失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
+        return {}
+    import_names = {item.name for item in importable}
+    comparison_pool: List[Dict[str, Any]] = [
+        {**item.to_config_payload(), "enabled": False}
+        for item in importable
+    ]
+    comparison_pool.extend(
+        config
+        for config in _cross_model_comparison_pool(existing_configs, user_id)
+        if str(config.get("name") or "").strip() not in import_names
+    )
+    return {
+        item.name: check_cross_model_metrics(comparison_pool, focus_config_name=item.name)
+        for item in importable
+    }
+
+
+async def quality_findings_for_imports(
+    imports: List[OssieSemanticModelImport],
+    datasource_id: str,
+    *,
+    physical_columns: Optional[Set[Tuple[str, str]]] = None,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    """导入链路逐模型质量检查编排（ossie-import/preview 与 check_yaml 工具共用）。
+
+    单模型 5 维规则（check_config）与跨模型口径（cross_model_findings_for_imports）
+    并入同一 findings 清单，靠 CON_CROSS_MODEL_* 编码区分层级。物理列由调用方加载
+    并传入（调用方的 checklist 还需要 inventory_available 口径，避免重复加载）；
+    不可导入模型跳过（其 checklist 由调用方基于 validation_error 生成）。
+    提示不阻断：存量读取失败已在 cross_model_findings_for_imports 内降级为空。
+    """
+    cross_by_model = await cross_model_findings_for_imports(
+        imports, datasource_id, semantic_service=semantic_service, user_id=user_id
+    )
+    checker = get_semantic_quality_checker()
+    return {
+        item.name: checker.check_config(
+            # enabled/scope_type 仅占位，不参与检查项（与保存链路占位口径一致）
+            {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
+            physical_columns=physical_columns,
+        ).to_payload()["findings"] + cross_by_model.get(item.name, [])
+        for item in imports
+        if item.importable
+    }
+
+
+async def quality_findings_for_save(
+    ds_manager: Any,
+    datasource_id: str,
+    *,
+    name: str,
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+    relationships: Optional[List[Dict[str, Any]]] = None,
+    exclude_config_id: Optional[str] = None,
+    semantic_service: Optional["SemanticConfigService"] = None,
+    user_id: str = "",
+) -> List[Dict[str, Any]]:
+    """编辑器保存链路的质量检查（单模型 5 维规则 + 跨模型口径，与导入/工具同源）。
+
+    校验方法多处统一的单一入口：导入 preview、check_yaml 工具、admin 质量报告
+    与本函数共用同一套 RULES 与跨模型比较逻辑。要点：
+    - 单模型层与 preview/check_yaml 完全同一 check_config（enabled/scope_type 仅占位）；
+    - 跨模型层比较池=公共配置 + 自己的私有配置，update 场景按 exclude_config_id
+      排除自身（不与自己比较）；
+    - 提示不阻断：返回 findings 列表由端点附进保存响应，任一读取失败降级为空列表，
+      质量提示不因基础设施抖动挡保存。
+    """
+    service = semantic_service or get_semantic_config_service()
+    try:
+        physical_columns = await load_semantic_physical_columns(ds_manager, datasource_id)
+    except Exception as exc:
+        logger.warning("保存链路质量检查加载物理列失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
+        return []
+    try:
+        checker = get_semantic_quality_checker()
+        single_findings = checker.check_config(
+            {
+                "name": name,
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "relationships": relationships or [],
+                "enabled": False,
+                "scope_type": "public",
+            },
+            physical_columns=physical_columns,
+        ).to_payload()["findings"]
+    except Exception as exc:
+        logger.warning("保存链路单模型质量检查失败，已跳过: name=%s error=%s", name, exc)
+        single_findings = []
+
+    cross_findings: List[Dict[str, Any]] = []
+    try:
+        existing_configs = await service.get_configs_async(datasource_id, user_id) or []
+        comparison_pool = [
+            config
+            for config in _cross_model_comparison_pool(existing_configs, user_id)
+            if str(config.get("id") or "") != str(exclude_config_id or "")
+        ]
+        comparison_pool.append(
+            {"name": name, "metrics": metrics, "dimensions": dimensions, "relationships": relationships or []}
+        )
+        cross_findings = check_cross_model_metrics(comparison_pool, focus_config_name=name)
+    except Exception as exc:
+        logger.warning("保存链路跨模型口径检查失败，已跳过: name=%s error=%s", name, exc)
+
+    return _strip_self_name_from_messages(single_findings + cross_findings, name)
+
+
+def _strip_self_name_from_messages(findings: List[Dict[str, Any]], config_name: str) -> List[Dict[str, Any]]:
+    """单模型保存上下文里，目标是配置名本身的提示去掉消息尾部的配置名。
+
+    保存前校验弹窗就挂在被编辑的模型之下，「…: auth_group_permissions基础模型」这类
+    尾缀是重复信息；但指标/维度级 target（如「指标缺少描述: 集群数量1」）与跨模型的
+    「模型.指标」目标仍然保留——导入预览等多模型场景不加此处理，名称在那里是有用定位。
+    """
+    suffix = f": {config_name}"
+    stripped: List[Dict[str, Any]] = []
+    for item in findings:
+        if list(item.get("targets") or []) == [config_name] and str(item.get("message") or "").endswith(suffix):
+            item = {**item, "message": item["message"][: -len(suffix)]}
+        stripped.append(item)
+    return stripped
+
+
+# ---------------------------------------------------------------------------
+# Ossie 导入落库（自 routers/semantic_config.py 下沉：事务边界归属 service 层）
+# ---------------------------------------------------------------------------
+
+
+class OssieImportWriteError(Exception):
+    """Ossie 导入落库失败：用于触发整批回滚，并携带面向用户的具体原因。"""
+
+
+async def persist_one_ossie_model(
+    item: Any,
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
+    if item.conflict_locked:
+        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
+        # 也不透出其 config_id 等元信息
+        return "skipped", {"name": item.name, "reason": "存在同名配置且无操作权限，已忽略"}
+    if not item.existing_config:
+        config = await semantic_service.create_async(
+            datasource_id=datasource_id,
+            scope_type="public",
+            create_by=user_id,
+            create_by_name=username,
+            **item.to_config_payload(),
+        )
+        if not config:
+            raise OssieImportWriteError(f"创建配置失败: {item.name}")
+        return "created", {"config_id": config.get("id"), "name": config.get("name")}
+
+    existing_config_id = str(item.existing_config["config_id"])
+    if conflict_actions.get(item.name, "skip") != "replace":
+        return "skipped", {
+            "name": item.name,
+            "config_id": existing_config_id,
+            "reason": "同名配置已存在，未导入",
+        }
+    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
+    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
+    config = await semantic_service.update_async(
+        datasource_id,
+        existing_config_id,
+        description=item.description or "",
+        business_notes=item.business_notes or "",
+        metrics=item.metrics,
+        dimensions=item.dimensions,
+        relationships=item.relationships,
+        update_by=user_id,
+        update_by_name=username,
+    )
+    if not config:
+        raise OssieImportWriteError(f"更新配置失败: {item.name}")
+    return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
+
+
+async def fill_ossie_column_dicts(
+    item: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> List[Dict[str, Any]]:
+    """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
+
+    只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
+    「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
+    """
+    filled: List[Dict[str, Any]] = []
+    for entry in item.column_dicts:
+        fields = await ds_manager.fill_column_dict_async(
+            datasource_id,
+            entry["table"],
+            entry["column"],
+            entry["dict"],
+            operator=user_id,
+            operator_name=username,
+        )
+        if fields is None:
+            raise OssieImportWriteError(f"写入数据字典失败: {entry['table']}.{entry['column']}（物理字段不存在）")
+        if fields:
+            filled.append({"table": entry["table"], "column": entry["column"], "fields": fields})
+    return filled
+
+
+async def persist_ossie_imports(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
+
+    created/replaced 的模型随后在同一事务内执行字典仅填空写入，
+    实际填充明细挂在各自 payload 的 column_dict_filled 上。
+    """
+    created: List[Dict[str, Any]] = []
+    replaced: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    buckets = {"created": created, "replaced": replaced, "skipped": skipped}
+    for item in imports:
+        kind, payload = await persist_one_ossie_model(
+            item, conflict_actions, semantic_service, datasource_id, user_id, username
+        )
+        if kind in ("created", "replaced") and item.column_dicts:
+            payload["column_dict_filled"] = await fill_ossie_column_dicts(
+                item, ds_manager, datasource_id, user_id, username,
+            )
+        buckets[kind].append(payload)
+    return created, replaced, skipped
+
+
+async def persist_ossie_imports_in_transaction(
+    imports: List[Any],
+    conflict_actions: Dict[str, str],
+    semantic_service: Any,
+    ds_manager: Any,
+    datasource_id: str,
+    user_id: str,
+    username: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """整批落库的事务边界（全有或全无）：任一模型写入失败即整体回滚，不留半批草稿。
+
+    字典仅填空写入与模型写入在同一事务内，模型与字典要么一起落库、要么一起回滚。
+    OssieImportWriteError / ValueError 原样上抛，由路由层翻译为对应错误响应。
+    """
+    async with transaction_scope():
+        return await persist_ossie_imports(
+            imports,
+            conflict_actions,
+            semantic_service,
+            ds_manager,
+            datasource_id,
+            user_id,
+            username,
+        )

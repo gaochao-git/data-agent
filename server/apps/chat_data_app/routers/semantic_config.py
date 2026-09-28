@@ -6,16 +6,12 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
-from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
 
 from utils.error_codes import ErrorCode
-from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
-from utils.llm_json import parse_llm_json
 from utils.response import business_response
-from ..agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from ..schema import (
     SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
@@ -24,7 +20,6 @@ from ..schema import (
     SemanticOssieImportRequest,
     SemanticPrefillRequest,
 )
-from ..daos.dao_session import transaction_scope
 from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic.run.semantic_history_learning_service import (
@@ -35,15 +30,19 @@ from ..services.semantic.run.semantic_history_learning_service import (
     build_semantic_history_learning_service,
 )
 from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist
-from ..services.semantic.run.semantic_quality_checker import get_semantic_quality_checker, grade_for_score
+from ..services.semantic.run.semantic_quality_checker import check_cross_model_metrics, get_semantic_quality_checker, grade_for_score
 from ..services.semantic.run.semantic_config_service import (
+    OssieImportWriteError as _OssieImportWriteError,
     can_mutate_semantic_config,
     dedupe_semantic_config_ids,
     get_semantic_config_service,
     is_private_semantic_config_owner,
     is_public_semantic_config,
     load_semantic_physical_columns as _load_physical_columns,
+    persist_ossie_imports_in_transaction,
     prepare_ossie_import_models,
+    quality_findings_for_imports,
+    quality_findings_for_save,
     validate_semantic_config_for_save,
 )
 from ..services.semantic.run.chat_data_ossie_importer import plan_column_dict_fills
@@ -60,10 +59,6 @@ PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
 PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
 # 单次批量切换的指标集数量上限：限制 UPDATE ... IN 的规模与整批回滚成本。
 SEMANTIC_BATCH_TOGGLE_MAX_IDS = 200
-
-
-class _OssieImportWriteError(Exception):
-    """Ossie 导入落库失败：用于触发整批回滚，并携带面向用户的具体原因。"""
 
 
 def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
@@ -95,12 +90,6 @@ async def _get_admin_semantic_configs(semantic_service: Any, datasource_id: str,
     """读取后台维护页可维护的公共指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id)
     return [_with_semantic_config_permissions(config, user_id, username, admin_manage=True) for config in (configs or []) if is_public_semantic_config(config)]
-
-
-def _quote_identifier(name: str) -> str:
-    """转义 SQL 标识符。"""
-    safe = (name or "").replace("`", "``")
-    return f"`{safe}`"
 
 
 def _history_table_parser(sql: str, source_type: str):
@@ -150,337 +139,24 @@ def _build_history_learning_service() -> SemanticHistoryLearningService:
     )
 
 
-def _normalize_prefill_display_name(value: Any, fallback: str) -> str:
-    """归一化自动预填返回的短显示名。"""
-    source = str(value or fallback or "").strip()
-    if not source:
-        return ""
-    first_part = re.split(r"[，,。；;：:\n\r]", source, maxsplit=1)[0].strip() or source
-    without_relation = re.sub(r"(?:同样)?关联\s+[A-Za-z_][A-Za-z0-9_.]*.*$", "", first_part, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"[`\"'“”‘’、/\\|()（）\[\]【】{}<>《》.!！?？~@#$%^&*+=-]", "", without_relation or first_part)
-    cleaned = re.sub(r"\s+", "", cleaned).strip()
-    display_name = cleaned or str(fallback or "").strip()
-    return display_name[:PREFILL_DISPLAY_NAME_MAX_LENGTH]
-
-
-def _build_prefill_alias_map(tables: List[Dict]) -> Dict[str, List[str]]:
-    """构造物理表到表角色别名列表的映射。"""
-    alias_map: Dict[str, List[str]] = {}
-    for table in tables or []:
-        table_name = str((table or {}).get("table_name") or (table or {}).get("table") or "").strip()
-        table_alias = str((table or {}).get("table_alias") or table_name).strip()
-        if not table_name or not table_alias:
-            continue
-        aliases = alias_map.setdefault(table_name, [])
-        if table_alias not in aliases:
-            aliases.append(table_alias)
-    return alias_map
-
-
-def _build_prefixed_prefill_name(table_alias: str, name: str) -> str:
-    """重名字段追加表角色前缀；超长时按预算截断别名。"""
-    alias = re.sub(r"[`\"'“”‘’、/\\|()（）\[\]【】{}<>《》.!！?？~@#$%^&*+=-]", "", str(table_alias or "").strip())
-    alias = re.sub(r"\s+", "", alias)
-    if not alias:
-        return name
-    candidate = _normalize_prefill_display_name(f"{alias}_{name}", name)
-    if len(f"{alias}_{name}") <= PREFILL_DISPLAY_NAME_MAX_LENGTH:
-        return candidate
-    budget = PREFILL_DISPLAY_NAME_MAX_LENGTH - len(name) - 1
-    if budget <= 0:
-        return name[:PREFILL_DISPLAY_NAME_MAX_LENGTH]
-    alias_parts = [part for part in alias.split("_") if part]
-    alias_part = alias_parts[-1] if alias_parts and len(alias_parts[-1]) >= 2 else alias
-    return _normalize_prefill_display_name(f"{alias_part[:budget]}_{name}", name)
-
-
-def _count_prefill_name_occurrences(items: List[Dict[str, str]]) -> Dict[str, int]:
-    """统计自动预填字段名出现次数。"""
-    name_counts: Dict[str, int] = {}
-    for item in items:
-        name = str(item.get("name") or "").strip()
-        if name:
-            name_counts[name] = name_counts.get(name, 0) + 1
-    return name_counts
-
-
-def _resolve_prefill_unique_name(name: str, used_names: Set[str]) -> str:
-    """重名时追加自增数字后缀，保证展示名唯一。"""
-    candidate = name
-    index = 2
-    while candidate in used_names:
-        suffix = str(index)
-        candidate = f"{name[:max(PREFILL_DISPLAY_NAME_MAX_LENGTH - len(suffix), 1)]}{suffix}"
-        index += 1
-    return candidate
-
-
-def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """自动预填字段重名时追加表角色前缀。"""
-    name_counts = _count_prefill_name_occurrences(items)
-    used_names: Set[str] = set()
-    for item in items:
-        name = str(item.get("name") or "").strip()
-        table_alias = str(item.get("table_alias") or item.get("table") or "").strip()
-        if name_counts.get(name, 0) > 1 and table_alias:
-            name = _build_prefixed_prefill_name(table_alias, name)
-        candidate = _resolve_prefill_unique_name(name, used_names)
-        item["name"] = candidate
-        used_names.add(candidate)
-    return items
-
-
-def _build_prefill_columns(table: Dict) -> List[Dict[str, str]]:
-    """构造单张表的紧凑字段列表。"""
-    columns = []
-    for col in table.get("columns", []) or []:
-        col_name = str(col.get("name") or "").strip()
-        if not col_name:
-            continue
-        columns.append({
-            "name": col_name,
-            "type": col.get("mysql_type") or col.get("hive_type") or col.get("type") or "",
-            "description": col.get("description") or "",
-        })
-    return columns
-
-
-def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
-    """构造自动预填使用的紧凑表结构。"""
-    table_payload = []
-    seen_tables: Set[str] = set()
-    for table in tables or []:
-        table_name = str(table.get("table_name") or "").strip()
-        if not table_name or table_name in seen_tables:
-            continue
-        seen_tables.add(table_name)
-        table_payload.append({
-            "table": table_name,
-            "description": table.get("description") or "",
-            "columns": _build_prefill_columns(table),
-        })
-    return table_payload
-
-
-def _build_table_columns_index(table_payload: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
-    """构建物理表字段名索引，供预填解析校验使用。"""
-    return {
-        table.get("table", ""): {col.get("name", "") for col in table.get("columns", []) if col.get("name")}
-        for table in table_payload
-        if table.get("table")
-    }
-
-
-def _resolve_prefill_alias_map(
-    table_payload: List[Dict[str, Any]],
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-) -> Dict[str, List[str]]:
-    """解析表别名映射，缺省回退为表名自身。"""
-    return table_alias_map or {table.get("table", ""): [table.get("table", "")] for table in table_payload if table.get("table")}
-
-
-def _parse_prefill_dimension_name_map(parsed: Dict[str, Any], table_payload: List[Dict[str, Any]]) -> Dict[str, str]:
-    """解析模型生成的物理字段显示名称。"""
-    raw_fields = parsed.get("fields", []) if isinstance(parsed, dict) else []
-    if not isinstance(raw_fields, list):
-        return {}
-    table_columns = _build_table_columns_index(table_payload)
-    name_map: Dict[str, str] = {}
-    for item in raw_fields:
-        if not isinstance(item, dict):
-            continue
-        table_name = str(item.get("table") or "").strip()
-        column_name = str(item.get("column") or "").strip()
-        if table_name not in table_columns or column_name not in table_columns[table_name]:
-            continue
-        name_map[f"{table_name}.{column_name}"] = _normalize_prefill_display_name(item.get("name"), column_name)
-    return name_map
-
-
-def _build_prefill_dimension_fields(
-    table_payload: List[Dict[str, Any]],
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-    dimension_name_map: Optional[Dict[str, str]] = None,
-) -> List[Dict[str, str]]:
-    """将物理字段全部作为维度预填。"""
-    fields: List[Dict[str, str]] = []
-    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
-    name_map = dimension_name_map or {}
-    for table in table_payload:
-        table_name = table.get("table", "")
-        if not table_name:
-            continue
-        aliases = alias_map.get(table_name) or [table_name]
-        for col in table.get("columns", []):
-            column_name = col.get("name", "")
-            if not column_name:
-                continue
-            display_name = name_map.get(f"{table_name}.{column_name}") or _normalize_prefill_display_name(column_name, column_name)
-            for table_alias in aliases:
-                fields.append({
-                    "table": table_name,
-                    "table_alias": table_alias,
-                    "column": column_name,
-                    "role": "dimension",
-                    "expression": _quote_identifier(column_name),
-                    "name": display_name,
-                })
-    return fields
-
-
-def _resolve_metric_candidate(item: Any, table_columns: Dict[str, Set[str]]) -> Optional[Tuple[str, str, str]]:
-    """提取并校验单条推荐指标的 (表, 字段, 聚合) 三元组；非法时返回 None。"""
-    if not isinstance(item, dict):
-        return None
-    table_name = str(item.get("table") or "").strip()
-    column_name = str(item.get("column") or item.get("source_column") or "").strip()
-    agg = str(item.get("agg") or "").strip().upper()
-    if table_name not in table_columns or column_name not in table_columns[table_name] or agg not in PREFILL_ALLOWED_METRIC_AGGS:
-        return None
-    return table_name, column_name, agg
-
-
-def _build_metric_entry(item: Dict[str, Any], table_name: str, column_name: str, agg: str) -> Dict[str, str]:
-    """构造单条原子指标条目（不含表别名）。"""
-    fallback_name = f"{column_name}_{agg.lower()}"
-    return {
-        "table": table_name,
-        "table_alias": "",
-        "column": column_name,
-        "source_column": column_name,
-        "role": "metric",
-        "field_name": str(item.get("field_name") or fallback_name).strip() or fallback_name,
-        "name": _normalize_prefill_display_name(item.get("name"), column_name),
-        "agg": agg,
-        "expression": f"{agg}({_quote_identifier(column_name)})",
-    }
-
-
-def _append_metric_entries(
-    normalized: List[Dict[str, str]],
-    item: Dict[str, Any],
-    table_name: str,
-    column_name: str,
-    agg: str,
-    aliases: List[str],
-    max_metrics: int,
-) -> bool:
-    """按表别名展开指标条目；达到数量上限时返回 True。"""
-    entry = _build_metric_entry(item, table_name, column_name, agg)
-    for table_alias in aliases:
-        normalized.append(dict(entry, table_alias=table_alias))
-        if len(normalized) >= max_metrics:
-            return True
-    return False
-
-
-def _parse_metric_items(
-    parsed: Dict[str, Any],
-    table_payload: List[Dict[str, Any]],
-    max_metrics: int = PREFILL_MAX_RECOMMENDED_METRICS,
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-) -> List[Dict[str, str]]:
-    """解析并校验模型推荐的原子指标列表。"""
-    raw_metrics = parsed.get("metrics", []) if isinstance(parsed, dict) else []
-    if not isinstance(raw_metrics, list):
-        return []
-    table_columns = _build_table_columns_index(table_payload)
-    alias_map = _resolve_prefill_alias_map(table_payload, table_alias_map)
-    normalized: List[Dict[str, str]] = []
-    seen: Set[str] = set()
-    for item in raw_metrics:
-        candidate = _resolve_metric_candidate(item, table_columns)
-        if candidate is None:
-            continue
-        table_name, column_name, agg = candidate
-        key = f"{table_name}.{column_name}.{agg}"
-        if key in seen:
-            continue
-        seen.add(key)
-        aliases = alias_map.get(table_name) or [table_name]
-        if _append_metric_entries(normalized, item, table_name, column_name, agg, aliases, max_metrics):
-            break
-    return _dedupe_prefill_display_names(normalized)
-
-
-def _parse_metric_recommendation_response(
-    content: str,
-    table_payload: List[Dict[str, Any]],
-    max_metrics: int = PREFILL_MAX_RECOMMENDED_METRICS,
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-) -> List[Dict[str, str]]:
-    """解析并校验模型推荐的原子指标。"""
-    parsed = parse_llm_json(str(content))
-    return _parse_metric_items(parsed, table_payload, max_metrics, table_alias_map)
-
-
-def _parse_prefill_recommendation_response(
-    content: str,
-    table_payload: List[Dict[str, Any]],
-    max_metrics: int = PREFILL_MAX_RECOMMENDED_METRICS,
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-) -> Dict[str, List[Dict[str, str]]]:
-    """解析模型返回的字段显示名称和推荐指标。"""
-    parsed = parse_llm_json(str(content))
-    dimension_name_map = _parse_prefill_dimension_name_map(parsed, table_payload)
-    fields = _build_prefill_dimension_fields(table_payload, table_alias_map, dimension_name_map)
-    metric_fields = _parse_metric_items(parsed, table_payload, max_metrics, table_alias_map)
-    return {"fields": fields, "metrics": metric_fields}
-
-
-async def _call_metric_recommendation_llm(
-    table_payload: List[Dict[str, Any]],
-    business_context: str = "",
-    max_metrics: int = PREFILL_MAX_RECOMMENDED_METRICS,
-    table_alias_map: Optional[Dict[str, List[str]]] = None,
-) -> Dict[str, List[Dict[str, str]]]:
-    """调用大模型推荐少量原子指标。"""
-    prompt = build_metric_recommendation_prompt(
-        table_payload=table_payload,
-        business_context=business_context,
-        max_metrics=max_metrics,
-    )
-    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "semantic_metric_recommendation"},
-        )
-        raise
-    content = response.content if hasattr(response, "content") else str(response)
-    return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
-
-
-async def _prefill_by_llm(
-    tables: List[Dict],
-    business_context: str = "",
-) -> Optional[Dict[str, Any]]:
-    """优化字段显示名称，并推荐少量高置信度原子指标。"""
-    if not tables:
-        return {"fields": []}
-    table_alias_map = _build_prefill_alias_map(tables)
-    table_payload = _build_prefill_table_payload(tables)
-    if not table_payload:
-        return {"fields": []}
-    fields = _build_prefill_dimension_fields(table_payload, table_alias_map)
-    try:
-        recommendation = await _call_metric_recommendation_llm(
-            table_payload=table_payload,
-            business_context=business_context,
-            max_metrics=PREFILL_MAX_RECOMMENDED_METRICS,
-            table_alias_map=table_alias_map,
-        )
-        if isinstance(recommendation, dict):
-            fields = recommendation.get("fields") or fields
-            metric_fields = recommendation.get("metrics") or []
-        else:
-            metric_fields = recommendation or []
-    except Exception as e:
-        logger.warning("自动预填调用大模型失败: %s", e)
-        metric_fields = []
-    return {"fields": _dedupe_prefill_display_names(fields + metric_fields)}
+# 自动预填实现已下沉 semantic_prefill_service；此处保留兼容导出，
+# 供既有测试与端点内部按原模块属性名引用（monkeypatch 语义不变）。
+from ..services.semantic.run.semantic_prefill_service import (  # noqa: E402
+    PREFILL_ALLOWED_METRIC_AGGS,
+    PREFILL_DISPLAY_NAME_MAX_LENGTH,
+    PREFILL_MAX_RECOMMENDED_METRICS,
+    _build_prefill_alias_map,
+    _build_prefill_dimension_fields,
+    _build_prefill_table_payload,
+    _dedupe_prefill_display_names,
+    _normalize_prefill_display_name,
+    _parse_metric_items,
+    _parse_metric_recommendation_response,
+    _parse_prefill_dimension_name_map,
+    _parse_prefill_recommendation_response,
+    _quote_identifier,
+    prefill_by_llm as _prefill_by_llm,
+)
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs")
@@ -684,10 +360,14 @@ async def preview_admin_ossie_semantic_import(
         imports, error = await _prepare_ossie_import(datasource_id, payload, request)
         if error is not None:
             return error
+        user_id = str(_get_current_user(request).user_id)
         physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
-        checker = get_semantic_quality_checker()
         # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
         existing_column_dicts = await get_semantic_config_service().get_column_dicts_async(datasource_id)
+        # 质量检查（单模型 5 维 + 跨模型口径）统一编排入口，与 check_yaml 工具同源
+        findings_by_model = await quality_findings_for_imports(
+            imports, datasource_id, physical_columns=physical_columns, user_id=user_id
+        )
         models = []
         for item in imports:
             model = item.to_preview_payload()
@@ -695,13 +375,8 @@ async def preview_admin_ossie_semantic_import(
             model["column_dict_fill_plan"] = dict_fill_plan
             findings = None
             if item.importable:
-                # 质量检查输入与 check_yaml 工具完全一致（enabled 仅占位，不参与检查项）
-                report = checker.check_config(
-                    {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
-                    physical_columns=physical_columns,
-                )
                 # 只透出触发的 findings：评分无法指导动作，预览链路不输出 score/grade
-                findings = report.to_payload()["findings"]
+                findings = findings_by_model.get(item.name, [])
                 model["quality"] = {"findings": findings}
             model["checklist"] = build_model_checklist(
                 item,
@@ -780,6 +455,8 @@ async def check_admin_semantic_config_quality(
         modeled_tables = _collect_modeled_tables(configs)
         inventory_tables = {table for table, _column in physical_columns} if physical_columns is not None else set()
         unmodeled_tables = sorted(inventory_tables - modeled_tables)
+        # 跨模型口径检查（第二层）：组内公共配置之间的指标冲突，独立于单模型评分
+        cross_model_findings = check_cross_model_metrics(configs)
         avg_score = round(sum(report["score"] for report in reports) / len(reports)) if reports else 100
         overall = {
             "config_count": len(reports),
@@ -790,6 +467,7 @@ async def check_admin_semantic_config_quality(
             "unmodeled_tables": unmodeled_tables[:10],
             "unmodeled_table_count": len(unmodeled_tables),
             "inventory_available": physical_columns is not None,
+            "cross_model_findings": cross_model_findings,
         }
         return business_response(data={"configs": reports, "overall": overall}, msg="质量检查完成")
     except Exception as e:
@@ -837,16 +515,15 @@ async def import_admin_ossie_semantic_configs(
         # （接口对外语义是「全有或全无」）。字典仅填空写入也在同一事务内，
         # 模型与字典要么一起落库、要么一起回滚。
         try:
-            async with transaction_scope():
-                created, replaced, skipped = await _persist_ossie_imports(
-                    imports,
-                    conflict_actions,
-                    semantic_service,
-                    ds_manager,
-                    datasource_id,
-                    user_id,
-                    username,
-                )
+            created, replaced, skipped = await persist_ossie_imports_in_transaction(
+                imports,
+                conflict_actions,
+                semantic_service,
+                ds_manager,
+                datasource_id,
+                user_id,
+                username,
+            )
         except _OssieImportWriteError as e:
             logger.error("Ossie 导入写入失败，已回滚: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
             return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -913,115 +590,6 @@ def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Di
     if invalid_actions:
         return actions, f"conflict_actions 只支持 replace/skip，收到: {'、'.join(invalid_actions)}"
     return actions, None
-
-
-async def _persist_one_ossie_model(
-    item: Any,
-    conflict_actions: Dict[str, str],
-    semantic_service: Any,
-    datasource_id: str,
-    user_id: str,
-    username: str,
-) -> Tuple[str, Dict[str, Any]]:
-    """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
-    if item.conflict_locked:
-        # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
-        # 也不透出其 config_id 等元信息
-        return "skipped", {"name": item.name, "reason": "存在同名配置且无操作权限，已忽略"}
-    if not item.existing_config:
-        config = await semantic_service.create_async(
-            datasource_id=datasource_id,
-            scope_type="public",
-            create_by=user_id,
-            create_by_name=username,
-            **item.to_config_payload(),
-        )
-        if not config:
-            raise _OssieImportWriteError(f"创建配置失败: {item.name}")
-        return "created", {"config_id": config.get("id"), "name": config.get("name")}
-
-    existing_config_id = str(item.existing_config["config_id"])
-    if conflict_actions.get(item.name, "skip") != "replace":
-        return "skipped", {
-            "name": item.name,
-            "config_id": existing_config_id,
-            "reason": "同名配置已存在，未导入",
-        }
-    # 替换：保留原 config_id，全量覆盖内容；enabled 不传参 → service 沿用原启用状态
-    # （description/business_notes 为空时传空串清空——替换语义以导入内容为准，不沿用旧值）
-    config = await semantic_service.update_async(
-        datasource_id,
-        existing_config_id,
-        description=item.description or "",
-        business_notes=item.business_notes or "",
-        metrics=item.metrics,
-        dimensions=item.dimensions,
-        relationships=item.relationships,
-        update_by=user_id,
-        update_by_name=username,
-    )
-    if not config:
-        raise _OssieImportWriteError(f"更新配置失败: {item.name}")
-    return "replaced", {"config_id": config.get("id"), "name": config.get("name")}
-
-
-async def _fill_ossie_column_dicts(
-    item: Any,
-    ds_manager: Any,
-    datasource_id: str,
-    user_id: str,
-    username: str,
-) -> List[Dict[str, Any]]:
-    """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
-
-    只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
-    「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
-    """
-    filled: List[Dict[str, Any]] = []
-    for entry in item.column_dicts:
-        fields = await ds_manager.fill_column_dict_async(
-            datasource_id,
-            entry["table"],
-            entry["column"],
-            entry["dict"],
-            operator=user_id,
-            operator_name=username,
-        )
-        if fields is None:
-            raise _OssieImportWriteError(f"写入数据字典失败: {entry['table']}.{entry['column']}（物理字段不存在）")
-        if fields:
-            filled.append({"table": entry["table"], "column": entry["column"], "fields": fields})
-    return filled
-
-
-async def _persist_ossie_imports(
-    imports: List[Any],
-    conflict_actions: Dict[str, str],
-    semantic_service: Any,
-    ds_manager: Any,
-    datasource_id: str,
-    user_id: str,
-    username: str,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
-
-    created/replaced 的模型随后在同一事务内执行字典仅填空写入，
-    实际填充明细挂在各自 payload 的 column_dict_filled 上。
-    """
-    created: List[Dict[str, Any]] = []
-    replaced: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
-    buckets = {"created": created, "replaced": replaced, "skipped": skipped}
-    for item in imports:
-        kind, payload = await _persist_one_ossie_model(
-            item, conflict_actions, semantic_service, datasource_id, user_id, username
-        )
-        if kind in ("created", "replaced") and item.column_dicts:
-            payload["column_dict_filled"] = await _fill_ossie_column_dicts(
-                item, ds_manager, datasource_id, user_id, username,
-            )
-        buckets[kind].append(payload)
-    return created, replaced, skipped
 
 
 @router.post("/semantic/prefill")
@@ -1176,6 +744,82 @@ async def _update_semantic_config(
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+async def _validate_semantic_config_with_scope(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    *,
+    exclude_config_id: str = "",
+):
+    """保存前校验（dry-run）：结构校验 + 质量/跨模型口径检查，不落库。
+
+    校验方法多处统一的编辑器入口：与导入 preview / check_yaml / admin 质量报告
+    共用同一套 RULES。structure_error 非空表示结构校验未过（保存会被拦截）；
+    quality_findings 为质量提示（弹窗展示后由用户决定是否仍要保存）。
+    """
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        ds_manager = get_datasource_manager()
+        datasource = await ds_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        metrics = [m.model_dump() for m in payload.metrics]
+        dimensions = [d.model_dump() for d in payload.dimensions]
+        relationships = [r.model_dump() for r in payload.relationships]
+        structure_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            metrics,
+            dimensions,
+            relationships,
+        )
+        quality_findings: list = []
+        if not structure_error:
+            quality_findings = await quality_findings_for_save(
+                ds_manager,
+                datasource_id,
+                name=payload.name,
+                metrics=metrics,
+                dimensions=dimensions,
+                relationships=relationships,
+                exclude_config_id=exclude_config_id or None,
+                semantic_service=get_semantic_config_service(),
+                user_id=user_id,
+            )
+        return business_response(
+            data={"structure_error": structure_error or "", "quality_findings": quality_findings},
+            msg="校验完成",
+        )
+    except Exception as e:
+        logger.error(f"保存前校验失败: {str(e)}", exc_info=True)
+        return business_response(msg=f"校验失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/validate")
+async def validate_semantic_config(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    exclude_config_id: str = "",
+):
+    """个人指标集保存前校验（dry-run，不落库）。"""
+    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/validate")
+async def validate_admin_semantic_config(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    exclude_config_id: str = "",
+):
+    """公共指标集保存前校验（dry-run，不落库）。"""
+    _get_current_user(request)
+    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
 
 
 async def _delete_semantic_config(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):

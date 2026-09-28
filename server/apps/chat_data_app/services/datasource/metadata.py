@@ -26,10 +26,13 @@ from .credentials import (
     resolve_mysql_credentials,
 )
 from ..runtime_config import read_positive_int_env
+from ..setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
 MYSQL_CONNECT_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_DB_CONNECT_TIMEOUT_SECONDS", 3)
+# Hive 表结构同步线程池并发：同步函数 _get_full_schema 的签名兜底默认值；异步入口
+# get_full_schema_async 运行期经后台配置变量表读取（CHAT_DATA_HIVE_SCHEMA_MAX_WORKERS）。
 HIVE_SCHEMA_MAX_WORKERS = read_positive_int_env("CHAT_DATA_HIVE_SCHEMA_MAX_WORKERS", 10)
 # Module aliases keep the configuration names explicit for direct Hive callers.
 SOCKET_TIMEOUT_SECONDS = HIVE_SOCKET_TIMEOUT_SECONDS
@@ -37,7 +40,7 @@ DEFAULT_MAX_WORKERS = HIVE_SCHEMA_MAX_WORKERS
 HIVE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 META_TABLES_URL = str(os.getenv("CHAT_DATA_META_TABLES_URL") or "").strip()
 META_SCHEMA_URL = str(os.getenv("CHAT_DATA_META_SCHEMA_URL") or "").strip()
-META_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_META_TIMEOUT_SECONDS", 30)
+# 元数据 HTTP 单次请求超时已迁移到后台配置变量表（CHAT_DATA_META_TIMEOUT_SECONDS，运行期读取）。
 META_SCHEMA_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_META_SCHEMA_MAX_CONCURRENCY", 10)
 HTTP_AUTH_TOKEN = get_http_auth_token()
 
@@ -429,8 +432,12 @@ class HiveSyncService:
     async def get_full_schema_async(
         self,
         table_names: Optional[List[str]] = None,
-        max_workers: int = DEFAULT_MAX_WORKERS,
+        max_workers: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """异步读取完整表结构；max_workers=None 时运行期经配置服务解析并发上限。"""
+        if max_workers is None:
+            hive_schema_max_workers = await get_runtime_setting("CHAT_DATA_HIVE_SCHEMA_MAX_WORKERS")
+            max_workers = hive_schema_max_workers
         return await asyncio.to_thread(self._get_full_schema, table_names, max_workers)
 
 
@@ -576,7 +583,10 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
 async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[HiveMetaHTTP] 请求对方接口: url=%s payload=%s", url, _meta_payload_summary(payload))
     try:
-        async with open_http_client(timeout_seconds=META_TIMEOUT_SECONDS, headers=_build_headers()) as client:
+        async with open_http_client(
+            timeout_seconds=await get_runtime_setting("CHAT_DATA_META_TIMEOUT_SECONDS"),
+            headers=_build_headers(),
+        ) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             response_payload = response.json()

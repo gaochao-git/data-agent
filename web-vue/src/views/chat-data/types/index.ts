@@ -183,15 +183,6 @@ export interface NL2SQLResult {
   is_qa?: boolean
 }
 
-// NL2SQL 请求
-export interface NL2SQLRequest {
-  query: string
-  return_metadata: boolean
-  datasource_id?: string | null
-  conversation_id?: string | null
-  enable_thinking?: boolean
-}
-
 // API 响应
 export interface ApiResponse<T> {
   status: 'success' | 'error'
@@ -703,6 +694,21 @@ export interface SemanticRelationship {
   join_type: 'inner' | 'left' | 'right'
 }
 
+export interface SemanticQualityFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  category: string
+  message: string
+  targets?: string[]
+}
+
+/** 保存前校验（dry-run）结果 */
+export interface SemanticConfigValidateResult {
+  /** 结构校验错误消息；空串表示通过 */
+  structure_error: string
+  quality_findings: SemanticQualityFinding[]
+}
+
 export interface SemanticConfigItem {
   id: string
   name: string
@@ -806,6 +812,8 @@ export interface AddFieldForm {
   fieldName: string
   // 原子指标模式：聚合表达式（如 SUM(`amount`)）；字段名由系统自动生成
   expression?: string
+  // 原子指标模式：字段备注（派生/复合指标的备注由弹窗内部 ref 管理，不经此模型）
+  description?: string
   displayName: string
   mode: 'dimension' | 'metric' | 'derived' | 'composite'
 }
@@ -938,4 +946,20 @@ export interface PluginInfo extends PluginManifestInfo {
   enabled: boolean
   create_by_name?: string
   create_time?: string
+}
+
+// 后台配置变量条目（可动态修改变量白名单，标注生效值与来源；分类由注册表统一管理）
+export interface ChatDataSettingItem {
+  setting_key: string
+  setting_desc: string
+  category: string
+  category_label: string
+  value_type: 'int' | 'bool' | 'float' | 'string'
+  effect_label: string
+  setting_value: string | null
+  source: 'table' | 'env' | 'default'
+  effective_value: unknown
+  value_invalid: boolean
+  update_time: string
+  update_by_name: string
 }

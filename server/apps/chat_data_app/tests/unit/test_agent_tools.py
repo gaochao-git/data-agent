@@ -19,7 +19,6 @@ from apps.chat_data_app.agent.tools import data_analyzing as agent_tools
 from apps.chat_data_app.agent.tools.current_time import get_current_time_payload, get_current_time_tool
 from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services.sql_run import runtime as query_runtime
-from apps.chat_data_app.services import sql_assist_context
 
 
 def test_current_time_tool_returns_detail_only_when_requested():
@@ -106,61 +105,6 @@ def test_calculator_tool_covers_empty_division_and_unary_branches():
     assert payload["results"][2]["result"] == "1"
 
 
-def test_table_metadata_formatters_cover_empty_and_selected_tables():
-    tables = [
-        {
-            "table_name": "orders",
-            "description": "订单表",
-            "columns": [
-                {"name": "order_id", "type": "bigint", "primary_key": True, "description": "订单ID"},
-                {"name": "status", "description": "订单状态"},
-            ],
-        },
-        {"table_name": "users", "description": "用户表", "columns": []},
-    ]
-
-    assert sql_assist_context.get_tables_create_format([], ["orders"]) == ""
-    assert sql_assist_context.get_tables_create_format(tables, []) == ""
-    assert sql_assist_context.get_tables_create_format(tables, ["missing"]) == ""
-
-    ddl = sql_assist_context.get_tables_create_format(tables, ["orders"])
-
-    assert "CREATE TABLE orders" in ddl
-    assert "order_id bigint PRIMARY KEY  -- 订单ID" in ddl
-    assert "status TEXT  -- 订单状态" in ddl
-
-    no_comment = sql_assist_context.get_tables_create_format(
-        [{"table_name": "logs", "description": "", "columns": [{"name": "id"}]}],
-        ["logs"],
-    )
-    assert "    id TEXT" in no_comment
-    assert "--" not in no_comment
-
-
-def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
-    class FakeManager:
-        async def get_datasource_async(self, datasource_id):
-            return {"ds_tables": [{"table_name": datasource_id}]} if datasource_id == "ds_a" else None
-
-        async def get_cached_schema_async(self, datasource_id):
-            datasource = await self.get_datasource_async(datasource_id)
-            if not datasource:
-                raise ValueError("数据源不存在")
-            return datasource.get("ds_tables", [])
-
-        async def get_all_datasources_async(self):
-            return [
-                {"ds_tables": [{"table_name": "orders"}]},
-                {"ds_tables": [{"table_name": "users"}]},
-            ]
-
-    monkeypatch.setattr(sql_assist_context, "get_datasource_manager", lambda: FakeManager())
-
-    assert asyncio.run(sql_assist_context.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
-    assert asyncio.run(sql_assist_context.get_all_tables_async("missing")) == []
-    assert asyncio.run(sql_assist_context.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
-
-
 class _FakeDatasourceManager:
     async def get_datasource_async(self, datasource_id: str):
         if datasource_id != "ds_group":
@@ -222,6 +166,7 @@ def _fake_runtime_execute_sql_for_member(handler):
         execution_id: str | None = None,
         skip_query_cache: bool = False,
         datasource_id: str | None = None,
+        max_rows: int | None = None,
     ) -> dict:
         member_id = execution_target.get("member_datasource_id")
         member_name = execution_target.get("member_name")

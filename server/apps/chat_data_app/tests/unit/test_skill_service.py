@@ -651,9 +651,11 @@ def test_upload_skill_file_writes_bytes_and_validates(tmp_path, monkeypatch):
             await service.upload_skill_version_file_async("skill-1", 1, "assets", "tool.exe", FakeUploadStream(b"x"), "u1")
         with pytest.raises(ValueError, match="不支持的文件类型"):
             await service.upload_skill_version_file_async("skill-1", 1, "references", "tool.exe", FakeUploadStream(b"x"), "u1")
-        # 大小上限复用主对话 CHAT_DATA_MAX_UPLOAD_SIZE_MB 口径（monkeypatch 调小以便验证）
-        monkeypatch.setattr(skill_service_module, "MAX_UPLOAD_SIZE", 4)
-        monkeypatch.setattr(skill_service_module, "MAX_UPLOAD_SIZE_MB", 1)
+        # 大小上限复用主对话 CHAT_DATA_MAX_UPLOAD_SIZE_MB 口径（patch 配置读取调小以便验证）
+        async def fake_upload_limit():
+            return 1, 4
+
+        monkeypatch.setattr(skill_service_module, "get_upload_size_limit", fake_upload_limit)
         with pytest.raises(ValueError, match="文件大小不能超过1MB"):
             await service.upload_skill_version_file_async("skill-1", 1, "assets", "big.pdf", FakeUploadStream(b"x" * 5), "u1")
         # 超限失败后不残留临时文件、不落目标文件（流式写盘的清理语义）
@@ -1415,7 +1417,12 @@ def test_read_raw_and_office_preview_skill_files_async(tmp_path, monkeypatch):
         with pytest.raises(ValueError, match="文件过大"):
             await service.read_skill_version_file_raw_async("skill-1", 1, "assets", "logo.png", "u1", max_bytes=4)
 
-        monkeypatch.setattr(skill_service_module, "WORKSPACE_OFFICE_SOURCE_MAX_BYTES", 3)
+        # Office 源上限运行期经配置服务读取（MB 口径），patch get_runtime_setting
+        # 注入 0MB（=0 字节）使任何非空文件都触发超限
+        async def fake_office_limit(key, default=None):
+            return 0 if key == "CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB" else default
+
+        monkeypatch.setattr(skill_service_module, "get_runtime_setting", fake_office_limit)
         with pytest.raises(ValueError, match="Office 文件"):
             await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
 

@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.services.semantic.core import config_validator as config_validator_module
 from apps.chat_data_app.services.semantic.run import semantic_config_service as semantic_config_service_module
+from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import OssieSemanticModelImport
 from apps.chat_data_app.services.semantic.run.semantic_config_service import SemanticConfigService
 
 
@@ -364,11 +364,6 @@ def test_generate_basic_single_table_configs_creates_enabled_models_and_is_idemp
         return original_build_table_columns_map(datasource)
 
     monkeypatch.setattr(semantic_config_service_module, "build_table_columns_map", tracked_build_table_columns_map)
-    monkeypatch.setattr(
-        config_validator_module,
-        "build_table_columns_map",
-        lambda _datasource: pytest.fail("批量校验不应重复构建字段映射"),
-    )
     datasource_manager.datasource["ds_tables"] = [
         {
             "table_name": "orders",
@@ -562,3 +557,240 @@ def test_batch_toggle_enabled_async_warns_on_rowcount_mismatch():
 
     assert result["updated_ids"] == ["sc_public"]
     assert result["updated_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 跨模型口径检查 helper（cross_model_findings_for_imports）
+# ---------------------------------------------------------------------------
+
+
+class _FakeCrossService:
+    """只提供 get_configs_async 的最小 service 替身。"""
+
+    def __init__(self, configs):
+        self._configs = configs
+
+    async def get_configs_async(self, datasource_id, user_id=""):
+        return list(self._configs)
+
+
+def _import_model(name: str, metric_name: str, expression: str, *, importable: bool = True):
+    return OssieSemanticModelImport(
+        name=name,
+        metrics=[{"name": metric_name, "expression": expression, "table": "orders"}],
+        errors=[] if importable else ["blocked"],
+    )
+
+
+def _public_config(name: str, metrics: list, scope_type: str = "public"):
+    return {"id": f"sc_{name}", "name": name, "scope_type": scope_type, "metrics": metrics}
+
+
+def test_cross_model_findings_for_imports_attributes_and_excludes_replace_target():
+    """公共存量参与比较、他人私有不泄露、同名被替换的存量被排除、不可导入模型不归因。"""
+    imports = [
+        _import_model("新模型", "销售额", "SUM(orders.new_amount)"),
+        _import_model("坏模型", "销售额", "SUM(orders.x)", importable=False),
+    ]
+    existing = [
+        _public_config("订单分析", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _public_config("他人私有", [{"name": "销售额", "expression": "SUM(orders.private)"}], scope_type="private"),
+        # 与导入模型同名（replace 目标）：即使口径不同也不应误报
+        _public_config("新模型", [{"name": "销售额", "expression": "SUM(orders.old)"}]),
+    ]
+    result = asyncio.run(
+        semantic_config_service_module.cross_model_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService(existing)
+        )
+    )
+    assert set(result) == {"新模型"}
+    assert [item["code"] for item in result["新模型"]] == ["CON_CROSS_MODEL_NAME_CONFLICT"]
+    assert "订单分析" in result["新模型"][0]["targets"][0]
+
+
+def test_cross_model_findings_for_imports_compares_within_batch_and_tolerates_service_failure(monkeypatch):
+    """同批导入模型之间互相比较；存量读取失败降级为空报告。"""
+    imports = [
+        _import_model("模型A", "销售额", "SUM(orders.amount)"),
+        _import_model("模型B", "销售额", "SUM(orders.amount)"),
+    ]
+
+    class _BoomService:
+        async def get_configs_async(self, datasource_id):
+            raise RuntimeError("db down")
+
+    within_batch = asyncio.run(
+        semantic_config_service_module.cross_model_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService([])
+        )
+    )
+    assert set(within_batch) == {"模型A", "模型B"}
+    assert [item["code"] for item in within_batch["模型A"]] == ["CON_CROSS_MODEL_METRIC_DUPLICATE"]
+
+    degraded = asyncio.run(
+        semantic_config_service_module.cross_model_findings_for_imports(
+            imports, "ds_a", semantic_service=_BoomService()
+        )
+    )
+    assert degraded == {}
+
+
+def test_cross_model_findings_for_imports_empty_imports_returns_empty():
+    assert asyncio.run(
+        semantic_config_service_module.cross_model_findings_for_imports(
+            [], "ds_a", semantic_service=_FakeCrossService([])
+        )
+    ) == {}
+
+
+# ---------------------------------------------------------------------------
+# 导入链路质量检查编排（quality_findings_for_imports：preview 与 check_yaml 共用）
+# ---------------------------------------------------------------------------
+
+
+def test_quality_findings_for_imports_merges_single_and_cross():
+    """编排入口：importable 模型合并单模型规则与跨模型口径两层 findings。"""
+    imports = [_import_model("模型A", "销售额", "SUM(orders.amount)")]
+    existing = [_public_config("模型B", [{"name": "销售额", "expression": "SUM(orders.other)"}])]
+    result = asyncio.run(
+        semantic_config_service_module.quality_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService(existing)
+        )
+    )
+    assert set(result) == {"模型A"}
+    codes = {item["code"] for item in result["模型A"]}
+    assert "DOC_METRIC_NO_DESCRIPTION" in codes      # 单模型层（指标缺描述）
+    assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes  # 跨模型层（同名异式）
+
+
+def test_quality_findings_for_imports_skips_non_importable():
+    """不可导入模型不产出 findings（checklist 由调用方基于 validation_error 生成）。"""
+    imports = [_import_model("坏模型", "销售额", "SUM(orders.x)", importable=False)]
+    assert asyncio.run(
+        semantic_config_service_module.quality_findings_for_imports(
+            imports, "ds_a", semantic_service=_FakeCrossService([])
+        )
+    ) == {}
+
+
+# ---------------------------------------------------------------------------
+# 编辑器保存链路质量检查（quality_findings_for_save：多处校验统一的单一入口）
+# ---------------------------------------------------------------------------
+
+
+def _save_kwargs(**overrides):
+    kwargs = {
+        "name": "订单分析",
+        "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
+                     "description": "已支付订单金额合计"}],
+        "dimensions": [],
+        "relationships": [],
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_quality_findings_for_save_merges_single_and_cross(monkeypatch):
+    """单模型规则与跨模型口径同源合并：缺描述触发 DOC 规则，撞名触发跨模型 error。"""
+    existing = [_public_config("销售主题", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}])]
+    async def _fake_load(ds, ds_id):
+        return None
+
+    monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
+    findings = asyncio.run(
+        semantic_config_service_module.quality_findings_for_save(
+            object(), "ds_a", semantic_service=_FakeCrossService(existing), **_save_kwargs()
+        )
+    )
+    codes = {item["code"] for item in findings}
+    assert "DOC_METRIC_NO_DESCRIPTION" not in codes  # 该指标有描述
+    assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes   # 与销售主题同名异式
+
+
+def test_quality_findings_for_save_excludes_self_by_id(monkeypatch):
+    """update 场景排除自身：库里的旧版本与自己同名同式不再误报。"""
+    existing = [{"id": "sc_self", "name": "订单分析",
+                 "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)"}]}]
+    async def _fake_load(ds, ds_id):
+        return None
+
+    monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
+    findings = asyncio.run(
+        semantic_config_service_module.quality_findings_for_save(
+            object(), "ds_a", semantic_service=_FakeCrossService(existing),
+            exclude_config_id="sc_self",
+            **_save_kwargs(),
+        )
+    )
+    assert not any(item["code"].startswith("CON_CROSS_MODEL_") for item in findings)
+
+
+def test_quality_findings_for_save_degrades_on_physical_failure(monkeypatch):
+    """物理列加载失败降级为空列表：质量提示不挡保存。"""
+    async def _boom(ds, ds_id):
+        raise RuntimeError("ds down")
+
+    monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _boom)
+    findings = asyncio.run(
+        semantic_config_service_module.quality_findings_for_save(
+            object(), "ds_a", semantic_service=_FakeCrossService([]), **_save_kwargs()
+        )
+    )
+    assert findings == []
+
+
+def test_cross_model_comparison_pool_includes_own_private_only():
+    """比较池=公共+本人私有：他人私有永不入选，user_id 未知时只留公共。"""
+    configs = [
+        _public_config("公共", []),
+        _public_config("本人私有", [], scope_type="private"),
+        _public_config("他人私有", [], scope_type="private"),
+    ]
+    configs[1]["create_by"] = "u_1"
+    configs[2]["create_by"] = "u_2"
+
+    pool_owner = semantic_config_service_module._cross_model_comparison_pool(configs, "u_1")
+    assert [c["name"] for c in pool_owner] == ["公共", "本人私有"]
+
+    pool_unknown = semantic_config_service_module._cross_model_comparison_pool(configs, "")
+    assert [c["name"] for c in pool_unknown] == ["公共"]
+
+
+def test_quality_findings_for_save_includes_own_private_conflict(monkeypatch):
+    """保存个人模型时与自己另一个个人模型撞名也应提示（review 修正场景）。"""
+    existing = [{"id": "sc_own", "name": "我的另一模型", "scope_type": "private", "create_by": "u_1",
+                 "metrics": [{"name": "销售额", "expression": "SUM(orders.other)"}]}]
+
+    async def _fake_load(ds, ds_id):
+        return None
+
+    monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
+    findings = asyncio.run(
+        semantic_config_service_module.quality_findings_for_save(
+            object(), "ds_a", semantic_service=_FakeCrossService(existing),
+            user_id="u_1", **_save_kwargs(),
+        )
+    )
+    assert "CON_CROSS_MODEL_NAME_CONFLICT" in {item["code"] for item in findings}
+
+
+def test_quality_findings_for_save_strips_self_name_suffix_only(monkeypatch):
+    """配置级提示（目标=模型名）去掉尾部模型名；指标级 target 与跨模型目标保留。"""
+
+    async def _fake_load(ds, ds_id):
+        return None
+
+    monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
+    findings = asyncio.run(
+        semantic_config_service_module.quality_findings_for_save(
+            object(), "ds_a", semantic_service=_FakeCrossService([]),
+            user_id="u_1",
+            name="auth_group_permissions基础模型",
+            metrics=[{"name": "集群数量1", "expression": "SUM(t.cnt)", "table": "t"}],
+            dimensions=[],
+            relationships=[],
+        )
+    )
+    by_code = {item["code"]: item for item in findings}
+    assert by_code["DOC_NO_BUSINESS_NOTES"]["message"] == "配置缺少业务说明 business_notes"
+    assert by_code["DOC_METRIC_NO_DESCRIPTION"]["message"].endswith(": 集群数量1")

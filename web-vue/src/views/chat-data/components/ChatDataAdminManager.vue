@@ -9,6 +9,7 @@ import DataSourceManager from './DataSourceManager.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
+import SettingAdminPanel from './SettingAdminPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
 
@@ -22,11 +23,12 @@ const emit = defineEmits<{
   'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule' | 'plugins'>('datasource')
+const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
+const settingPanelRef = ref<InstanceType<typeof SettingAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
 const loadingAdminDatasourceOptions = ref(false)
@@ -41,6 +43,7 @@ const tabs = [
   { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
   { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
   { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
+  { key: 'setting', label: '运行配置', icon: 'fa-sliders' },
 ] as const
 
 const openDatasourceGroupModal = () => {
@@ -71,7 +74,7 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugins') => {
+const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting') => {
   activeTab.value = tab
   if (tab === 'schedule') {
     await nextTick()
@@ -81,6 +84,11 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugin
   if (tab === 'plugins') {
     await nextTick()
     pluginPanelRef.value?.ensureLoaded()
+    return
+  }
+  if (tab === 'setting') {
+    await nextTick()
+    settingPanelRef.value?.ensureLoaded()
     return
   }
   if (tab !== 'sqlHistory') return
@@ -95,10 +103,6 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugin
     <template #header>
       <div class="flex items-center justify-between">
         <div class="flex min-w-0 items-center gap-3">
-          <h3 class="m-0 flex shrink-0 items-center text-sm font-medium text-slate-700">
-            <i class="fa-solid fa-sliders mr-2 text-blue-500"></i>
-            智能问数后台管理
-          </h3>
           <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
             <button
               v-for="tab in tabs"
@@ -147,6 +151,11 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugin
       <PluginAdminPanel
         v-show="activeTab === 'plugins'"
         ref="pluginPanelRef"
+        class="h-full"
+      />
+      <SettingAdminPanel
+        v-show="activeTab === 'setting'"
+        ref="settingPanelRef"
         class="h-full"
       />
     </div>

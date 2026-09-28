@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent import data_agent, sql_assist_agent
+from apps.chat_data_app.agent import data_agent
 from apps.chat_data_app.agent.agent_runtime import normalize_response_tool_call_names
 from apps.chat_data_app.agent.middleware import context_compression, context_usage
 from apps.chat_data_app.agent.middleware import message_integrity, tool_call_history_repair
@@ -1209,37 +1209,3 @@ async def test_tool_call_history_repair_middleware_replaces_state_messages(monke
     assert update["messages"][1:] == [messages[0]]
     assert warnings
 
-
-def test_sql_assist_agent_uses_create_agent(monkeypatch):
-    captured = {}
-
-    def fake_create_agent(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(name="sql_agent")
-
-    monkeypatch.setattr(
-        sql_assist_agent,
-        "get_chat_data_llm",
-        lambda streaming=True, **_kwargs: FakeChatModel(),
-    )
-    monkeypatch.setattr(sql_assist_agent, "create_agent", fake_create_agent)
-
-    system_prompt = sql_assist_agent.build_sql_assist_system_prompt(
-        sql_dialect="Hive",
-        tables_ddl_info="CREATE TABLE orders(id int)",
-    )
-    assert "CREATE TABLE orders" in system_prompt
-    assert "机构A" not in system_prompt
-
-    agent = sql_assist_agent.create_sql_assist_agent(
-        checkpointer="ckpt",
-        sql_dialect="Hive",
-        tables_ddl_info="CREATE TABLE orders(id int)",
-    )
-
-    assert agent.name == "sql_agent"
-    assert captured["checkpointer"] == "ckpt"
-    assert captured["tools"] == []
-    assert captured["state_schema"] is sql_assist_agent.SqlAssistState
-    assert captured["name"] == "sql_assist_agent"
-    assert "CREATE TABLE orders" in captured["system_prompt"]

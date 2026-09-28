@@ -1408,9 +1408,22 @@ def test_build_rg_command_str():
     command = we_search.build_rg_command_str(
         "/mnt/user-data/workspace", ["hello world", "foo"], glob="**/*.py",
     )
-    assert command.startswith("rg -F --json --hidden")
+    assert command.startswith("rg --json --hidden -F")
     assert "--glob '**/*.py'" in command
     assert command.endswith("-e 'hello world' -e foo")
+
+    # 新旋钮：正则去 -F、忽略大小写加 -i、上下文加 --context、聚合模式不带 --context
+    regex_cmd = we_search.build_rg_command_str(
+        "/tmp/x", ["a|b"], use_regex=True, ignore_case=True, context_lines=2,
+    )
+    assert "-F" not in regex_cmd.split()
+    assert "-i" in regex_cmd.split()
+    assert "--context 2" in regex_cmd
+    count_cmd = we_search.build_rg_command_str(
+        "/tmp/x", ["a"], output_mode="count", context_lines=3,
+    )
+    assert "--context" not in count_cmd
+    assert "-F" in count_cmd.split()
 
 
 def test_parse_rg_output():
@@ -1427,6 +1440,57 @@ def test_parse_rg_output():
         stdout, "/mnt/user-data/workspace", max_results=2, max_chars=10000,
     )
     assert [item["file"] for item in matches] == ["a.py", ""]
+    assert has_more is True
+
+
+def test_parse_rg_output_after_budget_cap_and_file_boundary():
+    # 文件边界后、本文件首个 match 前，context 行只进 before 缓冲，
+    # 不得挂到上一文件末条命中的 after（matches 列表跨文件共享）
+    stream = "\n".join([
+        '{"type": "begin"}',
+        '{"type": "match", "data": {"path": {"text": "/t/one.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 2, "lines": {"text": "a1"}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 3, "lines": {"text": "a2"}}}',
+        '{"type": "begin"}',
+        '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 1, "lines": {"text": "p1"}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 2, "lines": {"text": "p2"}}}',
+        '{"type": "match", "data": {"path": {"text": "/t/two.txt"}, "line_number": 3, "lines": {"text": "HIT2"}}}',
+    ])
+    matches, has_more = we_search.parse_rg_output(
+        stream, "/t", max_results=10, max_chars=10000, context_lines=2,
+    )
+    assert matches[0]["after"] == ["a1", "a2"]
+    assert matches[1]["before"] == ["p1", "p2"]
+    assert "after" not in matches[1]
+    assert has_more is False
+
+    # 尾随 after 行装不进剩余预算：该行不进入结果，has_more 置位（max_chars 硬上限）
+    long_line = "A" * 100
+    stream = "\n".join([
+        '{"type": "begin"}',
+        '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+        f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 2, "lines": {{"text": "{long_line}"}}}}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "B"}}}',
+    ])
+    matches, has_more = we_search.parse_rg_output(
+        stream, "/t", max_results=10, max_chars=10, context_lines=3,
+    )
+    assert len(matches) == 1
+    assert "after" not in matches[0]
+    assert has_more is True
+
+    # 部分装得下：短 after 行正常吸收，装不下的长行处截断
+    stream = "\n".join([
+        '{"type": "begin"}',
+        '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 2, "lines": {"text": "s1"}}}',
+        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "s2"}}}',
+        f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 4, "lines": {{"text": "{long_line}"}}}}}}',
+    ])
+    matches, has_more = we_search.parse_rg_output(
+        stream, "/t", max_results=10, max_chars=20, context_lines=3,
+    )
+    assert matches[0]["after"] == ["s1", "s2"]
     assert has_more is True
 
 

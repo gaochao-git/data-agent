@@ -69,3 +69,26 @@ def _no_db_workspace_date(monkeypatch):
     monkeypatch.setattr(agent_run_support_module, "get_conversation_created_date", _stub_date)
     monkeypatch.setattr(cw_routes, "get_conversation_created_date", _stub_date)
     monkeypatch.setattr(uploaded_file_service, "get_conversation_created_date", _stub_date)
+
+
+@pytest.fixture(autouse=True)
+def _no_setting_table_db(monkeypatch):
+    """单元测试内配置变量表（chat_data_setting）不连真实数据库。
+
+    get_runtime_setting 的表读取统一走 setting_service.transaction_scope；
+    这里将其替换为立即抛「no such table」的桩，命中 _load_raw_setting 的
+    missing-table 降级路径（告警一次 + 回退 env/默认），既保持「表覆盖 > env >
+    默认」语义可被 setenv 驱动，又让单元测试零真实 DB 依赖。
+    test_setting_service / test_setting_admin_api 等自带 sqlite harness 的用例
+    会在本桩之后再覆写 transaction_scope，不受影响。
+    """
+    from contextlib import asynccontextmanager
+
+    from apps.chat_data_app.services import setting_service
+
+    @asynccontextmanager
+    async def _no_db_scope():
+        raise RuntimeError("no such table: chat_data_setting (unit-test stub)")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(setting_service, "transaction_scope", _no_db_scope)

@@ -13,6 +13,7 @@ import type {
   ConversationItem,
   ConversationGroupPage,
   SemanticConfigItem,
+  SemanticConfigValidateResult,
   SemanticMetric,
   SemanticDimension,
   SemanticRelationship,
@@ -29,6 +30,7 @@ import type {
   AgentSchedulePayload,
   AgentScheduleRunItem,
   PluginInfo,
+  ChatDataSettingItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1239,6 +1241,34 @@ export function updateAdminSemanticConfig(datasourceId: string, configId: string
   })
 }
 
+/** 语义配置保存前校验（dry-run，不落库）：结构校验 + 质量/跨模型口径提示 */
+export function validateSemanticConfig(
+  datasourceId: string,
+  data: Partial<SemanticConfigItem>,
+  excludeConfigId?: string
+): Promise<ApiResponse<SemanticConfigValidateResult>> {
+  return request({
+    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/validate`,
+    method: 'post',
+    params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
+    data
+  })
+}
+
+/** 后台公共语义配置保存前校验（dry-run，不落库） */
+export function validateAdminSemanticConfig(
+  datasourceId: string,
+  data: Partial<SemanticConfigItem>,
+  excludeConfigId?: string
+): Promise<ApiResponse<SemanticConfigValidateResult>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/validate`,
+    method: 'post',
+    params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
+    data
+  })
+}
+
 /** 删除语义配置 */
 export function deleteSemanticConfig(datasourceId: string, configId: string): Promise<ApiResponse<null>> {
   return request({
@@ -1636,29 +1666,6 @@ export function cancelUserQuestion(
   })
 }
 
-/** 流式快速生成 SQL */
-export function streamQuickSql(data: {
-  query: string
-  datasource_id: string
-  member_datasource_ids?: string[]
-  semantic_config_id?: string
-  session_id?: string
-  conversation_id?: string
-  /** 指定生成模型；缺省用系统默认模型 */
-  model_id?: string
-  /** 用户显式开关深度思考；缺省跟随模型默认 */
-  enable_thinking?: boolean
-  /** 思考档位；缺省跟随模型默认 */
-  thinking_effort?: string
-}, signal?: AbortSignal): Promise<Response> {
-  return requestStream({
-    url: '/agents/api/chatdata/nl2sql',
-    method: 'POST',
-    data,
-    signal
-  })
-}
-
 /** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
 export function getConversationHistory(
   conversationId: string,
@@ -1791,6 +1798,15 @@ export function getAdminPlugins(params?: { limit?: number; offset?: number }): P
   })
 }
 
+/** 后台：配置变量列表（= 可动态修改变量白名单全量，含生效值与来源徽标） */
+export function getAdminSettings(params?: { keyword?: string }): Promise<ApiResponse<{ items: ChatDataSettingItem[]; total: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings`,
+    method: 'get',
+    params
+  })
+}
+
 /** 后台：上传插件 zip 安装（同名插件需先卸载；变更对新会话生效） */
 export function installPlugin(file: File): Promise<ApiResponse<{ plugin: PluginInfo; effective: string }>> {
   const formData = new FormData()
@@ -1816,6 +1832,31 @@ export function setAdminPluginEnabled(pluginId: string, enabled: boolean): Promi
 export function uninstallPlugin(pluginId: string): Promise<ApiResponse<{ name: string; version: string }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：覆盖已注册变量（key 限白名单；已重置的 key 自动复用原行恢复） */
+export function upsertAdminSetting(settingKey: string, data: { setting_value: string }): Promise<ApiResponse<{ setting_key: string; action: 'created' | 'updated' | 'restored' }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings/${settingKey}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：重置单个变量（软删覆盖行，回退 env/代码默认值） */
+export function deleteAdminSetting(settingKey: string): Promise<ApiResponse<{ setting_key: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings/${settingKey}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：全部重置（软删所有覆盖行，所有变量回退 env/代码默认值） */
+export function resetAllAdminSettings(): Promise<ApiResponse<{ reset_count: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/settings`,
     method: 'delete'
   })
 }

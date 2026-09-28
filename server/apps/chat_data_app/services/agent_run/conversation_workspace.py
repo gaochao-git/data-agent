@@ -48,30 +48,42 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import (
     USER_DATA_VIRTUAL_ROOT,
     WORKSPACE_PATH_POLICY,
 )
-from apps.chat_data_app.services.runtime_config import (
-    OFFICE_PREVIEW_SOURCE_MAX_MB,
-    TEXT_PREVIEW_MAX_MB,
-    WORKSPACE_ARCHIVE_MAX_MB,
-)
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 agent_inbox_dao = AgentInboxDao()
 
-# 文本预览源文件上限（默认 5MB）与 Office 预览源文件上限（默认 50MB），MB 值在
-# runtime_config 集中读取（CHAT_DATA_TEXT_PREVIEW_MAX_MB / CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB），
-# 此处只做 MB→字节派生。注意与 OFFICE_PREVIEW_MAX_CHARS（Office 转出 HTML 的字符上限，12MB）是两回事。
-# 模块级求值：改 env 后必须重启进程才生效。
-WORKSPACE_TEXT_PREVIEW_MAX_BYTES = TEXT_PREVIEW_MAX_MB * 1024 * 1024
-WORKSPACE_OFFICE_SOURCE_MAX_BYTES = OFFICE_PREVIEW_SOURCE_MAX_MB * 1024 * 1024
+# 预览/打包上限（字节）：运行期经后台配置变量表读取（表覆盖 > env > 默认），异步入口
+# 经 _text_preview_max_bytes 等解析后显式传参；以下常量仅作同步函数签名的兜底默认值
+# （直接调用同步函数且未传参时生效，等价注册表默认 5MB/50MB/50MB）。
+# 注意与 OFFICE_PREVIEW_MAX_CHARS（Office 转出 HTML 的字符上限）是两回事。
+WORKSPACE_TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
+WORKSPACE_OFFICE_SOURCE_MAX_BYTES = 50 * 1024 * 1024
 
 # raw（原始字节）预览上限：目前无对应 env，主对话与技能管理预览共用本常量（单一来源）。
 WORKSPACE_RAW_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
 
-# 目录打包下载的压缩包大小上限：限 zip 产物字节（MB 值在 runtime_config 集中读取，
-# CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB）。模块级求值：改 env 后必须重启进程才生效。
-WORKSPACE_ARCHIVE_MAX_BYTES = WORKSPACE_ARCHIVE_MAX_MB * 1024 * 1024
+WORKSPACE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024
+
+
+async def _text_preview_max_bytes() -> int:
+    """文本预览源上限（字节）：CHAT_DATA_TEXT_PREVIEW_MAX_MB 运行期读取。"""
+    text_preview_max_mb = await get_runtime_setting("CHAT_DATA_TEXT_PREVIEW_MAX_MB")
+    return text_preview_max_mb * 1024 * 1024
+
+
+async def _office_preview_source_max_bytes() -> int:
+    """Office 预览源上限（字节）：CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB 运行期读取。"""
+    office_source_max_mb = await get_runtime_setting("CHAT_DATA_OFFICE_PREVIEW_SOURCE_MAX_MB")
+    return office_source_max_mb * 1024 * 1024
+
+
+async def _archive_max_bytes() -> int:
+    """目录打包下载 zip 产物上限（字节）：CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB 运行期读取。"""
+    archive_max_mb = await get_runtime_setting("CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB")
+    return archive_max_mb * 1024 * 1024
 
 
 def _format_size_limit(max_bytes: int) -> str:
@@ -313,14 +325,14 @@ async def read_conversation_workspace_file(
     *,
     user_id: str,
     path: str,
-    max_bytes: int = WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
+    max_bytes: int | None = None,
 ) -> dict[str, Any]:
-    """读取当前用户会话持久化工作区中的文本文件。"""
+    """读取当前用户会话持久化工作区中的文本文件（上限运行期读取，None=按配置解析）。"""
     return await asyncio.to_thread(
         read_workspace_text_file,
         conversation_id,
         path,
-        max_bytes,
+        max_bytes if max_bytes is not None else await _text_preview_max_bytes(),
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
     )
@@ -378,9 +390,11 @@ def _archive_workspace_directory(
     user_id: str = "system",
     *,
     created_date: str | None = None,
+    archive_max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """把会话工作区的目录（顶层目录或其下子目录）打成 zip，写入临时文件并返回其路径等信息。
 
+    archive_max_bytes=None 时回退同步兜底常量（异步入口会显式传热值）。
     内容来源是 ``list_workspace_files`` 的白名单列表（已排除系统结果目录、内部文件与
     逃逸符号链接），**不重新遍历磁盘**——保证「单文件下载不了的，打包也下不到」，与
     单文件下载、前端文件树三方共用同一权限口径（consoleFileTree.ts 的防泄漏边界）。
@@ -391,6 +405,8 @@ def _archive_workspace_directory(
     一个文件都没打进包，按空目录处理报错。
     """
     normalized_directory = normalize_archive_directory(directory)
+    if archive_max_bytes is None:
+        archive_max_bytes = WORKSPACE_ARCHIVE_MAX_BYTES
     files = [
         item
         for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
@@ -416,8 +432,8 @@ def _archive_workspace_directory(
                 # arcname 用相对路径（含顶层目录前缀），解压后保留 outputs/... 的目录结构
                 zf.write(target, arcname=relative_path)
                 written += 1
-                if os.path.getsize(tmp_path) > WORKSPACE_ARCHIVE_MAX_BYTES:
-                    raise WorkspaceArchiveTooLargeError(WORKSPACE_ARCHIVE_MAX_BYTES)
+                if os.path.getsize(tmp_path) > archive_max_bytes:
+                    raise WorkspaceArchiveTooLargeError(archive_max_bytes)
         if not written:
             raise FileNotFoundError(f"{normalized_directory} 目录下没有可打包的文件")
     except Exception:
@@ -448,10 +464,13 @@ async def archive_conversation_workspace_directory(
         directory,
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+        archive_max_bytes=await _archive_max_bytes(),
     )
 
 
-def _validate_office_preview_source(workspace_root: str, path: str) -> None:
+def _validate_office_preview_source(workspace_root: str, path: str, *, max_bytes: int | None = None) -> None:
+    if max_bytes is None:
+        max_bytes = WORKSPACE_OFFICE_SOURCE_MAX_BYTES
     target = resolve_workspace_path(workspace_root, path)
     if is_system_result_workspace_path(workspace_root, target):
         raise ValueError("工具结果缓存不支持 Office 预览")
@@ -459,8 +478,8 @@ def _validate_office_preview_source(workspace_root: str, path: str) -> None:
         raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
     if not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
-    if target.stat().st_size > WORKSPACE_OFFICE_SOURCE_MAX_BYTES:
-        raise ValueError("文件过大，暂不支持预览超过 50MB 的 Office 文件")
+    if target.stat().st_size > max_bytes:
+        raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的 Office 文件")
 
 
 
@@ -479,6 +498,7 @@ async def render_conversation_workspace_office_preview(
         _validate_office_preview_source,
         workspace_root,
         path,
+        max_bytes=await _office_preview_source_max_bytes(),
     )
     runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_root,

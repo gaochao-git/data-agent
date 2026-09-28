@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 
@@ -186,10 +187,11 @@ def test_validate_sql_compat_surface():
 # ============ 超时上限 ============
 
 def test_resolve_query_timeout_clamps_request_value():
-    assert sql_executor.resolve_query_timeout("mysql", 10**9) == 3600
-    assert sql_executor.resolve_query_timeout("mysql", 30) == 30
-    assert sql_executor.resolve_query_timeout("mysql", None) == 60
-    assert sql_executor.resolve_query_timeout("hive", None) == 600
+    assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 10**9)) == 3600
+    assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 30)) == 30
+    # 默认值走配置变量表（单测桩下降级 env/注册表默认）
+    assert asyncio.run(sql_executor.resolve_query_timeout("mysql", None)) == 60
+    assert asyncio.run(sql_executor.resolve_query_timeout("hive", None)) == 600
 
 
 def test_schema_rejects_timeout_over_cap():

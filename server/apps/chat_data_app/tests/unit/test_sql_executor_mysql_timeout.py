@@ -93,7 +93,9 @@ async def test_mysql_timeout_kills_query_and_discards_connection(monkeypatch):
         return {"status": "succeeded", "error": None}
 
     executor.kill_query = fake_kill
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
+    async def _fake_timeout_96(*args, **kwargs):
+        return 0.05
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout_96)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
@@ -112,7 +114,9 @@ async def test_mysql_timeout_returns_error_even_when_kill_fails(monkeypatch):
         return {"status": "failed", "error": "KILL 失败"}
 
     executor.kill_query = fake_kill
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
+    async def _fake_timeout_115(*args, **kwargs):
+        return 0.05
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout_115)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
@@ -132,7 +136,9 @@ async def test_mysql_timeout_without_connection_id_skips_kill_but_discards_conne
         return {"status": "succeeded", "error": None}
 
     executor.kill_query = fake_kill
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 0.05)
+    async def _fake_timeout_135(*args, **kwargs):
+        return 0.05
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout_135)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 
@@ -163,7 +169,9 @@ async def test_mysql_success_path_does_not_close_connection(monkeypatch):
         cursor.executed_sqls.append(sql)
 
     cursor.execute = fast_execute
-    monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *args, **kwargs: 1)
+    async def _fake_timeout_166(*args, **kwargs):
+        return 1
+    monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout_166)
 
     result = await executor.execute("SELECT * FROM t", limit=10)
 

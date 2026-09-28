@@ -8,6 +8,8 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import (
+    check_cross_model_metrics,
+    first_structure_error,
     get_semantic_quality_checker,
     grade_for_score,
 )
@@ -65,6 +67,7 @@ PHYSICAL_COLUMNS = {
     ("orders", "order_id"),
     ("orders", "order_time"),
     ("orders", "status"),
+    ("orders", "user_id"),
     ("users", "nickname"),
     ("users", "id"),
     ("users", "tenant_id"),
@@ -96,8 +99,8 @@ def test_unmodeled_columns_aggregated_with_count():
     report = get_semantic_quality_checker().check_config(_good_config(), physical_columns=PHYSICAL_COLUMNS)
     finding = _find(report, "COV_UNMODELED_COLUMNS")
     assert finding is not None
-    # users.id 与 users.tenant_id 未被引用
-    assert "users" in finding.message and "2" in finding.message
+    # orders.user_id（关系 join 列，未被维度/指标建模）+ users.id + users.tenant_id 未被引用
+    assert "orders.user_id(3列)" in finding.message
 
 
 def test_atomic_metric_missing_table_is_error():
@@ -120,29 +123,30 @@ def test_dimension_missing_table_and_column():
 
 
 def test_unknown_column_against_physical_inventory():
+    """结构校验接管列存在性：维度单列与指标表达式双路径都报 STR。"""
     config = _good_config()
     config["dimensions"][0]["column"] = "not_exist_col"
     config["metrics"][0]["table"] = "fact_missing"
     report = get_semantic_quality_checker().check_config(config, physical_columns=PHYSICAL_COLUMNS)
-    finding = _find(report, "EXE_UNKNOWN_COLUMN")
-    assert finding is not None
-    assert any("not_exist_col" in target for target in finding.targets)
-    assert any("fact_missing" in target for target in finding.targets)
+    finding = _find(report, "STR_DIMENSION_INVALID")
+    assert finding is not None and "not_exist_col" in finding.message
+    finding = _find(report, "STR_METRIC_INVALID")
+    assert finding is not None and "fact_missing" in finding.message
 
 
 def test_unknown_column_skipped_without_inventory():
     config = _good_config()
     config["dimensions"][0]["column"] = "not_exist_col"
     report = get_semantic_quality_checker().check_config(config, physical_columns=None)
-    assert _find(report, "EXE_UNKNOWN_COLUMN") is None
+    assert _find(report, "STR_DIMENSION_INVALID") is None
 
 
 def test_derived_metric_base_missing_and_no_constraint():
     config = _good_config()
     config["metrics"][2]["base_metric"] = "不存在的指标"
     report = get_semantic_quality_checker().check_config(config)
-    finding = _find(report, "EXE_DERIVED_BASE_MISSING")
-    assert finding is not None and "本月成交额" in finding.targets
+    finding = _find(report, "STR_DERIVED_INVALID")
+    assert finding is not None and "本月成交额" in finding.message
 
     config2 = _good_config()
     config2["metrics"][2].pop("period")
@@ -156,7 +160,8 @@ def test_composite_formula_missing_and_unresolved_tokens():
     config = _good_config()
     config["metrics"][3].pop("formula")
     report = get_semantic_quality_checker().check_config(config)
-    assert _find(report, "EXE_COMPOSITE_FORMULA_MISSING") is not None
+    finding = _find(report, "STR_COMPOSITE_INVALID")
+    assert finding is not None and "formula" in finding.message
 
     config2 = _good_config()
     config2["metrics"][3]["formula"] = "{销售额} / {毛利率}"
@@ -222,6 +227,27 @@ def test_cross_namespace_same_name_not_flagged():
     config["metrics"][2]["filters"] = [{"dimension": "同名对象", "operator": "=", "value": "已支付"}]
     report = get_semantic_quality_checker().check_config(config)
     assert _find(report, "CON_NAME_DUPLICATE") is None
+
+
+def test_name_chars_valid_names_not_flagged():
+    """中/英/数字/下划线组合的名称不触发 CON_NAME_CHARS。"""
+    config = _good_config()
+    config["metrics"][0]["name"] = "销售总额_2026_amount"
+    config["dimensions"][0]["name"] = "下单时间2"
+    report = get_semantic_quality_checker().check_config(config)
+    assert _find(report, "CON_NAME_CHARS") is None
+
+
+def test_name_chars_flags_special_characters():
+    """空格/括号/花括号等白名单外字符触发 warning，指标维度分别报。"""
+    config = _good_config()
+    config["metrics"][0]["name"] = "订单 数量"
+    config["dimensions"][0]["name"] = "下单时间(日期)"
+    report = get_semantic_quality_checker().check_config(config)
+    finding = _find(report, "CON_NAME_CHARS")
+    assert finding is not None and finding.severity == "warning"
+    assert "指标:订单 数量" in finding.targets
+    assert "维度:下单时间(日期)" in finding.targets
 
 
 def test_relationship_key_uncovered():
@@ -360,9 +386,10 @@ def test_awful_config_scores_low():
     report = get_semantic_quality_checker().check_config(config, physical_columns=PHYSICAL_COLUMNS)
     codes = set(_codes(report))
     assert {
+        "STR_DIMENSION_INVALID", "STR_METRIC_INVALID", "STR_DERIVED_INVALID",
+        "STR_COMPOSITE_INVALID", "STR_RELATIONSHIP_INVALID",
         "PROV_METRIC_MISSING_TABLE", "PROV_DIMENSION_MISSING_TABLE", "PROV_DIMENSION_MISSING_COLUMN",
-        "EXE_UNKNOWN_COLUMN", "EXE_DERIVED_BASE_MISSING",
-        "EXE_COMPOSITE_FORMULA_MISSING", "COV_DUPLICATE_DIMENSION_COLUMN",
+        "COV_DUPLICATE_DIMENSION_COLUMN",
         "CON_DUPLICATE_METRIC_EXPRESSION", "CON_RELATIONSHIP_DUPLICATE", "CON_RELATIONSHIP_SELF",
         "CON_RELATIONSHIP_TABLE_UNREFERENCED", "CON_RELATIONSHIP_CYCLE",
         "DOC_METRIC_NO_DESCRIPTION", "DOC_DIMENSION_NO_DESCRIPTION", "DOC_NO_BUSINESS_NOTES",
@@ -387,3 +414,121 @@ def test_derived_and_composite_missing_table_not_flagged():
     report = get_semantic_quality_checker().check_config(config)
     finding = _find(report, "PROV_METRIC_MISSING_TABLE")
     assert finding is None
+
+
+# ---------------------------------------------------------------------------
+# 跨模型指标口径检查（第二层校验：check_cross_model_metrics）
+# ---------------------------------------------------------------------------
+
+
+def _model(name: str, metrics: list) -> dict:
+    return {"name": name, "metrics": metrics}
+
+
+def test_cross_model_name_conflict_is_error_and_names_both_models():
+    configs = [
+        _model("订单分析", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("销售主题", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert [item["code"] for item in findings] == ["CON_CROSS_MODEL_NAME_CONFLICT"]
+    assert findings[0]["severity"] == "error"
+    assert findings[0]["category"] == "consistency"
+    assert "订单分析" in findings[0]["targets"][0] and "销售主题" in findings[0]["targets"][0]
+
+
+def test_cross_model_same_name_same_expression_is_warning():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "sum( orders.amount )"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert [item["code"] for item in findings] == ["CON_CROSS_MODEL_METRIC_DUPLICATE"]
+    assert findings[0]["severity"] == "warning"
+
+
+def test_cross_model_same_expression_different_names_not_flagged():
+    """异名同表达式不判：COUNT(id)/SUM(xxx) 类通用表达式跨模型撞车太常见，判了全是噪音。"""
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("模型B", [{"name": "成交额", "expression": "SUM(ORDERS.AMOUNT)"}]),
+    ]
+    assert check_cross_model_metrics(configs) == []
+
+
+def test_cross_model_focus_only_reports_involving_focus():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}, {"name": "订单量", "expression": "COUNT(orders.id)"}]),
+        _model("模型C", [{"name": "成交量", "expression": "count( orders.id )"}]),
+    ]
+    focus_a = check_cross_model_metrics(configs, focus_config_name="模型A")
+    assert {item["code"] for item in focus_a} == {"CON_CROSS_MODEL_NAME_CONFLICT"}
+    # 模型C 与模型B 异名同表达式：不再判（只判同名）
+    assert check_cross_model_metrics(configs, focus_config_name="模型C") == []
+    all_findings = check_cross_model_metrics(configs)
+    assert {item["code"] for item in all_findings} == {"CON_CROSS_MODEL_NAME_CONFLICT"}
+
+
+def test_cross_model_skips_derived_composite_and_blank():
+    configs = [
+        _model("模型A", [
+            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+            {"name": "空表达式", "expression": "  "},
+            {"name": "", "expression": "SUM(x)"},
+        ]),
+        _model("模型B", [
+            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+        ]),
+    ]
+    assert check_cross_model_metrics(configs) == []
+
+
+def test_cross_model_three_models_same_name_aggregates_participants():
+    configs = [
+        _model("模型A", [{"name": "销售额", "expression": "SUM(a.amount)"}]),
+        _model("模型B", [{"name": "销售额", "expression": "SUM(b.amount)"}]),
+        _model("模型C", [{"name": "销售额", "expression": "SUM(c.amount)"}]),
+    ]
+    findings = check_cross_model_metrics(configs)
+    assert len(findings) == 1
+    for participant in ("模型A", "模型B", "模型C"):
+        assert participant in findings[0]["targets"][0]
+
+
+def test_single_model_check_never_emits_cross_model_codes():
+    config = _good_config()
+    config["metrics"].append({"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
+                              "description": "与首条重复口径，触发模型内 CON_DUPLICATE_METRIC_EXPRESSION"})
+    report = get_semantic_quality_checker().check_config(config)
+    codes = set(_codes(report))
+    assert "CON_DUPLICATE_METRIC_EXPRESSION" in codes
+    assert not any(code.startswith("CON_CROSS_MODEL_") for code in codes)
+
+
+def test_first_structure_error_guards_empty_table_map():
+    """表结构清单为空时返回同步提示文案，不进入检查。"""
+    assert first_structure_error([], [], []) == "当前数据源缺少表结构信息，请先完成数据源同步"
+
+
+def test_first_structure_error_returns_message_in_phase_order():
+    """多条结构错误并存时按阶段序返回第一条（显示名称先于指标物理引用）。"""
+    table_columns_map = {"orders": {"amount"}}
+    error = first_structure_error(
+        [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        [{"name": "城市", "table": "missing", "column": "city"}],
+        [],
+        table_columns_map=table_columns_map,
+    )
+    assert "所属表不存在" in error
+
+
+def test_first_structure_error_none_for_clean_config():
+    assert first_structure_error(
+        [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "description": "口径"}],
+        [{"name": "城市", "table": "orders", "column": "amount"}],
+        [],
+        table_columns_map={"orders": {"amount"}},
+    ) is None

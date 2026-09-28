@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from utils.logger import get_logger
+from apps.chat_data_app.services.setting_service import get_runtime_setting
 from .agent_inbox_service import AgentRunLeaseLostError, AgentInboxService, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
 from .chat_data_stream_request import ChatDataStreamRequest
@@ -65,12 +66,15 @@ class AgentRunRuntime:
         event_bus: RedisEventBus | None = None,
         stream_generator: Callable[..., AsyncIterator[str]] | None = None,
     ) -> None:
-        self._max_concurrency = max_concurrency or _max_concurrency()
+        # 并发上限运行期经后台配置变量表读取（CHAT_DATA_AGENT_MAX_CONCURRENCY）：
+        # _execute 每次执行前对账，无在途运行时按新值重建信号量（有在途时沿用旧的，
+        # 待自然排空后生效，避免重建打断持有计数）；导入期先按 env 快照建初始值。
+        self._semaphore_capacity = max_concurrency or _max_concurrency()
         self._inbox_service = inbox_service
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
         self._stream_generator = stream_generator
-        self._semaphore = asyncio.Semaphore(self._max_concurrency)
+        self._semaphore = asyncio.Semaphore(self._semaphore_capacity)
         self._tasks: dict[str, asyncio.Task] = {}
         self._owned_runs: set[str] = set()
         self._poll_task: asyncio.Task | None = None
@@ -217,7 +221,7 @@ class AgentRunRuntime:
         while True:
             try:
                 await self._reap_expired_runs()
-                available_slots = self._max_concurrency - len(self._tasks)
+                available_slots = self._semaphore_capacity - len(self._tasks)
                 if available_slots > 0:
                     runnable = await self._list_runnable_runs(available_slots)
                     for run_id in runnable:
@@ -474,6 +478,13 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        try:
+            desired_capacity = await get_runtime_setting("CHAT_DATA_AGENT_MAX_CONCURRENCY")
+        except Exception:
+            desired_capacity = self._semaphore_capacity
+        if desired_capacity != self._semaphore_capacity and not self._tasks:
+            self._semaphore_capacity = desired_capacity
+            self._semaphore = asyncio.Semaphore(desired_capacity)
         async with self._semaphore:
             state = _RunExecutionState(
                 run_id=run_id,

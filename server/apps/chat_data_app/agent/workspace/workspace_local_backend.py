@@ -36,7 +36,11 @@ from apps.chat_data_app.agent.workspace.officecli_adapter import (
     parse_officecli_args,
     translate_command_args,
 )
-from apps.chat_data_app.agent.workspace.workspace_search import parse_rg_output
+from apps.chat_data_app.agent.workspace.workspace_search import (
+    build_rg_args,
+    parse_rg_files_or_counts,
+    parse_rg_output,
+)
 from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
 
 logger = get_logger(__name__)
@@ -709,6 +713,44 @@ def _check_rg_available() -> bool:
     return _rg_available
 
 
+def _resolve_grep_target(
+    runtime: ConversationWorkspaceRuntime, path: str
+) -> tuple[Path, str, bool]:
+    """解析 grep 目标：skills 虚拟根走技能快照解析，其余走工作区路径解析。
+
+    返回 (物理目标, 可见根路径, 是否技能目录)。
+    """
+    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        return target, visible_root, True
+    target = resolve_workspace_path(runtime.workspace_root, raw)
+    return target, to_visible_path(runtime.workspace_root, target), False
+
+
+def _run_local_rg(args: list[str]) -> str:
+    """执行本地 rg 并返回解码后的 stdout；缺失/执行失败抛带安装提示的错误。"""
+    if not _check_rg_available():
+        raise RuntimeError("file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)")
+    proc = subprocess.run(args, capture_output=True, timeout=30)
+    if proc.returncode > 1:
+        raise RuntimeError(f"rg 执行失败 (exit={proc.returncode}): {proc.stderr.decode('utf-8', errors='replace')}")
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
+def _grep_local_visible_path(
+    file_rel: str,
+    is_skill: bool,
+    target: Path,
+    visible_root: str,
+    runtime: ConversationWorkspaceRuntime,
+) -> str:
+    """按 skill / workspace 两种可见路径规则把相对路径转成模型可见路径。"""
+    if is_skill:
+        return visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
+    return to_visible_path(runtime.workspace_root, (target / file_rel).resolve())
+
+
 def _build_local_grep_match(
     m: dict[str, Any],
     is_skill: bool,
@@ -716,18 +758,17 @@ def _build_local_grep_match(
     visible_root: str,
     runtime: ConversationWorkspaceRuntime,
 ) -> dict[str, Any]:
-    """按 skill / workspace 两种可见路径规则构造单条 grep 命中条目。"""
-    file_rel = m["file"]
-    if is_skill:
-        visible_path = visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
-    else:
-        resolved = (target / file_rel).resolve()
-        visible_path = to_visible_path(runtime.workspace_root, resolved)
-    return {
-        "path": visible_path,
+    """构造单条 grep 命中条目（可见路径 + 行号 + 内容 + 可选上下文）。"""
+    entry: dict[str, Any] = {
+        "path": _grep_local_visible_path(m["file"], is_skill, target, visible_root, runtime),
         "line_number": m["line_number"],
         "line": m["content"],
     }
+    if m.get("before"):
+        entry["before"] = m["before"]
+    if m.get("after"):
+        entry["after"] = m["after"]
+    return entry
 
 
 def _grep_local_workspace_text(
@@ -737,38 +778,38 @@ def _grep_local_workspace_text(
     glob: str,
     max_results: int,
     max_chars: int,
+    use_regex: bool = False,
+    ignore_case: bool = False,
+    context_lines: int = 0,
+    output_mode: str = "content",
 ) -> dict[str, Any]:
-    raw = str(path or "/mnt/user-data/workspace").strip().replace("\\", "/")
-    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-        target, visible_root = _resolve_local_skill_path(runtime, raw)
-        is_skill = True
-    else:
-        target = resolve_workspace_path(runtime.workspace_root, raw)
-        visible_root = to_visible_path(runtime.workspace_root, target)
-        is_skill = False
+    target, visible_root, is_skill = _resolve_grep_target(runtime, path)
     if target.is_symlink() or not target.exists():
         raise FileNotFoundError(f"路径不存在: {path}")
+    args = build_rg_args(
+        str(target), patterns, glob=glob, use_regex=use_regex,
+        ignore_case=ignore_case, context_lines=context_lines, output_mode=output_mode,
+    )
+    stdout = _run_local_rg(args)
 
-    if not _check_rg_available():
-        raise RuntimeError("file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)")
+    if output_mode in ("files_with_matches", "count"):
+        entries, has_more = parse_rg_files_or_counts(
+            stdout, str(target), max_results=max_results, mode=output_mode,
+        )
+        visible_entries = [
+            {
+                "path": _grep_local_visible_path(e["file"], is_skill, target, visible_root, runtime),
+                **({"match_count": e["match_count"]} if "match_count" in e else {}),
+            }
+            for e in entries
+        ]
+        return {"entries": visible_entries, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
 
-    args: list[str] = ["rg", "-F", "--json", "--hidden"]
-    if glob and glob != "**/*":
-        args.extend(["--glob", glob])
-    args.append(str(target))
-    for p in patterns:
-        args.extend(["-e", p])
-    proc = subprocess.run(args, capture_output=True, timeout=30)
-    if proc.returncode > 1:
-        raise RuntimeError(f"rg 执行失败 (exit={proc.returncode}): {proc.stderr.decode('utf-8', errors='replace')}")
-
-    stdout = proc.stdout.decode("utf-8", errors="replace")
     raw_matches, has_more = parse_rg_output(
         stdout, str(target), max_results=max_results, max_chars=max_chars,
+        context_lines=context_lines if output_mode == "content" else 0,
     )
-    matches: list[dict[str, Any]] = []
-    for m in raw_matches:
-        matches.append(_build_local_grep_match(m, is_skill, target, visible_root, runtime))
+    matches = [_build_local_grep_match(m, is_skill, target, visible_root, runtime) for m in raw_matches]
     return {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
 
 
@@ -1000,6 +1041,10 @@ class LocalWorkspaceBackend:
         glob: str,
         max_results: int,
         max_chars: int,
+        use_regex: bool = False,
+        ignore_case: bool = False,
+        context_lines: int = 0,
+        output_mode: str = "content",
     ) -> dict[str, Any]:
         if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             await runtime._ensure_snapshot_async()
@@ -1011,6 +1056,10 @@ class LocalWorkspaceBackend:
             glob,
             max_results,
             max_chars,
+            use_regex,
+            ignore_case,
+            context_lines,
+            output_mode,
         )
 
     async def validate_bash_paths(

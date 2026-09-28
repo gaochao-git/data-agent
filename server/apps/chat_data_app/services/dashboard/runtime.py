@@ -17,11 +17,12 @@ from utils.logger import get_logger
 from ...daos.query_execution_dao import QueryExecutionDao
 from .service import get_dashboard_service
 from ..sql_run.result import build_query_result_payload, query_result_succeeded
-from ..runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
+from ..setting_service import get_runtime_setting
 from ..sql_run.executor import resolve_query_timeout
 
 logger = get_logger(__name__)
-DASHBOARD_PANEL_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY", 8)
+# 面板批量执行并发上限：运行期经后台配置变量表读取（CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY），
+# 信号量本就随请求新建，改后 ≤30s 即按新值生效。
 _dashboard_sql_semaphore: ContextVar[Optional[asyncio.Semaphore]] = ContextVar("dashboard_sql_semaphore", default=None)
 query_execution_dao = QueryExecutionDao(session_context=lambda: get_session())
 
@@ -109,11 +110,12 @@ async def execute_dashboard_panel_sql(
         )
     execution_target = execution_targets[0]
     async def execute_single() -> Dict[str, Any]:
+        row_limit = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         return await dashboard_runtime().execute_sql_for_member(
             execution_target=execution_target,
             sql=sql,
-            limit=DEFAULT_ROW_LIMIT,
-            timeout=resolve_query_timeout(execution_target.get("source_type")),
+            limit=row_limit,
+            timeout=await resolve_query_timeout(execution_target.get("source_type")),
             user_id=user_id,
             username=operator_name,
             query_task_id=query_task_id,
@@ -147,11 +149,12 @@ async def execute_dashboard_panel_sql_with_target(
     sql = panel.get("sql") or ""
 
     async def execute_single() -> Dict[str, Any]:
+        row_limit = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         return await dashboard_runtime().execute_sql_for_member(
             execution_target=execution_target,
             sql=sql,
-            limit=DEFAULT_ROW_LIMIT,
-            timeout=resolve_query_timeout(execution_target.get("source_type")),
+            limit=row_limit,
+            timeout=await resolve_query_timeout(execution_target.get("source_type")),
             user_id=user_id,
             username=operator_name,
             query_task_id=query_task_id,
@@ -173,7 +176,9 @@ async def execute_dashboard_panel_sql_for_targets(
 ) -> Dict[str, Any]:
     """同一面板 SQL 在多个执行对象上执行，并合并为图表友好的结果。"""
     sql = panel.get("sql") or ""
-    semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
+    semaphore = asyncio.Semaphore(await get_runtime_setting("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY"))
+    # 行数上限热值与超时默认在批量前解析一次，供各成员执行共用
+    row_limit = await get_runtime_setting("CHATDATA_ROW_LIMIT")
 
     async def execute_one(target: Dict[str, Any]) -> Dict[str, Any]:
         async def execute_member() -> Dict[str, Any]:
@@ -187,13 +192,14 @@ async def execute_dashboard_panel_sql_for_targets(
             return await dashboard_runtime().execute_sql_for_member(
                 execution_target=target,
                 sql=sql,
-                limit=DEFAULT_ROW_LIMIT,
-                timeout=resolve_query_timeout(target.get("source_type")),
+                limit=row_limit,
+                timeout=await resolve_query_timeout(target.get("source_type")),
                 user_id=user_id,
                 username=operator_name,
                 query_task_id=query_task_id,
                 execution_id=execution_id,
                 datasource_id=panel.get("datasource_id"),
+                max_rows=row_limit,
             )
         return await run_dashboard_sql_operation(execute_member, semaphore)
 
@@ -744,9 +750,10 @@ def _spawn_dashboard_panel_tasks(
     task_id: str,
     user_id: str,
     operator_name: str,
+    max_concurrency: int,
 ) -> List[asyncio.Task]:
-    """在面板并发信号量保护下创建全部面板执行任务。"""
-    context_token = _dashboard_sql_semaphore.set(asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY))
+    """在面板并发信号量保护下创建全部面板执行任务（并发上限由 async 调用方解析传入）。"""
+    context_token = _dashboard_sql_semaphore.set(asyncio.Semaphore(max_concurrency))
     try:
         return [
             asyncio.create_task(
@@ -841,6 +848,7 @@ async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
         task_id,
         user_id,
         operator_name,
+        max_concurrency=await get_runtime_setting("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY"),
     )
     if not await _collect_dashboard_panel_results(task_id, tasks, batch_result):
         return
@@ -920,9 +928,10 @@ def create_dashboard_stream_tasks(
     task_id: str,
     user_id: Optional[str],
     operator_name: Optional[str],
+    max_concurrency: int,
 ) -> Dict[asyncio.Task, str]:
-    """创建流式批量面板执行任务。"""
-    semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
+    """创建流式批量面板执行任务（并发上限由 async 调用方解析传入）。"""
+    semaphore = asyncio.Semaphore(max_concurrency)
     context_token = _dashboard_sql_semaphore.set(semaphore)
     try:
         return {
@@ -1034,6 +1043,7 @@ async def stream_dashboard_batch_execution(
         task_id,
         user_id,
         operator_name,
+        max_concurrency=await get_runtime_setting("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY"),
     )
     pending_tasks = set(task_map.keys())
     try:

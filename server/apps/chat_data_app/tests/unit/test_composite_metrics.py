@@ -11,8 +11,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic.core.config_validator import validate_semantic_fields
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.core.query_plan import is_composite_metric, parse_formula_refs
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
@@ -190,7 +191,7 @@ DATASOURCE = {"ds_tables": [{"table_name": "orders", "columns": [
 
 
 def validate(metrics, dimensions):
-    return validate_semantic_fields(DATASOURCE, metrics, dimensions, [])
+    return first_structure_error(metrics, dimensions, [], table_columns_map=build_table_columns_map(DATASOURCE))
 
 
 def base_metrics():
@@ -273,11 +274,11 @@ def test_validator_rejects_composite_cross_table():
         {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "order_id"}]},
         {"table_name": "other", "columns": [{"name": "cost"}]},
     ]}
-    error = validate_semantic_fields(
-        datasource,
+    error = first_structure_error(
         [*base_metrics(), other_metric, composite(formula="{销售额} / {其他额}")],
         [],
         [],
+        table_columns_map=build_table_columns_map(datasource),
     )
     assert "跨表" in error
 
@@ -415,5 +416,5 @@ def test_composite_metric_survives_request_model_and_save_validation():
     datasource = {"ds_tables": [{"table_name": "orders", "columns": [
         {"name": "amount"}, {"name": "order_id"}, {"name": "order_time"},
     ]}]}
-    error = validate_semantic_fields(datasource, metrics, dimensions, [])
+    error = first_structure_error(metrics, dimensions, [], table_columns_map=build_table_columns_map(datasource))
     assert error is None

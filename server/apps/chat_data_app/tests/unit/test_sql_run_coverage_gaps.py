@@ -167,7 +167,10 @@ def test_execute_sql_for_member_direct_cache_hit_returns_cached(monkeypatch):
         executed.append(True)
         return {}
 
-    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", lambda *_args, **_kwargs: True)
+    async def fake_cache_enabled(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", fake_cache_enabled)
     monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", should_not_execute)
 

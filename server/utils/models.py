@@ -769,6 +769,33 @@ class DatasourceColumnDict(Base):
     )
 
 
+class ChatDataSetting(Base):
+    """ChatData 后台配置变量表：运行期参数的表级覆盖（覆盖行 > env > 代码默认）。
+
+    只允许 SETTING_REGISTRY（chat_data_app/services/setting_service.py）注册的
+    「可动态修改」类 env 变量进表；连接与凭据类留在 env。说明不落表——
+    单一来源是注册表 spec.description。
+    软删 + setting_key 全局唯一：重置（删除）后重新覆盖走 upsert 复用原行
+    （翻回 delete_flag=0 并更新值），不插入新行，避免唯一键冲突。
+    """
+    __tablename__ = "chat_data_setting"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    setting_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    setting_value: Mapped[str] = mapped_column(String(2048), nullable=False)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint('setting_key', name='uniq_setting_key'),
+    )
+
+
 class ChatDataAgentSchedule(Base):
     """智能体定时任务定义（用户在会话里创建，到点自动执行一次智能问数）。"""
 

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
+from apps.chat_data_app.services.datasource import column_dict_generate
 from utils.error_codes import ErrorCode
 
 
@@ -109,7 +110,7 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
             return SimpleNamespace(content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"synonyms":["订单状态"],"storage_format":"","unit":""}}')
 
     patch_datasource_manager(fake_datasource_manager)
-    monkeypatch.setattr(datasource_admin_routes, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
+    monkeypatch.setattr(column_dict_generate, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
 
     public_get_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
     admin_get_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)

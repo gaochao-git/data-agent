@@ -159,6 +159,7 @@ watch(visible, value => {
     if (firstMode) form.value.mode = firstMode
   }
   if (isSpecialMode.value) initSpecialForm()
+  else if (form.value.mode === 'metric') form.value.description = props.editingAtomic?.description || ''
 })
 
 watch(isSpecialMode, value => {
@@ -178,6 +179,7 @@ const handleModeChange = () => {
   // 切回正在编辑的类型时按被编辑指标回填名称，避免来回切 tab 丢名称
   if (form.value.mode === 'metric' && props.editingAtomic) {
     form.value.displayName = props.editingAtomic.name || ''
+    form.value.description = props.editingAtomic.description || ''
   }
   if (form.value.mode === 'derived' && props.editingDerived && props.editingDerived.metric_kind !== 'composite') {
     form.value.displayName = props.editingDerived.name || ''
@@ -764,10 +766,13 @@ const quickExpressions = computed(() => {
         <div class="text-xs text-gray-600 mb-1">{{ props.scope === 'metric' ? '指标名称' : '显示名称' }}</div>
         <el-input v-model="form.displayName" :placeholder="props.scope === 'metric' ? '请输入指标名称（同语义模型内唯一）' : '请输入显示名称（同语义模型内唯一）'" />
       </div>
-      <div v-if="isDerivedMode || isCompositeMode">
+      <!-- 字段备注：指标管理三类指标共用（原子走 form.description，派生/复合走各自 ref）；
+           维度作用域不显示——维度的业务说明在字段行内联编辑 -->
+      <div v-if="props.scope === 'metric'">
         <div class="text-xs text-gray-600 mb-1">字段备注</div>
         <el-input v-if="isDerivedMode" v-model="derivedDescription" placeholder="补充业务含义" />
-        <el-input v-else v-model="compositeDescription" placeholder="补充业务含义" />
+        <el-input v-else-if="isCompositeMode" v-model="compositeDescription" placeholder="补充业务含义" />
+        <el-input v-else v-model="form.description" placeholder="补充业务含义" />
       </div>
       <div v-if="isDerivedMode && definitionPreview" class="rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">
         口径预览：{{ definitionPreview }}

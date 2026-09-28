@@ -316,7 +316,11 @@ async def test_hive_meta_post_json_uses_http_client(monkeypatch):
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(hive_meta_http, "HTTP_AUTH_TOKEN", "secret")
-    monkeypatch.setattr(hive_meta_http, "META_TIMEOUT_SECONDS", 12)
+
+    async def fake_meta_timeout(key, default=None):
+        return 12 if key == "CHAT_DATA_META_TIMEOUT_SECONDS" else default
+
+    monkeypatch.setattr(hive_meta_http, "get_runtime_setting", fake_meta_timeout)
 
     result = await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})
 

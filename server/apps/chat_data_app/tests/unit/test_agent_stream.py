@@ -1458,15 +1458,18 @@ from apps.chat_data_app.services.agent_run.uploaded_file_service import MAX_IMAG
 from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
 from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 
+# 图片大小上限（字节）：与注册表默认值（CHAT_DATA_MAX_IMAGE_SIZE_MB=5）一致，显式传参。
+_VISION_LIMIT = 5 * 1024 * 1024
+
 
 def test_is_image_attachment_checks_type_and_size():
     ok = {"file_id": "f1", "file_type": "png", "file_size": 1024}
-    assert _is_image_attachment(ok)
-    assert not _is_image_attachment({"file_id": "f2", "file_type": "pdf", "file_size": 1024})
-    assert not _is_image_attachment({"file_type": "png", "file_size": 1024})  # 无 file_id
-    assert not _is_image_attachment({**ok, "file_size": 99 * 1024 * 1024})  # 超大小上限
+    assert _is_image_attachment(ok, max_image_size=_VISION_LIMIT)
+    assert not _is_image_attachment({"file_id": "f2", "file_type": "pdf", "file_size": 1024}, max_image_size=_VISION_LIMIT)
+    assert not _is_image_attachment({"file_type": "png", "file_size": 1024}, max_image_size=_VISION_LIMIT)  # 无 file_id
+    assert not _is_image_attachment({**ok, "file_size": 99 * 1024 * 1024}, max_image_size=_VISION_LIMIT)  # 超大小上限
     # 输入卸载附件（无 file_id 的 parsed_path 条目）
-    assert not _is_image_attachment({"original_filename": "input.txt", "parsed_path": "/mnt/x"})
+    assert not _is_image_attachment({"original_filename": "input.txt", "parsed_path": "/mnt/x"}, max_image_size=_VISION_LIMIT)
 
 
 def test_select_vision_attachments_returns_image_paths_only():
@@ -1478,7 +1481,7 @@ def test_select_vision_attachments_returns_image_paths_only():
         {"file_id": "img2", "original_filename": "c.jpg", "file_type": "jpg",
          "file_size": 10, "virtual_path": "/mnt/user-data/uploads/c.jpg"},
     ]
-    paths = _select_vision_attachments(atts)
+    paths = _select_vision_attachments(atts, max_image_size=_VISION_LIMIT)
     assert paths == ["/mnt/user-data/uploads/a.png", "/mnt/user-data/uploads/c.jpg"]
 
 
@@ -1490,7 +1493,7 @@ def test_select_vision_attachments_caps_at_limit_and_skips_invalid():
     ]
     oversized = [{"file_id": "big", "original_filename": "big.png", "file_type": "png",
                   "file_size": 99 * 1024 * 1024, "virtual_path": "/mnt/user-data/uploads/big.png"}]
-    paths = _select_vision_attachments(oversized + images)
+    paths = _select_vision_attachments(oversized + images, max_image_size=_VISION_LIMIT)
     assert len(paths) == MAX_IMAGES_PER_MESSAGE
     assert all(path.startswith("/mnt/user-data/uploads/") for path in paths)
 
@@ -1501,8 +1504,8 @@ def test_select_vision_attachments_empty_without_images():
          "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
         {"original_filename": "input.txt", "parsed_path": "/mnt/x"},
     ]
-    assert _select_vision_attachments([]) == []
-    assert _select_vision_attachments(atts) == []
+    assert _select_vision_attachments([], max_image_size=_VISION_LIMIT) == []
+    assert _select_vision_attachments(atts, max_image_size=_VISION_LIMIT) == []
 
 
 def test_extract_text_content_strips_attachment_lines():
