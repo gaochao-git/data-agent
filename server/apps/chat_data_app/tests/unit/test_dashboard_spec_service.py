@@ -659,10 +659,12 @@ def test_dashboard_card_semantic_config_id_supports_card_override_and_legacy_def
 
 def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeypatch):
     generator_calls = []
+    adapter_init_kwargs: list[dict] = []
 
     class FakeGenerator:
-        def __init__(self, semantic_config):
+        def __init__(self, semantic_config, max_rows=None):
             self.semantic_config = semantic_config
+            adapter_init_kwargs.append({"max_rows": max_rows})
 
         def generate_sql(self, **_kwargs):
             model_id = self.semantic_config["id"]
@@ -721,6 +723,10 @@ def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeyp
         "select 'payments' as model_id",
         "select 'orders' as model_id",
     ]
+    # 适配器必须收到运行期热值 max_rows（不再落回导入期 DEFAULT_ROW_LIMIT）
+    assert adapter_init_kwargs and all(
+        kwargs["max_rows"] == 100 for kwargs in adapter_init_kwargs
+    )
 
 
 def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
@@ -881,7 +887,7 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
     assert invalid["panels"] == []
 
     class FakeGenerator:
-        def __init__(self, semantic_config):
+        def __init__(self, semantic_config, max_rows=None):
             self.semantic_config = semantic_config
 
         def generate_sql(self, **_kwargs):

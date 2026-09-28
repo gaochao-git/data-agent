@@ -523,9 +523,12 @@ async def _build_spec_generators(
     user_id: str,
 ) -> Dict[str, SemanticAIQueryAdapter]:
     semantic_config_generators: Dict[str, SemanticAIQueryAdapter] = {}
+    # 行数上限热值：适配器不再落回导入期 DEFAULT_ROW_LIMIT（否则后台改表对本链路不生效，
+    # 与 CHATDATA_ROW_LIMIT 的 EFFECT_IMMEDIATE 标注矛盾）
+    row_limit = await get_runtime_setting("CHATDATA_ROW_LIMIT")
     for config_id in semantic_config_ids:
         semantic_config = await get_dashboard_spec_semantic_config(datasource_id, config_id, user_id=user_id)
-        semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config)
+        semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config, max_rows=row_limit)
     return semantic_config_generators
 
 

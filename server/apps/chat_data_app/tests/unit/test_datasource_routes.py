@@ -2165,7 +2165,7 @@ def test_create_dashboard_from_spec_creates_dashboard_and_panels(monkeypatch):
     monkeypatch.setattr(dashboard_spec_service, "execute_dashboard_panel_sql_preflight", lambda *_args, **_kwargs: asyncio.sleep(0, result=(True, "")))
 
     class FakeSqlGenerator:
-        def __init__(self, _config):
+        def __init__(self, _config, max_rows=None):
             pass
 
         def generate_sql(self, **kwargs):
