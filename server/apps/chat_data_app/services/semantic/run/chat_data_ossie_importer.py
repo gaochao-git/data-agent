@@ -328,7 +328,7 @@ def plan_column_dict_fills(
     return plan
 
 
-想想·xdef _merge_carried_entry_fields(target: Dict[str, Any], carried: Dict[str, Any]) -> None:
+def _merge_carried_entry_fields(target: Dict[str, Any], carried: Dict[str, Any]) -> None:
     """把一条携带字典的非空字段按「仅填空」并入 target（既有值一律保留）。"""
     for field_key in _COLUMN_DICT_FIELD_KEYS:
         if not target.get(field_key) and carried.get(field_key):
