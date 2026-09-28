@@ -45,10 +45,14 @@ def create_streaming_chat_model(
     model_id: str | None = None,
     enable_thinking: bool | None = None,
     thinking_effort: str | None = None,
-    stream_usage: bool = False,
+    stream_usage: bool = True,
     llm_factory: Callable[..., BaseChatModel] = get_chat_data_llm,
 ) -> BaseChatModel:
-    """创建智能体使用的流式聊天模型。"""
+    """创建智能体使用的流式聊天模型。
+
+    stream_usage 默认 True：langchain-openai 的流式请求不显式声明就不返回
+    token usage（静默丢失，极难排查），故除显式关闭外一律请求。
+    """
     kwargs = {
         "model": model_id,
         "streaming": True,

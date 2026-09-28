@@ -68,7 +68,8 @@ def test_create_streaming_chat_model_builds_kwargs():
     }
 
 
-def test_create_streaming_chat_model_omits_stream_usage_when_disabled():
+def test_create_streaming_chat_model_defaults_to_stream_usage():
+    """默认必须请求 stream_usage：langchain 流式不声明就不返回 usage（静默丢失）。"""
     captured: dict = {}
 
     def _factory(**kwargs):
@@ -76,6 +77,18 @@ def test_create_streaming_chat_model_omits_stream_usage_when_disabled():
         return SimpleNamespace(**kwargs)
 
     ar.create_streaming_chat_model(llm_factory=_factory)
+    assert captured["stream_usage"] is True
+    assert captured["streaming"] is True
+
+
+def test_create_streaming_chat_model_omits_stream_usage_when_disabled():
+    captured: dict = {}
+
+    def _factory(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    ar.create_streaming_chat_model(stream_usage=False, llm_factory=_factory)
     assert "stream_usage" not in captured
     assert captured["streaming"] is True
 
