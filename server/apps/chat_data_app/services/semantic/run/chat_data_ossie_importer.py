@@ -328,6 +328,13 @@ def plan_column_dict_fills(
     return plan
 
 
+def _merge_carried_entry_fields(target: Dict[str, Any], carried: Dict[str, Any]) -> None:
+    """把一条携带字典的非空字段按「仅填空」并入 target（既有值一律保留）。"""
+    for field_key in _COLUMN_DICT_FIELD_KEYS:
+        if not target.get(field_key) and carried.get(field_key):
+            target[field_key] = carried[field_key]
+
+
 def merge_carried_column_dicts(
     existing_column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]],
     carried_entries: List[Dict[str, Any]],
@@ -349,10 +356,7 @@ def merge_carried_column_dicts(
         carried = entry.get("dict") or {}
         if not key[0] or not key[1] or not carried:
             continue
-        target = merged.setdefault(key, {})
-        for field_key in _COLUMN_DICT_FIELD_KEYS:
-            if not target.get(field_key) and carried.get(field_key):
-                target[field_key] = carried[field_key]
+        _merge_carried_entry_fields(merged.setdefault(key, {}), carried)
     return merged
 
 
