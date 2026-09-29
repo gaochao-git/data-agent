@@ -21,7 +21,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 import auth  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
-from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
 from apps.chat_data_app.routers import evaluation as evaluation_routes  # noqa: E402

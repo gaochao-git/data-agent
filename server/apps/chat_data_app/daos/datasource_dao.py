@@ -30,7 +30,8 @@ from .datasource_dao_helpers import (
     _parse_source_line,
     _unique_non_empty_texts,
 )
-from .dao_session import _ORM_SESSION, session_scope, transaction_scope
+# _ORM_SESSION 在本模块未被直接使用，但测试按 datasource_dao._ORM_SESSION 打桩，属有意重导出
+from .dao_session import _ORM_SESSION, session_scope, transaction_scope  # noqa: F401
 from .semantic_config_dao import SemanticConfigDao
 
 logger = get_logger(__name__)

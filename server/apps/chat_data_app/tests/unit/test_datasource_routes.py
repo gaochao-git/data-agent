@@ -3,13 +3,13 @@ import copy
 import json
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage  # noqa: F401  # 测试按模块属性引用 HumanMessage，属有意重导出
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -17,7 +17,6 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from utils.error_codes import ErrorCode
-from apps.chat_data_app import routes
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
@@ -2036,10 +2035,8 @@ def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch)
         task = asyncio.create_task(iterator.__anext__())
         await asyncio.sleep(0.01)
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     asyncio.run(close_stream())
 

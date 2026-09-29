@@ -24,7 +24,7 @@ from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequ
 from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
 from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
 from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
-from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
+from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache
 
 
 @pytest.fixture()

@@ -476,7 +476,7 @@ class QueryHistoryService:
         execution_results: List[Dict[str, Any]],
     ) -> Dict[str, List[Dict[str, Any]]]:
         grouped: Dict[str, List[Dict[str, Any]]] = {}
-        for (execution, _task), cancel_result in zip(rows, execution_results):
+        for (execution, _task), cancel_result in zip(rows, execution_results, strict=False):
             task_id = str(execution.task_id or "").strip()
             if task_id:
                 grouped.setdefault(task_id, []).append(cancel_result)

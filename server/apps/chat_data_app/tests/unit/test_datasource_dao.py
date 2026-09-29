@@ -30,7 +30,7 @@ from apps.chat_data_app.daos.datasource_dao_helpers import (
     _normalize_query_executor_type_for_parse,
     _parse_member_source_entry,
     _parse_member_source_entries,
-    _parse_member_sources_text,
+    _parse_member_sources_text,  # noqa: F401  # 测试按模块属性引用 _parse_member_sources_text，属有意重导出
     _parse_source_line,
     _unique_non_empty_texts,
 )
@@ -218,9 +218,7 @@ class _FakeOrmSession:
 
     def _filter_datasource_table(self, sql: str, values: set):
         rows = list(self.rows_by_table.get("datasource_table", []))
-        if "group_id = " in sql:
-            rows = [row for row in rows if row.group_id in values]
-        elif "group_id IN " in sql:
+        if "group_id = " in sql or "group_id IN " in sql:
             rows = [row for row in rows if row.group_id in values]
         if "table_names = " in sql or "table_names IN " in sql:
             rows = [row for row in rows if row.table_names in values]
@@ -228,9 +226,7 @@ class _FakeOrmSession:
 
     def _filter_table_group(self, sql: str, values: set):
         rows = list(self.rows_by_table.get("datasource_table_group_rel", []))
-        if "group_id = " in sql:
-            rows = [row for row in rows if row.group_id in values]
-        elif "group_id IN " in sql:
+        if "group_id = " in sql or "group_id IN " in sql:
             rows = [row for row in rows if row.group_id in values]
         if "table_name IN " in sql:
             rows = [row for row in rows if row.table_name in values]

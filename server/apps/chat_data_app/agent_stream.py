@@ -6,7 +6,6 @@ import re
 import time
 
 import openai
-from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -93,9 +92,9 @@ from .agent_run_support import (
 # re-export 保持既有模块属性引用（含测试）不变。
 from .tool_stream_progress import (
     _STREAMING_LINE_COUNT_TOOLS,
-    _count_text_lines,
+    _count_text_lines,  # noqa: F401  # 测试按模块属性引用 _count_text_lines，属有意重导出
     _extract_streaming_progress_inputs,
-    _extract_streaming_text_field,
+    _extract_streaming_text_field,  # noqa: F401  # 测试按模块属性引用 _extract_streaming_text_field，属有意重导出
     _format_sse,
     _format_tool_progress_event,
     next_stream_stats_event,
@@ -919,10 +918,13 @@ class _AgentSseStreamAdapter:
         if event_type not in _SUBAGENT_TOOL_EVENT_TYPES:
             logger.warning("忽略未知的子智能体工具事件类型: %s", event_type)
             return []
-        if event_type == "subagent_message":
-            # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
-            if not event.get("streamed") and not str(event.get("content") or "").strip():
-                return []
+        # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
+        if (
+            event_type == "subagent_message"
+            and not event.get("streamed")
+            and not str(event.get("content") or "").strip()
+        ):
+            return []
         if event_type in {"subagent_message_delta", "subagent_thinking_delta"} and not str(event.get("delta") or ""):
             return []
         data = {key: value for key, value in event.items() if key != "event_type"}

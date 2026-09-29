@@ -557,7 +557,6 @@ async def test_claim_owner_failure_finalizes_unexecuted_run(monkeypatch):
 @pytest.mark.asyncio
 async def test_claim_owner_failure_propagates_original_error_when_finish_also_fails(monkeypatch, caplog):
     """finish_run 收口自身也失败时只记日志，不得掩盖原始 claim 异常。"""
-    import asyncio
     import logging
 
     class Inbox(_ActiveInbox):

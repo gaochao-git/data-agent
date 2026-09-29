@@ -50,7 +50,7 @@ def build_semantic_config():
 
 
 def test_semantic_builder_helper_branches():
-    compiler = SemanticBIQueryAdapter(build_semantic_config())
+    SemanticBIQueryAdapter(build_semantic_config())
 
     assert _as_list(None) == []
     with pytest.raises(ValueError, match=r"字段\[1\] 必须是对象"):

@@ -28,14 +28,6 @@ def mirror_dashboard_service():
     dashboard_runtime.get_dashboard_service = previous
 
 
-@pytest.fixture(autouse=True)
-def mirror_dashboard_service():
-    previous = dashboard_runtime.get_dashboard_service
-    dashboard_runtime.get_dashboard_service = lambda: dashboard_routes.get_dashboard_service()
-    yield
-    dashboard_runtime.get_dashboard_service = previous
-
-
 def response_payload(response):
     if isinstance(response, dict):
         return response

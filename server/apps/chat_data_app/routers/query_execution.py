@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, Request, status as http_status  # noqa: F401  # 测试按模块属性引用 status，属有意重导出
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode

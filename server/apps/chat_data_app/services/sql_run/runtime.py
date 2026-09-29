@@ -198,7 +198,7 @@ async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequ
             "operator_name": str(operator_name or "").strip(),
         })
     execution_ids = await query_execution_dao.create_pending_executions(specs)
-    return dict(zip(member_ids, execution_ids))
+    return dict(zip(member_ids, execution_ids, strict=True))
 
 
 async def update_query_execution(

@@ -274,7 +274,6 @@ def test_file_selection_mention_suffix_lists_files():
 
 
 def test_validate_workspace_file_selections_filters_invalid(tmp_path):
-    import os
 
     root = tmp_path / "user-data"
     (root / "uploads").mkdir(parents=True)
@@ -300,7 +299,6 @@ def test_validate_workspace_file_selections_filters_invalid(tmp_path):
 @pytest.mark.asyncio
 async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypatch):
     """排队消息采纳点：引用校验后追加引用短句、附件解析为占位行与 vision 标记。"""
-    import asyncio
 
     from langchain_core.messages import HumanMessage
 
@@ -662,7 +660,7 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
     )
     _override_semantic_context(monkeypatch)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
         thread_id="conv_partial_prematerialize",
         user_query="查询订单数",
         datasource_id="ds_a",

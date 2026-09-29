@@ -514,7 +514,7 @@ def test_sandbox_path_info_branches():
     entry = asyncio.run(we_api._sandbox_path_info(
         session=_make_session(sandbox, Path("/host/user-data")), path="/mnt/user-data/workspace/a.txt",
     ))
-    assert getattr(entry, "size") == 3
+    assert entry.size == 3
     missing = asyncio.run(we_api._sandbox_path_info(
         session=_make_session(sandbox, Path("/host/user-data")), path="/mnt/user-data/workspace/missing",
     ))
@@ -589,7 +589,7 @@ def test_list_sandbox_directory_entries(tmp_path):
     entries = asyncio.run(we_api._list_sandbox_directory_entries(
         session=session, path="/mnt/user-data/workspace",
     ))
-    assert sorted(getattr(entry, "path") for entry in entries) == [
+    assert sorted(entry.path for entry in entries) == [
         "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/sub",
     ]
 
@@ -619,10 +619,10 @@ def test_walk_sandbox_tree(tmp_path):
         session=_make_session(sandbox, _workspace_root(tmp_path)),
         root="/mnt/user-data/workspace",
     ))
-    assert [getattr(item, "path") for item in files] == [
+    assert [item.path for item in files] == [
         "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/sub/b.txt",
     ]
-    assert [getattr(item, "path") for item in directories] == ["/mnt/user-data/workspace/sub"]
+    assert [item.path for item in directories] == ["/mnt/user-data/workspace/sub"]
 
 
 # ---------------------------------------------------------------------------

@@ -96,9 +96,8 @@ def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict
             pending_chars += len(part)
             if ends_line and finish_line():
                 return {"selected_lines": selected_lines, "has_more_lines": True}
-    if pending_chars:
-        if finish_line():
-            return {"selected_lines": selected_lines, "has_more_lines": True}
+    if pending_chars and finish_line():
+        return {"selected_lines": selected_lines, "has_more_lines": True}
 
     return {
         "selected_lines": selected_lines,
@@ -233,7 +232,7 @@ def _read_text_page_from_path(
             "original_chars": item["original_chars"],
             "returned_chars": budget,
         }
-        for item, budget in zip(selected_lines, budgets)
+        for item, budget in zip(selected_lines, budgets, strict=True)
         if budget < item["original_chars"]
     ]
     has_more_lines = bool(page["has_more_lines"]) or len(budgets) < len(page["selected_lines"])

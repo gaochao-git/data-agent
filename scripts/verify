@@ -3,8 +3,13 @@
 #
 # 用法:
 #   scripts/verify            # 等价 --fast
-#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + 前端类型检查
-#   scripts/verify --all      # 推送前：fast 全部 + 覆盖率 + openapi 快照漂移 + 前端单测 + 构建
+#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + lint + 前端类型检查
+#   scripts/verify --all      # 推送前：import + 覆盖率（含全量 pytest）+ 静态检查 + 前端三步并行 + openapi 快照
+#
+# 提速说明：
+# - pytest 带 -n auto（pytest-xdist）多进程并行，与 pytest-cov 兼容（覆盖率数据自动合并）
+# - --all 不再单独裸跑一遍 pytest：coverage 步骤本身就含全量测试，避免同一批用例跑两次
+# - --all 的前端 type-check / test:unit / build 互不依赖，并行执行取最慢者
 #
 # 环境前提: 后端必须用 conda env fxcjg 的解释器（conda run 在非交互 shell 下
 # 不可靠，直接用绝对路径）；前端命令走 npm scripts（见 web-vue/package.json）。
@@ -40,26 +45,52 @@ cd "$ROOT"
 
 # ---- 后端 ----
 step "backend-import" bash -c "cd server && '$PY' -c 'import main'"
-step "backend-pytest" bash -c "cd server && '$PY' -m pytest -q"
+if [[ "$MODE" == "--fast" ]]; then
+  # -n auto 多进程并行；--all 模式跳过本步，全量测试由下方 coverage 步骤承担（避免跑两遍）
+  step "backend-pytest" bash -c "cd server && '$PY' -m pytest -q -n auto"
+fi
 step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
 step "params"         bash -c "'$PY' scripts/checks/params.py"
 step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
+# lint：规则集与豁免见仓库根 ruff.toml（只开 F/B/SIM bug 级规则），存量为零即通过
+step "ruff"          bash -c "'$PY' scripts/checks/ruff.py"
 # baseline 防滥用报警：本轮改动触碰 scripts/checks/（含 baselines/）时提醒人工确认，不阻断。
 # 往 baseline 加一行即可让门禁变绿，所以动它们必须有人看过——合法修债（真实复杂度下降）也允许改。
 step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- scripts/checks; git diff --name-only HEAD -- scripts/checks; git ls-files --others --exclude-standard scripts/checks; } | sort -u | { grep . && echo '    ⚠ 本轮改动了 scripts/checks/：往 baseline 加行会使门禁失效，请人工确认登记是否合法（新文件不允许登记）' || true; }"
 
-# ---- 前端 ----
-step "frontend-type"  bash -c "cd web-vue && npm run type-check"
+if [[ "$MODE" == "--fast" ]]; then
+  step "frontend-type"  bash -c "cd web-vue && npm run type-check"
+else
+  # --all：type-check / test:unit / build 互不依赖，并行执行（耗时取最慢者），日志落 /tmp 便于排查
+  echo ""
+  echo "==> [frontend-parallel] type-check / test:unit / build 并行执行"
+  local_t0=$(date +%s)
+  ( cd web-vue && npm run type-check )         > "/tmp/verify-$$-type.log"  2>&1 &
+  P_TYPE=$!
+  ( cd web-vue && npm run test:unit -- --run ) > "/tmp/verify-$$-test.log"  2>&1 &
+  P_TEST=$!
+  ( cd web-vue && npm run build-only )         > "/tmp/verify-$$-build.log" 2>&1 &
+  P_BUILD=$!
+  FAIL_FRONT=0
+  wait $P_TYPE  || { FAILED+=("frontend-type");  FAIL_FRONT=1; }
+  wait $P_TEST  || { FAILED+=("frontend-test");  FAIL_FRONT=1; }
+  wait $P_BUILD || { FAILED+=("frontend-build"); FAIL_FRONT=1; }
+  cat "/tmp/verify-$$-type.log" "/tmp/verify-$$-test.log" "/tmp/verify-$$-build.log"
+  if [[ $FAIL_FRONT == 1 ]]; then
+    echo "    [frontend-parallel] 失败 ($(( $(date +%s) - local_t0 ))s)，失败步骤日志见上方"
+  else
+    echo "    [frontend-parallel] 通过 ($(( $(date +%s) - local_t0 ))s)"
+  fi
+fi
 
 if [[ "$MODE" == "--all" ]]; then
-  # 口径与 AGENTS.md §3 一致：仅 chat_data_app；分支模式与 tests 排除由 server/.coveragerc 配置。
+  # 全量 pytest 只在 coverage 步骤跑一次（-n auto 与 pytest-cov 兼容，数据自动合并）；
+  # 保留 term-missing 输出：阈值不过时需要行级缺口定位。
   # 独立数据文件 .coverage.gate + 先擦除：防止与历史运行的数据叠加（否则行/分支阈值会读到被污染的合并数据）。
   # 行/分支双门禁由 coverage_thresholds.py 校验（两阈值满足时合并必 ≥95，故无需 --cov-fail-under）
-  step "coverage"       bash -c "cd server && rm -f .coverage.gate && COVERAGE_FILE=.coverage.gate '$PY' -m pytest -q --cov=apps/chat_data_app --cov-report=term-missing && COVERAGE_FILE=.coverage.gate '$PY' ../scripts/checks/coverage_thresholds.py"
+  step "coverage"       bash -c "cd server && rm -f .coverage.gate && COVERAGE_FILE=.coverage.gate '$PY' -m pytest -q -n auto --cov=apps/chat_data_app --cov-report=term-missing && COVERAGE_FILE=.coverage.gate '$PY' ../scripts/checks/coverage_thresholds.py"
   # openapi 快照漂移门禁：重新生成后与 HEAD 比对，改了路由没更新快照即失败
   step "openapi"        bash -c "'$PY' server/apps/chat_data_app/tests/generate_openapi.py > /dev/null && git diff --exit-code -- server/apps/chat_data_app/tests/api/openapi.json"
-  step "frontend-test"  bash -c "cd web-vue && npm run test:unit -- --run"
-  step "frontend-build" bash -c "cd web-vue && npm run build-only"
 fi
 
 ELAPSED=$(( $(date +%s) - START ))

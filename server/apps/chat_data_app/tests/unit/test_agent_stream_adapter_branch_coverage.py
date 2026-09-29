@@ -521,7 +521,6 @@ class _FakeOwnerTask:
 
 def _run_heartbeat(monkeypatch, statuses, *, owner_token="tok-1"):
     """驱动 _heartbeat_agent_run：statuses 逐个返回，None 表示抛通用异常。"""
-    from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunLeaseLostError
 
     iterator = iter(statuses)
     renewals: list[tuple] = []

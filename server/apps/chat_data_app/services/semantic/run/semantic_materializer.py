@@ -289,7 +289,7 @@ def _partition_loaded_configs(
     """分区加载结果：启用且有效的进 configs，异常进 failed_ids。"""
     configs: list[dict[str, Any]] = []
     failed_ids: list[str] = []
-    for config_id, result in zip(normalized_ids, loaded):
+    for config_id, result in zip(normalized_ids, loaded, strict=True):
         if isinstance(result, Exception):
             logger.error("加载选中语义模型失败: config_id=%s error=%s", config_id, result)
             failed_ids.append(config_id)
@@ -317,7 +317,6 @@ async def _render_selected_configs(
     salt = _batch_cache_salt(configs, column_dicts)
 
     async def render(config: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
-        config_id = _config_id(config)
         effective_source_type = str(source_type or config.get("source_type") or "").strip()
         # 纯类方法、无实例状态：直接走 SemanticConfigService，避免被注入的服务替身影响
         annotated = SemanticConfigService.annotate_export_column_dicts(config, column_dicts or {})
@@ -334,7 +333,7 @@ async def _render_selected_configs(
     directory: list[dict[str, Any]] = []
     cache_hits = 0
     failed_ids: list[str] = []
-    for config, result in zip(configs, rendered):
+    for config, result in zip(configs, rendered, strict=True):
         if isinstance(result, Exception):
             logger.error("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
             failed_ids.append(_config_id(config))

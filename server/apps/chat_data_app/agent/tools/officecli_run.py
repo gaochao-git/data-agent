@@ -28,10 +28,7 @@ _UPLOADS_PREFIXES = (
 def _under_uploads(path: str) -> bool:
     """判断虚拟路径是否落在 uploads 只读区内。"""
     p = str(path or "").strip()
-    for prefix in _UPLOADS_PREFIXES:
-        if p == prefix or p.startswith(f"{prefix}/"):
-            return True
-    return False
+    return any(p == prefix or p.startswith(f"{prefix}/") for prefix in _UPLOADS_PREFIXES)
 
 
 def _validate_save_stdout_path(path: str) -> str:

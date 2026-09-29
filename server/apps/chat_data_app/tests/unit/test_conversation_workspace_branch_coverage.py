@@ -22,7 +22,6 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
 from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
-from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     WorkspacePathMapping,
@@ -42,7 +41,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     read_conversation_workspace_raw_file,
     read_workspace_raw_file,
     render_conversation_workspace_office_preview,
-    resolve_output_skill_directory,
+    resolve_output_skill_directory,  # noqa: F401  # 测试按模块属性引用 resolve_output_skill_directory，属有意重导出
     resolve_uploads_root,
     to_visible_path,
     workspace_runtime_from_state,

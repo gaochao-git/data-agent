@@ -125,7 +125,7 @@ def test_build_snapshot_sweeps_stale_temp_dirs(tmp_path, monkeypatch):
 def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("missing-skill", tmp_path / "mgmt" / "missing-skill")])
 
-    with pytest.raises(Exception):
+    with pytest.raises(FileNotFoundError):
         asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
 
     conv_dir = _conv_dir(tmp_path)

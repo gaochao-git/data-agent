@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
-import time
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -18,7 +16,7 @@ from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
-from ..services.datasource.manager import get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager  # noqa: F401  # 测试按模块属性引用 get_datasource_manager，属有意重导出
 from ..services.evaluation_service import (
     EvaluationService,
     accuracy_bp,
@@ -42,8 +40,9 @@ logger = get_logger(__name__)
 from . import JSON_API_RESPONSES, SSE_RESPONSES
 
 router = APIRouter(tags=["ChatData 语义评估"], responses=JSON_API_RESPONSES)
-ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
-ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
+# 原在此处定义的 ACCURACY_QUERY_TYPES / ACCURACY_DIFFICULTIES 与 evaluation_service 中同名
+# 常量同值，且本模块内无任何引用（全仓亦无其它引用者），属死代码，故连同末尾的 re-export
+# 一并删除；权威定义保留在 services/evaluation_service.py。
 SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND
 
 
@@ -396,10 +395,9 @@ def _build_seed_case_candidates(config_id: str, config: Dict[str, Any], business
 # 草稿生成的 LLM 编排已下沉 evaluation_service；此处保留兼容导出，
 # 供端点与既有测试按原模块属性名引用（monkeypatch 语义不变）。
 from ..services.evaluation_service import (  # noqa: E402
-    ACCURACY_DIFFICULTIES,
-    ACCURACY_QUERY_TYPES,
-    looks_like_sql as _looks_like_sql,
-    generate_draft_case_by_llm as _generate_draft_case_by_llm,
+    # 两个下划线别名在本模块未直接使用，但测试按 routers.evaluation._xxx 打桩，属有意重导出
+    generate_draft_case_by_llm as _generate_draft_case_by_llm,  # noqa: F401
+    looks_like_sql as _looks_like_sql,  # noqa: F401
 )
 
 

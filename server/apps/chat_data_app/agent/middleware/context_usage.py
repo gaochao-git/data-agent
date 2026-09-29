@@ -501,7 +501,7 @@ def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
     except TypeError:
         pass
     try:
-        setattr(agent, "_chat_data_context_usage_middleware", middleware)
+        agent._chat_data_context_usage_middleware = middleware
     except Exception as exc:
         # 挂载失败仅意味着该 agent 缺少上下文用量统计,不应阻断 agent 装配,故记录后返回。
         logger.warning("上下文用量中间件挂载到 agent 失败,token 用量统计将缺失: agent=%s error=%s", type(agent).__name__, exc)

@@ -610,7 +610,7 @@ def _normalize_history_learning_result(
     result: Dict[str, List[Dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
     raw_counts: Dict[str, int] = {}
     skip_counts = _empty_history_learning_skip_counts()
-    for category in result.keys():
+    for category in result:
         result[category], raw_counts[category] = _normalize_history_suggestion_category(
             category, suggestions, sample_map, datasource, existing_indexes, skip_counts,
         )

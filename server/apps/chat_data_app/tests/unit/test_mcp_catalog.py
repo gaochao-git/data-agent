@@ -25,7 +25,7 @@ from apps.chat_data_app.agent.mcp.catalog import (  # noqa: E402
     MCPToolSearchService,
     ToolCatalogEntry,
     create_mcp_tool_search_tool,
-    warn_long_mcp_descriptions,
+    warn_long_mcp_descriptions,  # noqa: F401  # 测试按模块属性引用 warn_long_mcp_descriptions，属有意重导出
 )
 from apps.chat_data_app.agent.mcp.manager import MCPToolInfo  # noqa: E402
 from apps.chat_data_app.agent.middleware.mcp_tool_discovery import (  # noqa: E402

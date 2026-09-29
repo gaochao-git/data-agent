@@ -17,7 +17,6 @@ from utils.database import get_session as default_get_session
 from utils.llm_json import parse_llm_json
 
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
-from ..schema import AccuracyEvaluationDraftCaseRequest
 from .llm_config import get_chat_data_llm
 from utils.models import ChatDataEvalCase, ChatDataEvalRun, ChatDataEvalRunCase
 

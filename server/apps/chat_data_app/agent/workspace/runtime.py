@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shlex
@@ -693,10 +694,8 @@ def _render_local_office_html(
             }
         html = preview_file.read_text(encoding="utf-8", errors="replace")
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(preview_path)
-        except OSError:
-            pass
     truncated = len(html) > limit
     return {
         "renderer": "officecli-html",

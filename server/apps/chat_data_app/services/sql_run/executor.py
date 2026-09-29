@@ -11,7 +11,6 @@ from decimal import Decimal
 from datetime import date, datetime, timedelta
 import asyncio
 import inspect
-import re
 import os
 
 from utils.logger import get_logger
@@ -357,7 +356,7 @@ def _normalize_http_rows(raw_rows: Any, columns: list[str]) -> list[dict[str, An
             result.append(_serialize_row(row))
             continue
         if isinstance(row, (list, tuple)) and columns:
-            result.append(_serialize_row(dict(zip(columns, row))))
+            result.append(_serialize_row(dict(zip(columns, row, strict=False))))
     return result
 
 
@@ -692,44 +691,43 @@ class MySQLExecutor(SQLExecutor):
 
         try:
             pool = await self._get_pool()
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    connection_id = await self._fetch_connection_id(cursor)
-                    await self._maybe_invoke_db_connection_callback(connection_id, db_connection_callback)
+            async with pool.acquire() as conn, conn.cursor() as cursor:
+                connection_id = await self._fetch_connection_id(cursor)
+                await self._maybe_invoke_db_connection_callback(connection_id, db_connection_callback)
 
-                    sql_with_limit = build_effective_sql(
-                        sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
-                    )
-                    logger.debug(f"[MySQL] 执行 SQL: {sql_with_limit[:200]}...")
-                    # 添加超时控制：execute 与 fetchall 都必须在保护区内，
-                    # 否则查询在超时边界完成后 fetchall 仍可能无限挂起
-                    start_time = time.time()
+                sql_with_limit = build_effective_sql(
+                    sql, limit, source_type="mysql", datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
+                )
+                logger.debug(f"[MySQL] 执行 SQL: {sql_with_limit[:200]}...")
+                # 添加超时控制：execute 与 fetchall 都必须在保护区内，
+                # 否则查询在超时边界完成后 fetchall 仍可能无限挂起
+                start_time = time.time()
 
-                    async def _execute_and_fetch() -> list:
-                        await cursor.execute(sql_with_limit)
-                        return await cursor.fetchall()
+                async def _execute_and_fetch() -> list:
+                    await cursor.execute(sql_with_limit)
+                    return await cursor.fetchall()
 
-                    try:
-                        rows = await asyncio.wait_for(_execute_and_fetch(), timeout=resolved_timeout)
-                    except asyncio.TimeoutError:
-                        # 超时 = 服务端终止 + 废弃连接：客户端取消不会让服务端停跑，
-                        # 半读状态的连接也绝不能释放回连接池（否则污染后续复用者）
-                        await self._kill_timed_out_query(connection_id)
-                        conn.close()
-                        logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s），已发送 KILL 并废弃连接")
-                        return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
-                    execution_time_ms = int((time.time() - start_time) * 1000)
-                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                    data = [_serialize_row(dict(zip(columns, row))) for row in rows]
-                    _log_sql_execution_summary("MySQL", self.database, execution_time_ms, len(data))
-                    return {
-                        "status": "succeeded",
-                        "columns": columns,
-                        "data": data,
-                        "total_count": len(data),
-                        "execution_time_ms": execution_time_ms,
-                        "db_connection_id": connection_id,
-                    }
+                try:
+                    rows = await asyncio.wait_for(_execute_and_fetch(), timeout=resolved_timeout)
+                except asyncio.TimeoutError:
+                    # 超时 = 服务端终止 + 废弃连接：客户端取消不会让服务端停跑，
+                    # 半读状态的连接也绝不能释放回连接池（否则污染后续复用者）
+                    await self._kill_timed_out_query(connection_id)
+                    conn.close()
+                    logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s），已发送 KILL 并废弃连接")
+                    return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+                execution_time_ms = int((time.time() - start_time) * 1000)
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                data = [_serialize_row(dict(zip(columns, row, strict=False))) for row in rows]
+                _log_sql_execution_summary("MySQL", self.database, execution_time_ms, len(data))
+                return {
+                    "status": "succeeded",
+                    "columns": columns,
+                    "data": data,
+                    "total_count": len(data),
+                    "execution_time_ms": execution_time_ms,
+                    "db_connection_id": connection_id,
+                }
         except asyncio.TimeoutError:
             logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s）")
             return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
@@ -748,10 +746,9 @@ class MySQLExecutor(SQLExecutor):
         """测试 MySQL 连接"""
         try:
             pool = await self._get_pool()
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("SELECT 1")
-                    return True
+            async with pool.acquire() as conn, conn.cursor() as cursor:
+                await cursor.execute("SELECT 1")
+                return True
         except Exception as e:
             _emit_query_database_connection_alarm("mysql", self.database, e, host=self.host, port=self.port)
             logger.error(f"[MySQL] 连接测试失败: {e}")
@@ -764,9 +761,8 @@ class MySQLExecutor(SQLExecutor):
             return {"status": "failed", "error": "无效的 MySQL 连接ID"}
         try:
             pool = await self._get_pool()
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(f"KILL QUERY {normalized_connection_id}")
+            async with pool.acquire() as conn, conn.cursor() as cursor:
+                await cursor.execute(f"KILL QUERY {normalized_connection_id}")
             return {"status": "succeeded", "error": None}
         except Exception as e:
             logger.error("[MySQL] 停止查询失败: connection_id=%s error=%s", normalized_connection_id, e)
@@ -880,7 +876,7 @@ class HiveExecutor(SQLExecutor):
             rows = cursor.fetchall()
             execution_time_ms = int((time.time() - start_time) * 1000)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
-            data = [_serialize_row(dict(zip(columns, row))) for row in rows]
+            data = [_serialize_row(dict(zip(columns, row, strict=False))) for row in rows]
             _log_sql_execution_summary("Hive", self.database, execution_time_ms, len(data))
             return {
                 "status": "succeeded",

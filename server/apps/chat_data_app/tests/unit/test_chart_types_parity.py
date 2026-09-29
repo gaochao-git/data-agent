@@ -48,7 +48,7 @@ def _parse_frontend_registry(text: str) -> list[dict]:
     assert block, "chartTypes.ts 缺少 CHART_TYPES 数组"
     items = []
     for entry in re.findall(r"\{([^{}]+)\}", block.group(1)):
-        def field(name: str) -> str | bool:
+        def field(name: str, entry: str = entry) -> str | bool:
             match = re.search(rf"{name}:\s*'([^']+)'|{name}:\s*(true|false)", entry)
             assert match, f"CHART_TYPES 项缺少字段 {name}: {entry}"
             if match.group(1) is not None:

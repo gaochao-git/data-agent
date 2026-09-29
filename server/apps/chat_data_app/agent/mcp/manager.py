@@ -29,7 +29,6 @@ from typing import Any, AsyncIterator, Callable
 from langchain_core.tools import StructuredTool
 from mcp import Client, StdioServerParameters
 from mcp.client.sse import sse_client
-from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import Field, create_model
 

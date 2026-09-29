@@ -481,9 +481,7 @@ class InputValidator:
     def _is_number_value(value: Any) -> bool:
         if isinstance(value, bool) or value is None:
             return False
-        if isinstance(value, (int, float)):
-            return True
-        return False
+        return isinstance(value, (int, float))
 
     @staticmethod
     def _is_date_text(value: Any) -> bool:

@@ -219,14 +219,14 @@ def _apply_file_read_line_budgets(
         max_chars,
     )
     selected_lines = selected_source_lines[:len(budgets)]
-    lines = [line[:budget] for line, budget in zip(selected_lines, budgets)]
+    lines = [line[:budget] for line, budget in zip(selected_lines, budgets, strict=True)]
     truncated_lines = [
         {
             "line_number": start_line + position,
             "original_chars": len(line),
             "returned_chars": budget,
         }
-        for position, (line, budget) in enumerate(zip(selected_lines, budgets))
+        for position, (line, budget) in enumerate(zip(selected_lines, budgets, strict=True))
         if budget < len(line)
     ]
     return lines, truncated_lines, len(budgets) < len(selected_source_lines)
@@ -416,9 +416,8 @@ async def sandbox_delete_path(
             raise ValueError(f"目标是{path_type}，不能作为{expected_type}删除")
         files = getattr(session.sandbox, "files", None)
         if path_type == "dir":
-            if not recursive:
-                if await _list_sandbox_directory_entries(session=session, path=target):
-                    raise ValueError("目录非空；如确认删除，请设置 recursive=true")
+            if not recursive and await _list_sandbox_directory_entries(session=session, path=target):
+                raise ValueError("目录非空；如确认删除，请设置 recursive=true")
             deleter = getattr(files, "delete_directories", None)
         else:
             deleter = getattr(files, "delete_files", None)

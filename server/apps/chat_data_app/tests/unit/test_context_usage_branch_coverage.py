@@ -3,7 +3,6 @@ import os
 import sys
 from types import SimpleNamespace
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))

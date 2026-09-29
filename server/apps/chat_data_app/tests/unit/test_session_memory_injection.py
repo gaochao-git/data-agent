@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: F401  # 测试按模块属性引用 SimpleNamespace，属有意重导出
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage

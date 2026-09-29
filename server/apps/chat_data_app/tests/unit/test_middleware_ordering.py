@@ -65,12 +65,12 @@ def test_assembled_order_matches_canonical_order_for_all_combinations():
     for bits in product([False, True], repeat=len(slot_names) + len(flag_names)):
         kwargs: dict = {}
         enabled: dict[str, str] = {}
-        for slot, on in zip(slot_names, bits[: len(slot_names)]):
+        for slot, on in zip(slot_names, bits[: len(slot_names)], strict=True):
             if on:
                 name = _OPTIONAL_SLOTS[slot]
                 kwargs[slot] = SimpleNamespace(name=name)
                 enabled[slot] = name
-        for flag, on in zip(flag_names, bits[len(slot_names):]):
+        for flag, on in zip(flag_names, bits[len(slot_names):], strict=True):
             kwargs[flag] = on
             if on:
                 enabled[flag] = _FLAG_SLOTS[flag]

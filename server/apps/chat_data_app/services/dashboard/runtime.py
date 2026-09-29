@@ -209,7 +209,7 @@ async def execute_dashboard_panel_sql_for_targets(
     )
     member_results = [
         normalize_dashboard_member_execution_result(target, result)
-        for target, result in zip(execution_targets, raw_results)
+        for target, result in zip(execution_targets, raw_results, strict=True)
     ]
     return build_multi_member_dashboard_result(sql, member_results)
 

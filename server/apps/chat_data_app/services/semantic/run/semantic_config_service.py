@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from hashlib import sha1
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -12,7 +11,7 @@ from utils.logger import get_logger
 from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
-from ..core.config_validator import expression_uses_physical_column
+from ..core.config_validator import expression_uses_physical_column  # noqa: F401  # 测试按模块属性引用 expression_uses_physical_column，属有意重导出
 from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,

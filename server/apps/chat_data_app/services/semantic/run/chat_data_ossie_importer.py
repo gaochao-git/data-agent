@@ -720,7 +720,7 @@ class OssieToChatDataImporter:
 
         join_conditions = [
             {"left_column": left_column, "right_column": right_column}
-            for left_column, right_column in zip(left_columns, right_columns)
+            for left_column, right_column in zip(left_columns, right_columns, strict=True)
         ]
         entry = {
             "left_table": left_table,

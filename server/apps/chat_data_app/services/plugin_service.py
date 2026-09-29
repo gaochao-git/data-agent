@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from utils.logger import get_logger
 from utils.models import ChatDataPlugin

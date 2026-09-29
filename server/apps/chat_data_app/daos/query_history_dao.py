@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask

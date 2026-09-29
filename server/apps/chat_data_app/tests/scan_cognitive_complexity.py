@@ -129,10 +129,7 @@ class CognitiveComplexityVisitor:
         # visitFunctionDef：嵌套函数 level = 父 level+1；wrapper 函数继承；class/根下属归零
         parent = self.stack[-1]
         if parent["kind"] == "func":
-            if _is_wrapper(parent["node"], node):
-                level = parent["level"]
-            else:
-                level = parent["level"] + 1
+            level = parent["level"] if _is_wrapper(parent["node"], node) else parent["level"] + 1
         else:
             level = 0
         self._push("func", level, node)

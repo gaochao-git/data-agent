@@ -900,7 +900,7 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
     fake_store = _SaveStore()
     manager = _build_manager(fake_store)
 
-    saved = asyncio.run(manager._save_datasource_async(
+    asyncio.run(manager._save_datasource_async(
         datasource_id="ds_mysql_http",
         group_name="MySQLHTTP组",
         group_desc="",
@@ -1953,7 +1953,7 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DataSourceDao", FakeDatasourceDao)
     monkeypatch.setattr("apps.chat_data_app.services.datasource.manager._datasource_manager_instance", None)
 
-    manager = DataSourceManager()
+    DataSourceManager()
 
     assert created["called"] is True
 
@@ -1964,7 +1964,7 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
 
 
 def test_datasource_manager_helper_fallback_branches(monkeypatch):
-    manager = DataSourceManager.__new__(DataSourceManager)
+    DataSourceManager.__new__(DataSourceManager)
     merged = _merge_member_source_lines(
         current={},
         next_template_source_config={"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"},

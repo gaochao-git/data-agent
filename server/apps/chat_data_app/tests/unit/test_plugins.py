@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 from apps.chat_data_app.agent.plugins import installer as plugin_installer  # noqa: E402
 from apps.chat_data_app.agent.plugins import loader as plugin_loader  # noqa: E402
-from apps.chat_data_app.agent.plugins import manifest as plugin_manifest  # noqa: E402
 from apps.chat_data_app.agent.plugins.installer import (  # noqa: E402
     PluginInstallError,
     PluginNotFoundError,

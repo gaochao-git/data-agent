@@ -14,7 +14,6 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..core.common import is_time_logical_dimension
 from ..core.query_plan import (
-    FORMULA_OPERATOR_PATTERN,
     FORMULA_REF_PATTERN,
     is_composite_metric,
     is_derived_metric,
@@ -272,10 +271,7 @@ def _append_derived_metric_filter_part(parts: List[str], item: Any) -> None:
     dimension = normalize_text((item or {}).get("dimension"))
     operator = normalize_text((item or {}).get("operator")) or "="
     value = (item or {}).get("value")
-    if isinstance(value, list):
-        value_text = "、".join(str(entry) for entry in value)
-    else:
-        value_text = str(value or "")
+    value_text = "、".join(str(entry) for entry in value) if isinstance(value, list) else str(value or "")
     if dimension:
         parts.append(f"{dimension}{operator}{value_text}")
 

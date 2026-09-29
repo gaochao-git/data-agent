@@ -104,7 +104,7 @@ def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(mon
     second_runtime = _FakeRuntime()
 
     first = _materialize(first_runtime)
-    second = _materialize(second_runtime)
+    _materialize(second_runtime)
 
     assert len(first["directory"]) == 1
     assert first["directory"][0]["metrics_total"] == 1

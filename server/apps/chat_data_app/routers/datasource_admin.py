@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -477,7 +476,8 @@ async def get_admin_datasource_table_column_dicts(datasource_id: str, table_name
 from ..services.datasource.column_dict_generate import (  # noqa: E402
     find_datasource_column as _find_datasource_column,
     generate_column_dict_candidates,
-    parse_column_dict_generate_response as _parse_column_dict_generate_response,
+    # 本模块未直接使用，但测试按 routers.datasource_admin._parse_... 打桩，属有意重导出
+    parse_column_dict_generate_response as _parse_column_dict_generate_response,  # noqa: F401
 )
 
 

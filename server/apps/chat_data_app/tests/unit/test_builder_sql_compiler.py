@@ -170,7 +170,7 @@ def test_compile_query_plan_sql_validates_shape_and_required_fields():
         compile_query_plan_sql({"mainTable": "orders", "dimensions": [], "aggregations": []})
 
 
-def test_compile_query_plan_sql_rejects_raw_and_aggregate_metric_mix():
+def test_compile_query_plan_sql_rejects_raw_and_aggregate_metric_mix_inline_payload():
     with pytest.raises(ValueError, match="原始值与聚合函数混用"):
         compile_query_plan_sql({
             "mainTable": "orders",
@@ -1362,7 +1362,7 @@ def test_compile_query_plan_sql_having_tree_and_special_operators():
     assert "OR MAX(`amount`) NOT IN (select amount from blacklist)" in leaf_sql
 
 
-def test_compile_query_plan_sql_having_leaf_operator_variants():
+def test_compile_query_plan_sql_having_leaf_operator_variants_simple_filters():
     builder_config = {
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],

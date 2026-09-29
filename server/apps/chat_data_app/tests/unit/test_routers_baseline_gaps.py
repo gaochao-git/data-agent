@@ -11,7 +11,6 @@ routers 目录下 7 个文件综合覆盖率未达 95%，缺口形态高度一�
 
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 

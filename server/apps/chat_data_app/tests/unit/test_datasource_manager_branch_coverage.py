@@ -8,7 +8,7 @@
 
 import os
 import sys
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: F401  # 测试按模块属性引用 SimpleNamespace，属有意重导出
 
 import pytest
 

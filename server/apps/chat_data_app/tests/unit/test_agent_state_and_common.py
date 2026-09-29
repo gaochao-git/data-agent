@@ -10,7 +10,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent import agent_runtime
-from apps.chat_data_app.agent import agent_state
+from apps.chat_data_app.agent import agent_state  # noqa: F401  # 测试按模块属性引用 agent_state，属有意重导出
 from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.tools import common
 

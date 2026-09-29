@@ -838,7 +838,7 @@ class QueryTaskService:
         local_execution_map = self.build_execution_map_by_member(executions)
         cancelled_execution_map = self.build_cancelled_execution_map(executions)
         remote_results: List[Dict[str, Any]] = []
-        for remote_task, fetched in zip(remote_tasks, fetched_results):
+        for remote_task, fetched in zip(remote_tasks, fetched_results, strict=True):
             if isinstance(fetched, Exception):
                 logger.warning(
                     "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
@@ -856,7 +856,7 @@ class QueryTaskService:
                 local_execution_map.get(str(remote_task.get("member_datasource_id") or "").strip()),
                 cancelled_execution_map.get(str(remote_task.get("member_datasource_id") or "").strip()),
             )
-            for remote_task, remote_result in zip(remote_tasks, remote_results)
+            for remote_task, remote_result in zip(remote_tasks, remote_results, strict=True)
         ]
 
     @staticmethod

@@ -19,9 +19,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from apps.chat_data_app.services.agent_run import conversation_workspace as cw
-from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
-from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.services.agent_run import conversation_workspace as cw  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
 from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
 from apps.chat_data_app.agent.workspace import workspace_local_backend as lb
 from apps.chat_data_app.services.agent_run.conversation_workspace import (

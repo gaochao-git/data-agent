@@ -95,7 +95,7 @@ def decrypt_password(encrypted_password: str) -> str:
         iv = base64.b64decode(parts[0], validate=True)
         ciphertext = base64.b64decode(parts[1], validate=True)
     except Exception:
-        raise ValueError("密码 base64 解码失败，请重新加密")
+        raise ValueError("密码 base64 解码失败，请重新加密") from None
 
     if len(iv) != 16:
         raise ValueError(f"密码 IV 长度错误：期望16字节，实际{len(iv)}字节，请重新加密")
@@ -107,7 +107,7 @@ def decrypt_password(encrypted_password: str) -> str:
         decrypted = crypt_sm4.crypt_cbc(iv, ciphertext)
         return decrypted.decode('utf-8')
     except Exception:
-        raise ValueError("密码解密失败，密钥或密文不匹配，请重新加密")
+        raise ValueError("密码解密失败，密钥或密文不匹配，请重新加密") from None
 
 
 def decrypt_env_value(name: str, *, required: bool = False) -> str:

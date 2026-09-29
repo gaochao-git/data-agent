@@ -329,10 +329,7 @@ async def _file_grep_impl(
 ) -> str:
     # 字面模式：| 是多关键词 OR 分隔符（既有约定）；正则模式：pattern 整体交给 rg，
     # 其中的 | 是正则交替语法——若再拆分，(a|b) 分组、[a|b] 字符类会被拆成非法正则。
-    if use_regex:
-        patterns = [str(pattern or "").strip()]
-    else:
-        patterns = [p for p in str(pattern or "").split("|") if p]
+    patterns = [str(pattern or "").strip()] if use_regex else [p for p in str(pattern or "").split("|") if p]
     if not patterns or not patterns[0]:
         raise ValueError("pattern 不能为空")
     normalized_glob = _validate_relative_glob(glob, field_name="glob")

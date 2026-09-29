@@ -73,7 +73,8 @@ async def _format_threads(rows: List[UserThread], user_id: Optional[str]) -> Lis
 def _clean_title(title: str, fallback: str = "") -> str:
     """清理标题文本"""
     title = title.strip()
-    title = title.strip('"').strip("'").strip('《》""''').strip()
+    # 这里的意图是「去掉其中任意字符」，strip 的字符集语义正合用（非去除整串），故豁免 B005
+    title = title.strip('"').strip("'").strip('《》""''').strip()  # noqa: B005
     # 移除表情符号和特殊字符
     title = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', title)
     title = title[:15]  # 限制最大长度
@@ -299,7 +300,7 @@ async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None
     """
     all_conversations = []
 
-    for agent_id, config in agent_configs.items():
+    for agent_id in agent_configs:
         try:
             conversations = await list(agent_id, user_id, limit)
             all_conversations.extend(conversations)

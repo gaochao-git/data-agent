@@ -9,6 +9,7 @@
   <log_time>|<log_level>|<thread_id>|<trace_id>|[idc]|<ip>|<filename>|<module>|<lineno>|<msg，能够打印错误堆栈>|[ext1]|[ext2]
 """
 
+import contextlib
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
@@ -360,11 +361,9 @@ class LoggerManager:
         if cls._file_handler is not None and cls._file_handler_key == handler_key:
             return cls._file_handler
         if cls._file_handler is not None:
-            try:
+            # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
+            with contextlib.suppress(Exception):
                 cls._file_handler.close()
-            except Exception:
-                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
-                pass
         cls._file_handler = cls._build_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._file_handler_key = handler_key
         return cls._file_handler
@@ -384,11 +383,9 @@ class LoggerManager:
         if cls._access_file_handler is not None and cls._access_file_handler_key == handler_key:
             return cls._access_file_handler
         if cls._access_file_handler is not None:
-            try:
+            # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
+            with contextlib.suppress(Exception):
                 cls._access_file_handler.close()
-            except Exception:
-                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
-                pass
         cls._access_file_handler = cls._build_access_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._access_file_handler_key = handler_key
         return cls._access_file_handler
@@ -408,11 +405,9 @@ class LoggerManager:
         if cls._alarm_file_handler is not None and cls._alarm_file_handler_key == handler_key:
             return cls._alarm_file_handler
         if cls._alarm_file_handler is not None:
-            try:
+            # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
+            with contextlib.suppress(Exception):
                 cls._alarm_file_handler.close()
-            except Exception:
-                # logger 自身再打日志有递归风险,且下方会立即创建新 handler,关闭失败不影响后续写入,故静默
-                pass
         cls._alarm_file_handler = cls._build_alarm_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._alarm_file_handler_key = handler_key
         return cls._alarm_file_handler

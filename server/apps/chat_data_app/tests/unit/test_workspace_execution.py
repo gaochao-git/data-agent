@@ -31,7 +31,7 @@ from apps.chat_data_app.agent.workspace import (
     workspace_ops as we_ops,
     workspace_sandbox_api as we_api,
     workspace_sandbox_paths as we_paths,
-    workspace_search as we_search,
+    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
     workspace_session as we_session,
     workspace_sync as we_sync,
 )

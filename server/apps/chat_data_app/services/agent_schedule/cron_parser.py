@@ -83,7 +83,7 @@ def parse_cron_expr(expr: str) -> tuple[frozenset[int], frozenset[int], frozense
         raise CronExprError(f"cron 表达式必须是 5 个字段（分 时 日 月 周）: {expr!r}")
 
     parsed: list[set[int]] = []
-    for text, (name, minimum, maximum) in zip(fields, _FIELD_SPECS):
+    for text, (name, minimum, maximum) in zip(fields, _FIELD_SPECS, strict=True):
         values: set[int] = set()
         for part in text.split(","):
             if not part:

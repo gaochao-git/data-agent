@@ -7,7 +7,6 @@
 """
 
 import json
-from typing import Any
 
 from .agent_run_support import _get_timestamp
 
@@ -23,10 +22,7 @@ def _format_sse(event: str, data: dict | str) -> str:
     Returns:
         符合 SSE 规范的字符串: "event: {event}\\ndata: {data}\\n\\n"
     """
-    if isinstance(data, dict):
-        data_str = json.dumps(data, ensure_ascii=False)
-    else:
-        data_str = data
+    data_str = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else data
     return f"event: {event}\ndata: {data_str}\n\n"
 
 

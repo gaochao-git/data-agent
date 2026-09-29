@@ -387,7 +387,6 @@ def extract_physical_tables(sql: str, source_type: str | None = None) -> SqlPars
         return SqlParseResult(success=False, error="SQL 为空")
 
     try:
-        from sqlglot import exp
 
         expressions = _parse_sql(text, source_type)
     except Exception as err:

@@ -1,6 +1,5 @@
 import ast
 import asyncio
-import importlib
 import json
 import logging
 from pathlib import Path
@@ -15,11 +14,11 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
-from apps.chat_data_app.routers import conversation_workspace, dependencies
-from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_service
+from apps.chat_data_app.routers import conversation_workspace, dependencies  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
+from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_service  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
 from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
-from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
-from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
+from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime  # noqa: F401  # 测试按模块属性引用 ConversationWorkspaceRuntime，属有意重导出
+from apps.chat_data_app.schema import DatasourceSourceItem
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
 from utils import alarm as alarm_module

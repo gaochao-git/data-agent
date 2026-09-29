@@ -47,21 +47,11 @@ from apps.chat_data_app.agent.workspace.workspace_special_services import (
     stabilize_office_preview_html,
 )
 from apps.chat_data_app.agent.workspace import (
-    workspace_ops as we_ops,
-    workspace_sandbox_api as we_api,
-    workspace_sandbox_paths as we_paths,
-    workspace_search as we_search,
-    workspace_session as we_session,
-    workspace_sync as we_sync,
-)
-from apps.chat_data_app.agent.workspace import (
-    workspace_ops as we_ops,
-    workspace_sandbox_api as we_api,
-    workspace_sandbox_paths as we_paths,
-    workspace_search as we_search,
-    workspace_session as we_session,
-    workspace_sync as we_sync,
-)
+    workspace_ops as we_ops,  # noqa: F401  # 测试按模块属性引用 workspace_ops，属有意重导出
+    workspace_sandbox_api as we_api,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_api，属有意重导出
+    workspace_sandbox_paths as we_paths,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_paths，属有意重导出
+    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
+    )
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")

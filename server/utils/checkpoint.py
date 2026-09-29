@@ -175,7 +175,7 @@ def _build_mysql_checkpointer_context_factory():
     except ImportError:
         raise ImportError(
             "使用 MySQL checkpointer 需要安装: pip install langgraph-checkpoint-mysql aiomysql"
-        )
+        ) from None
 
     password = _get_mysql_password()
     if _endpoint_selector is None:

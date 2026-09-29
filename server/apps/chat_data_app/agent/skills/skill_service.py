@@ -451,9 +451,7 @@ class SkillService:
             return False
         if scope == "system" and item.get("source") != "system":
             return False
-        if scope == "runtime" and item.get("source") == "user" and not int(item.get("current_version_no") or 0):
-            return False
-        return True
+        return not (scope == "runtime" and item.get("source") == "user" and not int(item.get("current_version_no") or 0))
 
     @staticmethod
     def _skill_matches_filter(item: Dict[str, Any], keyword: str, normalized_category: str) -> bool:
@@ -963,7 +961,7 @@ class SkillService:
             skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
             if await self._get_system_skill_metadata_async(skill_id):
-                raise PermissionError("无权管理该技能文件")
+                raise PermissionError("无权管理该技能文件") from None
             raise
         if not skill:
             raise ValueError("技能不存在")
@@ -1071,9 +1069,8 @@ class SkillService:
             return False
         if row.get("skill_publish_status") != "published" and not include_draft:
             return False
-        if not include_draft and not int(row.get("current_skill_version_no") or 0):
-            return False
-        return True
+        # 等价正向写法：草稿放行，或已有正式版本号即视为有效（写成 not(not A and not B) 反而难读）
+        return include_draft or bool(int(row.get("current_skill_version_no") or 0))
 
     @staticmethod
     def _build_db_skill_metadata(
@@ -1212,7 +1209,7 @@ class SkillService:
             skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
             if await self._get_system_skill_metadata_async(skill_id):
-                raise PermissionError("无权管理该技能文件")
+                raise PermissionError("无权管理该技能文件") from None
             raise
         if not skill:
             raise ValueError("技能不存在")

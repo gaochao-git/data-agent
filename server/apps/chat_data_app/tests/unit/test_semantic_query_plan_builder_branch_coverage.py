@@ -7,7 +7,6 @@ between 周期校验、周期描述、维度映射（list/大小写/未命中）
 
 import os
 import sys
-from datetime import datetime
 
 import pytest
 

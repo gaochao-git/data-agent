@@ -467,9 +467,13 @@ class DataSourceManager:
         is_default: Any = _UNSET,
         query_context: str = "",
         recommended_questions: Optional[List[str]] = None,
-        audit: DatasourceWriteAudit = DatasourceWriteAudit(),
+        audit: Optional[DatasourceWriteAudit] = None,
     ) -> dict:
         """异步写入数据源组及表结构缓存。"""
+        # 原写法把 DatasourceWriteAudit() 实例放在默认参数上（跨调用共享同一对象），
+        # 改为进入函数后再构造，避免可变默认入参随调用累积状态。
+        if audit is None:
+            audit = DatasourceWriteAudit()
         normalized_query_executor_type = _normalize_query_executor_type(source_type, query_executor_type)
         validated_member_source_configs = _validate_member_source_configs(
             member_source_configs,
@@ -1372,7 +1376,7 @@ class DataSourceManager:
             raise
         except Exception as err:
             logger.error("异步获取表结构失败: %s", err)
-            raise ConnectionError(f"数据库连接失败: {str(err)}")
+            raise ConnectionError(f"数据库连接失败: {str(err)}") from err
 
     async def get_physical_table_names_async(
         self,
@@ -1397,7 +1401,7 @@ class DataSourceManager:
             raise
         except Exception as err:
             logger.error("获取表列表失败: %s", err, exc_info=True)
-            raise ConnectionError(f"数据库连接失败: {str(err)}")
+            raise ConnectionError(f"数据库连接失败: {str(err)}") from err
 
 
 _datasource_manager_instance: Optional[DataSourceManager] = None

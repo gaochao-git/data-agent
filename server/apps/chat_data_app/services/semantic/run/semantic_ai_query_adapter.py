@@ -454,10 +454,10 @@ class SemanticAIQueryAdapter:
 
         # 如果有字段信息，校验字段是否存在
         columns_map = self.tables_map[table_name]
-        if columns_map is not None:  # None 表示跳过字段校验
-            if column_name not in columns_map:
-                available_columns = list(columns_map.keys())
-                return f"表 '{table_name}' 中不存在字段 '{column_name}'。可用字段：{', '.join(available_columns[:10])}{'...' if len(available_columns) > 10 else ''}"
+        # columns_map 为 None 表示跳过字段校验
+        if columns_map is not None and column_name not in columns_map:
+            available_columns = list(columns_map.keys())
+            return f"表 '{table_name}' 中不存在字段 '{column_name}'。可用字段：{', '.join(available_columns[:10])}{'...' if len(available_columns) > 10 else ''}"
 
         return None
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import mimetypes
 import os
 import tempfile
@@ -438,10 +439,8 @@ def _archive_workspace_directory(
             raise FileNotFoundError(f"{normalized_directory} 目录下没有可打包的文件")
     except Exception:
         # 失败一律清理临时文件（含超限中止），不留半成品
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
     return {
         "temp_path": tmp_path,

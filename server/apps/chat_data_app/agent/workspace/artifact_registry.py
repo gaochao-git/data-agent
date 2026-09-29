@@ -54,9 +54,7 @@ def _chart_spec_encoding_valid(chart_type: str, encoding: Any) -> bool:
     max_y_fields = chart_type_max_y_fields(chart_type)
     if max_y_fields is not None and isinstance(y_fields, list) and len([item for item in y_fields if str(item).strip()]) > max_y_fields:
         return False
-    if chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip():
-        return False
-    return True
+    return not (chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip())
 
 
 def _chart_spec_fields_exist(chart_type: str, data: list, encoding: dict[str, Any], y_fields: Any) -> bool:
@@ -64,9 +62,7 @@ def _chart_spec_fields_exist(chart_type: str, data: list, encoding: dict[str, An
     x_field = str(encoding.get("x") or "").strip()
     if chart_type_requires_x(chart_type) and x_field and x_field not in row_fields:
         return False
-    if isinstance(y_fields, list) and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip()):
-        return False
-    return True
+    return not (isinstance(y_fields, list) and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip()))
 
 
 def parse_chart_spec_payload_value(payload: Any) -> dict[str, Any] | None:

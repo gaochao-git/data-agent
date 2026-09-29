@@ -211,7 +211,7 @@ class MCPCatalog:
         ranked = sorted(
             (
                 (score, entry)
-                for score, entry in zip(scores, self._entries)
+                for score, entry in zip(scores, self._entries, strict=True)
                 if score > 0.0 and entry.qualified_name not in excluded_names
             ),
             key=lambda pair: pair[0],

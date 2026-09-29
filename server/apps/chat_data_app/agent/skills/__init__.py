@@ -17,14 +17,14 @@ API：
 
 from .loader import (
     # 类型
-    Skill,
-    SkillMetadata,
+    Skill,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    SkillMetadata,  # noqa: F401  # 包级重导出（__init__ 对外 API）
     # API
-    parse_metadata_text,
-    parse_metadata,
-    discover_skills,
-    load_metadata,
-    clear_metadata_cache,
-    format_skills_prompt,
-    activate_skill,
+    parse_metadata_text,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    parse_metadata,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    discover_skills,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    load_metadata,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    clear_metadata_cache,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    format_skills_prompt,  # noqa: F401  # 包级重导出（__init__ 对外 API）
+    activate_skill,  # noqa: F401  # 包级重导出（__init__ 对外 API）
 )

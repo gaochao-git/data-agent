@@ -68,7 +68,7 @@ def test_services_reverse_deps_on_agent_only_shrink():
     services_dir = AGENT_DIR.parent / "services"
     agent_pkg_markers = ("agent.skills", "agent.prompts", "agent.run", "agent.context", "agent.workspace")
     count = 0
-    for path, text in _python_sources(services_dir):
+    for _path, text in _python_sources(services_dir):
         for line in text.splitlines():
             if not _IMPORT_LINE_RE.match(line):
                 continue
