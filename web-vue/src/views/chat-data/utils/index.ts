@@ -61,3 +61,4 @@ export {
 } from './semanticTool'
 export type { ContentSegment, ParsedContent } from './parseContent'
 export type { SqlFunctionCatalogItem, SqlFunctionGroupKey, SqlFunctionOption } from './sqlFunctionCatalog'
+export { computeGenerationStats, computeLiveGenerationSpeed, estimateTokensFromText, formatGenerationSpeed, formatGenerationStatsDetail } from './generationSpeed'

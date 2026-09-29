@@ -34,6 +34,7 @@ from .agent import (
     IdentityContext,
     ModelInvocationConfig,
     resolve_agent_runtime_options,
+    get_subagent_hot_defaults,
     build_unified_system_prompt,
     get_checkpointer,
 )
@@ -88,6 +89,17 @@ from .agent_run_support import (
     _resolve_file_attachments,
     _write_agent_model_snapshot,
 )
+# 工具参数流式进度与 SSE 格式化（源模块：tool_stream_progress，agent_stream 行数红线拆出）。
+# re-export 保持既有模块属性引用（含测试）不变。
+from .tool_stream_progress import (
+    _STREAMING_LINE_COUNT_TOOLS,
+    _count_text_lines,
+    _extract_streaming_progress_inputs,
+    _extract_streaming_text_field,
+    _format_sse,
+    _format_tool_progress_event,
+    next_stream_stats_event,
+)
 
 logger = get_logger(__name__)
 
@@ -137,25 +149,6 @@ def _model_failure_user_message(exc: Exception) -> str:
         # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
         return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
     return "智能问数执行失败，请稍后重试。"
-
-
-def _format_sse(event: str, data: dict | str) -> str:
-    """
-    格式化 SSE 事件
-
-    Args:
-        event: 事件类型 (message, tool, error, done)
-        data: 事件数据（字典会被 JSON 序列化，字符串直接使用）
-
-    Returns:
-        符合 SSE 规范的字符串: "event: {event}\ndata: {data}\n\n"
-    """
-    if isinstance(data, dict):
-        data_str = json.dumps(data, ensure_ascii=False)
-    else:
-        data_str = data
-    return f"event: {event}\ndata: {data_str}\n\n"
-
 
 
 def _file_selection_mention_suffix(file_selections: List[str]) -> str:
@@ -325,85 +318,6 @@ def _visible_tool_count(tool_names: dict[str, str]) -> int:
     return len(tool_names)
 
 
-# 需要实时显示生成行数的工具：added_field 计 "+N"（写入行数），
-# removed_field 计 "-M"（被替换移除行数，file_edit 整段替换口径）。
-_STREAMING_LINE_COUNT_TOOLS: dict[str, dict[str, str]] = {
-    "file_write": {"added_field": "content"},
-    "file_edit": {"added_field": "new_content", "removed_field": "old_content"},
-}
-
-
-def _extract_streaming_text_field(args_text: str, field_name: str) -> tuple[str | None, bool]:
-    """从生成中的 args JSON 里提取指定字符串字段的当前值（可能不完整）。
-
-    模型流式输出工具参数时，args 是 ``{"file_path":"...","content":"..."}`` 这样的
-    JSON 片段。在 content 生成过程中 JSON 尚未闭合，无法用 json.loads 解析；
-    这里用状态机直接定位 ``"<field_name>":"`` 之后的字符串值，处理转义字符。
-    返回 ``(value, closed)``：``closed`` 表示字符串已闭合（值最终确定）。
-    """
-    marker = f'"{field_name}"'
-    idx = args_text.find(marker)
-    if idx < 0:
-        return None, False
-    rest = args_text[idx + len(marker):]
-    colon = rest.find(':')
-    if colon < 0:
-        return None, False
-    rest = rest[colon + 1:].lstrip()
-    if not rest.startswith('"'):
-        return None, False
-    out: list[str] = []
-    i = 1
-    closed = False
-    while i < len(rest):
-        c = rest[i]
-        if c == '\\' and i + 1 < len(rest):
-            nxt = rest[i + 1]
-            mapping = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', '\\': '\\', '/': '/'}
-            out.append(mapping.get(nxt, nxt))
-            i += 2
-        elif c == '"':
-            closed = True  # 字符串闭合
-            break
-        else:
-            out.append(c)
-            i += 1
-    return ''.join(out), closed
-
-
-def _count_text_lines(text: str) -> int:
-    """统计文本行数（空文本 0 行；以换行结尾不计额外空行）。"""
-    if not text:
-        return 0
-    return text.count('\n') + (0 if text.endswith('\n') else 1)
-
-
-def _format_tool_progress_event(
-    tool_call_id: str,
-    tool_name: str,
-    content_lines: int | None,
-    removed_lines: int | None,
-    intent: str | None = None,
-) -> str:
-    """工具执行中推送进度事件：file_write/file_edit 的实时行数（+N / -M）、通用 intent 预渲染。
-
-    行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
-    """
-    data = {
-        "type": "tool_progress",
-        "tool_call_id": tool_call_id,
-        "tool_name": tool_name,
-        "timestamp": _get_timestamp(),
-    }
-    if content_lines is not None:
-        data["content_lines"] = content_lines
-    if removed_lines is not None:
-        data["removed_lines"] = removed_lines
-    if intent:
-        data["intent"] = intent
-    return _format_sse("tool_progress", data)
-
-
 def _format_tool_event(
     tool_name: str,
     tool_call_id: str | None,
@@ -556,33 +470,6 @@ def _finish_running_tool(
     return active_tool_call_id
 
 
-def _extract_streaming_progress_inputs(
-    args_text: str,
-    fields: dict[str, str] | None,
-) -> tuple[tuple[int, int] | None, str | None]:
-    """从流式 args 中计算行数统计与闭合后的 intent；纯计算，不涉及任何状态。
-
-    - 行数：整段替换口径，added_field 当前行数为写入行数，removed_field（file_edit）为被替换行数；
-      非 行数统计工具（fields 为空）返回 (None, intent)。
-    - intent：字符串未闭合时丢弃，避免部分前缀被当作最终值推送。
-    """
-    added: str | None = None
-    removed: str | None = None
-    if fields:
-        added, _ = _extract_streaming_text_field(args_text, fields["added_field"])
-        if fields.get("removed_field"):
-            removed, _ = _extract_streaming_text_field(args_text, fields["removed_field"])
-        else:
-            removed = ""
-    counts: tuple[int, int] | None = None
-    if added is not None or removed is not None:
-        counts = (_count_text_lines(added or ""), _count_text_lines(removed or ""))
-    intent, intent_closed = _extract_streaming_text_field(args_text, "intent")
-    if not intent_closed:
-        intent = None
-    return counts, intent
-
-
 class _ToolStreamState:
     """维护 LangGraph 流式工具调用状态，统一 running 和完成事件字段。"""
 
@@ -598,6 +485,10 @@ class _ToolStreamState:
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
         # 已推送的流式 intent，用于 intent 未变化时去重
         self.progress_intents: dict[str, str] = {}
+        # 本轮累计流式输出的 args 字符数（含全部工具调用）：前端实时生成速度的分子来源
+        self.streamed_args_chars = 0
+        # 已通过 stream_stats 事件上报的字符数（跨步长去重）
+        self.reported_args_chars = 0
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -618,10 +509,16 @@ class _ToolStreamState:
         coerced_args = _coerce_tool_args(raw_args)
         if coerced_args is not None:
             self.args_fallback[tool_call_id] = coerced_args
+        events = self._running_event(tool_call_id, tool_name, coerced_args)
         if isinstance(raw_args, str) and raw_args.strip():
             # 字符串形态的 args（含双层编码）进 buffer，完成后由 _parse_tool_args_buffer 统一解析。
             self.args_buffer[tool_call_id] = self.args_buffer.get(tool_call_id, "") + raw_args
-        return self._running_event(tool_call_id, tool_name, coerced_args)
+            self.streamed_args_chars += len(raw_args)
+            stats_event = next_stream_stats_event(self.streamed_args_chars, self.reported_args_chars)
+            if stats_event is not None:
+                self.reported_args_chars, stats_sse = stats_event
+                events.append(stats_sse)
+        return events
 
     def handle_tool_calls(self, tool_calls: Any) -> list[str]:
         events: list[str] = []
@@ -695,6 +592,11 @@ class _ToolStreamState:
             current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
+                self.streamed_args_chars += len(chunk_args)
+                stats_event = next_stream_stats_event(self.streamed_args_chars, self.reported_args_chars)
+                if stats_event is not None:
+                    self.reported_args_chars, stats_sse = stats_event
+                    events.append(stats_sse)
                 # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 tool_name = self.tool_names.get(current_tool_call_id, "")
                 events.extend(self._streaming_progress_events(
@@ -1664,12 +1566,7 @@ async def _run_chat_data_agent_stream(
         runtime_options = resolve_agent_runtime_options(
             user_id=user_id,
             override=(options or {}).get("runtime_options"),
-            explore_subagent_enabled=bool(
-                await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")
-            ),
-            plan_subagent_enabled=bool(
-                await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")
-            ),
+            **await get_subagent_hot_defaults(),
         )
         workspace_paths, workspace_runtime, semantic_materialize_note = (
             await _prepare_agent_workspace_runtime(

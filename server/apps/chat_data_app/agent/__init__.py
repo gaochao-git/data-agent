@@ -14,6 +14,7 @@ from .agent_state import ChatDataAgentState
 from .runtime_options import (
     AgentRuntimeOptions,
     get_chat_data_default_runtime_options,
+    get_subagent_hot_defaults,
     resolve_agent_runtime_options,
 )
 from .data_agent import (
@@ -41,6 +42,7 @@ __all__ = [
     "IdentityContext",
     "ModelInvocationConfig",
     "get_chat_data_default_runtime_options",
+    "get_subagent_hot_defaults",
     "resolve_agent_runtime_options",
     "create_agent_from_spec",
     "create_data_agent",

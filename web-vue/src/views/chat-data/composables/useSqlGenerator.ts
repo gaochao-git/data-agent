@@ -120,6 +120,8 @@ export function useSqlGenerator() {
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
+      /** 参数流式期间后端推送的累计 args 字符数（stream_stats 事件），实时生成速度的分子来源 */
+      onStreamStats?: (argsChars: number) => void
       fileSelections?: string[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
@@ -153,6 +155,7 @@ export function useSqlGenerator() {
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
+      onStreamStats,
       fileSelections,
       enableThinking,
       thinkingEffort,
@@ -334,6 +337,18 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 token_usage 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'stream_stats') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data.args_chars === 'number' && Number.isFinite(data.args_chars)) {
+                onStreamStats?.(data.args_chars)
+              }
+            } catch (err) {
+              console.error('解析 stream_stats 数据失败:', err, dataStr)
             }
             continue
           }

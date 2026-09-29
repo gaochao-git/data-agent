@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
-os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services import llm_config
 from apps.chat_data_app.services.llm_config import ThinkingCapability
@@ -442,6 +441,7 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
         "bash_enabled": True,
         "explore_subagent_enabled": False,
         "plan_subagent_enabled": False,
+        "general_purpose_subagent_enabled": False,
     }
     assert result["user_overridable"] is True
     assert result["context_window"] == 256000

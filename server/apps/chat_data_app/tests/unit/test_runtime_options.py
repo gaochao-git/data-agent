@@ -14,6 +14,7 @@ def test_defaults_are_local_without_bash():
     assert options.bash_enabled is False
     assert options.explore_subagent_enabled is False
     assert options.plan_subagent_enabled is False
+    assert options.general_purpose_subagent_enabled is False
 
 
 def test_post_init_falls_back_to_local_for_invalid_backend():
@@ -26,12 +27,14 @@ def test_get_default_runtime_options_reads_runtime_config(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_BASH_ENABLED", True)
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", True)
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", True)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED", True)
 
     options = ro.get_chat_data_default_runtime_options()
     assert options.workspace_backend == "sandbox"
     assert options.bash_enabled is True
     assert options.explore_subagent_enabled is True
     assert options.plan_subagent_enabled is True
+    assert options.general_purpose_subagent_enabled is True
 
 
 def test_resolve_applies_hot_subagent_defaults(monkeypatch):
@@ -42,10 +45,12 @@ def test_resolve_applies_hot_subagent_defaults(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
 
     options = ro.resolve_agent_runtime_options(
-        explore_subagent_enabled=True, plan_subagent_enabled=True
+        explore_subagent_enabled=True, plan_subagent_enabled=True,
+        general_purpose_subagent_enabled=True,
     )
     assert options.explore_subagent_enabled is True
     assert options.plan_subagent_enabled is True
+    assert options.general_purpose_subagent_enabled is True
 
     # 用户覆盖仍优先于热值默认；未传的开关沿用 base 快照
     monkeypatch.setattr(ro, "_is_runtime_option_user_overridable", lambda: True)
@@ -54,6 +59,23 @@ def test_resolve_applies_hot_subagent_defaults(monkeypatch):
     )
     assert options.explore_subagent_enabled is False
     assert options.plan_subagent_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_get_subagent_hot_defaults_maps_settings_to_kwargs(monkeypatch):
+    """热值 helper 把三个子智能体开关的运行时配置映射为 resolve 的同名参数。"""
+    from apps.chat_data_app.services import setting_service as ss
+
+    async def fake_setting(key: str) -> bool:
+        return key == "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED"
+
+    monkeypatch.setattr(ss, "get_runtime_setting", fake_setting)
+    hot = await ro.get_subagent_hot_defaults()
+    assert hot == {
+        "explore_subagent_enabled": False,
+        "plan_subagent_enabled": True,
+        "general_purpose_subagent_enabled": False,
+    }
 
 
 def test_resolve_returns_base_without_override(monkeypatch):
@@ -84,14 +106,21 @@ def test_resolve_applies_subagent_override_when_overridable(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
 
     options = ro.resolve_agent_runtime_options(
-        user_id="u1", override={"explore_subagent_enabled": True, "plan_subagent_enabled": "yes"}
+        user_id="u1",
+        override={
+            "explore_subagent_enabled": True,
+            "plan_subagent_enabled": "yes",
+            "general_purpose_subagent_enabled": "on",
+        },
     )
     assert options.explore_subagent_enabled is True
     assert options.plan_subagent_enabled is True
+    assert options.general_purpose_subagent_enabled is True
 
     options = ro.resolve_agent_runtime_options(user_id="u1", override={})
     assert options.explore_subagent_enabled is False
     assert options.plan_subagent_enabled is False
+    assert options.general_purpose_subagent_enabled is False
 
 
 def test_resolve_ignores_override_when_not_overridable(monkeypatch):

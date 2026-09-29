@@ -139,6 +139,10 @@ CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env(
 CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env(
     "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False
 )
+# 是否注册 general-purpose 子智能体（业内通行的通用执行角色：产出交付物/批量加工/查询汇总）。
+CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED = read_bool_env(
+    "CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED", False
+)
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。
@@ -254,6 +258,7 @@ async def get_chat_data_runtime_config() -> dict:
             "bash_enabled": CHAT_DATA_DEFAULT_BASH_ENABLED,
             "explore_subagent_enabled": CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
             "plan_subagent_enabled": CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
+            "general_purpose_subagent_enabled": CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED,
         },
         "user_overridable": CHAT_DATA_CAPABILITY_USER_OVERRIDABLE,
         "default_row_limit": await get_runtime_setting("CHATDATA_ROW_LIMIT"),
