@@ -124,12 +124,13 @@ describe('computeLiveGenerationSpeed', () => {
   it('执行中的工具按已耗时扣除,分母只含模型时间', () => {
     const speed = computeLiveGenerationSpeed({
       streamedText: '你'.repeat(1000),
+      argsChars: 800,
       toolSpansMs: [{ started_at_ms: 12_000, ended_at_ms: null }],
       runStartedAtMs: 10_000,
       nowMs: 20_000,
     })
-    // tokens≈1000,模型时间=10s−8s(工具已跑 8s)=2s → 500 tok/s
-    expect(speed).toBe(500)
+    // tokens≈1000+200(参数 800 字符/4),模型时间=10s−8s(工具已跑 8s)=2s → 600 tok/s
+    expect(speed).toBe(600)
   })
 
   it('已完成的工具按起止差扣除', () => {
@@ -166,6 +167,17 @@ describe('computeLiveGenerationSpeed', () => {
     })
     // 工具夹为 [10000, 20000],模型时间 0 → 不出数
     expect(speed).toBeNull()
+  })
+
+  it('纯参数流式阶段(无正文)凭服务端 argsChars 也能出数', () => {
+    const speed = computeLiveGenerationSpeed({
+      streamedText: '',
+      argsChars: 2000,
+      runStartedAtMs: 10_000,
+      nowMs: 20_000,
+    })
+    // 2000/4=500 tokens ÷ 10s = 50 tok/s
+    expect(speed).toBe(50)
   })
 
   it('工具时间异常吞掉全部墙钟时不出数', () => {

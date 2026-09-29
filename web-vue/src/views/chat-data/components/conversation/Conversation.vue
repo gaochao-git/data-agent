@@ -1521,9 +1521,13 @@ const attachGenerationStats = (messageId: string, usage: ChatDataTokenUsage | nu
 }
 
 // ---- 生成中的实时速率（500ms 节拍）----
-// 分子 = 流出正文的 token 粗估（CJK 1 字/token，其余 4 字符/token），分母 = 墙钟 − 工具执行时间；
+// 分子 = 流出正文/思考的 token 粗估（CJK 1 字/token，其余 4 字符/token）
+//   + 后端 stream_stats 累计参数字符数（ASCII 4 字符/token）；分母 = 墙钟 − 工具执行时间；
 // message_end 收口后由 attachGenerationStats 的精确值接管，ticker 停走。
 const liveGenerationSpeed = ref<number | null>(null)
+// 后端 stream_stats 推送的累计参数字符数（本轮全部工具调用）：参数流式期间前端拿不到参数内容,
+// 这是参数 token 的唯一实时分子来源;随 run 新建而后端状态归零,前端在发送时重置
+const serverArgsChars = ref(0)
 let liveSpeedTimerId: ReturnType<typeof setInterval> | null = null
 
 const stopLiveGenerationSpeed = () => {
@@ -1937,22 +1941,16 @@ const submitAnalysisQuery = async (
   isGenerating.value = true
   // 本轮发起时刻（客户端时钟）：生成速度分母的起点，与 onMessageEnd 的客户端时刻同源，无跨机时钟偏差
   const runStartedAtMs = Date.now()
+  serverArgsChars.value = 0
   liveGenerationSpeed.value = null
   liveSpeedTimerId = setInterval(() => {
     const active = activeAssistantMessageId.value
       ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
       : null
-    // 工具调用参数也是模型输出的大头（file_edit 等结构化参数），与工具时长同窗过滤，不计历史轮次
-    const toolArgsText = [...toolCallsMap.value.values()]
-      .filter(tool => (
-        (tool.status === 'generating' && tool.started_at_ms == null)
-        || (tool.started_at_ms != null && tool.started_at_ms >= runStartedAtMs - 2000)
-      ))
-      .map(tool => JSON.stringify(tool.args || {}))
-      .join('')
     liveGenerationSpeed.value = computeLiveGenerationSpeed({
-      streamedText: `${active?.content || ''}${toolArgsText}`,
+      streamedText: active?.content || '',
       thinkingText: (active?.thinkingSegments || []).map(segment => segment.content).join(''),
+      argsChars: serverArgsChars.value,
       toolSpansMs: [...toolCallsMap.value.values()],
       runStartedAtMs,
       nowMs: Date.now(),
@@ -2044,6 +2042,9 @@ const submitAnalysisQuery = async (
         },
         onTokenUsage: (usage) => {
           tokenUsage.value = usage
+        },
+        onStreamStats: (argsChars) => {
+          serverArgsChars.value = argsChars
         },
         fileSelections: mentionFileSelections,
         enableThinking: enableDeepThinking.value,

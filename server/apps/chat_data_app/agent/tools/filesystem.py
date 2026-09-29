@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 from pathlib import PurePosixPath
 from typing import Any
@@ -403,13 +404,20 @@ async def _file_diff_impl(
         })
     lines_a = text_a.splitlines()
     lines_b = text_b.splitlines()
-    diff_lines = list(difflib.unified_diff(
-        lines_a, lines_b,
-        fromfile=str(file_a), tofile=str(file_b), lineterm="",
-    ))
-    # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
-    # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
-    added, removed = _count_diff_lines(diff_lines)
+
+    def _compute_diff() -> tuple[list[str], int, int]:
+        # 纯 CPU 且对「高度相似的大文件」最坏近 O(n·m)，必须放线程池——
+        # 直接跑在事件循环里会阻塞整个 worker 的所有会话。
+        diff_lines = list(difflib.unified_diff(
+            lines_a, lines_b,
+            fromfile=str(file_a), tofile=str(file_b), lineterm="",
+        ))
+        # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
+        # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
+        added, removed = _count_diff_lines(diff_lines)
+        return diff_lines, added, removed
+
+    diff_lines, added, removed = await asyncio.to_thread(_compute_diff)
     return tool_result_payload("file_diff", {
         "file_a": str(file_a),
         "file_b": str(file_b),

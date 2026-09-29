@@ -110,6 +110,8 @@ export interface LiveGenerationSpeedInput {
   streamedText: string
   /** 本轮已流出的思考内容（同样是模型输出） */
   thinkingText?: string
+  /** 后端 stream_stats 推送的累计参数字符数（本轮全部工具调用，ASCII 按 4 字符/token 折算） */
+  argsChars?: number
   /** 工具执行起止（客户端时钟，与 ToolCallInfo 的 started_at_ms/ended_at_ms 同形）；仅有 started 表示仍在执行，用 nowMs 兜底 */
   toolSpansMs?: Array<{ started_at_ms?: number | null; ended_at_ms?: number | null }>
   /** 本轮发起时刻（客户端时钟） */
@@ -120,12 +122,16 @@ export interface LiveGenerationSpeedInput {
 
 /**
  * 生成中的实时速率：token 粗估 ÷ 已用模型时间（墙钟 − 工具执行时间）。
- * 工具执行中分子分母同时冻结，速率自然停走；开跑首秒估算噪声大，不足 1s 不出数。
+ * 分子 = 正文/思考的字符粗估 + 后端累计参数字符数（参数流式期间后端只缓存不下发内容，
+ * 该计数是参数 token 的唯一实时来源）；工具执行中分子分母同时冻结，速率自然停走；
+ * 开跑首秒估算噪声大，不足 1s 不出数。
  * toolSpansMs 可能含历史轮次的工具（toolCallsMap 仅在切换会话时清空）：
  * 本轮开始前已结束的一律忽略，执行中/晚于本轮开始的把起点夹到本轮起点。
  */
 export const computeLiveGenerationSpeed = (input: LiveGenerationSpeedInput): number | null => {
+  const argsChars = Number(input.argsChars) || 0
   const tokens = estimateTokensFromText(`${input.streamedText || ''}${input.thinkingText || ''}`)
+    + Math.floor(Math.max(argsChars, 0) / 4)
   if (tokens <= 0) return null
 
   const { runStartedAtMs, nowMs } = input
