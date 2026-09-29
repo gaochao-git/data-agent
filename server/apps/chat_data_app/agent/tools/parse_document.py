@@ -19,10 +19,29 @@ from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
 )
-from apps.chat_data_app.agent.workspace.uploaded_file_parser import parse_uploaded_file_to_markdown
+from apps.chat_data_app.agent.workspace.uploaded_file_parser import (
+    EmptyExtractionError,
+    parse_uploaded_file_to_markdown,
+)
+from apps.chat_data_app.agent.workspace.scanned_pdf import transcribe_scanned_pdf
 from .common import tool_result_payload
 
 logger = get_logger(__name__)
+
+
+async def _extract_markdown_with_fallback(src_physical: Path) -> tuple[str, str]:
+    """markitdown 主链路提取;PDF 无文本层(扫描版)时走视觉转写兜底。
+
+    返回 (markdown 内容, 解析来源 source)。兜底只对 PDF 生效，且解析器内部已按
+    「文本层 < 阈值」二次确认，纯文本解析失败不会误入视觉转写。
+    """
+    try:
+        return await parse_uploaded_file_to_markdown(src_physical), "text_layer"
+    except EmptyExtractionError:
+        if src_physical.suffix.lower() != ".pdf":
+            raise
+    logger.info("PDF 无文本层，走扫描版视觉转写: %s", src_physical.name)
+    return await transcribe_scanned_pdf(src_physical), "vision_transcribe"
 
 
 def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) -> list:
@@ -53,7 +72,7 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
             return tool_result_payload("parse_document", {"success": False, "error": "source_path 指向的文件不存在"})
 
         try:
-            content = await parse_uploaded_file_to_markdown(src_physical)
+            content, parse_source = await _extract_markdown_with_fallback(src_physical)
         except Exception as exc:
             logger.error("parse_document 解析失败: %s", exc, exc_info=True)
             return tool_result_payload("parse_document", {"success": False, "error": f"解析失败: {exc}"})
@@ -77,6 +96,7 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
                 "success": True,
                 "target_path": written_path,
                 "char_count": len(content),
+                "source": parse_source,
             },
         )
 
