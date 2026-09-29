@@ -30,7 +30,8 @@
 | `officecli_adapter.py` | OfficeCLI 参数解析、路径值提取、argv 翻译 |
 | `workspace_special_services.py` | 语义模型物料化、工具结果写入、产物加载、Office 预览四个 special service |
 | `workspace_text_budget.py` | 分页读取的行字符预算 |
-| `uploaded_file_parser.py` | 上传文件 → Markdown 解析 |
+| `uploaded_file_parser.py` | 上传文件 → Markdown 解析（markitdown 主链路，`EmptyExtractionError` 表示提取为空） |
+| `scanned_pdf.py` | 扫描版 PDF（无文本层）判定、页面渲染与视觉模型转写兜底；由 `parse_document` 在 PDF 空提取时调用 |
 | `artifact_registry.py` | outputs 产物识别（chart/dashboard/skill/markdown） |
 
 ## 路径映射机制（local 后端）

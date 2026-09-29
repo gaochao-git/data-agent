@@ -110,8 +110,13 @@ def test_render_downgrades_dpi_when_over_size_limit(tmp_path):
     """超大画幅超过视觉链路单张上限时逐次减半 DPI,最低降到 72 且始终产出有效文件。"""
     path = tmp_path / "scan.pdf"
     _make_scanned_pdf(path, pages=1)
+    # 不限量基准:150 DPI 渲染
+    base = render_pdf_pages(path, [1], tmp_path / "base")[0]
+    # max_bytes=1 → 必然超限 → 强制走 DPI 减半
     rendered = render_pdf_pages(path, [1], tmp_path / "out", max_bytes=1)
     assert rendered[0].is_file() and rendered[0].stat().st_size > 1
+    # 行为断言:分辨率确实降了(若减半循环失效,与基准同宽,此断言失败)
+    assert fitz.Pixmap(str(rendered[0])).width < fitz.Pixmap(str(base)).width
 
 
 # --------------------------------------------------------------------------- #
