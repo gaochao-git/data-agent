@@ -71,25 +71,27 @@ def _stub_conversation_event_writes(monkeypatch):
             # 对齐 Runtime 契约：生成器只产事实，结构化 done 由消费方（Runtime）收口发布。
             status = "finished"
             try:
-                async for payload in handler_module._generate_chat_data_stream(ChatDataStreamRequest(
-                    thread_id=conversation_id,
-                    user_query=context.get("query") or "",
-                    datasource_id=context.get("datasource_id"),
-                    user_id=user_id,
-                    username=operator_name,
-                    member_datasource_ids=context.get("member_datasource_ids") or [],
-                    semantic_config_id=context.get("semantic_config_id"),
-                    request=None,
-                    model_id=context.get("model_id"),
-                    file_selections=context.get("file_selections"),
-                    enable_thinking=context.get("enable_thinking"),
-                    skill_names=context.get("skill_names") or [],
-                    options=context.get("options") or {},
-                    file_ids=context.get("file_ids") or [],
-                    run_id=run_id,
-                    owner_token="test-owner",
-                    adopted_messages=[],
-                )):
+                async for payload in handler_module._generate_chat_data_stream(
+                    ChatDataStreamRequest(
+                        thread_id=conversation_id,
+                        user_query=context.get("query") or "",
+                        datasource_id=context.get("datasource_id"),
+                        user_id=user_id,
+                        username=operator_name,
+                        member_datasource_ids=context.get("member_datasource_ids") or [],
+                        semantic_config_id=context.get("semantic_config_id"),
+                        request=None,
+                        model_id=context.get("model_id"),
+                        file_selections=context.get("file_selections"),
+                        enable_thinking=context.get("enable_thinking"),
+                        skill_names=context.get("skill_names") or [],
+                        options=context.get("options") or {},
+                        file_ids=context.get("file_ids") or [],
+                        run_id=run_id,
+                        owner_token="test-owner",
+                        adopted_messages=[],
+                    )
+                ):
                     if payload.startswith("event: question_requested"):
                         status = "waiting_user"
                     await queue.put(payload)
@@ -206,39 +208,41 @@ def test_completion_api_streams_multi_tool_result_passthrough(client, auth_heade
             "cfg_user": {"id": "cfg_user", "name": "用户分析", "metrics": [{"name": "用户数"}]},
         },
     }
-    graph = FakeGraph([
-        (
-            FakeMessageChunk(
-                tool_calls=[{"id": "call_select", "name": "file_grep"}],
+    graph = FakeGraph(
+        [
+            (
+                FakeMessageChunk(
+                    tool_calls=[{"id": "call_select", "name": "file_grep"}],
+                ),
+                {"langgraph_node": "model"},
             ),
-            {"langgraph_node": "model"},
-        ),
-        (
-            FakeMessageChunk(
-                tool_call_chunks=[
-                    {
-                        "id": "call_select",
-                        "name": "file_grep",
-                        "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
-                    }
-                ],
+            (
+                FakeMessageChunk(
+                    tool_call_chunks=[
+                        {
+                            "id": "call_select",
+                            "name": "file_grep",
+                            "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
+                        }
+                    ],
+                ),
+                {"langgraph_node": "model"},
             ),
-            {"langgraph_node": "model"},
-        ),
-        (
-            FakeMessageChunk(
-                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
-                msg_type="tool",
-                tool_call_id="call_select",
-                name="file_grep",
+            (
+                FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    msg_type="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
             ),
-            {"langgraph_node": "tools"},
-        ),
-        (
-            FakeMessageChunk(content="已分别查询订单金额和用户数。"),
-            {"langgraph_node": "model"},
-        ),
-    ])
+            (
+                FakeMessageChunk(content="已分别查询订单金额和用户数。"),
+                {"langgraph_node": "model"},
+            ),
+        ]
+    )
     _patch_completion_dependencies(monkeypatch, graph)
 
     response = _post_completion(client, auth_headers, "conv_retrieval_api", "查询订单金额和用户数")
@@ -266,24 +270,30 @@ def test_completion_api_streams_single_tool_result_passthrough(client, auth_head
         "success": True,
         "semantic_config_ids": ["cfg_order"],
         "semantic_configs": {
-            "cfg_order": {"id": "cfg_order", "name": "订单分析", "metrics": [{"name": "订单金额", "expression": "SUM(orders.amount)"}]},
+            "cfg_order": {
+                "id": "cfg_order",
+                "name": "订单分析",
+                "metrics": [{"name": "订单金额", "expression": "SUM(orders.amount)"}],
+            },
         },
     }
-    graph = FakeGraph([
-        (
-            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "file_grep"}]),
-            {"langgraph_node": "model"},
-        ),
-        (
-            FakeMessageChunk(
-                content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
-                msg_type="tool",
-                tool_call_id="call_select",
-                name="file_grep",
+    graph = FakeGraph(
+        [
+            (
+                FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
             ),
-            {"langgraph_node": "tools"},
-        ),
-    ])
+            (
+                FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    msg_type="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
+        ]
+    )
     _patch_completion_dependencies(monkeypatch, graph)
 
     response = _post_completion(client, auth_headers, "conv_selected_api", "查询订单金额")
@@ -298,12 +308,14 @@ def test_completion_api_streams_single_tool_result_passthrough(client, auth_head
 
 
 def test_completion_api_passes_explicit_skill_names_to_query_state(client, auth_headers, monkeypatch):
-    graph = FakeGraph([
-        (
-            FakeMessageChunk(content="完成"),
-            {"langgraph_node": "model"},
-        ),
-    ])
+    graph = FakeGraph(
+        [
+            (
+                FakeMessageChunk(content="完成"),
+                {"langgraph_node": "model"},
+            ),
+        ]
+    )
     _patch_completion_dependencies(monkeypatch, graph)
 
     response = _post_completion(
@@ -339,11 +351,13 @@ class ToolCallingLLM:
         if self.calls == 1:
             return AIMessage(
                 content="",
-                tool_calls=[{
-                    "id": "call_dsl",
-                    "name": "data_analyzing_tool",
-                    "args": {"action": "validate_dsl", "action_payload": self.tool_args},
-                }],
+                tool_calls=[
+                    {
+                        "id": "call_dsl",
+                        "name": "data_analyzing_tool",
+                        "args": {"action": "validate_dsl", "action_payload": self.tool_args},
+                    }
+                ],
             )
         return AIMessage(content="已生成 SQL。")
 
@@ -352,14 +366,16 @@ def test_completion_api_runs_real_validate_dsl_action_with_structured_having(cli
     manager = FakeDatasourceManager()
     semantic_service = FakeSemanticConfigService(manager)
     datasource = manager.datasources["ds_a"]
-    datasource["ds_tables"].append({
-        "table_name": "order_items",
-        "description": "订单明细",
-        "columns": [
-            {"name": "order_id", "type": "int"},
-            {"name": "amount", "type": "decimal"},
-        ],
-    })
+    datasource["ds_tables"].append(
+        {
+            "table_name": "order_items",
+            "description": "订单明细",
+            "columns": [
+                {"name": "order_id", "type": "int"},
+                {"name": "amount", "type": "decimal"},
+            ],
+        }
+    )
     config = datasource["semantic_configs"][0]
     config["metrics"] = [
         {"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"},
@@ -383,16 +399,18 @@ def test_completion_api_runs_real_validate_dsl_action_with_structured_having(cli
             "metrics": ["出金总额", "销售额"],
             "dimensions": ["订单状态"],
             "filters": [],
-            "having": [{
-                "left": {"type": "metric", "name": "出金总额"},
-                "operator": ">",
-                "right": {
-                    "type": "binary",
-                    "operator": "*",
-                    "left": {"type": "metric", "name": "销售额"},
-                    "right": {"type": "literal", "value": 10},
-                },
-            }],
+            "having": [
+                {
+                    "left": {"type": "metric", "name": "出金总额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "*",
+                        "left": {"type": "metric", "name": "销售额"},
+                        "right": {"type": "literal", "value": 10},
+                    },
+                }
+            ],
             "order_by": [],
         },
     }

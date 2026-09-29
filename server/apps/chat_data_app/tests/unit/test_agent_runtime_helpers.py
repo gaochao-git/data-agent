@@ -13,9 +13,7 @@ from apps.chat_data_app.agent import agent_runtime as ar
 
 def test_format_current_time_for_prompt_includes_weekday():
     # 2026-08-29 是星期六
-    assert ar.format_current_time_for_prompt(datetime(2026, 8, 29, 10, 30, 5)) == (
-        "2026-08-29 10:30:05（周六）"
-    )
+    assert ar.format_current_time_for_prompt(datetime(2026, 8, 29, 10, 30, 5)) == ("2026-08-29 10:30:05（周六）")
 
 
 def test_timestamp_message_passthrough_for_empty_message():

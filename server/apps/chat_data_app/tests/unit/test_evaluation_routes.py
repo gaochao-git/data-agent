@@ -102,9 +102,21 @@ def test_build_seed_case_candidates_covers_detail_aggregation_time_filter_and_jo
             {"name": "订单数", "table": "orders", "expression": "COUNT(order_id)"},
         ],
         "dimensions": [
-            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": ["paid"]},
+            {
+                "name": "订单状态",
+                "table": "orders",
+                "column": "status",
+                "logical_type": "text",
+                "allowed_values": ["paid"],
+            },
             {"name": "下单时间", "table": "orders", "column": "created_at", "logical_type": "datetime"},
-            {"name": "商品分类", "table": "products", "column": "category", "logical_type": "text", "allowed_values": ["数码"]},
+            {
+                "name": "商品分类",
+                "table": "products",
+                "column": "category",
+                "logical_type": "text",
+                "allowed_values": ["数码"],
+            },
             {"name": "用户ID", "table": "users", "column": "user_id", "logical_type": "text"},
         ],
         "relationships": [{"left_table": "orders", "right_table": "products"}],
@@ -127,7 +139,13 @@ def test_build_seed_case_candidates_detail_table_uses_dimensions_only():
         "metrics": [],
         "dimensions": [
             {"name": "订单ID", "table": "orders", "column": "order_id", "logical_type": "text"},
-            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": ["paid"]},
+            {
+                "name": "订单状态",
+                "table": "orders",
+                "column": "status",
+                "logical_type": "text",
+                "allowed_values": ["paid"],
+            },
         ],
         "relationships": [],
     }
@@ -157,15 +175,24 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
     assert all(case["gold_dsl"]["filters"] == [] for case in detail_no_named_dimensions)
 
     config = {
-        "metrics": [
-            {"name": f"指标{i}", "table": "orders", "expression": f"SUM(amount{i})"}
-            for i in range(1, 8)
-        ],
+        "metrics": [{"name": f"指标{i}", "table": "orders", "expression": f"SUM(amount{i})"} for i in range(1, 8)],
         "dimensions": [
             {"name": "", "table": "orders", "column": "ignored", "logical_type": "text", "allowed_values": ["x"]},
-            {"name": "跨表维度", "table": "dim_table", "column": "name", "logical_type": "text", "allowed_values": ["A"]},
+            {
+                "name": "跨表维度",
+                "table": "dim_table",
+                "column": "name",
+                "logical_type": "text",
+                "allowed_values": ["A"],
+            },
             {"name": "无枚举维度", "table": "orders", "column": "city", "logical_type": "text", "allowed_values": []},
-            {"name": "空枚举值维度", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": [""]},
+            {
+                "name": "空枚举值维度",
+                "table": "orders",
+                "column": "status",
+                "logical_type": "text",
+                "allowed_values": [""],
+            },
         ],
         "relationships": [{"left_table": "orders", "right_table": "dim_table"}],
     }
@@ -174,9 +201,7 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
 
     assert len(cases) <= 30
     assert all(
-        case["gold_dsl"]["filters"][0]["dimension"] != "空枚举值维度"
-        for case in cases
-        if case["gold_dsl"]["filters"]
+        case["gold_dsl"]["filters"][0]["dimension"] != "空枚举值维度" for case in cases if case["gold_dsl"]["filters"]
     )
     assert any("跨表维度" in case["nl"] for case in cases)
 
@@ -203,10 +228,7 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
     assert [case["nl"] for case in skip_blank_cases] == ["查询销售额"]
 
     many_join_config = {
-        "metrics": [
-            {"name": f"指标{i}", "table": "fact", "expression": f"SUM(amount{i})"}
-            for i in range(1, 12)
-        ],
+        "metrics": [{"name": f"指标{i}", "table": "fact", "expression": f"SUM(amount{i})"} for i in range(1, 12)],
         "dimensions": [
             {"name": f"维度{i}", "table": f"dim{i}", "column": "name", "logical_type": "text", "allowed_values": ["A"]}
             for i in range(1, 12)
@@ -234,7 +256,10 @@ def test_build_seed_case_candidates_internal_empty_helper_edges(monkeypatch):
     monkeypatch.setattr(evaluation, "_categorical_dimensions", lambda _config: [])
     no_join_cases = evaluation._build_seed_case_candidates(
         "cfg_no_join_candidates",
-        {"metrics": [{"name": "销售额", "table": "orders"}], "relationships": [{"left_table": "orders", "right_table": "users"}]},
+        {
+            "metrics": [{"name": "销售额", "table": "orders"}],
+            "relationships": [{"left_table": "orders", "right_table": "users"}],
+        },
         "订单分析",
     )
     assert [case["query_type"] for case in no_join_cases] == ["aggregation"]
@@ -251,10 +276,18 @@ def test_accuracy_bp_and_case_pass_logic():
     assert evaluation._accuracy_bp(2) == 10000
     assert evaluation._accuracy_bp(-1) == 0
     assert evaluation._accuracy_bp("bad") == 0
-    assert evaluation._is_eval_case_passed({"status": "succeeded", "semantic_accuracy": 1, "dsl_exact_match": True, "compile_success": True}) is True
+    assert (
+        evaluation._is_eval_case_passed(
+            {"status": "succeeded", "semantic_accuracy": 1, "dsl_exact_match": True, "compile_success": True}
+        )
+        is True
+    )
     assert evaluation._is_eval_case_passed({"status": "failed", "semantic_accuracy": 1}) is False
     assert evaluation._is_eval_case_passed({"status": "succeeded", "semantic_accuracy": 0.9}) is False
-    assert evaluation._is_eval_case_passed({"status": "succeeded", "semantic_accuracy": 1, "dsl_exact_match": False}) is False
+    assert (
+        evaluation._is_eval_case_passed({"status": "succeeded", "semantic_accuracy": 1, "dsl_exact_match": False})
+        is False
+    )
 
 
 def test_eval_run_payload_formatters_include_summary_and_case_defaults():
@@ -306,7 +339,6 @@ def test_eval_run_payload_formatters_include_summary_and_case_defaults():
 
 
 def test_build_accuracy_runner_args_validates_scene():
-
     payload = AccuracyEvaluationRunRequest(
         datasource_id="ds_a",
         semantic_config_id="cfg_a",
@@ -341,27 +373,36 @@ def test_generate_draft_case_by_llm_handles_nl_and_sql(monkeypatch):
         async def ainvoke(self, messages):
             captured["messages"] = messages
             FakeLLM.prompt = messages[0].content
-            return SimpleNamespace(content=json.dumps({
-                "nl": "查询销售额",
-                "gold_dsl": {"metrics": ["销售额"], "dimensions": []},
-                "query_type": "aggregation",
-                "difficulty": "easy",
-            }, ensure_ascii=False))
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "nl": "查询销售额",
+                        "gold_dsl": {"metrics": ["销售额"], "dimensions": []},
+                        "query_type": "aggregation",
+                        "difficulty": "easy",
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
     monkeypatch.setattr(evaluation_llm_service, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
     monkeypatch.setattr(evaluation_llm_service.time, "time", lambda: 123.456)
     config = {"id": "cfg_a", "name": "订单分析", "metrics": [{"name": "销售额"}], "dimensions": []}
 
-    nl_case = asyncio.run(evaluation._generate_draft_case_by_llm(
-        "cfg_a",
-        config,
-        AccuracyEvaluationDraftCaseRequest(hint="查销售额", existing_questions=[]),
-    ))
-    sql_case = asyncio.run(evaluation._generate_draft_case_by_llm(
-        "cfg_a",
-        config,
-        AccuracyEvaluationDraftCaseRequest(hint="select sum(amount) from orders", existing_questions=[]),
-    ))
+    nl_case = asyncio.run(
+        evaluation._generate_draft_case_by_llm(
+            "cfg_a",
+            config,
+            AccuracyEvaluationDraftCaseRequest(hint="查销售额", existing_questions=[]),
+        )
+    )
+    sql_case = asyncio.run(
+        evaluation._generate_draft_case_by_llm(
+            "cfg_a",
+            config,
+            AccuracyEvaluationDraftCaseRequest(hint="select sum(amount) from orders", existing_questions=[]),
+        )
+    )
 
     assert nl_case["nl"] == "查销售额"
     assert getattr(captured["messages"][0], "type", "") == "human"
@@ -419,15 +460,23 @@ def test_iter_accuracy_evaluation_sse_updates_records(monkeypatch):
     monkeypatch.setattr(evaluation, "_load_accuracy_runner_cases", fake_cases)
     monkeypatch.setattr(evaluation, "_upsert_eval_run_case_record", fake_upsert)
     monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        iter_accuracy_evaluation_events=fake_iter,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            iter_accuracy_evaluation_events=fake_iter,
+        ),
+    )
 
-    events = asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        request=None,
-        current_user=SimpleNamespace(user_id="u1"),
-    )))
+    events = asyncio.run(
+        _collect(
+            evaluation._iter_accuracy_evaluation_sse(
+                AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                request=None,
+                current_user=SimpleNamespace(user_id="u1"),
+            )
+        )
+    )
 
     assert len(events) == 4
     assert '"event": "case_result"' in events[0]
@@ -459,15 +508,23 @@ def test_iter_accuracy_evaluation_sse_done_without_report_skips_update(monkeypat
     monkeypatch.setattr(evaluation, "_build_accuracy_runner_args", fake_args)
     monkeypatch.setattr(evaluation, "_load_accuracy_runner_cases", fake_cases)
     monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        iter_accuracy_evaluation_events=fake_iter,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            iter_accuracy_evaluation_events=fake_iter,
+        ),
+    )
 
-    events = asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        request=None,
-        current_user=SimpleNamespace(user_id="u1"),
-    )))
+    events = asyncio.run(
+        _collect(
+            evaluation._iter_accuracy_evaluation_sse(
+                AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                request=None,
+                current_user=SimpleNamespace(user_id="u1"),
+            )
+        )
+    )
 
     assert events == ['data: {"event": "done"}\n\n']
     assert calls == [("create",), ("update", "run_done", {"status": "succeeded", "summary": {}})]
@@ -502,7 +559,9 @@ async def test_scene_case_set_db_lifecycle(eval_db):
         },
     ]
 
-    case_set_id = await evaluation._save_scene_case_set("ds_a", "cfg_a", "订单集", "订单分析", cases_v1, operator_id="tester")
+    case_set_id = await evaluation._save_scene_case_set(
+        "ds_a", "cfg_a", "订单集", "订单分析", cases_v1, operator_id="tester"
+    )
     loaded_v1 = await evaluation._load_scene_case_set("ds_a", "cfg_a")
     runner_cases = await evaluation._load_scene_runner_cases("ds_a", "cfg_a")
 
@@ -553,29 +612,43 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
     )
 
     await evaluation._create_eval_run_record("run_1", payload, current_user)
-    await evaluation._upsert_eval_run_case_record("run_1", "case_1", {
-        "id": "case_1",
-        "status": "succeeded",
-        "semantic_accuracy": 1,
-        "dsl_exact_match": True,
-        "compile_success": True,
-        "elapsed_ms": 12,
-    })
-    await evaluation._upsert_eval_run_case_record("run_1", "case_2", {
-        "id": "case_2",
-        "status": "failed",
-        "semantic_accuracy": 0,
-        "error": "SQL错误",
-    })
-    await evaluation._upsert_eval_run_case_record("run_1", "case_2", {
-        "id": "case_2",
-        "status": "succeeded",
-        "semantic_accuracy": 1,
-        "dsl_exact_match": True,
-        "compile_success": True,
-        "elapsed_ms": 20,
-    })
-    await evaluation._update_eval_run_record("run_1", status="succeeded", summary={"total": 2, "scored": 2, "failed": 0, "semantic_accuracy": 1})
+    await evaluation._upsert_eval_run_case_record(
+        "run_1",
+        "case_1",
+        {
+            "id": "case_1",
+            "status": "succeeded",
+            "semantic_accuracy": 1,
+            "dsl_exact_match": True,
+            "compile_success": True,
+            "elapsed_ms": 12,
+        },
+    )
+    await evaluation._upsert_eval_run_case_record(
+        "run_1",
+        "case_2",
+        {
+            "id": "case_2",
+            "status": "failed",
+            "semantic_accuracy": 0,
+            "error": "SQL错误",
+        },
+    )
+    await evaluation._upsert_eval_run_case_record(
+        "run_1",
+        "case_2",
+        {
+            "id": "case_2",
+            "status": "succeeded",
+            "semantic_accuracy": 1,
+            "dsl_exact_match": True,
+            "compile_success": True,
+            "elapsed_ms": 20,
+        },
+    )
+    await evaluation._update_eval_run_record(
+        "run_1", status="succeeded", summary={"total": 2, "scored": 2, "failed": 0, "semantic_accuracy": 1}
+    )
     await evaluation._update_eval_run_record("run_1")
     await evaluation._update_eval_run_record("run_1", summary={"total": 3, "scored": 2, "failed": 1})
     await evaluation._update_eval_run_record("run_1", error_message="")
@@ -583,16 +656,28 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
 
     request = SimpleNamespace()
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: current_user)
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
 
-    list_response = await evaluation.list_accuracy_evaluation_runs(request, datasource_id="ds_a", semantic_config_id="cfg_a", page=-1, page_size=500)
+    list_response = await evaluation.list_accuracy_evaluation_runs(
+        request, datasource_id="ds_a", semantic_config_id="cfg_a", page=-1, page_size=500
+    )
     list_all_response = await evaluation.list_accuracy_evaluation_runs(request, page=1, page_size=1)
     detail_response = await evaluation.get_accuracy_evaluation_run_detail("run_1", request)
     missing_response = await evaluation.get_accuracy_evaluation_run_detail("missing", request)
 
     async with eval_db() as session:
         run_row = (await session.execute(select(ChatDataEvalRun).filter_by(run_id="run_1"))).scalar_one()
-        case_rows = (await session.execute(select(ChatDataEvalRunCase).filter_by(run_id="run_1").order_by(ChatDataEvalRunCase.case_id))).scalars().all()
+        case_rows = (
+            (
+                await session.execute(
+                    select(ChatDataEvalRunCase).filter_by(run_id="run_1").order_by(ChatDataEvalRunCase.case_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     list_payload = json.loads(list_response.body.decode("utf-8"))
     list_all_payload = json.loads(list_all_response.body.decode("utf-8"))
@@ -617,9 +702,17 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
 def test_run_accuracy_stream_returns_auth_error(monkeypatch):
     from fastapi import HTTPException
 
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: (_ for _ in ()).throw(HTTPException(status_code=401, detail="未登录")))
+    monkeypatch.setattr(
+        evaluation,
+        "_get_current_user",
+        lambda _request: (_ for _ in ()).throw(HTTPException(status_code=401, detail="未登录")),
+    )
 
-    response = asyncio.run(evaluation.run_accuracy_evaluation_stream(AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None))
+    response = asyncio.run(
+        evaluation.run_accuracy_evaluation_stream(
+            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None
+        )
+    )
     chunks = asyncio.run(_collect(response.body_iterator))
 
     assert "未登录" in "".join(chunks)
@@ -642,21 +735,29 @@ def test_accuracy_sse_iter_handles_value_and_runtime_errors(monkeypatch):
     monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
     monkeypatch.setattr(evaluation, "_build_accuracy_runner_args", raise_value_error)
 
-    value_events = asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        request=None,
-        current_user=SimpleNamespace(user_id="u1"),
-    )))
+    value_events = asyncio.run(
+        _collect(
+            evaluation._iter_accuracy_evaluation_sse(
+                AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                request=None,
+                current_user=SimpleNamespace(user_id="u1"),
+            )
+        )
+    )
 
     async def raise_runtime_error(_payload, _current_user):
         raise RuntimeError("runner down")
 
     monkeypatch.setattr(evaluation, "_build_accuracy_runner_args", raise_runtime_error)
-    runtime_events = asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        request=None,
-        current_user=SimpleNamespace(user_id="u1"),
-    )))
+    runtime_events = asyncio.run(
+        _collect(
+            evaluation._iter_accuracy_evaluation_sse(
+                AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                request=None,
+                current_user=SimpleNamespace(user_id="u1"),
+            )
+        )
+    )
 
     assert "测试集为空" in "".join(value_events)
     assert "评测失败: runner down" in "".join(runtime_events)
@@ -692,28 +793,46 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
     request = SimpleNamespace()
     monkeypatch.setattr(evaluation, "_build_evaluation_service", lambda: FakeEvaluationService())
     monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
+    monkeypatch.setattr(
+        evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员")
+    )
 
-    normal_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
-        request,
-        datasource_id="ds_a",
-        semantic_config_id="cfg_private",
-    )))
-    normal_public_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
-        request,
-        datasource_id="ds_a",
-        semantic_config_id="cfg_public",
-    )))
-    admin_list = _json_body(asyncio.run(evaluation.list_admin_accuracy_evaluation_runs(
-        request,
-        datasource_id="ds_a",
-        semantic_config_id="cfg_public",
-    )))
-    admin_private_list = _json_body(asyncio.run(evaluation.list_admin_accuracy_evaluation_runs(
-        request,
-        datasource_id="ds_a",
-        semantic_config_id="cfg_private",
-    )))
+    normal_list = _json_body(
+        asyncio.run(
+            evaluation.list_accuracy_evaluation_runs(
+                request,
+                datasource_id="ds_a",
+                semantic_config_id="cfg_private",
+            )
+        )
+    )
+    normal_public_list = _json_body(
+        asyncio.run(
+            evaluation.list_accuracy_evaluation_runs(
+                request,
+                datasource_id="ds_a",
+                semantic_config_id="cfg_public",
+            )
+        )
+    )
+    admin_list = _json_body(
+        asyncio.run(
+            evaluation.list_admin_accuracy_evaluation_runs(
+                request,
+                datasource_id="ds_a",
+                semantic_config_id="cfg_public",
+            )
+        )
+    )
+    admin_private_list = _json_body(
+        asyncio.run(
+            evaluation.list_admin_accuracy_evaluation_runs(
+                request,
+                datasource_id="ds_a",
+                semantic_config_id="cfg_private",
+            )
+        )
+    )
     normal_detail = _json_body(asyncio.run(evaluation.get_accuracy_evaluation_run_detail("private_run", request)))
     admin_detail = _json_body(asyncio.run(evaluation.get_admin_accuracy_evaluation_run_detail("public_run", request)))
     wrong_detail = _json_body(asyncio.run(evaluation.get_accuracy_evaluation_run_detail("public_run", request)))
@@ -732,19 +851,29 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
 def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
     from fastapi import HTTPException
 
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员")
+    )
+    monkeypatch.setattr(
+        evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
 
     async def fake_run(payload, request, current_user):
         return {"summary": {"total": payload.limit}, "user": current_user.username}
 
     monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", fake_run)
-    stream_response = asyncio.run(evaluation.run_accuracy_evaluation_stream(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        None,
-    ))
+    stream_response = asyncio.run(
+        evaluation.run_accuracy_evaluation_stream(
+            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+            None,
+        )
+    )
 
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: (_ for _ in ()).throw(HTTPException(status_code=403, detail="无权限")))
+    monkeypatch.setattr(
+        evaluation,
+        "_get_current_user",
+        lambda _request: (_ for _ in ()).throw(HTTPException(status_code=403, detail="无权限")),
+    )
     assert stream_response.media_type == "text/event-stream"
     assert stream_response.headers["Cache-Control"] == "no-cache"
 
@@ -772,15 +901,21 @@ def test_build_accuracy_runner_args_and_cases_validate_required_scene(monkeypatc
         return cases[:1]
 
     monkeypatch.setattr(evaluation, "_load_scene_runner_cases", fake_load_cases)
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        select_cases=fake_select,
-        validate_cases=fake_validate,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            select_cases=fake_select,
+            validate_cases=fake_validate,
+        ),
+    )
 
-    selected = asyncio.run(evaluation._load_accuracy_runner_cases(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        SimpleNamespace(limit=1),
-    ))
+    selected = asyncio.run(
+        evaluation._load_accuracy_runner_cases(
+            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+            SimpleNamespace(limit=1),
+        )
+    )
 
     assert selected == [{"id": "case_1"}]
     assert calls == [
@@ -820,29 +955,41 @@ def test_run_accuracy_evaluation_payload_success_and_failure(monkeypatch):
     monkeypatch.setattr(evaluation, "_load_accuracy_runner_cases", fake_cases)
     monkeypatch.setattr(evaluation, "_upsert_eval_run_case_record", fake_upsert)
     monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        run_live_score=fake_run_live_score,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            run_live_score=fake_run_live_score,
+        ),
+    )
 
-    report = asyncio.run(evaluation._run_accuracy_evaluation_payload(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        request=None,
-        current_user=SimpleNamespace(user_id="u1", username="测试人员"),
-    ))
+    report = asyncio.run(
+        evaluation._run_accuracy_evaluation_payload(
+            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+            request=None,
+            current_user=SimpleNamespace(user_id="u1", username="测试人员"),
+        )
+    )
 
     async def raise_run_live_score(_args, _cases):
         raise RuntimeError("runner failed")
 
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        run_live_score=raise_run_live_score,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            run_live_score=raise_run_live_score,
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="runner failed"):
-        asyncio.run(evaluation._run_accuracy_evaluation_payload(
-            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-            request=None,
-            current_user=SimpleNamespace(user_id="u1", username="测试人员"),
-        ))
+        asyncio.run(
+            evaluation._run_accuracy_evaluation_payload(
+                AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                request=None,
+                current_user=SimpleNamespace(user_id="u1", username="测试人员"),
+            )
+        )
 
     assert report["summary"]["semantic_accuracy"] == 1
     assert ("upsert", "run_payload", "case_1", 1) in calls
@@ -874,16 +1021,24 @@ def test_accuracy_sse_iter_handles_cancelled(monkeypatch):
     monkeypatch.setattr(evaluation, "_build_accuracy_runner_args", fake_args)
     monkeypatch.setattr(evaluation, "_load_accuracy_runner_cases", fake_cases)
     monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        iter_accuracy_evaluation_events=fake_iter,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            iter_accuracy_evaluation_events=fake_iter,
+        ),
+    )
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
-            AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-            request=None,
-            current_user=SimpleNamespace(user_id="u1"),
-        )))
+        asyncio.run(
+            _collect(
+                evaluation._iter_accuracy_evaluation_sse(
+                    AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+                    request=None,
+                    current_user=SimpleNamespace(user_id="u1"),
+                )
+            )
+        )
 
     assert updates == [("run_cancel", {"status": "cancelled", "error_message": "评测已停止"})]
 
@@ -892,29 +1047,41 @@ def test_compile_scene_case_gold_sql_success_and_error(monkeypatch):
     async def fake_compile_success(**kwargs):
         return {"success": True, "sql": "select sum(amount) from orders", "seen": kwargs}
 
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        compile_dsl_locally=fake_compile_success,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            compile_dsl_locally=fake_compile_success,
+        ),
+    )
 
-    compiled = asyncio.run(evaluation._compile_scene_case_gold_sql(
-        "ds_a",
-        "cfg_a",
-        {"id": "case_1", "nl": "查询销售额", "gold_dsl": {"metrics": ["销售额"]}},
-    ))
+    compiled = asyncio.run(
+        evaluation._compile_scene_case_gold_sql(
+            "ds_a",
+            "cfg_a",
+            {"id": "case_1", "nl": "查询销售额", "gold_dsl": {"metrics": ["销售额"]}},
+        )
+    )
 
     async def fake_compile_error(**_kwargs):
         return {"success": False, "error": "字段不存在"}
 
-    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
-        compile_dsl_locally=fake_compile_error,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "apps.chat_data_app.evaluate.accuracy.runner",
+        SimpleNamespace(
+            compile_dsl_locally=fake_compile_error,
+        ),
+    )
 
     with pytest.raises(ValueError, match="字段不存在"):
-        asyncio.run(evaluation._compile_scene_case_gold_sql(
-            "ds_a",
-            "cfg_a",
-            {"id": "case_2", "nl": "查询订单数", "gold_dsl": {"metrics": ["订单数"]}},
-        ))
+        asyncio.run(
+            evaluation._compile_scene_case_gold_sql(
+                "ds_a",
+                "cfg_a",
+                {"id": "case_2", "nl": "查询订单数", "gold_dsl": {"metrics": ["订单数"]}},
+            )
+        )
 
     assert compiled["gold_sql"] == "select sum(amount) from orders"
 
@@ -948,56 +1115,74 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
         }
 
     monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
+    monkeypatch.setattr(
+        evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员")
+    )
     monkeypatch.setattr(evaluation, "_compile_scene_case_gold_sql", fake_compile)
     monkeypatch.setattr(evaluation, "_generate_draft_case_by_llm", fake_generate)
-    monkeypatch.setattr(evaluation, "_build_seed_case_candidates", lambda _config_id, _config, domain: [{
-        "id": "seed_1",
-        "nl": "查询销售额",
-        "gold_dsl": {"metrics": ["销售额"]},
-        "gold_sql": "",
-        "query_type": "aggregation",
-        "difficulty": "easy",
-        "source": "llm",
-        "business_domain": domain,
-    }])
+    monkeypatch.setattr(
+        evaluation,
+        "_build_seed_case_candidates",
+        lambda _config_id, _config, domain: [
+            {
+                "id": "seed_1",
+                "nl": "查询销售额",
+                "gold_dsl": {"metrics": ["销售额"]},
+                "gold_sql": "",
+                "query_type": "aggregation",
+                "difficulty": "easy",
+                "source": "llm",
+                "business_domain": domain,
+            }
+        ],
+    )
 
     upsert_payload = AccuracyEvaluationCasesUpsertRequest(
         business_domain="订单分析",
-        cases=[{"id": "case_1", "nl": "查询销售额", "gold_dsl": {"metrics": ["销售额"]}, "business_domain": "订单分析"}],
+        cases=[
+            {"id": "case_1", "nl": "查询销售额", "gold_dsl": {"metrics": ["销售额"]}, "business_domain": "订单分析"}
+        ],
     )
     request = SimpleNamespace()
     save_response = asyncio.run(evaluation.save_scene_evaluation_cases("ds_a", "cfg_a", upsert_payload, request))
     get_response = asyncio.run(evaluation.get_scene_evaluation_cases("ds_a", "cfg_a", request))
     generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "cfg_a", request))
-    draft_response = asyncio.run(evaluation.draft_scene_evaluation_case(
-        "ds_a",
-        "cfg_a",
-        AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
-        request,
-    ))
+    draft_response = asyncio.run(
+        evaluation.draft_scene_evaluation_case(
+            "ds_a",
+            "cfg_a",
+            AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
+            request,
+        )
+    )
     missing_generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "missing", request))
-    missing_draft_response = asyncio.run(evaluation.draft_scene_evaluation_case(
-        "ds_a",
-        "missing",
-        AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
-        request,
-    ))
-    bad_save_response = asyncio.run(evaluation.save_scene_evaluation_cases(
-        "ds_a",
-        "cfg_a",
-        AccuracyEvaluationCasesUpsertRequest(
-            business_domain="订单分析",
-            cases=[{"id": "bad_compile", "nl": "查询坏用例", "gold_dsl": {}, "business_domain": "订单分析"}],
-        ),
-        request,
-    ))
-    bad_draft_response = asyncio.run(evaluation.draft_scene_evaluation_case(
-        "ds_a",
-        "cfg_a",
-        AccuracyEvaluationDraftCaseRequest(hint="bad", existing_questions=[]),
-        request,
-    ))
+    missing_draft_response = asyncio.run(
+        evaluation.draft_scene_evaluation_case(
+            "ds_a",
+            "missing",
+            AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
+            request,
+        )
+    )
+    bad_save_response = asyncio.run(
+        evaluation.save_scene_evaluation_cases(
+            "ds_a",
+            "cfg_a",
+            AccuracyEvaluationCasesUpsertRequest(
+                business_domain="订单分析",
+                cases=[{"id": "bad_compile", "nl": "查询坏用例", "gold_dsl": {}, "business_domain": "订单分析"}],
+            ),
+            request,
+        )
+    )
+    bad_draft_response = asyncio.run(
+        evaluation.draft_scene_evaluation_case(
+            "ds_a",
+            "cfg_a",
+            AccuracyEvaluationDraftCaseRequest(hint="bad", existing_questions=[]),
+            request,
+        )
+    )
     boom_save_response = asyncio.run(evaluation.save_scene_evaluation_cases("ds_a", "boom", upsert_payload, request))
 
     save_payload = _json_body(save_response)
@@ -1027,25 +1212,32 @@ async def test_eval_run_record_update_missing_and_payload_edge_cases(eval_db):
         AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
         SimpleNamespace(user_id="", username=""),
     )
-    await evaluation._update_eval_run_record("run_edge", status="running", summary={"total": 3, "scored": 1, "failed": 2, "semantic_accuracy": "bad"}, error_message="")
+    await evaluation._update_eval_run_record(
+        "run_edge",
+        status="running",
+        summary={"total": 3, "scored": 1, "failed": 2, "semantic_accuracy": "bad"},
+        error_message="",
+    )
     await evaluation._upsert_eval_run_case_record("run_edge", "case_raw", {"semantic_accuracy": 1, "result": "ok"})
 
     async with eval_db() as session:
         run_row = (await session.execute(select(ChatDataEvalRun).filter_by(run_id="run_edge"))).scalar_one()
 
     payload = evaluation._eval_run_row_to_payload(run_row)
-    case_payload = evaluation._eval_run_case_row_to_payload(SimpleNamespace(
-        run_case_id="rc_raw",
-        run_id="run_edge",
-        case_id="case_raw",
-        case_status="passed",
-        result_payload='"raw-result"',
-        semantic_accuracy_bp=10000,
-        elapsed_ms=None,
-        error_message=None,
-        create_time=None,
-        update_time=None,
-    ))
+    case_payload = evaluation._eval_run_case_row_to_payload(
+        SimpleNamespace(
+            run_case_id="rc_raw",
+            run_id="run_edge",
+            case_id="case_raw",
+            case_status="passed",
+            result_payload='"raw-result"',
+            semantic_accuracy_bp=10000,
+            elapsed_ms=None,
+            error_message=None,
+            create_time=None,
+            update_time=None,
+        )
+    )
 
     assert run_row.finished_time is None
     assert run_row.passed_count == 0

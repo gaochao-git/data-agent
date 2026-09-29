@@ -317,7 +317,9 @@ def emit_llm_connection_alarm_if_needed(exc: BaseException, *, ext1: Any = None,
     return True
 
 
-def emit_llm_first_token_timeout_alarm(*, elapsed_ms: int, threshold_seconds: int, ext1: Any = None, ext2: Any = None) -> None:
+def emit_llm_first_token_timeout_alarm(
+    *, elapsed_ms: int, threshold_seconds: int, ext1: Any = None, ext2: Any = None
+) -> None:
     emit_alarm(
         "大模型首 token 超时",
         alarm_id="LLM_EXCEPTION",

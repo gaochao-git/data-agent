@@ -41,9 +41,7 @@ async def test_parse_document_success(tmp_path, monkeypatch):
         assert path.name == "a.txt"
         return "# parsed"
 
-    monkeypatch.setattr(
-        parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse
-    )
+    monkeypatch.setattr(parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse)
     tool = create_parse_document_tool(runtime)[0]
     result = await tool.ainvoke(
         {
@@ -68,9 +66,7 @@ async def test_parse_document_success_falls_back_to_target_path(tmp_path, monkey
     async def _fake_write(*, file_path, content, mode):
         return {}
 
-    monkeypatch.setattr(
-        parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse
-    )
+    monkeypatch.setattr(parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse)
     monkeypatch.setattr(runtime, "write_text_file", _fake_write)
     tool = create_parse_document_tool(runtime)[0]
     result = await tool.ainvoke(
@@ -157,9 +153,7 @@ async def test_parse_document_write_failure(tmp_path, monkeypatch):
     async def _fake_parse(path):
         return "content"
 
-    monkeypatch.setattr(
-        parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse
-    )
+    monkeypatch.setattr(parse_document_module, "parse_uploaded_file_to_markdown", _fake_parse)
     tool = create_parse_document_tool(runtime)[0]
     result = await tool.ainvoke(
         {
@@ -175,6 +169,7 @@ async def test_parse_document_write_failure(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # 扫描版 PDF 兜底:文本层为空时走视觉转写
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_parse_document_pdf_falls_back_to_vision_transcribe(tmp_path, monkeypatch):
@@ -193,12 +188,8 @@ async def test_parse_document_pdf_falls_back_to_vision_transcribe(tmp_path, monk
     async def _fake_transcribe(path):
         return "## 第 1 页\n\n扫描转写内容"
 
-    monkeypatch.setattr(
-        parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse
-    )
-    monkeypatch.setattr(
-        parse_document_module, "transcribe_scanned_pdf", _fake_transcribe
-    )
+    monkeypatch.setattr(parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse)
+    monkeypatch.setattr(parse_document_module, "transcribe_scanned_pdf", _fake_transcribe)
     tool = create_parse_document_tool(runtime)[0]
     result = await tool.ainvoke(
         {
@@ -222,12 +213,8 @@ async def test_parse_document_non_pdf_empty_extraction_not_transcribed(tmp_path,
     async def _should_not_be_called(path):
         raise AssertionError("非 PDF 不应触发视觉转写")
 
-    monkeypatch.setattr(
-        parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse
-    )
-    monkeypatch.setattr(
-        parse_document_module, "transcribe_scanned_pdf", _should_not_be_called
-    )
+    monkeypatch.setattr(parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse)
+    monkeypatch.setattr(parse_document_module, "transcribe_scanned_pdf", _should_not_be_called)
     tool = create_parse_document_tool(runtime)[0]
     result = await tool.ainvoke(
         {

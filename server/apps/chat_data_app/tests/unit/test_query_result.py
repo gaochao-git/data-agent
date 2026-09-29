@@ -103,107 +103,129 @@ def test_build_sql_task_results_merges_execution_metadata_and_normalizes_status(
     results = QueryTaskService.build_sql_task_results(
         {
             "sql": "select * from orders",
-            "results": [{
+            "results": [
+                {
+                    "member_datasource_id": "m1",
+                    "member_name": "杭州库",
+                    "success": True,
+                    "columns": ["id"],
+                    "data": [{"id": 1}],
+                    "total_count": 1,
+                    "execution_time_ms": 12,
+                    "error": None,
+                }
+            ],
+        },
+        [
+            {
+                "execution_id": "exec_1",
                 "member_datasource_id": "m1",
                 "member_name": "杭州库",
-                "success": True,
-                "columns": ["id"],
-                "data": [{"id": 1}],
-                "total_count": 1,
-                "execution_time_ms": 12,
-                "error": None,
-            }],
-        },
-        [{
-            "execution_id": "exec_1",
-            "member_datasource_id": "m1",
-            "member_name": "杭州库",
-            "executor_type": "direct",
-            "sql_status": "succeeded",
-            "remote_task_id": "",
-            "db_connection_id": "conn_1",
-            "query": "select * from orders",
-            "started_time": "2026-07-16T10:00:00",
-            "finished_time": "2026-07-16T10:00:01",
-        }],
+                "executor_type": "direct",
+                "sql_status": "succeeded",
+                "remote_task_id": "",
+                "db_connection_id": "conn_1",
+                "query": "select * from orders",
+                "started_time": "2026-07-16T10:00:00",
+                "finished_time": "2026-07-16T10:00:01",
+            }
+        ],
     )
 
-    assert results == [{
-        "member_datasource_id": "m1",
-        "member_name": "杭州库",
-        "status": "succeeded",
-        "columns": ["id"],
-        "data": [{"id": 1}],
-        "total_count": 1,
-        "execution_time_ms": 12,
-        "error": None,
-        "execution_id": "exec_1",
-        "executor_type": "direct",
-        "remote_task_id": "",
-        "db_connection_id": "conn_1",
-        "sql": "select * from orders",
-        "started_time": "2026-07-16T10:00:00",
-        "finished_time": "2026-07-16T10:00:01",
-    }]
+    assert results == [
+        {
+            "member_datasource_id": "m1",
+            "member_name": "杭州库",
+            "status": "succeeded",
+            "columns": ["id"],
+            "data": [{"id": 1}],
+            "total_count": 1,
+            "execution_time_ms": 12,
+            "error": None,
+            "execution_id": "exec_1",
+            "executor_type": "direct",
+            "remote_task_id": "",
+            "db_connection_id": "conn_1",
+            "sql": "select * from orders",
+            "started_time": "2026-07-16T10:00:00",
+            "finished_time": "2026-07-16T10:00:01",
+        }
+    ]
     assert "success" not in results[0]
 
 
 def test_build_sql_task_results_uses_execution_rows_while_task_is_running():
-    results = QueryTaskService.build_sql_task_results(None, [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "杭州库",
-        "executor_type": "http",
-        "sql_status": "running",
-        "remote_task_id": "remote_1",
-        "db_connection_id": "",
-        "query": "select 1",
-    }])
+    results = QueryTaskService.build_sql_task_results(
+        None,
+        [
+            {
+                "execution_id": "exec_1",
+                "member_datasource_id": "m1",
+                "member_name": "杭州库",
+                "executor_type": "http",
+                "sql_status": "running",
+                "remote_task_id": "remote_1",
+                "db_connection_id": "",
+                "query": "select 1",
+            }
+        ],
+    )
 
-    assert results == [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "杭州库",
-        "executor_type": "http",
-        "remote_task_id": "remote_1",
-        "db_connection_id": "",
-        "status": "running",
-        "sql": "select 1",
-        "columns": [],
-        "data": [],
-        "total_count": 0,
-        "error": None,
-    }]
+    assert results == [
+        {
+            "execution_id": "exec_1",
+            "member_datasource_id": "m1",
+            "member_name": "杭州库",
+            "executor_type": "http",
+            "remote_task_id": "remote_1",
+            "db_connection_id": "",
+            "status": "running",
+            "sql": "select 1",
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+            "error": None,
+        }
+    ]
 
 
 def test_build_sql_task_results_keeps_failed_execution_error_without_task_payload():
-    results = QueryTaskService.build_sql_task_results(None, [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "机构1",
-        "sql_status": "failed",
-        "sql_text": "select * from orders limit1 100",
-        "error_message": "SQL 语法错误",
-    }])
+    results = QueryTaskService.build_sql_task_results(
+        None,
+        [
+            {
+                "execution_id": "exec_1",
+                "member_datasource_id": "m1",
+                "member_name": "机构1",
+                "sql_status": "failed",
+                "sql_text": "select * from orders limit1 100",
+                "error_message": "SQL 语法错误",
+            }
+        ],
+    )
 
-    assert results == [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "机构1",
-        "status": "failed",
-        "sql": "select * from orders limit1 100",
-        "columns": [],
-        "data": [],
-        "total_count": 0,
-        "error": "SQL 语法错误",
-    }]
+    assert results == [
+        {
+            "execution_id": "exec_1",
+            "member_datasource_id": "m1",
+            "member_name": "机构1",
+            "status": "failed",
+            "sql": "select * from orders limit1 100",
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+            "error": "SQL 语法错误",
+        }
+    ]
 
 
 def test_cancel_query_executions_continues_when_one_execution_stops_with_error():
     updates = []
 
     class HistoryService:
-        async def cancel_query_execution_for_batch(self, execution, *, cancel_execution, update_execution, operator_name=None):
+        async def cancel_query_execution_for_batch(
+            self, execution, *, cancel_execution, update_execution, operator_name=None
+        ):
             try:
                 return await cancel_execution(execution, operator_name=operator_name)
             except Exception:
@@ -229,46 +251,60 @@ def test_cancel_query_executions_continues_when_one_execution_stops_with_error()
     service.cancel_query_execution = cancel_execution
     service.update_query_execution = update_execution
 
-    results = asyncio.run(service.cancel_query_executions([
-        SimpleNamespace(execution_id="exec_failed"),
-        SimpleNamespace(execution_id="exec_ok"),
-    ]))
+    results = asyncio.run(
+        service.cancel_query_executions(
+            [
+                SimpleNamespace(execution_id="exec_failed"),
+                SimpleNamespace(execution_id="exec_ok"),
+            ]
+        )
+    )
 
     assert [item["status"] for item in results] == ["kill_failed", "cancelled"]
     assert updates == [("exec_failed", {"sql_status": "kill_failed"})]
 
 
 def test_build_sql_task_results_reads_sql_text_from_execution_rows():
-    results = QueryTaskService.build_sql_task_results(None, [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "杭州库",
-        "sql_status": "running",
-        "sql_text": "select * from orders",
-    }])
+    results = QueryTaskService.build_sql_task_results(
+        None,
+        [
+            {
+                "execution_id": "exec_1",
+                "member_datasource_id": "m1",
+                "member_name": "杭州库",
+                "sql_status": "running",
+                "sql_text": "select * from orders",
+            }
+        ],
+    )
 
     assert results[0]["sql"] == "select * from orders"
 
 
 def test_build_sql_task_results_uses_execution_result_payload_when_task_payload_missing():
-    results = QueryTaskService.build_sql_task_results(None, [{
-        "execution_id": "exec_1",
-        "member_datasource_id": "m1",
-        "member_name": "杭州库",
-        "sql_status": "succeeded",
-        "query": "select id from orders",
-        "result_payload": {
-            "status": "succeeded",
-            "columns": ["id"],
-            "data": [{"id": 1}],
-            "total_count": 1,
-            "execution_time_ms": 9,
-            "error": None,
-            "cache_hit": True,
-            "cache_age_seconds": 3,
-            "cache_expires_in_seconds": 30,
-        },
-    }])
+    results = QueryTaskService.build_sql_task_results(
+        None,
+        [
+            {
+                "execution_id": "exec_1",
+                "member_datasource_id": "m1",
+                "member_name": "杭州库",
+                "sql_status": "succeeded",
+                "query": "select id from orders",
+                "result_payload": {
+                    "status": "succeeded",
+                    "columns": ["id"],
+                    "data": [{"id": 1}],
+                    "total_count": 1,
+                    "execution_time_ms": 9,
+                    "error": None,
+                    "cache_hit": True,
+                    "cache_age_seconds": 3,
+                    "cache_expires_in_seconds": 30,
+                },
+            }
+        ],
+    )
 
     assert results[0]["columns"] == ["id"]
     assert results[0]["data"] == [{"id": 1}]

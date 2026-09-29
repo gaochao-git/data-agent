@@ -56,6 +56,7 @@ def build_composite_config() -> dict:
 # query_plan：formula 解析
 # ---------------------------------------------------------------------------
 
+
 def test_parse_formula_refs_ordered_dedup():
     assert parse_formula_refs("{B} + {A} - {B}") == ["B", "A"]
 
@@ -78,6 +79,7 @@ def test_is_composite_metric():
 # plan_builder：解析与代入
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_composite_metric_returns_members_and_table():
     config = build_composite_config()
     metrics_map = {m["name"]: m for m in config["metrics"]}
@@ -98,7 +100,8 @@ def test_resolve_composite_metric_non_composite_returns_none():
 def test_resolve_composite_metric_rejects_formula_without_refs():
     with pytest.raises(ValueError, match="没有任何"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "1 + 2"}, {},
+            {"name": "X", "metric_kind": "composite", "formula": "1 + 2"},
+            {},
         )
 
 
@@ -107,7 +110,8 @@ def test_resolve_composite_metric_rejects_missing_ref():
     metrics_map = {m["name"]: m for m in config["metrics"]}
     with pytest.raises(ValueError, match="引用的指标不存在"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "{不存在} + 1"}, metrics_map,
+            {"name": "X", "metric_kind": "composite", "formula": "{不存在} + 1"},
+            metrics_map,
         )
 
 
@@ -116,7 +120,8 @@ def test_resolve_composite_metric_rejects_composite_ref():
     metrics_map = {m["name"]: m for m in config["metrics"]}
     with pytest.raises(ValueError, match="不能引用其他复合指标"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "{客单价} + 1"}, metrics_map,
+            {"name": "X", "metric_kind": "composite", "formula": "{客单价} + 1"},
+            metrics_map,
         )
 
 
@@ -127,7 +132,8 @@ def test_resolve_composite_metric_rejects_derived_ref():
     }
     with pytest.raises(ValueError, match="暂不支持派生指标"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "{派生} + 1"}, metrics_map,
+            {"name": "X", "metric_kind": "composite", "formula": "{派生} + 1"},
+            metrics_map,
         )
 
 
@@ -135,7 +141,8 @@ def test_resolve_composite_metric_rejects_raw_ref():
     metrics_map = {"原始值": {"name": "原始值", "expression": "order_id", "table": "orders"}}
     with pytest.raises(ValueError, match="不是聚合指标"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "{原始值} + 1"}, metrics_map,
+            {"name": "X", "metric_kind": "composite", "formula": "{原始值} + 1"},
+            metrics_map,
         )
 
 
@@ -146,23 +153,30 @@ def test_resolve_composite_metric_rejects_cross_table_members():
     }
     with pytest.raises(ValueError, match="跨表"):
         resolve_composite_metric(
-            {"name": "X", "metric_kind": "composite", "formula": "{A} / {B}"}, metrics_map,
+            {"name": "X", "metric_kind": "composite", "formula": "{A} / {B}"},
+            metrics_map,
         )
 
 
 def test_substitute_composite_formula_wraps_division_with_nullif():
-    sql = substitute_composite_formula("{A} / {B}", [
-        {"name": "A", "expression": "SUM(t.a)"},
-        {"name": "B", "expression": "COUNT(t.b)"},
-    ])
+    sql = substitute_composite_formula(
+        "{A} / {B}",
+        [
+            {"name": "A", "expression": "SUM(t.a)"},
+            {"name": "B", "expression": "COUNT(t.b)"},
+        ],
+    )
     assert sql == "SUM(t.a) / NULLIF(COUNT(t.b), 0)"
 
 
 def test_substitute_composite_formula_keeps_addition():
-    sql = substitute_composite_formula("{A} + {B} * 2", [
-        {"name": "A", "expression": "SUM(t.a)"},
-        {"name": "B", "expression": "SUM(t.b)"},
-    ])
+    sql = substitute_composite_formula(
+        "{A} + {B} * 2",
+        [
+            {"name": "A", "expression": "SUM(t.a)"},
+            {"name": "B", "expression": "SUM(t.b)"},
+        ],
+    )
     assert sql == "SUM(t.a) + SUM(t.b) * 2"
 
 
@@ -175,7 +189,8 @@ def test_composite_metric_verbalization_with_members():
 
 def test_composite_metric_verbalization_without_members():
     verbal = composite_metric_verbalization(
-        {"name": "X", "metric_kind": "composite", "formula": "{A} / {B}"}, {},
+        {"name": "X", "metric_kind": "composite", "formula": "{A} / {B}"},
+        {},
     )
     assert verbal == "A / B"
 
@@ -184,9 +199,19 @@ def test_composite_metric_verbalization_without_members():
 # config_validator：复合指标结构校验
 # ---------------------------------------------------------------------------
 
-DATASOURCE = {"ds_tables": [{"table_name": "orders", "columns": [
-    {"name": "amount"}, {"name": "cost"}, {"name": "order_id"}, {"name": "category_name"},
-]}]}
+DATASOURCE = {
+    "ds_tables": [
+        {
+            "table_name": "orders",
+            "columns": [
+                {"name": "amount"},
+                {"name": "cost"},
+                {"name": "order_id"},
+                {"name": "category_name"},
+            ],
+        }
+    ]
+}
 
 
 def validate(metrics, dimensions):
@@ -256,7 +281,8 @@ def test_validator_rejects_composite_derived_ref():
         "base_metric": "销售额",
     }
     error = validate(
-        [*base_metrics(), derived_metric, composite(formula="{本月成交额} + 1")], [],
+        [*base_metrics(), derived_metric, composite(formula="{本月成交额} + 1")],
+        [],
     )
     assert "暂不支持派生指标" in error
 
@@ -269,10 +295,12 @@ def test_validator_rejects_composite_raw_ref():
 
 def test_validator_rejects_composite_cross_table():
     other_metric = {"name": "其他额", "expression": "SUM(other.cost)", "table": "other"}
-    datasource = {"ds_tables": [
-        {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "order_id"}]},
-        {"table_name": "other", "columns": [{"name": "cost"}]},
-    ]}
+    datasource = {
+        "ds_tables": [
+            {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "order_id"}]},
+            {"table_name": "other", "columns": [{"name": "cost"}]},
+        ]
+    }
     error = first_structure_error(
         [*base_metrics(), other_metric, composite(formula="{销售额} / {其他额}")],
         [],
@@ -285,6 +313,7 @@ def test_validator_rejects_composite_cross_table():
 # ---------------------------------------------------------------------------
 # AI 适配器：SQL 生成
 # ---------------------------------------------------------------------------
+
 
 def ai_sql(config, payload):
     result = SemanticAIQueryAdapter(config).generate_sql(
@@ -316,11 +345,14 @@ def test_ai_composite_metric_with_dimension_and_atomic_mix():
 
 def test_ai_composite_metric_order_by():
     config = build_composite_config()
-    sql = ai_sql(config, {
-        "metrics": ["客单价"],
-        "dimensions": ["产品分类"],
-        "order_by": [{"field": "客单价", "direction": "DESC"}],
-    })
+    sql = ai_sql(
+        config,
+        {
+            "metrics": ["客单价"],
+            "dimensions": ["产品分类"],
+            "order_by": [{"field": "客单价", "direction": "DESC"}],
+        },
+    )
     assert "ORDER BY" in sql
     assert "客单价" in sql
 
@@ -328,11 +360,18 @@ def test_ai_composite_metric_order_by():
 def test_ai_invalid_composite_fails_gracefully():
     """配置无效的复合指标降级为不可选，返回友好错误而不是异常。"""
     config = build_composite_config()
-    config["metrics"].append({
-        "name": "坏复合", "metric_kind": "composite", "formula": "{不存在} / 2",
-    })
+    config["metrics"].append(
+        {
+            "name": "坏复合",
+            "metric_kind": "composite",
+            "formula": "{不存在} / 2",
+        }
+    )
     result = SemanticAIQueryAdapter(config).generate_sql(
-        metrics=["坏复合"], dimensions=[], filters=[], having=[],
+        metrics=["坏复合"],
+        dimensions=[],
+        filters=[],
+        having=[],
     )
     assert result["success"] is False
     assert "至少需要一个指标" in result["error"]
@@ -342,12 +381,15 @@ def test_ai_invalid_composite_fails_gracefully():
 # BI 适配器：查询计划
 # ---------------------------------------------------------------------------
 
+
 def test_bi_composite_metric_maps_to_raw_expression():
     config = build_composite_config()
-    plan = SemanticBIQueryAdapter(config).adapt({
-        "aggregations": [{"semanticName": "客单价", "alias": "客单价"}],
-        "dimensions": [{"semanticName": "产品分类"}],
-    })
+    plan = SemanticBIQueryAdapter(config).adapt(
+        {
+            "aggregations": [{"semanticName": "客单价", "alias": "客单价"}],
+            "dimensions": [{"semanticName": "产品分类"}],
+        }
+    )
     agg = plan["aggregations"][0]
     assert agg["func"] == "RAW"
     assert agg["column"] == "*"
@@ -358,23 +400,28 @@ def test_bi_composite_metric_maps_to_raw_expression():
 
 def test_bi_composite_metric_compiles_sql():
     config = build_composite_config()
-    result = SemanticBIQueryAdapter(config).compile({
-        "aggregations": [{"semanticName": "毛利率", "alias": "毛利率"}],
-    })
+    result = SemanticBIQueryAdapter(config).compile(
+        {
+            "aggregations": [{"semanticName": "毛利率", "alias": "毛利率"}],
+        }
+    )
     assert "(SUM(orders.amount) - SUM(orders.cost)) / NULLIF(SUM(orders.amount), 0)" in result["sql"]
 
 
 def test_bi_composite_metric_no_extra_filters():
     config = build_composite_config()
-    plan = SemanticBIQueryAdapter(config).adapt({
-        "aggregations": [{"semanticName": "客单价"}],
-    })
+    plan = SemanticBIQueryAdapter(config).adapt(
+        {
+            "aggregations": [{"semanticName": "客单价"}],
+        }
+    )
     assert plan["filters"] == []
 
 
 # ---------------------------------------------------------------------------
 # 周边消费：看板聚合判定 / 检索摘要 / Ossie 导出
 # ---------------------------------------------------------------------------
+
 
 def test_spec_service_treats_composite_metric_as_aggregate():
     composite_metric = next(m for m in build_composite_config()["metrics"] if m["name"] == "客单价")
@@ -412,8 +459,17 @@ def test_composite_metric_survives_request_model_and_save_validation():
         metric,
     ]
     dimensions = [{"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime"}]
-    datasource = {"ds_tables": [{"table_name": "orders", "columns": [
-        {"name": "amount"}, {"name": "order_id"}, {"name": "order_time"},
-    ]}]}
+    datasource = {
+        "ds_tables": [
+            {
+                "table_name": "orders",
+                "columns": [
+                    {"name": "amount"},
+                    {"name": "order_id"},
+                    {"name": "order_time"},
+                ],
+            }
+        ]
+    }
     error = first_structure_error(metrics, dimensions, [], table_columns_map=build_table_columns_map(datasource))
     assert error is None

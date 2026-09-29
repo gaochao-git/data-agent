@@ -10,6 +10,7 @@ runtime-skills 快照，不区分系统 / 用户类别）；磁盘真实管理�
 等多处各自硬编码副本，新增类别（如 team）时极易漏改导致后端行为漂移。
 现集中至此模块，全项目统一引用。
 """
+
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
@@ -70,11 +71,7 @@ def resolve_skill_snapshot_path(runtime_skills_dir: Path, path: str) -> tuple[Pa
     source_entry = Path(runtime_skills_dir) / name
     source_dir = source_entry.resolve()
     snapshot_root = Path(runtime_skills_dir).resolve()
-    if (
-        source_entry.is_symlink()
-        or not source_dir.is_dir()
-        or snapshot_root not in source_dir.parents
-    ):
+    if source_entry.is_symlink() or not source_dir.is_dir() or snapshot_root not in source_dir.parents:
         raise ValueError(f"技能不存在或无权限访问: {name}")
     relative_parts = parts[4:]
     if ".." in relative_parts:

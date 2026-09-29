@@ -51,9 +51,7 @@ def _workspace_request(monkeypatch, tmp_path):
 
 def _query_tool_message(query_result: dict) -> ToolMessage:
     return ToolMessage(
-        content=tool_results.build_internal_query_result(
-            query_result, query_mode="dsl2sql"
-        ),
+        content=tool_results.build_internal_query_result(query_result, query_mode="dsl2sql"),
         name="semantic_query_tool",
         tool_call_id="call_query",
     )
@@ -66,10 +64,10 @@ def _query_tool_message(query_result: dict) -> ToolMessage:
 
 def test_clip_text_to_chars_edge_cases():
     clip = tool_result._clip_text_to_chars
-    assert clip("", 10) == ""                       # 空内容原样返回
-    assert clip("abcdef", 0) == ""                  # 预算为 0
+    assert clip("", 10) == ""  # 空内容原样返回
+    assert clip("abcdef", 0) == ""  # 预算为 0
     assert clip("abcdef", -5) == ""
-    assert clip("abcdef", 100) == "abcdef"          # 未超预算
+    assert clip("abcdef", 100) == "abcdef"  # 未超预算
     # 预算小到放不下省略标记：直接按字符硬截
     assert clip("x" * 1000, 10) == "x" * 10
     # 预算足够：首尾各留一部分，中间插入省略标记
@@ -91,12 +89,7 @@ def test_read_tool_recovery_only_supports_paginated_reads_with_path():
     # 非分页读取工具：不产出恢复信息
     assert tool_result._read_tool_recovery("calculator_tool", _request(), "结果") is None
     # file_read 但没有 file_path：无法定位结果
-    assert (
-        tool_result._read_tool_recovery(
-            "file_read", _request(tool_call={"args": {}}), "结果"
-        )
-        is None
-    )
+    assert tool_result._read_tool_recovery("file_read", _request(tool_call={"args": {}}), "结果") is None
 
     recovery = tool_result._read_tool_recovery(
         "file_read",
@@ -104,8 +97,8 @@ def test_read_tool_recovery_only_supports_paginated_reads_with_path():
         "结果内容",
     )
     assert recovery["result_path"] == "/mnt/user-data/workspace/a.txt"
-    assert recovery["offset"] == 0          # 负数兜底为 0
-    assert recovery["limit"] == 200         # 非法值兜底为默认 200
+    assert recovery["offset"] == 0  # 负数兜底为 0
+    assert recovery["limit"] == 200  # 非法值兜底为默认 200
     assert recovery["result_size_chars"] == len("结果内容")
 
 
@@ -134,9 +127,7 @@ def test_replace_tool_message_without_updates_returns_same_instance():
 @pytest.mark.asyncio
 async def test_write_private_tool_result_requires_workspace_root():
     with pytest.raises(ValueError, match="缺少会话工作区"):
-        await tool_result._write_private_tool_result(
-            content="结果", suffix=".txt", request=_request()
-        )
+        await tool_result._write_private_tool_result(content="结果", suffix=".txt", request=_request())
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +145,13 @@ async def test_finalize_returns_message_when_content_is_not_serializable():
 async def test_query_failure_returns_structured_error_with_sql(monkeypatch, tmp_path):
     """查询未成功：带上 SQL 与错误信息，不做落盘。"""
     request, _paths = _workspace_request(monkeypatch, tmp_path)
-    message = _query_tool_message({
-        "status": "failed",
-        "sql": "select bad from t",
-        "error": "列不存在",
-    })
+    message = _query_tool_message(
+        {
+            "status": "failed",
+            "sql": "select bad from t",
+            "error": "列不存在",
+        }
+    )
 
     result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
@@ -174,11 +167,13 @@ async def test_query_failure_returns_structured_error_with_sql(monkeypatch, tmp_
 async def test_query_success_without_sql_omits_sql_from_meta(monkeypatch, tmp_path):
     """成功但无 SQL（如缓存命中）→ meta 里不应出现 sql 字段。"""
     request, _paths = _workspace_request(monkeypatch, tmp_path)
-    message = _query_tool_message({
-        "status": "succeeded",
-        "results": [{"status": "succeeded", "data": [{"value": 1}]}],
-        "total_count": 1,
-    })
+    message = _query_tool_message(
+        {
+            "status": "succeeded",
+            "results": [{"status": "succeeded", "data": [{"value": 1}]}],
+            "total_count": 1,
+        }
+    )
 
     result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)

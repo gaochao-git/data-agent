@@ -79,10 +79,12 @@ def _normalize_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
         if not enum_value or enum_value in seen_values:
             continue
         seen_values.add(enum_value)
-        enum_values.append({
-            "value": enum_value,
-            "label": str(item.get("label") or item.get("enum_label") or "").strip()[:255],
-        })
+        enum_values.append(
+            {
+                "value": enum_value,
+                "label": str(item.get("label") or item.get("enum_label") or "").strip()[:255],
+            }
+        )
     return enum_values
 
 
@@ -117,7 +119,12 @@ def _normalize_column_dict(raw_dict: Dict[str, Any] | None) -> Dict[str, Any]:
 def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:
     """判断字段数据字典是否为空。"""
     normalized = _normalize_column_dict(payload)
-    return not normalized["enum_values"] and not normalized["synonyms"] and not normalized["storage_format"] and not normalized["unit"]
+    return (
+        not normalized["enum_values"]
+        and not normalized["synonyms"]
+        and not normalized["storage_format"]
+        and not normalized["unit"]
+    )
 
 
 def _normalize_table_index_item(raw_item: Any) -> Optional[Dict[str, Any]]:
@@ -224,15 +231,13 @@ def _physical_indexes_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _merge_table_indexes_for_sync(table: Dict[str, Any], existing_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
     """Refresh physical metadata while retaining user-maintained indexes."""
     existing = _normalize_table_indexes_payload(existing_payload, table.get("columns"))
-    has_physical_metadata = any(
-        key in table for key in ("primary_keys", "unique_indexes", "indexes")
-    )
+    has_physical_metadata = any(key in table for key in ("primary_keys", "unique_indexes", "indexes"))
     physical = _physical_indexes_from_table(table) if has_physical_metadata else existing["physical"]
     return {"physical": physical, "manual": existing["manual"]}
 
 
 def _batch_items(items: List[Dict[str, Any]], batch_size: int = UPSERT_BATCH_SIZE) -> List[List[Dict[str, Any]]]:
-    return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
 def _build_source_line(host: Any, port: Any, database: Any) -> str | None:
@@ -327,7 +332,9 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
         parsed = _parse_source_line(source_text)
         if not parsed:
             return None
-    member_identity = _build_member_identity(source_type, normalized_query_executor_type, org_code, parsed.get("source_line"))
+    member_identity = _build_member_identity(
+        source_type, normalized_query_executor_type, org_code, parsed.get("source_line")
+    )
     if not member_identity:
         _warn_parse_once("成员执行源缺少唯一标识，忽略: %s", text)
         return None
@@ -343,7 +350,10 @@ def _split_member_source_fields(text: str) -> Optional[tuple[str, str, str, str]
     """校验并拆分「机构名称|机构编码|执行方式|源描述」四段格式。"""
     parts = [part.strip() for part in text.split("|")]
     if len(parts) != 4:
-        _warn_parse_once("成员数据源格式无效，仅支持 HTTP=机构名称|机构编码|http|db_name 或直连=机构名称|机构编码|direct|ip:port:db_name: %s", text)
+        _warn_parse_once(
+            "成员数据源格式无效，仅支持 HTTP=机构名称|机构编码|http|db_name 或直连=机构名称|机构编码|direct|ip:port:db_name: %s",
+            text,
+        )
         return None
     org_name, org_code, executor_type, source_text = parts
     if not org_name:
@@ -399,7 +409,9 @@ def _parse_member_source_entries(
     result: List[Dict[str, Any]] = []
     if template_entry is not None:
         result.append(template_entry)
-    result.extend(item for item in parsed_entries if item["datasource_id"] != (template_entry or {}).get("datasource_id"))
+    result.extend(
+        item for item in parsed_entries if item["datasource_id"] != (template_entry or {}).get("datasource_id")
+    )
     return result
 
 
@@ -415,7 +427,8 @@ def _resolve_template_entry(
     if template_line:
         template_entry = next(
             (
-                item for item in parsed_entries
+                item
+                for item in parsed_entries
                 if item["raw_line"] == template_line or item["source_line"] == template_line
             ),
             None,
@@ -429,7 +442,9 @@ def _resolve_template_entry(
     return template_entry
 
 
-def _parse_member_sources_text(member_sources_text: Any, template_source: Any, source_type: Any, query_executor_type: Any) -> List[str]:
+def _parse_member_sources_text(
+    member_sources_text: Any, template_source: Any, source_type: Any, query_executor_type: Any
+) -> List[str]:
     return [
         item["datasource_id"]
         for item in _parse_member_source_entries(member_sources_text, template_source, source_type, query_executor_type)

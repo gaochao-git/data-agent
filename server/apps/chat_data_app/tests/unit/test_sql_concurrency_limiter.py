@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.services.sql_run import concurrency as limiter
 
@@ -28,11 +28,13 @@ async def _run_limited_pair(user_id: str, first_target: dict, second_target: dic
 def test_sql_user_datasource_limiter_serializes_same_user_same_datasource(monkeypatch):
     monkeypatch.setenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, "1")
 
-    elapsed, events = asyncio.run(_run_limited_pair(
-        "user_a",
-        {"member_datasource_id": "member_a"},
-        {"member_datasource_id": "member_a"},
-    ))
+    elapsed, events = asyncio.run(
+        _run_limited_pair(
+            "user_a",
+            {"member_datasource_id": "member_a"},
+            {"member_datasource_id": "member_a"},
+        )
+    )
 
     assert elapsed >= 0.28
     assert events == ["start:first", "end:first", "start:second", "end:second"]
@@ -41,11 +43,13 @@ def test_sql_user_datasource_limiter_serializes_same_user_same_datasource(monkey
 def test_sql_user_datasource_limiter_allows_different_datasources(monkeypatch):
     monkeypatch.setenv(limiter.SQL_USER_DATASOURCE_MAX_CONCURRENCY_ENV, "1")
 
-    elapsed, events = asyncio.run(_run_limited_pair(
-        "user_a",
-        {"member_datasource_id": "member_a"},
-        {"member_datasource_id": "member_b"},
-    ))
+    elapsed, events = asyncio.run(
+        _run_limited_pair(
+            "user_a",
+            {"member_datasource_id": "member_a"},
+            {"member_datasource_id": "member_b"},
+        )
+    )
 
     assert elapsed < 0.25
     assert events[0:2] == ["start:first", "start:second"]

@@ -94,9 +94,7 @@ def test_merge_memory_items_appends_dedups_and_evicts_oldest(workspace_root, mem
     assert merged[0].content == "内容5"
     assert (workspace_root / ".memory.lock").exists()
     assert not list(workspace_root.glob(".memory-*.tmp"))
-    assert (workspace_root / "memory" / "memory.md").read_text(encoding="utf-8") == (
-        render_memory_document(merged)
-    )
+    assert (workspace_root / "memory" / "memory.md").read_text(encoding="utf-8") == (render_memory_document(merged))
 
 
 def test_merge_memory_items_two_processes_no_loss(tmp_path, workspace_root, memory_env):
@@ -181,12 +179,8 @@ async def test_schedule_after_turn_debounce_keeps_latest(monkeypatch, tmp_path, 
     monkeypatch.setattr(svc, "extract_and_save_memory", fake_extract)
     common = dict(workspace_root=str(tmp_path), user_id="u", username="n", model_id="m")
 
-    svc.schedule_memory_extraction_after_turn(
-        conversation_id="c-debounce", messages=[HumanMessage("第一轮")], **common
-    )
-    svc.schedule_memory_extraction_after_turn(
-        conversation_id="c-debounce", messages=[HumanMessage("第二轮")], **common
-    )
+    svc.schedule_memory_extraction_after_turn(conversation_id="c-debounce", messages=[HumanMessage("第一轮")], **common)
+    svc.schedule_memory_extraction_after_turn(conversation_id="c-debounce", messages=[HumanMessage("第二轮")], **common)
     await asyncio.sleep(0.05)
 
     assert len(captured) == 1
@@ -261,9 +255,15 @@ async def test_after_agent_turn_skips_when_state_unavailable(monkeypatch, tmp_pa
     # state 缺失：messages=None 走守卫拒绝，不调度
     adapter = SimpleNamespace(state=None)
     await svc.after_agent_turn_with_memory(
-        log_done, adapter, conversation_id="c-skip", workspace_root=str(tmp_path),
-        user_id=None, username=None, model_id=None,
+        log_done,
+        adapter,
+        conversation_id="c-skip",
+        workspace_root=str(tmp_path),
+        user_id=None,
+        username=None,
+        model_id=None,
     )
+
     # state.values 读取异常：静默跳过
     class _BoomState:
         @property
@@ -271,8 +271,13 @@ async def test_after_agent_turn_skips_when_state_unavailable(monkeypatch, tmp_pa
             raise RuntimeError("no state")
 
     await svc.after_agent_turn_with_memory(
-        log_done, SimpleNamespace(state=_BoomState()), conversation_id="c-skip",
-        workspace_root=str(tmp_path), user_id=None, username=None, model_id=None,
+        log_done,
+        SimpleNamespace(state=_BoomState()),
+        conversation_id="c-skip",
+        workspace_root=str(tmp_path),
+        user_id=None,
+        username=None,
+        model_id=None,
     )
     await asyncio.sleep(0.02)
     assert captured == []
@@ -391,9 +396,7 @@ async def test_extract_and_save_memory_merge_failure_degrades(monkeypatch, tmp_p
 
     monkeypatch.setattr(svc, "merge_memory_items", broken_merge)
     # 不抛出即通过（失败只告警降级）
-    await svc.extract_and_save_memory(
-        conversation_id="c1", workspace_root=str(tmp_path), model_id="m", messages=[]
-    )
+    await svc.extract_and_save_memory(conversation_id="c1", workspace_root=str(tmp_path), model_id="m", messages=[])
 
 
 # ---------------------------------------------------------------------------

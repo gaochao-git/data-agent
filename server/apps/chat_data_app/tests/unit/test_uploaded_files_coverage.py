@@ -65,15 +65,17 @@ def test_dao_threads_and_crud_paths():
     dao = make_dao(session)
     assert asyncio.run(dao.thread_belongs_to_user("t1", user_id="u1")) is True
 
-    row = asyncio.run(dao.create_file(
-        file_id="f1",
-        thread_id="t1",
-        original_filename="a.pdf",
-        file_type="pdf",
-        file_size=10,
-        storage_dir="a.pdf",
-        now=datetime(2026, 1, 1),
-    ))
+    row = asyncio.run(
+        dao.create_file(
+            file_id="f1",
+            thread_id="t1",
+            original_filename="a.pdf",
+            file_type="pdf",
+            file_size=10,
+            storage_dir="a.pdf",
+            now=datetime(2026, 1, 1),
+        )
+    )
     assert row.file_id == "f1"
     assert row.parse_status == "pending"
 
@@ -322,19 +324,33 @@ def patch_route_user(monkeypatch):
 
 def test_router_content_type_map():
     assert uploaded_files_routes._get_content_type("pdf") == "application/pdf"
-    assert uploaded_files_routes._get_content_type("docx").startswith("application/vnd.openxmlformats-officedocument.wordprocessingml")
+    assert uploaded_files_routes._get_content_type("docx").startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml"
+    )
     assert uploaded_files_routes._get_content_type("zip") == "application/octet-stream"
 
 
 def test_router_upload_validations(monkeypatch):
-    payload = response_payload(asyncio.run(uploaded_files_routes.upload_file_api(
-        file=SimpleNamespace(filename=None), thread_id="t1", req=None,
-    )))
+    payload = response_payload(
+        asyncio.run(
+            uploaded_files_routes.upload_file_api(
+                file=SimpleNamespace(filename=None),
+                thread_id="t1",
+                req=None,
+            )
+        )
+    )
     assert payload["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
 
-    payload = response_payload(asyncio.run(uploaded_files_routes.upload_file_api(
-        file=SimpleNamespace(filename="evil.exe"), thread_id="t1", req=None,
-    )))
+    payload = response_payload(
+        asyncio.run(
+            uploaded_files_routes.upload_file_api(
+                file=SimpleNamespace(filename="evil.exe"),
+                thread_id="t1",
+                req=None,
+            )
+        )
+    )
     assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert ".exe" in payload["msg"]
 
@@ -344,27 +360,45 @@ def test_router_upload_validations(monkeypatch):
         return {"file_id": "f9"}
 
     monkeypatch.setattr(uploaded_files_routes, "upload_file", fake_upload)
-    payload = response_payload(asyncio.run(uploaded_files_routes.upload_file_api(
-        file=SimpleNamespace(filename="a.pdf"), thread_id="t1", req=None,
-    )))
+    payload = response_payload(
+        asyncio.run(
+            uploaded_files_routes.upload_file_api(
+                file=SimpleNamespace(filename="a.pdf"),
+                thread_id="t1",
+                req=None,
+            )
+        )
+    )
     assert payload["data"]["file_id"] == "f9"
 
     async def value_error(*_args, **_kwargs):
         raise ValueError("文件大小不能超过50MB")
 
     monkeypatch.setattr(uploaded_files_routes, "upload_file", value_error)
-    payload = response_payload(asyncio.run(uploaded_files_routes.upload_file_api(
-        file=SimpleNamespace(filename="a.pdf"), thread_id="t1", req=None,
-    )))
+    payload = response_payload(
+        asyncio.run(
+            uploaded_files_routes.upload_file_api(
+                file=SimpleNamespace(filename="a.pdf"),
+                thread_id="t1",
+                req=None,
+            )
+        )
+    )
     assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def boom(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(uploaded_files_routes, "upload_file", boom)
-    payload = response_payload(asyncio.run(uploaded_files_routes.upload_file_api(
-        file=SimpleNamespace(filename="a.pdf"), thread_id="t1", req=None,
-    )))
+    payload = response_payload(
+        asyncio.run(
+            uploaded_files_routes.upload_file_api(
+                file=SimpleNamespace(filename="a.pdf"),
+                thread_id="t1",
+                req=None,
+            )
+        )
+    )
     assert payload["code"] == ErrorCode.CHATDATA_UPLOAD_FAILED
 
 

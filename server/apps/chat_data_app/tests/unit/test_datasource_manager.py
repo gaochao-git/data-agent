@@ -6,7 +6,7 @@ import sys
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -194,20 +194,52 @@ class _FakeStore:
         self.soft_delete_group(group_id, update_by=update_by, update_by_name=update_by_name)
 
     def get_table_group_relations(self, group_id: str):
-        return [
-            {"table_group_name": "订单域", "table_name": "orders"},
-            {"table_group_name": "订单域", "table_name": "orders"},
-            {"table_group_name": "", "table_name": "ignored"},
-        ] if group_id == "group_ds_a" else []
+        return (
+            [
+                {"table_group_name": "订单域", "table_name": "orders"},
+                {"table_group_name": "订单域", "table_name": "orders"},
+                {"table_group_name": "", "table_name": "ignored"},
+            ]
+            if group_id == "group_ds_a"
+            else []
+        )
 
     async def get_table_group_relations_async(self, group_id: str):
         return self.get_table_group_relations(group_id)
 
-    def replace_table_group_relations(self, group_id: str, groups: list[dict], create_by: str = "", update_by: str = "", create_by_name: str = "", update_by_name: str = ""):
-        self.replaced_table_groups = {"group_id": group_id, "groups": groups, "create_by": create_by, "update_by": update_by}
+    def replace_table_group_relations(
+        self,
+        group_id: str,
+        groups: list[dict],
+        create_by: str = "",
+        update_by: str = "",
+        create_by_name: str = "",
+        update_by_name: str = "",
+    ):
+        self.replaced_table_groups = {
+            "group_id": group_id,
+            "groups": groups,
+            "create_by": create_by,
+            "update_by": update_by,
+        }
 
-    async def replace_table_group_relations_async(self, group_id: str, groups: list[dict], create_by: str = "", update_by: str = "", create_by_name: str = "", update_by_name: str = ""):
-        self.replace_table_group_relations(group_id, groups, create_by=create_by, update_by=update_by, create_by_name=create_by_name, update_by_name=update_by_name)
+    async def replace_table_group_relations_async(
+        self,
+        group_id: str,
+        groups: list[dict],
+        create_by: str = "",
+        update_by: str = "",
+        create_by_name: str = "",
+        update_by_name: str = "",
+    ):
+        self.replace_table_group_relations(
+            group_id,
+            groups,
+            create_by=create_by,
+            update_by=update_by,
+            create_by_name=create_by_name,
+            update_by_name=update_by_name,
+        )
 
     def replace_datasource_tables(self, group_id: str, tables: list[dict], **kwargs):
         self.replaced_datasource_tables = {"group_id": group_id, "tables": list(tables or []), **kwargs}
@@ -217,6 +249,7 @@ class _FakeStore:
 
     async def replace_datasource_tables_async(self, group_id: str, tables: list[dict], **kwargs):
         self.replace_datasource_tables(group_id, tables, **kwargs)
+
 
 def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager = DataSourceManager.__new__(DataSourceManager)
@@ -238,28 +271,36 @@ def _execution_config_resolver(credentials=None):
 
 
 def test_normalize_org_codes_accepts_string_list_only():
-    assert execution_permission.normalize_org_codes([
-        " ORG_A ",
-        "ORG_B",
-        {"orgCode": "ORG_C"},
-        None,
-        "",
-    ]) == {"ORG_A", "ORG_B"}
+    assert execution_permission.normalize_org_codes(
+        [
+            " ORG_A ",
+            "ORG_B",
+            {"orgCode": "ORG_C"},
+            None,
+            "",
+        ]
+    ) == {"ORG_A", "ORG_B"}
     assert execution_permission.normalize_org_codes({"data": ["ORG_A"]}) == set()
 
 
 def test_authorized_datasources_filter_http_missing_permission_and_direct_allowlist(monkeypatch):
     store = _FakeStore()
-    store.datasources["ds_a"].update({
-        "template_datasource_id": "m_direct_allowed",
-        "member_datasource_ids": ["m_direct_allowed", "m_direct_denied", "m_http_allowed", "m_http_denied"],
-        "member_sources": [
-            {"member_datasource_id": "m_direct_allowed", "org_code": "ORG_CODE1", "query_executor_type": "direct"},
-            {"member_datasource_id": "m_direct_denied", "org_code": "ORG_DENIED", "query_executor_type": "direct"},
-            {"member_datasource_id": "m_http_allowed", "org_code": "ORG_HTTP_ALLOWED", "query_executor_type": "http"},
-            {"member_datasource_id": "m_http_denied", "org_code": "ORG_HTTP_DENIED", "query_executor_type": "http"},
-        ],
-    })
+    store.datasources["ds_a"].update(
+        {
+            "template_datasource_id": "m_direct_allowed",
+            "member_datasource_ids": ["m_direct_allowed", "m_direct_denied", "m_http_allowed", "m_http_denied"],
+            "member_sources": [
+                {"member_datasource_id": "m_direct_allowed", "org_code": "ORG_CODE1", "query_executor_type": "direct"},
+                {"member_datasource_id": "m_direct_denied", "org_code": "ORG_DENIED", "query_executor_type": "direct"},
+                {
+                    "member_datasource_id": "m_http_allowed",
+                    "org_code": "ORG_HTTP_ALLOWED",
+                    "query_executor_type": "http",
+                },
+                {"member_datasource_id": "m_http_denied", "org_code": "ORG_HTTP_DENIED", "query_executor_type": "http"},
+            ],
+        }
+    )
     manager = _build_manager(store)
 
     async def allowed_without_http(_user_id=None, _username=None):
@@ -278,11 +319,13 @@ def test_can_access_datasource_uses_authorized_datasource_scope(monkeypatch):
     captured = {}
 
     async def authorized(include_tables=True, user_id=None, username=None):
-        captured.update({
-            "include_tables": include_tables,
-            "user_id": user_id,
-            "username": username,
-        })
+        captured.update(
+            {
+                "include_tables": include_tables,
+                "user_id": user_id,
+                "username": username,
+            }
+        )
         return [{"id": "ds_a"}]
 
     monkeypatch.setattr(manager, "get_authorized_datasources_async", authorized)
@@ -294,26 +337,28 @@ def test_can_access_datasource_uses_authorized_datasource_scope(monkeypatch):
 
 def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     store = _FakeStore()
-    store.datasources["ds_a"].update({
-        "template_datasource_id": "m_http_allowed",
-        "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
-        "member_sources": [
-            {
-                "member_datasource_id": "m_http_allowed",
-                "org_code": "ORG_HTTP_ALLOWED",
-                "org_name": "HTTP机构A",
-                "query_executor_type": "http",
-                "source_type": "hive",
-            },
-            {
-                "member_datasource_id": "m_http_denied",
-                "org_code": "ORG_HTTP_DENIED",
-                "org_name": "HTTP机构B",
-                "query_executor_type": "http",
-                "source_type": "hive",
-            },
-        ],
-    })
+    store.datasources["ds_a"].update(
+        {
+            "template_datasource_id": "m_http_allowed",
+            "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
+            "member_sources": [
+                {
+                    "member_datasource_id": "m_http_allowed",
+                    "org_code": "ORG_HTTP_ALLOWED",
+                    "org_name": "HTTP机构A",
+                    "query_executor_type": "http",
+                    "source_type": "hive",
+                },
+                {
+                    "member_datasource_id": "m_http_denied",
+                    "org_code": "ORG_HTTP_DENIED",
+                    "org_name": "HTTP机构B",
+                    "query_executor_type": "http",
+                    "source_type": "hive",
+                },
+            ],
+        }
+    )
     manager = _build_manager(store)
 
     async def fail_get_full_datasource(_datasource_id):
@@ -329,32 +374,38 @@ def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
     assert targets[0]["member_name"] == "HTTP机构A"
     with pytest.raises(ValueError, match="成员数据源不存在或不属于当前组"):
-        asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", ["m_http_denied"], user_id="u1", username="用户1"))
+        asyncio.run(
+            manager.get_authorized_execution_datasources_async(
+                "ds_a", ["m_http_denied"], user_id="u1", username="用户1"
+            )
+        )
 
 
 def test_list_authorized_execution_targets_returns_all_allowed_members(monkeypatch):
     """全量授权清单：只返回过滤后的成员全集，不限定选中范围；无权限成员被整体剔除。"""
     store = _FakeStore()
-    store.datasources["ds_a"].update({
-        "template_datasource_id": "m_http_allowed",
-        "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
-        "member_sources": [
-            {
-                "member_datasource_id": "m_http_allowed",
-                "org_code": "ORG_HTTP_ALLOWED",
-                "org_name": "HTTP机构A",
-                "query_executor_type": "http",
-                "source_type": "hive",
-            },
-            {
-                "member_datasource_id": "m_http_denied",
-                "org_code": "ORG_HTTP_DENIED",
-                "org_name": "HTTP机构B",
-                "query_executor_type": "http",
-                "source_type": "hive",
-            },
-        ],
-    })
+    store.datasources["ds_a"].update(
+        {
+            "template_datasource_id": "m_http_allowed",
+            "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
+            "member_sources": [
+                {
+                    "member_datasource_id": "m_http_allowed",
+                    "org_code": "ORG_HTTP_ALLOWED",
+                    "org_name": "HTTP机构A",
+                    "query_executor_type": "http",
+                    "source_type": "hive",
+                },
+                {
+                    "member_datasource_id": "m_http_denied",
+                    "org_code": "ORG_HTTP_DENIED",
+                    "org_name": "HTTP机构B",
+                    "query_executor_type": "http",
+                    "source_type": "hive",
+                },
+            ],
+        }
+    )
     manager = _build_manager(store)
 
     async def allowed_http(_user_id=None, _username=None):
@@ -408,7 +459,11 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
     monkeypatch.setattr(datasource_credentials, "HTTP_VERIFY_TLS", False)
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     permission_alarms = []
-    monkeypatch.setattr(execution_permission, "emit_external_api_alarm", lambda *args, **kwargs: permission_alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        execution_permission,
+        "emit_external_api_alarm",
+        lambda *args, **kwargs: permission_alarms.append((args, kwargs)),
+    )
 
     result = asyncio.run(execution_permission.get_http_permission_org_codes(" user_a ", " 用户A "))
     assert result == {"ORG_A", "ORG_B"}
@@ -471,10 +526,13 @@ def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
     allowed_empty = asyncio.run(execution_permission.get_allowed_org_codes_by_executor("u1", "用户1"))
     assert allowed_empty["direct"] == set()
 
-    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
-        {"member_sources": []},
-        {"direct": {"ORG_A"}, "http": set()},
-    ) is None
+    assert (
+        execution_permission.filter_datasource_members_by_allowed_org_codes(
+            {"member_sources": []},
+            {"direct": {"ORG_A"}, "http": set()},
+        )
+        is None
+    )
 
     datasource = {
         "source_type": " mysql ",
@@ -497,10 +555,13 @@ def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
     assert filtered["member_datasource_ids"] == ["m1"]
     assert filtered["template_datasource_id"] == "m1"
 
-    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
-        datasource,
-        {"direct": {"ORG_MISSING"}, "http": set()},
-    ) is None
+    assert (
+        execution_permission.filter_datasource_members_by_allowed_org_codes(
+            datasource,
+            {"direct": {"ORG_MISSING"}, "http": set()},
+        )
+        is None
+    )
 
 
 def test_execution_permission_skips_http_lookup_when_not_required(monkeypatch):
@@ -521,18 +582,28 @@ def test_execution_permission_skips_http_lookup_when_not_required(monkeypatch):
 
 
 def test_datasource_requires_http_permission_is_conservative():
-    assert execution_permission.datasource_requires_http_permission({
-        "query_executor_type": "direct",
-        "member_sources": [
-            {"member_datasource_id": "m1", "query_executor_type": "direct"},
-        ],
-    }) is False
-    assert execution_permission.datasource_requires_http_permission({
-        "query_executor_type": "direct",
-        "member_sources": [
-            {"member_datasource_id": "m1", "query_executor_type": "http"},
-        ],
-    }) is True
+    assert (
+        execution_permission.datasource_requires_http_permission(
+            {
+                "query_executor_type": "direct",
+                "member_sources": [
+                    {"member_datasource_id": "m1", "query_executor_type": "direct"},
+                ],
+            }
+        )
+        is False
+    )
+    assert (
+        execution_permission.datasource_requires_http_permission(
+            {
+                "query_executor_type": "direct",
+                "member_sources": [
+                    {"member_datasource_id": "m1", "query_executor_type": "http"},
+                ],
+            }
+        )
+        is True
+    )
     assert execution_permission.datasource_requires_http_permission({}) is True
 
 
@@ -641,12 +712,30 @@ def test_datasource_manager_column_dict_async_boundaries():
 
         async def get_column_dicts_by_table_async(self, group_id: str, table_name: str):
             return {
-                "status": {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "", "unit": ""},
-                "ghost": {"enum_values": [{"value": "X", "label": "不存在"}], "synonyms": [], "storage_format": "", "unit": ""},
+                "status": {
+                    "enum_values": [{"value": "1", "label": "有效"}],
+                    "synonyms": [],
+                    "storage_format": "",
+                    "unit": "",
+                },
+                "ghost": {
+                    "enum_values": [{"value": "X", "label": "不存在"}],
+                    "synonyms": [],
+                    "storage_format": "",
+                    "unit": "",
+                },
             }
 
-        async def replace_column_dict_async(self, group_id: str, table_name: str, column_name: str, column_dict: dict, **kwargs):
-            self.saved_column_dict = {"group_id": group_id, "table_name": table_name, "column_name": column_name, "column_dict": column_dict, **kwargs}
+        async def replace_column_dict_async(
+            self, group_id: str, table_name: str, column_name: str, column_dict: dict, **kwargs
+        ):
+            self.saved_column_dict = {
+                "group_id": group_id,
+                "table_name": table_name,
+                "column_name": column_name,
+                "column_dict": column_dict,
+                **kwargs,
+            }
             return dict(column_dict)
 
     store = DictStore()
@@ -665,10 +754,22 @@ def test_datasource_manager_column_dict_async_boundaries():
             await manager.get_table_column_dicts_async("ds_a", "missing"),
             await manager.get_table_column_dicts_async("ds_a", "orders"),
             await manager.replace_column_dict_async("ds_a", "orders", "missing", {}),
-            await manager.replace_column_dict_async("ds_a", "orders", "status", {"unit": "元"}, operator="u1", operator_name="用户1"),
+            await manager.replace_column_dict_async(
+                "ds_a", "orders", "status", {"unit": "元"}, operator="u1", operator_name="用户1"
+            ),
         )
 
-    missing_ds, missing_column, existing, blank_table, missing_table_ds, missing_table, table_dicts, replace_missing, saved = asyncio.run(run_checks())
+    (
+        missing_ds,
+        missing_column,
+        existing,
+        blank_table,
+        missing_table_ds,
+        missing_table,
+        table_dicts,
+        replace_missing,
+        saved,
+    ) = asyncio.run(run_checks())
 
     assert missing_ds is None
     assert missing_column is None
@@ -795,37 +896,39 @@ def test_save_datasource_rejects_duplicate_member_connections():
     manager.datasource_dao = None
 
     with pytest.raises(ValueError, match="第 2 个机构编码重复"):
-        asyncio.run(manager._save_datasource_async(
-            datasource_id="ds_test",
-            group_name="测试组",
-            group_desc="",
-            source_type="mysql",
-            query_executor_type="direct",
-            template_source="127.0.0.1:3306:test_db",
-            member_source_configs=[
-                {
-                    "org_name": "模板库",
-                    "org_code": "ORG_A",
-                    "host": "127.0.0.1",
-                    "port": 3306,
-                    "database": "test_db",
-                },
-                {
-                    "org_name": "重复库",
-                    "org_code": "ORG_A",
-                    "host": "127.0.0.1",
-                    "port": 3306,
-                    "database": "test_db",
-                },
-            ],
-            tables=[],
-            mapped_modules=[],
-            is_default=False,
-            audit=DatasourceWriteAudit(
-                create_by="",
-                update_by="",
-            ),
-        ))
+        asyncio.run(
+            manager._save_datasource_async(
+                datasource_id="ds_test",
+                group_name="测试组",
+                group_desc="",
+                source_type="mysql",
+                query_executor_type="direct",
+                template_source="127.0.0.1:3306:test_db",
+                member_source_configs=[
+                    {
+                        "org_name": "模板库",
+                        "org_code": "ORG_A",
+                        "host": "127.0.0.1",
+                        "port": 3306,
+                        "database": "test_db",
+                    },
+                    {
+                        "org_name": "重复库",
+                        "org_code": "ORG_A",
+                        "host": "127.0.0.1",
+                        "port": 3306,
+                        "database": "test_db",
+                    },
+                ],
+                tables=[],
+                mapped_modules=[],
+                is_default=False,
+                audit=DatasourceWriteAudit(
+                    create_by="",
+                    update_by="",
+                ),
+            )
+        )
 
 
 def test_save_datasource_rejects_missing_member_name():
@@ -834,112 +937,38 @@ def test_save_datasource_rejects_missing_member_name():
     manager.datasource_dao = None
 
     with pytest.raises(ValueError, match="机构名称不能为空"):
-        asyncio.run(manager._save_datasource_async(
-            datasource_id="ds_test",
-            group_name="测试组",
-            group_desc="",
-            source_type="mysql",
-            query_executor_type="direct",
-            template_source="127.0.0.1:3306:test_db",
-            member_source_configs=[
-                {
-                    "host": "127.0.0.1",
-                    "port": 3306,
-                    "database": "test_db",
-                },
-            ],
-            tables=[],
-            mapped_modules=[],
-            is_default=False,
-            audit=DatasourceWriteAudit(
-                create_by="",
-                update_by="",
-            ),
-        ))
+        asyncio.run(
+            manager._save_datasource_async(
+                datasource_id="ds_test",
+                group_name="测试组",
+                group_desc="",
+                source_type="mysql",
+                query_executor_type="direct",
+                template_source="127.0.0.1:3306:test_db",
+                member_source_configs=[
+                    {
+                        "host": "127.0.0.1",
+                        "port": 3306,
+                        "database": "test_db",
+                    },
+                ],
+                tables=[],
+                mapped_modules=[],
+                is_default=False,
+                audit=DatasourceWriteAudit(
+                    create_by="",
+                    update_by="",
+                ),
+            )
+        )
 
 
 def test_save_datasource_keeps_hive_http_members_with_shared_connection():
     fake_store = _SaveStore()
     manager = _build_manager(fake_store)
 
-    saved = asyncio.run(manager._save_datasource_async(
-        datasource_id="ds_hive_http",
-        group_name="HiveHTTP组",
-        group_desc="",
-        source_type="hive",
-        query_executor_type="http",
-        template_source="127.0.0.1:10000:dw",
-        member_source_configs=[
-            {
-                "org_name": "机构A",
-                "org_code": "ORG_A",
-                "database": "dw",
-            },
-            {
-                "org_name": "机构B",
-                "org_code": "ORG_B",
-                "database": "dw",
-            },
-        ],
-        tables=[],
-        mapped_modules=[],
-        is_default=False,
-        audit=DatasourceWriteAudit(
-            create_by="",
-            update_by="",
-        ),
-    ))
-
-    assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["query_context"] == ""
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw"
-    assert [item["member_datasource_id"] for item in saved["member_sources"]] == ["ORG_A", "ORG_B"]
-
-
-def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
-    fake_store = _SaveStore()
-    manager = _build_manager(fake_store)
-
-    asyncio.run(manager._save_datasource_async(
-        datasource_id="ds_mysql_http",
-        group_name="MySQLHTTP组",
-        group_desc="",
-        source_type="mysql",
-        query_executor_type="http",
-        template_source="127.0.0.1:3306:test_db",
-        member_source_configs=[
-            {
-                "org_name": "机构A",
-                "org_code": "ORG_A",
-                "database": "test_db",
-            },
-            {
-                "org_name": "机构B",
-                "org_code": "ORG_B",
-                "database": "test_db",
-            },
-        ],
-        tables=[],
-        mapped_modules=[],
-        is_default=False,
-        audit=DatasourceWriteAudit(
-            create_by="",
-            update_by="",
-        ),
-    ))
-
-    assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["query_context"] == ""
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|test_db\n机构B|ORG_B|http|test_db"
-
-
-def test_save_datasource_rejects_duplicate_hive_http_names():
-    manager = DataSourceManager.__new__(DataSourceManager)
-    manager.base_dir = None
-    manager.datasource_dao = None
-
-    with pytest.raises(ValueError, match="第 2 个机构编码重复"):
-        asyncio.run(manager._save_datasource_async(
+    saved = asyncio.run(
+        manager._save_datasource_async(
             datasource_id="ds_hive_http",
             group_name="HiveHTTP组",
             group_desc="",
@@ -953,9 +982,9 @@ def test_save_datasource_rejects_duplicate_hive_http_names():
                     "database": "dw",
                 },
                 {
-                    "org_name": "机构A重名",
-                    "org_code": "ORG_A",
-                    "database": "dw_b",
+                    "org_name": "机构B",
+                    "org_code": "ORG_B",
+                    "database": "dw",
                 },
             ],
             tables=[],
@@ -965,7 +994,89 @@ def test_save_datasource_rejects_duplicate_hive_http_names():
                 create_by="",
                 update_by="",
             ),
-        ))
+        )
+    )
+
+    assert fake_store.saved_kwargs is not None
+    assert fake_store.saved_kwargs["query_context"] == ""
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw"
+    assert [item["member_datasource_id"] for item in saved["member_sources"]] == ["ORG_A", "ORG_B"]
+
+
+def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
+    fake_store = _SaveStore()
+    manager = _build_manager(fake_store)
+
+    asyncio.run(
+        manager._save_datasource_async(
+            datasource_id="ds_mysql_http",
+            group_name="MySQLHTTP组",
+            group_desc="",
+            source_type="mysql",
+            query_executor_type="http",
+            template_source="127.0.0.1:3306:test_db",
+            member_source_configs=[
+                {
+                    "org_name": "机构A",
+                    "org_code": "ORG_A",
+                    "database": "test_db",
+                },
+                {
+                    "org_name": "机构B",
+                    "org_code": "ORG_B",
+                    "database": "test_db",
+                },
+            ],
+            tables=[],
+            mapped_modules=[],
+            is_default=False,
+            audit=DatasourceWriteAudit(
+                create_by="",
+                update_by="",
+            ),
+        )
+    )
+
+    assert fake_store.saved_kwargs is not None
+    assert fake_store.saved_kwargs["query_context"] == ""
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|test_db\n机构B|ORG_B|http|test_db"
+
+
+def test_save_datasource_rejects_duplicate_hive_http_names():
+    manager = DataSourceManager.__new__(DataSourceManager)
+    manager.base_dir = None
+    manager.datasource_dao = None
+
+    with pytest.raises(ValueError, match="第 2 个机构编码重复"):
+        asyncio.run(
+            manager._save_datasource_async(
+                datasource_id="ds_hive_http",
+                group_name="HiveHTTP组",
+                group_desc="",
+                source_type="hive",
+                query_executor_type="http",
+                template_source="127.0.0.1:10000:dw",
+                member_source_configs=[
+                    {
+                        "org_name": "机构A",
+                        "org_code": "ORG_A",
+                        "database": "dw",
+                    },
+                    {
+                        "org_name": "机构A重名",
+                        "org_code": "ORG_A",
+                        "database": "dw_b",
+                    },
+                ],
+                tables=[],
+                mapped_modules=[],
+                is_default=False,
+                audit=DatasourceWriteAudit(
+                    create_by="",
+                    update_by="",
+                ),
+            )
+        )
 
 
 def test_get_execution_datasources_supports_hive_http_org_code_selection(monkeypatch):
@@ -1011,21 +1122,33 @@ def test_update_datasource_preserves_template_member_name_when_refreshing_tables
     fake_store = _SaveStore()
     manager = _build_manager(fake_store)
 
-    asyncio.run(manager.update_datasource_async(
-        "ds_refresh",
-        tables=[{"table_name": "orders", "description": "orders", "columns": []}],
-        source_config={"database": "dw"},
-    ))
+    asyncio.run(
+        manager.update_datasource_async(
+            "ds_refresh",
+            tables=[{"table_name": "orders", "description": "orders", "columns": []}],
+            source_config={"database": "dw"},
+        )
+    )
 
     assert fake_store.saved_kwargs["template_source"] == "机构A|ORG_A|http|dw"
     assert fake_store.saved_kwargs["member_sources_text"].splitlines()[0] == "机构A|ORG_A|http|dw"
     with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
-        _normalize_member_source_config("hive", {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "database": "dw"})
+        _normalize_member_source_config(
+            "hive",
+            {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "database": "dw"},
+        )
 
 
 def test_validate_member_source_configs_rejects_duplicate_org_code():
     configs = [
-        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
+        {
+            "org_name": "机构A",
+            "org_code": "ORG_A",
+            "query_executor_type": "direct",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "demo",
+        },
         {"org_name": "机构A2", "org_code": "ORG_A", "query_executor_type": "http", "database": "demo"},
     ]
 
@@ -1037,11 +1160,25 @@ def test_merge_member_source_lines_keeps_new_template_first_and_existing_members
     current = {
         "template_datasource_id": "ORG_OLD",
         "member_sources": [
-            {"org_name": "旧机构", "org_code": "ORG_OLD", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
+            {
+                "org_name": "旧机构",
+                "org_code": "ORG_OLD",
+                "query_executor_type": "direct",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+            },
             {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "demo"},
         ],
     }
-    template = {"org_name": "新机构", "org_code": "ORG_NEW", "query_executor_type": "direct", "host": "127.0.0.3", "port": 3306, "database": "demo"}
+    template = {
+        "org_name": "新机构",
+        "org_code": "ORG_NEW",
+        "query_executor_type": "direct",
+        "host": "127.0.0.3",
+        "port": 3306,
+        "database": "demo",
+    }
 
     merged = _merge_member_source_lines(current, template, "mysql", "direct", member_source_configs=None)
 
@@ -1059,8 +1196,26 @@ def test_build_execution_datasource_targets_defaults_template_and_adds_credentia
         "source_type": "mysql",
         "query_executor_type": "direct",
         "member_sources": [
-            {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "source_type": "mysql", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-            {"member_datasource_id": "ORG_B", "org_name": "机构B", "org_code": "ORG_B", "source_type": "mysql", "query_executor_type": "http", "host": "127.0.0.2", "port": 3306, "database": "demo"},
+            {
+                "member_datasource_id": "ORG_A",
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "source_type": "mysql",
+                "query_executor_type": "direct",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+            },
+            {
+                "member_datasource_id": "ORG_B",
+                "org_name": "机构B",
+                "org_code": "ORG_B",
+                "source_type": "mysql",
+                "query_executor_type": "http",
+                "host": "127.0.0.2",
+                "port": 3306,
+                "database": "demo",
+            },
         ],
     }
 
@@ -1081,7 +1236,22 @@ def test_build_execution_datasource_targets_rejects_invalid_members():
         ({}, None, "没有可执行的数据源"),
         ({"member_sources": [{"member_datasource_id": ""}]}, None, "成员配置无效"),
         ({"member_sources": [{"member_datasource_id": "m1"}]}, ["m2"], "成员数据源不存在"),
-        ({"source_type": "hive", "member_sources": [{"member_datasource_id": "m1", "query_executor_type": "http", "host": "h", "port": 1, "database": "d"}]}, ["m1"], "缺少机构编码"),
+        (
+            {
+                "source_type": "hive",
+                "member_sources": [
+                    {
+                        "member_datasource_id": "m1",
+                        "query_executor_type": "http",
+                        "host": "h",
+                        "port": 1,
+                        "database": "d",
+                    }
+                ],
+            },
+            ["m1"],
+            "缺少机构编码",
+        ),
     ]
     for datasource, selected, expected in cases:
         with pytest.raises(ValueError, match=expected):
@@ -1096,15 +1266,26 @@ def test_replace_table_groups_filters_missing_tables_and_dedupes():
         async def get_datasource_async(self, datasource_id):
             return {"group_id": "group_a", "ds_tables": [{"table_name": "orders"}, {"table_name": "items"}]}
 
-        async def replace_table_group_relations_async(self, group_id, groups, create_by="", update_by="", create_by_name="", update_by_name=""):
+        async def replace_table_group_relations_async(
+            self, group_id, groups, create_by="", update_by="", create_by_name="", update_by_name=""
+        ):
             captured.update({"group_id": group_id, "groups": groups, "create_by": create_by, "update_by": update_by})
 
     manager.datasource_dao = FakeStore()
 
-    assert asyncio.run(manager.replace_table_groups_async("ds_a", [
-        {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
-        {"table_group_name": "", "table_names": ["items"]},
-    ], operator="u1")) is True
+    assert (
+        asyncio.run(
+            manager.replace_table_groups_async(
+                "ds_a",
+                [
+                    {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
+                    {"table_group_name": "", "table_names": ["items"]},
+                ],
+                operator="u1",
+            )
+        )
+        is True
+    )
     assert captured == {
         "group_id": "group_a",
         "groups": [{"table_group_name": "订单域", "table_names": ["orders"]}],
@@ -1133,22 +1314,33 @@ def test_save_datasource_persists_group_and_tables_in_transaction():
     manager.datasource_dao = FakeStore()
     manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id})
 
-    result = asyncio.run(manager._save_datasource_async(
-        datasource_id="ds_a",
-        group_name="订单组",
-        group_desc="描述",
-        source_type="mysql",
-        query_executor_type="direct",
-        template_source="127.0.0.1:3306:demo",
-        member_source_configs=[{"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"}],
-        tables=[{"table_name": "orders"}],
-        mapped_modules=["执法检查"],
-        is_default=True,
-        audit=DatasourceWriteAudit(
-            create_by="u1",
-            update_by="u2",
-        ),
-    ))
+    result = asyncio.run(
+        manager._save_datasource_async(
+            datasource_id="ds_a",
+            group_name="订单组",
+            group_desc="描述",
+            source_type="mysql",
+            query_executor_type="direct",
+            template_source="127.0.0.1:3306:demo",
+            member_source_configs=[
+                {
+                    "org_name": "机构A",
+                    "org_code": "ORG_A",
+                    "query_executor_type": "direct",
+                    "host": "127.0.0.1",
+                    "port": 3306,
+                    "database": "demo",
+                }
+            ],
+            tables=[{"table_name": "orders"}],
+            mapped_modules=["执法检查"],
+            is_default=True,
+            audit=DatasourceWriteAudit(
+                create_by="u1",
+                update_by="u2",
+            ),
+        )
+    )
 
     assert result == {"id": "ds_a"}
     assert calls[0][0] == "upsert_group"
@@ -1170,10 +1362,21 @@ def test_datasource_manager_table_groups_and_visibility_filters():
     store.datasources["ds_a"]["ds_tables"] = [{"table_name": "orders"}, {"table_name": "items"}]
     manager = _build_manager(store)
 
-    assert asyncio.run(manager.get_table_groups_async("ds_a")) == [{"table_group_name": "订单域", "table_names": ["orders"]}]
-    assert asyncio.run(manager.replace_table_groups_async("ds_a", [
-        {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
-    ], operator="u1")) is True
+    assert asyncio.run(manager.get_table_groups_async("ds_a")) == [
+        {"table_group_name": "订单域", "table_names": ["orders"]}
+    ]
+    assert (
+        asyncio.run(
+            manager.replace_table_groups_async(
+                "ds_a",
+                [
+                    {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
+                ],
+                operator="u1",
+            )
+        )
+        is True
+    )
     assert store.replaced_table_groups["groups"] == [{"table_group_name": "订单域", "table_names": ["orders"]}]
     tables = asyncio.run(manager.get_datasource_async("ds_a"))["ds_tables"]
     assert next((table for table in tables if table.get("table_name") == "items"), None) == {"table_name": "items"}
@@ -1203,8 +1406,24 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         "template_datasource_id": "ORG_A",
         "template_source": "机构A|ORG_A|direct|127.0.0.1:3306:old",
         "member_sources": [
-            {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "old"},
-            {"member_datasource_id": "ORG_B", "org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "direct", "host": "127.0.0.2", "port": 3306, "database": "old"},
+            {
+                "member_datasource_id": "ORG_A",
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "query_executor_type": "direct",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "old",
+            },
+            {
+                "member_datasource_id": "ORG_B",
+                "org_name": "机构B",
+                "org_code": "ORG_B",
+                "query_executor_type": "direct",
+                "host": "127.0.0.2",
+                "port": 3306,
+                "database": "old",
+            },
         ],
         "ds_tables": [{"table_name": "orders"}],
         "mapped_modules": ["执法检查"],
@@ -1218,6 +1437,7 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         return {"id": kwargs["datasource_id"], "name": kwargs["group_name"]}
 
     monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.datetime", _FixedDatetime)
+
     class FakeDao:
         def __init__(self):
             self.updated_kwargs = None
@@ -1228,16 +1448,18 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
             if not self.updated_kwargs:
                 return current
             result = dict(current)
-            result.update({
-                "group_name": self.updated_kwargs["group_name"],
-                "ds_description": self.updated_kwargs["group_desc"],
-                "query_context": self.updated_kwargs["query_context"],
-                "recommended_questions": self.updated_kwargs["recommended_questions"],
-                "source_type": self.updated_kwargs["source_type"],
-                "template_source": self.updated_kwargs["template_source"],
-                "member_sources_text": self.updated_kwargs["member_sources_text"],
-                "ds_tables": [],
-            })
+            result.update(
+                {
+                    "group_name": self.updated_kwargs["group_name"],
+                    "ds_description": self.updated_kwargs["group_desc"],
+                    "query_context": self.updated_kwargs["query_context"],
+                    "recommended_questions": self.updated_kwargs["recommended_questions"],
+                    "source_type": self.updated_kwargs["source_type"],
+                    "template_source": self.updated_kwargs["template_source"],
+                    "member_sources_text": self.updated_kwargs["member_sources_text"],
+                    "ds_tables": [],
+                }
+            )
             return result
 
         async def update_datasource_group_async(self, **kwargs):
@@ -1245,27 +1467,41 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
 
     fake_dao = FakeDao()
     manager._save_datasource_async = fake_save
-    manager.get_datasource_async = lambda datasource_id: asyncio.sleep(0, result=current if datasource_id == "ds_a" else None)
+    manager.get_datasource_async = lambda datasource_id: asyncio.sleep(
+        0, result=current if datasource_id == "ds_a" else None
+    )
     manager.datasource_dao = fake_dao
 
-    created = asyncio.run(manager.create_datasource_group_from_sources_async(
-        group_name="新组",
-        group_desc="描述",
-        source_type="mysql",
-        template_source_config={"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "host": "127.0.0.2", "port": 3306, "database": "demo"}],
-        recommended_questions=["新推荐问题"],
-        create_by="u1",
-    ))
-    updated = asyncio.run(manager.update_datasource_group_from_sources_async(
-        "ds_a",
-        "更新组",
-        "新描述",
-        "mysql",
-        {"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.3", "port": 3306, "database": "new"},
-        member_source_configs=None,
-        update_by="u2",
-    ))
+    created = asyncio.run(
+        manager.create_datasource_group_from_sources_async(
+            group_name="新组",
+            group_desc="描述",
+            source_type="mysql",
+            template_source_config={
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+            },
+            member_source_configs=[
+                {"org_name": "机构B", "org_code": "ORG_B", "host": "127.0.0.2", "port": 3306, "database": "demo"}
+            ],
+            recommended_questions=["新推荐问题"],
+            create_by="u1",
+        )
+    )
+    updated = asyncio.run(
+        manager.update_datasource_group_from_sources_async(
+            "ds_a",
+            "更新组",
+            "新描述",
+            "mysql",
+            {"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.3", "port": 3306, "database": "new"},
+            member_source_configs=None,
+            update_by="u2",
+        )
+    )
 
     assert created["id"].startswith("ds_20260602101112_345678")
     assert saved_calls[0]["member_source_configs"][0]["org_code"] == "ORG_A"
@@ -1282,16 +1518,20 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
 def test_datasource_manager_update_datasource_updates_supported_fields(monkeypatch):
     store = _SaveStore()
     manager = _build_manager(store)
-    manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id, "updated": True})
+    manager._load_datasource_async = lambda datasource_id: asyncio.sleep(
+        0, result={"id": datasource_id, "updated": True}
+    )
 
-    result = asyncio.run(manager.update_datasource_async(
-        "ds_refresh",
-        name="新名称",
-        description="新描述",
-        source_config={"database": "dw2"},
-        mapped_modules=["执法检查"],
-        update_by="u1",
-    ))
+    result = asyncio.run(
+        manager.update_datasource_async(
+            "ds_refresh",
+            name="新名称",
+            description="新描述",
+            source_config={"database": "dw2"},
+            mapped_modules=["执法检查"],
+            update_by="u1",
+        )
+    )
 
     assert result == {"id": "ds_refresh", "updated": True}
     assert store.saved_kwargs["group_name"] == "新名称"
@@ -1303,10 +1543,26 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
     store = _FakeStore()
     store.datasources["ds_a"]["ds_tables"] = [{"table_name": "orders"}]
     store.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_shared", "org_name": "成员A", "org_code": "ORG_A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"}
+        {
+            "member_datasource_id": "phy_shared",
+            "org_name": "成员A",
+            "org_code": "ORG_A",
+            "source_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "db_a",
+        }
     ]
     store.semantic_configs["group_ds_a"] = [
-        {"id": "sc_a", "name": "订单分析", "scope_type": "public", "enabled": True, "metrics": [], "dimensions": [], "relationships": []}
+        {
+            "id": "sc_a",
+            "name": "订单分析",
+            "scope_type": "public",
+            "enabled": True,
+            "metrics": [],
+            "dimensions": [],
+            "relationships": [],
+        }
     ]
     manager = _build_manager(store)
 
@@ -1316,8 +1572,15 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
         assert "semantic_configs" not in (await manager.get_datasource_async("ds_a"))
         assert (await manager.get_datasource_by_group_name_async("数据源A"))["id"] == "ds_a"
         assert (await manager.get_execution_datasources_async("ds_a"))[0]["member_datasource_id"] == "phy_shared"
-        assert await manager.get_table_groups_async("ds_a") == [{"table_group_name": "订单域", "table_names": ["orders"]}]
-        assert await manager.replace_table_groups_async("ds_a", [{"table_group_name": "订单域", "table_names": ["orders", "missing"]}], operator="u1") is True
+        assert await manager.get_table_groups_async("ds_a") == [
+            {"table_group_name": "订单域", "table_names": ["orders"]}
+        ]
+        assert (
+            await manager.replace_table_groups_async(
+                "ds_a", [{"table_group_name": "订单域", "table_names": ["orders", "missing"]}], operator="u1"
+            )
+            is True
+        )
         assert (await manager.get_default_datasource_async())["id"] == "ds_a"
         assert await manager.set_default_datasource_async("ds_b") is True
         store.datasources["ds_b"]["is_default"] = True
@@ -1350,11 +1613,13 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
         async def load_schema(self, table_names):
             table_name = table_names[0] if table_names else "orders"
             if self.access_type == "http":
-                return [{
-                    "table_name": table_name,
-                    "org_code": self.source_config["org_code"],
-                    "org_name": self.source_config["org_name"],
-                }]
+                return [
+                    {
+                        "table_name": table_name,
+                        "org_code": self.source_config["org_code"],
+                        "org_name": self.source_config["org_name"],
+                    }
+                ]
             return [{"table_name": table_name}]
 
     class FakeRegistry:
@@ -1380,9 +1645,13 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
         assert calls[-1][:2] == ("hive", "direct")
 
         store.datasources["ds_a"]["query_executor_type"] = "http"
-        store.datasources["ds_a"]["member_sources"] = [{"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http"}]
+        store.datasources["ds_a"]["member_sources"] = [
+            {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http"}
+        ]
         store.datasources["ds_a"]["template_datasource_id"] = "ORG_A"
-        assert await manager.get_live_schema_async("ds_a", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
+        assert await manager.get_live_schema_async(
+            "ds_a", table_names=["orders"], user_id="user_a", username="测试用户"
+        ) == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
         assert calls[-1][3:] == ("user_a", "测试用户")
 
         assert await manager.get_cached_schema_async("ds_a", table_names=["missing"]) == []
@@ -1435,7 +1704,14 @@ def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
             {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"},
         )
         assert mysql_tables == ["orders", "users"]
-        assert calls[-1] == ("adapter", "mysql", "direct", {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"}, None, None)
+        assert calls[-1] == (
+            "adapter",
+            "mysql",
+            "direct",
+            {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"},
+            None,
+            None,
+        )
 
         hive_tables = await manager.get_physical_table_names_async(
             "hive",
@@ -1451,7 +1727,14 @@ def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
             username="测试用户",
         )
         assert http_tables == ["http_orders"]
-        assert calls[-1] == ("adapter", "hive", "http", {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"}, "user_a", "测试用户")
+        assert calls[-1] == (
+            "adapter",
+            "hive",
+            "http",
+            {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"},
+            "user_a",
+            "测试用户",
+        )
 
         manager.get_live_schema_async = fake_live_schema
         synced = await manager.sync_datasource_schema_from_source_async(
@@ -1545,16 +1828,40 @@ def test_datasource_manager_helper_edge_cases(monkeypatch):
         _build_source_line({"host": "", "port": 3306, "database": "demo"})
     with pytest.raises(ValueError, match="机构编码不能为空"):
         _normalize_member_source_config("mysql", {"org_name": "机构A", "host": "h", "port": 1, "database": "d"})
-    assert _build_member_source_identity({"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"}, "mysql") == "ORG_A"
-    assert _build_member_source_text_line("mysql", {"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"}) == "机构A|ORG_A|direct|h:1:d"
+    assert (
+        _build_member_source_identity(
+            {"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"}, "mysql"
+        )
+        == "ORG_A"
+    )
+    assert (
+        _build_member_source_text_line(
+            "mysql", {"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"}
+        )
+        == "机构A|ORG_A|direct|h:1:d"
+    )
 
     datasource = {
         "template_datasource_id": "ORG_B",
         "query_executor_type": "http",
         "source_config": {"host": "h", "port": 1, "database": "d"},
         "member_sources": [
-            {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "host": "h1", "port": 1, "database": "d1"},
-            {"member_datasource_id": "ORG_B", "org_name": "机构B", "org_code": "ORG_B", "host": "h2", "port": 2, "database": "d2"},
+            {
+                "member_datasource_id": "ORG_A",
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "host": "h1",
+                "port": 1,
+                "database": "d1",
+            },
+            {
+                "member_datasource_id": "ORG_B",
+                "org_name": "机构B",
+                "org_code": "ORG_B",
+                "host": "h2",
+                "port": 2,
+                "database": "d2",
+            },
         ],
     }
     assert _get_template_member_source_config(datasource)["org_code"] == "ORG_B"
@@ -1582,7 +1889,9 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
             calls.append(("replace_tables", kwargs))
 
     manager.datasource_dao = AsyncSaveStore()
-    manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id, "loaded": True})
+    manager._load_datasource_async = lambda datasource_id: asyncio.sleep(
+        0, result={"id": datasource_id, "loaded": True}
+    )
 
     async def run_checks():
         saved = await manager._save_datasource_async(
@@ -1592,7 +1901,9 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
             source_type="mysql",
             query_executor_type="direct",
             template_source="h:3306:d",
-            member_source_configs=[{"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 3306, "database": "d"}],
+            member_source_configs=[
+                {"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 3306, "database": "d"}
+            ],
             tables=[{"table_name": "orders"}],
             mapped_modules=["智能问数"],
             is_default=True,
@@ -1611,16 +1922,22 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
 
     calls.clear()
     monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.datetime", _FixedDatetime)
-    manager._save_datasource_async = lambda **kwargs: asyncio.sleep(0, result={"id": kwargs["datasource_id"], "members": kwargs["member_source_configs"]})
+    manager._save_datasource_async = lambda **kwargs: asyncio.sleep(
+        0, result={"id": kwargs["datasource_id"], "members": kwargs["member_source_configs"]}
+    )
 
-    created = asyncio.run(manager.create_datasource_group_from_sources_async(
-        "异步新组",
-        "描述",
-        "mysql",
-        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "database": "d"},
-        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "d2"}],
-        create_by="u1",
-    ))
+    created = asyncio.run(
+        manager.create_datasource_group_from_sources_async(
+            "异步新组",
+            "描述",
+            "mysql",
+            {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "database": "d"},
+            member_source_configs=[
+                {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "d2"}
+            ],
+            create_by="u1",
+        )
+    )
     assert created["id"] == "ds_20260602101112_345678"
     assert [item["org_code"] for item in created["members"]] == ["ORG_A", "ORG_B"]
 
@@ -1639,8 +1956,24 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
         "template_datasource_id": "ORG_A",
         "template_source": "机构A|ORG_A|direct|127.0.0.1:3306:old",
         "member_sources": [
-            {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "old"},
-            {"member_datasource_id": "ORG_B", "org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "direct", "host": "127.0.0.2", "port": 3306, "database": "old"},
+            {
+                "member_datasource_id": "ORG_A",
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "query_executor_type": "direct",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "old",
+            },
+            {
+                "member_datasource_id": "ORG_B",
+                "org_name": "机构B",
+                "org_code": "ORG_B",
+                "query_executor_type": "direct",
+                "host": "127.0.0.2",
+                "port": 3306,
+                "database": "old",
+            },
         ],
         "ds_tables": [{"table_name": "orders"}],
         "mapped_modules": ["智能问数"],
@@ -1649,6 +1982,7 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
         "update_by": "old",
         "semantic_configs": [],
     }
+
     async def fake_get_datasource_meta(datasource_id: str):
         if datasource_id != "ds_a":
             return None
@@ -1656,20 +1990,28 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
             return current
         updated_kwargs = store.updated_groups[-1][1]
         result = dict(current)
-        result.update({
-            "group_name": updated_kwargs.get("group_name", current["group_name"]),
-            "ds_description": updated_kwargs.get("group_desc", current.get("ds_description", "")),
-            "query_context": updated_kwargs.get("query_context", current.get("query_context", "")),
-            "recommended_questions": updated_kwargs.get("recommended_questions", current.get("recommended_questions", [])),
-            "source_type": updated_kwargs.get("source_type", current["source_type"]),
-            "template_source": updated_kwargs.get("template_source", current["template_source"]),
-            "member_sources_text": updated_kwargs.get("member_sources_text", ""),
-            "ds_tables": [],
-        })
+        result.update(
+            {
+                "group_name": updated_kwargs.get("group_name", current["group_name"]),
+                "ds_description": updated_kwargs.get("group_desc", current.get("ds_description", "")),
+                "query_context": updated_kwargs.get("query_context", current.get("query_context", "")),
+                "recommended_questions": updated_kwargs.get(
+                    "recommended_questions", current.get("recommended_questions", [])
+                ),
+                "source_type": updated_kwargs.get("source_type", current["source_type"]),
+                "template_source": updated_kwargs.get("template_source", current["template_source"]),
+                "member_sources_text": updated_kwargs.get("member_sources_text", ""),
+                "ds_tables": [],
+            }
+        )
         return result
 
-    manager.get_datasource_async = lambda datasource_id: asyncio.sleep(0, result=current if datasource_id == "ds_a" else None)
-    manager._save_datasource_async = lambda **kwargs: saved_calls.append(kwargs) or asyncio.sleep(0, result={"id": kwargs["datasource_id"], "name": kwargs["group_name"]})
+    manager.get_datasource_async = lambda datasource_id: asyncio.sleep(
+        0, result=current if datasource_id == "ds_a" else None
+    )
+    manager._save_datasource_async = lambda **kwargs: saved_calls.append(kwargs) or asyncio.sleep(
+        0, result={"id": kwargs["datasource_id"], "name": kwargs["group_name"]}
+    )
     manager.datasource_dao.get_datasource_meta_async = fake_get_datasource_meta
 
     async def run_checks():
@@ -1721,29 +2063,43 @@ def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypa
         _execution_config_resolver({"username": "hive_user", "password": "hive_pwd"}),
     )
     manager = DataSourceManager.__new__(DataSourceManager)
-    hive_direct = manager._build_execution_datasource_targets({
-        "source_type": "hive",
-        "query_executor_type": "direct",
-        "template_datasource_id": "hive_a",
-        "member_sources": [
-            {"member_datasource_id": "hive_a", "host": "hive-host", "port": 10000, "database": "dw", "source_type": "hive", "query_executor_type": "direct"},
-        ],
-    })[0]
-    fallback_default = manager._build_execution_datasource_targets({
-        "source_type": "mysql",
-        "query_executor_type": "http",
-        "template_datasource_id": "missing",
-        "member_sources": [
-            {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
-        ],
-    })[0]
-    dedup_selected = manager._build_execution_datasource_targets({
-        "source_type": "mysql",
-        "query_executor_type": "http",
-        "member_sources": [
-            {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
-        ],
-    }, ["", "m1", "m1"])[0]
+    hive_direct = manager._build_execution_datasource_targets(
+        {
+            "source_type": "hive",
+            "query_executor_type": "direct",
+            "template_datasource_id": "hive_a",
+            "member_sources": [
+                {
+                    "member_datasource_id": "hive_a",
+                    "host": "hive-host",
+                    "port": 10000,
+                    "database": "dw",
+                    "source_type": "hive",
+                    "query_executor_type": "direct",
+                },
+            ],
+        }
+    )[0]
+    fallback_default = manager._build_execution_datasource_targets(
+        {
+            "source_type": "mysql",
+            "query_executor_type": "http",
+            "template_datasource_id": "missing",
+            "member_sources": [
+                {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
+            ],
+        }
+    )[0]
+    dedup_selected = manager._build_execution_datasource_targets(
+        {
+            "source_type": "mysql",
+            "query_executor_type": "http",
+            "member_sources": [
+                {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
+            ],
+        },
+        ["", "m1", "m1"],
+    )[0]
 
     assert hive_direct["source_config"]["username"] == "hive_user"
     assert hive_direct["source_config"]["password"] == "hive_pwd"
@@ -1775,7 +2131,9 @@ def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypa
             await manager.update_table_business_desc_async("ds_a", "", "x"),
             await manager.update_table_business_desc_async("missing", "orders", "x"),
             await manager.update_table_business_desc_async("ds_a", "missing", "x"),
-            await manager.update_table_business_desc_async("ds_a", "orders", "  " + "a" * 300, operator="u1", operator_name="用户1"),
+            await manager.update_table_business_desc_async(
+                "ds_a", "orders", "  " + "a" * 300, operator="u1", operator_name="用户1"
+            ),
         )
 
     blank_table, missing_ds, missing_table, updated = asyncio.run(run_desc_checks())
@@ -1795,11 +2153,13 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
         "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver(),
     )
-    no_credential_target = manager._build_execution_datasource_targets({
-        "source_type": "hive",
-        "query_executor_type": "direct",
-        "member_sources": [{"member_datasource_id": "hive_a", "host": "h", "port": 10000, "database": "dw"}],
-    })[0]
+    no_credential_target = manager._build_execution_datasource_targets(
+        {
+            "source_type": "hive",
+            "query_executor_type": "direct",
+            "member_sources": [{"member_datasource_id": "hive_a", "host": "h", "port": 10000, "database": "dw"}],
+        }
+    )[0]
     assert "username" not in no_credential_target["source_config"]
     assert "password" not in no_credential_target["source_config"]
 
@@ -1807,11 +2167,13 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
         "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user"}),
     )
-    username_only_target = manager._build_execution_datasource_targets({
-        "source_type": "hive",
-        "query_executor_type": "direct",
-        "member_sources": [{"member_datasource_id": "hive_b", "host": "h", "port": 10000, "database": "dw"}],
-    })[0]
+    username_only_target = manager._build_execution_datasource_targets(
+        {
+            "source_type": "hive",
+            "query_executor_type": "direct",
+            "member_sources": [{"member_datasource_id": "hive_b", "host": "h", "port": 10000, "database": "dw"}],
+        }
+    )[0]
     assert username_only_target["source_config"]["username"] == "hive_user"
     assert "password" not in username_only_target["source_config"]
 
@@ -1819,11 +2181,13 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
         "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"password": "hive_pwd"}),
     )
-    password_only_target = manager._build_execution_datasource_targets({
-        "source_type": "hive",
-        "query_executor_type": "direct",
-        "member_sources": [{"member_datasource_id": "hive_c", "host": "h", "port": 10000, "database": "dw"}],
-    })[0]
+    password_only_target = manager._build_execution_datasource_targets(
+        {
+            "source_type": "hive",
+            "query_executor_type": "direct",
+            "member_sources": [{"member_datasource_id": "hive_c", "host": "h", "port": 10000, "database": "dw"}],
+        }
+    )[0]
     assert "username" not in password_only_target["source_config"]
     assert password_only_target["source_config"]["password"] == "hive_pwd"
 
@@ -1837,14 +2201,27 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
             captured.update({"group_id": group_id, "groups": groups, "kwargs": kwargs})
 
     manager.datasource_dao = GroupStore()
-    assert asyncio.run(manager.replace_table_groups_async("ds_a", [
-        {"table_group_name": "空分组", "table_names": ["missing"]},
-        {"table_group_name": "  ", "table_names": ["orders"]},
-    ])) is True
+    assert (
+        asyncio.run(
+            manager.replace_table_groups_async(
+                "ds_a",
+                [
+                    {"table_group_name": "空分组", "table_names": ["missing"]},
+                    {"table_group_name": "  ", "table_names": ["orders"]},
+                ],
+            )
+        )
+        is True
+    )
     assert captured["groups"] == []
 
     table = manager._find_table_column(
-        {"ds_tables": [{"table_name": "users", "columns": [{"name": "id"}]}, {"table_name": "orders", "columns": [{"name": "id"}]}]},
+        {
+            "ds_tables": [
+                {"table_name": "users", "columns": [{"name": "id"}]},
+                {"table_name": "orders", "columns": [{"name": "id"}]},
+            ]
+        },
         "orders",
         "id",
     )
@@ -1867,13 +2244,15 @@ def test_datasource_manager_table_indexes_validate_and_persist():
     class IndexStore(_FakeStore):
         def __init__(self):
             super().__init__()
-            self.datasources["ds_a"]["ds_tables"] = [{
-                "table_name": "orders",
-                "columns": [{"name": "id"}, {"name": "status"}, {"name": "created_at"}],
-                "primary_keys": [],
-                "unique_indexes": [{"name": "uniq_physical", "columns": ["id"]}],
-                "indexes": [{"name": "idx_physical", "columns": ["created_at"]}],
-            }]
+            self.datasources["ds_a"]["ds_tables"] = [
+                {
+                    "table_name": "orders",
+                    "columns": [{"name": "id"}, {"name": "status"}, {"name": "created_at"}],
+                    "primary_keys": [],
+                    "unique_indexes": [{"name": "uniq_physical", "columns": ["id"]}],
+                    "indexes": [{"name": "idx_physical", "columns": ["created_at"]}],
+                }
+            ]
             self.index_payload = {
                 "physical": [{"index_type": "secondary", "index_name": "idx_physical", "columns": ["created_at"]}],
                 "manual": [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}],
@@ -1908,23 +2287,29 @@ def test_datasource_manager_table_indexes_validate_and_persist():
         "physical": [{"index_type": "secondary", "index_name": "idx_physical", "columns": ["created_at"]}],
         "manual": [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}],
     }
-    saved = asyncio.run(manager.replace_table_indexes_async(
-        "ds_a", "orders", payload, operator="u1", operator_name="用户1"
-    ))
+    saved = asyncio.run(
+        manager.replace_table_indexes_async("ds_a", "orders", payload, operator="u1", operator_name="用户1")
+    )
     assert saved[0]["index_name"] == "PRIMARY"
     assert store.saved_indexes["update_by"] == "u1"
     assert store.saved_indexes["update_by_name"] == "用户1"
 
 
-@pytest.mark.parametrize(("indexes", "message"), [
-    ([{"index_type": "bad", "index_name": "idx_x", "columns": ["id"]}], "索引类型"),
-    ([{"index_type": "secondary", "index_name": "wrong", "columns": ["id"]}], "必须以 idx_ 开头"),
-    ([{"index_type": "unique", "index_name": "uniq_x", "columns": ["missing"]}], "索引字段不存在"),
-    ([{"index_type": "secondary", "index_name": "idx_x", "columns": ["id", "id"]}], "不能重复配置字段"),
-    ([{"index_type": "secondary", "index_name": "idx_physical", "columns": ["id"]}], "与物理索引重复"),
-    ([{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}] * 2, "只能配置一个主键"),
-    ([{"index_type": "secondary", "index_name": f"idx_{index}", "columns": ["id"]} for index in range(6)], "不能超过 5 个"),
-])
+@pytest.mark.parametrize(
+    ("indexes", "message"),
+    [
+        ([{"index_type": "bad", "index_name": "idx_x", "columns": ["id"]}], "索引类型"),
+        ([{"index_type": "secondary", "index_name": "wrong", "columns": ["id"]}], "必须以 idx_ 开头"),
+        ([{"index_type": "unique", "index_name": "uniq_x", "columns": ["missing"]}], "索引字段不存在"),
+        ([{"index_type": "secondary", "index_name": "idx_x", "columns": ["id", "id"]}], "不能重复配置字段"),
+        ([{"index_type": "secondary", "index_name": "idx_physical", "columns": ["id"]}], "与物理索引重复"),
+        ([{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}] * 2, "只能配置一个主键"),
+        (
+            [{"index_type": "secondary", "index_name": f"idx_{index}", "columns": ["id"]} for index in range(6)],
+            "不能超过 5 个",
+        ),
+    ],
+)
 def test_datasource_manager_rejects_invalid_table_indexes(indexes, message):
     table = {
         "columns": [{"name": "id"}, {"name": "status"}],
@@ -1957,8 +2342,12 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
 
     assert created["called"] is True
 
-    first = __import__("apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
-    second = __import__("apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
+    first = __import__(
+        "apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]
+    ).get_datasource_manager()
+    second = __import__(
+        "apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]
+    ).get_datasource_manager()
     assert first is second
     assert isinstance(first.datasource_dao, FakeDatasourceDao)
 
@@ -1982,10 +2371,21 @@ def test_datasource_manager_helper_fallback_branches(monkeypatch):
     )
     assert _build_member_source_identity({"host": "h", "port": 3306, "database": "d"}, "mysql") == "h:3306:d"
 
-    meta_config = _build_meta_source_config({
-        "source_config": {"host": "h", "port": 10000, "database": "d"},
-        "member_sources": [{"member_datasource_id": "", "org_name": "机构A", "org_code": "", "host": "h", "port": 10000, "database": "d"}],
-    })
+    meta_config = _build_meta_source_config(
+        {
+            "source_config": {"host": "h", "port": 10000, "database": "d"},
+            "member_sources": [
+                {
+                    "member_datasource_id": "",
+                    "org_name": "机构A",
+                    "org_code": "",
+                    "host": "h",
+                    "port": 10000,
+                    "database": "d",
+                }
+            ],
+        }
+    )
     assert "org_code" not in meta_config
     assert meta_config["org_name"] == "机构A"
     assert meta_config["query_executor_type"] == "direct"
@@ -2032,15 +2432,17 @@ def test_datasource_manager_async_save_datasource_supports_minimal_payloads():
 
     manager.datasource_dao = MinimalAsyncStore()
 
-    result = asyncio.run(manager._save_datasource_async(
-        datasource_id="ds_async_min",
-        group_name="异步最小数据源",
-        group_desc="",
-        source_type="mysql",
-        query_executor_type="direct",
-        template_source="h:3306:d",
-        member_source_configs=[],
-    ))
+    result = asyncio.run(
+        manager._save_datasource_async(
+            datasource_id="ds_async_min",
+            group_name="异步最小数据源",
+            group_desc="",
+            source_type="mysql",
+            query_executor_type="direct",
+            template_source="h:3306:d",
+            member_source_configs=[],
+        )
+    )
 
     assert result["id"] == "ds_async_min"
     assert calls[0][1]["template_source"] == "h:3306:d"
@@ -2088,12 +2490,22 @@ def test_datasource_manager_lookup_and_table_failure_paths(monkeypatch):
 def test_datasource_manager_update_datasource_without_live_source_change():
     store = _FakeStore()
     store.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "db_a"}
+        {
+            "member_datasource_id": "ORG_A",
+            "org_name": "机构A",
+            "org_code": "ORG_A",
+            "query_executor_type": "direct",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "db_a",
+        }
     ]
     store.datasources["ds_a"]["template_datasource_id"] = "ORG_A"
     manager = _build_manager(store)
     saved_calls = []
-    manager._save_datasource_async = lambda **kwargs: asyncio.sleep(0, result=(saved_calls.append(kwargs) or {"id": kwargs["datasource_id"], "name": kwargs["group_name"]}))
+    manager._save_datasource_async = lambda **kwargs: asyncio.sleep(
+        0, result=(saved_calls.append(kwargs) or {"id": kwargs["datasource_id"], "name": kwargs["group_name"]})
+    )
 
     assert asyncio.run(manager.update_datasource_async("missing")) is None
     updated = asyncio.run(manager.update_datasource_async("ds_a", update_by="u2"))

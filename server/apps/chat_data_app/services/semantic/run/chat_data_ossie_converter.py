@@ -200,28 +200,30 @@ def _metric_extension_data(item: dict[str, Any], datatype: str | None) -> dict[s
     if column_dict:
         data["column_dict"] = column_dict
     if _is_derived_metric(item):
-        data.update({
-            "metric_kind": "derived",
-            "base_metric": _text(item.get("base_metric")),
-            "definition": derived_metric_verbalization(item),
-            "period": item.get("period") or {},
-            "filters": item.get("filters") or [],
-        })
+        data.update(
+            {
+                "metric_kind": "derived",
+                "base_metric": _text(item.get("base_metric")),
+                "definition": derived_metric_verbalization(item),
+                "period": item.get("period") or {},
+                "filters": item.get("filters") or [],
+            }
+        )
     elif _is_composite_metric(item):
-        data.update({
-            "metric_kind": "composite",
-            "formula": _text(item.get("formula")),
-            "metric_refs": parse_formula_refs(item.get("formula")),
-        })
+        data.update(
+            {
+                "metric_kind": "composite",
+                "formula": _text(item.get("formula")),
+                "metric_refs": parse_formula_refs(item.get("formula")),
+            }
+        )
     return data
 
 
 def _metrics_by_name(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """指标名 → 配置：派生/复合指标解析成员时复用同一份索引。"""
     return {
-        item.get("name"): item
-        for item in config.get("metrics") or []
-        if isinstance(item, dict) and item.get("name")
+        item.get("name"): item for item in config.get("metrics") or [] if isinstance(item, dict) and item.get("name")
     }
 
 
@@ -279,9 +281,7 @@ def _load_ossie_types() -> tuple[Any, ...]:
             OSISemanticModel,
         )
     except ImportError as exc:
-        raise RuntimeError(
-            "Apache Ossie Python 包未安装，无法生成语义模型快照；请安装 apache-ossie"
-        ) from exc
+        raise RuntimeError("Apache Ossie Python 包未安装，无法生成语义模型快照；请安装 apache-ossie") from exc
     return (
         OSICustomExtension,
         OSIDataset,
@@ -304,10 +304,7 @@ def _wrap_ossie_key_lists(data: dict[str, Any]) -> None:
             if "primary_key" in dataset:
                 dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
             if "unique_keys" in dataset:
-                dataset["unique_keys"] = [
-                    _FlowStyleList(columns)
-                    for columns in dataset["unique_keys"]
-                ]
+                dataset["unique_keys"] = [_FlowStyleList(columns) for columns in dataset["unique_keys"]]
 
 
 class ChatDataToOssieConverter:
@@ -352,17 +349,21 @@ class ChatDataToOssieConverter:
             OSIRelationship,
             OSICustomExtension,
         )
-        metrics = self._metrics(normalized, OSIMetric, OSIExpression, OSIDialectExpression, OSICustomExtension, OSIDataType)
-        extension = _extension({
-            "semantic_config_id": config_id,
-            "source_type": _text(source_type),
-            "update_time": _text(normalized.get("update_time")),
-            "snapshot_role": "model_reference_only",
-            # Ossie 的 dataset→field 两级结构会把平铺维度按表聚簇，平铺顺序在 YAML 里
-            # 没有位置可放；写入原始顺序清单（table.column 键），导入侧据此还原，
-            # 保证「物化下载→再导入」往返后维度顺序与库中一致。
-            "dimension_order": _dimension_order(normalized.get("dimensions")),
-        })
+        metrics = self._metrics(
+            normalized, OSIMetric, OSIExpression, OSIDialectExpression, OSICustomExtension, OSIDataType
+        )
+        extension = _extension(
+            {
+                "semantic_config_id": config_id,
+                "source_type": _text(source_type),
+                "update_time": _text(normalized.get("update_time")),
+                "snapshot_role": "model_reference_only",
+                # Ossie 的 dataset→field 两级结构会把平铺维度按表聚簇，平铺顺序在 YAML 里
+                # 没有位置可放；写入原始顺序清单（table.column 键），导入侧据此还原，
+                # 保证「物化下载→再导入」往返后维度顺序与库中一致。
+                "dimension_order": _dimension_order(normalized.get("dimensions")),
+            }
+        )
         model = OSISemanticModel(
             name=_text(normalized.get("name") or config_id),
             description=_text(normalized.get("description")) or None,
@@ -415,8 +416,21 @@ class ChatDataToOssieConverter:
             result.append(_config_id(config))
         return result
 
-    def _dataset(self, table: str, config: dict[str, Any], dataset_type: Any, field_type: Any, expression_type: Any, dialect_type: Any, dimension_type: Any, extension_type: Any, datatype_type: Any) -> Any:
-        fields = self._dataset_fields(config, table, field_type, expression_type, dialect_type, dimension_type, extension_type, datatype_type)
+    def _dataset(
+        self,
+        table: str,
+        config: dict[str, Any],
+        dataset_type: Any,
+        field_type: Any,
+        expression_type: Any,
+        dialect_type: Any,
+        dimension_type: Any,
+        extension_type: Any,
+        datatype_type: Any,
+    ) -> Any:
+        fields = self._dataset_fields(
+            config, table, field_type, expression_type, dialect_type, dimension_type, extension_type, datatype_type
+        )
         primary_key, unique_keys = self._dataset_keys(table, config)
         return dataset_type(
             name=table,
@@ -424,7 +438,9 @@ class ChatDataToOssieConverter:
             primary_key=primary_key,
             unique_keys=unique_keys or [[]],
             fields=fields,
-            custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
+            custom_extensions=[
+                extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])
+            ],
         )
 
     def _append_dataset_field(
@@ -448,15 +464,23 @@ class ChatDataToOssieConverter:
         if not name or not expression:
             return
         datatype = self._dimension_datatype(config, item)
-        fields.append(field_type(
-            name=name,
-            expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
-            dimension=dimension_type(is_time=_text(item.get("logical_type")).lower() in {"date", "datetime", "timestamp", "time"}) if item.get("logical_type") else None,
-            label=_text(item.get("label")) or None,
-            description=_text(item.get("description") or item.get("metadata_supplement")) or None,
-            datatype=datatype_type(datatype) if datatype else None,
-            custom_extensions=[extension_type(**x) for x in (_extension(_dimension_extension_data(item, datatype)) or [])],
-        ))
+        fields.append(
+            field_type(
+                name=name,
+                expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
+                dimension=dimension_type(
+                    is_time=_text(item.get("logical_type")).lower() in {"date", "datetime", "timestamp", "time"}
+                )
+                if item.get("logical_type")
+                else None,
+                label=_text(item.get("label")) or None,
+                description=_text(item.get("description") or item.get("metadata_supplement")) or None,
+                datatype=datatype_type(datatype) if datatype else None,
+                custom_extensions=[
+                    extension_type(**x) for x in (_extension(_dimension_extension_data(item, datatype)) or [])
+                ],
+            )
+        )
 
     def _dataset_fields(
         self,
@@ -473,38 +497,39 @@ class ChatDataToOssieConverter:
         fields = []
         for item in config.get("dimensions") or []:
             self._append_dataset_field(
-                fields, item, config, table, field_type, expression_type, dialect_type,
-                dimension_type, extension_type, datatype_type,
+                fields,
+                item,
+                config,
+                table,
+                field_type,
+                expression_type,
+                dialect_type,
+                dimension_type,
+                extension_type,
+                datatype_type,
             )
         return fields
 
     @staticmethod
     def _find_table_config(config: dict[str, Any], table: str) -> dict[str, Any]:
-        return next((
-            item for item in config.get("tables") or []
-            if isinstance(item, dict) and _table_name(item) == table
-        ), {})
+        return next(
+            (item for item in config.get("tables") or [] if isinstance(item, dict) and _table_name(item) == table), {}
+        )
 
     @staticmethod
     def _physical_primary_keys(table_config: dict[str, Any]) -> list[list[str]]:
-        return [
-            columns for value in table_config.get("primary_keys") or []
-            if (columns := _key_columns(value))
-        ]
+        return [columns for value in table_config.get("primary_keys") or [] if (columns := _key_columns(value))]
 
     @staticmethod
     def _manual_indexes(table_config: dict[str, Any]) -> list[dict[str, Any]]:
-        return [
-            item for item in table_config.get("manual_indexes") or []
-            if isinstance(item, dict)
-        ]
+        return [item for item in table_config.get("manual_indexes") or [] if isinstance(item, dict)]
 
     @staticmethod
     def _manual_primary_keys(manual_indexes: list[dict[str, Any]]) -> list[list[str]]:
         return [
-            columns for item in manual_indexes
-            if _text(item.get("index_type")).lower() == "primary"
-            and (columns := _key_columns(item.get("columns")))
+            columns
+            for item in manual_indexes
+            if _text(item.get("index_type")).lower() == "primary" and (columns := _key_columns(item.get("columns")))
         ]
 
     @staticmethod
@@ -538,11 +563,14 @@ class ChatDataToOssieConverter:
                 continue
             if _text(column.get("name")).casefold() != column_name:
                 continue
-            physical_type = next((
-                _text(column.get(key))
-                for key in ("mysql_type", "hive_type", "type", "data_type")
-                if _text(column.get(key))
-            ), "")
+            physical_type = next(
+                (
+                    _text(column.get(key))
+                    for key in ("mysql_type", "hive_type", "type", "data_type")
+                    if _text(column.get(key))
+                ),
+                "",
+            )
             if physical_type:
                 return physical_type
         return ""
@@ -578,14 +606,28 @@ class ChatDataToOssieConverter:
                 return _datatype(physical_type)
         return _datatype(dimension.get("logical_type"))
 
-    def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:
+    def _metrics(
+        self,
+        config: dict[str, Any],
+        metric_type: Any,
+        expression_type: Any,
+        dialect_type: Any,
+        extension_type: Any,
+        datatype_type: Any,
+    ) -> list[Any]:
         metrics_map = _metrics_by_name(config)
         result = []
         for item in config.get("metrics") or []:
             if not isinstance(item, dict) or not _text(item.get("name")):
                 continue
             metric = self._build_metric(
-                item, metrics_map, metric_type, expression_type, dialect_type, extension_type, datatype_type,
+                item,
+                metrics_map,
+                metric_type,
+                expression_type,
+                dialect_type,
+                extension_type,
+                datatype_type,
             )
             if metric is not None:
                 result.append(metric)
@@ -640,22 +682,34 @@ class ChatDataToOssieConverter:
             conditions = [condition for condition in item.get("join_conditions") or [] if isinstance(condition, dict)]
             if not left or not right or not conditions:
                 continue
-            from_table, to_table, from_columns, to_columns, rel_type = self._relationship_direction(item, conditions, left, right)
+            from_table, to_table, from_columns, to_columns, rel_type = self._relationship_direction(
+                item, conditions, left, right
+            )
             if not all(from_columns) or not all(to_columns):
                 continue
-            result.append(relationship_type(
-                name=f"{from_table}__{to_table}__{index}",
-                **{"from": from_table},
-                to=to_table,
-                from_columns=from_columns,
-                to_columns=to_columns,
-                custom_extensions=[extension_type(**x) for x in (_extension({
-                    "relationship_type": rel_type,
-                    "join_type": _text(item.get("join_type")),
-                    "left_table": left,
-                    "right_table": right,
-                }) or [])],
-            ))
+            result.append(
+                relationship_type(
+                    name=f"{from_table}__{to_table}__{index}",
+                    **{"from": from_table},
+                    to=to_table,
+                    from_columns=from_columns,
+                    to_columns=to_columns,
+                    custom_extensions=[
+                        extension_type(**x)
+                        for x in (
+                            _extension(
+                                {
+                                    "relationship_type": rel_type,
+                                    "join_type": _text(item.get("join_type")),
+                                    "left_table": left,
+                                    "right_table": right,
+                                }
+                            )
+                            or []
+                        )
+                    ],
+                )
+            )
         return result
 
     @staticmethod
@@ -668,7 +722,20 @@ class ChatDataToOssieConverter:
         """按关系类型决定 from/to 方向：one_to_many 反转，其余保持 left→right；一并返回 rel_type 供扩展字段复用。"""
         rel_type = _relationship_type(item.get("relationship_type"))
         if rel_type == "one_to_many":
-            return right, left, [_text(c.get("right_column")) for c in conditions], [_text(c.get("left_column")) for c in conditions], rel_type
-        return left, right, [_text(c.get("left_column")) for c in conditions], [_text(c.get("right_column")) for c in conditions], rel_type
+            return (
+                right,
+                left,
+                [_text(c.get("right_column")) for c in conditions],
+                [_text(c.get("left_column")) for c in conditions],
+                rel_type,
+            )
+        return (
+            left,
+            right,
+            [_text(c.get("left_column")) for c in conditions],
+            [_text(c.get("right_column")) for c in conditions],
+            rel_type,
+        )
+
 
 __all__ = ["ChatDataToOssieConverter"]

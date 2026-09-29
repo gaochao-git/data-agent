@@ -87,8 +87,7 @@ def test_docx_merged_cells_expanded_before_markitdown(tmp_path):
     assert sum(row.count("半年数据") for row in table_rows) == 2, "横向合并内容应重复填充"
     assert sum(row.count("B 机构") for row in table_rows) == 2, "纵向合并内容应重复填充"
     last_row = table_rows[-1]
-    assert all(token in last_row for token in ("B 机构", "80", "90", "170")), \
-        "延续行不得串列"
+    assert all(token in last_row for token in ("B 机构", "80", "90", "170")), "延续行不得串列"
 
 
 def test_docx_without_merge_keeps_original_file(tmp_path):

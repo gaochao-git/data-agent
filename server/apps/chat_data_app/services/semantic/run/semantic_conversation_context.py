@@ -265,8 +265,8 @@ def _query_requests_all_execution_targets(user_query: str | None) -> bool:
 
 
 def _target_member_ids(execution_targets: list[dict[str, Any]]) -> list[str]:
-    return list(dict.fromkeys(
-        member_id
-        for target in execution_targets
-        if (member_id := get_execution_target_member_id(target))
-    ))
+    return list(
+        dict.fromkeys(
+            member_id for target in execution_targets if (member_id := get_execution_target_member_id(target))
+        )
+    )

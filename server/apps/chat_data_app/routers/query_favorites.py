@@ -25,6 +25,7 @@ from . import JSON_API_RESPONSES
 
 router = APIRouter(tags=["ChatData 查询收藏"], responses=JSON_API_RESPONSES)
 
+
 def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
     return current_user if current_user is not None else _get_current_user(request)
 
@@ -51,7 +52,9 @@ async def get_query_favorites(
         raise
     except Exception as e:
         logger.error("获取收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="获取收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_LIST_FAILED, status="error"
+        )
 
 
 @router.post("/query-favorites")
@@ -75,7 +78,9 @@ async def create_query_favorite(
         raise
     except Exception as e:
         logger.error("创建收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="创建收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED, status="error")
+        return business_response(
+            msg="创建收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED, status="error"
+        )
 
 
 @router.put("/query-favorites/{favorite_id}")
@@ -103,7 +108,9 @@ async def update_query_favorite(
         raise
     except Exception as e:
         logger.error("更新收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="更新收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED, status="error")
+        return business_response(
+            msg="更新收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED, status="error"
+        )
 
 
 @router.delete("/query-favorites/{favorite_id}")
@@ -127,4 +134,6 @@ async def delete_query_favorite(
         raise
     except Exception as e:
         logger.error("删除收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="删除收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED, status="error")
+        return business_response(
+            msg="删除收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED, status="error"
+        )

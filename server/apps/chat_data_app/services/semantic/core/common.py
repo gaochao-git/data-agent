@@ -23,9 +23,7 @@ def build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:
         table_name = table.get("table_name")
         if table_name:
             table_columns[table_name] = {
-                column.get("name")
-                for column in table.get("columns", []) or []
-                if column.get("name")
+                column.get("name") for column in table.get("columns", []) or [] if column.get("name")
             }
     return table_columns
 
@@ -44,4 +42,3 @@ def ensure_dimension_logical_type(dimension: Dict[str, Any]) -> Dict[str, Any]:
 
 def is_time_logical_dimension(config: Dict[str, Any]) -> bool:
     return normalize_logical_type((config or {}).get("logical_type")) in {"date", "datetime"}
-

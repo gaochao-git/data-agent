@@ -91,14 +91,26 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
         if config.server_id == "bad":
             raise RuntimeError("simulated connection failure")
         opens["count"] += 1
-        yield _fake_client(lambda: _list_result([
-            _tool_obj("echo", "回显输入文本", {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
-            _tool_obj("greet", "必选+可选参数", {
-                "type": "object",
-                "properties": {"name": {"type": "string"}, "greeting": {"type": "string"}},
-                "required": ["name"],
-            }),
-        ]))
+        yield _fake_client(
+            lambda: _list_result(
+                [
+                    _tool_obj(
+                        "echo",
+                        "回显输入文本",
+                        {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                    ),
+                    _tool_obj(
+                        "greet",
+                        "必选+可选参数",
+                        {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}, "greeting": {"type": "string"}},
+                            "required": ["name"],
+                        },
+                    ),
+                ]
+            )
+        )
 
     manager = MCPToolManager(
         tool_timeout_seconds=10,
@@ -198,10 +210,12 @@ def test_env_config_invalid_entry_skipped_valid_kept(monkeypatch):
 
     monkeypatch.setenv(
         MCP_SERVERS_ENV,
-        json.dumps([
-            {"id": "good", "transport": "stdio", "command": "x"},
-            {"id": "BAD ID", "transport": "stdio", "command": "x"},
-        ]),
+        json.dumps(
+            [
+                {"id": "good", "transport": "stdio", "command": "x"},
+                {"id": "BAD ID", "transport": "stdio", "command": "x"},
+            ]
+        ),
     )
     configs = mcp_config._env_mcp_server_configs()
     assert [c.server_id for c in configs] == ["good"]
@@ -210,10 +224,12 @@ def test_env_config_invalid_entry_skipped_valid_kept(monkeypatch):
 def test_env_config_disabled_entry_excluded(monkeypatch):
     monkeypatch.setenv(
         MCP_SERVERS_ENV,
-        json.dumps([
-            {"id": "off", "transport": "stdio", "command": "x", "enabled": False},
-            {"id": "on", "transport": "stdio", "command": "x"},
-        ]),
+        json.dumps(
+            [
+                {"id": "off", "transport": "stdio", "command": "x", "enabled": False},
+                {"id": "on", "transport": "stdio", "command": "x"},
+            ]
+        ),
     )
     configs = load_mcp_server_configs()
     assert [c.server_id for c in configs] == ["on"]

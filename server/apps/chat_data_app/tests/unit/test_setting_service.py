@@ -75,9 +75,7 @@ def harness(monkeypatch):
 
     async def fetch_rows(setting_key):
         async with session_factory() as session:
-            result = await session.execute(
-                select(ChatDataSetting).where(ChatDataSetting.setting_key == setting_key)
-            )
+            result = await session.execute(select(ChatDataSetting).where(ChatDataSetting.setting_key == setting_key))
             return result.scalars().all()
 
     monkeypatch.setattr(setting_service, "transaction_scope", test_transaction_scope)
@@ -102,9 +100,9 @@ async def test_table_override_wins_and_ttl_cache_serves_within_ttl(harness, monk
 
     # TTL 内第二次读走缓存（缓存的是表原始字符串），直接改库不影响本次 TTL 窗口
     async with harness.scope() as session:
-        row = (await session.execute(
-            select(ChatDataSetting).where(ChatDataSetting.setting_key == REGISTERED_KEY)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataSetting).where(ChatDataSetting.setting_key == REGISTERED_KEY))
+        ).scalar_one()
         row.setting_value = "30"
     assert await setting_service.get_runtime_setting(REGISTERED_KEY) == 20
 
@@ -171,7 +169,9 @@ async def test_db_failure_falls_back_without_raising(harness, monkeypatch):
 
 def test_parse_registered_value_type_branches():
     bool_spec = setting_service.SettingSpec(key="X_FLAG", value_type="bool", default=False, category="query")
-    float_spec = setting_service.SettingSpec(key="X_RATIO", value_type="float", default=0.5, category="query", minimum=0, maximum=1)
+    float_spec = setting_service.SettingSpec(
+        key="X_RATIO", value_type="float", default=0.5, category="query", minimum=0, maximum=1
+    )
     string_spec = setting_service.SettingSpec(key="X_TEXT", value_type="string", default="", category="upload_preview")
 
     assert setting_service._parse_registered_value(bool_spec, "TRUE") is True
@@ -189,12 +189,18 @@ def test_parse_registered_value_type_branches():
 @pytest.mark.asyncio
 async def test_upsert_create_update_and_restore_keeps_create_audit(harness):
     created = await setting_service.upsert_setting(
-        TEST_KEY, "维护中", user_id="u1", username="管理员",
+        TEST_KEY,
+        "维护中",
+        user_id="u1",
+        username="管理员",
     )
     assert created == {"setting_key": TEST_KEY, "action": "created"}
 
     updated = await setting_service.upsert_setting(
-        TEST_KEY, "维护完成", user_id="u2", username="运维二号",
+        TEST_KEY,
+        "维护完成",
+        user_id="u2",
+        username="运维二号",
     )
     assert updated["action"] == "updated"
     rows = await harness.fetch_rows(TEST_KEY)
@@ -205,7 +211,10 @@ async def test_upsert_create_update_and_restore_keeps_create_audit(harness):
 
     await setting_service.delete_setting(TEST_KEY, user_id="u2", username="运维二号")
     restored = await setting_service.upsert_setting(
-        TEST_KEY, "重新上线", user_id="u3", username="运维三号",
+        TEST_KEY,
+        "重新上线",
+        user_id="u3",
+        username="运维三号",
     )
     assert restored["action"] == "restored"
     rows = await harness.fetch_rows(TEST_KEY)

@@ -29,6 +29,7 @@ from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import
 
 # ---------------------------------------------------------------- 周期
 
+
 def test_between_period_range_requires_start_and_end():
     with pytest.raises(ValueError, match="缺少 start/end"):
         _between_period_range({})
@@ -39,6 +40,7 @@ def test_describe_period_between_kind():
 
 
 # ---------------------------------------------------------------- 维度映射
+
 
 def test_mapped_dimension_value_passthrough_without_mapping():
     dim = {"name": "状态"}
@@ -60,8 +62,7 @@ def test_mapped_dimension_value_case_insensitive_match_and_miss():
 # ---------------------------------------------------------------- 派生指标过滤叶子
 
 _TIME_DIM = {"name": "下单时间", "logical_type": "datetime", "table": "orders"}
-_STATUS_DIM = {"name": "订单状态", "logical_type": "enum", "table": "orders",
-               "mapping": {"paid": "已支付"}}
+_STATUS_DIM = {"name": "订单状态", "logical_type": "enum", "table": "orders", "mapping": {"paid": "已支付"}}
 
 
 def test_filter_leaves_skips_period_when_absent():
@@ -104,19 +105,23 @@ def test_resolve_derived_metric_rejects_derived_base():
 
 # ---------------------------------------------------------------- 派生指标口述化
 
+
 def test_verbalization_without_base_name_and_with_list_value():
     """无 base_metric（275->277）、list 值拼接（284->285）、空 dimension 跳过（288->280）。"""
-    text = derived_metric_verbalization({
-        "period": {"kind": "this_month"},
-        "filters": [
-            {"dimension": "订单状态", "operator": "=", "value": ["paid", "refund"]},
-            {"dimension": "", "operator": "=", "value": "x"},
-        ],
-    })
+    text = derived_metric_verbalization(
+        {
+            "period": {"kind": "this_month"},
+            "filters": [
+                {"dimension": "订单状态", "operator": "=", "value": ["paid", "refund"]},
+                {"dimension": "", "operator": "=", "value": "x"},
+            ],
+        }
+    )
     assert text == "本月 · 订单状态=paid、refund"
 
 
 # ---------------------------------------------------------------- 复合指标
+
 
 def _metrics_map():
     return {

@@ -12,6 +12,7 @@ from apps.chat_data_app.services.semantic.core import filter_normalization as fn
 
 # ============ filter_normalization ============
 
+
 def test_split_text_between_filter_keeps_node_without_two_sides():
     node = {"operator": "BETWEEN", "value": "only-one"}
     assert fn.split_text_between_filter(node) is node
@@ -33,6 +34,7 @@ def test_normalize_time_filter_leaf_non_time_value_keeps_node():
 
 
 # ============ tool_results ============
+
 
 def test_parse_internal_tool_result_requires_dict_payload_and_meta():
     content = tr.build_internal_query_result({"status": "succeeded"}, query_mode="standard")
@@ -62,10 +64,13 @@ def test_merge_tool_result_recovery_keeps_existing_and_wraps_foreign_artifacts()
     assert tr.merge_tool_result_recovery_artifact({"a": 1}, {"version": 1})["a"] == 1
     merged = tr.merge_tool_result_recovery_artifact("raw-artifact", {"version": 1})
     assert merged["source_artifact"] == "raw-artifact"
-    assert tr.merge_tool_result_recovery_artifact(None, {"version": 1}) == {"chatdata_tool_result_recovery": {"version": 1}}
+    assert tr.merge_tool_result_recovery_artifact(None, {"version": 1}) == {
+        "chatdata_tool_result_recovery": {"version": 1}
+    }
 
 
 # ============ tool_call_normalizer ============
+
 
 def test_is_exact_repeat_of_rejects_empty_tool_name():
     assert tcn._is_exact_repeat_of("abcabc", "") is False
@@ -132,6 +137,7 @@ async def test_normalizer_middleware_passthrough_when_result_empty():
 
 
 # ============ redis_event_bus ============
+
 
 def _bus_with(fake_redis, fake_read_redis=None) -> reb.RedisEventBus:
     # __new__ 绕过 __init__，须补齐全部实例属性（含双档客户端）

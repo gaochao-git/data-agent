@@ -80,11 +80,13 @@ def normalize_temporal_exclusive_upper(value: Any, *, inclusive: bool) -> str | 
 
 
 def normalize_default_filter(filter_item: dict[str, Any], dimension: Any, value: Any) -> list[Any]:
-    return [{
-        "dimension": dimension,
-        "operator": filter_item.get("operator"),
-        "value": value,
-    }]
+    return [
+        {
+            "dimension": dimension,
+            "operator": filter_item.get("operator"),
+            "value": value,
+        }
+    ]
 
 
 def normalize_temporal_between_filter(dimension: Any, value: Any) -> list[Any] | None:

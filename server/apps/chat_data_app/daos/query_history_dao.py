@@ -44,7 +44,9 @@ class QueryHistoryDao:
             return
         source_values = [item for item in source_filter if item]
         if "" in source_filter:
-            conditions.append(or_(ChatDataQueryTask.query_type.in_(source_values), ChatDataQueryTask.query_type.is_(None)))
+            conditions.append(
+                or_(ChatDataQueryTask.query_type.in_(source_values), ChatDataQueryTask.query_type.is_(None))
+            )
             return
         conditions.append(ChatDataQueryTask.query_type.in_(source_filter))
 
@@ -70,13 +72,15 @@ class QueryHistoryDao:
             conditions.append(ChatDataQueryExecution.user_id == user_id)
         if username:
             username_keyword = f"%{username}%"
-            conditions.append(or_(
-                ChatDataQueryExecution.create_by_name.like(username_keyword),
-                ChatDataQueryExecution.update_by_name.like(username_keyword),
-                ChatDataQueryTask.create_by_name.like(username_keyword),
-                ChatDataQueryTask.update_by_name.like(username_keyword),
-                ChatDataQueryTask.request_payload.like(username_keyword),
-            ))
+            conditions.append(
+                or_(
+                    ChatDataQueryExecution.create_by_name.like(username_keyword),
+                    ChatDataQueryExecution.update_by_name.like(username_keyword),
+                    ChatDataQueryTask.create_by_name.like(username_keyword),
+                    ChatDataQueryTask.update_by_name.like(username_keyword),
+                    ChatDataQueryTask.request_payload.like(username_keyword),
+                )
+            )
         if keyword:
             conditions.append(ChatDataQueryExecution.sql_text.like(f"%{keyword}%"))
         if semantic_config_id:
@@ -195,7 +199,9 @@ class QueryHistoryDao:
         if not execution_id:
             return None
         async with self._session_context() as db:
-            result = await db.execute(select(ChatDataQueryExecution).filter_by(execution_id=execution_id, delete_flag=0))
+            result = await db.execute(
+                select(ChatDataQueryExecution).filter_by(execution_id=execution_id, delete_flag=0)
+            )
             return result.scalar_one_or_none()
 
     async def list_running_executions(

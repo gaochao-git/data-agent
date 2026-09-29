@@ -47,7 +47,9 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
     )
 
     assert list_response.status_code == 200
-    assert list_response.json()["data"]["files"] == [{"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"}]
+    assert list_response.json()["data"]["files"] == [
+        {"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"}
+    ]
     assert read_response.status_code == 200
     assert read_response.json()["data"]["content"] == "{}"
 

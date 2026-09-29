@@ -165,9 +165,7 @@ def test_free_expression_rejects_unsafe_sql(validator):
 
 def test_free_expression_rejects_value_type_without_expression(validator):
     """只给 valueType 不给 rightExpression 时报错。"""
-    _, err = validator.validate_filters(
-        [{"dimension": "city", "operator": "=", "valueType": "expression"}]
-    )
+    _, err = validator.validate_filters([{"dimension": "city", "operator": "=", "valueType": "expression"}])
     assert "必须同时使用" in err
 
 
@@ -223,9 +221,7 @@ def test_logical_values_rejects_unsupported_logical_type(validator):
 
 def test_enum_config_requires_allowed_values_and_mapping(validator):
     """枚举维度必须同时配置 allowed_values 与 mapping（原缺失行 419）。"""
-    _, err = validator.validate_filters(
-        [{"dimension": "city_broken", "operator": "=", "value": "北京"}]
-    )
+    _, err = validator.validate_filters([{"dimension": "city_broken", "operator": "=", "value": "北京"}])
     assert "必须同时配置 allowed_values 和 mapping" in err
 
 
@@ -279,17 +275,13 @@ def test_date_rejects_non_string(validator):
 def test_datetime_rejects_calendar_invalid_value(validator):
     """格式匹配但日期不存在（如 2 月 30 日），strptime 抛 ValueError（原缺失行 485-486）。"""
     assert InputValidator._is_datetime_text("2026-02-30 10:00:00") is False
-    _, err = validator.validate_filters(
-        [{"dimension": "ts", "operator": "=", "value": "2026-02-30 10:00:00"}]
-    )
+    _, err = validator.validate_filters([{"dimension": "ts", "operator": "=", "value": "2026-02-30 10:00:00"}])
     assert "必须是 yyyy-MM-dd HH:mm:ss 格式" in err
 
 
 def test_datetime_accepts_sql_function_literal(validator):
     """date/datetime 维度允许 SQL 函数字面量（覆盖 403 的 continue 分支）。"""
-    ok, err = validator.validate_filters(
-        [{"dimension": "ts", "operator": "=", "value": "CURRENT_TIMESTAMP()"}]
-    )
+    ok, err = validator.validate_filters([{"dimension": "ts", "operator": "=", "value": "CURRENT_TIMESTAMP()"}])
     assert err is None
     assert ok
 
@@ -315,9 +307,7 @@ def test_normalize_maps_synonym_to_enum_value(validator):
 
 def test_normalize_maps_each_item_in_list(validator):
     """value 为数组时逐项归一化（覆盖 552-553 分支）。"""
-    ok, err = validator.validate_filters(
-        [{"dimension": "city", "operator": "IN", "value": ["北京", "上海"]}]
-    )
+    ok, err = validator.validate_filters([{"dimension": "city", "operator": "IN", "value": ["北京", "上海"]}])
     assert err is None
     assert ok[0]["value"] == ["BJ", "SH"]
 
@@ -406,9 +396,7 @@ def test_expression_having_rejects_unknown_left_metric(validator):
 
 def test_metric_operand_rejects_non_dict(validator):
     """操作数不是对象时报错（原缺失行 630）。"""
-    _, err = validator.validate_having(
-        [{"left": {"type": "metric", "name": "gmv"}, "right": "oops", "operator": "="}]
-    )
+    _, err = validator.validate_having([{"left": {"type": "metric", "name": "gmv"}, "right": "oops", "operator": "="}])
     assert "HAVING 表达式 right 必须是对象" in err
 
 

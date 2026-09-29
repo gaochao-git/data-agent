@@ -71,9 +71,7 @@ class QueryTaskDao:
         """
         async with self._session_context() as db:
             result = await db.execute(
-                select(ChatDataQueryTask)
-                .filter_by(task_id=task_id, delete_flag=0)
-                .with_for_update()
+                select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0).with_for_update()
             )
             task = result.scalar_one_or_none()
             if not task:

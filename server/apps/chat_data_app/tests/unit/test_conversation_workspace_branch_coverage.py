@@ -208,39 +208,56 @@ async def test_runtime_delegates_directory_and_preview_operations(tmp_path, monk
         {"path": "/mnt/user-data/workspace"}
     ]
     assert await runtime.create_dir(path="/mnt/user-data/workspace/new") == {
-        "path": "/mnt/user-data/workspace/new", "type": "dir",
+        "path": "/mnt/user-data/workspace/new",
+        "type": "dir",
     }
     assert await runtime.delete_path(path="/mnt/user-data/workspace/a.txt", recursive=False, expected_type="file") == {
         "deleted": "/mnt/user-data/workspace/a.txt"
     }
-    assert await runtime.move_path(source_path="/mnt/user-data/workspace/a.txt", destination_path="/mnt/user-data/workspace/b.txt") == {
-        "moved": "/mnt/user-data/workspace/b.txt"
-    }
-    assert await runtime.copy_path(source_path="/mnt/user-data/uploads/a.csv", destination_path="/mnt/user-data/workspace/a.csv") == {
-        "copied": "/mnt/user-data/workspace/a.csv"
-    }
+    assert await runtime.move_path(
+        source_path="/mnt/user-data/workspace/a.txt", destination_path="/mnt/user-data/workspace/b.txt"
+    ) == {"moved": "/mnt/user-data/workspace/b.txt"}
+    assert await runtime.copy_path(
+        source_path="/mnt/user-data/uploads/a.csv", destination_path="/mnt/user-data/workspace/a.csv"
+    ) == {"copied": "/mnt/user-data/workspace/a.csv"}
     assert await runtime.search_files(path="/mnt/user-data/workspace", pattern="*.py", max_results=5) == []
-    assert await runtime.read_text_file(file_path="/mnt/user-data/workspace/a.txt", offset=0, limit=10, max_chars=100) == {
-        "content": "stub"
-    }
+    assert await runtime.read_text_file(
+        file_path="/mnt/user-data/workspace/a.txt", offset=0, limit=10, max_chars=100
+    ) == {"content": "stub"}
     assert await runtime.write_text_file(file_path="/mnt/user-data/workspace/a.txt", content="x", mode="overwrite") == {
         "written": True
     }
     assert await runtime.replace_text_file(
-        file_path="/mnt/user-data/workspace/a.txt", old_content="a", new_content="b",
+        file_path="/mnt/user-data/workspace/a.txt",
+        old_content="a",
+        new_content="b",
     ) == {"replaced": True}
     assert await runtime.write_internal_text_files(entries=[("/mnt/user-data/workspace/semantic/m.yaml", "a: 1")]) == []
     assert await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/semantic/m.yaml") == {
-        "path": "/mnt/user-data/workspace/semantic/m.yaml", "type": "file",
+        "path": "/mnt/user-data/workspace/semantic/m.yaml",
+        "type": "file",
     }
     assert await runtime.grep_text(
-        path="/mnt/user-data/workspace", patterns=["x"], glob="**/*", max_results=5, max_chars=100,
+        path="/mnt/user-data/workspace",
+        patterns=["x"],
+        glob="**/*",
+        max_results=5,
+        max_chars=100,
     ) == {"matches": []}
     called = [name for name, _ in backend.calls]
     assert called == [
-        "list_dir", "create_dir", "delete_path", "move_path", "copy_path",
-        "search_files", "read_text_file", "write_text_file", "replace_text_file",
-        "write_internal_text_files", "delete_internal_text_files", "grep_text",
+        "list_dir",
+        "create_dir",
+        "delete_path",
+        "move_path",
+        "copy_path",
+        "search_files",
+        "read_text_file",
+        "write_text_file",
+        "replace_text_file",
+        "write_internal_text_files",
+        "delete_internal_text_files",
+        "grep_text",
     ]
 
 
@@ -323,7 +340,9 @@ def test_resolve_output_skill_directory_rejects_system_results(tmp_path):
     offload = root / "outputs" / cw_runtime_module.TOOL_OFFLOAD_DIR_NAME / "demo-skill"
     _write_output_skill(offload, "demo-skill", "demo-skill")
     with pytest.raises(ValueError, match="不允许导入系统结果目录"):
-        cw_runtime_module.resolve_output_skill_directory(str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/demo-skill")
+        cw_runtime_module.resolve_output_skill_directory(
+            str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/demo-skill"
+        )
 
 
 def test_resolve_output_skill_directory_rejects_non_output_paths(tmp_path):
@@ -421,7 +440,9 @@ async def test_async_workspace_wrappers_delegate(tmp_path, monkeypatch):
     assert text["content"] == "hello"
 
     raw = await read_conversation_workspace_raw_file(
-        "conv_async", user_id="user_a", path="/mnt/user-data/workspace/b.pdf",
+        "conv_async",
+        user_id="user_a",
+        path="/mnt/user-data/workspace/b.pdf",
     )
     assert raw["mime"] == "application/pdf"
     assert raw["data"] == b"%PDF-1.4"
@@ -439,7 +460,9 @@ def test_read_workspace_raw_file_branches(tmp_path):
     target.write_bytes(b"x" * 100)
 
     with pytest.raises(ValueError, match="不在工作区文件预览范围内"):
-        read_workspace_raw_file("conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a")
+        read_workspace_raw_file(
+            "conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a"
+        )
     with pytest.raises(FileNotFoundError, match="文件不存在"):
         read_workspace_raw_file("conv_raw", "/mnt/user-data/workspace/missing.bin", 100, "user_a")
     with pytest.raises(ValueError, match="文件过大"):
@@ -462,7 +485,9 @@ def test_validate_office_preview_source_branches(tmp_path):
     _validate_office_preview_source(root, "/mnt/user-data/workspace/report.docx")
 
     with pytest.raises(ValueError, match="不支持 Office 预览"):
-        _validate_office_preview_source(root, f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.docx")
+        _validate_office_preview_source(
+            root, f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.docx"
+        )
     with pytest.raises(ValueError, match="仅支持 .docx"):
         _validate_office_preview_source(root, "/mnt/user-data/workspace/notes.txt")
     with pytest.raises(FileNotFoundError, match="文件不存在"):
@@ -529,21 +554,30 @@ def test_render_local_office_html_failure_paths(tmp_path, monkeypatch):
     (Path(root) / "workspace" / "report.docx").write_bytes(b"doc")
 
     _patch_officecli(
-        monkeypatch, which_result="/usr/bin/officecli", returncode=1,
-        write_preview=False, stderr="boom",
+        monkeypatch,
+        which_result="/usr/bin/officecli",
+        returncode=1,
+        write_preview=False,
+        stderr="boom",
     )
     with pytest.raises(RuntimeError, match="boom"):
         _render_local_office_html(root, "/mnt/user-data/workspace/report.docx", 100)
 
     _patch_officecli(
-        monkeypatch, which_result="/usr/bin/officecli", returncode=1,
-        write_preview=False, stderr="",
+        monkeypatch,
+        which_result="/usr/bin/officecli",
+        returncode=1,
+        write_preview=False,
+        stderr="",
     )
     with pytest.raises(RuntimeError, match="OfficeCLI HTML 预览失败"):
         _render_local_office_html(root, "/mnt/user-data/workspace/report.docx", 100)
 
     _patch_officecli(
-        monkeypatch, which_result="/usr/bin/officecli", returncode=0, write_preview=False,
+        monkeypatch,
+        which_result="/usr/bin/officecli",
+        returncode=0,
+        write_preview=False,
     )
     with pytest.raises(RuntimeError, match="未生成预览文件"):
         _render_local_office_html(root, "/mnt/user-data/workspace/report.docx", 100)
@@ -553,7 +587,10 @@ def test_render_local_office_html_success_and_truncation(tmp_path, monkeypatch):
     root = str(_runtime_root(tmp_path))
     (Path(root) / "workspace" / "report.docx").write_bytes(b"doc")
     _patch_officecli(
-        monkeypatch, which_result="/usr/bin/officecli", returncode=0, write_preview=True,
+        monkeypatch,
+        which_result="/usr/bin/officecli",
+        returncode=0,
+        write_preview=True,
     )
 
     result = _render_local_office_html(root, "/mnt/user-data/workspace/report.docx", 1000)
@@ -577,18 +614,24 @@ async def test_render_conversation_workspace_office_preview_branches(tmp_path, m
 
     fake_render.payload = {"html": "", "truncated": True}
     assert await render_conversation_workspace_office_preview(
-        "conv_preview", user_id="user_a", path="/mnt/user-data/workspace/report.docx",
+        "conv_preview",
+        user_id="user_a",
+        path="/mnt/user-data/workspace/report.docx",
     ) == {"available": False, "reason": "preview_too_large"}
 
     fake_render.payload = {"html": "", "truncated": False}
     with pytest.raises(RuntimeError, match="未返回 HTML 预览内容"):
         await render_conversation_workspace_office_preview(
-            "conv_preview", user_id="user_a", path="/mnt/user-data/workspace/report.docx",
+            "conv_preview",
+            user_id="user_a",
+            path="/mnt/user-data/workspace/report.docx",
         )
 
     fake_render.payload = {"html": "<html/>", "truncated": False}
     result = await render_conversation_workspace_office_preview(
-        "conv_preview", user_id="user_a", path="/mnt/user-data/workspace/report.docx",
+        "conv_preview",
+        user_id="user_a",
+        path="/mnt/user-data/workspace/report.docx",
     )
     assert result["available"] is True and result["html"] == "<html/>"
 
@@ -610,7 +653,9 @@ async def test_read_conversation_query_result_delegates(monkeypatch):
 
     monkeypatch.setattr(cw, "ToolResultStore", StubStore)
     payload = await read_conversation_query_result(
-        "conv_q", user_id="user_a", result_id="qr_1",
+        "conv_q",
+        user_id="user_a",
+        result_id="qr_1",
     )
     assert payload == {"result_id": "qr_1"}
     assert captured == {
@@ -640,9 +685,7 @@ async def test_can_access_conversation_workspace_branches(monkeypatch):
 
 
 def test_absolute_command_path_tokens_branches():
-    assert _absolute_command_path_tokens("cat /mnt/user-data/workspace/a.txt") == [
-        "/mnt/user-data/workspace/a.txt"
-    ]
+    assert _absolute_command_path_tokens("cat /mnt/user-data/workspace/a.txt") == ["/mnt/user-data/workspace/a.txt"]
     with pytest.raises(ValueError, match="command 解析失败"):
         _absolute_command_path_tokens("cat 'unclosed")
     with pytest.raises(ValueError, match="不允许路径越界"):
@@ -655,9 +698,7 @@ def test_officecli_selector_token_indices_variants():
     assert _officecli_selector_token_indices(["python", "script.py"]) == set()
     assert _officecli_selector_token_indices(["officecli", "view", "a.docx"]) == set()
     # get/query/... 的第三个 token 是 DOM 选择器
-    assert _officecli_selector_token_indices(
-        ["officecli", "get", "/tmp/a.docx", "//w:p[1]"]
-    ) == {3}
+    assert _officecli_selector_token_indices(["officecli", "get", "/tmp/a.docx", "//w:p[1]"]) == {3}
     # move：目标选择器 + --to/--after/--before 的后一个 token
     assert _officecli_selector_token_indices(
         ["officecli", "slide", "move", "/tmp/a.pptx", "//p:slide[2]", "--to", "//p:slide[9]"]
@@ -671,9 +712,7 @@ def test_officecli_selector_token_indices_variants():
 
 
 def test_absolute_command_path_tokens_skips_officecli_selectors():
-    paths = _absolute_command_path_tokens(
-        "officecli get /tmp/a.docx /mnt/user-data/workspace/selector"
-    )
+    paths = _absolute_command_path_tokens("officecli get /tmp/a.docx /mnt/user-data/workspace/selector")
     # 选择器位置不参与路径校验，因此不出现在结果里
     assert "/tmp/a.docx" in paths
     assert "/mnt/user-data/workspace/selector" not in paths

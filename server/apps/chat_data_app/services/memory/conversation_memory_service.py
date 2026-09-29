@@ -175,9 +175,7 @@ def merge_memory_items(
 def _extract_llm_text(response: Any) -> str:
     content = getattr(response, "content", response)
     if isinstance(content, list):
-        content = "\n".join(
-            str(item.get("text") if isinstance(item, dict) else item) for item in content
-        )
+        content = "\n".join(str(item.get("text") if isinstance(item, dict) else item) for item in content)
     return str(content or "").strip()
 
 
@@ -234,13 +232,13 @@ async def extract_and_save_memory(
             max_items=session_memory_max_items(),
         )
     except Exception:
-        logger.warning(
-            "[memory] 会话记忆写入失败: conversation_id=%s", conversation_id, exc_info=True
-        )
+        logger.warning("[memory] 会话记忆写入失败: conversation_id=%s", conversation_id, exc_info=True)
         return
     logger.info(
         "[memory] 会话记忆已更新: conversation_id=%s items=%s total=%s",
-        conversation_id, len(items), len(merged),
+        conversation_id,
+        len(items),
+        len(merged),
     )
 
 
@@ -295,17 +293,20 @@ def schedule_memory_extraction_after_turn(
     previous = _pending_extraction_tasks.pop(conversation_id, None)
     if previous is not None and not previous.done():
         previous.cancel()
-    task = asyncio.create_task(_debounced_extract(
-        conversation_id=conversation_id,
-        workspace_root=workspace_root,
-        model_id=model_id,
-        messages=snapshot,
-    ))
+    task = asyncio.create_task(
+        _debounced_extract(
+            conversation_id=conversation_id,
+            workspace_root=workspace_root,
+            model_id=model_id,
+            messages=snapshot,
+        )
+    )
     _pending_extraction_tasks[conversation_id] = task
     task.add_done_callback(partial(_discard_pending_task, conversation_id=conversation_id))
     logger.debug(
         "[memory] 已调度整轮结束抽取: conversation_id=%s snapshot=%s",
-        conversation_id, len(snapshot),
+        conversation_id,
+        len(snapshot),
     )
 
 
@@ -320,12 +321,14 @@ def schedule_memory_extraction_now(
     dropped = list(messages or [])
     if not _prepare_scheduled_extraction(conversation_id=conversation_id, messages=dropped):
         return
-    task = asyncio.create_task(extract_and_save_memory(
-        conversation_id=conversation_id,
-        workspace_root=workspace_root,
-        model_id=model_id,
-        messages=dropped,
-    ))
+    task = asyncio.create_task(
+        extract_and_save_memory(
+            conversation_id=conversation_id,
+            workspace_root=workspace_root,
+            model_id=model_id,
+            messages=dropped,
+        )
+    )
     _background_extraction_tasks.add(task)
     task.add_done_callback(_background_extraction_tasks.discard)
 
@@ -378,7 +381,8 @@ def render_session_memory_block(workspace_root: str, *, conversation_id: str) ->
         return ""
     items = load_memory_items(workspace_root)
     budgeted = select_items_within_budget(
-        items, max_tokens=session_memory_injection_max_tokens(),
+        items,
+        max_tokens=session_memory_injection_max_tokens(),
     )
     if not budgeted:
         return ""

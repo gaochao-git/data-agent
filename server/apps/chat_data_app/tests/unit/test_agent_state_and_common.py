@@ -49,6 +49,7 @@ def test_agent_runtime_helpers_build_shared_agent_bits():
     assert model_calls[-1]["stream_usage"] is True
     assert model_calls[-1]["enable_thinking"] is True
 
+
 def test_common_workspace_root_validation_and_binary_detection(tmp_path):
     with pytest.raises(ValueError, match="缺少 workspace_root"):
         common.validate_workspace_root("  ")
@@ -85,14 +86,14 @@ def test_common_iter_files_skips_ignored_dirs_and_handles_single_file(tmp_path):
 
 def test_common_format_json_and_normalize_json_like_payload():
     assert common.format_lines(["a", "b"], 3) == "     3 a\n     4 b"
-    assert common.json_dumps({"中文": object()}).startswith("{\n  \"中文\": \"<object object at")
+    assert common.json_dumps({"中文": object()}).startswith('{\n  "中文": "<object object at')
     assert common.normalize_json_like_payload({"a": 1}) == {"a": 1}
     assert common.normalize_json_like_payload("") == ""
     assert common.normalize_json_like_payload("not json") == "not json"
-    assert common.normalize_json_like_payload("```json\n{\"a\": 1}\n```") == {"a": 1}
-    assert common.normalize_json_like_payload("\"{\\\"a\\\": 1}\"") == {"a": 1}
-    assert common.normalize_json_like_payload("```\n{\"a\": 1}") == {"a": 1}
-    assert common.normalize_json_like_payload("{\"a\": 1}\n```") == "{\"a\": 1}\n```"
+    assert common.normalize_json_like_payload('```json\n{"a": 1}\n```') == {"a": 1}
+    assert common.normalize_json_like_payload('"{\\"a\\": 1}"') == {"a": 1}
+    assert common.normalize_json_like_payload('```\n{"a": 1}') == {"a": 1}
+    assert common.normalize_json_like_payload('{"a": 1}\n```') == '{"a": 1}\n```'
     assert common.normalize_json_like_payload("```\nnot json\n```") == "```\nnot json\n```"
 
 

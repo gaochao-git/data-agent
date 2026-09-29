@@ -87,10 +87,13 @@ class _AnyBody:
 
 def _mock_user(monkeypatch):
     monkeypatch.setattr(
-        dependencies_routes, "_get_current_user",
+        dependencies_routes,
+        "_get_current_user",
         lambda _request: SimpleNamespace(user_id="10001", username="测试用户"),
     )
-    monkeypatch.setattr(admin, "_get_current_user", lambda _request: SimpleNamespace(user_id="10001", username="测试用户"))
+    monkeypatch.setattr(
+        admin, "_get_current_user", lambda _request: SimpleNamespace(user_id="10001", username="测试用户")
+    )
 
 
 def _mock_boom(monkeypatch):
@@ -130,9 +133,7 @@ ENDPOINTS = [
     ENDPOINTS,
     ids=[endpoint.__name__ for endpoint, _, _ in ENDPOINTS],
 )
-def test_admin_endpoint_converts_unexpected_failure_to_business_error(
-    monkeypatch, endpoint, args, kwargs
-):
+def test_admin_endpoint_converts_unexpected_failure_to_business_error(monkeypatch, endpoint, args, kwargs):
     manager = _mock_boom(monkeypatch)
     response = asyncio.run(endpoint(*args, SimpleNamespace(), **kwargs))
     payload = _payload(response)
@@ -148,9 +149,7 @@ def test_admin_endpoint_converts_unexpected_failure_to_business_error(
     ENDPOINTS,
     ids=[endpoint.__name__ for endpoint, _, _ in ENDPOINTS],
 )
-def test_admin_endpoint_reraises_http_exception_without_swallowing(
-    monkeypatch, endpoint, args, kwargs
-):
+def test_admin_endpoint_reraises_http_exception_without_swallowing(monkeypatch, endpoint, args, kwargs):
     """鉴权等 HTTPException 必须原样抛出，不能被 except Exception 转成 200 错误体。"""
     _mock_user(monkeypatch)
 
@@ -158,6 +157,7 @@ def test_admin_endpoint_reraises_http_exception_without_swallowing(
         def __getattr__(self, _name):
             async def raiser(*_args, **_kwargs):
                 raise HTTPException(status_code=403, detail="无权限")
+
             return raiser
 
     monkeypatch.setattr(admin, "get_datasource_manager", lambda: _HttpRaisingManager())
@@ -210,10 +210,14 @@ class _MethodManager:
 
 def test_create_datasource_group_maps_value_error_to_bad_request(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        get_datasource_meta_by_group_name_async=None,
-        create_datasource_group_from_sources_async=ValueError("模板数据源配置非法"),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            get_datasource_meta_by_group_name_async=None,
+            create_datasource_group_from_sources_async=ValueError("模板数据源配置非法"),
+        ),
+    )
     payload = _payload(asyncio.run(admin.create_datasource_group(_AnyBody(), SimpleNamespace())))
     # 契约：ValueError（含入参归一化阶段的）必须映射为参数错误码并透传原文，
     # 不能落到 500 语义的通用失败码
@@ -224,11 +228,15 @@ def test_create_datasource_group_maps_value_error_to_bad_request(monkeypatch):
 
 def test_update_group_config_maps_value_error_to_bad_request(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        get_datasource_meta_async={"id": "ds_a"},
-        get_datasource_meta_by_group_name_async=None,
-        update_datasource_group_from_sources_async=ValueError("成员数据源至少需要一个"),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            get_datasource_meta_async={"id": "ds_a"},
+            get_datasource_meta_by_group_name_async=None,
+            update_datasource_group_from_sources_async=ValueError("成员数据源至少需要一个"),
+        ),
+    )
     payload = _payload(asyncio.run(admin.update_datasource_group_config("ds_a", _AnyBody(), SimpleNamespace())))
     # 契约：ValueError 必须映射为参数错误码并透传原文，不能落到通用失败码
     assert payload["status"] == "error"
@@ -238,9 +246,13 @@ def test_update_group_config_maps_value_error_to_bad_request(monkeypatch):
 
 def test_update_group_config_reports_missing_datasource(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        update_datasource_group_from_sources_async=None,
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            update_datasource_group_from_sources_async=None,
+        ),
+    )
     payload = _payload(asyncio.run(admin.update_datasource_group_config("ds_a", _AnyBody(), SimpleNamespace())))
     assert payload["status"] == "error"
     assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
@@ -248,9 +260,13 @@ def test_update_group_config_reports_missing_datasource(monkeypatch):
 
 def test_sync_metadata_reports_timeout(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        sync_datasource_schema_from_source_async=asyncio.TimeoutError(),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            sync_datasource_schema_from_source_async=asyncio.TimeoutError(),
+        ),
+    )
     payload = _payload(asyncio.run(admin.sync_datasource_group_metadata("ds_a", _AnyBody(), SimpleNamespace())))
     assert payload["status"] == "error"
     assert "同步超时" in payload["msg"]
@@ -258,9 +274,13 @@ def test_sync_metadata_reports_timeout(monkeypatch):
 
 def test_sync_metadata_maps_value_error_to_bad_request(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        sync_datasource_schema_from_source_async=ValueError("模板数据源不存在"),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            sync_datasource_schema_from_source_async=ValueError("模板数据源不存在"),
+        ),
+    )
     payload = _payload(asyncio.run(admin.sync_datasource_group_metadata("ds_a", _AnyBody(), SimpleNamespace())))
     assert payload["status"] == "error"
     assert payload["msg"] == "模板数据源不存在"
@@ -268,9 +288,13 @@ def test_sync_metadata_maps_value_error_to_bad_request(monkeypatch):
 
 def test_get_db_tables_reports_connection_timeout(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        get_physical_table_names_async=asyncio.TimeoutError(),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            get_physical_table_names_async=asyncio.TimeoutError(),
+        ),
+    )
     payload = _payload(asyncio.run(admin.get_db_tables(_AnyBody(), SimpleNamespace())))
     assert payload["status"] == "error"
     assert "连接超时" in payload["msg"]
@@ -278,9 +302,13 @@ def test_get_db_tables_reports_connection_timeout(monkeypatch):
 
 def test_get_db_tables_reports_generic_failure_with_safe_text(monkeypatch):
     _mock_user(monkeypatch)
-    monkeypatch.setattr(admin, "get_datasource_manager", lambda: _MethodManager(
-        get_physical_table_names_async=RuntimeError("Access denied for user 'root'@'10.0.0.5'"),
-    ))
+    monkeypatch.setattr(
+        admin,
+        "get_datasource_manager",
+        lambda: _MethodManager(
+            get_physical_table_names_async=RuntimeError("Access denied for user 'root'@'10.0.0.5'"),
+        ),
+    )
     payload = _payload(asyncio.run(admin.get_db_tables(_AnyBody(), SimpleNamespace())))
     assert payload["status"] == "error"
     # 该端点兜底是固定文案，不能把驱动层异常原文透给前端

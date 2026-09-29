@@ -38,19 +38,23 @@ logger = get_logger(__name__)
 
 # ============ 请求模型 ============
 
+
 class CreateConversationRequest(BaseModel):
     """创建会话请求"""
+
     agent_id: str
     datasource_id: Optional[str] = None  # 建会话即绑定的数据源组（问数 agent 用）
 
 
 class UpdateTitleRequest(BaseModel):
     """更新标题请求"""
+
     title: str
 
 
 class CompletionRequest(BaseModel):
     """对话请求"""
+
     query: str = ""
     agent_id: str
     options: Optional[Dict[str, Any]] = None  # 通用扩展参数
@@ -70,6 +74,7 @@ class SteerRequest(BaseModel):
     校验解析（白名单 + 引用短句 + 附件占位/视觉装载）——排队消息与
     普通发送路径共享同一条「存引用、晚解析」语义。
     """
+
     # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD 对齐：steering 语义是运行中追加短指令，
     # 超长输入会原样进 state/checkpoint 每步重复落库，必须在入口拦下
     query: str = Field(..., min_length=1, max_length=4000)
@@ -85,6 +90,7 @@ _STEER_META_MAX_ITEMS = 50
 
 class SteerMessageUpdateRequest(BaseModel):
     """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
+
     # 编辑后的内容同样经 inbox 进 state/checkpoint，与 SteerRequest 同限
     content: Optional[str] = Field(default=None, min_length=1, max_length=4000)
     queue_type: Optional[SteerQueueType] = None
@@ -159,6 +165,7 @@ def register_agent(
         "get_checkpointer": get_checkpointer,
     }
 
+
 def register_completion_handler(agent_id: str, handler: Callable):
     """
     注册 completion 处理器
@@ -175,7 +182,9 @@ def get_agent_config(agent_id: str) -> Optional[Dict[str, Any]]:
     return _agent_configs.get(agent_id)
 
 
-async def get_agent_config_by_conversation(conversation_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_agent_config_by_conversation(
+    conversation_id: str, user_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     通过 conversation_id 获取 agent 配置
 
@@ -195,7 +204,9 @@ async def get_agent_config_by_conversation(conversation_id: str, user_id: Option
     return _agent_configs.get(agent_id)
 
 
-async def _get_existing_agent_for_completion(conversation_id: str, request_agent_id: str, user_id: str) -> Optional[str]:
+async def _get_existing_agent_for_completion(
+    conversation_id: str, request_agent_id: str, user_id: str
+) -> Optional[str]:
     """校验会话归属并读取本用户会话的 agent_id。"""
     existing_agent_id = await conversation.get_agent_id(conversation_id, user_id)
     if existing_agent_id and existing_agent_id != request_agent_id:
@@ -239,22 +250,23 @@ def _build_completion_handler_kwargs(
         "query": request.query,
         "options": options,
     }
-    if 'file_ids' in sig.parameters:
-        kwargs['file_ids'] = request.file_ids
-    if 'queued_message_id' in sig.parameters:
-        kwargs['queued_message_id'] = request.queued_message_id
-    if 'preserve_queued_messages' in sig.parameters:
-        kwargs['preserve_queued_messages'] = request.preserve_queued_messages
-    if 'user_id' in sig.parameters:
-        kwargs['user_id'] = user_id
-    if 'username' in sig.parameters:
-        kwargs['username'] = username
-    if 'request' in sig.parameters:
-        kwargs['request'] = req
+    if "file_ids" in sig.parameters:
+        kwargs["file_ids"] = request.file_ids
+    if "queued_message_id" in sig.parameters:
+        kwargs["queued_message_id"] = request.queued_message_id
+    if "preserve_queued_messages" in sig.parameters:
+        kwargs["preserve_queued_messages"] = request.preserve_queued_messages
+    if "user_id" in sig.parameters:
+        kwargs["user_id"] = user_id
+    if "username" in sig.parameters:
+        kwargs["username"] = username
+    if "request" in sig.parameters:
+        kwargs["request"] = req
     return kwargs
 
 
 # ============ 认证辅助 ============
+
 
 def _get_current_user(request: Request):
     """解析可信代理转发的当前用户，不负责 service token 校验。"""
@@ -305,7 +317,9 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
 
         config = get_agent_config(request.agent_id)
         if not config:
-            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+            return business_response(
+                msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
+            )
         normalized_datasource_id = str(request.datasource_id or "").strip()
         result = await conversation.create(request.agent_id, user_id, datasource_id=normalized_datasource_id or None)
         conversation_id = str(result.get("id") or "")
@@ -329,14 +343,17 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
                 if materialized.get("failed_ids"):
                     logger.warning(
                         "创建会话物化部分语义模型失败: conversation_id=%s failed_ids=%s",
-                        conversation_id, materialized["failed_ids"],
+                        conversation_id,
+                        materialized["failed_ids"],
                     )
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"创建对话失败: {e}", exc_info=True)
-        return business_response(msg="创建对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
+        return business_response(
+            msg="创建对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error"
+        )
 
 
 def _flat_conversation_page_result(rows: List[Dict[str, Any]], page: int, page_size: int) -> Dict[str, Any]:
@@ -370,10 +387,14 @@ async def _list_grouped_conversations_response(
 ):
     """分组视图会话查询响应。"""
     if agent_ids or not agent_id:
-        return business_response(msg="分组会话查询必须指定单个 agent_id", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+        return business_response(
+            msg="分组会话查询必须指定单个 agent_id", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error"
+        )
     config = get_agent_config(agent_id)
     if not config:
-        return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+        return business_response(
+            msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
+        )
     try:
         result = await conversation.list_grouped(
             agent_id,
@@ -425,21 +446,29 @@ async def list_conversations(
         user_id, username = _get_current_user_identity(req)
 
         if view == "grouped":
-            return await _list_grouped_conversations_response(agent_id, agent_ids, user_id, page, page_size, group_key, cursor)
+            return await _list_grouped_conversations_response(
+                agent_id, agent_ids, user_id, page, page_size, group_key, cursor
+            )
 
         offset = (page - 1) * page_size
         if agent_ids:
             requested_agent_ids = _parse_requested_agent_ids(agent_ids)
             unknown_agent_ids = _unknown_agent_ids(requested_agent_ids)
             if unknown_agent_ids:
-                return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+                return business_response(
+                    msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}",
+                    code=ErrorCode.CHATDATA_UNKNOWN_AGENT,
+                    status="error",
+                )
             rows = await conversation.list_by_agent_ids(requested_agent_ids, user_id, page_size + 1, offset)
             result = _flat_conversation_page_result(rows, page, page_size)
         elif agent_id:
             # 指定 agent_id，使用该智能体的数据库
             config = get_agent_config(agent_id)
             if not config:
-                return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+                return business_response(
+                    msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
+                )
             rows = await conversation.list(agent_id, user_id, page_size + 1, offset)
             result = _flat_conversation_page_result(rows, page, page_size)
         else:
@@ -450,7 +479,9 @@ async def list_conversations(
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话列表失败: {e}", exc_info=True)
-        return business_response(msg="获取对话列表失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取对话列表失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error"
+        )
 
 
 @router.get("/{conversation_id}")
@@ -459,7 +490,9 @@ async def get_conversation_detail(
     req: Request,
     view: Literal["full", "timeline"] = "full",
     limit: Optional[int] = Query(default=None, ge=1, le=600, description="仅返回最近 limit 条历史事件，用于长会话分页"),
-    before_sequence: Optional[int] = Query(default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"),
+    before_sequence: Optional[int] = Query(
+        default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
+    ),
 ):
     """
     获取会话详情
@@ -504,7 +537,9 @@ async def get_conversation_detail(
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话详情失败: {e}", exc_info=True)
-        return business_response(msg="获取对话详情失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
+        return business_response(
+            msg="获取对话详情失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error"
+        )
 
 
 @router.put("/{conversation_id}/title")
@@ -543,7 +578,9 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"更新标题失败: {e}", exc_info=True)
-        return business_response(msg="更新标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error")
+        return business_response(
+            msg="更新标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error"
+        )
 
 
 @router.post("/{conversation_id}/title")
@@ -568,19 +605,20 @@ async def generate_conversation_title(conversation_id: str, req: Request):
         if not config:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        title = await conversation.generate_title(
-            conversation_id,
-            user_id
-        )
+        title = await conversation.generate_title(conversation_id, user_id)
         if not title:
-            return business_response(msg="无法生成标题，对话不存在或无消息", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg="无法生成标题，对话不存在或无消息", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         return business_response(data={"id": conversation_id, "title": title}, msg="标题生成成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"生成标题失败: {e}", exc_info=True)
-        return business_response(msg="生成标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error")
+        return business_response(
+            msg="生成标题失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error"
+        )
 
 
 @router.post("/{conversation_id}/favorite")
@@ -611,13 +649,15 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
 
         return business_response(
             data={"id": conversation_id, "is_favorited": is_favorited},
-            msg="收藏成功" if is_favorited else "取消收藏成功"
+            msg="收藏成功" if is_favorited else "取消收藏成功",
         )
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"切换收藏状态失败: {e}", exc_info=True)
-        return business_response(msg="切换收藏状态失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
+        return business_response(
+            msg="切换收藏状态失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error"
+        )
 
 
 def _validate_completion_request(conversation_id: str, request: CompletionRequest):
@@ -666,7 +706,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
-            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+            return business_response(
+                msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
+            )
         if not existing_agent_id:
             await conversation.get_or_create_conversation(request.agent_id, conversation_id, user_id)
         options = dict(request.options or {})
@@ -703,7 +745,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
-        return business_response(msg="对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
+        return business_response(
+            msg="对话失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error"
+        )
 
 
 @router.post("/{conversation_id}/steer")
@@ -843,6 +887,7 @@ async def _resume_question(
     )
     # 延迟导入用于打破 agent_stream -> routers 注册链的循环依赖。
     from ..agent_stream import resume_chat_data_question_handler
+
     return await resume_chat_data_question_handler(
         conversation_id=conversation_id,
         user_id=user_id,
@@ -933,6 +978,8 @@ async def cancel_question(conversation_id: str, question_id: str, req: Request):
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
 @router.get("/{conversation_id}/steer")
 async def list_steer_messages(conversation_id: str, req: Request):
     """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""
@@ -1133,9 +1180,13 @@ async def get_conversation_context(conversation_id: str, req: Request):
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
-        return business_response(data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功")
+        return business_response(
+            data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功"
+        )
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话上下文失败: {e}", exc_info=True)
-        return business_response(msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
+        return business_response(
+            msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error"
+        )

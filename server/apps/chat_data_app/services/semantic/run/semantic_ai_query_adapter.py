@@ -93,7 +93,8 @@ class SemanticAIQueryAdapter:
         self._build_table_column_map()
         # 派生/复合指标统一预解析（共享入口）：编译配置 + 派生固定过滤叶子
         self._metric_base_cfgs, self._derived_fixed_leaves = build_metric_base_configs(
-            self.metrics_map, self.dimensions_map,
+            self.metrics_map,
+            self.dimensions_map,
         )
 
     @staticmethod
@@ -178,9 +179,21 @@ class SemanticAIQueryAdapter:
             return {}
 
         if "and" in node:
-            return {"and": [self._map_filter_node_for_builder(child) for child in node.get("and", []) or [] if isinstance(child, dict)]}
+            return {
+                "and": [
+                    self._map_filter_node_for_builder(child)
+                    for child in node.get("and", []) or []
+                    if isinstance(child, dict)
+                ]
+            }
         if "or" in node:
-            return {"or": [self._map_filter_node_for_builder(child) for child in node.get("or", []) or [] if isinstance(child, dict)]}
+            return {
+                "or": [
+                    self._map_filter_node_for_builder(child)
+                    for child in node.get("or", []) or []
+                    if isinstance(child, dict)
+                ]
+            }
 
         if self._is_expression_filter_node(node):
             return self._map_expression_filter_node_for_builder(node)
@@ -189,8 +202,7 @@ class SemanticAIQueryAdapter:
         dim_config = self.dimensions_map.get(dim_name, {})
         normalized_filters = self._map_filter_value_for_builder(node, dim_config)
         builder_nodes = [
-            self._filter_leaf_to_builder_node(normalized_filter, dim_config)
-            for normalized_filter in normalized_filters
+            self._filter_leaf_to_builder_node(normalized_filter, dim_config) for normalized_filter in normalized_filters
         ]
         if len(builder_nodes) == 1:
             return builder_nodes[0]
@@ -235,7 +247,9 @@ class SemanticAIQueryAdapter:
         dim_column = dim_cfg.get("column")
         dim_expression = str(dim_cfg.get("expression") or "").strip()
         if dim_expression:
-            return self._rewrite_expression_table_qualifier(dim_expression, dim_table_alias, dim_table), {dim_table_alias} if dim_table_alias else set()
+            return self._rewrite_expression_table_qualifier(dim_expression, dim_table_alias, dim_table), {
+                dim_table_alias
+            } if dim_table_alias else set()
         column_expr = self._quote_dimension_column(dim_column)
         if dim_table_alias:
             column_expr = f"{dim_table_alias}.{column_expr}"
@@ -307,11 +321,13 @@ class SemanticAIQueryAdapter:
         if operand_type == "metric":
             metric_name = str((operand or {}).get("name") or "").strip()
             metric_node = self._metric_aggregation_node(metric_name, main_table)
-            metric_node.update({
-                "type": "metric",
-                "name": metric_name,
-                "aggId": metric_alias_to_id.get(metric_name),
-            })
+            metric_node.update(
+                {
+                    "type": "metric",
+                    "name": metric_name,
+                    "aggId": metric_alias_to_id.get(metric_name),
+                }
+            )
             return metric_node
         if operand_type == "literal":
             return {"type": "literal", "value": (operand or {}).get("value")}
@@ -319,8 +335,12 @@ class SemanticAIQueryAdapter:
             return {
                 "type": "binary",
                 "operator": str((operand or {}).get("operator") or "").strip(),
-                "left": self._map_having_operand_for_builder((operand or {}).get("left") or {}, metric_alias_to_id, main_table),
-                "right": self._map_having_operand_for_builder((operand or {}).get("right") or {}, metric_alias_to_id, main_table),
+                "left": self._map_having_operand_for_builder(
+                    (operand or {}).get("left") or {}, metric_alias_to_id, main_table
+                ),
+                "right": self._map_having_operand_for_builder(
+                    (operand or {}).get("right") or {}, metric_alias_to_id, main_table
+                ),
             }
         return {"type": "literal", "value": None}
 
@@ -402,23 +422,24 @@ class SemanticAIQueryAdapter:
             if name in self.dimensions_map:
                 normalized_metrics.append(self._build_dimension_raw_metric(name, self.dimensions_map[name]))
                 continue
-            return [], f"错误：指标 '{name}' 不存在。可用指标：{', '.join(valid_metric_names)}。可用维度：{', '.join(valid_dimension_names)}"
+            return (
+                [],
+                f"错误：指标 '{name}' 不存在。可用指标：{', '.join(valid_metric_names)}。可用维度：{', '.join(valid_dimension_names)}",
+            )
         return normalized_metrics, None
 
     def _register_table_columns(self, table: Any) -> None:
         """把单个数据源表结构的列名映射登记进 self.tables_map。"""
-        table_name = table.get('table_name')
+        table_name = table.get("table_name")
         if not table_name:
             return
-        columns = table.get('columns', [])
-        self.tables_map[table_name] = {
-            col.get('name'): col for col in columns if col.get('name')
-        }
+        columns = table.get("columns", [])
+        self.tables_map[table_name] = {col.get("name"): col for col in columns if col.get("name")}
 
     def _register_unvalidated_tables(self, entries_key: str) -> None:
         """从指标/维度条目提取表名登记进 self.tables_map（值为 None 表示不校验字段）。"""
         for entry in self.semantic_config.get(entries_key, []):
-            table = entry.get('table')
+            table = entry.get("table")
             if table and table not in self.tables_map:
                 self.tables_map[table] = None
 
@@ -427,14 +448,14 @@ class SemanticAIQueryAdapter:
         self.tables_map = {}  # table_name -> {column_name: column_info}
 
         # 从数据源的 tables 配置中获取表结构
-        tables = self.semantic_config.get('tables', [])
+        tables = self.semantic_config.get("tables", [])
         for table in tables:
             self._register_table_columns(table)
 
         # 如果没有 tables 配置，从指标和维度中提取表名（不校验字段）
         if not self.tables_map:
-            self._register_unvalidated_tables('metrics')
-            self._register_unvalidated_tables('dimensions')
+            self._register_unvalidated_tables("metrics")
+            self._register_unvalidated_tables("dimensions")
 
     def _validate_table_column(self, table_name: str, column_name: str) -> Optional[str]:
         """
@@ -581,7 +602,9 @@ class SemanticAIQueryAdapter:
         plan.having_metric_names = self._collect_having_metric_names(plan.validated_having)
         plan.dimension_names = [self._extract_dimension_name(d) for d in plan.matched_dimensions]
 
-        plan.validated_order_by, err = self.validator.validate_order_by(order_by or [], metrics or [], plan.dimension_names)
+        plan.validated_order_by, err = self.validator.validate_order_by(
+            order_by or [], metrics or [], plan.dimension_names
+        )
         if err:
             return err
 
@@ -602,8 +625,7 @@ class SemanticAIQueryAdapter:
         having_metric_names / dimension_names 已在校验阶段填充。
         """
         plan.requires_grouping_for_raw_fields = bool(plan.validated_having) or any(
-            metric_func_column(metric.get("expression"))
-            for metric in plan.matched_metrics
+            metric_func_column(metric.get("expression")) for metric in plan.matched_metrics
         )
 
     def _infer_main_table_and_alias(self, plan: _UnifiedEnginePlan) -> None:
@@ -633,15 +655,17 @@ class SemanticAIQueryAdapter:
                 transform = time_grain
             dim_table = dim_cfg.get("table")
             dim_table_alias = self._table_alias(dim_cfg) or dim_table
-            plan.builder_dimensions.append({
-                "id": f"dim-{dim_name}",
-                "table": dim_table,
-                "tableAlias": dim_table_alias,
-                "column": dim_cfg.get("column"),
-                "alias": dim_name,
-                "expression": dim_cfg.get("expression"),
-                "transform": transform,
-            })
+            plan.builder_dimensions.append(
+                {
+                    "id": f"dim-{dim_name}",
+                    "table": dim_table,
+                    "tableAlias": dim_table_alias,
+                    "column": dim_cfg.get("column"),
+                    "alias": dim_name,
+                    "expression": dim_cfg.get("expression"),
+                    "transform": transform,
+                }
+            )
             plan.builder_dimension_keys.add((dim_table_alias, dim_cfg.get("column")))
 
     def _build_builder_aggregations(self, plan: _UnifiedEnginePlan) -> None:
@@ -658,18 +682,25 @@ class SemanticAIQueryAdapter:
                 func = parsed[0]
                 if parsed[1]:
                     metric_column = parsed[1]
-                plan.builder_aggregations.append({
-                    "id": agg_id,
-                    "func": func,
-                    "table": metric_table,
-                    "tableAlias": metric_table_alias,
-                    "column": metric_column or "*",
-                    "alias": metric_name,
-                    "expression": metric_expression,
-                })
+                plan.builder_aggregations.append(
+                    {
+                        "id": agg_id,
+                        "func": func,
+                        "table": metric_table,
+                        "tableAlias": metric_table_alias,
+                        "column": metric_column or "*",
+                        "alias": metric_name,
+                        "expression": metric_expression,
+                    }
+                )
             else:
                 self._append_raw_metric_block(
-                    plan, metric_name, metric_table, metric_table_alias, metric_expression, metric_column,
+                    plan,
+                    metric_name,
+                    metric_table,
+                    metric_table_alias,
+                    metric_expression,
+                    metric_column,
                 )
 
     def _append_raw_metric_block(
@@ -684,36 +715,46 @@ class SemanticAIQueryAdapter:
         """RAW 指标映射：存在聚合输出时转分组字段，否则作为 RAW 聚合块。"""
         raw_table = metric_table or plan.main_table
         raw_table_alias = metric_table_alias or raw_table
-        raw_expr = metric_expression or (f"{raw_table_alias}.{metric_column}" if raw_table_alias and metric_column else "")
+        raw_expr = metric_expression or (
+            f"{raw_table_alias}.{metric_column}" if raw_table_alias and metric_column else ""
+        )
         raw_column = metric_column or "*"
         # 存在聚合输出时，RAW 指标需作为分组字段，避免 SELECT 聚合+非聚合非法。
         if plan.requires_grouping_for_raw_fields and raw_column != "*":
             dim_key = (raw_table_alias, raw_column)
             if dim_key not in plan.builder_dimension_keys:
-                plan.builder_dimensions.append({
-                    "id": f"dim-from-metric-{metric_name}",
+                plan.builder_dimensions.append(
+                    {
+                        "id": f"dim-from-metric-{metric_name}",
+                        "table": raw_table,
+                        "tableAlias": raw_table_alias,
+                        "column": raw_column,
+                        "alias": metric_name,
+                        "expression": raw_expr,
+                        "transform": "raw",
+                    }
+                )
+                plan.builder_dimension_keys.add(dim_key)
+        else:
+            plan.builder_aggregations.append(
+                {
+                    "id": f"agg-{metric_name}",
+                    "func": "RAW",
                     "table": raw_table,
                     "tableAlias": raw_table_alias,
                     "column": raw_column,
                     "alias": metric_name,
                     "expression": raw_expr,
-                    "transform": "raw",
-                })
-                plan.builder_dimension_keys.add(dim_key)
-        else:
-            plan.builder_aggregations.append({
-                "id": f"agg-{metric_name}",
-                "func": "RAW",
-                "table": raw_table,
-                "tableAlias": raw_table_alias,
-                "column": raw_column,
-                "alias": metric_name,
-                "expression": raw_expr,
-            })
+                }
+            )
 
     def _build_builder_filters_and_having(self, plan: _UnifiedEnginePlan) -> None:
         validated_filters = plan.validated_filters
-        if len(validated_filters) == 1 and isinstance(validated_filters[0], dict) and ("and" in validated_filters[0] or "or" in validated_filters[0]):
+        if (
+            len(validated_filters) == 1
+            and isinstance(validated_filters[0], dict)
+            and ("and" in validated_filters[0] or "or" in validated_filters[0])
+        ):
             plan.builder_filters.append(self._map_filter_node_for_builder(validated_filters[0]))
         else:
             for fil in validated_filters:
@@ -728,25 +769,31 @@ class SemanticAIQueryAdapter:
             if self._is_expression_having_node(hv):
                 left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
                 having_node = self._metric_aggregation_node(left_metric_name, plan.main_table)
-                having_node.update({
-                    "id": f"having-{left_metric_name}",
-                    "operator": hv.get("operator", "="),
-                    "logic": hv.get("logic", "AND"),
-                    "aggId": plan.metric_alias_to_id.get(left_metric_name),
-                    "rightOperand": self._map_having_operand_for_builder(hv.get("right") or {}, plan.metric_alias_to_id, plan.main_table),
-                })
+                having_node.update(
+                    {
+                        "id": f"having-{left_metric_name}",
+                        "operator": hv.get("operator", "="),
+                        "logic": hv.get("logic", "AND"),
+                        "aggId": plan.metric_alias_to_id.get(left_metric_name),
+                        "rightOperand": self._map_having_operand_for_builder(
+                            hv.get("right") or {}, plan.metric_alias_to_id, plan.main_table
+                        ),
+                    }
+                )
                 plan.builder_having.append(having_node)
                 continue
 
             metric_name = hv.get("metric")
             having_node = self._metric_aggregation_node(metric_name, plan.main_table)
-            having_node.update({
-                "id": f"having-{metric_name}",
-                "operator": hv.get("operator", "="),
-                "value": hv.get("value"),
-                "logic": hv.get("logic", "AND"),
-                "aggId": plan.metric_alias_to_id.get(metric_name),
-            })
+            having_node.update(
+                {
+                    "id": f"having-{metric_name}",
+                    "operator": hv.get("operator", "="),
+                    "value": hv.get("value"),
+                    "logic": hv.get("logic", "AND"),
+                    "aggId": plan.metric_alias_to_id.get(metric_name),
+                }
+            )
             plan.builder_having.append(having_node)
             self._copy_filter_value_type(hv, having_node)
 
@@ -781,26 +828,30 @@ class SemanticAIQueryAdapter:
                 column = parsed[1]
             elif metric_cfg.get("column"):
                 column = metric_cfg.get("column")
-            plan.builder_order_by.append({
-                "id": f"order-{field_name}",
-                "table": metric_cfg.get("table", plan.main_table),
-                "tableAlias": metric_table_alias,
-                "column": column,
-                "expression": metric_cfg.get("expression"),
-                "direction": direction,
-                "aggFunc": func,
-                "aggId": plan.metric_alias_to_id.get(field_name),
-            })
+            plan.builder_order_by.append(
+                {
+                    "id": f"order-{field_name}",
+                    "table": metric_cfg.get("table", plan.main_table),
+                    "tableAlias": metric_table_alias,
+                    "column": column,
+                    "expression": metric_cfg.get("expression"),
+                    "direction": direction,
+                    "aggFunc": func,
+                    "aggId": plan.metric_alias_to_id.get(field_name),
+                }
+            )
         else:
             dim_cfg = self.dimensions_map.get(field_name, {})
             dim_table_alias = self._table_alias(dim_cfg) or dim_cfg.get("table") or plan.main_table
-            plan.builder_order_by.append({
-                "id": f"order-{field_name}",
-                "table": dim_cfg.get("table", plan.main_table),
-                "tableAlias": dim_table_alias,
-                "column": dim_cfg.get("column", field_name),
-                "direction": direction,
-            })
+            plan.builder_order_by.append(
+                {
+                    "id": f"order-{field_name}",
+                    "table": dim_cfg.get("table", plan.main_table),
+                    "tableAlias": dim_table_alias,
+                    "column": dim_cfg.get("column", field_name),
+                    "direction": direction,
+                }
+            )
 
     def _build_builder_order_by(self, plan: _UnifiedEnginePlan) -> None:
         for od in plan.validated_order_by:
@@ -854,7 +905,12 @@ class SemanticAIQueryAdapter:
             return _error(f"错误：SQL 转换失败 - {str(err)}")
 
         params_block = format_params_for_display(
-            metrics, plan.dimension_names, filters, having,
-            plan.validated_order_by, plan.validated_limit, plan.validated_offset,
+            metrics,
+            plan.dimension_names,
+            filters,
+            having,
+            plan.validated_order_by,
+            plan.validated_limit,
+            plan.validated_offset,
         )
         return {"success": True, "sql": sql, "params_block": params_block, "error": None}

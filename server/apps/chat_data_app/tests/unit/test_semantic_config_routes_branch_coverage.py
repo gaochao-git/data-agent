@@ -35,11 +35,15 @@ def _patch_user(monkeypatch):
 
 # ---------------------------------------------------------------- 列表路由：数据源不存在
 
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", [
-    semantic_config.list_my_semantic_configs,
-    semantic_config.list_admin_semantic_configs,
-])
+@pytest.mark.parametrize(
+    "route",
+    [
+        semantic_config.list_my_semantic_configs,
+        semantic_config.list_admin_semantic_configs,
+    ],
+)
 async def test_list_routes_report_missing_datasource(route, monkeypatch):
     """has_datasource_async=False → NOT_FOUND 出口（494->495 / 512->513）。"""
     _patch_user(monkeypatch)
@@ -54,6 +58,7 @@ async def test_list_routes_report_missing_datasource(route, monkeypatch):
 
 
 # ---------------------------------------------------------------- Ossie 预览：错误透传
+
 
 @pytest.mark.asyncio
 async def test_preview_route_returns_prepare_error(monkeypatch):
@@ -70,17 +75,20 @@ async def test_preview_route_returns_prepare_error(monkeypatch):
 
 # ---------------------------------------------------------------- 质量检查：modeled_tables 收集循环
 
+
 def _quality_configs() -> list:
-    return [{
-        "name": "模型A",
-        "metrics": [{"name": "销售额", "table": "orders"}],
-        "dimensions": [{"name": "空表维度", "table": " "}],
-        "relationships": [
-            {"left_table": "orders", "right_table": "users"},
-            {"left_table": "", "right_table": None},
-            "junk-relationship",
-        ],
-    }]
+    return [
+        {
+            "name": "模型A",
+            "metrics": [{"name": "销售额", "table": "orders"}],
+            "dimensions": [{"name": "空表维度", "table": " "}],
+            "relationships": [
+                {"left_table": "orders", "right_table": "users"},
+                {"left_table": "", "right_table": None},
+                "junk-relationship",
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -125,6 +133,7 @@ async def test_quality_route_collects_modeled_tables(monkeypatch):
 
 # ---------------------------------------------------------------- Ossie 导入：replace 写入失败回滚
 
+
 @pytest.mark.asyncio
 async def test_import_route_rolls_back_when_replace_write_fails(monkeypatch):
     """replace 路径 update_async 返回 None → _OssieImportWriteError → 整体回滚（833->834）。"""
@@ -163,6 +172,7 @@ async def test_import_route_rolls_back_when_replace_write_fails(monkeypatch):
 
 # ---------------------------------------------------------------- 历史学习：权限拒绝
 
+
 @pytest.mark.asyncio
 async def test_history_learning_rejects_without_permission(monkeypatch):
     """can_mutate_semantic_config=False → 权限拒绝出口（933->934）。"""
@@ -181,5 +191,6 @@ async def test_history_learning_rejects_without_permission(monkeypatch):
     monkeypatch.setattr(semantic_config, "can_mutate_semantic_config", lambda _c, _u, _admin: False)
 
     resp = await semantic_config._learn_semantic_config_from_history_route(
-        "ds_a", "cfg_a", SimpleNamespace(), _REQUEST, admin_manage=True)
+        "ds_a", "cfg_a", SimpleNamespace(), _REQUEST, admin_manage=True
+    )
     assert _body(resp)["msg"] == "无权限操作该指标集"

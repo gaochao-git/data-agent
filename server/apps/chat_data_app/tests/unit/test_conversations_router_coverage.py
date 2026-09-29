@@ -31,12 +31,14 @@ def router_state(monkeypatch):
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
-    conversation_router._agent_configs.update({
-        conversation_router.AGENT_ID: {
-            "get_graph": lambda _checkpointer: None,
-            "get_checkpointer": lambda: None,
-        },
-    })
+    conversation_router._agent_configs.update(
+        {
+            conversation_router.AGENT_ID: {
+                "get_graph": lambda _checkpointer: None,
+                "get_checkpointer": lambda: None,
+            },
+        }
+    )
     yield user
 
     conversation_router._agent_configs.clear()
@@ -183,13 +185,17 @@ async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", config_found)
     monkeypatch.setattr(conversation_router.conversation, "update_title", title_fail)
     response = await conversation_router.update_conversation_title(
-        "conv_1", conversation_router.UpdateTitleRequest(title="新标题"), FakeRequest(),
+        "conv_1",
+        conversation_router.UpdateTitleRequest(title="新标题"),
+        FakeRequest(),
     )
     assert payload(response)["msg"] == "对话不存在"
 
     monkeypatch.setattr(conversation_router.conversation, "update_title", title_ok)
     response = await conversation_router.update_conversation_title(
-        "conv_1", conversation_router.UpdateTitleRequest(title="新标题"), FakeRequest(),
+        "conv_1",
+        conversation_router.UpdateTitleRequest(title="新标题"),
+        FakeRequest(),
     )
     assert payload(response)["data"]["title"] == "新标题"
 
@@ -198,7 +204,9 @@ async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
 
     monkeypatch.setattr(conversation_router.conversation, "update_title", update_boom)
     response = await conversation_router.update_conversation_title(
-        "conv_1", conversation_router.UpdateTitleRequest(title="新标题"), FakeRequest(),
+        "conv_1",
+        conversation_router.UpdateTitleRequest(title="新标题"),
+        FakeRequest(),
     )
     assert payload(response)["code"] == ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED
 
@@ -379,10 +387,14 @@ async def test_resume_question_full_flow_and_errors(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.agent_run_event_service, "latest_event_id", latest_event_id)
 
     import apps.chat_data_app.agent_stream as handlers_mod
+
     monkeypatch.setattr(handlers_mod, "resume_chat_data_question_handler", resume_handler)
 
     result = await conversation_router._resume_question(
-        "conv_1", "q_1", {"answers": []}, FakeRequest(),
+        "conv_1",
+        "q_1",
+        {"answers": []},
+        FakeRequest(),
     )
     assert result.status_code == 200
     assert calls["wait_for_done"] == "run_1"
@@ -521,7 +533,9 @@ async def test_list_steer_messages_and_stream_events(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_run_snapshot", snapshot_ok)
     monkeypatch.setattr(conversation_router.agent_run_event_service, "stream", stream_events)
     response = await conversation_router.stream_run_events(
-        "conv_1", "run_1", FakeRequest(headers={"Last-Event-ID": "3-0"}),
+        "conv_1",
+        "run_1",
+        FakeRequest(headers={"Last-Event-ID": "3-0"}),
     )
     assert response.media_type == "text/event-stream"
     assert response.headers["x-chatdata-run-id"] == "run_1"
@@ -533,7 +547,11 @@ async def test_list_steer_messages_and_stream_events(router_state, monkeypatch):
     assert body["code"] == ErrorCode.CHATDATA_STEER_LIST_FAILED
 
     monkeypatch.setattr(conversation_router, "_get_current_user_identity", None)
-    monkeypatch.setattr(conversation_router, "_get_current_user_identity", lambda *_a: (_ for _ in ()).throw(AuthenticationError(401, "unauthorized")))
+    monkeypatch.setattr(
+        conversation_router,
+        "_get_current_user_identity",
+        lambda *_a: (_ for _ in ()).throw(AuthenticationError(401, "unauthorized")),
+    )
     with pytest.raises(HTTPException):
         await conversation_router.list_steer_messages("conv_1", FakeRequest())
 
@@ -640,6 +658,8 @@ async def test_get_conversation_context_branches(router_state, monkeypatch):
     from fastapi.responses import JSONResponse  # noqa: F401  占位确保 fastapi 可用
 
     monkeypatch.setattr(conversation_router, "_get_user_id", None)
-    monkeypatch.setattr(conversation_router, "_get_user_id", lambda *_a: (_ for _ in ()).throw(AuthenticationError(401, "unauthorized")))
+    monkeypatch.setattr(
+        conversation_router, "_get_user_id", lambda *_a: (_ for _ in ()).throw(AuthenticationError(401, "unauthorized"))
+    )
     with pytest.raises(HTTPException):
         await conversation_router.get_conversation_context("conv_1", FakeRequest())

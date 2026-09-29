@@ -33,11 +33,7 @@ router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], res
 
 
 @router.post("/upload", operation_id="upload_chatdata_file")
-async def upload_file_api(
-    file: UploadFile = File(...),
-    thread_id: str = Form(...),
-    req: Request = None
-):
+async def upload_file_api(file: UploadFile = File(...), thread_id: str = Form(...), req: Request = None):
     """
     上传文件
 
@@ -187,11 +183,7 @@ async def get_file_content_api(file_id: str, req: Request = None):
     original_filename = info["original_filename"]
     ascii_fallback = original_filename.encode("ascii", "ignore").decode("ascii") or "file"
     disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(original_filename)}"
-    return Response(
-        content=content,
-        media_type=content_type,
-        headers={"Content-Disposition": disposition}
-    )
+    return Response(content=content, media_type=content_type, headers={"Content-Disposition": disposition})
 
 
 def _get_content_type(file_type: str) -> str:

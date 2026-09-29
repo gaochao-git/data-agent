@@ -27,9 +27,7 @@ from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 
 
 def test_system_prompt_appends_memory_section_when_provided():
-    prompt = chat_data.build_unified_system_prompt(
-        AgentRuntimeOptions(), memory_block="- [口径] 销售额含税"
-    )
+    prompt = chat_data.build_unified_system_prompt(AgentRuntimeOptions(), memory_block="- [口径] 销售额含税")
     assert chat_data.MEMORY_BLOCK in prompt
     assert "## 会话记忆\n- [口径] 销售额含税" in prompt
 
@@ -41,9 +39,7 @@ def test_system_prompt_omits_memory_section_when_empty():
 
 
 def test_memory_section_sits_between_convention_block_and_data_context():
-    prompt = chat_data.build_unified_system_prompt(
-        AgentRuntimeOptions(), memory_block="- [口径] A"
-    )
+    prompt = chat_data.build_unified_system_prompt(AgentRuntimeOptions(), memory_block="- [口径] A")
     assert prompt.index("## 会话记忆约定") < prompt.index("## 会话记忆\n") < prompt.index("# 数据上下文")
 
 
@@ -84,9 +80,7 @@ def test_subagent_spec_memory_block_defaults_empty():
 
 def test_build_subagent_middleware_passes_memory_block_to_specs():
     options = AgentRuntimeOptions(explore_subagent_enabled=True, plan_subagent_enabled=True)
-    middleware = data_agent.build_subagent_middleware(
-        options, [], model=object(), memory_block="- [口径] A"
-    )
+    middleware = data_agent.build_subagent_middleware(options, [], model=object(), memory_block="- [口径] A")
     assert middleware is not None
     assert {spec.memory_block for spec in middleware.specs} == {"- [口径] A"}
 
@@ -237,6 +231,4 @@ def test_agent_stream_imports_memory_turn_hook():
     import apps.chat_data_app.agent_stream as agent_stream
     from apps.chat_data_app.services.memory import conversation_memory_service
 
-    assert agent_stream.after_agent_turn_with_memory is (
-        conversation_memory_service.after_agent_turn_with_memory
-    )
+    assert agent_stream.after_agent_turn_with_memory is (conversation_memory_service.after_agent_turn_with_memory)

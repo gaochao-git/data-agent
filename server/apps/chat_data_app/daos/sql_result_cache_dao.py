@@ -111,19 +111,21 @@ class SqlResultCacheDao:
                     operator_username=operator_name,
                 )
             else:
-                db.add(ChatDataSqlResultCache(
-                    cache_key=cache_key,
-                    **identity_fields,
-                    sql_text=sql_text,
-                    result_payload=payload_json,
-                    result_row_count=result_row_count,
-                    expire_time=expire_time,
-                    hit_count=0,
-                    delete_flag=0,
-                    create_time=now,
-                    update_time=now,
-                    create_by=operator_user_id,
-                    create_by_name=operator_name,
-                    update_by=operator_user_id,
-                    update_by_name=operator_name,
-                ))
+                db.add(
+                    ChatDataSqlResultCache(
+                        cache_key=cache_key,
+                        **identity_fields,
+                        sql_text=sql_text,
+                        result_payload=payload_json,
+                        result_row_count=result_row_count,
+                        expire_time=expire_time,
+                        hit_count=0,
+                        delete_flag=0,
+                        create_time=now,
+                        update_time=now,
+                        create_by=operator_user_id,
+                        create_by_name=operator_name,
+                        update_by=operator_user_id,
+                        update_by_name=operator_name,
+                    )
+                )

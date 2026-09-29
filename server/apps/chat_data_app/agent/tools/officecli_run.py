@@ -21,9 +21,7 @@ logger = get_logger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 
-_UPLOADS_PREFIXES = (
-    "/mnt/user-data/uploads",
-)
+_UPLOADS_PREFIXES = ("/mnt/user-data/uploads",)
 
 
 def _under_uploads(path: str) -> bool:
@@ -59,8 +57,7 @@ def _guard_uploads_readonly(command, cwd: str | None) -> None:
     effective_cwd = str(cwd or "/mnt/user-data/workspace").strip()
     if command.mutates and _under_uploads(effective_cwd):
         raise ValueError(
-            "uploads 目录为只读，不允许写入或修改。请先用 file_copy 将文件复制到 "
-            "/mnt/user-data/workspace 后再操作。"
+            "uploads 目录为只读，不允许写入或修改。请先用 file_copy 将文件复制到 /mnt/user-data/workspace 后再操作。"
         )
     for index, path in command_path_values(command, effective_cwd):
         if index in command.write_indices and _under_uploads(path):
@@ -95,9 +92,7 @@ async def run_officecli_command(
     save_target = ""
     if save_stdout_to:
         save_target = _validate_save_stdout_path(save_stdout_to)
-    execution = await workspace_runtime.run_officecli(
-        args=safe_args, cwd=cwd, timeout_seconds=timeout
-    )
+    execution = await workspace_runtime.run_officecli(args=safe_args, cwd=cwd, timeout_seconds=timeout)
     raw_stdout = str(execution["stdout"])
     stdout, stdout_truncated = truncate_output(raw_stdout)
     stderr, stderr_truncated = truncate_output(str(execution["stderr"]))
@@ -113,9 +108,7 @@ async def run_officecli_command(
         except Exception as exc:
             # 命令已成功执行，转存失败不能让它整笔失败丢掉 stdout/stderr；
             # 记录真实原因进 payload，由模型决定换路径重试还是直接用 stdout。
-            logger.warning(
-                "officecli 转存 stdout 失败: target=%s error=%s", save_target, exc, exc_info=True
-            )
+            logger.warning("officecli 转存 stdout 失败: target=%s error=%s", save_target, exc, exc_info=True)
             saved_stdout_error = f"转存失败: {exc}"
     return {
         "success": success,
@@ -134,7 +127,8 @@ async def run_officecli_command(
         "saved_stdout_error": saved_stdout_error,
         "next_required_action": (
             "编辑后执行 officecli validate 与 view 校验；确认无误再继续或调用 present_artifacts。"
-            if success else "检查子命令、文件路径与参数后重试；officecli 报错见 stderr。"
+            if success
+            else "检查子命令、文件路径与参数后重试；officecli 报错见 stderr。"
         ),
     }
 

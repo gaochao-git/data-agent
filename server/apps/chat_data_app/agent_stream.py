@@ -283,10 +283,13 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
     reasoning_content = _format_reasoning_for_display(_extract_reasoning_content(message_chunk, msg_data))
     if not reasoning_content:
         return None
-    return _format_sse("thinking", {
-        "content": reasoning_content,
-        "timestamp": _get_timestamp(),
-    })
+    return _format_sse(
+        "thinking",
+        {
+            "content": reasoning_content,
+            "timestamp": _get_timestamp(),
+        },
+    )
 
 
 def _append_reasoning_segment(
@@ -327,7 +330,7 @@ def _format_tool_event(
     args: dict | None = None,
     result: str | None = None,
     message: str | None = None,
-    timestamp: str | None = None
+    timestamp: str | None = None,
 ) -> str:
     """
     格式化统一的 tool 事件
@@ -531,7 +534,10 @@ class _ToolStreamState:
         return events
 
     def _register_tool_call_chunk(
-        self, chunk_id: str, chunk_name: str, chunk_index: Any,
+        self,
+        chunk_id: str,
+        chunk_name: str,
+        chunk_index: Any,
     ) -> str | None:
         """登记 chunk 的身份信息，返回本次应播报的 running 工具名（无则 None）。"""
         if not chunk_id:
@@ -561,7 +567,8 @@ class _ToolStreamState:
         - 两类信息任一变化就合并推一个事件，行数字段仅行数统计工具携带。
         """
         counts, intent = _extract_streaming_progress_inputs(
-            args_text, _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
+            args_text,
+            _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
         )
 
         counts_changed = counts is not None and self.progress_line_counts.get(tool_call_id) != counts
@@ -574,9 +581,15 @@ class _ToolStreamState:
             self.progress_intents[tool_call_id] = intent
         # 行数未变化的合并事件不携带行数字段，前端保留已有值
         event_counts = counts if counts_changed else (None, None)
-        return [_format_tool_progress_event(
-            tool_call_id, tool_name, event_counts[0], event_counts[1], intent,
-        )]
+        return [
+            _format_tool_progress_event(
+                tool_call_id,
+                tool_name,
+                event_counts[0],
+                event_counts[1],
+                intent,
+            )
+        ]
 
     def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
         events: list[str] = []
@@ -601,9 +614,13 @@ class _ToolStreamState:
                     events.append(stats_sse)
                 # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 tool_name = self.tool_names.get(current_tool_call_id, "")
-                events.extend(self._streaming_progress_events(
-                    current_tool_call_id, tool_name, self.args_buffer[current_tool_call_id],
-                ))
+                events.extend(
+                    self._streaming_progress_events(
+                        current_tool_call_id,
+                        tool_name,
+                        self.args_buffer[current_tool_call_id],
+                    )
+                )
         return events
 
     def build_tool_message_payload(self, message_chunk: Any) -> dict[str, Any]:
@@ -614,7 +631,9 @@ class _ToolStreamState:
         msg_data["tool_name"] = self.tool_names.get(tool_call_id, msg_data.get("name") or "")
         # MCP 工具展示名随结果事件下发（tool_started 已带；这里补齐完成/失败事件）
         msg_data["display_name"] = get_mcp_tool_display_name(str(msg_data["tool_name"] or ""))
-        msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content"), msg_data.get("status")) else "completed"
+        msg_data["status"] = (
+            "error" if _is_tool_result_error(msg_data.get("content"), msg_data.get("status")) else "completed"
+        )
         # ToolTimingMiddleware 盖在 additional_kwargs 里的执行起止时间，提升为顶层字段供前端展示。
         tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
         msg_data["started_at_ms"] = tool_additional_kwargs.get("started_at_ms")
@@ -701,12 +720,7 @@ class _MessageChunkFlags:
 
     @property
     def has_visible_payload(self) -> bool:
-        return (
-            self.has_content
-            or self.has_tool_calls
-            or self.has_tool_call_chunks
-            or bool(self.thinking_event)
-        )
+        return self.has_content or self.has_tool_calls or self.has_tool_call_chunks or bool(self.thinking_event)
 
     @property
     def thinking_only(self) -> bool:
@@ -781,7 +795,9 @@ class _AgentSseStreamAdapter:
                 yield sse_event
         except Exception as exc:
             if not self._first_visible_payload_seen:
-                self._emit_first_token_timeout_if_needed(started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)})
+                self._emit_first_token_timeout_if_needed(
+                    started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)}
+                )
             emit_llm_connection_alarm_if_needed(
                 exc,
                 ext1=self._alarm_context(),
@@ -834,7 +850,9 @@ class _AgentSseStreamAdapter:
         async for sse_event in self._handle_message_chunk(message_chunk, metadata):
             yield sse_event
 
-    async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
+    async def finish(
+        self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False
+    ) -> dict[str, Any]:
         """读取最终状态并构造 message_end payload。"""
         self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
         if persist_latest_ai_timestamp:
@@ -905,13 +923,18 @@ class _AgentSseStreamAdapter:
         if not tool_call_id or not tool_name or not message:
             logger.warning("忽略无效工具进度事件: %s", payload)
             return []
-        return [_format_tool_lifecycle_event("tool_progress", {
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "status": "running",
-            "message": message,
-            "progress": payload.get("progress"),
-        })]
+        return [
+            _format_tool_lifecycle_event(
+                "tool_progress",
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "status": "running",
+                    "message": message,
+                    "progress": payload.get("progress"),
+                },
+            )
+        ]
 
     def _handle_subagent_tool_payload(self, payload: dict[str, Any]) -> list[str]:
         if not isinstance(payload.get("event"), dict):
@@ -1002,7 +1025,9 @@ class _AgentSseStreamAdapter:
             for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
                 yield tool_event
         if flags.has_tool_call_chunks:
-            for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
+            for tool_event in self.tool_stream_state.handle_tool_call_chunks(
+                getattr(message_chunk, "tool_call_chunks", []) or []
+            ):
                 yield tool_event
         if flags.is_tool_message:
             tool_payload = self.tool_stream_state.build_tool_message_payload(message_chunk)
@@ -1107,10 +1132,7 @@ async def _generate_chat_data_stream(
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
     owner_task = asyncio.current_task()
-    heartbeat_task = (
-        asyncio.create_task(_heartbeat_agent_run(run_id, owner_task, owner_token))
-        if run_id else None
-    )
+    heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id, owner_task, owner_token)) if run_id else None
     # 生命周期契约：本生成器只产出执行事实（业务事件 / error / question_requested），
     # 不发 done、不做收口。Run 的终态判定、complete_run/finish_run 调用与结构化
     # done 发布统一由 AgentRunRuntime（唯一生命周期 owner）完成。
@@ -1232,17 +1254,25 @@ def _create_agent_stream_adapter(
         include_empty_tool_messages=True,
         on_first_message=partial(callbacks.log_phase, "first_model_chunk"),
         on_stream_started=on_stream_started,
-        reasoning_turn_id=callbacks.resume_turn_id or callbacks.turn_id or (
+        reasoning_turn_id=callbacks.resume_turn_id
+        or callbacks.turn_id
+        or (
             str(callbacks.user_message.additional_kwargs.get("reasoning_turn_id") or "")
-            if callbacks.user_message else None
+            if callbacks.user_message
+            else None
         ),
     )
     callbacks.stream_adapter = adapter
     if callbacks.recovering:
-        adapter.queue_event(_format_sse("run_restarted", {
-            "run_id": callbacks.run_id,
-            "turn_id": callbacks.turn_id,
-        }))
+        adapter.queue_event(
+            _format_sse(
+                "run_restarted",
+                {
+                    "run_id": callbacks.run_id,
+                    "turn_id": callbacks.turn_id,
+                },
+            )
+        )
     return adapter
 
 
@@ -1266,15 +1296,15 @@ async def _resolve_inbox_message_references(
     file_ids = kwargs.get("file_ids") or []
     if not selections and not file_ids:
         return message
-    valid_selections = (
-        _validate_workspace_file_selections(selections, workspace_root)
-        if selections else []
-    )
+    valid_selections = _validate_workspace_file_selections(selections, workspace_root) if selections else []
     file_attachments = (
         await _resolve_file_attachments(
-            file_ids, user_id=user_id, thread_id=thread_id,
+            file_ids,
+            user_id=user_id,
+            thread_id=thread_id,
         )
-        if file_ids else []
+        if file_ids
+        else []
     )
     new_kwargs = dict(kwargs)
     if selections:
@@ -1347,7 +1377,9 @@ async def _mark_agent_waiting_for_user(
 async def _confirm_agent_consumed_messages(callbacks: _AgentRunStreamCallbacks) -> None:
     if callbacks.run_id:
         await agent_inbox_service.mark_consumed(
-            callbacks.run_id, callbacks.steering_tracker.drain(), callbacks.owner_token,
+            callbacks.run_id,
+            callbacks.steering_tracker.drain(),
+            callbacks.owner_token,
         )
 
 
@@ -1378,7 +1410,9 @@ async def _prepare_agent_prompt_bundle(
     """
     data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
     available_skills_xml = await _load_runtime_skills_xml(
-        user_id or "system", thread_id, workspace_runtime,
+        user_id or "system",
+        thread_id,
+        workspace_runtime,
     )
     return data_context, available_skills_xml
 
@@ -1461,18 +1495,16 @@ async def _resolve_agent_turn_inputs(
     message_kwargs: dict[str, Any] = {}
     if skill_names:
         message_kwargs["skill_names"] = skill_names
-    current_turn_checkpointed, resume_checkpointed, adopted_messages = (
-        await _resolve_checkpointed_turn_state(
-            checkpointer,
-            config,
-            recovering=recovering,
-            resume_answer=resume_answer,
-            resume_started=resume_started,
-            turn_id=turn_id,
-            run_id=run_id,
-            owner_token=owner_token,
-            adopted_messages=adopted_messages,
-        )
+    current_turn_checkpointed, resume_checkpointed, adopted_messages = await _resolve_checkpointed_turn_state(
+        checkpointer,
+        config,
+        recovering=recovering,
+        resume_answer=resume_answer,
+        resume_started=resume_started,
+        turn_id=turn_id,
+        run_id=run_id,
+        owner_token=owner_token,
+        adopted_messages=adopted_messages,
     )
     user_message = None
     if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
@@ -1520,9 +1552,14 @@ async def _admit_adopted_messages(
     if adopted_messages:
         adopted_ids = [str(message.id or "") for message in adopted_messages]
         steering_tracker.record(adopted_ids)
-        stream_adapter.queue_event(_format_sse("inbox_admitted", {
-            "message_ids": adopted_ids,
-        }))
+        stream_adapter.queue_event(
+            _format_sse(
+                "inbox_admitted",
+                {
+                    "message_ids": adopted_ids,
+                },
+            )
+        )
 
 
 async def _run_chat_data_agent_stream(
@@ -1573,14 +1610,12 @@ async def _run_chat_data_agent_stream(
             override=(options or {}).get("runtime_options"),
             **await get_subagent_hot_defaults(),
         )
-        workspace_paths, workspace_runtime, semantic_materialize_note = (
-            await _prepare_agent_workspace_runtime(
-                thread_id=thread_id,
-                datasource_id=datasource_id,
-                user_id=user_id,
-                semantic_context=semantic_context,
-                runtime_options=runtime_options,
-            )
+        workspace_paths, workspace_runtime, semantic_materialize_note = await _prepare_agent_workspace_runtime(
+            thread_id=thread_id,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            semantic_context=semantic_context,
+            runtime_options=runtime_options,
         )
     except _AgentRunPreparationError as exc:
         yield _format_sse("error", {"error": exc.message})
@@ -1601,7 +1636,10 @@ async def _run_chat_data_agent_stream(
             )
 
     data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
-        semantic_materialize_note, user_id, thread_id, workspace_runtime,
+        semantic_materialize_note,
+        user_id,
+        thread_id,
+        workspace_runtime,
     )
     # 会话记忆注入段（每轮构建时读取）：由系统自动维护，主图 system prompt
     # 与子图只读段共用同一份渲染产物；空串时各消费方自动省略整段。
@@ -1615,10 +1653,7 @@ async def _run_chat_data_agent_stream(
         # 主/子图口径同源；运行期经后台配置变量表读取（新会话装配时生效），
         # 不设置时 langgraph 默认仅 25 个 super-step。
         "recursion_limit": await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
-        "configurable": {
-            "thread_id": thread_id,
-            "checkpoint_ns": ""
-        }
+        "configurable": {"thread_id": thread_id, "checkpoint_ns": ""},
     }
 
     steering_tracker = SteeringMessageTracker()
@@ -1626,14 +1661,18 @@ async def _run_chat_data_agent_stream(
     # 解析 file_ids 对应的文件信息，用于追加到用户消息。
     # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
     file_attachments = await _resolve_file_attachments(
-        file_ids, user_id=user_id, thread_id=thread_id,
+        file_ids,
+        user_id=user_id,
+        thread_id=thread_id,
     )
 
     # 用户输入超长时自动转为文件写入 workspace outputs
     user_message_content = user_query
     if len(user_query) > USER_INPUT_OFFLOAD_THRESHOLD:
         user_message_content, offload_attachment = await _offload_oversized_user_input(
-            user_query, workspace_runtime, thread_id,
+            user_query,
+            workspace_runtime,
+            thread_id,
         )
         file_attachments.append(offload_attachment)
 
@@ -1649,39 +1688,37 @@ async def _run_chat_data_agent_stream(
             attachment_text = build_file_attachment_text(file_attachments)
             message_content = f"{user_message_content}{attachment_text}"
 
-            user_message, initial_state, system_prompt, adopted_messages = (
-                await _resolve_agent_turn_inputs(
-                    checkpointer,
-                    config,
-                    user_input=TurnUserInput(
-                        user_query=user_query,
-                        message_content=message_content,
-                        file_selections=valid_file_selections,
-                        vision_attachments=vision_attachments,
-                        skill_names=skill_names,
-                        adopted_messages=adopted_messages,
-                    ),
-                    resume=TurnResumeContext(
-                        recovering=recovering,
-                        resume_answer=resume_answer,
-                        resume_started=resume_started,
-                        turn_id=turn_id,
-                        run_id=run_id,
-                        owner_token=owner_token,
-                    ),
-                    runtime=TurnRuntimeContext(
-                        user_id=user_id,
-                        username=username,
-                        thread_id=thread_id,
-                        datasource_id=datasource_id,
-                        semantic_context=semantic_context,
-                        runtime_options=runtime_options,
-                        workspace_root=workspace_paths["root"],
-                        data_context=data_context,
-                        available_skills_xml=available_skills_xml,
-                        memory_block=memory_block,
-                    ),
-                )
+            user_message, initial_state, system_prompt, adopted_messages = await _resolve_agent_turn_inputs(
+                checkpointer,
+                config,
+                user_input=TurnUserInput(
+                    user_query=user_query,
+                    message_content=message_content,
+                    file_selections=valid_file_selections,
+                    vision_attachments=vision_attachments,
+                    skill_names=skill_names,
+                    adopted_messages=adopted_messages,
+                ),
+                resume=TurnResumeContext(
+                    recovering=recovering,
+                    resume_answer=resume_answer,
+                    resume_started=resume_started,
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    owner_token=owner_token,
+                ),
+                runtime=TurnRuntimeContext(
+                    user_id=user_id,
+                    username=username,
+                    thread_id=thread_id,
+                    datasource_id=datasource_id,
+                    semantic_context=semantic_context,
+                    runtime_options=runtime_options,
+                    workspace_root=workspace_paths["root"],
+                    data_context=data_context,
+                    available_skills_xml=available_skills_xml,
+                    memory_block=memory_block,
+                ),
             )
             log_phase("build_system_prompt")
 
@@ -1742,11 +1779,18 @@ async def _run_chat_data_agent_stream(
             )
             log_phase("create_agent")
             stream_adapter = _create_agent_stream_adapter(
-                callbacks, agent=agent, initial_state=initial_state, config=config, request=request,
+                callbacks,
+                agent=agent,
+                initial_state=initial_state,
+                config=config,
+                request=request,
             )
 
             await _admit_adopted_messages(
-                callbacks, stream_adapter, steering_tracker, adopted_messages,
+                callbacks,
+                stream_adapter,
+                steering_tracker,
+                adopted_messages,
             )
 
             async for sse_event in stream_agent_turn(

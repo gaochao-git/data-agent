@@ -64,20 +64,11 @@ def parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
 
 
 def semantic_table_alias(item: Dict[str, Any]) -> str:
-    return str(
-        (item or {}).get("table_alias")
-        or (item or {}).get("alias")
-        or (item or {}).get("table")
-        or ""
-    ).strip()
+    return str((item or {}).get("table_alias") or (item or {}).get("alias") or (item or {}).get("table") or "").strip()
 
 
 def _relationship_alias(relationship: Dict[str, Any], side: str) -> str:
-    return str(
-        (relationship or {}).get(f"{side}_alias")
-        or (relationship or {}).get(f"{side}_table")
-        or ""
-    ).strip()
+    return str((relationship or {}).get(f"{side}_alias") or (relationship or {}).get(f"{side}_table") or "").strip()
 
 
 class SemanticQueryPlanContext:
@@ -86,24 +77,14 @@ class SemanticQueryPlanContext:
     def __init__(self, semantic_config: Dict[str, Any]):
         normalized_config = dict(semantic_config or {})
         normalized_config["dimensions"] = [
-            ensure_dimension_logical_type(item)
-            for item in normalized_config.get("dimensions") or []
+            ensure_dimension_logical_type(item) for item in normalized_config.get("dimensions") or []
         ]
         self.semantic_config = normalized_config
-        self.metrics_map = {
-            item["name"]: item
-            for item in normalized_config.get("metrics") or []
-            if item.get("name")
-        }
+        self.metrics_map = {item["name"]: item for item in normalized_config.get("metrics") or [] if item.get("name")}
         self.dimensions_map = {
-            item["name"]: item
-            for item in normalized_config.get("dimensions") or []
-            if item.get("name")
+            item["name"]: item for item in normalized_config.get("dimensions") or [] if item.get("name")
         }
-        self.dialect_name = (
-            str(normalized_config.get("source_type") or "mysql").strip().lower()
-            or "mysql"
-        )
+        self.dialect_name = str(normalized_config.get("source_type") or "mysql").strip().lower() or "mysql"
 
     def build_joins(self, main_alias: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
         tables_needed = {str(table or "").strip() for table in tables_needed if str(table or "").strip()}

@@ -103,9 +103,7 @@ async def test_run_bash_command_success_and_timeout_clamp():
     assert result["next_required_action"].startswith("如果命令生成了 workspace 中间产物")
 
     runtime2 = _FakeRuntime(_execution())
-    result2 = await run_bash_command(
-        command="echo hi", timeout_seconds=9999, workspace_runtime=runtime2
-    )
+    result2 = await run_bash_command(command="echo hi", timeout_seconds=9999, workspace_runtime=runtime2)
     assert result2["timeout_seconds"] == MAX_TIMEOUT_SECONDS
 
 
@@ -170,9 +168,7 @@ async def test_kill_switch_refuses_execution_without_touching_runtime(monkeypatc
     monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", True)
     runtime = _FakeRuntime(_execution())
 
-    result = await run_bash_command(
-        command="echo hi", workspace_runtime=runtime
-    )
+    result = await run_bash_command(command="echo hi", workspace_runtime=runtime)
 
     assert result["success"] is False
     assert result["disabled"] is True
@@ -187,9 +183,7 @@ async def test_kill_switch_takes_precedence_over_command_validation(monkeypatch)
     monkeypatch.setattr(bash_run_module, "BASH_RUN_DISABLED", True)
     runtime = _FakeRuntime(_execution())
 
-    result = await run_bash_command(
-        command="sudo rm -rf /", workspace_runtime=runtime
-    )
+    result = await run_bash_command(command="sudo rm -rf /", workspace_runtime=runtime)
 
     assert result["disabled"] is True
     assert runtime.calls == []

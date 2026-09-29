@@ -47,6 +47,7 @@ def _load_encrypt_key() -> None:
     if not os.getenv("ENCRYPT_KEY"):
         raise ValueError(f"环境 {active_env} 未配置 ENCRYPT_KEY")
 
+
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in {"-h", "--help", "help"}:

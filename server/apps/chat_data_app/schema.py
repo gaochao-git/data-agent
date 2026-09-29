@@ -23,6 +23,7 @@ class ApiResponse(BaseModel):
     code: int
     data: Any | None = None
 
+
 QueryExecutorType = Literal["direct", "http"]
 MAX_RECOMMENDED_QUESTION_COUNT = 50
 MAX_RECOMMENDED_QUESTION_LENGTH = 50
@@ -69,6 +70,7 @@ def _normalize_recommended_questions(value: Any) -> List[str]:
 
 class ExecuteSqlRequest(BaseModel):
     """SQL 执行运行时请求（供异步任务、智能体和内部复用）"""
+
     sql: str = Field(..., min_length=1, description="要执行的 SQL 语句")
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
@@ -77,15 +79,23 @@ class ExecuteSqlRequest(BaseModel):
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     limit: Optional[int] = Field(default=None, description="结果行数限制；为空时由服务端按运行时配置解析默认值")
-    timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
+    timeout: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=MAX_QUERY_TIMEOUT_SECONDS,
+        description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600",
+    )
     query_type: Optional[str] = Field(default="sql", description="内部查询类型: sql | builder | agent")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
-    semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
+    semantic_builder_config: Optional[dict] = Field(
+        default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL"
+    )
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
 
 class QueryTaskCreateRequest(BaseModel):
     """异步查询任务创建请求"""
+
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
     user_id: Optional[str] = Field(default=None, description="当前用户ID")
@@ -95,10 +105,17 @@ class QueryTaskCreateRequest(BaseModel):
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     sql: List[str] = Field(default_factory=list, description="要执行的 SQL 语句列表；builder 查询由服务端根据 DSL 编译")
     limit: Optional[int] = Field(default=None, description="结果行数限制；为空时由服务端按运行时配置解析默认值")
-    timeout: Optional[int] = Field(default=None, ge=1, le=MAX_QUERY_TIMEOUT_SECONDS, description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600")
+    timeout: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=MAX_QUERY_TIMEOUT_SECONDS,
+        description="查询超时时间（秒），为空时按数据源类型取全局默认值，上限 3600",
+    )
     query_type: Literal["sql", "builder"] = Field(default="sql", description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
-    semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
+    semantic_builder_config: Optional[dict] = Field(
+        default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL"
+    )
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
     @model_validator(mode="after")
@@ -124,6 +141,7 @@ class InternalQueryTaskCreateRequest(QueryTaskCreateRequest):
 
 class CompileSemanticBuilderSqlRequest(BaseModel):
     """编译语义可视化 DSL 请求（仅生成 SQL，不执行）。"""
+
     datasource_id: str = Field(..., description="数据源ID")
     semantic_config_id: str = Field(..., description="语义配置ID")
     semantic_builder_config: dict = Field(..., description="语义可视化 DSL；不包含 mainTable/joins")
@@ -131,6 +149,7 @@ class CompileSemanticBuilderSqlRequest(BaseModel):
 
 class QueryFavoriteCreateRequest(BaseModel):
     """创建查询收藏请求"""
+
     datasource_id: str = Field(..., description="数据源ID")
     query_type: Literal["conversation", "builder", "sql"] = Field(..., description="收藏类型")
     favorite_title: str = Field(..., min_length=1, max_length=255, description="收藏标题")
@@ -141,6 +160,7 @@ class QueryFavoriteCreateRequest(BaseModel):
 
 class QueryFavoriteUpdateRequest(BaseModel):
     """更新查询收藏请求"""
+
     favorite_title: Optional[str] = Field(default=None, min_length=1, max_length=255, description="收藏标题")
     query_text: Optional[str] = Field(default=None, min_length=1, description="原始查询内容（问题或SQL）")
     builder_config: Optional[dict] = Field(default=None, description="可视化查询配置（仅 builder 类型）")
@@ -152,14 +172,24 @@ class AgentScheduleCreateRequest(BaseModel):
 
     title: str = Field(..., min_length=1, max_length=100, description="任务标题")
     prompt: str = Field(..., min_length=1, max_length=2000, description="任务指令（提示词）")
-    conversation_id: Optional[str] = Field(default=None, max_length=64, description="绑定的会话ID；conversation_mode=fixed 时必填")
-    conversation_mode: Literal["fixed", "new_each_run"] = Field(default="fixed", description="会话绑定方式：fixed-指定会话，new_each_run-每次执行新建会话")
+    conversation_id: Optional[str] = Field(
+        default=None, max_length=64, description="绑定的会话ID；conversation_mode=fixed 时必填"
+    )
+    conversation_mode: Literal["fixed", "new_each_run"] = Field(
+        default="fixed", description="会话绑定方式：fixed-指定会话，new_each_run-每次执行新建会话"
+    )
     schedule_type: Literal["cron", "once"] = Field(default="cron", description="调度类型：cron-周期，once-单次")
-    cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式（分 时 日 月 周），周期任务必填")
+    cron_expr: Optional[str] = Field(
+        default=None, max_length=64, description="五字段 cron 表达式（分 时 日 月 周），周期任务必填"
+    )
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间，必须晚于当前时间")
     effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间，空表示长期有效")
-    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID（创建时的便捷字段，等价于 options.datasource_id）")
-    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项（与智能问数 options 口径一致）；值为 null 的键视为未设置")
+    datasource_id: Optional[str] = Field(
+        default=None, max_length=128, description="执行数据源ID（创建时的便捷字段，等价于 options.datasource_id）"
+    )
+    options: Optional[Dict[str, Any]] = Field(
+        default=None, description="运行选项（与智能问数 options 口径一致）；值为 null 的键视为未设置"
+    )
 
 
 class AgentScheduleUpdateRequest(BaseModel):
@@ -169,13 +199,23 @@ class AgentScheduleUpdateRequest(BaseModel):
     prompt: Optional[str] = Field(default=None, min_length=1, max_length=2000, description="任务指令（提示词）")
     schedule_type: Optional[Literal["cron", "once"]] = Field(default=None, description="调度类型")
     conversation_mode: Optional[Literal["fixed", "new_each_run"]] = Field(default=None, description="会话绑定方式")
-    conversation_id: Optional[str] = Field(default=None, max_length=64, description="绑定的会话ID（切换为指定会话模式时必填）")
+    conversation_id: Optional[str] = Field(
+        default=None, max_length=64, description="绑定的会话ID（切换为指定会话模式时必填）"
+    )
     cron_expr: Optional[str] = Field(default=None, max_length=64, description="五字段 cron 表达式")
     plan_time: Optional[datetime] = Field(default=None, description="单次任务的执行时间")
-    effective_end_time: Optional[datetime] = Field(default=None, description="有效期结束时间；显式传 null 表示清除有效期，不传则保持不变")
+    effective_end_time: Optional[datetime] = Field(
+        default=None, description="有效期结束时间；显式传 null 表示清除有效期，不传则保持不变"
+    )
     enabled_flag: Optional[int] = Field(default=None, ge=0, le=1, description="启用状态：1-启用，0-停用")
-    datasource_id: Optional[str] = Field(default=None, max_length=128, description="执行数据源ID（便捷字段，等价于 options.datasource_id；清除请用 options 补丁传 null）")
-    options: Optional[Dict[str, Any]] = Field(default=None, description="运行选项补丁：只提交要改的键，值为 null 表示清除该键，未提交的键保持不变")
+    datasource_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="执行数据源ID（便捷字段，等价于 options.datasource_id；清除请用 options 补丁传 null）",
+    )
+    options: Optional[Dict[str, Any]] = Field(
+        default=None, description="运行选项补丁：只提交要改的键，值为 null 表示清除该键，未提交的键保持不变"
+    )
 
 
 class AgentSchedulePauseRequest(BaseModel):
@@ -199,25 +239,26 @@ class ChatDataSettingUpsertRequest(BaseModel):
 
 # ============ 表管理相关模型 ============
 
+
 class TableListResponse(BaseModel):
     """表列表响应"""
+
     status: Literal["success", "error"] = "success"
     msg: str = ""
     code: int = 2000
-    data: Optional[Dict[str, List[str]]] = Field(
-        default=None,
-        description="表名列表 {'tables': ['table1', 'table2']}"
-    )
+    data: Optional[Dict[str, List[str]]] = Field(default=None, description="表名列表 {'tables': ['table1', 'table2']}")
 
 
 class TableInfoRequest(BaseModel):
     """表信息请求"""
+
     table_name: str = Field(..., description="表名")
     include_ddl: bool = Field(default=False, description="是否包含DDL语句")
 
 
 class TableInfoResult(BaseModel):
     """表信息结果"""
+
     table_name: str = Field(..., description="表名")
     description: str = Field(default="", description="表描述")
     columns: List[Dict] = Field(default_factory=list, description="列信息列表")
@@ -226,6 +267,7 @@ class TableInfoResult(BaseModel):
 
 class TableInfoResponse(BaseModel):
     """表信息响应"""
+
     status: Literal["success", "error"] = "success"
     msg: str = ""
     code: int = 2000
@@ -234,8 +276,10 @@ class TableInfoResponse(BaseModel):
 
 # ============ 数据库元数据同步模型 ============
 
+
 class DbConnectionRequest(BaseModel):
     """数据库连接请求（用于获取表列表）"""
+
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     query_executor_type: QueryExecutorType = Field(default="direct", description="查询执行方式: direct | http")
     host: str = Field(default="", description="服务器地址")
@@ -264,34 +308,40 @@ class DbConnectionRequest(BaseModel):
 
 class DatasourceUpdateRequest(BaseModel):
     """数据源更新请求（元信息）"""
+
     name: Optional[str] = Field(default=None, description="数据源名称")
     description: Optional[str] = Field(default=None, description="数据源描述")
 
 
 class DatasourceTableGroupItem(BaseModel):
     """数据源表分组项"""
+
     table_group_name: str = Field(..., min_length=1, max_length=100, description="表分组名称")
     table_names: List[str] = Field(default_factory=list, description="分组内表名列表")
 
 
 class DatasourceTableGroupsUpdateRequest(BaseModel):
     """数据源表分组更新请求"""
+
     groups: List[DatasourceTableGroupItem] = Field(default_factory=list, description="表分组列表")
 
 
 class DatasourceTableBusinessDescUpdateRequest(BaseModel):
     """数据源表业务说明更新请求"""
+
     business_desc: str = Field(default="", max_length=255, description="表业务说明")
 
 
 class DatasourceColumnDictEnumItem(BaseModel):
     """数据源字段字典枚举项"""
+
     value: str = Field(..., min_length=1, max_length=128, description="枚举值")
     label: str = Field(default="", max_length=255, description="枚举含义")
 
 
 class DatasourceColumnDictPayload(BaseModel):
     """数据源字段字典内容"""
+
     enum_values: List[DatasourceColumnDictEnumItem] = Field(default_factory=list, description="枚举值列表")
     synonyms: List[str] = Field(default_factory=list, description="字段同义词")
     storage_format: str = Field(default="", max_length=255, description="数据存储格式")
@@ -300,18 +350,23 @@ class DatasourceColumnDictPayload(BaseModel):
 
 class DatasourceColumnDictUpdateRequest(BaseModel):
     """数据源字段字典更新请求"""
+
     model_config = {"populate_by_name": True}
 
-    column_dict: DatasourceColumnDictPayload = Field(default_factory=DatasourceColumnDictPayload, alias="dict", description="字段字典")
+    column_dict: DatasourceColumnDictPayload = Field(
+        default_factory=DatasourceColumnDictPayload, alias="dict", description="字段字典"
+    )
 
 
 class DatasourceColumnDictGenerateRequest(BaseModel):
     """数据源字段字典生成请求"""
+
     text: str = Field(..., min_length=1, max_length=10000, description="用于生成字段字典的文本")
 
 
 class TableIndexItem(BaseModel):
     """数据源表索引项"""
+
     index_type: Literal["primary", "unique", "secondary"] = Field(..., description="索引类型")
     index_name: str = Field(default="", max_length=32, description="索引名称")
     columns: List[str] = Field(default_factory=list, max_length=5, description="索引列名列表")
@@ -319,11 +374,13 @@ class TableIndexItem(BaseModel):
 
 class DatasourceTableIndexesUpdateRequest(BaseModel):
     """数据源表索引配置更新请求（整体覆盖）"""
+
     indexes: List[TableIndexItem] = Field(default_factory=list, max_length=5, description="索引列表")
 
 
 class SkillCreateRequest(BaseModel):
     """用户技能创建请求"""
+
     skill_name: str = Field(..., min_length=3, max_length=64, description="技能英文名称，使用小写字母和中划线")
     skill_title: str = Field(..., min_length=1, max_length=200, description="技能标题")
     skill_desc: str = Field(default="", max_length=1000, description="技能描述")
@@ -334,6 +391,7 @@ class SkillCreateRequest(BaseModel):
 
 class SkillUpdateRequest(BaseModel):
     """用户技能更新请求"""
+
     skill_title: str = Field(..., min_length=1, max_length=200, description="技能标题")
     skill_desc: str = Field(default="", max_length=1000, description="技能描述")
     skill_category: str = Field(default="custom", max_length=100, description="技能分类")
@@ -343,6 +401,7 @@ class SkillUpdateRequest(BaseModel):
 
 class SkillFileUpsertRequest(BaseModel):
     """用户技能版本文件保存请求"""
+
     dir_name: Literal["references", "assets"] = Field(..., description="技能固定目录")
     file_path: str = Field(..., min_length=1, max_length=500, description="目录内相对路径")
     content: str = Field(default="", description="文件内容")
@@ -350,11 +409,13 @@ class SkillFileUpsertRequest(BaseModel):
 
 class SkillImportFromWorkspaceRequest(BaseModel):
     """从智能分析工作区导入用户技能"""
+
     skill_dir_path: str = Field(..., min_length=1, max_length=500, description="工作区技能目录路径")
 
 
 class DatasourceSourceItem(BaseModel):
     """数据源连接项"""
+
     org_name: str = Field(..., min_length=1, max_length=128, description="机构名称")
     org_code: str = Field(..., min_length=1, max_length=128, description="机构编码")
     query_executor_type: QueryExecutorType = Field(..., description="查询执行方式: direct | http")
@@ -383,10 +444,13 @@ class DatasourceSourceItem(BaseModel):
 
 class DatasourceGroupCreateRequest(BaseModel):
     """数据源组创建请求"""
+
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
     query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
-    recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
+    recommended_questions: List[str] = Field(
+        default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字"
+    )
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
@@ -399,10 +463,13 @@ class DatasourceGroupCreateRequest(BaseModel):
 
 class DatasourceGroupUpdateRequest(BaseModel):
     """数据源组更新请求"""
+
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
     query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
-    recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
+    recommended_questions: List[str] = Field(
+        default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字"
+    )
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
@@ -415,13 +482,16 @@ class DatasourceGroupUpdateRequest(BaseModel):
 
 class DatasourceGroupMetadataSyncRequest(BaseModel):
     """数据源组模板元数据同步请求"""
+
     template_table_names: List[str] = Field(default_factory=list, description="需要同步的模板表名列表")
 
 
 # ============ 语义层配置模型 ============
 
+
 class SemanticMetricPeriod(BaseModel):
     """派生指标固定统计周期"""
+
     kind: Literal["today", "yesterday", "last_n_days", "this_week", "this_month", "between"] = Field(
         ..., description="周期类型"
     )
@@ -433,6 +503,7 @@ class SemanticMetricPeriod(BaseModel):
 
 class SemanticMetricFilter(BaseModel):
     """派生指标修饰词过滤"""
+
     dimension: str = Field(..., description="过滤维度名称")
     operator: str = Field(..., description="操作符，如 '='、'IN'")
     value: Union[str, List[str]] = Field(default="", description="筛选值；IN/NOT IN 为字符串数组")
@@ -449,18 +520,28 @@ class SemanticMetricFilter(BaseModel):
 
 class SemanticMetric(BaseModel):
     """语义层指标定义"""
+
     name: str = Field(..., description="指标名称，如'销售额'")
     field_name: Optional[str] = Field(default=None, description="逻辑字段名（可选，用于区分同一物理字段的多个配置）")
     expression: str = Field(..., description="SQL聚合表达式，如'SUM(amount)'")
     table: str = Field(..., description="所属表名")
     table_alias: Optional[str] = Field(default=None, description="查询表别名；为空时默认等于所属表名")
-    data_type: Optional[str] = Field(default=None, description="指标结果或源字段类型，如'int'、'decimal(10,2)'、'timestamp'")
+    data_type: Optional[str] = Field(
+        default=None, description="指标结果或源字段类型，如'int'、'decimal(10,2)'、'timestamp'"
+    )
     filter: Optional[str] = Field(default=None, description="默认过滤条件，如'is_active=1'")
     description: Optional[str] = Field(default=None, description="指标描述")
     metadata_supplement: Optional[str] = Field(default=None, description="字段级元数据补充说明")
-    compare_type: Optional[Literal["mom", "yoy"]] = Field(default=None, description="预计算同比/环比指标类型：mom=环比，yoy=同比")
-    compare_mode: Optional[Literal["trend", "value"]] = Field(default=None, description="预计算同比/环比指标形态：trend=趋势，value=单值")
-    base_metric: Optional[str] = Field(default=None, description="基础指标名称；派生指标为必填（口径来源），预计算同比/环比指标（legacy）亦复用此字段，如'销售额'")
+    compare_type: Optional[Literal["mom", "yoy"]] = Field(
+        default=None, description="预计算同比/环比指标类型：mom=环比，yoy=同比"
+    )
+    compare_mode: Optional[Literal["trend", "value"]] = Field(
+        default=None, description="预计算同比/环比指标形态：trend=趋势，value=单值"
+    )
+    base_metric: Optional[str] = Field(
+        default=None,
+        description="基础指标名称；派生指标为必填（口径来源），预计算同比/环比指标（legacy）亦复用此字段，如'销售额'",
+    )
     # 派生/复合指标扩展：metric_kind 缺省（None）即为原子指标
     metric_kind: Optional[Literal["derived", "composite"]] = Field(
         default=None, description="指标类别：derived=派生指标，composite=复合指标，缺省为原子指标"
@@ -514,6 +595,7 @@ class SemanticMetric(BaseModel):
 
 class SemanticDimension(BaseModel):
     """语义层维度定义（增强版）"""
+
     name: str = Field(..., description="维度名称，如'数据库类型'")
     field_name: Optional[str] = Field(default=None, description="逻辑字段名（可选，用于区分同一物理字段的多个配置）")
     column: str = Field(..., description="对应的字段名")
@@ -521,26 +603,26 @@ class SemanticDimension(BaseModel):
     table: str = Field(..., description="所属表名")
     table_alias: Optional[str] = Field(default=None, description="查询表别名；为空时默认等于所属表名")
     logical_type: Optional[Literal["text", "number", "date", "datetime", "enum"]] = Field(
-        default=None,
-        description="逻辑值类型，用于 DSL 过滤值校验和前端字段类型展示"
+        default=None, description="逻辑值类型，用于 DSL 过滤值校验和前端字段类型展示"
     )
     description: Optional[str] = Field(default=None, description="维度描述")
     metadata_supplement: Optional[str] = Field(default=None, description="字段级元数据补充说明")
-    mapping: Optional[Dict[str, str]] = Field(default=None, description="同义词映射（同义词→标准值），如{'mysql':'MySQL', 'pg':'PostgreSQL'}")
+    mapping: Optional[Dict[str, str]] = Field(
+        default=None, description="同义词映射（同义词→标准值），如{'mysql':'MySQL', 'pg':'PostgreSQL'}"
+    )
 
     # 新增：过滤增强
     allowed_operators: Optional[List[str]] = Field(
-        default=None,
-        description="允许的过滤操作符，如['=', '!=', 'IN', 'NOT IN', '>', '<']，为空则使用默认值"
+        default=None, description="允许的过滤操作符，如['=', '!=', 'IN', 'NOT IN', '>', '<']，为空则使用默认值"
     )
     allowed_values: Optional[List[str]] = Field(
-        default=None,
-        description="预定义的可选值（用于下拉选择），如['MySQL', 'PostgreSQL']"
+        default=None, description="预定义的可选值（用于下拉选择），如['MySQL', 'PostgreSQL']"
     )
 
 
 class SemanticRelationship(BaseModel):
     """语义层表关系定义（改进版 Join）"""
+
     left_table: str = Field(..., description="左表名")
     right_table: str = Field(..., description="右表名")
     left_alias: Optional[str] = Field(default=None, description="左表查询别名；为空时默认等于左表名")
@@ -549,17 +631,17 @@ class SemanticRelationship(BaseModel):
     right_column: str = Field(..., description="右表关联字段")
     join_conditions: List[Dict[str, str]] = Field(
         default_factory=list,
-        description="多字段关联条件列表，如[{left_column:'id', right_column:'id'}]；多个条件使用AND"
+        description="多字段关联条件列表，如[{left_column:'id', right_column:'id'}]；多个条件使用AND",
     )
     relationship_type: Literal["one_to_one", "one_to_many", "many_to_one"] = Field(
-        default="one_to_one",
-        description="关系基数：one_to_one/one_to_many/many_to_one"
+        default="one_to_one", description="关系基数：one_to_one/one_to_many/many_to_one"
     )
     join_type: Literal["inner", "left", "right"] = Field(default="left", description="关联类型")
 
 
 class SemanticConfig(BaseModel):
     """单个语义配置（支持多配置）"""
+
     id: str = Field(..., description="配置ID")
     name: str = Field(..., description="配置名称，如'数据库集群分析'")
     description: Optional[str] = Field(default=None, description="指标集短描述")
@@ -572,6 +654,7 @@ class SemanticConfig(BaseModel):
 
 class SemanticConfigCreateRequest(BaseModel):
     """创建语义配置请求"""
+
     name: str = Field(..., description="配置名称")
     description: Optional[str] = Field(default=None, description="指标集短描述")
     business_notes: Optional[str] = Field(default=None, description="业务说明/业务知识")
@@ -583,6 +666,7 @@ class SemanticConfigCreateRequest(BaseModel):
 
 class SemanticOssieImportRequest(BaseModel):
     """Ossie 语义模型导入请求（YAML 全文）"""
+
     yaml_content: str = Field(..., min_length=1, max_length=2_000_000, description="Ossie YAML 文档全文")
     # 同名冲突处理动作：模型名 → replace（覆盖同名配置内容，强制禁用）/ skip（跳过该模型）。
     # 冲突模型缺省动作时按 skip 处理（保守：不破坏已有配置）；非法值在路由层整体拒绝。
@@ -591,6 +675,7 @@ class SemanticOssieImportRequest(BaseModel):
 
 class SemanticConfigUpdateRequest(BaseModel):
     """更新语义配置请求"""
+
     name: Optional[str] = Field(default=None, description="配置名称")
     description: Optional[str] = Field(default=None, description="指标集短描述")
     business_notes: Optional[str] = Field(default=None, description="业务说明/业务知识")
@@ -602,20 +687,25 @@ class SemanticConfigUpdateRequest(BaseModel):
 
 class SemanticConfigBatchToggleRequest(BaseModel):
     """批量切换语义配置启用状态请求"""
+
     config_ids: List[str] = Field(default_factory=list, description="待切换的指标集 ID 列表")
     enabled: bool = Field(..., description="目标启用状态")
 
 
 class SemanticHistoryLearningRequest(BaseModel):
     """从当前指标集查询历史生成维护建议。"""
+
     days: int = Field(default=7, ge=1, le=90, description="学习最近多少天的历史")
     limit: int = Field(default=50, ge=1, le=200, description="最大学习历史条数")
-    sources: List[Literal["agent", "builder", "sql"]] = Field(default_factory=lambda: ["agent", "builder", "sql"], description="学习来源")
+    sources: List[Literal["agent", "builder", "sql"]] = Field(
+        default_factory=lambda: ["agent", "builder", "sql"], description="学习来源"
+    )
     include_failed: bool = Field(default=True, description="是否包含失败的智能问数/可视化查询")
 
 
 class AccuracyEvaluationRunRequest(BaseModel):
     """智能问数准确率评测请求"""
+
     datasource_id: str = Field(..., description="数据源 ID")
     semantic_config_id: str = Field(..., description="语义配置 ID")
     model_id: Optional[str] = Field(default=None, description="模型 ID")
@@ -631,11 +721,14 @@ class AccuracyEvaluationRunRequest(BaseModel):
 
 class AccuracyEvaluationCase(BaseModel):
     """当前场景准确率评测用例。"""
+
     id: str = Field(..., description="用例 ID")
     nl: str = Field(..., min_length=1, description="自然语言问题")
     gold_dsl: Dict[str, Any] = Field(default_factory=dict, description="标准 DSL")
     gold_sql: str = Field(default="", description="标准 SQL")
-    query_type: Literal["filter", "join", "aggregation", "subquery"] = Field(default="aggregation", description="查询类型")
+    query_type: Literal["filter", "join", "aggregation", "subquery"] = Field(
+        default="aggregation", description="查询类型"
+    )
     difficulty: Literal["easy", "medium", "hard"] = Field(default="easy", description="难度")
     source: Literal["human", "llm"] = Field(default="human", description="来源")
     business_domain: str = Field(..., min_length=1, description="业务域")
@@ -643,12 +736,14 @@ class AccuracyEvaluationCase(BaseModel):
 
 class AccuracyEvaluationCasesUpsertRequest(BaseModel):
     """保存评测用例列表请求。"""
+
     business_domain: Optional[str] = Field(default=None, description="业务域")
     cases: List[AccuracyEvaluationCase] = Field(default_factory=list, description="评测用例列表")
 
 
 class AccuracyEvaluationDraftCaseRequest(BaseModel):
     """生成单条评测用例草稿请求。"""
+
     hint: Optional[str] = Field(default=None, description="可选生成方向")
     existing_questions: List[str] = Field(default_factory=list, description="已有问题，用于避免重复")
 
@@ -656,42 +751,33 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
 # ============ 树形过滤条件模型（参考 Cube.js 设计）============
 
 # 使用 ForwardRef 解决循环引用
-FilterConditionRef = ForwardRef('FilterCondition')
+FilterConditionRef = ForwardRef("FilterCondition")
 
 
 class LeafFilter(BaseModel):
     """叶子过滤条件（单个维度的过滤）"""
+
     dimension: str = Field(..., description="维度名称")
-    operator: str = Field(
-        default="=",
-        description="操作符：=, !=, >, <, >=, <=, IN, NOT IN, LIKE, NOT LIKE"
-    )
+    operator: str = Field(default="=", description="操作符：=, !=, >, <, >=, <=, IN, NOT IN, LIKE, NOT LIKE")
     value: Union[str, int, float, List[Union[str, int, float]]] = Field(
-        ...,
-        description="过滤值，IN/NOT IN 操作符使用列表"
+        ..., description="过滤值，IN/NOT IN 操作符使用列表"
     )
 
 
 class AndFilter(BaseModel):
     """AND 组合过滤条件（所有子条件都要满足）"""
+
     model_config = {"populate_by_name": True}
 
-    and_: List['FilterCondition'] = Field(
-        ...,
-        alias="and",
-        description="子条件列表，所有条件都要满足"
-    )
+    and_: List["FilterCondition"] = Field(..., alias="and", description="子条件列表，所有条件都要满足")
 
 
 class OrFilter(BaseModel):
     """OR 组合过滤条件（任一子条件满足即可）"""
+
     model_config = {"populate_by_name": True}
 
-    or_: List['FilterCondition'] = Field(
-        ...,
-        alias="or",
-        description="子条件列表，任一条件满足即可"
-    )
+    or_: List["FilterCondition"] = Field(..., alias="or", description="子条件列表，任一条件满足即可")
 
 
 # FilterCondition 是联合类型：可以是叶子节点、AND 节点或 OR 节点
@@ -704,8 +790,10 @@ OrFilter.model_rebuild()
 
 # ============ 语义工具输入模型 ============
 
+
 class ExecuteSemanticInput(BaseModel):
     """语义查询执行工具的输入参数（供 LangGraph Agent 工具使用）"""
+
     model_config = {"extra": "ignore"}
     semantic_config_id: str = Field(
         ...,
@@ -714,11 +802,11 @@ class ExecuteSemanticInput(BaseModel):
     )
     dsl: Dict[str, Any] = Field(
         ...,
-        description='''完整语义 DSL 对象，必须包含在 dsl 参数内，不要把 metrics、dimensions、filters 等字段放在工具顶层。
+        description="""完整语义 DSL 对象，必须包含在 dsl 参数内，不要把 metrics、dimensions、filters 等字段放在工具顶层。
 DSL 字段包括 metrics、dimensions、filters、having、order_by、limit、offset。
 dimensions 支持简单字符串和 {"name":"时间维度名","time_grain":"month"}。
 filters 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL；支持 and/or 树和 left/right 结构化表达式。
-having 只用于聚合结果过滤。'''
+having 只用于聚合结果过滤。""",
     )
 
     @model_validator(mode="before")
@@ -732,8 +820,10 @@ having 只用于聚合结果过滤。'''
 
 # ============ Agent 工具输入模型 ============
 
+
 class SemanticQueryInput(BaseModel):
     """查询工具输入：常规使用 DSL 模式，无法表达时使用 SQL 模式。"""
+
     dsl: Optional[Dict[str, Any]] = Field(
         default=None,
         description="DSL 模式专用：完整语义 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；operator 使用 SQL 风格操作符，不使用 equals/notEquals；与顶层 sql 二选一，不要传 mode",
@@ -830,7 +920,7 @@ class _CheckYamlActionPayload(BaseModel):
         """模型仍按旧习惯传 yaml_content 时，给出可执行的改法而不是泛化拒绝。"""
         if isinstance(data, dict) and "yaml_content" in data:
             raise ValueError(
-                'check_yaml 不再接受 yaml_content 全文参数，请改传文件路径：'
+                "check_yaml 不再接受 yaml_content 全文参数，请改传文件路径："
                 '{"file_path": "/mnt/user-data/workspace/semantic/<模型文件>.yaml"}'
             )
         return data
@@ -884,12 +974,12 @@ class DataAnalyzingInput(BaseModel):
         ...,
         description=(
             "操作参数，结构随 action 变化："
-            "validate_dsl 传 {\"dsl\": <单个查询DSL>, \"semantic_config_id\": \"...\"}；"
-            "validate_dashboard 传 {\"dsl\": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "
-            "\"semantic_config_id\": \"卡片缺省值，可选\"}；"
-            "execute_query 传 {\"dsl\": <完整语义DSL> 或 \"sql\": \"...\", \"semantic_config_id\": \"...\", "
-            "\"member_datasource_ids\": [...]}；"
-            "check_yaml 传 {\"file_path\": \"/mnt/user-data/workspace/model.yaml\"}；"
+            'validate_dsl 传 {"dsl": <单个查询DSL>, "semantic_config_id": "..."}；'
+            'validate_dashboard 传 {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, '
+            '"semantic_config_id": "卡片缺省值，可选"}；'
+            'execute_query 传 {"dsl": <完整语义DSL> 或 "sql": "...", "semantic_config_id": "...", '
+            '"member_datasource_ids": [...]}；'
+            'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}"
         ),
     )
@@ -922,6 +1012,7 @@ class DataAnalyzingInput(BaseModel):
 
 class CalculatorItem(BaseModel):
     """单个确定性计算项"""
+
     name: Optional[str] = Field(default=None, max_length=100, description="计算项名称，用于区分多个结果")
     expression: str = Field(
         ...,
@@ -939,38 +1030,26 @@ class CalculatorItem(BaseModel):
 
 class GenerateChartInput(BaseModel):
     """图表生成工具的输入参数"""
-    result_id: str = Field(
-        description="查询结果ID，从 data_analyzing_tool 的 execute_query 返回的 result_id"
-    )
-    chart_type: Optional[ChartType] = Field(
-        default=None,
-        description="图表类型。不传则返回数据分析，由你来推荐"
-    )
-    x_field: Optional[str] = Field(
-        default=None,
-        description="X轴字段名。不传则返回数据分析"
-    )
-    y_field: Optional[str] = Field(
-        default=None,
-        description="Y轴字段名；关系图时表示终点字段。不传则返回数据分析"
-    )
-    series_field: Optional[str] = Field(
-        default=None,
-        description="分组字段名（可选），传入则生成多折线图"
-    )
+
+    result_id: str = Field(description="查询结果ID，从 data_analyzing_tool 的 execute_query 返回的 result_id")
+    chart_type: Optional[ChartType] = Field(default=None, description="图表类型。不传则返回数据分析，由你来推荐")
+    x_field: Optional[str] = Field(default=None, description="X轴字段名。不传则返回数据分析")
+    y_field: Optional[str] = Field(default=None, description="Y轴字段名；关系图时表示终点字段。不传则返回数据分析")
+    series_field: Optional[str] = Field(default=None, description="分组字段名（可选），传入则生成多折线图")
 
 
 class LoadSkillInput(BaseModel):
     """加载 Skill 工具的输入参数"""
-    skill_name: str = Field(
-        description=f"要加载的 skill 名称，如 {DATA_ANALYZING_SKILL}"
-    )
+
+    skill_name: str = Field(description=f"要加载的 skill 名称，如 {DATA_ANALYZING_SKILL}")
 
 
 # ============ Dashboard 模型 ============
 
+
 class DashboardCreateRequest(BaseModel):
     """创建大屏请求"""
+
     name: str = Field(..., description="大屏名称")
     description: Optional[str] = Field(default=None, description="大屏描述")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID")
@@ -979,6 +1058,7 @@ class DashboardCreateRequest(BaseModel):
 
 class DashboardUpdateRequest(BaseModel):
     """更新大屏请求"""
+
     name: Optional[str] = Field(default=None, description="大屏名称")
     description: Optional[str] = Field(default=None, description="大屏描述")
     theme: Optional[Literal["light", "dark"]] = Field(default=None, description="主题")
@@ -987,12 +1067,10 @@ class DashboardUpdateRequest(BaseModel):
 
 class PanelCreateRequest(BaseModel):
     """创建面板请求"""
+
     name: Optional[str] = Field(default=None, description="面板名称（可选，缺省时服务端使用本地兜底名称）")
     sql: str = Field(..., description="SQL查询语句")
-    chart_type: ChartType = Field(
-        default="table",
-        description="图表类型"
-    )
+    chart_type: ChartType = Field(default="table", description="图表类型")
     chart_config: Optional[Dict] = Field(default=None, description="图表配置")
     layout_x: Optional[int] = Field(default=None, description="布局X位置，不指定则自动放到最下方")
     layout_y: Optional[int] = Field(default=None, description="布局Y位置，不指定则自动放到最下方")
@@ -1006,6 +1084,7 @@ class PanelCreateRequest(BaseModel):
 
 class DashboardFromSpecRequest(BaseModel):
     """根据 AI 看板规格创建大屏请求"""
+
     dashboard_spec: Dict[str, Any] = Field(..., description="AI 生成并经服务端校验的看板规格")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
@@ -1014,31 +1093,27 @@ class DashboardFromSpecRequest(BaseModel):
 
 class PanelBatchExecuteRequest(BaseModel):
     """批量执行面板请求"""
+
     panel_ids: List[str] = Field(default_factory=list, description="面板ID列表，为空时执行当前看板全部面板")
     panel_member_datasource_ids: Dict[str, str] = Field(
-        default_factory=dict,
-        description="按面板指定执行成员的映射，key 为 panel_id，value 为 member_datasource_id"
+        default_factory=dict, description="按面板指定执行成员的映射，key 为 panel_id，value 为 member_datasource_id"
     )
 
 
 class PanelNameGenerateRequest(BaseModel):
     """生成面板标题请求"""
+
     sql: str = Field(..., description="SQL查询语句")
-    chart_type: ChartType = Field(
-        default="table",
-        description="图表类型"
-    )
+    chart_type: ChartType = Field(default="table", description="图表类型")
     name: Optional[str] = Field(default=None, description="用户显式传入的名称，存在时优先使用")
 
 
 class PanelUpdateRequest(BaseModel):
     """更新面板请求"""
+
     name: Optional[str] = Field(default=None, description="面板名称")
     sql: Optional[str] = Field(default=None, description="SQL查询语句")
-    chart_type: Optional[ChartType] = Field(
-        default=None,
-        description="图表类型"
-    )
+    chart_type: Optional[ChartType] = Field(default=None, description="图表类型")
     chart_config: Optional[Dict] = Field(default=None, description="图表配置")
     layout_x: Optional[int] = Field(default=None, description="布局X位置")
     layout_y: Optional[int] = Field(default=None, description="布局Y位置")
@@ -1050,7 +1125,5 @@ class PanelUpdateRequest(BaseModel):
 
 class LayoutUpdateRequest(BaseModel):
     """批量更新布局请求"""
-    layouts: List[Dict] = Field(
-        ...,
-        description="布局列表 [{'panel_id': 'xxx', 'x': 0, 'y': 0, 'w': 6, 'h': 4}, ...]"
-    )
+
+    layouts: List[Dict] = Field(..., description="布局列表 [{'panel_id': 'xxx', 'x': 0, 'y': 0, 'w': 6, 'h': 4}, ...]")

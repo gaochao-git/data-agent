@@ -147,11 +147,13 @@ def test_generate_aggregate_order_by_metric_uses_aggregate_expression_for_hive()
 
 def test_generate_having_keeps_metric_expression_when_metric_not_selected():
     config = build_config()
-    config["metrics"].append({
-        "name": "明细销售额",
-        "expression": "SUM(order_items.quantity * order_items.unit_price)",
-        "table": "order_items",
-    })
+    config["metrics"].append(
+        {
+            "name": "明细销售额",
+            "expression": "SUM(order_items.quantity * order_items.unit_price)",
+            "table": "order_items",
+        }
+    )
     sql = generate(
         config,
         {
@@ -236,11 +238,13 @@ def test_time_dimension_text_between_is_split_to_between_values():
         build_config("hive"),
         {
             "metrics": ["订单数"],
-            "filters": [{
-                "dimension": "下单时间",
-                "operator": "BETWEEN",
-                "value": "2024-01-01 00:00:00 AND 2024-12-31 23:59:59",
-            }],
+            "filters": [
+                {
+                    "dimension": "下单时间",
+                    "operator": "BETWEEN",
+                    "value": "2024-01-01 00:00:00 AND 2024-12-31 23:59:59",
+                }
+            ],
         },
     )
 
@@ -252,10 +256,14 @@ def test_time_dimension_equal_year_inside_tree_is_normalized_to_range():
         build_config("hive"),
         {
             "metrics": ["订单数"],
-            "filters": [{"and": [
-                {"dimension": "订单状态", "operator": "=", "value": "paid"},
-                {"dimension": "下单时间", "operator": "=", "value": "2024"},
-            ]}],
+            "filters": [
+                {
+                    "and": [
+                        {"dimension": "订单状态", "operator": "=", "value": "paid"},
+                        {"dimension": "下单时间", "operator": "=", "value": "2024"},
+                    ]
+                }
+            ],
         },
     )
 
@@ -293,11 +301,19 @@ def test_prompt_dsl_examples_compile_to_sql():
             ["COUNT(DISTINCT order_id) AS `订单数`", "GROUP BY `status`"],
         ),
         (
-            {"metrics": ["订单数"], "dimensions": ["订单状态"], "having": [{"metric": "订单数", "operator": ">", "value": 10}]},
+            {
+                "metrics": ["订单数"],
+                "dimensions": ["订单状态"],
+                "having": [{"metric": "订单数", "operator": ">", "value": 10}],
+            },
             ["HAVING COUNT(DISTINCT order_id) > 10"],
         ),
         (
-            {"metrics": [], "dimensions": ["订单状态"], "filters": [{"dimension": "订单状态", "operator": "IN", "value": ["paid", "cancelled"]}]},
+            {
+                "metrics": [],
+                "dimensions": ["订单状态"],
+                "filters": [{"dimension": "订单状态", "operator": "IN", "value": ["paid", "cancelled"]}],
+            },
             ["WHERE `status` IN ('paid', 'cancelled')"],
         ),
         (
@@ -542,7 +558,10 @@ def test_structured_expression_filter_inside_tree():
         },
     )
 
-    assert "WHERE (`order_time` >= '2026-06-01 00:00:00' AND `order_time` < '2026-06-02 00:00:00') AND `out_amount` >= (orders.`in_amount` + 100)" in sql
+    assert (
+        "WHERE (`order_time` >= '2026-06-01 00:00:00' AND `order_time` < '2026-06-02 00:00:00') AND `out_amount` >= (orders.`in_amount` + 100)"
+        in sql
+    )
 
 
 def test_structured_expression_filter_collects_cross_table_join():
@@ -662,23 +681,27 @@ def test_structured_expression_filter_rejects_invalid_operands():
 
 
 def test_structured_expression_filter_helper_edges(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT helper"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = build_config()
     config["metrics"][0]["table_alias"] = "o"
-    config["dimensions"].append({
-        "name": "格式化状态",
-        "column": "status",
-        "table": "orders",
-        "table_alias": "o",
-        "expression": "CASE WHEN orders.status='paid' THEN '已支付' END",
-    })
+    config["dimensions"].append(
+        {
+            "name": "格式化状态",
+            "column": "status",
+            "table": "orders",
+            "table_alias": "o",
+            "expression": "CASE WHEN orders.status='paid' THEN '已支付' END",
+        }
+    )
     generator = SemanticAIQueryAdapter(config)
 
     result = generator.generate_sql(
@@ -711,10 +734,18 @@ def test_structured_expression_filter_helper_edges(monkeypatch):
 
 def test_structured_expression_filter_additional_helper_branches():
     config = build_config()
-    config["dimensions"].extend([
-        {"name": "空表达式维度", "column": "raw_col", "table": "", "table_alias": "", "expression": ""},
-        {"name": "别名表达式维度", "column": "status", "table": "orders", "table_alias": "o", "expression": "orders.status"},
-    ])
+    config["dimensions"].extend(
+        [
+            {"name": "空表达式维度", "column": "raw_col", "table": "", "table_alias": "", "expression": ""},
+            {
+                "name": "别名表达式维度",
+                "column": "status",
+                "table": "orders",
+                "table_alias": "o",
+                "expression": "orders.status",
+            },
+        ]
+    )
     generator = SemanticAIQueryAdapter(config)
 
     assert generator._rewrite_expression_table_qualifier("", "o", "orders") == ""
@@ -758,10 +789,12 @@ def test_generate_having_order_offset_and_params_block():
 
 def test_generate_structured_metric_expression_having():
     config = build_config()
-    config["metrics"].extend([
-        {"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"},
-        {"name": "入金总额", "expression": "SUM(orders.in_amount)", "table": "orders"},
-    ])
+    config["metrics"].extend(
+        [
+            {"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"},
+            {"name": "入金总额", "expression": "SUM(orders.in_amount)", "table": "orders"},
+        ]
+    )
 
     result = generate_result(
         config,
@@ -813,14 +846,20 @@ def test_generate_structured_having_collects_right_metric_join_table():
 
 
 def test_generate_rejects_having_unknown_metric_and_order_direction():
-    bad_having = generate_result(build_config(), {
-        "metrics": ["订单数"],
-        "having": [{"metric": "不存在指标", "operator": ">", "value": 1}],
-    })
-    bad_order = generate_result(build_config(), {
-        "metrics": ["订单数"],
-        "order_by": [{"field": "订单数", "direction": "bad"}],
-    })
+    bad_having = generate_result(
+        build_config(),
+        {
+            "metrics": ["订单数"],
+            "having": [{"metric": "不存在指标", "operator": ">", "value": 1}],
+        },
+    )
+    bad_order = generate_result(
+        build_config(),
+        {
+            "metrics": ["订单数"],
+            "order_by": [{"field": "订单数", "direction": "bad"}],
+        },
+    )
 
     assert bad_having["success"] is False
     assert "HAVING 条件中的指标" in bad_having["error"]
@@ -878,7 +917,9 @@ def test_generate_dimension_in_metrics_as_raw_detail_field():
 
 def test_generate_raw_metric_becomes_group_dimension_for_aggregate_query():
     config = build_config()
-    config["metrics"].append({"name": "订单编号", "expression": "orders.order_id", "table": "orders", "column": "order_id"})
+    config["metrics"].append(
+        {"name": "订单编号", "expression": "orders.order_id", "table": "orders", "column": "order_id"}
+    )
 
     sql = generate(
         config,
@@ -894,8 +935,10 @@ def test_generate_raw_metric_becomes_group_dimension_for_aggregate_query():
 
 
 def test_generate_compile_failure_returns_error(monkeypatch):
-
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")))
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")),
+    )
 
     result = generate_result(build_config(), {"metrics": ["订单数"]})
 
@@ -910,11 +953,26 @@ def test_generator_helper_branches_for_tables_and_joins():
     assert generator._parse_aggregate_expression("orders.amount") is None
     assert generator._validate_table_column("orders", "missing") is None
     assert generator._validate_table_column("missing", "id").startswith("表 'missing' 不存在")
-    assert generator._map_filter_node_for_builder({"or": [{"dimension": "订单状态", "operator": "=", "value": "paid"}]}) == {
-        "or": [{"id": "filter-订单状态", "table": "orders", "tableAlias": "orders", "column": "status", "expression": None, "operator": "=", "value": "paid", "logic": "AND"}]
+    assert generator._map_filter_node_for_builder(
+        {"or": [{"dimension": "订单状态", "operator": "=", "value": "paid"}]}
+    ) == {
+        "or": [
+            {
+                "id": "filter-订单状态",
+                "table": "orders",
+                "tableAlias": "orders",
+                "column": "status",
+                "expression": None,
+                "operator": "=",
+                "value": "paid",
+                "logic": "AND",
+            }
+        ]
     }
     tables_needed = set()
-    generator._collect_tables_from_filter_node({"and": [{"table": "orders"}, {"or": [{"table": "users"}]}]}, tables_needed)
+    generator._collect_tables_from_filter_node(
+        {"and": [{"table": "orders"}, {"or": [{"table": "users"}]}]}, tables_needed
+    )
     assert tables_needed == {"orders", "users"}
 
 
@@ -938,7 +996,11 @@ def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
     config = build_config()
     config["relationships"] = [
         {"left_table": "", "right_table": "users", "join_conditions": [{"left_column": "id", "right_column": "id"}]},
-        {"left_table": "orders", "right_table": "users", "join_conditions": [{"left_column": "", "right_column": "user_id"}]},
+        {
+            "left_table": "orders",
+            "right_table": "users",
+            "join_conditions": [{"left_column": "", "right_column": "user_id"}],
+        },
     ]
     generator = SemanticAIQueryAdapter(config)
     with pytest.raises(ValueError, match="缺少有效关联条件"):
@@ -948,7 +1010,6 @@ def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
 
 
 def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
@@ -956,7 +1017,10 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
         captured["dialect"] = dialect
         return "SELECT 1"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -997,14 +1061,16 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
 
 
 def test_generator_captures_builder_config_for_count_star_and_metric_columns(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT captured"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1056,21 +1122,28 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
 
 
 def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT raw"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
             {"name": "订单数", "expression": "COUNT(*)", "table": "orders"},
         ],
         "dimensions": [
-            {"name": "表达式状态", "column": "status", "table": "orders", "expression": "CASE WHEN status='paid' THEN '已支付' END"},
+            {
+                "name": "表达式状态",
+                "column": "status",
+                "table": "orders",
+                "expression": "CASE WHEN status='paid' THEN '已支付' END",
+            },
             {"name": "无表字段", "column": "", "table": ""},
         ],
         "relationships": [],
@@ -1079,7 +1152,9 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
-    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(
+        generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None)
+    )
     monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
     monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
 
@@ -1108,7 +1183,6 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
 
 
 def test_generator_additional_helper_and_join_edges(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
@@ -1116,7 +1190,10 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
         captured["dialect"] = dialect
         return "SELECT joined"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
 
     config = {
         "source_type": "mysql",
@@ -1158,7 +1235,10 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
     }
     generator = SemanticAIQueryAdapter(config)
 
-    assert generator._parse_aggregate_expression("count(distinct orders.order_id)") == ("COUNT_DISTINCT", "orders.order_id")
+    assert generator._parse_aggregate_expression("count(distinct orders.order_id)") == (
+        "COUNT_DISTINCT",
+        "orders.order_id",
+    )
     assert generator._validate_table_column("orders", "status") is None
     assert "不存在字段" in generator._validate_table_column("orders", "missing")
 
@@ -1174,21 +1254,27 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
     builder_config = captured["builder_config"]
     assert builder_config["mainAlias"] == "p"
     assert builder_config["joins"][0]["rightAlias"] == "items"
-    assert builder_config["joins"][0]["joinConditions"] == [{"leftTable": "products", "leftAlias": "p", "leftColumn": "id", "rightColumn": "product_id"}]
+    assert builder_config["joins"][0]["joinConditions"] == [
+        {"leftTable": "products", "leftAlias": "p", "leftColumn": "id", "rightColumn": "product_id"}
+    ]
     assert builder_config["joins"][1]["rightAlias"] == "orders"
-    assert builder_config["joins"][1]["joinConditions"] == [{"leftTable": "order_items", "leftAlias": "items", "leftColumn": "order_id", "rightColumn": "order_id"}]
+    assert builder_config["joins"][1]["joinConditions"] == [
+        {"leftTable": "order_items", "leftAlias": "items", "leftColumn": "order_id", "rightColumn": "order_id"}
+    ]
     assert builder_config["orderBy"][0]["column"] == "category"
 
 
 def test_generator_builder_config_branches_for_metric_columns_and_table_sets(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT branches"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
 
     config = {
         "source_type": "mysql",
@@ -1207,7 +1293,9 @@ def test_generator_builder_config_branches_for_metric_columns_and_table_sets(mon
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
-    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(
+        generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None)
+    )
     monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
     monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
 
@@ -1274,14 +1362,16 @@ def test_generator_error_validation_edges():
 
 
 def test_generator_remaining_branch_edges(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT remaining"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
 
     config = {
         "source_type": "mysql",
@@ -1327,7 +1417,9 @@ def test_generator_remaining_branch_edges(monkeypatch):
         order_by=[],
     )
     assert aggregate_raw_star["success"] is True
-    assert any(item["alias"] == "无列指标" and item["func"] == "RAW" for item in captured["builder_config"]["aggregations"])
+    assert any(
+        item["alias"] == "无列指标" and item["func"] == "RAW" for item in captured["builder_config"]["aggregations"]
+    )
 
     missing_dim_cfg = generator.generate_sql(
         metrics=[],
@@ -1345,14 +1437,16 @@ def test_generator_remaining_branch_edges(monkeypatch):
 
 
 def test_generator_disconnected_join_and_missing_dimension_metric_branches(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT disconnected"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1403,14 +1497,16 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
 
 
 def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT empty tables"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1436,14 +1532,16 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
 
 
 def test_generator_remaining_builder_mapping_edges(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT mapped"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1460,7 +1558,9 @@ def test_generator_remaining_builder_mapping_edges(monkeypatch):
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
-    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(
+        generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None)
+    )
     monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
     monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
 
@@ -1516,14 +1616,16 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
 
 
 def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT branch coverage"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1544,7 +1646,9 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
     }
     generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
-    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(
+        generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None)
+    )
 
     joins = generator._build_builder_joins("orders", {"orders", "users"})
     assert joins[0]["joinConditions"][0]["leftColumn"] == "user_id"
@@ -1567,14 +1671,16 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
 
 
 def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT duplicate"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [{"name": "状态原始值", "expression": "", "table": "orders", "column": "status"}],
@@ -1597,14 +1703,16 @@ def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypa
 
 
 def test_generator_remaining_coverage_branches(monkeypatch):
-
     captured = {}
 
     def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT coverage"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile_query_plan_sql,
+    )
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1636,7 +1744,9 @@ def test_generator_remaining_coverage_branches(monkeypatch):
     }
     generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
-    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(
+        generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None)
+    )
 
     with pytest.raises(ValueError, match="缺少有效关联条件"):
         generator._build_builder_joins("refunds", {"refunds", "orders"})
@@ -1662,7 +1772,9 @@ def test_generator_remaining_coverage_branches(monkeypatch):
     builder_config = captured["builder_config"]
     assert builder_config["aggregations"][0]["column"] == "*"
     assert builder_config["aggregations"][1]["column"] == "*"
-    having_by_id = {item.get("id"): item for item in builder_config["filters"] if str(item.get("id", "")).startswith("having-")}
+    having_by_id = {
+        item.get("id"): item for item in builder_config["filters"] if str(item.get("id", "")).startswith("having-")
+    }
     assert having_by_id["having-总数"]["column"] == "*"
     assert having_by_id["having-无表达式指标"]["column"] == "*"
     assert builder_config["orderBy"][0]["column"] == "*"

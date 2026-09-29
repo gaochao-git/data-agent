@@ -1,6 +1,5 @@
 """Sandbox path roots, visibility mapping and managed/unmanaged predicates."""
 
-
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
@@ -89,7 +88,9 @@ def _is_unmanaged_sandbox_path(path: str) -> bool:
 
 
 def _is_unmanaged_local_path(application_root: Path, path: Path) -> bool:
-    return not _is_hidden_tool_results_local_path(application_root, path) and not _is_managed_semantic_model_local_path(application_root, path)
+    return not _is_hidden_tool_results_local_path(application_root, path) and not _is_managed_semantic_model_local_path(
+        application_root, path
+    )
 
 
 def _is_sandbox_file_not_found(error: Exception) -> bool:
@@ -132,7 +133,7 @@ def sandbox_path_to_visible(path: str) -> str:
         if value == prefix:
             return visible
         if value.startswith(f"{prefix}/"):
-            return f"{visible}{value[len(prefix):]}"
+            return f"{visible}{value[len(prefix) :]}"
     return value
 
 

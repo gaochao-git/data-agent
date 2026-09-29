@@ -49,10 +49,16 @@ def _chart_spec_encoding_valid(chart_type: str, encoding: Any) -> bool:
     if not isinstance(encoding, dict):
         return False
     y_fields = encoding.get("y")
-    if chart_type_requires_y(chart_type) and (not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)):
+    if chart_type_requires_y(chart_type) and (
+        not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)
+    ):
         return False
     max_y_fields = chart_type_max_y_fields(chart_type)
-    if max_y_fields is not None and isinstance(y_fields, list) and len([item for item in y_fields if str(item).strip()]) > max_y_fields:
+    if (
+        max_y_fields is not None
+        and isinstance(y_fields, list)
+        and len([item for item in y_fields if str(item).strip()]) > max_y_fields
+    ):
         return False
     return not (chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip())
 
@@ -62,7 +68,10 @@ def _chart_spec_fields_exist(chart_type: str, data: list, encoding: dict[str, An
     x_field = str(encoding.get("x") or "").strip()
     if chart_type_requires_x(chart_type) and x_field and x_field not in row_fields:
         return False
-    return not (isinstance(y_fields, list) and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip()))
+    return not (
+        isinstance(y_fields, list)
+        and any(str(item or "").strip() not in row_fields for item in y_fields if str(item or "").strip())
+    )
 
 
 def parse_chart_spec_payload_value(payload: Any) -> dict[str, Any] | None:
@@ -154,7 +163,9 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
     ArtifactDefinition("spreadsheet", "spreadsheet", _matches_suffixes(".xlsx"), _generic_artifact),
     ArtifactDefinition("presentation", "presentation", _matches_suffixes(".pptx"), _generic_artifact),
     ArtifactDefinition("pdf", "pdf", _matches_suffixes(".pdf"), _generic_artifact),
-    ArtifactDefinition("image", "image", _matches_suffixes(".png", ".jpg", ".jpeg", ".gif", ".webp"), _generic_artifact),
+    ArtifactDefinition(
+        "image", "image", _matches_suffixes(".png", ".jpg", ".jpeg", ".gif", ".webp"), _generic_artifact
+    ),
     ArtifactDefinition("markdown", "markdown", _matches_markdown, _generic_artifact),
     # 自包含 HTML 页面（内联 CSS/JS/数据），前端以沙箱 iframe 渲染
     ArtifactDefinition("html", "html", _matches_suffixes(".html", ".htm"), _generic_artifact),
@@ -171,7 +182,7 @@ def _output_relative_path(visible_path: str) -> PurePosixPath | None:
     prefixes = ("/mnt/user-data/", "/", "")
     for prefix in prefixes:
         if raw.startswith(prefix):
-            relative = raw[len(prefix):]
+            relative = raw[len(prefix) :]
             if relative == "outputs" or relative.startswith("outputs/"):
                 return PurePosixPath(relative)
     return None

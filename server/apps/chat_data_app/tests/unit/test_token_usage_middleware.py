@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -42,10 +42,11 @@ def _build_request_messages(request):
     if isinstance(system_message, BaseMessage):
         messages.append(system_message)
     messages.extend(
-        message for message in list(getattr(request, "messages", None) or [])
-        if isinstance(message, BaseMessage)
+        message for message in list(getattr(request, "messages", None) or []) if isinstance(message, BaseMessage)
     )
     return messages
+
+
 from langchain_core.messages import AIMessage, ToolMessage
 
 from apps.chat_data_app.agent.context.context_budget import (
@@ -99,15 +100,19 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
 
 def test_sanitize_context_usage_for_response_redacts_and_deduplicates_without_mutation():
     usage = {
-        "breakdown": [{
-            "key": "system_prompt",
-            "content": "SECRET_SYSTEM_PROMPT",
-            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
-        }],
-        "llm_calls": [{
-            "input_tokens": 12,
-            "breakdown": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
-        }],
+        "breakdown": [
+            {
+                "key": "system_prompt",
+                "content": "SECRET_SYSTEM_PROMPT",
+                "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+            }
+        ],
+        "llm_calls": [
+            {
+                "input_tokens": 12,
+                "breakdown": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+            }
+        ],
     }
 
     sanitized = sanitize_context_usage_for_response(usage)
@@ -126,32 +131,39 @@ def test_sanitize_context_usage_strips_content_but_keeps_counting_fields():
     usage = {
         "used": 90,
         "total": 100,
-        "breakdown": [{
-            "key": "messages",
-            "label": "会话消息与工具上下文",
-            "tokens": 90,
-            "children": [{
-                "key": "message_1",
-                "label": "第 1 轮 · 用户消息",
-                "role": "human",
-                "round": 1,
-                "message_index": 1,
-                "message_id": "msg-1",
+        "breakdown": [
+            {
+                "key": "messages",
+                "label": "会话消息与工具上下文",
                 "tokens": 90,
-                "content": "很长的正文" * 100,
-            }],
-        }, {
-            "key": "tool_schema",
-            "label": "工具定义",
-            "tokens": 20,
-            "children": [{
-                "key": "tool_schema_0",
-                "label": "工具定义 · run_sql",
-                "role": "tool_schema",
+                "children": [
+                    {
+                        "key": "message_1",
+                        "label": "第 1 轮 · 用户消息",
+                        "role": "human",
+                        "round": 1,
+                        "message_index": 1,
+                        "message_id": "msg-1",
+                        "tokens": 90,
+                        "content": "很长的正文" * 100,
+                    }
+                ],
+            },
+            {
+                "key": "tool_schema",
+                "label": "工具定义",
                 "tokens": 20,
-                "content": '{"name": "run_sql"}',
-            }],
-        }],
+                "children": [
+                    {
+                        "key": "tool_schema_0",
+                        "label": "工具定义 · run_sql",
+                        "role": "tool_schema",
+                        "tokens": 20,
+                        "content": '{"name": "run_sql"}',
+                    }
+                ],
+            },
+        ],
         "llm_calls": [{"input_tokens": 90}],
     }
 
@@ -171,11 +183,13 @@ def test_sanitize_context_usage_strips_content_but_keeps_counting_fields():
 
 def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
     usage = {
-        "breakdown": [{
-            "key": "system_prompt",
-            "content": "SECRET_SYSTEM_PROMPT",
-            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
-        }],
+        "breakdown": [
+            {
+                "key": "system_prompt",
+                "content": "SECRET_SYSTEM_PROMPT",
+                "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+            }
+        ],
     }
 
     monkeypatch.setattr(
@@ -190,17 +204,21 @@ def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypat
 
 
 def test_count_tools_tokens_uses_tool_schema_text():
-    tokens = count_tools_tokens([{
-        "type": "function",
-        "function": {
-            "name": "run_sql",
-            "description": "执行 SQL",
-            "parameters": {
-                "type": "object",
-                "properties": {"sql": {"type": "string"}},
-            },
-        },
-    }])
+    tokens = count_tools_tokens(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "description": "执行 SQL",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"sql": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+    )
 
     assert tokens > estimate_tokens("run_sql")
 
@@ -222,10 +240,20 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch, tmp_path):
     import json
 
     registry = tmp_path / "models.json"
-    registry.write_text(json.dumps([
-        {"id": "qwen3.5-35b-a3b", "temperature": 0.2, "context_window": 256000, "vlm": False,
-         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
-    ]), encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "qwen3.5-35b-a3b",
+                    "temperature": 0.2,
+                    "context_window": 256000,
+                    "vlm": False,
+                    "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
 
@@ -245,10 +273,20 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
     import json
 
     registry = tmp_path / "models.json"
-    registry.write_text(json.dumps([
-        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
-         "thinking": {"mode": "none"}},
-    ]), encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "budget-model",
+                    "temperature": 0.2,
+                    "context_window": 100000,
+                    "vlm": False,
+                    "thinking": {"mode": "none"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
@@ -265,10 +303,21 @@ def test_model_context_budget_uses_registry_max_output_tokens(monkeypatch, tmp_p
     import json
 
     registry = tmp_path / "models.json"
-    registry.write_text(json.dumps([
-        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
-         "max_output_tokens": 8000, "thinking": {"mode": "none"}},
-    ]), encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "budget-model",
+                    "temperature": 0.2,
+                    "context_window": 100000,
+                    "vlm": False,
+                    "max_output_tokens": 8000,
+                    "thinking": {"mode": "none"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
@@ -282,10 +331,20 @@ def test_model_context_budget_never_delays_compression_past_output_reserve(monke
     import json
 
     registry = tmp_path / "models.json"
-    registry.write_text(json.dumps([
-        {"id": "budget-model", "temperature": 0.2, "context_window": 100000, "vlm": False,
-         "thinking": {"mode": "none"}},
-    ]), encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "budget-model",
+                    "temperature": 0.2,
+                    "context_window": 100000,
+                    "vlm": False,
+                    "thinking": {"mode": "none"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
     monkeypatch.setattr(
@@ -349,10 +408,12 @@ def test_context_request_budget_rejects_dynamic_static_input_above_guard(monkeyp
 
 
 def test_build_message_breakdown_includes_message_metadata_and_content():
-    rows = build_message_breakdown([
-        HumanMessage(content="你好"),
-        AIMessage(content="我来分析"),
-    ])
+    rows = build_message_breakdown(
+        [
+            HumanMessage(content="你好"),
+            AIMessage(content="我来分析"),
+        ]
+    )
 
     assert rows[0]["role"] == "human"
     assert rows[0]["round"] == 1
@@ -365,10 +426,12 @@ def test_build_message_breakdown_includes_message_metadata_and_content():
 
 
 def test_build_message_breakdown_carries_message_id_and_tool_call_id_for_frontend_lookup():
-    rows = build_message_breakdown([
-        HumanMessage(content="你好", id="msg-user-1"),
-        ToolMessage(content="工具结果", id="msg-tool-1", tool_call_id="call-1"),
-    ])
+    rows = build_message_breakdown(
+        [
+            HumanMessage(content="你好", id="msg-user-1"),
+            ToolMessage(content="工具结果", id="msg-tool-1", tool_call_id="call-1"),
+        ]
+    )
 
     assert rows[0]["message_id"] == "msg-user-1"
     assert rows[0]["tool_call_id"] is None
@@ -377,9 +440,11 @@ def test_build_message_breakdown_carries_message_id_and_tool_call_id_for_fronten
 
 
 def test_build_message_breakdown_keeps_system_message_content_by_default():
-    rows = build_message_breakdown([
-        SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
-    ])
+    rows = build_message_breakdown(
+        [
+            SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
+        ]
+    )
 
     assert rows[0]["role"] == "system"
     assert rows[0]["content"] == "# 角色 SECRET_SYSTEM_PROMPT"
@@ -387,10 +452,12 @@ def test_build_message_breakdown_keeps_system_message_content_by_default():
 
 
 def test_build_message_breakdown_redacts_runtime_context_summary():
-    rows = build_message_breakdown([
-        HumanMessage(content="内部摘要内容", additional_kwargs={"context_summary": True}),
-        HumanMessage(content="当前用户问题"),
-    ])
+    rows = build_message_breakdown(
+        [
+            HumanMessage(content="内部摘要内容", additional_kwargs={"context_summary": True}),
+            HumanMessage(content="当前用户问题"),
+        ]
+    )
 
     assert rows[0]["label"] == "历史摘要（运行态）"
     assert rows[0]["role"] == "context_summary"
@@ -400,9 +467,12 @@ def test_build_message_breakdown_redacts_runtime_context_summary():
 
 
 def test_build_message_breakdown_redacts_when_explicitly_requested():
-    rows = build_message_breakdown([
-        SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
-    ], hide_content=True)
+    rows = build_message_breakdown(
+        [
+            SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
+        ],
+        hide_content=True,
+    )
 
     assert rows[0]["role"] == "system"
     assert rows[0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
@@ -412,16 +482,20 @@ def test_build_message_breakdown_redacts_when_explicitly_requested():
 
 
 def test_build_message_breakdown_includes_ai_tool_call_arguments():
-    rows = build_message_breakdown([
-        AIMessage(
-            content="",
-            tool_calls=[{
-                "id": "call_1",
-                "name": "run_sql",
-                "args": {"sql": "select count(*) from orders"},
-            }],
-        )
-    ])
+    rows = build_message_breakdown(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "run_sql",
+                        "args": {"sql": "select count(*) from orders"},
+                    }
+                ],
+            )
+        ]
+    )
 
     assert "tool_calls" in rows[0]["content"]
     assert "run_sql" in rows[0]["content"]
@@ -431,7 +505,7 @@ def test_build_message_breakdown_includes_ai_tool_call_arguments():
 def test_message_tokens_handle_structured_content_and_raw_tool_calls():
     message = AIMessage(
         content=[{"type": "text", "text": "结构化内容"}],
-        additional_kwargs={"tool_calls": [{"function": {"name": "run_sql", "arguments": "{\"sql\":\"select 1\"}"}}]},
+        additional_kwargs={"tool_calls": [{"function": {"name": "run_sql", "arguments": '{"sql":"select 1"}'}}]},
     )
 
     assert count_messages_tokens([message]) > 4
@@ -441,11 +515,13 @@ def test_message_tokens_handle_structured_content_and_raw_tool_calls():
 
 def test_message_tokens_do_not_double_count_normalized_and_raw_tool_calls():
     normalized = [{"id": "call_1", "name": "run_sql", "args": {"sql": "select 1"}}]
-    raw = [{
-        "id": "call_1",
-        "type": "function",
-        "function": {"name": "run_sql", "arguments": '{"sql":"select 1"}'},
-    }]
+    raw = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "run_sql", "arguments": '{"sql":"select 1"}'},
+        }
+    ]
     normalized_only = AIMessage(content="", tool_calls=normalized)
     normalized_and_raw = AIMessage(
         content="",
@@ -457,9 +533,11 @@ def test_message_tokens_do_not_double_count_normalized_and_raw_tool_calls():
 
 
 def test_build_message_breakdown_includes_tool_output_content():
-    rows = build_message_breakdown([
-        ToolMessage(content='{"rows": [{"count": 12}]}', tool_call_id="call_1"),
-    ])
+    rows = build_message_breakdown(
+        [
+            ToolMessage(content='{"rows": [{"count": 12}]}', tool_call_id="call_1"),
+        ]
+    )
 
     assert rows[0]["role"] == "tool"
     assert rows[0]["label"].endswith("工具结果")
@@ -502,14 +580,16 @@ def test_build_request_breakdown_groups_tools_and_keeps_messages():
             ToolMessage(content='{"rows": [{"count": 1}]}', tool_call_id="call_1"),
         ],
         message_tokens=30,
-        tools=[{
-            "type": "function",
-            "function": {
-                "name": "run_sql",
-                "description": "执行 SQL",
-                "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}},
-            },
-        }],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "description": "执行 SQL",
+                    "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                },
+            }
+        ],
         tools_tokens=20,
         overhead_tokens=3,
     )
@@ -553,10 +633,12 @@ def test_build_request_breakdown_can_return_only_tool_schema():
     breakdown = build_request_breakdown(
         messages=[],
         message_tokens=0,
-        tools=[{
-            "type": "function",
-            "function": {"name": "only_tool", "description": "工具", "parameters": {"type": "object"}},
-        }],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "only_tool", "description": "工具", "parameters": {"type": "object"}},
+            }
+        ],
         tools_tokens=10,
         overhead_tokens=0,
     )
@@ -580,11 +662,14 @@ def test_build_tools_breakdown_fallback_payload(monkeypatch):
 
 
 def test_build_usage_from_llm_calls_uses_current_call_as_context():
-    usage = build_usage_from_llm_calls([
-        {"index": 1, "input_tokens": 100, "output_tokens": 10},
-        {"index": 2, "input_tokens": 300, "output_tokens": 20},
-        {"index": 3, "input_tokens": 200, "output_tokens": 30},
-    ], 1000)
+    usage = build_usage_from_llm_calls(
+        [
+            {"index": 1, "input_tokens": 100, "output_tokens": 10},
+            {"index": 2, "input_tokens": 300, "output_tokens": 20},
+            {"index": 3, "input_tokens": 200, "output_tokens": 30},
+        ],
+        1000,
+    )
 
     assert usage["used"] == 200
     assert usage["input_tokens"] == 200
@@ -596,26 +681,35 @@ def test_build_usage_from_llm_calls_uses_current_call_as_context():
 
 
 def test_build_usage_from_llm_calls_includes_cache_metrics_only_when_reported():
-    usage = build_usage_from_llm_calls([
-        {"index": 1, "input_tokens": 100, "actual_input_tokens": 120, "cached_input_tokens": 0},
-        {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
-    ], 1000)
+    usage = build_usage_from_llm_calls(
+        [
+            {"index": 1, "input_tokens": 100, "actual_input_tokens": 120, "cached_input_tokens": 0},
+            {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
+        ],
+        1000,
+    )
 
     assert usage["current_cached_input_tokens"] == 320
     assert usage["cumulative_cached_input_tokens"] == 320
     assert usage["current_cache_hit_rate"] == 80.0
     assert usage["cumulative_cache_hit_rate"] == 61.5
 
-    partial_usage = build_usage_from_llm_calls([
-        {"index": 1, "input_tokens": 100, "cached_input_tokens": 80},
-        {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
-    ], 1000)
+    partial_usage = build_usage_from_llm_calls(
+        [
+            {"index": 1, "input_tokens": 100, "cached_input_tokens": 80},
+            {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
+        ],
+        1000,
+    )
     assert partial_usage["cumulative_cached_input_tokens"] == 320
     assert partial_usage["cumulative_cache_hit_rate"] == 80.0
 
-    unsupported_usage = build_usage_from_llm_calls([
-        {"index": 1, "input_tokens": 100, "actual_input_tokens": 120},
-    ], 1000)
+    unsupported_usage = build_usage_from_llm_calls(
+        [
+            {"index": 1, "input_tokens": 100, "actual_input_tokens": 120},
+        ],
+        1000,
+    )
     assert "current_cached_input_tokens" not in unsupported_usage
     assert "cumulative_cached_input_tokens" not in unsupported_usage
     assert "current_cache_hit_rate" not in unsupported_usage
@@ -646,15 +740,20 @@ def test_request_message_and_model_helpers():
 
 def test_merge_response_usage_supports_message_and_result_wrapper():
     record = {"input_tokens": 1}
-    _merge_response_usage(record, AIMessage(content="ok", usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}))
+    _merge_response_usage(
+        record, AIMessage(content="ok", usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12})
+    )
     assert record["actual_input_tokens"] == 10
     assert record["output_tokens"] == 2
     assert record["actual_total_tokens"] == 12
 
     wrapper_record = {"input_tokens": 1}
-    _merge_response_usage(wrapper_record, SimpleNamespace(result=[
-        AIMessage(content="ok", usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8})
-    ]))
+    _merge_response_usage(
+        wrapper_record,
+        SimpleNamespace(
+            result=[AIMessage(content="ok", usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8})]
+        ),
+    )
     assert wrapper_record["actual_total_tokens"] == 8
 
     ignored_record = {"input_tokens": 1}
@@ -664,55 +763,72 @@ def test_merge_response_usage_supports_message_and_result_wrapper():
 
 def test_merge_response_usage_extracts_normalized_and_openai_cache_metrics():
     normalized_record = {"input_tokens": 1}
-    _merge_response_usage(normalized_record, AIMessage(
-        content="ok",
-        usage_metadata={
-            "input_tokens": 100,
-            "output_tokens": 2,
-            "total_tokens": 102,
-            "input_token_details": {"cache_read": 80},
-        },
-    ))
+    _merge_response_usage(
+        normalized_record,
+        AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 2,
+                "total_tokens": 102,
+                "input_token_details": {"cache_read": 80},
+            },
+        ),
+    )
     assert normalized_record["cached_input_tokens"] == 80
 
     priority_record = {"input_tokens": 1}
-    _merge_response_usage(priority_record, AIMessage(
-        content="ok",
-        usage_metadata={
-            "input_tokens": 100,
-            "output_tokens": 2,
-            "total_tokens": 102,
-            "input_token_details": {"priority_cache_read": 80},
-        },
-    ))
+    _merge_response_usage(
+        priority_record,
+        AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 2,
+                "total_tokens": 102,
+                "input_token_details": {"priority_cache_read": 80},
+            },
+        ),
+    )
     assert priority_record["cached_input_tokens"] == 80
 
     raw_record = {"input_tokens": 1}
-    _merge_response_usage(raw_record, AIMessage(
-        content="ok",
-        usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
-        response_metadata={"token_usage": {"prompt_tokens_details": {"cached_tokens": 0}}},
-    ))
+    _merge_response_usage(
+        raw_record,
+        AIMessage(
+            content="ok",
+            usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
+            response_metadata={"token_usage": {"prompt_tokens_details": {"cached_tokens": 0}}},
+        ),
+    )
     assert raw_record["cached_input_tokens"] == 0
 
     raw_usage_record = {"input_tokens": 1}
-    _merge_response_usage(raw_usage_record, AIMessage(
-        content="ok",
-        response_metadata={"token_usage": {
-            "prompt_tokens": 100,
-            "completion_tokens": 2,
-            "total_tokens": 102,
-            "prompt_tokens_details": {"cached_tokens": 80},
-        }},
-    ))
+    _merge_response_usage(
+        raw_usage_record,
+        AIMessage(
+            content="ok",
+            response_metadata={
+                "token_usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 2,
+                    "total_tokens": 102,
+                    "prompt_tokens_details": {"cached_tokens": 80},
+                }
+            },
+        ),
+    )
     assert raw_usage_record["actual_input_tokens"] == 100
     assert raw_usage_record["cached_input_tokens"] == 80
 
     unsupported_record = {"input_tokens": 1}
-    _merge_response_usage(unsupported_record, AIMessage(
-        content="ok",
-        usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
-    ))
+    _merge_response_usage(
+        unsupported_record,
+        AIMessage(
+            content="ok",
+            usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
+        ),
+    )
     assert "cached_input_tokens" not in unsupported_record
 
 
@@ -747,15 +863,19 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
         request = SimpleNamespace(
             system_message=SystemMessage(content="系统提示"),
             messages=[HumanMessage(content="统计订单数")],
-            tools=[{
-                "type": "function",
-                "function": {"name": "run_sql", "parameters": {"type": "object"}},
-            }],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "run_sql", "parameters": {"type": "object"}},
+                }
+            ],
             model=SimpleNamespace(model_name="qwen3.5-35b-a3b"),
         )
 
         async def handler(_request):
-            return AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
+            return AIMessage(
+                content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+            )
 
         response = await middleware.awrap_model_call(request, handler)
         return middleware, response
@@ -774,6 +894,7 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
 
 def test_create_request_context_usage_middleware_stamps_execution_timing():
     """模型调用起止时间盖进 record 和响应消息，供面板/历史相减得耗时。"""
+
     async def run():
         middleware = create_request_context_usage_middleware()
         request = SimpleNamespace(
@@ -802,20 +923,22 @@ def test_create_request_context_usage_middleware_stamps_execution_timing():
 
 
 def test_build_message_breakdown_carries_execution_timing_only_when_stamped():
-    rows = build_message_breakdown([
-        HumanMessage(content="你好", id="msg-user-1"),
-        AIMessage(
-            content="分析完成",
-            id="msg-ai-1",
-            additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
-        ),
-        ToolMessage(
-            content="工具结果",
-            id="msg-tool-1",
-            tool_call_id="call-1",
-            additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
-        ),
-    ])
+    rows = build_message_breakdown(
+        [
+            HumanMessage(content="你好", id="msg-user-1"),
+            AIMessage(
+                content="分析完成",
+                id="msg-ai-1",
+                additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
+            ),
+            ToolMessage(
+                content="工具结果",
+                id="msg-tool-1",
+                tool_call_id="call-1",
+                additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
+            ),
+        ]
+    )
 
     assert rows[0]["started_at_ms"] is None
     assert rows[0]["ended_at_ms"] is None
@@ -885,7 +1008,9 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
 
         async def handler(inner_request):
             captured["request"] = inner_request
-            return AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
+            return AIMessage(
+                content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+            )
 
         response = await middleware.awrap_model_call(request, handler)
         return middleware, response, captured
@@ -918,21 +1043,25 @@ def test_invoke_with_context_usage_prefers_runtime_usage_and_falls_back_to_estim
     middleware = SimpleNamespace(get_context_usage=lambda: {"used": 99, "total": 100})
     agent = Agent({"messages": [AIMessage(content="完成")]})
     bind_context_usage_middleware(agent, middleware)
-    result, usage = asyncio.run(invoke_with_context_usage(
-        agent=agent,
-        state={"messages": [HumanMessage(content="问题")]},
-        system_prompt="系统",
-        model_id="qwen",
-    ))
+    result, usage = asyncio.run(
+        invoke_with_context_usage(
+            agent=agent,
+            state={"messages": [HumanMessage(content="问题")]},
+            system_prompt="系统",
+            model_id="qwen",
+        )
+    )
     assert result["messages"][0].content == "完成"
     assert usage == {"used": 99, "total": 100}
 
     fallback_agent = Agent({"messages": [AIMessage(content="没有 runtime usage")]})
-    _result, fallback_usage = asyncio.run(invoke_with_context_usage(
-        agent=fallback_agent,
-        state={"messages": [HumanMessage(content="问题")]},
-        system_prompt="系统",
-        model_id="qwen",
-    ))
+    _result, fallback_usage = asyncio.run(
+        invoke_with_context_usage(
+            agent=fallback_agent,
+            state={"messages": [HumanMessage(content="问题")]},
+            system_prompt="系统",
+            model_id="qwen",
+        )
+    )
     assert fallback_usage["estimated"] is True
     assert fallback_usage["input_tokens"] > 0

@@ -22,11 +22,13 @@ MediumTextType = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 class Base(DeclarativeBase):
     """基类"""
+
     pass
 
 
 class UserThread(Base):
     """用户会话表"""
+
     __tablename__ = "user_threads"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -47,6 +49,7 @@ class UserThread(Base):
 
 class ChatDataConversationEvent(Base):
     """ChatData 会话的追加式原始事件历史。"""
+
     __tablename__ = "chat_data_conversation_event"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -74,6 +77,7 @@ class ChatDataConversationEvent(Base):
 
 class ChatDataAgentInbox(Base):
     """跨进程协调 ChatData 活跃运行和运行中追加消息。"""
+
     __tablename__ = "chat_data_agent_inbox"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -116,6 +120,7 @@ class ChatDataAgentInbox(Base):
 
 class UploadedFile(Base):
     """上传文件表"""
+
     __tablename__ = "uploaded_files"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -138,6 +143,7 @@ class UploadedFile(Base):
 
 class ChatDataDashboard(Base):
     """分析大屏表"""
+
     __tablename__ = "chat_data_dashboard"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -160,6 +166,7 @@ class ChatDataDashboard(Base):
 
 class ChatDataDashboardPanel(Base):
     """大屏面板表"""
+
     __tablename__ = "chat_data_dashboard_panel"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -170,7 +177,9 @@ class ChatDataDashboardPanel(Base):
     chart_type: Mapped[str] = mapped_column(String(50), default="table")
     chart_config: Mapped[Optional[str]] = mapped_column(String(2000))  # JSON 格式的图表配置
     datasource_id: Mapped[Optional[str]] = mapped_column(String(255))  # 数据源ID
-    member_datasource_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")  # 成员数据源ID
+    member_datasource_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )  # 成员数据源ID
     # 布局信息 (react-grid-layout 格式)
     layout_x: Mapped[int] = mapped_column(Integer, default=0)
     layout_y: Mapped[int] = mapped_column(Integer, default=0)
@@ -191,7 +200,8 @@ class ChatDataDashboardPanel(Base):
 
 class SqlQueryHistory(Base):
     """SQL查询历史表"""
-    __tablename__ = 'sql_query_history'
+
+    __tablename__ = "sql_query_history"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
@@ -200,7 +210,7 @@ class SqlQueryHistory(Base):
     # 查询信息
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
     query_title: Mapped[Optional[str]] = mapped_column(String(255))
-    query_type: Mapped[Optional[str]] = mapped_column(String(20), default='sql')  # sql | builder
+    query_type: Mapped[Optional[str]] = mapped_column(String(20), default="sql")  # sql | builder
     builder_config: Mapped[Optional[str]] = mapped_column(Text)  # JSON string for builder mode
 
     last_used: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -219,43 +229,44 @@ class SqlQueryHistory(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        Index('idx_datasource_last_used', 'datasource_id', 'last_used'),
-        Index('idx_user_datasource', 'user_id', 'datasource_id'),
+        Index("idx_datasource_last_used", "datasource_id", "last_used"),
+        Index("idx_user_datasource", "user_id", "datasource_id"),
     )
 
     def to_dict(self):
         """转换为字典"""
         result = {
-            'id': self.id,
-            'title': self.query_title,
-            'query': self.sql_text,
-            'query_type': self.query_type or 'sql',
-            'last_used': self.last_used.isoformat() if self.last_used else None,
-            'execution_time_ms': self.execution_time_ms,
-            'result_row_count': self.result_row_count,
-            'success_flag': self.success_flag,
-            'error_message': self.error_message,
-            'source': 'history'
+            "id": self.id,
+            "title": self.query_title,
+            "query": self.sql_text,
+            "query_type": self.query_type or "sql",
+            "last_used": self.last_used.isoformat() if self.last_used else None,
+            "execution_time_ms": self.execution_time_ms,
+            "result_row_count": self.result_row_count,
+            "success_flag": self.success_flag,
+            "error_message": self.error_message,
+            "source": "history",
         }
         # 解析 builder_config JSON
         if self.builder_config:
             try:
-                result['builder_config'] = json.loads(self.builder_config)
+                result["builder_config"] = json.loads(self.builder_config)
             except (TypeError, ValueError, json.JSONDecodeError):
-                result['builder_config'] = None
+                result["builder_config"] = None
         return result
 
 
 class SqlQueryFavorite(Base):
     """查询收藏表"""
-    __tablename__ = 'sql_query_favorite'
+
+    __tablename__ = "sql_query_favorite"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     user_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     semantic_config_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
 
-    query_type: Mapped[str] = mapped_column(String(20), nullable=False, default='sql')  # conversation | builder | sql
+    query_type: Mapped[str] = mapped_column(String(20), nullable=False, default="sql")  # conversation | builder | sql
     favorite_title: Mapped[str] = mapped_column(String(255), nullable=False)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     builder_config: Mapped[Optional[str]] = mapped_column(Text)  # JSON string for builder mode
@@ -269,39 +280,40 @@ class SqlQueryFavorite(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        Index('idx_fav_datasource_query_type', 'datasource_id', 'query_type'),
-        Index('idx_fav_user_datasource', 'user_id', 'datasource_id'),
-        Index('idx_fav_semantic_config_id', 'semantic_config_id'),
+        Index("idx_fav_datasource_query_type", "datasource_id", "query_type"),
+        Index("idx_fav_user_datasource", "user_id", "datasource_id"),
+        Index("idx_fav_semantic_config_id", "semantic_config_id"),
     )
 
     def to_dict(self):
         """转换为字典"""
         result = {
-            'id': self.id,
-            'datasource_id': self.datasource_id,
-            'user_id': self.user_id,
-            'semantic_config_id': self.semantic_config_id,
-            'query_type': self.query_type,
-            'favorite_title': self.favorite_title,
-            'query_text': self.query_text,
-            'create_time': self.create_time.isoformat() if self.create_time else None,
-            'update_time': self.update_time.isoformat() if self.update_time else None,
-            'create_by': self.create_by,
-            'create_by_name': self.create_by_name,
-            'update_by': self.update_by,
-            'update_by_name': self.update_by_name,
-            'source': 'favorite',
+            "id": self.id,
+            "datasource_id": self.datasource_id,
+            "user_id": self.user_id,
+            "semantic_config_id": self.semantic_config_id,
+            "query_type": self.query_type,
+            "favorite_title": self.favorite_title,
+            "query_text": self.query_text,
+            "create_time": self.create_time.isoformat() if self.create_time else None,
+            "update_time": self.update_time.isoformat() if self.update_time else None,
+            "create_by": self.create_by,
+            "create_by_name": self.create_by_name,
+            "update_by": self.update_by,
+            "update_by_name": self.update_by_name,
+            "source": "favorite",
         }
         if self.builder_config:
             try:
-                result['builder_config'] = json.loads(self.builder_config)
+                result["builder_config"] = json.loads(self.builder_config)
             except (TypeError, ValueError, json.JSONDecodeError):
-                result['builder_config'] = None
+                result["builder_config"] = None
         return result
 
 
 class ChatDataQueryTask(Base):
     """ChatData 异步查询任务表"""
+
     __tablename__ = "chat_data_query_task"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -309,7 +321,9 @@ class ChatDataQueryTask(Base):
     task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="sql", server_default="sql")
     datasource_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     query_type: Mapped[str] = mapped_column(String(32), nullable=False, default="sql", server_default="sql")
-    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending", index=True)
+    task_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending", index=True
+    )
     progress_text: Mapped[Optional[str]] = mapped_column(String(255))
     request_payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
     result_payload: Mapped[Optional[str]] = mapped_column(MediumTextType)
@@ -326,26 +340,31 @@ class ChatDataQueryTask(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        Index('idx_query_task_type_task_status', 'task_type', 'task_status'),
-        Index('idx_query_task_datasource_task_status', 'datasource_id', 'task_status'),
+        Index("idx_query_task_type_task_status", "task_type", "task_status"),
+        Index("idx_query_task_datasource_task_status", "datasource_id", "task_status"),
     )
 
     def to_dict(self):
         """转换为字典"""
         import json
+
         result_payload = None
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
             except Exception as exc:
-                logger.warning("查询任务 result_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
+                logger.warning(
+                    "查询任务 result_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc
+                )
                 result_payload = None
         request_payload = None
         if self.request_payload:
             try:
                 request_payload = json.loads(self.request_payload)
             except Exception as exc:
-                logger.warning("查询任务 request_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc)
+                logger.warning(
+                    "查询任务 request_payload 解析 JSON 失败,按 None 返回: task_id=%s error=%s", self.task_id, exc
+                )
                 request_payload = None
         return {
             "task_id": self.task_id,
@@ -371,6 +390,7 @@ class ChatDataQueryTask(Base):
 
 class ChatDataQueryExecution(Base):
     """ChatData SQL 执行明细表"""
+
     __tablename__ = "chat_data_query_execution"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -400,21 +420,26 @@ class ChatDataQueryExecution(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('execution_id', name='uniq_execution_id'),
-        Index('idx_execution_task_id', 'task_id'),
-        Index('idx_execution_user_ds_time', 'user_id', 'datasource_id', 'create_time'),
-        Index('idx_execution_ds_status', 'datasource_id', 'sql_status'),
+        UniqueConstraint("execution_id", name="uniq_execution_id"),
+        Index("idx_execution_task_id", "task_id"),
+        Index("idx_execution_user_ds_time", "user_id", "datasource_id", "create_time"),
+        Index("idx_execution_ds_status", "datasource_id", "sql_status"),
     )
 
     def to_dict(self):
         """转换为字典"""
         import json
+
         result_payload = None
         if self.result_payload:
             try:
                 result_payload = json.loads(self.result_payload)
             except Exception as exc:
-                logger.warning("SQL 执行明细 result_payload 解析 JSON 失败,按 None 返回: execution_id=%s error=%s", self.execution_id, exc)
+                logger.warning(
+                    "SQL 执行明细 result_payload 解析 JSON 失败,按 None 返回: execution_id=%s error=%s",
+                    self.execution_id,
+                    exc,
+                )
                 result_payload = None
         return {
             "id": self.id,
@@ -446,6 +471,7 @@ class ChatDataQueryExecution(Base):
 
 class ChatDataSqlResultCache(Base):
     """ChatData SQL 查询结果缓存表"""
+
     __tablename__ = "chat_data_sql_result_cache"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -463,21 +489,24 @@ class ChatDataSqlResultCache(Base):
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('cache_key', name='uniq_cache_key'),
-        Index('idx_expire_time', 'expire_time'),
-        Index('idx_ds_update', 'datasource_id', 'update_time'),
+        UniqueConstraint("cache_key", name="uniq_cache_key"),
+        Index("idx_expire_time", "expire_time"),
+        Index("idx_ds_update", "datasource_id", "update_time"),
     )
 
 
 class ChatDataSkill(Base):
     """ChatData 技能表"""
+
     __tablename__ = "chat_data_skill"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -487,51 +516,63 @@ class ChatDataSkill(Base):
     skill_desc: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
     skill_category: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     skill_source: Mapped[str] = mapped_column(String(20), nullable=False, default="user", server_default="user")
-    visibility_type: Mapped[str] = mapped_column(String(20), nullable=False, default="private", server_default="private")
+    visibility_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="private", server_default="private"
+    )
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
-    skill_publish_status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft")
+    skill_publish_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft"
+    )
     current_skill_version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     owner_user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('skill_id', name='uniq_skill_id'),
-        UniqueConstraint('skill_name', name='uniq_skill_name'),
-        Index('idx_skill_source', 'skill_source', 'skill_publish_status'),
-        Index('idx_skill_owner', 'owner_user_id', 'skill_publish_status'),
+        UniqueConstraint("skill_id", name="uniq_skill_id"),
+        UniqueConstraint("skill_name", name="uniq_skill_name"),
+        Index("idx_skill_source", "skill_source", "skill_publish_status"),
+        Index("idx_skill_owner", "owner_user_id", "skill_publish_status"),
     )
 
 
 class ChatDataSkillVersion(Base):
     """ChatData 技能版本表"""
+
     __tablename__ = "chat_data_skill_version"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     skill_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     skill_version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    version_publish_status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft")
+    version_publish_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft"
+    )
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('skill_id', 'skill_version_no', name='uniq_skill_version'),
-        Index('idx_version_skill', 'skill_id', 'version_publish_status'),
+        UniqueConstraint("skill_id", "skill_version_no", name="uniq_skill_version"),
+        Index("idx_version_skill", "skill_id", "version_publish_status"),
     )
 
 
 class ChatDataSkillFavorite(Base):
     """ChatData 技能收藏表"""
+
     __tablename__ = "chat_data_skill_favorite"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -539,20 +580,23 @@ class ChatDataSkillFavorite(Base):
     skill_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('favorite_user_id', 'skill_id', name='uniq_fav_user_skill'),
-        Index('idx_fav_skill', 'skill_id'),
+        UniqueConstraint("favorite_user_id", "skill_id", name="uniq_fav_user_skill"),
+        Index("idx_fav_skill", "skill_id"),
     )
 
 
 class ChatDataEvalCaseSet(Base):
     """ChatData 评测测试集表"""
+
     __tablename__ = "chat_data_eval_case_set"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -566,21 +610,24 @@ class ChatDataEvalCaseSet(Base):
     case_set_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default="active")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('case_set_id', name='uniq_eval_case_set_id'),
-        Index('idx_eval_case_set_scene', 'datasource_id', 'semantic_config_id'),
-        Index('idx_eval_case_set_status', 'case_set_status', 'update_time'),
+        UniqueConstraint("case_set_id", name="uniq_eval_case_set_id"),
+        Index("idx_eval_case_set_scene", "datasource_id", "semantic_config_id"),
+        Index("idx_eval_case_set_status", "case_set_status", "update_time"),
     )
 
 
 class ChatDataEvalCase(Base):
     """ChatData 评测用例表"""
+
     __tablename__ = "chat_data_eval_case"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -589,7 +636,9 @@ class ChatDataEvalCase(Base):
     nl_text: Mapped[str] = mapped_column(Text, nullable=False)
     gold_dsl_text: Mapped[str] = mapped_column(MediumTextType, nullable=False)
     gold_sql_text: Mapped[str] = mapped_column(MediumTextType, nullable=False)
-    query_type: Mapped[str] = mapped_column(String(32), nullable=False, default="aggregation", server_default="aggregation")
+    query_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="aggregation", server_default="aggregation"
+    )
     case_difficulty: Mapped[str] = mapped_column(String(32), nullable=False, default="easy", server_default="easy")
     case_source: Mapped[str] = mapped_column(String(32), nullable=False, default="human", server_default="human")
     business_domain: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -597,22 +646,25 @@ class ChatDataEvalCase(Base):
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('case_set_id', 'case_id', name='uniq_eval_case_set_case'),
-        Index('idx_eval_case_set_id', 'case_set_id'),
-        Index('idx_eval_case_type', 'query_type'),
-        Index('idx_eval_case_source', 'case_source'),
+        UniqueConstraint("case_set_id", "case_id", name="uniq_eval_case_set_case"),
+        Index("idx_eval_case_set_id", "case_set_id"),
+        Index("idx_eval_case_type", "query_type"),
+        Index("idx_eval_case_source", "case_source"),
     )
 
 
 class ChatDataEvalRun(Base):
     """ChatData 评测运行记录表"""
+
     __tablename__ = "chat_data_eval_run"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -635,21 +687,24 @@ class ChatDataEvalRun(Base):
     finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('run_id', name='uniq_eval_run_id'),
-        Index('idx_eval_run_scene', 'datasource_id', 'semantic_config_id', 'create_time'),
-        Index('idx_eval_run_status', 'run_status', 'create_time'),
+        UniqueConstraint("run_id", name="uniq_eval_run_id"),
+        Index("idx_eval_run_scene", "datasource_id", "semantic_config_id", "create_time"),
+        Index("idx_eval_run_status", "run_status", "create_time"),
     )
 
 
 class ChatDataEvalRunCase(Base):
     """ChatData 评测单用例结果表"""
+
     __tablename__ = "chat_data_eval_run_case"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -663,22 +718,25 @@ class ChatDataEvalRunCase(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('run_case_id', name='uniq_eval_run_case_id'),
-        UniqueConstraint('run_id', 'case_id', name='uniq_eval_run_case'),
-        Index('idx_eval_run_case_run', 'run_id'),
-        Index('idx_eval_run_case_case', 'case_id'),
+        UniqueConstraint("run_case_id", name="uniq_eval_run_case_id"),
+        UniqueConstraint("run_id", "case_id", name="uniq_eval_run_case"),
+        Index("idx_eval_run_case_run", "run_id"),
+        Index("idx_eval_run_case_case", "case_id"),
     )
 
 
 class DatasourceGroup(Base):
     """数据源组表"""
+
     __tablename__ = "datasource_group"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -694,7 +752,9 @@ class DatasourceGroup(Base):
     is_default: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -703,6 +763,7 @@ class DatasourceGroup(Base):
 
 class DatasourceTable(Base):
     """数据源表结构缓存表"""
+
     __tablename__ = "datasource_table"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -715,19 +776,20 @@ class DatasourceTable(Base):
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (
-        Index('uniq_group_id_table_names', 'group_id', 'table_names', unique=True),
-    )
+    __table_args__ = (Index("uniq_group_id_table_names", "group_id", "table_names", unique=True),)
 
 
 class DatasourceTableGroupRel(Base):
     """数据源表分组关系表"""
+
     __tablename__ = "datasource_table_group_rel"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -736,19 +798,20 @@ class DatasourceTableGroupRel(Base):
     table_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (
-        UniqueConstraint('group_id', 'table_group_name', 'table_name', name='uniq_grp_tbl_group'),
-    )
+    __table_args__ = (UniqueConstraint("group_id", "table_group_name", "table_name", name="uniq_grp_tbl_group"),)
 
 
 class DatasourceColumnDict(Base):
     """数据源字段数据字典表"""
+
     __tablename__ = "datasource_column_dict"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -758,15 +821,15 @@ class DatasourceColumnDict(Base):
     dict_json: Mapped[Optional[str]] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (
-        UniqueConstraint('group_id', 'table_name', 'column_name', name='uniq_grp_tbl_col'),
-    )
+    __table_args__ = (UniqueConstraint("group_id", "table_name", "column_name", name="uniq_grp_tbl_col"),)
 
 
 class ChatDataSetting(Base):
@@ -778,6 +841,7 @@ class ChatDataSetting(Base):
     软删 + setting_key 全局唯一：重置（删除）后重新覆盖走 upsert 复用原行
     （翻回 delete_flag=0 并更新值），不插入新行，避免唯一键冲突。
     """
+
     __tablename__ = "chat_data_setting"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -785,15 +849,15 @@ class ChatDataSetting(Base):
     setting_value: Mapped[str] = mapped_column(String(2048), nullable=False)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (
-        UniqueConstraint('setting_key', name='uniq_setting_key'),
-    )
+    __table_args__ = (UniqueConstraint("setting_key", name="uniq_setting_key"),)
 
 
 class ChatDataAgentSchedule(Base):
@@ -819,7 +883,9 @@ class ChatDataAgentSchedule(Base):
     options_json: Mapped[Optional[str]] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -885,7 +951,9 @@ class ChatDataAgentScheduleRun(Base):
     finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -927,7 +995,9 @@ class ChatDataAgentScheduleControl(Base):
     pause_reason: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -945,6 +1015,7 @@ class ChatDataAgentScheduleControl(Base):
 
 class SemanticConfig(Base):
     """语义配置表"""
+
     __tablename__ = "semantic_config"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -961,7 +1032,9 @@ class SemanticConfig(Base):
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -970,6 +1043,7 @@ class SemanticConfig(Base):
 
 class ChatDataPlugin(Base):
     """ChatData 插件状态表：启停以本表为唯一真值（替代磁盘 .disabled 标记）。"""
+
     __tablename__ = "chat_data_plugin"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
@@ -981,13 +1055,15 @@ class ChatDataPlugin(Base):
     manifest_text: Mapped[Optional[str]] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint('plugin_name', name='uniq_plugin_name'),
-        Index('idx_plugin_enabled_delete', 'enabled_flag', 'delete_flag'),
+        UniqueConstraint("plugin_name", name="uniq_plugin_name"),
+        Index("idx_plugin_enabled_delete", "enabled_flag", "delete_flag"),
     )

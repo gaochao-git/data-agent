@@ -13,7 +13,13 @@ QUERY_CANCELLED_STATUS = "cancelled"
 def query_result_status(result: Dict[str, Any]) -> str:
     """Return the normalized status for a query result payload."""
     raw_status = str((result or {}).get("status") or "").strip().lower()
-    if raw_status in {"pending", QUERY_RUNNING_STATUS, QUERY_SUCCEEDED_STATUS, QUERY_FAILED_STATUS, QUERY_CANCELLED_STATUS}:
+    if raw_status in {
+        "pending",
+        QUERY_RUNNING_STATUS,
+        QUERY_SUCCEEDED_STATUS,
+        QUERY_FAILED_STATUS,
+        QUERY_CANCELLED_STATUS,
+    }:
         return raw_status
     # 读侧兼容（勿删）：生产端已全部只写 status，但持久化数据仍可能只有
     # success 旧字段——如 status 契约上线前写入的 SQL 结果缓存（cache.py
@@ -48,7 +54,9 @@ def _resolve_query_result_status(
     """根据成员结果推导聚合状态与错误信息。"""
     has_running = any(query_result_status(item) in {"pending", QUERY_RUNNING_STATUS} for item in normalized_results)
     has_results = bool(normalized_results)
-    all_cancelled = has_results and all(query_result_status(item) == QUERY_CANCELLED_STATUS for item in normalized_results)
+    all_cancelled = has_results and all(
+        query_result_status(item) == QUERY_CANCELLED_STATUS for item in normalized_results
+    )
 
     if has_running:
         return QUERY_RUNNING_STATUS, "部分执行对象仍在查询中"
@@ -107,8 +115,4 @@ def build_query_result_payload(
 
 def _join_member_errors(results: List[Dict[str, Any]]) -> str:
     """Join member errors into a single user-facing message."""
-    return "；".join(
-        text
-        for text in (str(item.get("error") or "").strip() for item in results)
-        if text
-    )
+    return "；".join(text for text in (str(item.get("error") or "").strip() for item in results) if text)

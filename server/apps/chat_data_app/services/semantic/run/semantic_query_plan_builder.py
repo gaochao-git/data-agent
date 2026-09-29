@@ -232,11 +232,13 @@ def derived_metric_filter_leaves(
         item = item or {}
         dim_name = normalize_text(item.get("dimension"))
         dim_cfg = dimensions_map.get(dim_name) or {}
-        leaves.append({
-            "dimension": dim_name,
-            "operator": normalize_text(item.get("operator")) or "=",
-            "value": _mapped_dimension_value(dim_cfg, item.get("value")),
-        })
+        leaves.append(
+            {
+                "dimension": dim_name,
+                "operator": normalize_text(item.get("operator")) or "=",
+                "value": _mapped_dimension_value(dim_cfg, item.get("value")),
+            }
+        )
     return leaves
 
 
@@ -437,7 +439,9 @@ def build_metric_base_configs(
     for metric_name, metric_cfg in metrics_map.items():
         try:
             base_cfg, fixed_leaves = resolve_derived_metric(
-                metric_cfg, metrics_map, dimensions_map,
+                metric_cfg,
+                metrics_map,
+                dimensions_map,
             )
         except ValueError as exc:
             logger.warning("派生指标配置无效，查询时回退为原始配置: %s", exc)
@@ -464,18 +468,17 @@ def check_mixed_derived_periods(
             continue
         period = cfg.get("period") or {}
         # 口径签名：周期类型 + 时间维度 + 参数；修饰词过滤不影响周期窗口交集
-        key = "|".join([
-            normalize_text(period.get("kind")),
-            normalize_text(period.get("time_dimension")),
-            normalize_text(period.get("n")),
-            normalize_text(period.get("start")),
-            normalize_text(period.get("end")),
-        ])
+        key = "|".join(
+            [
+                normalize_text(period.get("kind")),
+                normalize_text(period.get("time_dimension")),
+                normalize_text(period.get("n")),
+                normalize_text(period.get("start")),
+                normalize_text(period.get("end")),
+            ]
+        )
         period_groups.setdefault(key, []).append(name)
     if len(period_groups) > 1:
         names = [name for names_list in period_groups.values() for name in names_list]
-        return (
-            f"同一查询暂不支持混用不同周期的派生指标（{'、'.join(names)}），"
-            "请分开查询或改用同一周期口径"
-        )
+        return f"同一查询暂不支持混用不同周期的派生指标（{'、'.join(names)}），请分开查询或改用同一周期口径"
     return None

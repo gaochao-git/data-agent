@@ -130,17 +130,18 @@ def test_last_human_index_without_any_human_message():
 
 def test_select_current_turn_tail_start_short_circuits():
     # 整段当前回合都在预算内：整体保留
-    assert _select_current_turn_tail_start(
-        [HumanMessage(content="a"), AIMessage(content="b")],
-        static_input_tokens=0,
-        compression_target_tokens=10_000,
-    ) == 1
+    assert (
+        _select_current_turn_tail_start(
+            [HumanMessage(content="a"), AIMessage(content="b")],
+            static_input_tokens=0,
+            compression_target_tokens=10_000,
+        )
+        == 1
+    )
 
     # 当前回合没有完整分组（工具调用悬空）：只能整体保留
     dangling = [HumanMessage(content="a"), AIMessage(content="", tool_calls=[_tool_call("c-1")])]
-    assert _select_current_turn_tail_start(
-        dangling, static_input_tokens=0, compression_target_tokens=0
-    ) == 1
+    assert _select_current_turn_tail_start(dangling, static_input_tokens=0, compression_target_tokens=0) == 1
 
 
 def test_select_current_turn_tail_start_walks_boundaries_without_fit():
@@ -152,22 +153,21 @@ def test_select_current_turn_tail_start_walks_boundaries_without_fit():
         AIMessage(content="", tool_calls=[_tool_call("c-2")]),
         ToolMessage(content="T" * 10, tool_call_id="c-2"),
     ]
-    assert _select_current_turn_tail_start(
-        turn, static_input_tokens=0, compression_target_tokens=1
-    ) == 3
+    assert _select_current_turn_tail_start(turn, static_input_tokens=0, compression_target_tokens=1) == 3
 
 
 def test_drop_current_turn_groups_without_human_returns_empty():
-    assert _drop_current_turn_groups_to_limit(
-        [AIMessage(content="a")], guard_tokens=1, summary_text=None, static_input_tokens=0
-    ) == []
+    assert (
+        _drop_current_turn_groups_to_limit(
+            [AIMessage(content="a")], guard_tokens=1, summary_text=None, static_input_tokens=0
+        )
+        == []
+    )
 
 
 def test_drop_current_turn_groups_keeps_only_human_when_nothing_fits():
     messages = [HumanMessage(content="x" * 100), AIMessage(content="y" * 100)]
-    result = _drop_current_turn_groups_to_limit(
-        messages, guard_tokens=1, summary_text=None, static_input_tokens=10_000
-    )
+    result = _drop_current_turn_groups_to_limit(messages, guard_tokens=1, summary_text=None, static_input_tokens=10_000)
     assert result == [messages[0]]
 
 
@@ -180,9 +180,7 @@ def test_truncate_current_human_noop_when_already_within_budget():
 
 
 def test_reference_tool_results_stops_immediately_when_within_target():
-    tool_message = ToolMessage(
-        content="x" * 100, tool_call_id="c-1", artifact=_recovery_artifact()
-    )
+    tool_message = ToolMessage(content="x" * 100, tool_call_id="c-1", artifact=_recovery_artifact())
     working, referenced = _reference_tool_results_to_target(
         [HumanMessage(content="h"), tool_message],
         static_input_tokens=0,
@@ -206,8 +204,8 @@ def test_build_context_compression_event_skips_messages_without_id():
     event = context_compression._build_context_compression_event(
         [
             HumanMessage(content="a", id="h-1"),
-            HumanMessage(content="b"),          # 无 id：必须继续往前找
-            AIMessage(content="c"),             # 非用户消息：跳过
+            HumanMessage(content="b"),  # 无 id：必须继续往前找
+            AIMessage(content="c"),  # 非用户消息：跳过
         ],
         {"triggered": True},
     )
@@ -220,9 +218,7 @@ def test_prepare_summary_input_skips_uncompactable_tool_results():
         ToolMessage(content="", tool_call_id="c-0"),
         ToolMessage(content="y" * 5_000, tool_call_id="c-1"),
     ]
-    prepared, report = _prepare_summary_input(
-        messages, previous_summary=None, summary_input_limit_tokens=10
-    )
+    prepared, report = _prepare_summary_input(messages, previous_summary=None, summary_input_limit_tokens=10)
     assert report["summary_tool_results_compacted"] == 1
     assert report["summary_input_unusable"] is True
     assert prepared == []
@@ -334,7 +330,7 @@ async def test_compression_stops_when_second_pass_has_nothing_left(deterministic
         messages, summarizer=summarizer, **_base_kwargs(compression_target_tokens=1)
     )
 
-    assert len(calls) == 1                       # 第二轮直接 break，不再调用摘要
+    assert len(calls) == 1  # 第二轮直接 break，不再调用摘要
     assert report["compression_passes"] == 1
     assert summary == "S"
     assert [message.id for message in compressed] == ["u-cur", "a-dangling"]
@@ -365,7 +361,7 @@ async def test_compression_breaks_when_second_pass_does_not_shrink(deterministic
     )
     assert len(calls) == 2
     assert report["compression_passes"] == 1
-    assert summary == "S" * 20                   # 未采纳更长的第二轮摘要
+    assert summary == "S" * 20  # 未采纳更长的第二轮摘要
     assert [message.id for message in compressed] == ["u-cur", "a-1", "t-1", "a-2", "t-2"]
 
 
@@ -400,7 +396,8 @@ def _middleware(monkeypatch, *, trigger, target, hard_limit, compressed_summary=
         ),
     )
     monkeypatch.setattr(
-        context_compression, "get_context_compression_config",
+        context_compression,
+        "get_context_compression_config",
         lambda: {"enabled": True, "trigger_ratio": 0.10},
     )
     monkeypatch.setattr(context_compression, "_get_summary_input_limit_tokens", lambda _m: 100_000)
@@ -442,15 +439,15 @@ async def test_middleware_emits_compression_event_with_message_updates(monkeypat
     middleware = _middleware(monkeypatch, trigger=1, target=1, hard_limit=100_000)
     messages = []
     for index in range(3):
-        messages.extend([
-            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 40, id=f"u-{index}"),
-            AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 40, id=f"a-{index}"),
-        ])
+        messages.extend(
+            [
+                HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 40, id=f"u-{index}"),
+                AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 40, id=f"a-{index}"),
+            ]
+        )
     messages.append(HumanMessage(content="当前问题", id="u-current"))
 
-    update = await middleware.abefore_model(
-        {"messages": messages, "context_summary": None}, None
-    )
+    update = await middleware.abefore_model({"messages": messages, "context_summary": None}, None)
 
     assert update["context_compression"]["triggered"] is True
     assert len(update["context_compression_events"]) == 1
@@ -469,15 +466,15 @@ async def test_middleware_emits_compression_started_event_before_completed(monke
     monkeypatch.setattr(context_compression, "get_stream_writer", lambda: (lambda payload: captured.append(payload)))
     messages = []
     for index in range(3):
-        messages.extend([
-            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 40, id=f"u-{index}"),
-            AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 40, id=f"a-{index}"),
-        ])
+        messages.extend(
+            [
+                HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 40, id=f"u-{index}"),
+                AIMessage(content=f"历史回答{index}" + " 销售额同比环比口径 " * 40, id=f"a-{index}"),
+            ]
+        )
     messages.append(HumanMessage(content="当前问题", id="u-current"))
 
-    update = await middleware.abefore_model(
-        {"messages": messages, "context_summary": None}, None
-    )
+    update = await middleware.abefore_model({"messages": messages, "context_summary": None}, None)
 
     phases = [payload["event"]["phase"] for payload in captured if payload.get("type") == "context_compression"]
     assert phases == ["started", "completed"]
@@ -504,6 +501,7 @@ async def test_middleware_skips_started_event_when_compression_not_triggered(mon
 # ---------------------------------------------------------------------------
 # 待办快照注入摘要 + 陈旧 write_todos 工具结果占位
 # ---------------------------------------------------------------------------
+
 
 def test_neutralize_stale_todo_tool_messages_replaces_only_write_todos():
     human = HumanMessage(content="开始任务")
@@ -572,11 +570,15 @@ def test_read_middleware_todos_and_format_snapshot():
     assert context_compression._read_middleware_todos(None) is None
     assert context_compression._read_middleware_todos({"todos": []}) is None
     assert context_compression._read_middleware_todos({"todos": "oops"}) is None
-    todos = context_compression._read_middleware_todos({"todos": [
-        {"content": "任务A", "status": "pending"},
-        {"content": "任务B", "status": "in_progress"},
-        "bad",
-    ]})
+    todos = context_compression._read_middleware_todos(
+        {
+            "todos": [
+                {"content": "任务A", "status": "pending"},
+                {"content": "任务B", "status": "in_progress"},
+                "bad",
+            ]
+        }
+    )
     assert todos == [{"content": "任务A", "status": "pending"}, {"content": "任务B", "status": "in_progress"}]
     assert context_compression._format_todo_snapshot(todos) == "1. [待办] 任务A\n2. [进行中] 任务B"
     assert context_compression._format_todo_snapshot(None) is None
@@ -584,4 +586,5 @@ def test_read_middleware_todos_and_format_snapshot():
 
 def asyncio_run(coro):
     import asyncio
+
     return asyncio.run(coro)

@@ -227,12 +227,15 @@ async def test_cancel_local_requires_owned_run():
 
 @pytest.mark.asyncio
 async def test_cancel_run_returns_false_when_nothing_cancelled():
-    inbox = _Inbox(cancel_result=AgentRunCancellationResult(
-        cancelled=False, status="active", terminal_owner_token=None
-    ))
+    inbox = _Inbox(
+        cancel_result=AgentRunCancellationResult(cancelled=False, status="active", terminal_owner_token=None)
+    )
     runtime = _runtime(inbox=inbox)
     ok = await runtime.cancel_run(
-        run_id="run-1", conversation_id="c", user_id="u", operator_name="n",
+        run_id="run-1",
+        conversation_id="c",
+        user_id="u",
+        operator_name="n",
     )
     assert ok is False
 
@@ -246,7 +249,10 @@ async def test_cancel_run_publishes_terminal_without_local_cancel():
     runtime.cancel_local = lambda run_id: cancelled_locally.append(run_id) or False
 
     ok = await runtime.cancel_run(
-        run_id="run-1", conversation_id="c", user_id="u", operator_name="n",
+        run_id="run-1",
+        conversation_id="c",
+        user_id="u",
+        operator_name="n",
     )
     assert ok is True
     assert cancelled_locally == []  # 已 MySQL 收口，不该再走本地取消
@@ -257,16 +263,22 @@ async def test_cancel_run_publishes_terminal_without_local_cancel():
 
 @pytest.mark.asyncio
 async def test_cancel_run_falls_back_to_local_cancel_without_terminal_token():
-    inbox = _Inbox(cancel_result=AgentRunCancellationResult(
-        cancelled=True, status="cancelling", terminal_owner_token=None
-    ))
+    inbox = _Inbox(
+        cancel_result=AgentRunCancellationResult(cancelled=True, status="cancelling", terminal_owner_token=None)
+    )
     runtime = _runtime(inbox=inbox)
     seen = []
     runtime.cancel_local = lambda run_id: seen.append(run_id) or True
 
-    assert await runtime.cancel_run(
-        run_id="run-2", conversation_id="c", user_id="u", operator_name="n",
-    ) is True
+    assert (
+        await runtime.cancel_run(
+            run_id="run-2",
+            conversation_id="c",
+            user_id="u",
+            operator_name="n",
+        )
+        is True
+    )
     assert seen == ["run-2"]
 
 
@@ -283,7 +295,11 @@ async def test_publish_closed_terminal_swallows_append_failure():
 
     # 发布失败只告警，不抛出：SSE 侧会用 MySQL 终态补发
     await runtime._publish_closed_terminal(
-        run_id="run-3", conversation_id="c", user_id="u", status="cancelled", owner_token="tok",
+        run_id="run-3",
+        conversation_id="c",
+        user_id="u",
+        status="cancelled",
+        owner_token="tok",
     )
     assert events.claimed == ["run-3"]
     assert inbox.recorded == []
@@ -295,7 +311,11 @@ async def test_publish_closed_terminal_swallows_owner_release_failure():
     events = _Events(release_error=RuntimeError("release failed"))
     runtime = _runtime(events=events)
     await runtime._publish_closed_terminal(
-        run_id="run-4", conversation_id="c", user_id="u", status="cancelled", owner_token="tok",
+        run_id="run-4",
+        conversation_id="c",
+        user_id="u",
+        status="cancelled",
+        owner_token="tok",
     )
     assert events.released == []  # 释放失败被吞掉，不影响主流程
 
@@ -306,17 +326,23 @@ async def test_publish_closed_terminal_records_terminal_event_failure():
     events = _Events()
     runtime = _runtime(inbox=inbox, events=events)
     await runtime._publish_closed_terminal(
-        run_id="run-5", conversation_id="c", user_id="u", status="timeout", owner_token="tok",
+        run_id="run-5",
+        conversation_id="c",
+        user_id="u",
+        status="timeout",
+        owner_token="tok",
     )
     assert events.appended  # append 成功，record 失败被兜底
 
 
 @pytest.mark.asyncio
 async def test_reap_expired_runs_publishes_each_terminal():
-    inbox = _Inbox(reap_results=[
-        AgentRunReapResult("run-a", "conv-a", "user-a", "timeout", "tok-a"),
-        AgentRunReapResult("run-b", "conv-b", "user-b", "timeout", "tok-b"),
-    ])
+    inbox = _Inbox(
+        reap_results=[
+            AgentRunReapResult("run-a", "conv-a", "user-a", "timeout", "tok-a"),
+            AgentRunReapResult("run-b", "conv-b", "user-b", "timeout", "tok-b"),
+        ]
+    )
     events = _Events()
     runtime = _runtime(inbox=inbox, events=events)
     await runtime._reap_expired_runs()
@@ -347,7 +373,8 @@ async def test_poll_pending_runs_submits_then_exits_on_cancel(monkeypatch):
     runtime._list_runnable_runs = fake_list
     runtime._tasks["run-known"] = asyncio.create_task(asyncio.sleep(0))
     monkeypatch.setattr(
-        runtime, "submit",
+        runtime,
+        "submit",
         lambda **kwargs: submitted.append(kwargs["run_id"]),
     )
     _patch_sleep_to_yield(monkeypatch)

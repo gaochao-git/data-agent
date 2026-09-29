@@ -64,7 +64,9 @@ async def get_query_history(
         raise
     except Exception as e:
         logger.error("获取查询历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
+        return business_response(
+            msg="获取查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error"
+        )
 
 
 @router.get("/admin/query-history")
@@ -106,7 +108,9 @@ async def get_admin_query_history(
         raise
     except Exception as e:
         logger.error("获取全局查询历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取全局查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
+        return business_response(
+            msg="获取全局查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error"
+        )
 
 
 @router.post("/query-history/cancel-running")
@@ -156,7 +160,9 @@ async def cancel_query_history_execution(
         raise
     except Exception as e:
         logger.error("停止查询历史明细失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
-        return business_response(msg="停止查询明细失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="停止查询明细失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 @router.post("/admin/query-history/cancel-running")
@@ -187,7 +193,9 @@ async def get_query_history_result(
     execution_id: str,
     request: Request,
     history_service: Annotated[QueryHistoryService | None, Depends(get_query_history_service)] = None,
-    remote_result_fetcher: Annotated[RemoteResultFetcher | None, Depends(get_query_history_remote_result_fetcher)] = None,
+    remote_result_fetcher: Annotated[
+        RemoteResultFetcher | None, Depends(get_query_history_remote_result_fetcher)
+    ] = None,
 ):
     """按执行ID获取查询历史结果。"""
     try:
@@ -204,4 +212,6 @@ async def get_query_history_result(
         raise
     except Exception as e:
         logger.error("获取查询历史结果失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
-        return business_response(msg="获取查询历史结果失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
+        return business_response(
+            msg="获取查询历史结果失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error"
+        )

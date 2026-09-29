@@ -153,9 +153,7 @@ def test_map_having_operand_for_builder_maps_literal(adapter):
 
 
 def test_map_having_operand_for_builder_maps_metric_with_agg_id(adapter):
-    mapped = adapter._map_having_operand_for_builder(
-        {"type": "metric", "name": "GMV"}, {"GMV": "agg-GMV"}, "orders"
-    )
+    mapped = adapter._map_having_operand_for_builder({"type": "metric", "name": "GMV"}, {"GMV": "agg-GMV"}, "orders")
     assert mapped["type"] == "metric"
     assert mapped["aggId"] == "agg-GMV"
     # _metric_aggregation_node 用的是 aggFunc，不是 func

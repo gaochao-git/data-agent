@@ -182,22 +182,42 @@ def _collect_column_schema_issues(
 ) -> None:
     """收集单表字段级结构差异（缺失与类型变化）。"""
     for column_name in sorted(set(cached_columns) - set(physical_columns)):
-        issues.append(_schema_health_issue("error", "physical_column_removed", f"物理库已不存在字段: {table_name}.{column_name}", f"column:{table_name}.{column_name}"))
+        issues.append(
+            _schema_health_issue(
+                "error",
+                "physical_column_removed",
+                f"物理库已不存在字段: {table_name}.{column_name}",
+                f"column:{table_name}.{column_name}",
+            )
+        )
     for column_name in sorted(set(cached_columns) & set(physical_columns)):
         cached_type = cached_columns[column_name]
         physical_type = physical_columns[column_name]
         if cached_type and physical_type and cached_type != physical_type:
-            issues.append(_schema_health_issue("warning", "physical_column_type_changed", f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}", f"column:{table_name}.{column_name}"))
+            issues.append(
+                _schema_health_issue(
+                    "warning",
+                    "physical_column_type_changed",
+                    f"字段类型变化: {table_name}.{column_name}，缓存为 {cached_type}，物理库为 {physical_type}",
+                    f"column:{table_name}.{column_name}",
+                )
+            )
 
 
-def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _compare_datasource_schema(
+    cached_tables: List[Dict[str, Any]], physical_tables: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """校验缓存表结构是否仍存在于真实物理表结构中。"""
     cached_schema = _build_table_schema_map(cached_tables)
     physical_schema = _build_table_schema_map(physical_tables)
     issues: List[Dict[str, Any]] = []
 
     for table_name in sorted(set(cached_schema) - set(physical_schema)):
-        issues.append(_schema_health_issue("error", "physical_table_removed", f"物理库已不存在表: {table_name}", f"table:{table_name}"))
+        issues.append(
+            _schema_health_issue(
+                "error", "physical_table_removed", f"物理库已不存在表: {table_name}", f"table:{table_name}"
+            )
+        )
 
     for table_name in sorted(set(cached_schema) & set(physical_schema)):
         _collect_column_schema_issues(cached_schema[table_name], physical_schema[table_name], table_name, issues)
@@ -216,20 +236,47 @@ def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tab
     }
 
 
-def _build_datasource_schema_health(datasource: Dict[str, Any], physical_tables: Optional[List[Dict[str, Any]]] = None, error: Optional[Exception] = None) -> Dict[str, Any]:
+def _build_datasource_schema_health(
+    datasource: Dict[str, Any],
+    physical_tables: Optional[List[Dict[str, Any]]] = None,
+    error: Optional[Exception] = None,
+) -> Dict[str, Any]:
     """根据实时物理表结构校验当前缓存表字段是否仍存在。"""
     source_type = datasource.get("source_type")
     if source_type not in ("mysql", "hive"):
         return {
             "status": "warning",
-            "summary": {"cached_table_count": len(datasource.get("ds_tables") or []), "physical_table_count": 0, "issue_count": 1, "error_count": 0, "warning_count": 1},
-            "issues": [_schema_health_issue("warning", "physical_schema_unsupported", f"暂不支持校验该数据源类型的物理表结构: {source_type or '未知'}", "datasource")],
+            "summary": {
+                "cached_table_count": len(datasource.get("ds_tables") or []),
+                "physical_table_count": 0,
+                "issue_count": 1,
+                "error_count": 0,
+                "warning_count": 1,
+            },
+            "issues": [
+                _schema_health_issue(
+                    "warning",
+                    "physical_schema_unsupported",
+                    f"暂不支持校验该数据源类型的物理表结构: {source_type or '未知'}",
+                    "datasource",
+                )
+            ],
         }
     if error is not None:
         return {
             "status": "invalid",
-            "summary": {"cached_table_count": len(datasource.get("ds_tables") or []), "physical_table_count": 0, "issue_count": 1, "error_count": 1, "warning_count": 0},
-            "issues": [_schema_health_issue("error", "physical_schema_check_failed", f"连接物理库读取表结构失败: {str(error)}", "datasource")],
+            "summary": {
+                "cached_table_count": len(datasource.get("ds_tables") or []),
+                "physical_table_count": 0,
+                "issue_count": 1,
+                "error_count": 1,
+                "warning_count": 0,
+            },
+            "issues": [
+                _schema_health_issue(
+                    "error", "physical_schema_check_failed", f"连接物理库读取表结构失败: {str(error)}", "datasource"
+                )
+            ],
         }
     return _compare_datasource_schema(datasource.get("ds_tables") or [], physical_tables or [])
 
@@ -242,9 +289,36 @@ def _extract_expression_identifiers(expression: str) -> Set[str]:
     without_strings = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", " ", text).replace("`", "")
     identifiers = set()
     sql_keywords = {
-        "and", "as", "asc", "between", "case", "cast", "count", "date", "date_format",
-        "desc", "distinct", "else", "end", "from", "if", "in", "is", "max", "min", "not",
-        "null", "or", "sum", "avg", "then", "trim", "upper", "lower", "when", "year",
+        "and",
+        "as",
+        "asc",
+        "between",
+        "case",
+        "cast",
+        "count",
+        "date",
+        "date_format",
+        "desc",
+        "distinct",
+        "else",
+        "end",
+        "from",
+        "if",
+        "in",
+        "is",
+        "max",
+        "min",
+        "not",
+        "null",
+        "or",
+        "sum",
+        "avg",
+        "then",
+        "trim",
+        "upper",
+        "lower",
+        "when",
+        "year",
     }
     pattern = r"[A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*"
     for match in re.finditer(pattern, without_strings):
@@ -266,7 +340,9 @@ def _is_count_all_expression(expression: str) -> bool:
     return normalized in {"COUNT(*)", "COUNT(1)"}
 
 
-def _semantic_health_issue(level: str, issue_type: str, message: str, target: str, config: Optional[Dict] = None) -> Dict[str, Any]:
+def _semantic_health_issue(
+    level: str, issue_type: str, message: str, target: str, config: Optional[Dict] = None
+) -> Dict[str, Any]:
     """构造语义健康检查问题项。"""
     issue = {
         "level": level,
@@ -302,15 +378,31 @@ def _validate_semantic_dimension_health(
     column_name = dim.get("column")
     target = f"dimension:{dim_name}"
     if not table_name or table_name not in table_columns_map:
-        return [_semantic_health_issue("error", "missing_table", f"维度 {dim_name} 所属表不存在: {table_name}", target, config)]
+        return [
+            _semantic_health_issue(
+                "error", "missing_table", f"维度 {dim_name} 所属表不存在: {table_name}", target, config
+            )
+        ]
 
     issues: List[Dict[str, Any]] = []
     if not column_name or column_name not in table_columns_map[table_name]:
-        issues.append(_semantic_health_issue("error", "missing_column", f"维度 {dim_name} 字段不存在: {table_name}.{column_name}", target, config))
+        issues.append(
+            _semantic_health_issue(
+                "error", "missing_column", f"维度 {dim_name} 字段不存在: {table_name}.{column_name}", target, config
+            )
+        )
     expression = str(dim.get("expression") or "").strip()
     for identifier in _extract_expression_identifiers(expression):
         if identifier not in table_columns_map[table_name]:
-            issues.append(_semantic_health_issue("warning", "expression_column_changed", f"维度 {dim_name} 表达式疑似引用已变化字段: {table_name}.{identifier}", target, config))
+            issues.append(
+                _semantic_health_issue(
+                    "warning",
+                    "expression_column_changed",
+                    f"维度 {dim_name} 表达式疑似引用已变化字段: {table_name}.{identifier}",
+                    target,
+                    config,
+                )
+            )
     return issues
 
 
@@ -328,16 +420,34 @@ def _validate_semantic_metric_health(
     expression = str(metric.get("expression") or "").strip()
     target = f"metric:{metric_name}"
     if not table_name or table_name not in table_columns_map:
-        return [_semantic_health_issue("error", "missing_table", f"指标 {metric_name} 所属表不存在: {table_name}", target, config)]
+        return [
+            _semantic_health_issue(
+                "error", "missing_table", f"指标 {metric_name} 所属表不存在: {table_name}", target, config
+            )
+        ]
     if _is_count_all_expression(expression):
         return []
 
     identifiers = _extract_expression_identifiers(expression)
     if not identifiers:
-        return [_semantic_health_issue("warning", "expression_unparsed", f"指标 {metric_name} 表达式未识别到物理字段: {expression or '-'}", target, config)]
+        return [
+            _semantic_health_issue(
+                "warning",
+                "expression_unparsed",
+                f"指标 {metric_name} 表达式未识别到物理字段: {expression or '-'}",
+                target,
+                config,
+            )
+        ]
 
     return [
-        _semantic_health_issue("error", "expression_column_missing", f"指标 {metric_name} 表达式引用不存在字段: {table_name}.{identifier}", target, config)
+        _semantic_health_issue(
+            "error",
+            "expression_column_missing",
+            f"指标 {metric_name} 表达式引用不存在字段: {table_name}.{identifier}",
+            target,
+            config,
+        )
         for identifier in sorted(identifiers - table_columns_map[table_name])
     ]
 
@@ -353,19 +463,41 @@ def _validate_semantic_relationship_health(
     right_table = rel.get("right_table")
     target = f"relationship:{left_table}->{right_table}"
     if not left_table or left_table not in table_columns_map:
-        return [_semantic_health_issue("error", "missing_table", f"关系 {index} 左表不存在: {left_table}", target, config)]
+        return [
+            _semantic_health_issue("error", "missing_table", f"关系 {index} 左表不存在: {left_table}", target, config)
+        ]
     if not right_table or right_table not in table_columns_map:
-        return [_semantic_health_issue("error", "missing_table", f"关系 {index} 右表不存在: {right_table}", target, config)]
+        return [
+            _semantic_health_issue("error", "missing_table", f"关系 {index} 右表不存在: {right_table}", target, config)
+        ]
 
     issues: List[Dict[str, Any]] = []
-    conditions = rel.get("join_conditions") or [{"left_column": rel.get("left_column"), "right_column": rel.get("right_column")}]
+    conditions = rel.get("join_conditions") or [
+        {"left_column": rel.get("left_column"), "right_column": rel.get("right_column")}
+    ]
     for cond_index, cond in enumerate(conditions, start=1):
         left_column = (cond or {}).get("left_column")
         right_column = (cond or {}).get("right_column")
         if not left_column or left_column not in table_columns_map[left_table]:
-            issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 左字段不存在: {left_table}.{left_column}", target, config))
+            issues.append(
+                _semantic_health_issue(
+                    "error",
+                    "missing_join_column",
+                    f"关系 {index}.{cond_index} 左字段不存在: {left_table}.{left_column}",
+                    target,
+                    config,
+                )
+            )
         if not right_column or right_column not in table_columns_map[right_table]:
-            issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 右字段不存在: {right_table}.{right_column}", target, config))
+            issues.append(
+                _semantic_health_issue(
+                    "error",
+                    "missing_join_column",
+                    f"关系 {index}.{cond_index} 右字段不存在: {right_table}.{right_column}",
+                    target,
+                    config,
+                )
+            )
     return issues
 
 
@@ -374,7 +506,15 @@ def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str
     table_columns_map = build_table_columns_map(datasource)
     issues: List[Dict[str, Any]] = []
     if not table_columns_map:
-        issues.append(_semantic_health_issue("error", "missing_schema", "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存", "datasource", config))
+        issues.append(
+            _semantic_health_issue(
+                "error",
+                "missing_schema",
+                "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存",
+                "datasource",
+                config,
+            )
+        )
         return _build_semantic_health_result(config, issues)
 
     for dim in config.get("dimensions") or []:

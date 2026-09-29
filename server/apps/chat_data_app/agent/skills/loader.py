@@ -27,8 +27,10 @@ logger = get_logger(__name__)
 
 # ============ 类型定义 ============
 
+
 class SkillMetadata(TypedDict):
     """启动时加载的轻量元数据"""
+
     name: str
     title: str
     description: str
@@ -41,6 +43,7 @@ class SkillMetadata(TypedDict):
 
 class Skill(TypedDict):
     """按需加载的完整技能"""
+
     name: str
     title: str
     description: str
@@ -63,7 +66,7 @@ def system_skills_root() -> Path:
 
 def _parse_frontmatter(text: str) -> dict[str, Any]:
     """解析 SKILL.md frontmatter，优先兼容 YAML，失败时走简单 key/value。"""
-    match = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
+    match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
     if not match:
         return {}
     raw_frontmatter = match.group(1).strip()
@@ -75,9 +78,9 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
         except Exception as err:
             logger.warning("[skills] YAML frontmatter 解析失败，回退简单解析: %s", err)
     frontmatter: dict[str, Any] = {}
-    for line in raw_frontmatter.split('\n'):
-        if ':' in line:
-            k, v = line.split(':', 1)
+    for line in raw_frontmatter.split("\n"):
+        if ":" in line:
+            k, v = line.split(":", 1)
             frontmatter[k.strip()] = v.strip().strip('"').strip("'")
     return frontmatter
 
@@ -89,6 +92,7 @@ def clear_metadata_cache() -> None:
 
 
 # ============ API ============
+
 
 def parse_metadata_text(text: str, *, path: str = "") -> SkillMetadata | None:
     """解析 SKILL.md 文本中的 frontmatter 元数据。"""
@@ -143,7 +147,9 @@ def load_metadata() -> dict[str, SkillMetadata]:
         return _metadata_cache
 
     skills_root = system_skills_root()
-    skill_dirs = [d for d in skills_root.iterdir() if d.is_dir() and not d.name.startswith("_")] if skills_root.is_dir() else []
+    skill_dirs = (
+        [d for d in skills_root.iterdir() if d.is_dir() and not d.name.startswith("_")] if skills_root.is_dir() else []
+    )
     skill_files = discover_skills(skill_dirs)
 
     _metadata_cache = {}
@@ -190,7 +196,7 @@ def activate_skill(name: str) -> Skill | None:
         return None
 
     # 去掉 frontmatter，只返回正文
-    match = re.match(r'^---\s*\n.*?\n---\s*\n(.*)$', text, re.DOTALL)
+    match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)$", text, re.DOTALL)
     content = match.group(1).strip() if match else text
 
     logger.debug(f"[skills] 返回 '{name}' 内容，{len(content)} 字符")
@@ -202,5 +208,5 @@ def activate_skill(name: str) -> Skill | None:
         category=meta.get("category") or "",
         output_type=meta.get("output_type") or "text",
         input_schema=meta.get("input_schema") or {},
-        content=content
+        content=content,
     )

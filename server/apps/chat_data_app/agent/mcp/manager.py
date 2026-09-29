@@ -122,7 +122,7 @@ def _dedupe_qualified_names(tools: list[MCPToolInfo]) -> list[MCPToolInfo]:
             info = MCPToolInfo(
                 server_id=info.server_id,
                 name=info.name,
-                qualified_name=f"{info.qualified_name[:MCP_TOOL_NAME_MAX_LENGTH - len(suffix)]}{suffix}",
+                qualified_name=f"{info.qualified_name[: MCP_TOOL_NAME_MAX_LENGTH - len(suffix)]}{suffix}",
                 description=info.description,
                 input_schema=info.input_schema,
                 label=info.label,
@@ -185,11 +185,13 @@ class MCPToolManager:
         session_factory: Callable | None = None,
         config_loader: Callable[[], list[MCPServerConfig]] | None = None,
     ):
-        self._tool_timeout = tool_timeout_seconds if tool_timeout_seconds is not None else read_positive_int_env(
-            _MCP_TOOL_TIMEOUT_ENV, 60
+        self._tool_timeout = (
+            tool_timeout_seconds
+            if tool_timeout_seconds is not None
+            else read_positive_int_env(_MCP_TOOL_TIMEOUT_ENV, 60)
         )
-        self._cache_ttl = cache_ttl_seconds if cache_ttl_seconds is not None else read_positive_int_env(
-            _MCP_TOOLS_CACHE_TTL_ENV, 300
+        self._cache_ttl = (
+            cache_ttl_seconds if cache_ttl_seconds is not None else read_positive_int_env(_MCP_TOOLS_CACHE_TTL_ENV, 300)
         )
         self._session_factory = session_factory or (
             lambda config: open_mcp_session(config, timeout_seconds=self._tool_timeout)
@@ -257,11 +259,8 @@ class MCPToolManager:
                 description=str(getattr(tool, "description", None) or ""),
                 # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
                 # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
-                input_schema=dict(
-                    getattr(tool, "input_schema", None)
-                    or getattr(tool, "inputSchema", None)
-                    or {}
-                ) or {"type": "object", "properties": {}},
+                input_schema=dict(getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {})
+                or {"type": "object", "properties": {}},
                 # 展示名按原始工具名查插件 tool_labels，未配置时回退原始工具名
                 label=str(config.tool_labels.get(tool.name) or "").strip() or str(tool.name or "").strip(),
             )
@@ -374,6 +373,7 @@ def build_langchain_tools(
     """把枚举结果包装为 LangChain StructuredTool（仅异步调用）。"""
     wrapped: list[StructuredTool] = []
     for info in tools_info:
+
         async def _acall(
             _server_id: str = info.server_id,
             _tool_name: str = info.name,

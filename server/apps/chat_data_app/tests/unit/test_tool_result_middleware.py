@@ -25,15 +25,17 @@ def _request(
     user_id: str = "user_a",
     workspace_root: str | None = None,
 ):
-    return SimpleNamespace(state={
-        "conversation_id": conversation_id,
-        "user_id": user_id,
-        "messages": [HumanMessage(content="查询结果")],
-        "workspace": {
-            "workspace_root": workspace_root or "",
-            "workspace_backend": "local",
-        },
-    })
+    return SimpleNamespace(
+        state={
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "messages": [HumanMessage(content="查询结果")],
+            "workspace": {
+                "workspace_root": workspace_root or "",
+                "workspace_backend": "local",
+            },
+        }
+    )
 
 
 def _workspace_request(monkeypatch, tmp_path):
@@ -57,12 +59,14 @@ def _query_tool_message(query_result: dict) -> ToolMessage:
 @pytest.mark.asyncio
 async def test_query_result_is_saved_as_reference_only(monkeypatch, tmp_path):
     request, paths = _workspace_request(monkeypatch, tmp_path)
-    message = _query_tool_message({
-        "status": "succeeded",
-        "sql": "select 1",
-        "results": [{"status": "succeeded", "data": [{"value": 1}]}],
-        "total_count": 1,
-    })
+    message = _query_tool_message(
+        {
+            "status": "succeeded",
+            "sql": "select 1",
+            "results": [{"status": "succeeded", "data": [{"value": 1}]}],
+            "total_count": 1,
+        }
+    )
 
     result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
@@ -72,22 +76,24 @@ async def test_query_result_is_saved_as_reference_only(monkeypatch, tmp_path):
     assert payload["data"] is None
     result_id = payload["meta"]["result_id"]
     assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/query_result/{result_id}.json"
-    assert json.loads(
-        (Path(paths["outputs"]) / "query_result" / f"{result_id}.json").read_text(encoding="utf-8")
-    )["results"][0]["data"] == [{"value": 1}]
+    assert json.loads((Path(paths["outputs"]) / "query_result" / f"{result_id}.json").read_text(encoding="utf-8"))[
+        "results"
+    ][0]["data"] == [{"value": 1}]
 
 
 @pytest.mark.asyncio
 async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tmp_path):
     request, paths = _workspace_request(monkeypatch, tmp_path)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    message = _query_tool_message({
-        "status": "succeeded",
-        "sql": "select content from report",
-        "results": [{"status": "succeeded", "data": [{"content": "x" * 200}]}],
-        "total_count": 1,
-        "execution_time_ms": 12,
-    })
+    message = _query_tool_message(
+        {
+            "status": "succeeded",
+            "sql": "select content from report",
+            "results": [{"status": "succeeded", "data": [{"content": "x" * 200}]}],
+            "total_count": 1,
+            "execution_time_ms": 12,
+        }
+    )
 
     result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
@@ -165,12 +171,16 @@ async def test_query_result_storage_failure_returns_structured_delivery_error(mo
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
-    message = _query_tool_message({
-        "status": "succeeded",
-        "sql": "select content",
-        "results": [{"status": "succeeded", "data": [{"content": "x" * 200}]}],
-    })
+    monkeypatch.setattr(
+        conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result
+    )
+    message = _query_tool_message(
+        {
+            "status": "succeeded",
+            "sql": "select content",
+            "results": [{"status": "succeeded", "data": [{"content": "x" * 200}]}],
+        }
+    )
 
     result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
@@ -196,7 +206,9 @@ async def test_generic_storage_failure_returns_incomplete_result_marker(monkeypa
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(
+        conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result
+    )
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = ToolMessage(content="x" * 200, name="calculator_tool", tool_call_id="call_generic")
 

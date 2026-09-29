@@ -1,8 +1,9 @@
 """chat_data_ossie_converter 纯函数/类方法的分支覆盖补测。"""
+
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import (
     ChatDataToOssieConverter,
@@ -77,9 +78,10 @@ def test_collect_unique_keys_dedups_and_skips_invalid():
 
 def test_dimension_datatype_fallback_without_column():
     # 缺物理列名 → 直接按 logical_type 兜底（361->381）
-    assert ChatDataToOssieConverter._dimension_datatype(
-        {"tables": []}, {"table": "orders", "logical_type": "date"}
-    ) == "Date"
+    assert (
+        ChatDataToOssieConverter._dimension_datatype({"tables": []}, {"table": "orders", "logical_type": "date"})
+        == "Date"
+    )
 
 
 def test_dimension_datatype_scans_tables_and_columns():
@@ -106,8 +108,8 @@ def test_metrics_skips_invalid_items():
     converter = ChatDataToOssieConverter()
     config = {
         "metrics": [
-            "bad",            # 非 dict（386->387）
-            {"name": ""},     # name/expression 全空（390->391）
+            "bad",  # 非 dict（386->387）
+            {"name": ""},  # name/expression 全空（390->391）
         ]
     }
     # 只走 continue 分支，不会触达 metric_type 构造，传 None 安全
@@ -119,10 +121,14 @@ def test_relationships_skips_invalid_items():
     config = {
         "semantic_config_id": "cfg-1",
         "relationships": [
-            "bad",                      # 非 dict（405->406）
-            {"left_table": "a"},        # 表/条件不全（410->411）
+            "bad",  # 非 dict（405->406）
+            {"left_table": "a"},  # 表/条件不全（410->411）
             {"left_table": "a", "right_table": "b", "join_conditions": [{}]},  # 条件全被过滤（410->411）
-            {"left_table": "a", "right_table": "b", "join_conditions": [{"left_column": "id"}]},  # 方向列不全（413->414）
+            {
+                "left_table": "a",
+                "right_table": "b",
+                "join_conditions": [{"left_column": "id"}],
+            },  # 方向列不全（413->414）
         ],
     }
     # 只走 continue 分支，不会触达 relationship_type 构造，传 None 安全

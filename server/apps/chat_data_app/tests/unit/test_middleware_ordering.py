@@ -70,13 +70,11 @@ def test_assembled_order_matches_canonical_order_for_all_combinations():
                 name = _OPTIONAL_SLOTS[slot]
                 kwargs[slot] = SimpleNamespace(name=name)
                 enabled[slot] = name
-        for flag, on in zip(flag_names, bits[len(slot_names):], strict=True):
+        for flag, on in zip(flag_names, bits[len(slot_names) :], strict=True):
             kwargs[flag] = on
             if on:
                 enabled[flag] = _FLAG_SLOTS[flag]
 
         middleware = build_standard_agent_middleware([], **kwargs)
         actual = [getattr(item, "name", "") for item in middleware]
-        assert actual == _expected_names(enabled), (
-            f"组合 {sorted(enabled.values())} 的组装顺序与规范表不符: {actual}"
-        )
+        assert actual == _expected_names(enabled), f"组合 {sorted(enabled.values())} 的组装顺序与规范表不符: {actual}"

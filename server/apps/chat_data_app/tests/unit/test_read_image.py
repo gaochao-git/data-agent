@@ -70,6 +70,7 @@ def _read_image_exchange(file_path: str, *, call_id: str = "call_img"):
 # 工具本身
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_read_image_tool_success(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
@@ -126,6 +127,7 @@ async def test_read_image_tool_rejects_oversize(monkeypatch, tmp_path):
 # 注入中间件
 # ---------------------------------------------------------------------------
 
+
 def _middleware(model_id="qwen-test", monkeypatch=None, *, vlm=True):
     if monkeypatch is not None:
         monkeypatch.setattr(
@@ -140,6 +142,7 @@ def _handler_capturing(captured):
     async def handler(request):
         captured["request"] = request
         return "ok"
+
     return handler
 
 
@@ -198,9 +201,10 @@ async def test_injection_vlm_off_rewrites_tool_result_only(monkeypatch, tmp_path
     assert "vlm-off" in str(sent[-1].content)
     for message in sent:
         content = message.content
-        assert not (isinstance(content, list) and any(
-            isinstance(block, dict) and block.get("type") == "image_url" for block in content
-        ))
+        assert not (
+            isinstance(content, list)
+            and any(isinstance(block, dict) and block.get("type") == "image_url" for block in content)
+        )
     assert str(sent[-1].content).startswith(original_content)
 
 
@@ -234,12 +238,8 @@ async def test_injection_dedupes_same_file_and_caps_count(monkeypatch, tmp_path)
     request = _request(paths)
     messages = [HumanMessage(content="多图")]
     for index in range(6):
-        messages.extend(_read_image_exchange(
-            f"/mnt/user-data/uploads/img-{index}.png", call_id=f"call_{index}"
-        ))
-    messages.extend(_read_image_exchange(
-        "/mnt/user-data/uploads/img-0.png", call_id="call_dup"
-    ))
+        messages.extend(_read_image_exchange(f"/mnt/user-data/uploads/img-{index}.png", call_id=f"call_{index}"))
+    messages.extend(_read_image_exchange("/mnt/user-data/uploads/img-0.png", call_id="call_dup"))
     request.messages = messages
 
     captured = {}
@@ -256,6 +256,7 @@ async def test_injection_dedupes_same_file_and_caps_count(monkeypatch, tmp_path)
 # ---------------------------------------------------------------------------
 # 用户上传图片附件（vision_attachments 标记来源）
 # ---------------------------------------------------------------------------
+
 
 def _marked_user_message(paths_list, content="看图"):
     """构造带 vision_attachments 路径标记的用户消息。"""
@@ -331,17 +332,23 @@ async def test_injection_rolling_window_across_turns(monkeypatch, tmp_path):
     request = _request(paths)
     # 两轮历史消息共带 6 个标记路径，只应注入最近 4 张
     request.messages = [
-        _marked_user_message([
-            "/mnt/user-data/uploads/u-0.png",
-            "/mnt/user-data/uploads/u-1.png",
-            "/mnt/user-data/uploads/u-2.png",
-        ], content="第一批"),
+        _marked_user_message(
+            [
+                "/mnt/user-data/uploads/u-0.png",
+                "/mnt/user-data/uploads/u-1.png",
+                "/mnt/user-data/uploads/u-2.png",
+            ],
+            content="第一批",
+        ),
         AIMessage(content="收到"),
-        _marked_user_message([
-            "/mnt/user-data/uploads/u-3.png",
-            "/mnt/user-data/uploads/u-4.png",
-            "/mnt/user-data/uploads/u-5.png",
-        ], content="第二批"),
+        _marked_user_message(
+            [
+                "/mnt/user-data/uploads/u-3.png",
+                "/mnt/user-data/uploads/u-4.png",
+                "/mnt/user-data/uploads/u-5.png",
+            ],
+            content="第二批",
+        ),
     ]
 
     captured = {}

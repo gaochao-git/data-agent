@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 class JSONParseError(Exception):
     """JSON 解析错误"""
+
     pass
 
 
@@ -53,7 +54,7 @@ def parse_llm_json(content: str, strict: bool = True) -> Dict[str, Any]:
         pass
 
     # 方法2: 提取 ```json 代码块
-    json_block_pattern = r'```(?:json)?\s*([\s\S]*?)\s*```'
+    json_block_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
     match = re.search(json_block_pattern, content)
     if match:
         try:
@@ -62,7 +63,7 @@ def parse_llm_json(content: str, strict: bool = True) -> Dict[str, Any]:
             pass
 
     # 方法3: 提取花括号内容（贪婪匹配最外层）
-    brace_pattern = r'\{[\s\S]*\}'
+    brace_pattern = r"\{[\s\S]*\}"
     match = re.search(brace_pattern, content)
     if match:
         try:
@@ -99,14 +100,14 @@ def _try_fix_json(content: str) -> Optional[str]:
         修复后的内容，如果无法修复返回 None
     """
     # 提取可能的 JSON 部分
-    match = re.search(r'\{[\s\S]*\}', content)
+    match = re.search(r"\{[\s\S]*\}", content)
     if not match:
         return None
 
     json_str = match.group(0)
 
     # 修复1: 移除尾部逗号
-    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
 
     # 修复2: 替换单引号为双引号（注意不要替换字符串内的单引号）
     # 这个修复比较危险，只在明显是单引号键值对时使用
@@ -115,6 +116,6 @@ def _try_fix_json(content: str) -> Optional[str]:
 
     # 修复3: 修复未加引号的键
     # 例如: {key: "value"} -> {"key": "value"}
-    json_str = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str)
+    json_str = re.sub(r"([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r'\1"\2":', json_str)
 
     return json_str

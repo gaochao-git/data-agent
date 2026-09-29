@@ -55,11 +55,7 @@ def _names_from_search_content(content: Any) -> list[str]:
         return []
     if not isinstance(payload, dict):
         return []
-    return [
-        str(item["name"])
-        for item in payload.get("results") or []
-        if isinstance(item, dict) and item.get("name")
-    ]
+    return [str(item["name"]) for item in payload.get("results") or [] if isinstance(item, dict) and item.get("name")]
 
 
 def _discovered_from_history(messages: Any) -> list[str]:
@@ -137,10 +133,12 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
             return Command(update=update, goto=result.goto, resume=result.resume)
         if isinstance(result, ToolMessage):
             logger.info("[mcp_tool_discovery] 发现工具: %s", names)
-            return Command(update={
-                "messages": [result],
-                "discovered_tool_names": names,
-            })
+            return Command(
+                update={
+                    "messages": [result],
+                    "discovered_tool_names": names,
+                }
+            )
         return result
 
 

@@ -127,7 +127,11 @@ async def _load_scene_runner_cases(datasource_id: str, semantic_config_id: str) 
 
 
 def _metric_names(config: Dict[str, Any]) -> List[str]:
-    return [str(item.get("name") or "").strip() for item in config.get("metrics") or [] if str(item.get("name") or "").strip()]
+    return [
+        str(item.get("name") or "").strip()
+        for item in config.get("metrics") or []
+        if str(item.get("name") or "").strip()
+    ]
 
 
 def _dimension_items(config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -154,21 +158,20 @@ def _categorical_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     candidate_tokens = ("状态", "分类", "类型", "名称", "status", "category", "type", "name")
     candidates = [item for item in _dimension_items(config) if not is_time_logical_dimension(item)]
     preferred = [
-        item for item in candidates
-        if str(item.get("allowed_values") or "").strip()
-        or _dimension_matches_any_token(item, candidate_tokens)
+        item
+        for item in candidates
+        if str(item.get("allowed_values") or "").strip() or _dimension_matches_any_token(item, candidate_tokens)
     ]
-    return [
-        item for item in (preferred or candidates)
-        if not _dimension_matches_any_token(item, blocked_tokens)
-    ]
+    return [item for item in (preferred or candidates) if not _dimension_matches_any_token(item, blocked_tokens)]
 
 
 def _build_case_id(config_id: str, index: int) -> str:
     return f"{_sanitize_scene_segment(config_id, 'scene')}_{index:03d}"
 
 
-def _new_case_payload(case_id: str, nl: str, gold_dsl: Dict[str, Any], query_type: str, difficulty: str, business_domain: str) -> Dict[str, Any]:
+def _new_case_payload(
+    case_id: str, nl: str, gold_dsl: Dict[str, Any], query_type: str, difficulty: str, business_domain: str
+) -> Dict[str, Any]:
     return {
         "id": case_id,
         "nl": nl,
@@ -219,24 +222,28 @@ def _build_detail_seed_cases(
         filter_value = _first_allowed_value(dimension)
         if not dimension_name or not filter_value:
             continue
-        cases.append(_new_case_payload(
-            _build_case_id(config_id, start_index + len(cases)),
-            f"查看{filter_value}{dimension_name}的明细数据",
-            {
-                "metrics": [],
-                "dimensions": detail_dimension_names,
-                "filters": [{"dimension": dimension_name, "operator": "=", "value": filter_value}],
-                "having": [],
-                "order_by": [],
-            },
-            "filter",
-            "medium",
-            business_domain,
-        ))
+        cases.append(
+            _new_case_payload(
+                _build_case_id(config_id, start_index + len(cases)),
+                f"查看{filter_value}{dimension_name}的明细数据",
+                {
+                    "metrics": [],
+                    "dimensions": detail_dimension_names,
+                    "filters": [{"dimension": dimension_name, "operator": "=", "value": filter_value}],
+                    "having": [],
+                    "order_by": [],
+                },
+                "filter",
+                "medium",
+                business_domain,
+            )
+        )
     return cases
 
 
-def _build_metric_seed_cases(config_id: str, metrics: List[str], business_domain: str, start_index: int) -> List[Dict[str, Any]]:
+def _build_metric_seed_cases(
+    config_id: str, metrics: List[str], business_domain: str, start_index: int
+) -> List[Dict[str, Any]]:
     return [
         _new_case_payload(
             _build_case_id(config_id, start_index + offset),
@@ -263,14 +270,16 @@ def _build_dimension_group_seed_cases(
             dimension_name = _dimension_name(dimension)
             if not dimension_name:
                 continue
-            cases.append(_new_case_payload(
-                _build_case_id(config_id, start_index + len(cases)),
-                f"查询各{dimension_name}的{metric}",
-                {"metrics": [metric], "dimensions": [dimension_name], "filters": [], "having": [], "order_by": []},
-                "aggregation",
-                "medium",
-                business_domain,
-            ))
+            cases.append(
+                _new_case_payload(
+                    _build_case_id(config_id, start_index + len(cases)),
+                    f"查询各{dimension_name}的{metric}",
+                    {"metrics": [metric], "dimensions": [dimension_name], "filters": [], "having": [], "order_by": []},
+                    "aggregation",
+                    "medium",
+                    business_domain,
+                )
+            )
     return cases
 
 
@@ -287,20 +296,22 @@ def _build_time_seed_cases(
             dimension_name = _dimension_name(dimension)
             if not dimension_name:
                 continue
-            cases.append(_new_case_payload(
-                _build_case_id(config_id, start_index + len(cases)),
-                f"查询按{dimension_name}每月统计的{metric}",
-                {
-                    "metrics": [metric],
-                    "dimensions": [{"name": dimension_name, "time_grain": "month"}],
-                    "filters": [],
-                    "having": [],
-                    "order_by": [],
-                },
-                "aggregation",
-                "medium",
-                business_domain,
-            ))
+            cases.append(
+                _new_case_payload(
+                    _build_case_id(config_id, start_index + len(cases)),
+                    f"查询按{dimension_name}每月统计的{metric}",
+                    {
+                        "metrics": [metric],
+                        "dimensions": [{"name": dimension_name, "time_grain": "month"}],
+                        "filters": [],
+                        "having": [],
+                        "order_by": [],
+                    },
+                    "aggregation",
+                    "medium",
+                    business_domain,
+                )
+            )
     return cases
 
 
@@ -318,25 +329,29 @@ def _build_filter_seed_cases(
             filter_value = _first_allowed_value(dimension)
             if not dimension_name or not filter_value:
                 continue
-            cases.append(_new_case_payload(
-                _build_case_id(config_id, start_index + len(cases)),
-                f"查询{filter_value}{dimension_name}的{metric}",
-                {
-                    "metrics": [metric],
-                    "dimensions": [],
-                    "filters": [{"dimension": dimension_name, "operator": "=", "value": filter_value}],
-                    "having": [],
-                    "order_by": [],
-                },
-                "filter",
-                "medium",
-                business_domain,
-            ))
+            cases.append(
+                _new_case_payload(
+                    _build_case_id(config_id, start_index + len(cases)),
+                    f"查询{filter_value}{dimension_name}的{metric}",
+                    {
+                        "metrics": [metric],
+                        "dimensions": [],
+                        "filters": [{"dimension": dimension_name, "operator": "=", "value": filter_value}],
+                        "having": [],
+                        "order_by": [],
+                    },
+                    "filter",
+                    "medium",
+                    business_domain,
+                )
+            )
     return cases
 
 
 def _metric_table(config: Dict[str, Any], metric: str) -> str:
-    return next((str(item.get("table") or "").strip() for item in config.get("metrics") or [] if item.get("name") == metric), "")
+    return next(
+        (str(item.get("table") or "").strip() for item in config.get("metrics") or [] if item.get("name") == metric), ""
+    )
 
 
 def _build_join_seed_cases(
@@ -357,14 +372,16 @@ def _build_join_seed_cases(
             metric_table = _metric_table(config, metric)
             if not dimension_name or not dimension_table or not metric_table or dimension_table == metric_table:
                 continue
-            cases.append(_new_case_payload(
-                _build_case_id(config_id, start_index + len(cases)),
-                f"查询各{dimension_name}的{metric}",
-                {"metrics": [metric], "dimensions": [dimension_name], "filters": [], "having": [], "order_by": []},
-                "join",
-                "hard",
-                business_domain,
-            ))
+            cases.append(
+                _new_case_payload(
+                    _build_case_id(config_id, start_index + len(cases)),
+                    f"查询各{dimension_name}的{metric}",
+                    {"metrics": [metric], "dimensions": [dimension_name], "filters": [], "having": [], "order_by": []},
+                    "join",
+                    "hard",
+                    business_domain,
+                )
+            )
             break
         if start_index + len(cases) > 30:
             break
@@ -393,10 +410,14 @@ def _build_seed_case_candidates(config_id: str, config: Dict[str, Any], business
     if not metrics and dimensions:
         cases.extend(_build_detail_seed_cases(config_id, dimensions, cat_dims, business_domain, 1))
     cases.extend(_build_metric_seed_cases(config_id, metrics, business_domain, _next_case_index(cases, 1)))
-    cases.extend(_build_dimension_group_seed_cases(config_id, metrics, cat_dims, business_domain, _next_case_index(cases, 1)))
+    cases.extend(
+        _build_dimension_group_seed_cases(config_id, metrics, cat_dims, business_domain, _next_case_index(cases, 1))
+    )
     cases.extend(_build_time_seed_cases(config_id, metrics, time_dims, business_domain, _next_case_index(cases, 1)))
     cases.extend(_build_filter_seed_cases(config_id, metrics, cat_dims, business_domain, _next_case_index(cases, 1)))
-    cases.extend(_build_join_seed_cases(config_id, config, metrics, cat_dims, business_domain, _next_case_index(cases, 1)))
+    cases.extend(
+        _build_join_seed_cases(config_id, config, metrics, cat_dims, business_domain, _next_case_index(cases, 1))
+    )
     return _dedupe_seed_cases(cases)
 
 
@@ -459,16 +480,26 @@ async def _run_accuracy_evaluation_payload(payload: AccuracyEvaluationRunRequest
     user_id = str(getattr(current_user, "user_id", "") or "").strip()
     username = str(getattr(current_user, "username", "") or "").strip()
     for result in report.get("results") or []:
-        await _upsert_eval_run_case_record(run_id, str(result.get("id") or ""), result, operator_id=user_id, operator_name=username)
+        await _upsert_eval_run_case_record(
+            run_id, str(result.get("id") or ""), result, operator_id=user_id, operator_name=username
+        )
     await _update_eval_run_record(run_id, status="succeeded", summary=report.get("summary") or {})
     return report
 
 
-async def _persist_accuracy_event_record(run_id: str, event: Dict[str, Any], operator_id: str, operator_name: str) -> None:
+async def _persist_accuracy_event_record(
+    run_id: str, event: Dict[str, Any], operator_id: str, operator_name: str
+) -> None:
     """按事件类型落库评测运行记录；其他事件类型忽略。"""
     event_name = str(event.get("event") or "")
     if event_name == "case_result":
-        await _upsert_eval_run_case_record(run_id, str(event.get("id") or ""), event.get("result") or {}, operator_id=operator_id, operator_name=operator_name)
+        await _upsert_eval_run_case_record(
+            run_id,
+            str(event.get("id") or ""),
+            event.get("result") or {},
+            operator_id=operator_id,
+            operator_name=operator_name,
+        )
     elif event_name == "progress":
         await _update_eval_run_record(run_id, status="running", summary=event.get("summary") or {})
     elif event_name == "done":
@@ -502,7 +533,9 @@ async def _iter_accuracy_evaluation_sse(payload: AccuracyEvaluationRunRequest, r
         yield f"data: {json.dumps({'event': 'error', 'message': f'评测失败: {exc}'}, ensure_ascii=False)}\n\n"
 
 
-def _accuracy_sse_response(payload: AccuracyEvaluationRunRequest, request: Request, current_user: Any) -> StreamingResponse:
+def _accuracy_sse_response(
+    payload: AccuracyEvaluationRunRequest, request: Request, current_user: Any
+) -> StreamingResponse:
     """返回准确率评测 SSE 响应。"""
     return StreamingResponse(
         _iter_accuracy_evaluation_sse(payload, request, current_user),
@@ -526,7 +559,13 @@ async def _create_eval_run_record(run_id: str, payload: AccuracyEvaluationRunReq
     await _build_evaluation_service().create_eval_run_record(run_id, payload, current_user)
 
 
-async def _upsert_eval_run_case_record(run_id: str, case_id_value: str, result: Dict[str, Any], operator_id: Optional[str] = None, operator_name: Optional[str] = None) -> None:
+async def _upsert_eval_run_case_record(
+    run_id: str,
+    case_id_value: str,
+    result: Dict[str, Any],
+    operator_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+) -> None:
     """保存单条评测用例结果。"""
     await _build_evaluation_service().upsert_eval_run_case_record(
         run_id,
@@ -537,7 +576,13 @@ async def _upsert_eval_run_case_record(run_id: str, case_id_value: str, result: 
     )
 
 
-async def _update_eval_run_record(run_id: str, *, status: Optional[str] = None, summary: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None) -> None:
+async def _update_eval_run_record(
+    run_id: str,
+    *,
+    status: Optional[str] = None,
+    summary: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> None:
     """更新评测运行汇总。"""
     await _build_evaluation_service().update_eval_run_record(
         run_id,
@@ -583,11 +628,15 @@ async def _accuracy_error_stream(message: str):
     yield f"data: {json.dumps({'event': 'error', 'message': message}, ensure_ascii=False)}\n\n"
 
 
-async def _run_accuracy_evaluation_stream_route(payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False):
+async def _run_accuracy_evaluation_stream_route(
+    payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False
+):
     """流式运行准确率评测，逐条返回用例结果。"""
     try:
         current_user = _get_current_user(request)
-        await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
+        await _ensure_evaluation_semantic_permission(
+            payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage
+        )
     except (HTTPException, ValueError) as e:
         message = str(getattr(e, "detail", None) or e)
         return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")
@@ -606,9 +655,13 @@ async def _list_accuracy_evaluation_runs_route(
     """按当前维护入口查询评测历史批次。"""
     try:
         if not datasource_id or not semantic_config_id:
-            return business_response(msg="查询评测历史需要指定数据源和指标集", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+            return business_response(
+                msg="查询评测历史需要指定数据源和指标集", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error"
+            )
         current_user = _get_current_user(request)
-        await _ensure_evaluation_semantic_permission(datasource_id, semantic_config_id, current_user, admin_manage=admin_manage)
+        await _ensure_evaluation_semantic_permission(
+            datasource_id, semantic_config_id, current_user, admin_manage=admin_manage
+        )
         data = await _build_evaluation_service().list_eval_runs(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
@@ -619,8 +672,16 @@ async def _list_accuracy_evaluation_runs_route(
     except HTTPException as e:
         return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
-        logger.error("获取智能问数评测历史失败: datasource_id=%s config_id=%s error=%s", datasource_id, semantic_config_id, e, exc_info=True)
-        return business_response(msg="获取评测历史失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error")
+        logger.error(
+            "获取智能问数评测历史失败: datasource_id=%s config_id=%s error=%s",
+            datasource_id,
+            semantic_config_id,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg="获取评测历史失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error"
+        )
 
 
 async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Request, *, admin_manage: bool = False):
@@ -642,7 +703,9 @@ async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Reques
         return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
         logger.error("获取智能问数评测历史详情失败: run_id=%s error=%s", run_id, e, exc_info=True)
-        return business_response(msg="获取评测历史详情失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
+        return business_response(
+            msg="获取评测历史详情失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error"
+        )
 
 
 @router.post("/evaluations/accuracy/run-stream", responses=SSE_RESPONSES)
@@ -714,7 +777,9 @@ async def get_admin_accuracy_evaluation_run_detail(run_id: str, request: Request
     return await _get_accuracy_evaluation_run_detail_route(run_id, request, admin_manage=True)
 
 
-async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: str, case_payload: Dict[str, Any]) -> Dict[str, Any]:
+async def _compile_scene_case_gold_sql(
+    datasource_id: str, semantic_config_id: str, case_payload: Dict[str, Any]
+) -> Dict[str, Any]:
     """为当前场景用例编译标准 SQL。"""
     from ..evaluate.accuracy.runner import compile_dsl_locally
 
@@ -730,7 +795,9 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
     return cloned
 
 
-async def _get_scene_evaluation_cases_route(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
+async def _get_scene_evaluation_cases_route(
+    datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False
+):
     """读取当前指标集场景的评测测试集。"""
     try:
         current_user = _get_current_user(request)
@@ -738,16 +805,27 @@ async def _get_scene_evaluation_cases_route(datasource_id: str, config_id: str, 
         scene_paths = _scene_case_paths(datasource_id, config_id)
         loaded = await _load_scene_case_set(datasource_id, config_id)
         cases = loaded.get("cases") or []
-        business_domain = loaded.get("business_domain") or (cases[0].get("business_domain") if cases else _sanitize_scene_segment(config_id, "scene"))
+        business_domain = loaded.get("business_domain") or (
+            cases[0].get("business_domain") if cases else _sanitize_scene_segment(config_id, "scene")
+        )
         return business_response(
-            data={"cases": cases, "total": len(cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
+            data={
+                "cases": cases,
+                "total": len(cases),
+                "business_domain": business_domain,
+                "scene_id": scene_paths["scene_id"],
+            },
             msg="获取成功",
         )
     except HTTPException as e:
         return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
-        logger.error("获取场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"获取测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED, status="error")
+        logger.error(
+            "获取场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
+        )
+        return business_response(
+            msg=f"获取测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED, status="error"
+        )
 
 
 async def _save_scene_evaluation_cases_route(
@@ -763,7 +841,9 @@ async def _save_scene_evaluation_cases_route(
         current_user = _get_current_user(request)
         user_id = str(getattr(current_user, "user_id", "") or "").strip()
         username = str(getattr(current_user, "username", "") or "").strip()
-        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
+        config = await _ensure_evaluation_semantic_permission(
+            datasource_id, config_id, current_user, admin_manage=admin_manage
+        )
         cases = [item.model_dump() for item in payload.cases]
         business_domain = str(payload.business_domain or _sanitize_scene_segment(config_id, "scene")).strip()
         compiled_cases: List[Dict[str, Any]] = []
@@ -781,7 +861,12 @@ async def _save_scene_evaluation_cases_route(
             operator_name=username,
         )
         return business_response(
-            data={"cases": compiled_cases, "total": len(compiled_cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
+            data={
+                "cases": compiled_cases,
+                "total": len(compiled_cases),
+                "business_domain": business_domain,
+                "scene_id": scene_paths["scene_id"],
+            },
             msg="保存成功",
         )
     except HTTPException as e:
@@ -789,15 +874,23 @@ async def _save_scene_evaluation_cases_route(
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("保存场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"保存测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED, status="error")
+        logger.error(
+            "保存场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
+        )
+        return business_response(
+            msg=f"保存测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED, status="error"
+        )
 
 
-async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
+async def _generate_scene_evaluation_cases_route(
+    datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False
+):
     """按当前语义配置生成场景评测测试集草稿，不直接保存。"""
     try:
         current_user = _get_current_user(request)
-        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
+        config = await _ensure_evaluation_semantic_permission(
+            datasource_id, config_id, current_user, admin_manage=admin_manage
+        )
         business_domain = _sanitize_scene_segment(config.get("name") or config_id, "scene")
         draft_cases = _build_seed_case_candidates(config_id, config, business_domain)
         compiled_cases: List[Dict[str, Any]] = []
@@ -805,7 +898,12 @@ async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: 
             compiled_cases.append(await _compile_scene_case_gold_sql(datasource_id, config_id, case))
         scene_paths = _scene_case_paths(datasource_id, config_id)
         return business_response(
-            data={"cases": compiled_cases, "total": len(compiled_cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
+            data={
+                "cases": compiled_cases,
+                "total": len(compiled_cases),
+                "business_domain": business_domain,
+                "scene_id": scene_paths["scene_id"],
+            },
             msg="生成草稿成功",
         )
     except HTTPException as e:
@@ -813,8 +911,12 @@ async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: 
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("生成场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"生成测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error")
+        logger.error(
+            "生成场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
+        )
+        return business_response(
+            msg=f"生成测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error"
+        )
 
 
 async def _draft_scene_evaluation_case_route(
@@ -828,7 +930,9 @@ async def _draft_scene_evaluation_case_route(
     """用 LLM 生成单条当前场景评测用例草稿。"""
     try:
         current_user = _get_current_user(request)
-        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
+        config = await _ensure_evaluation_semantic_permission(
+            datasource_id, config_id, current_user, admin_manage=admin_manage
+        )
         case = await _generate_draft_case_by_llm(config_id, config, payload)
         compiled_case = await _compile_scene_case_gold_sql(datasource_id, config_id, case)
         return business_response(data={"case": compiled_case}, msg="生成成功")
@@ -837,8 +941,16 @@ async def _draft_scene_evaluation_case_route(
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("生成单条评测用例草稿失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"生成用例草稿失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
+        logger.error(
+            "生成单条评测用例草稿失败: datasource_id=%s config_id=%s error=%s",
+            datasource_id,
+            config_id,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg=f"生成用例草稿失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error"
+        )
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
@@ -855,13 +967,17 @@ async def get_admin_scene_evaluation_cases(datasource_id: str, config_id: str, r
 
 
 @router.put("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
-async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
+async def save_scene_evaluation_cases(
+    datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request
+):
     """保存个人指标集场景的评测测试集。"""
     return await _save_scene_evaluation_cases_route(datasource_id, config_id, payload, request, admin_manage=False)
 
 
 @router.put("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
-async def save_admin_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
+async def save_admin_scene_evaluation_cases(
+    datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request
+):
     """后台保存公共指标集场景的评测测试集。"""
     _get_current_user(request)
     return await _save_scene_evaluation_cases_route(datasource_id, config_id, payload, request, admin_manage=True)
@@ -881,13 +997,17 @@ async def generate_admin_scene_evaluation_cases(datasource_id: str, config_id: s
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
-async def draft_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request):
+async def draft_scene_evaluation_case(
+    datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request
+):
     """用 LLM 生成个人指标集评测用例草稿。"""
     return await _draft_scene_evaluation_case_route(datasource_id, config_id, payload, request, admin_manage=False)
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
-async def draft_admin_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request):
+async def draft_admin_scene_evaluation_case(
+    datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request
+):
     """后台用 LLM 生成公共指标集评测用例草稿。"""
     _get_current_user(request)
     return await _draft_scene_evaluation_case_route(datasource_id, config_id, payload, request, admin_manage=True)

@@ -16,11 +16,15 @@ from utils.builtin_skills import DATA_ANALYZING_SKILL
 def test_system_prompt_requires_semantic_skill_gate_before_query():
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
-        available_skills_xml=format_skills_prompt([{
-            "name": DATA_ANALYZING_SKILL,
-            "title": "数据分析技能",
-            "description": "基于语义模型完成数据查询",
-        }]),
+        available_skills_xml=format_skills_prompt(
+            [
+                {
+                    "name": DATA_ANALYZING_SKILL,
+                    "title": "数据分析技能",
+                    "description": "基于语义模型完成数据查询",
+                }
+            ]
+        ),
     )
 
     assert "第一步必须调用 `file_read`" in prompt
@@ -65,11 +69,15 @@ def test_removed_workflow_blocks_are_absent_and_environment_keeps_tree():
 def test_system_prompt_keeps_detailed_semantic_rules_in_skill():
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
-        available_skills_xml=format_skills_prompt([{
-            "name": DATA_ANALYZING_SKILL,
-            "title": "数据分析技能",
-            "description": "基于语义模型完成数据查询",
-        }]),
+        available_skills_xml=format_skills_prompt(
+            [
+                {
+                    "name": DATA_ANALYZING_SKILL,
+                    "title": "数据分析技能",
+                    "description": "基于语义模型完成数据查询",
+                }
+            ]
+        ),
     )
 
     assert "## DSL 参数" not in prompt

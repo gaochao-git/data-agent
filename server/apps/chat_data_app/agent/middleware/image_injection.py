@@ -45,10 +45,7 @@ USER_UPLOAD_SOURCE = "user_upload"
 MAX_INJECTED_IMAGES = 4
 VISION_ATTACHMENTS_KEY = "vision_attachments"
 
-_VLM_DISABLED_NOTE = (
-    "\n当前模型未开启视觉能力（vlm-off），无法读取图片内容；"
-    "请如实告知用户当前模型不支持直接查看图片。"
-)
+_VLM_DISABLED_NOTE = "\n当前模型未开启视觉能力（vlm-off），无法读取图片内容；请如实告知用户当前模型不支持直接查看图片。"
 
 
 def create_image_injection_middleware(
@@ -73,10 +70,12 @@ def create_image_injection_middleware(
             ]
             if not read_image_pendings:
                 return await handler(request)
-            return await handler(_override_request(
-                request,
-                messages=_append_vlm_disabled_notes(messages, read_image_pendings),
-            ))
+            return await handler(
+                _override_request(
+                    request,
+                    messages=_append_vlm_disabled_notes(messages, read_image_pendings),
+                )
+            )
 
         _, max_image_size = await get_image_size_limit()
         injection = _build_image_injection_message(request, pending_requests, max_image_size=max_image_size)
@@ -176,7 +175,9 @@ def _build_image_injection_message(
     if total:
         lines.append(f"共 {total} 张，请基于图片内容继续分析。")
     if loaded_sources[USER_UPLOAD_SOURCE]:
-        lines.append(f"- 用户上传附件 {len(loaded_sources[USER_UPLOAD_SOURCE])} 张：{'、'.join(loaded_sources[USER_UPLOAD_SOURCE])}")
+        lines.append(
+            f"- 用户上传附件 {len(loaded_sources[USER_UPLOAD_SOURCE])} 张：{'、'.join(loaded_sources[USER_UPLOAD_SOURCE])}"
+        )
     if loaded_sources[READ_IMAGE_TOOL_NAME]:
         lines.append(
             f"- 通过 {READ_IMAGE_TOOL_NAME} 加载 {len(loaded_sources[READ_IMAGE_TOOL_NAME])} 张："

@@ -47,7 +47,19 @@ def test_next_fire_time(expr, expected):
 
 @pytest.mark.parametrize(
     "expr",
-    ["", "  ", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "*/0 * * * *", "5-2 * * * *", "a * * * *", "* * * * 8", "1,,2 * * * *"],
+    [
+        "",
+        "  ",
+        "* * * *",
+        "* * * * * *",
+        "60 * * * *",
+        "* 24 * * *",
+        "*/0 * * * *",
+        "5-2 * * * *",
+        "a * * * *",
+        "* * * * 8",
+        "1,,2 * * * *",
+    ],
 )
 def test_invalid_expr_rejected(expr):
     with pytest.raises(CronExprError):
@@ -87,28 +99,37 @@ def test_validate_cron_expr_rejects_invalid():
 
 def test_compute_next_trigger_once():
     plan = datetime(2026, 9, 12, 10, 0)
-    assert compute_next_trigger(
-        schedule_type=SCHEDULE_TYPE_ONCE,
-        cron_expr="",
-        plan_time=plan,
-        effective_end_time=None,
-        after=_BASE,
-    ) == plan
+    assert (
+        compute_next_trigger(
+            schedule_type=SCHEDULE_TYPE_ONCE,
+            cron_expr="",
+            plan_time=plan,
+            effective_end_time=None,
+            after=_BASE,
+        )
+        == plan
+    )
     # 已过期或超出有效期：无下一次
-    assert compute_next_trigger(
-        schedule_type=SCHEDULE_TYPE_ONCE,
-        cron_expr="",
-        plan_time=plan,
-        effective_end_time=None,
-        after=datetime(2026, 9, 12, 10, 1),
-    ) is None
-    assert compute_next_trigger(
-        schedule_type=SCHEDULE_TYPE_ONCE,
-        cron_expr="",
-        plan_time=plan,
-        effective_end_time=datetime(2026, 9, 12, 9, 0),
-        after=_BASE,
-    ) is None
+    assert (
+        compute_next_trigger(
+            schedule_type=SCHEDULE_TYPE_ONCE,
+            cron_expr="",
+            plan_time=plan,
+            effective_end_time=None,
+            after=datetime(2026, 9, 12, 10, 1),
+        )
+        is None
+    )
+    assert (
+        compute_next_trigger(
+            schedule_type=SCHEDULE_TYPE_ONCE,
+            cron_expr="",
+            plan_time=plan,
+            effective_end_time=datetime(2026, 9, 12, 9, 0),
+            after=_BASE,
+        )
+        is None
+    )
 
 
 def test_compute_next_trigger_cron_respects_effective_end():
@@ -119,13 +140,16 @@ def test_compute_next_trigger_cron_respects_effective_end():
         effective_end_time=datetime(2026, 9, 13, 0, 0),
         after=_BASE,
     ) == datetime(2026, 9, 12, 9, 0)
-    assert compute_next_trigger(
-        schedule_type=SCHEDULE_TYPE_CRON,
-        cron_expr="0 9 * * *",
-        plan_time=None,
-        effective_end_time=datetime(2026, 9, 12, 8, 45),
-        after=_BASE,
-    ) is None
+    assert (
+        compute_next_trigger(
+            schedule_type=SCHEDULE_TYPE_CRON,
+            cron_expr="0 9 * * *",
+            plan_time=None,
+            effective_end_time=datetime(2026, 9, 12, 8, 45),
+            after=_BASE,
+        )
+        is None
+    )
 
 
 def test_parse_field_part_rejects_non_numeric_step():
@@ -166,10 +190,13 @@ def test_validate_cron_expr_rejects_blank():
 
 def test_compute_next_trigger_returns_none_for_never_matching_cron():
     """永远无法命中的表达式（2 月 30 日）在有效期内没有触发点，返回 None 由上层拦截。"""
-    assert compute_next_trigger(
-        schedule_type=SCHEDULE_TYPE_CRON,
-        cron_expr="0 0 30 2 *",
-        plan_time=None,
-        effective_end_time=None,
-        after=_BASE,
-    ) is None
+    assert (
+        compute_next_trigger(
+            schedule_type=SCHEDULE_TYPE_CRON,
+            cron_expr="0 0 30 2 *",
+            plan_time=None,
+            effective_end_time=None,
+            after=_BASE,
+        )
+        is None
+    )

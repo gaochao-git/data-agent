@@ -125,7 +125,7 @@ def extract_legacy_context_summary(messages: list[BaseMessage]) -> tuple[list[Ba
         if isinstance(message, SystemMessage) and additional_kwargs.get("context_compression"):
             normalized = str(getattr(message, "content", "") or "").strip()
             if normalized.startswith(LEGACY_CONTEXT_SUMMARY_PREFIX):
-                normalized = normalized[len(LEGACY_CONTEXT_SUMMARY_PREFIX):].lstrip("\n ")
+                normalized = normalized[len(LEGACY_CONTEXT_SUMMARY_PREFIX) :].lstrip("\n ")
             if normalized:
                 summaries.append(normalized)
             continue
@@ -141,7 +141,11 @@ def count_tools_tokens(tools: list[Any] | None) -> int:
             payload = tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
         except Exception as exc:
             # schema 转换失败只影响该工具的 token 估算精度,不能让预算计算中断,降级用字符串估算。
-            logger.warning("工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=%s error=%s", getattr(tool, "name", type(tool).__name__), exc)
+            logger.warning(
+                "工具 schema 转 OpenAI 格式失败,降级用字符串估算 token: tool=%s error=%s",
+                getattr(tool, "name", type(tool).__name__),
+                exc,
+            )
             payload = str(tool)
         total += estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
     return int(total)
@@ -197,6 +201,7 @@ class ContextBudget:
     def remaining_for_messages(self, static_input_tokens: int) -> int:
         """扣除固定输入后，留给消息的硬容量。"""
         return max(self.hard_input_limit_tokens - max(int(static_input_tokens), 0), 1)
+
 
 def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | None = None) -> ContextBudget:
     """按模型窗口、输出预留和质量阈值构造统一预算。"""

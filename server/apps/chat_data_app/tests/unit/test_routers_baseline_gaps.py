@@ -73,8 +73,16 @@ class AlwaysHttpExceptionService:
 # --------------------------------------------------------------------------
 
 _SKILL_CASES = [
-    ("create_user_skill", skills_routes.create_user_skill, (SkillCreateRequest(skill_name="demo-skill", skill_title="Demo"), REQUEST)),
-    ("update_user_skill", skills_routes.update_user_skill, ("skill-1", SkillUpdateRequest(skill_title="Updated"), REQUEST)),
+    (
+        "create_user_skill",
+        skills_routes.create_user_skill,
+        (SkillCreateRequest(skill_name="demo-skill", skill_title="Demo"), REQUEST),
+    ),
+    (
+        "update_user_skill",
+        skills_routes.update_user_skill,
+        ("skill-1", SkillUpdateRequest(skill_title="Updated"), REQUEST),
+    ),
     ("delete_user_skill", skills_routes.delete_user_skill, ("skill-1", REQUEST)),
     ("copy_user_skill", skills_routes.copy_user_skill, ("skill-1", REQUEST)),
     ("publish_user_skill", skills_routes.publish_user_skill, ("skill-1", REQUEST)),
@@ -82,8 +90,16 @@ _SKILL_CASES = [
     ("get_skill_version", skills_routes.get_skill_version, ("skill-1", 1, REQUEST)),
     ("list_skill_version_files", skills_routes.list_skill_version_files, ("skill-1", 1, REQUEST)),
     ("read_skill_version_file", skills_routes.read_skill_version_file, ("skill-1", 1, "references", "a.md", REQUEST)),
-    ("save_skill_version_file", skills_routes.save_skill_version_file, ("skill-1", 1, SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="body"), REQUEST)),
-    ("delete_skill_version_file", skills_routes.delete_skill_version_file, ("skill-1", 1, "references", "a.md", REQUEST)),
+    (
+        "save_skill_version_file",
+        skills_routes.save_skill_version_file,
+        ("skill-1", 1, SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="body"), REQUEST),
+    ),
+    (
+        "delete_skill_version_file",
+        skills_routes.delete_skill_version_file,
+        ("skill-1", 1, "references", "a.md", REQUEST),
+    ),
     ("rollback_skill_version", skills_routes.rollback_skill_version, ("skill-1", 1, REQUEST)),
     ("favorite_skill", skills_routes.favorite_skill, ("skill-1", REQUEST)),
     ("unfavorite_skill", skills_routes.unfavorite_skill, ("skill-1", REQUEST)),
@@ -110,15 +126,30 @@ async def test_skill_routes_rethrow_http_exception(route, args, monkeypatch):
 
 _FAVORITE_CASES = [
     ("get_query_favorites", favorites_routes.get_query_favorites, (REQUEST,), {"datasource_id": "ds-1"}),
-    ("create_query_favorite", favorites_routes.create_query_favorite, (QueryFavoriteCreateRequest(
-        datasource_id="ds-1", query_type="sql", favorite_title="常用查询", query_text="select 1"
-    ), REQUEST), {}),
-    ("update_query_favorite", favorites_routes.update_query_favorite, (1, QueryFavoriteUpdateRequest(favorite_title="改名"), REQUEST), {}),
+    (
+        "create_query_favorite",
+        favorites_routes.create_query_favorite,
+        (
+            QueryFavoriteCreateRequest(
+                datasource_id="ds-1", query_type="sql", favorite_title="常用查询", query_text="select 1"
+            ),
+            REQUEST,
+        ),
+        {},
+    ),
+    (
+        "update_query_favorite",
+        favorites_routes.update_query_favorite,
+        (1, QueryFavoriteUpdateRequest(favorite_title="改名"), REQUEST),
+        {},
+    ),
     ("delete_query_favorite", favorites_routes.delete_query_favorite, (1, REQUEST), {}),
 ]
 
 
-@pytest.mark.parametrize("route,args,kwargs", [(c[1], c[2], c[3]) for c in _FAVORITE_CASES], ids=[c[0] for c in _FAVORITE_CASES])
+@pytest.mark.parametrize(
+    "route,args,kwargs", [(c[1], c[2], c[3]) for c in _FAVORITE_CASES], ids=[c[0] for c in _FAVORITE_CASES]
+)
 @pytest.mark.asyncio
 async def test_query_favorite_routes_rethrow_http_exception(route, args, kwargs, monkeypatch):
     """收藏路由同样必须透传 HTTPException。"""
@@ -285,9 +316,11 @@ async def test_create_semantic_config_reports_validation_error(monkeypatch):
     service = _FakeSemanticConfigService({"id": "cfg-1", "name": "demo"})
     _patch_semantic_config(monkeypatch, service, validation_error="指标表达式不合法")
 
-    response = payload(await semantic_config_routes._create_semantic_config_with_scope(
-        "ds-1", _create_payload(), REQUEST, scope_type="private"
-    ))
+    response = payload(
+        await semantic_config_routes._create_semantic_config_with_scope(
+            "ds-1", _create_payload(), REQUEST, scope_type="private"
+        )
+    )
 
     assert response["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
     assert response["msg"] == "指标表达式不合法"
@@ -299,9 +332,11 @@ async def test_create_semantic_config_returns_created_config(monkeypatch):
     service = _FakeSemanticConfigService({"id": "cfg-1", "name": "demo"})
     _patch_semantic_config(monkeypatch, service)
 
-    response = payload(await semantic_config_routes._create_semantic_config_with_scope(
-        "ds-1", _create_payload(), REQUEST, scope_type="private", admin_manage=True
-    ))
+    response = payload(
+        await semantic_config_routes._create_semantic_config_with_scope(
+            "ds-1", _create_payload(), REQUEST, scope_type="private", admin_manage=True
+        )
+    )
 
     assert response["msg"] == "创建成功"
     assert service.create_kwargs["scope_type"] == "private"
@@ -312,9 +347,11 @@ async def test_create_semantic_config_returns_created_config(monkeypatch):
 async def test_create_semantic_config_reports_empty_result(monkeypatch):
     _patch_semantic_config(monkeypatch, _FakeSemanticConfigService(None))
 
-    response = payload(await semantic_config_routes._create_semantic_config_with_scope(
-        "ds-1", _create_payload(), REQUEST, scope_type="global"
-    ))
+    response = payload(
+        await semantic_config_routes._create_semantic_config_with_scope(
+            "ds-1", _create_payload(), REQUEST, scope_type="global"
+        )
+    )
 
     assert response["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert response["msg"] == "创建失败"
@@ -324,9 +361,11 @@ async def test_create_semantic_config_reports_empty_result(monkeypatch):
 async def test_create_semantic_config_shields_unexpected_errors(monkeypatch):
     _patch_semantic_config(monkeypatch, _FakeSemanticConfigService(RuntimeError("db down")))
 
-    response = payload(await semantic_config_routes._create_semantic_config_with_scope(
-        "ds-1", _create_payload(), REQUEST, scope_type="private"
-    ))
+    response = payload(
+        await semantic_config_routes._create_semantic_config_with_scope(
+            "ds-1", _create_payload(), REQUEST, scope_type="private"
+        )
+    )
 
     assert response["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert "db down" in response["msg"]

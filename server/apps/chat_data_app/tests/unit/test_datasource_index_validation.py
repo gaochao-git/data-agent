@@ -44,9 +44,7 @@ def test_index_name_rejects_collision_with_physical_index():
     """与库内已有物理索引重名必须拦下（调用方负责把物理名归一化为小写）。"""
     with pytest.raises(ValueError, match="物理索引重复"):
         manager._validate_table_index_name("secondary", "idx_orders", {"idx_orders"})
-    assert manager._validate_table_index_name(
-        "secondary", "idx_amount", {"idx_orders"}
-    ) == "idx_amount"
+    assert manager._validate_table_index_name("secondary", "idx_amount", {"idx_orders"}) == "idx_amount"
 
 
 def test_index_columns_require_at_least_one_non_blank_value():

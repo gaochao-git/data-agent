@@ -59,6 +59,7 @@ class _FakeVisionLLM:
 # 扫描版判定
 # --------------------------------------------------------------------------- #
 
+
 def test_text_pdf_is_not_scanned(tmp_path):
     path = tmp_path / "text.pdf"
     _make_text_pdf(path)
@@ -93,6 +94,7 @@ def test_page_number_noise_does_not_hide_scanned_pdf(tmp_path):
 # 页码选择与渲染
 # --------------------------------------------------------------------------- #
 
+
 def test_select_page_numbers_caps_and_floors():
     assert select_page_numbers(5, 10) == [1, 2, 3, 4, 5]
     assert select_page_numbers(30, 10) == list(range(1, 11))
@@ -123,6 +125,7 @@ def test_render_downgrades_dpi_when_over_size_limit(tmp_path):
 # --------------------------------------------------------------------------- #
 # 视觉转写
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_transcribe_batches_pages_and_headers(tmp_path, monkeypatch):
@@ -196,6 +199,7 @@ async def test_transcribe_refuses_text_layer_pdf_with_clear_message(tmp_path, mo
 # --------------------------------------------------------------------------- #
 # 与解析主链路的衔接
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.asyncio
 async def test_parser_raises_empty_extraction_for_scanned_pdf(tmp_path):

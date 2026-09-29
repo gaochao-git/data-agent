@@ -35,7 +35,9 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
     normalized_user_id = str(user_id or "").strip()
     normalized_username = str(username or "").strip()
     if not HTTP_PERMISSION_URL:
-        logger.debug("跳过 HTTP 执行对象权限查询: CHAT_DATA_HTTP_PERMISSION_URL 未配置 user_id=%s", normalized_user_id or "-")
+        logger.debug(
+            "跳过 HTTP 执行对象权限查询: CHAT_DATA_HTTP_PERMISSION_URL 未配置 user_id=%s", normalized_user_id or "-"
+        )
         return set()
     if not normalized_user_id:
         logger.debug("跳过 HTTP 执行对象权限查询: user_id 为空 url=%s", HTTP_PERMISSION_URL)
@@ -67,7 +69,11 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
     try:
         code = int(response_payload.get("code"))
     except (TypeError, ValueError, AttributeError):
-        logger.debug("HTTP 执行对象权限响应 code 无效: user_id=%s response_type=%s", normalized_user_id, type(response_payload).__name__)
+        logger.debug(
+            "HTTP 执行对象权限响应 code 无效: user_id=%s response_type=%s",
+            normalized_user_id,
+            type(response_payload).__name__,
+        )
         return set()
     if code != 20000:
         logger.debug("HTTP 执行对象权限响应非成功: user_id=%s code=%s", normalized_user_id, code)
@@ -91,11 +97,7 @@ async def get_allowed_org_codes_by_executor(
     """
     return {
         "direct": get_direct_org_codes(),
-        "http": (
-            await get_http_permission_org_codes(user_id, username)
-            if include_http_permission
-            else set()
-        ),
+        "http": (await get_http_permission_org_codes(user_id, username) if include_http_permission else set()),
     }
 
 
@@ -157,7 +159,9 @@ def _filter_member_datasource_ids(
     ]
 
 
-def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], allowed_org_codes: Dict[str, Set[str]]) -> Optional[Dict[str, Any]]:
+def filter_datasource_members_by_allowed_org_codes(
+    datasource: Dict[str, Any], allowed_org_codes: Dict[str, Set[str]]
+) -> Optional[Dict[str, Any]]:
     """Filter datasource member_sources by executor-specific org permissions."""
     member_sources = list(datasource.get("member_sources") or [])
     if not member_sources:
@@ -166,7 +170,8 @@ def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], a
     source_type = str(datasource.get("source_type") or "").strip()
     datasource_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
     allowed_members = [
-        member for member in member_sources
+        member
+        for member in member_sources
         if _member_allowed_by_org_codes(member, datasource_executor_type, allowed_org_codes)
     ]
     if not allowed_members:
@@ -183,7 +188,9 @@ def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], a
     return result
 
 
-def filter_datasources_by_allowed_org_codes(datasources: Iterable[Dict[str, Any]], allowed_org_codes: Dict[str, Set[str]]) -> List[Dict[str, Any]]:
+def filter_datasources_by_allowed_org_codes(
+    datasources: Iterable[Dict[str, Any]], allowed_org_codes: Dict[str, Set[str]]
+) -> List[Dict[str, Any]]:
     """Filter datasource list by execution target permissions."""
     result: List[Dict[str, Any]] = []
     for datasource in datasources or []:

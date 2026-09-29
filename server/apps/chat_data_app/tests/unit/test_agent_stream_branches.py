@@ -38,14 +38,13 @@ def _stub_datasource_binding(monkeypatch):
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
     semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_member_ids = list(dict.fromkeys(
-        str(item).strip()
-        for item in kwargs.get("member_datasource_ids") or []
-        if str(item).strip()
-    ))
+    selected_member_ids = list(
+        dict.fromkeys(str(item).strip() for item in kwargs.get("member_datasource_ids") or [] if str(item).strip())
+    )
     semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
-        if semantic_config_id else None
+        if semantic_config_id
+        else None
     )
     return SemanticConversationContext(
         datasource_id=datasource_id,
@@ -62,10 +61,7 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
 def _override_semantic_context(monkeypatch, **overrides):
     async def prepare_context(**kwargs):
         context = _semantic_context_from_request(**kwargs)
-        values = {
-            key: value(context, kwargs) if callable(value) else value
-            for key, value in overrides.items()
-        }
+        values = {key: value(context, kwargs) if callable(value) else value for key, value in overrides.items()}
         return context.__class__(**{**context.__dict__, **values})
 
     monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", prepare_context)
@@ -90,9 +86,14 @@ def sse_event_name(event: str) -> str:
 
 
 def test_checkpoint_resume_status_uses_pending_interrupts():
-    assert agent_run_support._checkpoint_resume_status(SimpleNamespace(
-        pending_writes=[("task-1", "__interrupt__", [])],
-    )) is False
+    assert (
+        agent_run_support._checkpoint_resume_status(
+            SimpleNamespace(
+                pending_writes=[("task-1", "__interrupt__", [])],
+            )
+        )
+        is False
+    )
     assert agent_run_support._checkpoint_resume_status(SimpleNamespace(pending_writes=[])) is True
     assert agent_run_support._checkpoint_resume_status(SimpleNamespace()) is None
 
@@ -106,10 +107,12 @@ async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monk
     events = []
 
     with pytest.raises(RuntimeError, match="semantic context failed"):
-        async for event in agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-            thread_id="conv-1",
-            user_query="查询订单",
-        )):
+        async for event in agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv-1",
+                user_query="查询订单",
+            )
+        ):
             events.append(event)
 
     assert [sse_event_name(event) for event in events] == ["error"]  # done 由 Runtime 统一发布
@@ -137,15 +140,19 @@ async def _collect_stream_until_failure(generator):
 def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
     state = agent_stream._ToolStreamState()
 
-    started = state.handle_tool_calls([
-        {"id": "call-1", "name": "semantic_query_tool", "args": {"dsl": {}}},
-    ])
-    completed_payload = state.build_tool_message_payload(FakeChunk(
-        content="查询完成",
-        msg_type="tool",
-        tool_call_id="call-1",
-        name="semantic_query_tool",
-    ))
+    started = state.handle_tool_calls(
+        [
+            {"id": "call-1", "name": "semantic_query_tool", "args": {"dsl": {}}},
+        ]
+    )
+    completed_payload = state.build_tool_message_payload(
+        FakeChunk(
+            content="查询完成",
+            msg_type="tool",
+            tool_call_id="call-1",
+            name="semantic_query_tool",
+        )
+    )
     completed = state.build_completion_event(completed_payload)
 
     assert [sse_event_name(event) for event in started] == ["tool_started", "tool"]
@@ -155,24 +162,28 @@ def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
 
     state.handle_tool_calls([{"id": "call-2", "name": "semantic_query_tool"}])
     # 成败只认显式协议位：query_result envelope 的 status=failed 判失败，裸文本不算
-    failed_payload = state.build_tool_message_payload(FakeChunk(
-        content='{"type": "query_result", "status": "failed", "error": "字段不存在"}',
-        msg_type="tool",
-        tool_call_id="call-2",
-        name="semantic_query_tool",
-    ))
+    failed_payload = state.build_tool_message_payload(
+        FakeChunk(
+            content='{"type": "query_result", "status": "failed", "error": "字段不存在"}',
+            msg_type="tool",
+            tool_call_id="call-2",
+            name="semantic_query_tool",
+        )
+    )
 
     assert sse_event_name(state.build_completion_event(failed_payload)) == "tool_failed"
 
     # ToolMessage 自带 status="error"（ToolErrorMiddleware 路径）时无条件判失败
     state.handle_tool_calls([{"id": "call-3", "name": "semantic_query_tool"}])
-    native_failed_payload = state.build_tool_message_payload(FakeChunk(
-        content="查询完成",
-        msg_type="tool",
-        tool_call_id="call-3",
-        name="semantic_query_tool",
-        status="error",
-    ))
+    native_failed_payload = state.build_tool_message_payload(
+        FakeChunk(
+            content="查询完成",
+            msg_type="tool",
+            tool_call_id="call-3",
+            name="semantic_query_tool",
+            status="error",
+        )
+    )
 
     assert sse_event_name(state.build_completion_event(native_failed_payload)) == "tool_failed"
 
@@ -181,13 +192,16 @@ def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
 async def test_agent_sse_stream_adapter_forwards_valid_tool_progress_only():
     class Agent:
         async def astream(self, *_args, **_kwargs):
-            yield "custom", {
-                "type": "tool_progress",
-                "tool_call_id": "call-1",
-                "tool_name": "officecli_run",
-                "message": "正在生成预览",
-                "progress": 50,
-            }
+            yield (
+                "custom",
+                {
+                    "type": "tool_progress",
+                    "tool_call_id": "call-1",
+                    "tool_name": "officecli_run",
+                    "message": "正在生成预览",
+                    "progress": 50,
+                },
+            )
             yield "custom", {"type": "tool_progress", "tool_call_id": "call-2"}
 
     adapter = agent_stream._AgentSseStreamAdapter(
@@ -249,20 +263,22 @@ async def test_stream_agent_turn_emits_question_and_skips_message_end():
     async def on_interrupt(payload):
         calls.append(payload)
 
-    events = [event async for event in stream_agent_turn(
-        stream_adapter=InterruptAdapter(),
-        format_sse=agent_stream._format_sse,
-        persistence=TurnPersistenceHooks(
-            persist_user_message=noop,
-            persist_turn_history=noop,
-            persist_partial_history=noop,
-        ),
-        hooks=TurnLifecycleHooks(
-            on_interrupt=on_interrupt,
-        ),
-        resources=TurnResourceOptions(
-        ),
-    )]
+    events = [
+        event
+        async for event in stream_agent_turn(
+            stream_adapter=InterruptAdapter(),
+            format_sse=agent_stream._format_sse,
+            persistence=TurnPersistenceHooks(
+                persist_user_message=noop,
+                persist_turn_history=noop,
+                persist_partial_history=noop,
+            ),
+            hooks=TurnLifecycleHooks(
+                on_interrupt=on_interrupt,
+            ),
+            resources=TurnResourceOptions(),
+        )
+    ]
 
     assert calls == [question]
     assert [sse_event_name(event) for event in events] == ["question_requested"]
@@ -315,7 +331,6 @@ class FakeCheckpointer:
         return None
 
 
-
 def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert agent_stream._resolve_active_tool_call_id(None, "active", []) == "active"
     assert agent_stream._resolve_active_tool_call_id(None, None, ["older", "latest"]) == "latest"
@@ -344,11 +359,16 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert agent_stream._is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
 
     assert agent_stream._visible_tool_count({}) == 0
-    assert agent_stream._visible_tool_count({
-        "hidden": "load_skill_tool",
-        "sql": "data_analyzing_tool",
-        "dsl": "calculator_tool",
-    }) == 3
+    assert (
+        agent_stream._visible_tool_count(
+            {
+                "hidden": "load_skill_tool",
+                "sql": "data_analyzing_tool",
+                "dsl": "calculator_tool",
+            }
+        )
+        == 3
+    )
 
     reasoning_segments = []
     agent_stream._append_reasoning_segment(reasoning_segments, "工具前", 0)
@@ -373,17 +393,34 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
     class Agent:
         def __init__(self):
             self.updated = []
-            self.state = SimpleNamespace(values={
-                "messages": [AIMessage(content="最终", additional_kwargs={"timestamp": "2026-07-15 09:00:00"})],
-                "token_usage": {"total_tokens": 9},
-            })
+            self.state = SimpleNamespace(
+                values={
+                    "messages": [AIMessage(content="最终", additional_kwargs={"timestamp": "2026-07-15 09:00:00"})],
+                    "token_usage": {"total_tokens": 9},
+                }
+            )
 
         async def astream(self, *_args, **_kwargs):
             yield "custom", {"type": "token_usage", "usage": {"total_tokens": 7}}
             yield "custom", {"type": "context_compression", "event": {"id": "context-compression-1"}}
-            yield "messages", (FakeChunk(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"}), {"langgraph_node": "model"})
-            yield "messages", (FakeChunk(tool_calls=[{"id": "tc1", "name": "data_analyzing_tool", "args": {"dsl": {}}}]), {"langgraph_node": "model"})
-            yield "messages", (FakeChunk(content="{}", msg_type="tool", tool_call_id="tc1"), {"langgraph_node": "tools"})
+            yield (
+                "messages",
+                (
+                    FakeChunk(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"}),
+                    {"langgraph_node": "model"},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    FakeChunk(tool_calls=[{"id": "tc1", "name": "data_analyzing_tool", "args": {"dsl": {}}}]),
+                    {"langgraph_node": "model"},
+                ),
+            )
+            yield (
+                "messages",
+                (FakeChunk(content="{}", msg_type="tool", tool_call_id="tc1"), {"langgraph_node": "tools"}),
+            )
             yield "messages", (FakeChunk(content="完成", msg_type="ai"), {"langgraph_node": "model"})
 
         async def aupdate_state(self, config, values, as_node=None):
@@ -440,21 +477,33 @@ async def test_agent_sse_stream_adapter_does_not_emit_steer_human_message():
 async def test_agent_sse_stream_adapter_supports_langchain_chunk_message_types():
     class Agent:
         async def astream(self, *_args, **_kwargs):
-            yield "messages", (
-                HumanMessageChunk(content="不要输出的 steer 消息"),
-                {"langgraph_node": "model"},
+            yield (
+                "messages",
+                (
+                    HumanMessageChunk(content="不要输出的 steer 消息"),
+                    {"langgraph_node": "model"},
+                ),
             )
-            yield "messages", (
-                AIMessageChunk(content="", additional_kwargs={"reasoning_content": "正在思考"}),
-                {"langgraph_node": "model"},
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="", additional_kwargs={"reasoning_content": "正在思考"}),
+                    {"langgraph_node": "model"},
+                ),
             )
-            yield "messages", (
-                AIMessageChunk(content="千问正常回答"),
-                {"langgraph_node": "model"},
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="千问正常回答"),
+                    {"langgraph_node": "model"},
+                ),
             )
-            yield "messages", (
-                ToolMessageChunk(content="工具结果", tool_call_id="call-1", name="file_read"),
-                {"langgraph_node": "tools"},
+            yield (
+                "messages",
+                (
+                    ToolMessageChunk(content="工具结果", tool_call_id="call-1", name="file_read"),
+                    {"langgraph_node": "tools"},
+                ),
             )
 
     adapter = agent_stream._AgentSseStreamAdapter(
@@ -524,7 +573,11 @@ async def test_agent_sse_stream_adapter_llm_connection_alarm(monkeypatch):
             raise RuntimeError("API connection error")
             yield  # pragma: no cover
 
-    monkeypatch.setattr(agent_stream, "emit_llm_connection_alarm_if_needed", lambda *args, **kwargs: alarms.append((args, kwargs)) or True)
+    monkeypatch.setattr(
+        agent_stream,
+        "emit_llm_connection_alarm_if_needed",
+        lambda *args, **kwargs: alarms.append((args, kwargs)) or True,
+    )
 
     adapter = agent_stream._AgentSseStreamAdapter(
         agent=Agent(),
@@ -636,11 +689,13 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
     )
     final_ai = AIMessage(content="报告已完成", id="assistant-final")
     adapter = SimpleNamespace(
-        state=SimpleNamespace(values={
-            "messages": [user, second_ai, second_tool, final_ai],
-            "context_compression_events": [],
-            "token_usage": {"used": 8, "total": 100},
-        }),
+        state=SimpleNamespace(
+            values={
+                "messages": [user, second_ai, second_tool, final_ai],
+                "context_compression_events": [],
+                "token_usage": {"used": 8, "total": 100},
+            }
+        ),
         archived_turn_messages=[user, first_ai, first_tool, second_ai, second_tool],
         reasoning_segments=[],
         latest_token_usage={
@@ -681,11 +736,15 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
 
 
 def test_message_end_payload_prefers_persisted_ai_timestamp():
-    state = SimpleNamespace(values={"messages": [
-        AIMessage(content="中间回复", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
-        ToolMessage(content="工具", tool_call_id="tc", id="tool_1"),
-        AIMessage(content="最终回复", id="ai_2", additional_kwargs={"timestamp": "2026-06-21 07:14:44"}),
-    ]})
+    state = SimpleNamespace(
+        values={
+            "messages": [
+                AIMessage(content="中间回复", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
+                ToolMessage(content="工具", tool_call_id="tc", id="tool_1"),
+                AIMessage(content="最终回复", id="ai_2", additional_kwargs={"timestamp": "2026-06-21 07:14:44"}),
+            ]
+        }
+    )
 
     raw_usage = {
         "total_tokens": 7,
@@ -703,10 +762,14 @@ def test_message_end_payload_prefers_persisted_ai_timestamp():
 
 
 def test_message_end_payload_ignores_empty_latest_ai_timestamp():
-    state = SimpleNamespace(values={"messages": [
-        AIMessage(content="上一条", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
-        AIMessage(content="最新", id="ai_2", additional_kwargs={}),
-    ]})
+    state = SimpleNamespace(
+        values={
+            "messages": [
+                AIMessage(content="上一条", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
+                AIMessage(content="最新", id="ai_2", additional_kwargs={}),
+            ]
+        }
+    )
 
     assert agent_stream._latest_assistant_timestamp(state) == ""
 
@@ -716,9 +779,13 @@ async def test_persist_latest_ai_message_timestamp_uses_langchain_agent_model_no
     class Agent:
         def __init__(self):
             self.updated = []
-            self.state = SimpleNamespace(values={"messages": [
-                AIMessage(content="最终回复", id="ai_1", additional_kwargs={}),
-            ]})
+            self.state = SimpleNamespace(
+                values={
+                    "messages": [
+                        AIMessage(content="最终回复", id="ai_1", additional_kwargs={}),
+                    ]
+                }
+            )
 
         async def aupdate_state(self, config, values, as_node=None):
             self.updated.append((config, values, as_node))
@@ -747,24 +814,34 @@ async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeyp
             yield FakeChunk(content="skip", msg_type="ai"), {"langgraph_node": "tools"}
             yield FakeChunk(), {"langgraph_node": "model"}
             yield FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_search"}]), {"langgraph_node": "model"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "semantic_search", "args": '{"query":'}]), {"langgraph_node": "model"}
+            yield (
+                FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "semantic_search", "args": '{"query":'}]),
+                {"langgraph_node": "model"},
+            )
             yield FakeChunk(tool_call_chunks=[{"id": None, "args": '"查销售额"}'}]), {"langgraph_node": "model"}
-            yield FakeChunk(
-                content='[semantic_search] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集", "metrics": [{"name": "销售额"}]}}}',
-                msg_type="tool",
-                tool_call_id="tc1",
-            ), {"langgraph_node": "tools"}
+            yield (
+                FakeChunk(
+                    content='[semantic_search] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集", "metrics": [{"name": "销售额"}]}}}',
+                    msg_type="tool",
+                    tool_call_id="tc1",
+                ),
+                {"langgraph_node": "tools"},
+            )
             yield FakeChunk(content="answer", msg_type="ai"), {"langgraph_node": "model"}
 
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查销售额",
-        datasource_id="ds",
-        user_id="u1",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查销售额",
+                datasource_id="ds",
+                user_id="u1",
+            )
+        )
+    )
     text = "".join(chunks)
     assert '"semantic_config_ids": ["cfg"]' in tool_event_contents(chunks)[-1]
     assert "accumulated_args" in text
@@ -784,21 +861,28 @@ async def test_generate_chat_data_stream_emits_thinking_event(monkeypatch):
             return SimpleNamespace(values={}, tasks=[])
 
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(
-                msg_type="ai",
-                additional_kwargs={"reasoning_content": "正在判断问题类型"},
-            ), {"langgraph_node": "model"}
+            yield (
+                FakeChunk(
+                    msg_type="ai",
+                    additional_kwargs={"reasoning_content": "正在判断问题类型"},
+                ),
+                {"langgraph_node": "model"},
+            )
             yield FakeChunk(content="你好", msg_type="ai"), {"langgraph_node": "model"}
 
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="你好",
-        datasource_id="ds",
-        user_id="u1",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="你好",
+                datasource_id="ds",
+                user_id="u1",
+            )
+        )
+    )
 
     text = "".join(chunks)
     assert "event: thinking" in text
@@ -813,12 +897,16 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
         semantic_config=None,
         semantic_config_error="未找到可用指标集: missing",
     )
-    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查销售额",
-        datasource_id="ds",
-        semantic_config_id="missing",
-    )))
+    chunks, failure = await _collect_stream_until_failure(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查销售额",
+                datasource_id="ds",
+                semantic_config_id="missing",
+            )
+        )
+    )
     assert "未找到可用指标集: missing" in "".join(chunks)
     assert failure is not None  # 失败异常抛给 Runtime 收口，不被 Handler 吞掉
 
@@ -833,10 +921,14 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: BadCheckpointer())
     # checkpointer 失败发生在图执行守卫段内：补发 error 后按流失败契约抛
     # AgentRunStreamFailedError，由 Runtime 收口为 failed。
-    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="hello",
-    )))
+    chunks, failure = await _collect_stream_until_failure(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="hello",
+            )
+        )
+    )
     assert "智能问数执行失败，请稍后重试。" in "".join(chunks)
     assert "checkpoint down" not in "".join(chunks)
     assert failure is not None
@@ -864,12 +956,16 @@ async def test_generate_chat_data_stream_disconnect_uses_clean_query_state(monke
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查订单",
-        datasource_id="ds_a",
-        request=DisconnectAfterFirst(),
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查订单",
+                datasource_id="ds_a",
+                request=DisconnectAfterFirst(),
+            )
+        )
+    )
 
     assert chunks == []
     assert graph.initial_state is None
@@ -900,16 +996,20 @@ async def test_resume_disconnect_before_graph_restores_pending_question(monkeypa
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
     monkeypatch.setattr(agent_stream.agent_inbox_service, "restore_question_answer", restore)
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查订单",
-        user_id="u1",
-        username="用户一",
-        request=DisconnectedRequest(),
-        run_id="run-1",
-        resume_answer={"answers": []},
-        resume_turn_id="turn-1",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查订单",
+                user_id="u1",
+                username="用户一",
+                request=DisconnectedRequest(),
+                run_id="run-1",
+                resume_answer={"answers": []},
+                resume_turn_id="turn-1",
+            )
+        )
+    )
 
     assert chunks == []
     assert graph.initial_state is None
@@ -1025,11 +1125,15 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查订单",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查订单",
+                datasource_id="ds_a",
+            )
+        )
+    )
 
     assert "query answer" in "".join(chunks)
     assert [message.content for message in graph.initial_state["messages"]] == ["查订单"]
@@ -1047,6 +1151,7 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     同一次模型调用的组合：输入框发送走 preserve（不接管），单条执行/
     continuation 走空 query + adopted。本用例钉住后者。
     """
+
     class Graph:
         def __init__(self):
             self.initial_state = None
@@ -1063,12 +1168,16 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
     adopted = [HumanMessage(content="遗留排队消息", id="adopted-1")]
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="",
-        datasource_id="ds_a",
-        adopted_messages=adopted,
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="",
+                datasource_id="ds_a",
+                adopted_messages=adopted,
+            )
+        )
+    )
 
     text = "".join(chunks)
     assert "inbox_admitted" in text
@@ -1082,9 +1191,11 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
 async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monkeypatch):
     class Checkpointer(FakeCheckpointer):
         async def aget_tuple(self, _config):
-            return SimpleNamespace(checkpoint={
-                "channel_values": {"messages": [HumanMessage(content="当前问题", id="turn-1")]},
-            })
+            return SimpleNamespace(
+                checkpoint={
+                    "channel_values": {"messages": [HumanMessage(content="当前问题", id="turn-1")]},
+                }
+            )
 
     class Graph:
         initial_state = "unset"
@@ -1110,16 +1221,20 @@ async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monke
     monkeypatch.setattr(agent_stream.agent_inbox_service, "reconcile_recovered_messages", reconcile)
     monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="当前问题",
-        datasource_id="ds_a",
-        user_id="u1",
-        run_id="run-1",
-        owner_token="2:owner",
-        turn_id="turn-1",
-        recovering=True,
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="当前问题",
+                datasource_id="ds_a",
+                user_id="u1",
+                run_id="run-1",
+                owner_token="2:owner",
+                turn_id="turn-1",
+                recovering=True,
+            )
+        )
+    )
 
     assert graph.initial_state is None
     assert reconciled == [("run-1", {"turn-1"}, "2:owner")]
@@ -1130,9 +1245,11 @@ async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monke
 async def test_recovery_rebuilds_input_when_checkpoint_is_from_previous_turn(monkeypatch):
     class Checkpointer(FakeCheckpointer):
         async def aget_tuple(self, _config):
-            return SimpleNamespace(checkpoint={
-                "channel_values": {"messages": [HumanMessage(content="旧问题", id="old-turn")]},
-            })
+            return SimpleNamespace(
+                checkpoint={
+                    "channel_values": {"messages": [HumanMessage(content="旧问题", id="old-turn")]},
+                }
+            )
 
     class Graph:
         initial_state = None
@@ -1153,16 +1270,20 @@ async def test_recovery_rebuilds_input_when_checkpoint_is_from_previous_turn(mon
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
     monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
 
-    await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="新问题",
-        datasource_id="ds_a",
-        user_id="u1",
-        run_id="run-1",
-        owner_token="2:owner",
-        turn_id="turn-1",
-        recovering=True,
-    )))
+    await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="新问题",
+                datasource_id="ds_a",
+                user_id="u1",
+                run_id="run-1",
+                owner_token="2:owner",
+                turn_id="turn-1",
+                recovering=True,
+            )
+        )
+    )
 
     assert graph.initial_state is not None
     assert [str(message.id) for message in graph.initial_state["messages"]] == ["turn-1"]
@@ -1177,16 +1298,23 @@ async def test_generate_chat_data_stream_tool_chunk_missing_id_and_bad_json(monk
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(tool_calls=[{"id": "tc_bad", "name": "semantic_query_tool"}]), {"langgraph_node": "model"}
             yield FakeChunk(tool_call_chunks=[{"id": None, "name": "", "args": "{bad"}]), {"langgraph_node": "model"}
-            yield FakeChunk(content="tool done", msg_type="tool", tool_call_id="tc_bad", name="semantic_query_tool"), {"langgraph_node": "tools"}
+            yield (
+                FakeChunk(content="tool done", msg_type="tool", tool_call_id="tc_bad", name="semantic_query_tool"),
+                {"langgraph_node": "tools"},
+            )
 
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+            )
+        )
+    )
     text = "".join(chunks)
     assert "semantic_query_tool" in text
     assert "tool done" in text
@@ -1216,12 +1344,16 @@ async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_n
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
 
-    chunks, failure = await _collect_stream_until_failure(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-        semantic_config_id="missing",
-    )))
+    chunks, failure = await _collect_stream_until_failure(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+                semantic_config_id="missing",
+            )
+        )
+    )
 
     assert "未找到可用指标集: missing" in "".join(chunks)
     assert graph.initial_state is None
@@ -1235,28 +1367,40 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
             return SimpleNamespace(tasks=[], values={"token_usage": {"total_tokens": 4}})
 
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[
-                {"id": "", "name": "skip_missing_id"},
-                {"id": "tc_dup", "name": "semantic_query_tool"},
-            ]), {"langgraph_node": "model"}
+            yield (
+                FakeChunk(
+                    tool_calls=[
+                        {"id": "", "name": "skip_missing_id"},
+                        {"id": "tc_dup", "name": "semantic_query_tool"},
+                    ]
+                ),
+                {"langgraph_node": "model"},
+            )
             yield FakeChunk(tool_calls=[{"id": "tc_dup", "name": "semantic_query_tool"}]), {"langgraph_node": "model"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_fresh", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "model"}
-            yield FakeChunk(content="fresh done", msg_type="tool", tool_call_id="tc_fresh", name="semantic_query_tool"), {"langgraph_node": "tools"}
+            yield (
+                FakeChunk(tool_call_chunks=[{"id": "tc_fresh", "name": "semantic_query_tool", "args": ""}]),
+                {"langgraph_node": "model"},
+            )
+            yield (
+                FakeChunk(content="fresh done", msg_type="tool", tool_call_id="tc_fresh", name="semantic_query_tool"),
+                {"langgraph_node": "tools"},
+            )
 
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+            )
+        )
+    )
     text = "".join(chunks)
 
-    duplicate_blocks = [
-        block for block in text.split("\n\n")
-        if '"tool_call_id": "tc_dup"' in block
-    ]
+    duplicate_blocks = [block for block in text.split("\n\n") if '"tool_call_id": "tc_dup"' in block]
     assert [sse_event_name(block) for block in duplicate_blocks] == ["tool_started", "tool"]
     assert "fresh done" in text
     assert "message_end" in text
@@ -1274,21 +1418,28 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
             yield FakeChunk(tool_call_chunks=[{"id": None, "args": '{"forced":true}'}]), {"langgraph_node": "model"}
             yield FakeChunk(content="forced done", msg_type="tool", tool_call_id="forced"), {"langgraph_node": "tools"}
             yield FakeChunk(tool_calls=[{"id": "tc_select", "name": "semantic_search"}]), {"langgraph_node": "model"}
-            yield FakeChunk(
-                content='[semantic_search] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
-                msg_type="tool",
-                tool_call_id="tc_select",
-            ), {"langgraph_node": "tools"}
+            yield (
+                FakeChunk(
+                    content='[semantic_search] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
+                    msg_type="tool",
+                    tool_call_id="tc_select",
+                ),
+                {"langgraph_node": "tools"},
+            )
 
     monkeypatch.setattr(agent_stream, "_resolve_active_tool_call_id", lambda *_args: "forced")
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+            )
+        )
+    )
     text = "".join(chunks)
 
     assert '"accumulated_args": {"forced": true}' in text
@@ -1304,27 +1455,43 @@ async def test_generate_chat_data_stream_thinking_with_content_and_untracked_too
             return SimpleNamespace(values={}, tasks=[])
 
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(
-                content="带思考的回答",
-                msg_type="ai",
-                additional_kwargs={"reasoning_content": "先想一下"},
-            ), {"langgraph_node": "model"}
-            yield FakeChunk(content="untracked tool", msg_type="tool", tool_call_id="missing"), {"langgraph_node": "tools"}
-            yield FakeChunk(tool_calls=[{"id": "tc_select_bad", "name": "semantic_search"}]), {"langgraph_node": "model"}
-            yield FakeChunk(
-                content="[semantic_search] not-json",
-                msg_type="tool",
-                tool_call_id="tc_select_bad",
-            ), {"langgraph_node": "tools"}
+            yield (
+                FakeChunk(
+                    content="带思考的回答",
+                    msg_type="ai",
+                    additional_kwargs={"reasoning_content": "先想一下"},
+                ),
+                {"langgraph_node": "model"},
+            )
+            yield (
+                FakeChunk(content="untracked tool", msg_type="tool", tool_call_id="missing"),
+                {"langgraph_node": "tools"},
+            )
+            yield (
+                FakeChunk(tool_calls=[{"id": "tc_select_bad", "name": "semantic_search"}]),
+                {"langgraph_node": "model"},
+            )
+            yield (
+                FakeChunk(
+                    content="[semantic_search] not-json",
+                    msg_type="tool",
+                    tool_call_id="tc_select_bad",
+                ),
+                {"langgraph_node": "tools"},
+            )
 
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+            )
+        )
+    )
     text = "".join(chunks)
 
     assert "event: thinking" in text
@@ -1338,7 +1505,10 @@ async def test_generate_chat_data_stream_thinking_with_content_and_untracked_too
 async def test_generate_chat_data_stream_message_end_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "model"}
+            yield (
+                FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]),
+                {"langgraph_node": "model"},
+            )
 
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -1349,20 +1519,21 @@ async def test_generate_chat_data_stream_message_end_without_token_usage(monkeyp
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 
-    chunks = await collect_stream(agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv",
-        user_query="查",
-        datasource_id="ds_a",
-    )))
+    chunks = await collect_stream(
+        agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+                datasource_id="ds_a",
+            )
+        )
+    )
     text = "".join(chunks)
 
     assert '"status": "pending"' not in text
     assert "message_end" in text
     assert '"timestamp":' in text
     assert '"usage"' not in text
-
-
-
 
 
 @pytest.mark.asyncio
@@ -1372,16 +1543,18 @@ async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
 
     async def fake_inner(**_kwargs):
         raise asyncio.CancelledError("agent_run_lease_lost")
-        yield 'event: message\ndata: {}\n\n'  # pragma: no cover -- 使其成为异步生成器
+        yield "event: message\ndata: {}\n\n"  # pragma: no cover -- 使其成为异步生成器
 
     monkeypatch.setattr(agent_stream, "_run_chat_data_agent_stream", fake_inner)
 
     events = []
     with pytest.raises(asyncio.CancelledError):
-        async for event in agent_stream._generate_chat_data_stream(ChatDataStreamRequest(
-            thread_id="conv",
-            user_query="查",
-        )):
+        async for event in agent_stream._generate_chat_data_stream(
+            ChatDataStreamRequest(
+                thread_id="conv",
+                user_query="查",
+            )
+        ):
             events.append(event)
 
     assert events == []

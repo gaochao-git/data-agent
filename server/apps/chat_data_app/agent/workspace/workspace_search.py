@@ -1,6 +1,5 @@
 """Sandbox text search via rg and Files API glob."""
 
-
 from __future__ import annotations
 
 import fnmatch
@@ -30,8 +29,7 @@ def _matches_sandbox_glob(relative_path: str, pattern: str) -> bool:
     """Match root files for **/ patterns like pathlib's recursive glob does."""
     normalized = str(pattern or "**/*")
     return fnmatch.fnmatchcase(relative_path, normalized) or (
-        normalized.startswith("**/")
-        and fnmatch.fnmatchcase(relative_path, normalized[3:])
+        normalized.startswith("**/") and fnmatch.fnmatchcase(relative_path, normalized[3:])
     )
 
 
@@ -81,9 +79,13 @@ def build_rg_command_str(
     return " ".join(
         shlex.quote(part)
         for part in build_rg_args(
-            target, patterns, glob=glob,
-            use_regex=use_regex, ignore_case=ignore_case,
-            context_lines=context_lines, output_mode=output_mode,
+            target,
+            patterns,
+            glob=glob,
+            use_regex=use_regex,
+            ignore_case=ignore_case,
+            context_lines=context_lines,
+            output_mode=output_mode,
         )
     )
 
@@ -274,7 +276,12 @@ def parse_rg_output(
         if context_lines > 0:
             remaining = max_chars - body_chars
             cost = accumulator.observe(
-                line, normalized_target, prefix, prefix_len, matches, budget_left=remaining,
+                line,
+                normalized_target,
+                prefix,
+                prefix_len,
+                matches,
+                budget_left=remaining,
             )
             if cost > remaining:
                 has_more = True
@@ -341,9 +348,13 @@ async def sandbox_grep_text(
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
 
         command = build_rg_command_str(
-            target, patterns, glob=glob,
-            use_regex=use_regex, ignore_case=ignore_case,
-            context_lines=context_lines, output_mode=output_mode,
+            target,
+            patterns,
+            glob=glob,
+            use_regex=use_regex,
+            ignore_case=ignore_case,
+            context_lines=context_lines,
+            output_mode=output_mode,
         )
         exit_code, stdout, stderr = await run_command_in_sandbox(
             session=session,
@@ -352,8 +363,7 @@ async def sandbox_grep_text(
         )
         if exit_code == 127 or "command not found" in (stderr or "").lower():
             raise RuntimeError(
-                "file_grep 需要 ripgrep (rg)，沙箱环境未安装。"
-                "请在沙箱镜像中安装 ripgrep: apt-get install ripgrep"
+                "file_grep 需要 ripgrep (rg)，沙箱环境未安装。请在沙箱镜像中安装 ripgrep: apt-get install ripgrep"
             )
         if exit_code > 1:
             raise RuntimeError(f"rg 执行失败 (exit={exit_code}): {stderr}")
@@ -361,13 +371,14 @@ async def sandbox_grep_text(
         stripped_target = target.rstrip("/")
         if output_mode in ("files_with_matches", "count"):
             entries, has_more = parse_rg_files_or_counts(
-                stdout, target, max_results=max_results, mode=output_mode,
+                stdout,
+                target,
+                max_results=max_results,
+                mode=output_mode,
             )
             entries = [
                 {
-                    "path": sandbox_path_to_visible(
-                        f"{stripped_target}/{e['file']}" if e["file"] else stripped_target
-                    ),
+                    "path": sandbox_path_to_visible(f"{stripped_target}/{e['file']}" if e["file"] else stripped_target),
                     **({"match_count": e["match_count"]} if "match_count" in e else {}),
                 }
                 for e in entries
@@ -375,19 +386,24 @@ async def sandbox_grep_text(
             payload = {"entries": entries, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
             logger.info(
                 "OpenSandbox file_grep(%s) 完成: sandbox_id=%s path=%s entries=%s has_more=%s",
-                output_mode, session.sandbox_id, target, len(entries), payload["has_more"],
+                output_mode,
+                session.sandbox_id,
+                target,
+                len(entries),
+                payload["has_more"],
             )
             return payload
 
         raw_matches, has_more = parse_rg_output(
-            stdout, target, max_results=max_results, max_chars=max_chars,
+            stdout,
+            target,
+            max_results=max_results,
+            max_chars=max_chars,
             context_lines=context_lines,
         )
         matches = [
             {
-                "path": sandbox_path_to_visible(
-                    f"{stripped_target}/{m['file']}" if m["file"] else stripped_target
-                ),
+                "path": sandbox_path_to_visible(f"{stripped_target}/{m['file']}" if m["file"] else stripped_target),
                 "line_number": m["line_number"],
                 "line": m["content"],
                 **({"before": m["before"]} if m.get("before") else {}),
@@ -398,6 +414,9 @@ async def sandbox_grep_text(
         payload = {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
         logger.info(
             "OpenSandbox file_grep 完成: sandbox_id=%s path=%s matches=%s has_more=%s",
-            session.sandbox_id, target, len(matches), payload["has_more"],
+            session.sandbox_id,
+            target,
+            len(matches),
+            payload["has_more"],
         )
         return payload

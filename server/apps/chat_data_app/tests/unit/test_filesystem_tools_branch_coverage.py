@@ -82,10 +82,15 @@ class StubRuntime:
         self.calls.append(("grep_text", kwargs))
         if self.fail_with is not None:
             raise self.fail_with
-        return self.results.get("grep_text", {
-            "matches": [{"path": "a.py", "line_number": 1, "line": "hello"}],
-            "has_more": True, "skipped_binary": 2, "skipped_large": 1,
-        })
+        return self.results.get(
+            "grep_text",
+            {
+                "matches": [{"path": "a.py", "line_number": 1, "line": "hello"}],
+                "has_more": True,
+                "skipped_binary": 2,
+                "skipped_large": 1,
+            },
+        )
 
     async def create_dir(self, **kwargs):
         self.calls.append(("create_dir", kwargs))
@@ -97,10 +102,13 @@ class StubRuntime:
         self.calls.append(("list_dir", kwargs))
         if self.fail_with is not None:
             raise self.fail_with
-        return self.results.get("list_dir", [
-            {"type": "dir", "path": "/mnt/user-data/workspace/sub/", "size": "-", "mtime": "2026-08-28 10:00"},
-            {"type": "file", "path": "/mnt/user-data/workspace/a.txt", "size": 3, "mtime": "2026-08-28 10:00"},
-        ])
+        return self.results.get(
+            "list_dir",
+            [
+                {"type": "dir", "path": "/mnt/user-data/workspace/sub/", "size": "-", "mtime": "2026-08-28 10:00"},
+                {"type": "file", "path": "/mnt/user-data/workspace/a.txt", "size": 3, "mtime": "2026-08-28 10:00"},
+            ],
+        )
 
 
 def _tools(runtime) -> dict:
@@ -150,47 +158,82 @@ def test_validate_filename_pattern_rules():
 @pytest.mark.asyncio
 async def test_file_move_tool_success_and_error():
     runtime = StubRuntime()
-    text = await _invoke(runtime, "file_move", {
-        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
-    })
+    text = await _invoke(
+        runtime,
+        "file_move",
+        {
+            "source_path": "/mnt/user-data/workspace/a.txt",
+            "destination_path": "/mnt/user-data/workspace/b.txt",
+        },
+    )
     payload = _payload(text)
     assert payload["destination_path"] == "/mnt/user-data/workspace/b.txt"
-    assert runtime.calls == [("move_path", {
-        "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
-    })]
+    assert runtime.calls == [
+        (
+            "move_path",
+            {
+                "source_path": "/mnt/user-data/workspace/a.txt",
+                "destination_path": "/mnt/user-data/workspace/b.txt",
+            },
+        )
+    ]
 
     failing = StubRuntime()
     failing.fail_with = ValueError("目标路径已存在")
     with pytest.raises(ValueError, match="目标路径已存在"):
-        await _invoke(failing, "file_move", {
-            "source_path": "/mnt/user-data/workspace/a.txt", "destination_path": "/mnt/user-data/workspace/b.txt",
-        })
+        await _invoke(
+            failing,
+            "file_move",
+            {
+                "source_path": "/mnt/user-data/workspace/a.txt",
+                "destination_path": "/mnt/user-data/workspace/b.txt",
+            },
+        )
 
 
 @pytest.mark.asyncio
 async def test_file_copy_tool_success_and_unexpected_error():
     runtime = StubRuntime()
-    payload = _payload(await _invoke(runtime, "file_copy", {
-        "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
-    }))
+    payload = _payload(
+        await _invoke(
+            runtime,
+            "file_copy",
+            {
+                "source_path": "/mnt/user-data/uploads/a.csv",
+                "destination_path": "/mnt/user-data/workspace/a.csv",
+            },
+        )
+    )
     assert payload == {"type": "file", "bytes": 3}
 
     # 失败改为 raise 原异常，由 ToolErrorMiddleware 统一转成 status="error" 的 ToolMessage
     failing = StubRuntime()
     failing.fail_with = RuntimeError("connection pool exhausted at 10.0.0.5:3306")
     with pytest.raises(RuntimeError, match="connection pool exhausted"):
-        await _invoke(failing, "file_copy", {
-            "source_path": "/mnt/user-data/uploads/a.csv", "destination_path": "/mnt/user-data/workspace/a.csv",
-        })
+        await _invoke(
+            failing,
+            "file_copy",
+            {
+                "source_path": "/mnt/user-data/uploads/a.csv",
+                "destination_path": "/mnt/user-data/workspace/a.csv",
+            },
+        )
 
 
 @pytest.mark.asyncio
 async def test_file_delete_tool_pins_file_semantics():
     runtime = StubRuntime()
     await _invoke(runtime, "file_delete", {"file_path": "/mnt/user-data/workspace/a.txt"})
-    assert runtime.calls == [("delete_path", {
-        "path": "/mnt/user-data/workspace/a.txt", "recursive": False, "expected_type": "file",
-    })]
+    assert runtime.calls == [
+        (
+            "delete_path",
+            {
+                "path": "/mnt/user-data/workspace/a.txt",
+                "recursive": False,
+                "expected_type": "file",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -198,9 +241,16 @@ async def test_dir_delete_tool_passes_recursive_flag():
     runtime = StubRuntime()
     text = await _invoke(runtime, "dir_delete", {"path": "/mnt/user-data/workspace/sub", "recursive": True})
     assert _payload(text)["type"] == "file"  # 桩返回复用，重点在参数透传
-    assert runtime.calls == [("delete_path", {
-        "path": "/mnt/user-data/workspace/sub", "recursive": True, "expected_type": "dir",
-    })]
+    assert runtime.calls == [
+        (
+            "delete_path",
+            {
+                "path": "/mnt/user-data/workspace/sub",
+                "recursive": True,
+                "expected_type": "dir",
+            },
+        )
+    ]
 
     shallow = StubRuntime()
     await _invoke(shallow, "dir_delete", {"path": "/mnt/user-data/workspace/sub"})
@@ -230,7 +280,9 @@ async def test_file_glob_tool_validates_and_formats():
     assert payload["pattern"] == "*.py"
     assert payload["count"] == 1
     assert runtime.calls[0][1] == {
-        "path": "/mnt/user-data/workspace", "pattern": "*.py", "max_results": fs._DEFAULT_GLOB_RESULTS,
+        "path": "/mnt/user-data/workspace",
+        "pattern": "*.py",
+        "max_results": fs._DEFAULT_GLOB_RESULTS,
     }
 
     # 路径型 pattern 在沙箱 Files search 语义下不允许（校验失败现在以异常抛出）
@@ -248,9 +300,18 @@ async def test_file_glob_tool_validates_and_formats():
 @pytest.mark.asyncio
 async def test_file_grep_tool_splits_or_patterns_and_reports_skips():
     runtime = StubRuntime()
-    payload = _payload(await _invoke(runtime, "file_grep", {
-        "pattern": "error|warn", "path": "outputs", "glob": "**/*.log", "max_results": 10,
-    }))
+    payload = _payload(
+        await _invoke(
+            runtime,
+            "file_grep",
+            {
+                "pattern": "error|warn",
+                "path": "outputs",
+                "glob": "**/*.log",
+                "max_results": 10,
+            },
+        )
+    )
     assert payload["pattern"] == "error|warn"
     assert payload["glob"] == "**/*.log"
     assert payload["count"] == 1
@@ -272,16 +333,32 @@ async def test_file_grep_tool_regex_case_context_options():
     """file_grep 新旋钮：use_regex/ignore_case/context_lines 透传，content 模式带 before/after。"""
     runtime = StubRuntime()
     runtime.results["grep_text"] = {
-        "matches": [{
-            "path": "/mnt/user-data/workspace/a.py", "line_number": 2, "line": "def two_impl():",
-            "before": ["    return 1"], "after": ["    return 2"],
-        }],
-        "has_more": False, "skipped_binary": 0, "skipped_large": 0,
+        "matches": [
+            {
+                "path": "/mnt/user-data/workspace/a.py",
+                "line_number": 2,
+                "line": "def two_impl():",
+                "before": ["    return 1"],
+                "after": ["    return 2"],
+            }
+        ],
+        "has_more": False,
+        "skipped_binary": 0,
+        "skipped_large": 0,
     }
-    payload = _payload(await _invoke(runtime, "file_grep", {
-        "pattern": r"def \w+_impl", "use_regex": True, "ignore_case": True,
-        "context_lines": 2, "output_mode": "content",
-    }))
+    payload = _payload(
+        await _invoke(
+            runtime,
+            "file_grep",
+            {
+                "pattern": r"def \w+_impl",
+                "use_regex": True,
+                "ignore_case": True,
+                "context_lines": 2,
+                "output_mode": "content",
+            },
+        )
+    )
     assert payload["output_mode"] == "content"
     assert payload["matches"][0]["before"] == ["    return 1"]
     assert payload["matches"][0]["after"] == ["    return 2"]
@@ -328,11 +405,22 @@ async def test_file_grep_tool_files_and_count_modes():
             {"path": "/mnt/user-data/workspace/a.py", "match_count": 3},
             {"path": "/mnt/user-data/workspace/b.md"},
         ],
-        "has_more": False, "skipped_binary": 0, "skipped_large": 0,
+        "has_more": False,
+        "skipped_binary": 0,
+        "skipped_large": 0,
     }
-    payload = _payload(await _invoke(runtime, "file_grep", {
-        "pattern": "error", "ignore_case": True, "output_mode": "count", "max_results": 50,
-    }))
+    payload = _payload(
+        await _invoke(
+            runtime,
+            "file_grep",
+            {
+                "pattern": "error",
+                "ignore_case": True,
+                "output_mode": "count",
+                "max_results": 50,
+            },
+        )
+    )
     assert payload["output_mode"] == "count"
     assert "matches" not in payload
     assert payload["entries"][0]["match_count"] == 3
@@ -341,11 +429,20 @@ async def test_file_grep_tool_files_and_count_modes():
     files_runtime = StubRuntime()
     files_runtime.results["grep_text"] = {
         "entries": [{"path": "/mnt/user-data/workspace/a.py"}],
-        "has_more": True, "skipped_binary": 0, "skipped_large": 0,
+        "has_more": True,
+        "skipped_binary": 0,
+        "skipped_large": 0,
     }
-    files_payload = _payload(await _invoke(files_runtime, "file_grep", {
-        "pattern": "error", "output_mode": "files_with_matches",
-    }))
+    files_payload = _payload(
+        await _invoke(
+            files_runtime,
+            "file_grep",
+            {
+                "pattern": "error",
+                "output_mode": "files_with_matches",
+            },
+        )
+    )
     assert files_payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
     assert files_payload["has_more"] is True
 
@@ -392,13 +489,23 @@ async def test_dir_list_tool_error_raises_unexpected_exception():
 async def test_file_read_tool_rejects_bad_pagination_before_runtime():
     runtime = StubRuntime()
     with pytest.raises(ValueError, match="offset 必须大于等于 0"):
-        await _invoke(runtime, "file_read", {
-            "file_path": "/mnt/user-data/workspace/a.txt", "offset": -1,
-        })
+        await _invoke(
+            runtime,
+            "file_read",
+            {
+                "file_path": "/mnt/user-data/workspace/a.txt",
+                "offset": -1,
+            },
+        )
     with pytest.raises(ValueError, match="limit 必须在 1-500 之间"):
-        await _invoke(runtime, "file_read", {
-            "file_path": "/mnt/user-data/workspace/a.txt", "limit": 0,
-        })
+        await _invoke(
+            runtime,
+            "file_read",
+            {
+                "file_path": "/mnt/user-data/workspace/a.txt",
+                "limit": 0,
+            },
+        )
     assert runtime.calls == []
 
 
@@ -408,9 +515,15 @@ async def test_file_edit_tool_rejects_blank_old_content_before_runtime():
     # 非字符串类型在 ainvoke 入口先被 langchain 参数 pydantic 校验拦截；
     # 空字符串才落到工具体校验，统一以异常抛出
     with pytest.raises(ValueError, match="old_content 必须是非空字符串"):
-        await _invoke(runtime, "file_edit", {
-            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "", "new_content": "new",
-        })
+        await _invoke(
+            runtime,
+            "file_edit",
+            {
+                "file_path": "/mnt/user-data/workspace/a.txt",
+                "old_content": "",
+                "new_content": "new",
+            },
+        )
     assert runtime.calls == []
 
 
@@ -418,14 +531,26 @@ async def test_file_edit_tool_rejects_blank_old_content_before_runtime():
 async def test_file_edit_tool_rejects_identical_content_before_runtime():
     runtime = StubRuntime()
     with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
-        await _invoke(runtime, "file_edit", {
-            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "same", "new_content": "same",
-        })
+        await _invoke(
+            runtime,
+            "file_edit",
+            {
+                "file_path": "/mnt/user-data/workspace/a.txt",
+                "old_content": "same",
+                "new_content": "same",
+            },
+        )
     # new_content 为非字符串时按序列化结果比较，同样拦截
     with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
-        await _invoke(runtime, "file_edit", {
-            "file_path": "/mnt/user-data/workspace/a.txt", "old_content": "123", "new_content": 123,
-        })
+        await _invoke(
+            runtime,
+            "file_edit",
+            {
+                "file_path": "/mnt/user-data/workspace/a.txt",
+                "old_content": "123",
+                "new_content": 123,
+            },
+        )
     assert runtime.calls == []
 
 
@@ -437,7 +562,9 @@ async def test_file_edit_tool_rejects_identical_content_before_runtime():
 class PagedFileRuntime:
     """基于临时目录的 read_text_file 分页契约替身：offset 0 起始、lines/has_more/next_offset 翻页。"""
 
-    def __init__(self, root, page_size: int | None = None, binary_paths: set[str] | None = None, infinite: bool = False):
+    def __init__(
+        self, root, page_size: int | None = None, binary_paths: set[str] | None = None, infinite: bool = False
+    ):
         self.root = root
         self.page_size = page_size
         self.binary_paths = binary_paths or set()
@@ -458,23 +585,34 @@ class PagedFileRuntime:
         if self.infinite and offset >= len(lines):
             # 模拟超长文件：内容读完后仍不断声称有下一页，用于验证翻页上限的 fail-fast
             return {
-                "exists": True, "is_dir": False, "is_binary": False, "path": file_path,
-                "total_lines": len(lines), "empty": False, "offset_out_of_range": False,
-                "lines": [f"filler-{offset}"], "has_more": True,
+                "exists": True,
+                "is_dir": False,
+                "is_binary": False,
+                "path": file_path,
+                "total_lines": len(lines),
+                "empty": False,
+                "offset_out_of_range": False,
+                "lines": [f"filler-{offset}"],
+                "has_more": True,
                 "next_offset": offset + effective_limit,
                 "truncated_lines": [],
             }
-        page_lines = lines[offset:offset + effective_limit]
+        page_lines = lines[offset : offset + effective_limit]
         has_more = offset + effective_limit < len(lines)
         next_offset = offset + effective_limit if has_more else None
         if self.infinite and not has_more and page_lines:
             has_more = True
             next_offset = offset + effective_limit
         return {
-            "exists": True, "is_dir": False, "is_binary": False, "path": file_path,
-            "total_lines": len(lines), "empty": content == "",
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": file_path,
+            "total_lines": len(lines),
+            "empty": content == "",
             "offset_out_of_range": content != "" and offset >= len(lines),
-            "lines": page_lines, "has_more": has_more,
+            "lines": page_lines,
+            "has_more": has_more,
             "next_offset": next_offset,
             "truncated_lines": [],
         }
@@ -542,9 +680,14 @@ async def test_file_diff_tool_rejects_binary(tmp_path):
     (tmp_path / "uploads").mkdir(exist_ok=True)
     (tmp_path / "uploads" / "blob.bin").write_bytes(b"\x00\x01")
     with pytest.raises(ValueError, match="二进制"):
-        await _invoke(runtime, "file_diff", {
-            "file_a": path_a, "file_b": "/mnt/user-data/uploads/blob.bin",
-        })
+        await _invoke(
+            runtime,
+            "file_diff",
+            {
+                "file_a": path_a,
+                "file_b": "/mnt/user-data/uploads/blob.bin",
+            },
+        )
 
 
 @pytest.mark.asyncio

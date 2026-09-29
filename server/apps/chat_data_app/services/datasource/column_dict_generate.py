@@ -37,7 +37,7 @@ def build_column_dict_generate_prompt(table_name: str, column_name: str, column:
         "3) unit 表示数值单位，例如 元、万元、秒；如果文本没有明确单位，返回空字符串。\n"
         "4) 不要生成 storage_format，column_type 只是数据库字段类型，不代表字段真实数据存储格式。\n"
         "5) 不要生成同义词。\n"
-        "6) 只输出 JSON，不要解释文本。格式：{\"dict\":{\"enum_values\":[{\"value\":\"...\",\"label\":\"...\"}],\"unit\":\"...\"}}\n"
+        '6) 只输出 JSON，不要解释文本。格式：{"dict":{"enum_values":[{"value":"...","label":"..."}],"unit":"..."}}\n'
         "输入数据：\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -76,7 +76,9 @@ def parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     }
 
 
-def find_datasource_column(datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
+def find_datasource_column(
+    datasource: Optional[Dict[str, Any]], table_name: str, column_name: str
+) -> Optional[Dict[str, Any]]:
     """在数据源表结构中定位指定字段。"""
     target_column = None
     for table in (datasource or {}).get("ds_tables") or []:

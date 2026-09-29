@@ -34,9 +34,9 @@ EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
 
 
-
 def _compare_stream_ids(left: str, right: str) -> int:
     """按 Redis Stream 的时间和序号比较游标。"""
+
     def key(value: str) -> tuple[int, int, str]:
         parts = value.split("-", 1)
         try:
@@ -47,6 +47,7 @@ def _compare_stream_ids(left: str, right: str) -> int:
     left_key = key(left)
     right_key = key(right)
     return (left_key > right_key) - (left_key < right_key)
+
 
 class ConversationEventService:
     """将 Agent 完整消息转换为追加式历史事件。"""
@@ -75,12 +76,14 @@ class ConversationEventService:
             conversation_id=conversation_id,
             user_id=user_id,
             operator_name=operator_name,
-            events=[_event(
-                turn_id=turn_id,
-                event_key=f"user:{turn_id}",
-                event_type=EVENT_USER_MESSAGE,
-                payload=_serialize_human_message(message),
-            )],
+            events=[
+                _event(
+                    turn_id=turn_id,
+                    event_key=f"user:{turn_id}",
+                    event_type=EVENT_USER_MESSAGE,
+                    payload=_serialize_human_message(message),
+                )
+            ],
             touch_thread=True,
         )
 
@@ -226,12 +229,14 @@ class ConversationEventService:
             payload = _load_payload(row.payload)
             if not payload:
                 continue
-            history_events.append({
-                "sequence_no": int(row.sequence_no),
-                "turn_id": row.turn_id,
-                "event_type": row.event_type,
-                "payload": payload,
-            })
+            history_events.append(
+                {
+                    "sequence_no": int(row.sequence_no),
+                    "turn_id": row.turn_id,
+                    "event_type": row.event_type,
+                    "payload": payload,
+                }
+            )
             if include_derived and row.event_type == EVENT_REASONING:
                 reasoning_segments.append(payload)
             elif include_derived and row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
@@ -304,12 +309,14 @@ class ConversationEventService:
             payload = _load_payload(row.payload)
             if not payload:
                 continue
-            history_events.append({
-                "sequence_no": int(row.sequence_no),
-                "turn_id": row.turn_id,
-                "event_type": row.event_type,
-                "payload": payload,
-            })
+            history_events.append(
+                {
+                    "sequence_no": int(row.sequence_no),
+                    "turn_id": row.turn_id,
+                    "event_type": row.event_type,
+                    "payload": payload,
+                }
+            )
             if include_derived and row.event_type == EVENT_REASONING:
                 reasoning_segments.append(payload)
             elif include_derived and row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
@@ -479,16 +486,19 @@ def _build_turn_events_ready_reasoning(
 ) -> None:
     while (
         state["next_reasoning_index"] < len(pending_reasoning)
-        and int(pending_reasoning[state["next_reasoning_index"]].get("tool_call_count") or 0) <= state["visible_tool_count"]
+        and int(pending_reasoning[state["next_reasoning_index"]].get("tool_call_count") or 0)
+        <= state["visible_tool_count"]
     ):
         segment = pending_reasoning[state["next_reasoning_index"]]
         segment_id = str(segment["id"])
-        events.append(_event(
-            turn_id=turn_id,
-            event_key=f"reasoning:{segment_id}",
-            event_type=EVENT_REASONING,
-            payload=segment,
-        ))
+        events.append(
+            _event(
+                turn_id=turn_id,
+                event_key=f"reasoning:{segment_id}",
+                event_type=EVENT_REASONING,
+                payload=segment,
+            )
+        )
         state["next_reasoning_index"] += 1
 
 
@@ -500,12 +510,14 @@ def _build_turn_events_anchor_events(
 ) -> None:
     for event in compression_events_by_anchor.pop(anchor_message_id, []):
         event_id = str(event["id"])
-        events.append(_event(
-            turn_id=turn_id,
-            event_key=f"context_compression:{event_id}",
-            event_type=EVENT_CONTEXT_COMPRESSION,
-            payload=event,
-        ))
+        events.append(
+            _event(
+                turn_id=turn_id,
+                event_key=f"context_compression:{event_id}",
+                event_type=EVENT_CONTEXT_COMPRESSION,
+                payload=event,
+            )
+        )
 
 
 def _build_turn_events_flush_unanchored(
@@ -515,12 +527,14 @@ def _build_turn_events_flush_unanchored(
 ) -> None:
     for event in unanchored_compression_events:
         event_id = str(event["id"])
-        events.append(_event(
-            turn_id=turn_id,
-            event_key=f"context_compression:{event_id}",
-            event_type=EVENT_CONTEXT_COMPRESSION,
-            payload=event,
-        ))
+        events.append(
+            _event(
+                turn_id=turn_id,
+                event_key=f"context_compression:{event_id}",
+                event_type=EVENT_CONTEXT_COMPRESSION,
+                payload=event,
+            )
+        )
     unanchored_compression_events.clear()
 
 
@@ -534,12 +548,14 @@ def _build_turn_events_human_message(
     message_id = _message_id(message)
     if not message_id:
         return
-    events.append(_event(
-        turn_id=turn_id,
-        event_key=f"user:{message_id}",
-        event_type=EVENT_USER_MESSAGE,
-        payload=_serialize_human_message(message),
-    ))
+    events.append(
+        _event(
+            turn_id=turn_id,
+            event_key=f"user:{message_id}",
+            event_type=EVENT_USER_MESSAGE,
+            payload=_serialize_human_message(message),
+        )
+    )
     _build_turn_events_anchor_events(events, compression_events_by_anchor, message_id, turn_id)
     if unanchored_compression_events:
         _build_turn_events_flush_unanchored(events, unanchored_compression_events, turn_id)
@@ -556,12 +572,14 @@ def _build_turn_events_ai_message(
 ) -> None:
     _build_turn_events_ready_reasoning(events, state, pending_reasoning, turn_id)
     message_id = _message_id(message) or f"{turn_id}:ai:{message_index}"
-    events.append(_event(
-        turn_id=turn_id,
-        event_key=f"assistant:{message_id}",
-        event_type=EVENT_ASSISTANT_MESSAGE,
-        payload=_serialize_ai_message(message),
-    ))
+    events.append(
+        _event(
+            turn_id=turn_id,
+            event_key=f"assistant:{message_id}",
+            event_type=EVENT_ASSISTANT_MESSAGE,
+            payload=_serialize_ai_message(message),
+        )
+    )
     state["visible_tool_count"] += len(getattr(message, "tool_calls", None) or [])
     _build_turn_events_anchor_events(events, compression_events_by_anchor, message_id, turn_id)
 
@@ -574,12 +592,14 @@ def _build_turn_events_tool_message(
     turn_id: str,
 ) -> None:
     message_id = _message_id(message) or f"{turn_id}:tool:{message_index}"
-    events.append(_event(
-        turn_id=turn_id,
-        event_key=f"tool:{message_id}",
-        event_type=EVENT_TOOL_RESULT,
-        payload=_serialize_tool_message(message),
-    ))
+    events.append(
+        _event(
+            turn_id=turn_id,
+            event_key=f"tool:{message_id}",
+            event_type=EVENT_TOOL_RESULT,
+            payload=_serialize_tool_message(message),
+        )
+    )
     _build_turn_events_anchor_events(events, compression_events_by_anchor, message_id, turn_id)
 
 
@@ -637,14 +657,16 @@ def _build_turn_events(
         unanchored_compression_events.extend(pending_events)
     _build_turn_events_flush_unanchored(events, unanchored_compression_events, turn_id)
     if isinstance(token_usage, dict) and token_usage:
-        events.append(_event(
-            turn_id=turn_id,
-            # 固定 event_key：借助 append_events 的按 key 原地更新语义，
-            # 每会话仅保留一条最新 token_usage 快照，避免逐轮追加大 payload。
-            event_key="token_usage:latest",
-            event_type=EVENT_TOKEN_USAGE,
-            payload=token_usage,
-        ))
+        events.append(
+            _event(
+                turn_id=turn_id,
+                # 固定 event_key：借助 append_events 的按 key 原地更新语义，
+                # 每会话仅保留一条最新 token_usage 快照，避免逐轮追加大 payload。
+                event_key="token_usage:latest",
+                event_type=EVENT_TOKEN_USAGE,
+                payload=token_usage,
+            )
+        )
     return events
 
 
@@ -666,12 +688,14 @@ def _normalize_reasoning_segments(segments: list[dict[str, Any]], turn_id: str) 
         content = str(raw.get("content") or "").strip()
         if not content:
             continue
-        normalized.append({
-            "id": str(raw.get("id") or f"reasoning-{turn_id}-{index}"),
-            "content": content,
-            "tool_call_count": _normalize_tool_call_count(raw.get("tool_call_count")),
-            "reasoning_turn_id": turn_id,
-        })
+        normalized.append(
+            {
+                "id": str(raw.get("id") or f"reasoning-{turn_id}-{index}"),
+                "content": content,
+                "tool_call_count": _normalize_tool_call_count(raw.get("tool_call_count")),
+                "reasoning_turn_id": turn_id,
+            }
+        )
     return normalized
 
 
@@ -689,16 +713,18 @@ def _normalize_context_compression_events(
         if not event_id or event_id in seen_ids or event_turn_id != turn_id:
             continue
         seen_ids.add(event_id)
-        normalized.append({
-            "id": event_id,
-            "turn_id": turn_id,
-            "anchor_message_id": str(raw_event.get("anchor_message_id") or "").strip(),
-            "timestamp": str(raw_event.get("timestamp") or "").strip(),
-            "estimated_tokens_before": _non_negative_int(raw_event.get("estimated_tokens_before")),
-            "estimated_tokens_after": _non_negative_int(raw_event.get("estimated_tokens_after")),
-            "estimated_cleared_tokens": _non_negative_int(raw_event.get("estimated_cleared_tokens")),
-            "compressed_messages": _non_negative_int(raw_event.get("compressed_messages")),
-        })
+        normalized.append(
+            {
+                "id": event_id,
+                "turn_id": turn_id,
+                "anchor_message_id": str(raw_event.get("anchor_message_id") or "").strip(),
+                "timestamp": str(raw_event.get("timestamp") or "").strip(),
+                "estimated_tokens_before": _non_negative_int(raw_event.get("estimated_tokens_before")),
+                "estimated_tokens_after": _non_negative_int(raw_event.get("estimated_tokens_after")),
+                "estimated_cleared_tokens": _non_negative_int(raw_event.get("estimated_cleared_tokens")),
+                "compressed_messages": _non_negative_int(raw_event.get("compressed_messages")),
+            }
+        )
     return normalized
 
 
@@ -804,13 +830,15 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
         if not isinstance(tool_call, dict):
             continue
         name = str(tool_call.get("name") or "")
-        tool_calls.append({
-            "id": tool_call.get("id"),
-            "name": name,
-            "args": tool_call.get("args") or {},
-            # MCP 工具的用户可见展示名；内置工具为空串，前端映射表兜底
-            "display_name": get_mcp_tool_display_name(name),
-        })
+        tool_calls.append(
+            {
+                "id": tool_call.get("id"),
+                "name": name,
+                "args": tool_call.get("args") or {},
+                # MCP 工具的用户可见展示名；内置工具为空串，前端映射表兜底
+                "display_name": get_mcp_tool_display_name(name),
+            }
+        )
     if tool_calls:
         payload["tool_calls"] = tool_calls
     reasoning_content = _extract_reasoning_content(message)

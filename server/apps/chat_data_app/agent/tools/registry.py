@@ -16,6 +16,7 @@
 2026-09-18：``semantic_search`` 工具与 ``semantic_model_search`` LLM 检索器整体下线
 （不再通过大模型选模型，语义模型定位走物化 YAML + ``file_grep``/``file_read`` 自导航）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -130,11 +131,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         provides=("bash_run",),
-        build=lambda ctx: (
-            [create_bash_run_tool(ctx.workspace_runtime)]
-            if ctx.runtime_options.bash_enabled
-            else []
-        ),
+        build=lambda ctx: ([create_bash_run_tool(ctx.workspace_runtime)] if ctx.runtime_options.bash_enabled else []),
         note="受 CHAT_DATA_DEFAULT_BASH_ENABLED 运行选项控制的可选执行工具；bash_run.BASH_RUN_DISABLED 代码级总闸生效时即使注册也拒绝执行",
     ),
 )
@@ -151,35 +148,39 @@ SUBAGENT_BASE_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_art
 
 # data-explore 在基础排除集之上额外排除的写操作工具：只读事实收集不写文件、
 # 不执行命令、不做文档编辑，避免子智能体在探查过程中产生副作用。
-DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
-    "file_edit",
-    "file_write",
-    "file_move",
-    "file_copy",
-    "file_delete",
-    "dir_create",
-    "dir_delete",
-    "bash_run",
-    "officecli_run",
-})
+DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
+    {
+        "file_edit",
+        "file_write",
+        "file_move",
+        "file_copy",
+        "file_delete",
+        "dir_create",
+        "dir_delete",
+        "bash_run",
+        "officecli_run",
+    }
+)
 
 # plan 在基础排除集之上额外排除执行类工具：规划子智能体只盘点资料与产出计划，
 # 不运行查询、不做计算、不编辑文档，保证规划与执行分离（执行由主智能体完成）。
 # data_analyzing_tool 为合并工具（含执行查询的 execute_query action），整工具排除。
-PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
-    "file_edit",
-    "file_move",
-    "file_copy",
-    "file_delete",
-    "dir_create",
-    "dir_delete",
-    "bash_run",
-    "officecli_run",
-    "data_analyzing_tool",
-    "calculator_tool",
-    "read_image",
-    "parse_document",
-})
+PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
+    {
+        "file_edit",
+        "file_move",
+        "file_copy",
+        "file_delete",
+        "dir_create",
+        "dir_delete",
+        "bash_run",
+        "officecli_run",
+        "data_analyzing_tool",
+        "calculator_tool",
+        "read_image",
+        "parse_document",
+    }
+)
 
 # general-purpose 在基础排除集之上额外排除 bash_run：业内通行的通用执行角色
 # （对齐 deepagents/Claude Code 的 general-purpose），保留文件写工具与查询工具

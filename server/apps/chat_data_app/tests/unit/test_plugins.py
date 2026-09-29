@@ -104,12 +104,14 @@ def test_parse_manifest_rejects_invalid(override):
 
 
 def test_parse_manifest_allows_mcp_only_and_ignores_unknown_fields():
-    parsed = parse_plugin_manifest({
-        **VALID_MANIFEST,
-        "skills": [],
-        "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
-        "future_field": {"anything": True},
-    })
+    parsed = parse_plugin_manifest(
+        {
+            **VALID_MANIFEST,
+            "skills": [],
+            "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
+            "future_field": {"anything": True},
+        }
+    )
     assert parsed.skills == ()
     assert parsed.mcp_servers[0]["id"] == "fs-ro"
 
@@ -183,7 +185,7 @@ def test_install_plugin_rejects_symlink_member():
         archive.writestr("skills/fault-analysis/SKILL.md", "---\nname: fault-analysis\n---\n")
         info = zipfile.ZipInfo("link.txt")
         info.create_system = 3
-        info.external_attr = (0o120777 << 16)
+        info.external_attr = 0o120777 << 16
         archive.writestr(info, "/etc/passwd")
     with pytest.raises(PluginInstallError, match="符号链接"):
         install_plugin_from_zip_bytes(buffer.getvalue())
@@ -205,10 +207,14 @@ def test_uninstall_plugin_missing_raises_not_found():
 
 
 def _install_default_plugin():
-    install_plugin_from_zip_bytes(_build_zip({
-        **VALID_MANIFEST,
-        "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
-    }))
+    install_plugin_from_zip_bytes(
+        _build_zip(
+            {
+                **VALID_MANIFEST,
+                "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
+            }
+        )
+    )
 
 
 def _set_enabled_snapshot(names):
@@ -298,7 +304,9 @@ async def test_service_install_writes_db_and_refreshes(monkeypatch):
     monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
 
     manifest = await plugin_service.install_plugin(
-        _build_zip(VALID_MANIFEST), operator_id="u1", operator_name="张三",
+        _build_zip(VALID_MANIFEST),
+        operator_id="u1",
+        operator_name="张三",
     )
     assert manifest.name == "ops-readonly"
     assert calls["upsert"]["plugin_name"] == "ops-readonly"
@@ -319,7 +327,9 @@ async def test_service_install_rolls_back_files_when_db_write_fails(monkeypatch)
 
     with pytest.raises(RuntimeError):
         await plugin_service.install_plugin(
-            _build_zip(VALID_MANIFEST), operator_id="u1", operator_name="张三",
+            _build_zip(VALID_MANIFEST),
+            operator_id="u1",
+            operator_name="张三",
         )
     # DB 写失败 → 已解包目录被回滚删除
     assert not (plugin_loader.plugins_root() / "ops-readonly").exists()
@@ -342,7 +352,10 @@ async def test_service_set_enabled_calls_dao_and_refreshes(monkeypatch):
     monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
 
     ok = await plugin_service.set_plugin_enabled(
-        "ops-readonly", enabled=False, operator_id="u1", operator_name="张三",
+        "ops-readonly",
+        enabled=False,
+        operator_id="u1",
+        operator_name="张三",
     )
     assert ok is True
     assert seen["plugin_name"] == "ops-readonly"
@@ -372,7 +385,10 @@ async def test_service_set_enabled_reconciles_orphan_plugin(monkeypatch):
     monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
 
     ok = await plugin_service.set_plugin_enabled(
-        "ops-readonly", enabled=True, operator_id="u1", operator_name="张三",
+        "ops-readonly",
+        enabled=True,
+        operator_id="u1",
+        operator_name="张三",
     )
     assert ok is True
     assert calls["upsert"]["plugin_name"] == "ops-readonly"
@@ -402,7 +418,10 @@ async def test_service_set_enabled_returns_false_when_missing_on_disk_and_db(mon
     monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
 
     ok = await plugin_service.set_plugin_enabled(
-        "ghost-plugin", enabled=True, operator_id="u1", operator_name="张三",
+        "ghost-plugin",
+        enabled=True,
+        operator_id="u1",
+        operator_name="张三",
     )
     assert ok is False
 
@@ -440,7 +459,8 @@ async def test_service_list_merges_db_audit_fields(monkeypatch):
     orphan_dir = plugin_loader.plugins_root() / "ops-orphan"
     orphan_dir.mkdir()
     (orphan_dir / "plugin.json").write_text(
-        json.dumps({**VALID_MANIFEST, "name": "ops-orphan"}, ensure_ascii=False), encoding="utf-8",
+        json.dumps({**VALID_MANIFEST, "name": "ops-orphan"}, ensure_ascii=False),
+        encoding="utf-8",
     )
     clear_metadata_cache()
 
@@ -479,7 +499,8 @@ async def test_service_list_paginates_sorted_by_name(monkeypatch):
         plugin_dir = plugin_loader.plugins_root() / name
         plugin_dir.mkdir()
         (plugin_dir / "plugin.json").write_text(
-            json.dumps({**VALID_MANIFEST, "name": name}, ensure_ascii=False), encoding="utf-8",
+            json.dumps({**VALID_MANIFEST, "name": name}, ensure_ascii=False),
+            encoding="utf-8",
         )
     clear_metadata_cache()
 

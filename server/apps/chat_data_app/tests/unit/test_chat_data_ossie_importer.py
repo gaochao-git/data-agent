@@ -52,12 +52,28 @@ def _full_config() -> dict:
             },
         ],
         "dimensions": [
-            {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime",
-             "expression": "`order_time`", "description": "订单下单时间"},
-            {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "enum",
-             "expression": "`status`"},
-            {"name": "用户昵称", "column": "nickname", "table": "users", "logical_type": "text",
-             "expression": "`nickname`"},
+            {
+                "name": "下单时间",
+                "column": "order_time",
+                "table": "orders",
+                "logical_type": "datetime",
+                "expression": "`order_time`",
+                "description": "订单下单时间",
+            },
+            {
+                "name": "订单状态",
+                "column": "status",
+                "table": "orders",
+                "logical_type": "enum",
+                "expression": "`status`",
+            },
+            {
+                "name": "用户昵称",
+                "column": "nickname",
+                "table": "users",
+                "logical_type": "text",
+                "expression": "`nickname`",
+            },
         ],
         "relationships": [
             {
@@ -72,8 +88,10 @@ def _full_config() -> dict:
                 "right_table": "orders",
                 "relationship_type": "one_to_many",
                 "join_type": "inner",
-                "join_conditions": [{"left_column": "id", "right_column": "user_id"},
-                                    {"left_column": "tenant_id", "right_column": "tenant_id"}],
+                "join_conditions": [
+                    {"left_column": "id", "right_column": "user_id"},
+                    {"left_column": "tenant_id", "right_column": "tenant_id"},
+                ],
             },
         ],
         "tables": [
@@ -161,8 +179,10 @@ def test_round_trip_full_config_preserves_semantics():
     assert relationships[1] == {
         "left_table": "users",
         "right_table": "orders",
-        "join_conditions": [{"left_column": "id", "right_column": "user_id"},
-                            {"left_column": "tenant_id", "right_column": "tenant_id"}],
+        "join_conditions": [
+            {"left_column": "id", "right_column": "user_id"},
+            {"left_column": "tenant_id", "right_column": "tenant_id"},
+        ],
         "relationship_type": "one_to_many",
         "join_type": "inner",
         "left_column": "id",
@@ -354,15 +374,17 @@ semantic_model:
         to_columns: [id]
 """
     result = OssieToChatDataImporter().import_yaml(document)[0]
-    assert result.relationships == [{
-        "left_table": "orders",
-        "right_table": "users",
-        "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
-        "relationship_type": "one_to_one",
-        "join_type": "left",
-        "left_column": "user_id",
-        "right_column": "id",
-    }]
+    assert result.relationships == [
+        {
+            "left_table": "orders",
+            "right_table": "users",
+            "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
+            "relationship_type": "one_to_one",
+            "join_type": "left",
+            "left_column": "user_id",
+            "right_column": "id",
+        }
+    ]
     assert any("方向" in warning for warning in result.warnings)
 
 
@@ -488,13 +510,23 @@ def _body(response) -> dict:
     return json.loads(response.body.decode("utf-8"))
 
 
-_DATASOURCE = {"id": "ds1", "ds_tables": [
-    {"table_name": "orders", "columns": [
-        {"name": "amount"}, {"name": "order_id"}, {"name": "user_id"},
-        {"name": "tenant_id"}, {"name": "order_time"}, {"name": "status"},
-    ]},
-    {"table_name": "users", "columns": [{"name": "id"}, {"name": "nickname"}, {"name": "tenant_id"}]},
-]}
+_DATASOURCE = {
+    "id": "ds1",
+    "ds_tables": [
+        {
+            "table_name": "orders",
+            "columns": [
+                {"name": "amount"},
+                {"name": "order_id"},
+                {"name": "user_id"},
+                {"name": "tenant_id"},
+                {"name": "order_time"},
+                {"name": "status"},
+            ],
+        },
+        {"table_name": "users", "columns": [{"name": "id"}, {"name": "nickname"}, {"name": "tenant_id"}]},
+    ],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -540,16 +572,19 @@ class FakeManager:
     async def get_column_dicts_async(self, datasource_id):
         return dict(self._column_dicts)
 
-    async def fill_column_dict_async(self, datasource_id, table_name, column_name, column_dict,
-                                     operator="", operator_name=""):
-        self.fill_calls.append({
-            "datasource_id": datasource_id,
-            "table": table_name,
-            "column": column_name,
-            "dict": column_dict,
-            "operator": operator,
-            "operator_name": operator_name,
-        })
+    async def fill_column_dict_async(
+        self, datasource_id, table_name, column_name, column_dict, operator="", operator_name=""
+    ):
+        self.fill_calls.append(
+            {
+                "datasource_id": datasource_id,
+                "table": table_name,
+                "column": column_name,
+                "dict": column_dict,
+                "operator": operator,
+                "operator_name": operator_name,
+            }
+        )
         return list(self._dict_fill_fields or [])
 
     async def create_async(self, **kwargs):
@@ -593,11 +628,19 @@ def test_preview_route_returns_importable_draft(monkeypatch):
     manager = FakeManager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     models = response["data"]["models"]
     assert len(models) == 1
@@ -618,15 +661,23 @@ def test_preview_route_reports_validation_error(monkeypatch):
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
     broken_yaml = _single_dataset_yaml().replace("SUM(amount)", "SUM(amount_missing)")
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=broken_yaml), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=broken_yaml),
+                _request(),
+            )
+        )
+    )
     models = response["data"]["models"]
     assert models[0]["importable"] is False
     assert any("物理字段" in error or "表达式" in error for error in models[0]["errors"])
     checklist = {row["name"]: row for row in models[0]["checklist"]}
     assert checklist["物理字段校验"]["status"] == "fail"
-    assert "amount_missing" in checklist["物理字段校验"]["message"] or "物理字段" in checklist["物理字段校验"]["message"]
+    assert (
+        "amount_missing" in checklist["物理字段校验"]["message"] or "物理字段" in checklist["物理字段校验"]["message"]
+    )
     assert checklist["质量规则核对"]["status"] == "skip"
     assert "score" not in models[0].get("quality", {})
 
@@ -635,11 +686,19 @@ def test_import_route_creates_enabled_public_configs(monkeypatch):
     manager = FakeManager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     assert response["data"]["created"] == [{"config_id": "sc_1", "name": "商品模型"}]
     # 不再强制禁用：不传 enabled，由 service 默认启用
@@ -655,9 +714,15 @@ def test_import_route_blocked_by_validation_error(monkeypatch):
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
     broken_yaml = _single_dataset_yaml().replace("SUM(amount)", "SUM(amount_missing)")
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=broken_yaml), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=broken_yaml),
+                _request(),
+            )
+        )
+    )
     assert response["status"] == "error"
     assert response["data"]["models"][0]["importable"] is False
 
@@ -668,9 +733,15 @@ def test_import_route_rejects_invalid_document(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content="version: [unclosed"), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content="version: [unclosed"),
+                _request(),
+            )
+        )
+    )
     assert response["status"] == "error"
     assert "YAML" in response["msg"]
 
@@ -681,9 +752,15 @@ def test_import_route_missing_datasource(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "missing", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "missing",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["status"] == "error"
     assert "数据源不存在" in response["msg"]
 
@@ -705,6 +782,7 @@ def test_checklist_all_pass_and_no_score():
     assert by_name["物理字段校验"]["status"] == "pass"
     assert by_name["质量规则核对"]["status"] == "pass"
     from apps.chat_data_app.services.semantic.run.semantic_quality_checker import RULES as quality_rules
+
     assert by_name["质量规则核对"]["message"] == f"{len(quality_rules)} 条质量规则全部未触发"
     assert all("score" not in row and "grade" not in row for row in rows)
 
@@ -788,9 +866,15 @@ def test_preview_route_marks_existing_config_conflict(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     model = response["data"]["models"][0]
     # 冲突不影响可导入（由导入动作决定替换/跳过）；动作徽章数据仍随模型返回
@@ -806,9 +890,15 @@ def test_preview_route_no_conflict_when_name_absent(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     model = response["data"]["models"][0]
     assert model["existing_config"] is None
     assert all(row["name"] != "模型名冲突" for row in model["checklist"])
@@ -819,7 +909,9 @@ def test_import_route_replace_updates_existing_config(monkeypatch):
     manager = _conflicted_manager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
     payload = SemanticOssieImportRequest(
         yaml_content=_single_dataset_yaml(),
@@ -846,13 +938,21 @@ def test_import_route_skips_conflict_by_default(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     assert response["data"]["created"] == []
     assert response["data"]["replaced"] == []
-    assert response["data"]["skipped"] == [{"name": "商品模型", "config_id": "sc_9", "reason": "同名配置已存在，未导入"}]
+    assert response["data"]["skipped"] == [
+        {"name": "商品模型", "config_id": "sc_9", "reason": "同名配置已存在，未导入"}
+    ]
     assert manager.created_kwargs == []
     assert manager.updated_kwargs == {}
 
@@ -887,9 +987,15 @@ def test_import_route_rejects_duplicate_model_names_in_request(monkeypatch):
         "semantic_model:\n  - name: 商品模型\n    datasets: []\n    metrics: []",
         1,
     )
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=yaml_text), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=yaml_text),
+                _request(),
+            )
+        )
+    )
     assert response["status"] == "error"
     assert "重名" in response["msg"]
     assert manager.created_kwargs == []
@@ -897,9 +1003,11 @@ def test_import_route_rejects_duplicate_model_names_in_request(monkeypatch):
 
 def _locked_conflict_manager():
     """同组内同名配置属于他人私有：admin 口径下不可操作，只能强制跳过。"""
-    return FakeManager(configs=[
-        {"id": "sc_p1", "name": "商品模型", "enabled": True, "scope_type": "private", "create_by": "user_b"},
-    ])
+    return FakeManager(
+        configs=[
+            {"id": "sc_p1", "name": "商品模型", "enabled": True, "scope_type": "private", "create_by": "user_b"},
+        ]
+    )
 
 
 def test_preview_route_locks_conflict_with_others_private_config(monkeypatch):
@@ -909,9 +1017,15 @@ def test_preview_route_locks_conflict_with_others_private_config(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     model = response["data"]["models"][0]
     # 不可操作的同名配置不进冲突表（existing_config 保持 None），改由 conflict_locked 标记
@@ -930,7 +1044,9 @@ def test_import_route_skips_locked_conflict_even_with_replace_action(monkeypatch
     manager = _locked_conflict_manager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
     payload = SemanticOssieImportRequest(
         yaml_content=_single_dataset_yaml(),
@@ -1017,9 +1133,15 @@ def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
     monkeypatch.setattr(semantic_config_service, "transaction_scope", transaction)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_two_model_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_two_model_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["status"] == "error"
     assert "已回滚" in response["msg"]
     assert "用户模型" in response["msg"]
@@ -1030,7 +1152,9 @@ def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
 
 def test_checklist_conflict_row_only_for_locked_conflict():
     """可操作同名不再进清单（覆盖导入是正常工作流）；仅 locked 同名保留「模型名冲突」警告行。"""
-    item = OssieSemanticModelImport(name="模型A", existing_config={"config_id": "sc_1", "name": "模型A", "enabled": False})
+    item = OssieSemanticModelImport(
+        name="模型A", existing_config={"config_id": "sc_1", "name": "模型A", "enabled": False}
+    )
     rows = build_model_checklist(item)
     assert all(row["name"] != "模型名冲突" for row in rows)
 
@@ -1180,21 +1304,37 @@ def test_prepare_models_returns_duplicate_error_without_models():
         "semantic_model:\n  - name: 商品模型\n    datasets: []\n    metrics: []",
         1,
     )
-    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
-        manager, _DATASOURCE, "ds1", yaml_text, semantic_service=manager, user_id="user_a",
-    ))
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
     assert models == []
     assert "重名" in error
 
 
 def test_prepare_models_public_conflict_sets_existing_config_not_locked():
     """同名公共配置：进入冲突表（可 replace），且不得同时标记 conflict_locked。"""
-    manager = FakeManager(configs=[
-        {"id": "sc_pub", "name": "商品模型", "scope_type": "public", "enabled": True},
-    ])
-    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
-        manager, _DATASOURCE, "ds1", _single_dataset_yaml(), semantic_service=manager, user_id="user_a",
-    ))
+    manager = FakeManager(
+        configs=[
+            {"id": "sc_pub", "name": "商品模型", "scope_type": "public", "enabled": True},
+        ]
+    )
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            _single_dataset_yaml(),
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
     assert error is None
     item = models[0]
     assert item.importable is True
@@ -1218,16 +1358,25 @@ def test_prepare_models_enum_validation_uses_single_batch_dict_query():
         "            datatype: String\n"
         "            custom_extensions:\n"
         "              - vendor_name: CHAT_DATA\n"
-        "                data: '{\"table\": \"orders\", \"column\": \"status\", \"logical_type\": \"enum\"}'\n"
+        '                data: \'{"table": "orders", "column": "status", "logical_type": "enum"}\'\n'
         "    metrics:",
         1,
     )
-    manager = FakeManager(column_dicts={
-        ("orders", "status"): {"enum_values": [{"value": "PAID", "label": "已支付"}]},
-    })
-    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
-        manager, _DATASOURCE, "ds1", yaml_text, semantic_service=manager, user_id="user_a",
-    ))
+    manager = FakeManager(
+        column_dicts={
+            ("orders", "status"): {"enum_values": [{"value": "PAID", "label": "已支付"}]},
+        }
+    )
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
     assert error is None
     assert models[0].importable is True
     assert models[0].validation_error is None
@@ -1248,14 +1397,21 @@ def test_prepare_models_enum_without_dict_values_blocks_import():
         "            datatype: String\n"
         "            custom_extensions:\n"
         "              - vendor_name: CHAT_DATA\n"
-        "                data: '{\"table\": \"orders\", \"column\": \"status\", \"logical_type\": \"enum\"}'\n"
+        '                data: \'{"table": "orders", "column": "status", "logical_type": "enum"}\'\n'
         "    metrics:",
         1,
     )
     manager = FakeManager()
-    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
-        manager, _DATASOURCE, "ds1", yaml_text, semantic_service=manager, user_id="user_a",
-    ))
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
     assert error is None
     assert models[0].importable is False
     assert "请先维护字段字典枚举值" in models[0].validation_error
@@ -1265,12 +1421,21 @@ def test_prepare_models_enum_without_dict_values_blocks_import():
 
 def test_prepare_models_others_private_conflict_locked_without_existing():
     """他人同名私有配置：conflict_locked=True 且 existing_config 保持 None（不泄露元信息）。"""
-    manager = FakeManager(configs=[
-        {"id": "sc_p1", "name": "商品模型", "scope_type": "private", "create_by": "user_b", "enabled": True},
-    ])
-    models, error = asyncio.run(semantic_config_service.prepare_ossie_import_models(
-        manager, _DATASOURCE, "ds1", _single_dataset_yaml(), semantic_service=manager, user_id="user_a",
-    ))
+    manager = FakeManager(
+        configs=[
+            {"id": "sc_p1", "name": "商品模型", "scope_type": "private", "create_by": "user_b", "enabled": True},
+        ]
+    )
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            _single_dataset_yaml(),
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
     assert error is None
     item = models[0]
     assert item.importable is True
@@ -1280,10 +1445,13 @@ def test_prepare_models_others_private_conflict_locked_without_existing():
 
 def test_existing_index_prefers_first_config_on_duplicate_name():
     """存量数据意外同名（脏数据）：索引首见优先，不因后者覆盖 config_id。"""
-    by_name, locked = semantic_config_service._build_existing_config_index([
-        {"id": "sc_1", "name": "销售模型", "scope_type": "public", "enabled": True},
-        {"id": "sc_2", "name": "销售模型", "scope_type": "public", "enabled": False},
-    ], user_id="user_a")
+    by_name, locked = semantic_config_service._build_existing_config_index(
+        [
+            {"id": "sc_1", "name": "销售模型", "scope_type": "public", "enabled": True},
+            {"id": "sc_2", "name": "销售模型", "scope_type": "public", "enabled": False},
+        ],
+        user_id="user_a",
+    )
     assert set(by_name) == {"销售模型"}
     assert by_name["销售模型"] == {"config_id": "sc_1", "name": "销售模型", "enabled": True}
     assert locked == set()
@@ -1291,21 +1459,27 @@ def test_existing_index_prefers_first_config_on_duplicate_name():
 
 def test_existing_index_skips_rows_missing_name_or_id():
     """缺名或缺 id 的残缺行不进索引也不进 locked，避免空名占位。"""
-    by_name, locked = semantic_config_service._build_existing_config_index([
-        {"id": "", "name": "只有名字", "scope_type": "public"},
-        {"id": "sc_3", "name": "", "scope_type": "public"},
-        {"id": "sc_4", "name": "正常模型", "scope_type": "public", "enabled": True},
-    ], user_id="user_a")
+    by_name, locked = semantic_config_service._build_existing_config_index(
+        [
+            {"id": "", "name": "只有名字", "scope_type": "public"},
+            {"id": "sc_3", "name": "", "scope_type": "public"},
+            {"id": "sc_4", "name": "正常模型", "scope_type": "public", "enabled": True},
+        ],
+        user_id="user_a",
+    )
     assert set(by_name) == {"正常模型"}
     assert locked == set()
 
 
 def test_existing_index_routes_private_configs_to_locked_in_admin_scope():
     """admin 口径下私有配置一律不可操作（含本人私有）：进 locked，不进冲突表。"""
-    by_name, locked = semantic_config_service._build_existing_config_index([
-        {"id": "sc_5", "name": "他人私有", "scope_type": "private", "create_by": "user_b", "enabled": True},
-        {"id": "sc_6", "name": "本人私有", "scope_type": "private", "create_by": "user_a", "enabled": True},
-    ], user_id="user_a")
+    by_name, locked = semantic_config_service._build_existing_config_index(
+        [
+            {"id": "sc_5", "name": "他人私有", "scope_type": "private", "create_by": "user_b", "enabled": True},
+            {"id": "sc_6", "name": "本人私有", "scope_type": "private", "create_by": "user_a", "enabled": True},
+        ],
+        user_id="user_a",
+    )
     assert by_name == {}
     assert locked == {"他人私有", "本人私有"}
 
@@ -1388,19 +1562,21 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
     """导出侧把字典四项写入 CHAT_DATA 扩展，导入侧提取为仅填空条目（结构化，不压进 description）。"""
     config = {
         "id": "sc_dict",
-        "dimensions": [{
-            "name": "支付状态",
-            "table": "orders",
-            "column": "status",
-            "expression": "`status`",
-            "logical_type": "enum",
-            "_column_dict": {
-                "enum_values": [{"value": "1", "label": "已支付"}],
-                "synonyms": ["支付状态"],
-                "storage_format": "0/1",
-                "unit": "",
-            },
-        }],
+        "dimensions": [
+            {
+                "name": "支付状态",
+                "table": "orders",
+                "column": "status",
+                "expression": "`status`",
+                "logical_type": "enum",
+                "_column_dict": {
+                    "enum_values": [{"value": "1", "label": "已支付"}],
+                    "synonyms": ["支付状态"],
+                    "storage_format": "0/1",
+                    "unit": "",
+                },
+            }
+        ],
         "metrics": [{"name": "总额", "table": "orders", "expression": "SUM(amount)", "data_type": "decimal(10,2)"}],
     }
     yaml_text = ChatDataToOssieConverter().convert(config, source_type="mysql")
@@ -1417,20 +1593,29 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
     assert "column_dict" not in metric_ext
 
     result = OssieToChatDataImporter().import_yaml(yaml_text)[0]
-    assert result.column_dicts == [{
-        "table": "orders",
-        "column": "status",
-        "dict": {"enum_values": [{"value": "1", "label": "已支付"}], "synonyms": ["支付状态"], "storage_format": "0/1"},
-    }]
+    assert result.column_dicts == [
+        {
+            "table": "orders",
+            "column": "status",
+            "dict": {
+                "enum_values": [{"value": "1", "label": "已支付"}],
+                "synonyms": ["支付状态"],
+                "storage_format": "0/1",
+            },
+        }
+    ]
 
 
 def test_import_extracts_atomic_metric_column_dict_by_declared_column():
     """原子指标：扩展声明 column 时按声明提取字典条目；聚合表达式不阻断。"""
-    extension_json = json.dumps({
-        "table": "orders",
-        "column": "amount",
-        "column_dict": {"unit": "元"},
-    }, ensure_ascii=False)
+    extension_json = json.dumps(
+        {
+            "table": "orders",
+            "column": "amount",
+            "column_dict": {"unit": "元"},
+        },
+        ensure_ascii=False,
+    )
     yaml_text = f"""
 version: "1.0"
 semantic_model:
@@ -1456,31 +1641,35 @@ semantic_model:
 def test_import_normalizes_and_dedupes_column_dict_payload():
     """提取口径：枚举按 value 去重并丢空值，同义词去重丢空，空 unit 不保留；同字段取首见。"""
     result = OssieToChatDataImporter().import_yaml(_dict_extension_yaml())[0]
-    assert result.column_dicts == [{
-        "table": "orders",
-        "column": "status",
-        "dict": {
-            "enum_values": [{"value": "1", "label": "已支付"}],
-            "synonyms": ["支付状态"],
-            "storage_format": "0/1",
-        },
-    }]
-
-
-def test_plan_column_dict_fills_only_targets_empty_fields():
-    """仅填空计划：现有值非空的字段不进计划，空缺字段按固定键序输出。"""
-    item = OssieSemanticModelImport(
-        name="商品模型",
-        column_dicts=[{
+    assert result.column_dicts == [
+        {
             "table": "orders",
             "column": "status",
             "dict": {
                 "enum_values": [{"value": "1", "label": "已支付"}],
                 "synonyms": ["支付状态"],
                 "storage_format": "0/1",
-                "unit": "元",
             },
-        }],
+        }
+    ]
+
+
+def test_plan_column_dict_fills_only_targets_empty_fields():
+    """仅填空计划：现有值非空的字段不进计划，空缺字段按固定键序输出。"""
+    item = OssieSemanticModelImport(
+        name="商品模型",
+        column_dicts=[
+            {
+                "table": "orders",
+                "column": "status",
+                "dict": {
+                    "enum_values": [{"value": "1", "label": "已支付"}],
+                    "synonyms": ["支付状态"],
+                    "storage_format": "0/1",
+                    "unit": "元",
+                },
+            }
+        ],
     )
     existing = {
         ("orders", "status"): {
@@ -1497,7 +1686,9 @@ def test_plan_column_dict_fills_only_targets_empty_fields():
     covered = {
         ("orders", "status"): {
             "enum_values": [{"value": "2", "label": "已有值"}],
-            "synonyms": ["已有"], "storage_format": "x", "unit": "元",
+            "synonyms": ["已有"],
+            "storage_format": "x",
+            "unit": "元",
         },
     }
     assert plan_column_dict_fills(item, covered) == []
@@ -1515,9 +1706,15 @@ def test_merge_carried_column_dicts_fills_empty_only():
         ("orders", "amount"): {"unit": "万元"},
     }
     carried = [
-        {"table": "orders", "column": "status", "dict": {
-            "enum_values": [{"value": "0", "label": "待支付"}], "synonyms": ["支付"], "unit": "不该覆盖",
-        }},
+        {
+            "table": "orders",
+            "column": "status",
+            "dict": {
+                "enum_values": [{"value": "0", "label": "待支付"}],
+                "synonyms": ["支付"],
+                "unit": "不该覆盖",
+            },
+        },
         {"table": "orders", "column": "new_col", "dict": {"unit": "秒"}},
         {"table": "orders", "column": "blank", "dict": {}},
         {"table": "", "column": "status", "dict": {"unit": "元"}},
@@ -1552,7 +1749,17 @@ def test_apply_physical_validation_counts_carried_dicts(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_validate(ds_manager, datasource_id, datasource, metrics, dimensions, relationships, *, column_dicts=None, table_columns_map=None):
+    async def fake_validate(
+        ds_manager,
+        datasource_id,
+        datasource,
+        metrics,
+        dimensions,
+        relationships,
+        *,
+        column_dicts=None,
+        table_columns_map=None,
+    ):
         captured["column_dicts"] = column_dicts
         return None
 
@@ -1568,9 +1775,16 @@ def test_apply_physical_validation_counts_carried_dicts(monkeypatch):
         dimensions=[{"name": "订单状态", "expression": "status", "table": "orders"}],
         column_dicts=[{"table": "orders", "column": "status", "dict": {"unit": "元"}}],
     )
-    asyncio.run(semantic_config_service._apply_physical_validation(
-        [item], _DictManager(), "ds_1", {"id": "ds_1"}, {}, set(),
-    ))
+    asyncio.run(
+        semantic_config_service._apply_physical_validation(
+            [item],
+            _DictManager(),
+            "ds_1",
+            {"id": "ds_1"},
+            {},
+            set(),
+        )
+    )
     assert captured["column_dicts"] == {("orders", "status"): {"unit": "元"}}
 
 
@@ -1601,18 +1815,31 @@ def test_checklist_dict_row_states():
 
 def test_preview_route_includes_dict_fill_plan_and_checklist_row(monkeypatch):
     """preview 确认面：对照现有字典输出填充计划，checklist 出现⑤数据字典行。"""
-    manager = FakeManager(column_dicts={
-        ("orders", "status"): {
-            "enum_values": [], "synonyms": ["支付状态"], "storage_format": "", "unit": "",
-        },
-    })
+    manager = FakeManager(
+        column_dicts={
+            ("orders", "status"): {
+                "enum_values": [],
+                "synonyms": ["支付状态"],
+                "storage_format": "",
+                "unit": "",
+            },
+        }
+    )
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
-    response = _body(asyncio.run(semantic_config.preview_admin_ossie_semantic_import(
-        "ds1", SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.preview_admin_ossie_semantic_import(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()),
+                _request(),
+            )
+        )
+    )
     model = response["data"]["models"][0]
     assert model["importable"] is True
     # 现有字典已含同义词 → 只计划填充枚举值与存储格式
@@ -1629,11 +1856,19 @@ def test_import_route_fills_column_dict_for_created_models(monkeypatch):
     manager = FakeManager(dict_fill_fields=["enum_values"])
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     assert response["data"]["created"][0]["column_dict_filled"] == [
         {"table": "orders", "column": "status", "fields": ["enum_values"]},
@@ -1656,9 +1891,15 @@ def test_import_route_skips_dict_fill_for_skipped_models(monkeypatch):
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
 
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.SUCCESS
     assert [item["name"] for item in response["data"]["skipped"]] == ["商品模型"]
     assert manager.fill_calls == []
@@ -1688,9 +1929,15 @@ def test_import_route_rolls_back_when_dict_fill_fails(monkeypatch):
             raise
 
     monkeypatch.setattr(semantic_config_service, "transaction_scope", recording_scope)
-    response = _body(asyncio.run(semantic_config.import_admin_ossie_semantic_configs(
-        "ds1", SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()), _request(),
-    )))
+    response = _body(
+        asyncio.run(
+            semantic_config.import_admin_ossie_semantic_configs(
+                "ds1",
+                SemanticOssieImportRequest(yaml_content=_dict_extension_yaml()),
+                _request(),
+            )
+        )
+    )
     assert response["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert "回滚" in response["msg"]
     assert rollback_calls == ["entered", "rolled_back"]
@@ -1719,19 +1966,23 @@ def test_round_trip_restores_interleaved_dimension_order():
     document = yaml.safe_load(yaml_text)
     for model in document["semantic_model"]:
         model["custom_extensions"] = [
-            ext for ext in model.get("custom_extensions") or []
-            if "dimension_order" not in json.loads(ext["data"])
+            ext for ext in model.get("custom_extensions") or [] if "dimension_order" not in json.loads(ext["data"])
         ]
-    stripped = OssieToChatDataImporter().import_document(parse_ossie_document(yaml.safe_dump(document, allow_unicode=True)))[0]
+    stripped = OssieToChatDataImporter().import_document(
+        parse_ossie_document(yaml.safe_dump(document, allow_unicode=True))
+    )[0]
     assert [dim["name"] for dim in stripped.dimensions] == ["订单状态", "订单金额", "用户昵称", "用户等级"]
 
 
 def test_restore_dimension_order_appends_unknown_dims_stably():
     """手工新增的维度不在顺序清单里：稳定追加在已知维度之后，不丢不重排相对顺序。"""
-    extension_json = json.dumps({
-        "semantic_config_id": "sc_old",
-        "dimension_order": ["orders.status", "orders.city"],
-    }, ensure_ascii=False)
+    extension_json = json.dumps(
+        {
+            "semantic_config_id": "sc_old",
+            "dimension_order": ["orders.status", "orders.city"],
+        },
+        ensure_ascii=False,
+    )
     yaml_text = f"""
 version: "1.0"
 semantic_model:

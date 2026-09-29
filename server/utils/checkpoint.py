@@ -47,10 +47,12 @@ _endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS) if MYSQL_ENDPOINT
 def _get_mysql_password() -> str:
     """获取 MySQL 密码（SM4 解密）"""
     from utils.crypto import decrypt_password
+
     return decrypt_password(os.getenv("CHECKPOINTER_PASSWORD", ""))
 
 
 # ============ Checkpointer 工厂 ============
+
 
 def get_checkpointer():
     """
@@ -80,6 +82,7 @@ class _SqliteCheckpointerContext:
     解决 langgraph-checkpoint-sqlite 3.0.0 的兼容性问题：
     aiosqlite 连接对象没有 is_alive 方法
     """
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.conn = None
@@ -174,19 +177,14 @@ def _build_mysql_checkpointer_context_factory():
     try:
         from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
     except ImportError:
-        raise ImportError(
-            "使用 MySQL checkpointer 需要安装: pip install langgraph-checkpoint-mysql aiomysql"
-        ) from None
+        raise ImportError("使用 MySQL checkpointer 需要安装: pip install langgraph-checkpoint-mysql aiomysql") from None
 
     password = _get_mysql_password()
     if _endpoint_selector is None:
         raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
 
     def context_factory(endpoint):
-        conn_string = (
-            f"mysql+aiomysql://{MYSQL_USER}:{password}"
-            f"@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
-        )
+        conn_string = f"mysql+aiomysql://{MYSQL_USER}:{password}@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
         return AIOMySQLSaver.from_conn_string(conn_string)
 
     return context_factory
@@ -226,6 +224,7 @@ async def select_available_checkpointer_endpoint() -> None:
 
 # ============ 初始化函数 ============
 
+
 async def setup_checkpointer():
     """
     初始化 checkpointer 和业务表
@@ -241,6 +240,7 @@ async def setup_checkpointer():
     if CHECKPOINTER_TYPE == "sqlite":
         # SQLite: 先启用 WAL 模式（持久化到数据库文件）
         import aiosqlite
+
         async with aiosqlite.connect(DB_PATH) as conn:
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.commit()
@@ -253,6 +253,7 @@ async def setup_checkpointer():
 
 
 # ============ 工具函数 ============
+
 
 def get_checkpoint_info() -> dict:
     """获取当前 checkpoint 配置信息"""

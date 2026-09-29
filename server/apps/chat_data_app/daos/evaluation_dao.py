@@ -13,10 +13,10 @@ from utils.models import ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun,
 class EvaluationDao:
     """封装准确率评测相关表读写。"""
 
-    async def load_scene_case_set(self, db: Any, case_set_id: str) -> Tuple[Optional[ChatDataEvalCaseSet], List[ChatDataEvalCase]]:
-        set_result = await db.execute(
-            select(ChatDataEvalCaseSet).filter_by(case_set_id=case_set_id, delete_flag=0)
-        )
+    async def load_scene_case_set(
+        self, db: Any, case_set_id: str
+    ) -> Tuple[Optional[ChatDataEvalCaseSet], List[ChatDataEvalCase]]:
+        set_result = await db.execute(select(ChatDataEvalCaseSet).filter_by(case_set_id=case_set_id, delete_flag=0))
         case_set = set_result.scalar_one_or_none()
         if not case_set:
             return None, []
@@ -44,9 +44,31 @@ class EvaluationDao:
         set_result = await db.execute(select(ChatDataEvalCaseSet).filter_by(case_set_id=case_set_id))
         case_set = set_result.scalar_one_or_none()
         if case_set:
-            self._update_case_set(case_set, datasource_id, semantic_config_id, case_set_name, business_domain, cases, operator_id, operator_name, now)
+            self._update_case_set(
+                case_set,
+                datasource_id,
+                semantic_config_id,
+                case_set_name,
+                business_domain,
+                cases,
+                operator_id,
+                operator_name,
+                now,
+            )
         else:
-            db.add(self._new_case_set(case_set_id, datasource_id, semantic_config_id, case_set_name, business_domain, cases, operator_id, operator_name, now))
+            db.add(
+                self._new_case_set(
+                    case_set_id,
+                    datasource_id,
+                    semantic_config_id,
+                    case_set_name,
+                    business_domain,
+                    cases,
+                    operator_id,
+                    operator_name,
+                    now,
+                )
+            )
 
         existing_result = await db.execute(select(ChatDataEvalCase).filter_by(case_set_id=case_set_id))
         existing_cases = {row.case_id: row for row in existing_result.scalars().all()}
@@ -202,9 +224,7 @@ class EvaluationDao:
 
     async def list_eval_run_cases(self, db: Any, run_id: str) -> List[ChatDataEvalRunCase]:
         result = await db.execute(
-            select(ChatDataEvalRunCase)
-            .filter_by(run_id=run_id, delete_flag=0)
-            .order_by(ChatDataEvalRunCase.id.asc())
+            select(ChatDataEvalRunCase).filter_by(run_id=run_id, delete_flag=0).order_by(ChatDataEvalRunCase.id.asc())
         )
         return list(result.scalars().all())
 

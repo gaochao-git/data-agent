@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -79,7 +79,9 @@ def _table_model(group_id: str = "group_a", table_name: str = "orders", sort_no:
     )
 
 
-def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_by: str = "u1", name: str = "订单分析", sort_no: int = 0):
+def _semantic_model(
+    config_id: str = "sc_a", scope_type: str = "public", create_by: str = "u1", name: str = "订单分析", sort_no: int = 0
+):
     return SimpleNamespace(
         id=1 + sort_no,
         semantic_config_id=config_id,
@@ -119,13 +121,19 @@ def _table_group_model(group_id: str, table_group_name: str, table_name: str):
     )
 
 
-def _column_dict_model(group_id: str = "group_a", table_name: str = "orders", column_name: str = "status", dict_json: str | None = None):
+def _column_dict_model(
+    group_id: str = "group_a", table_name: str = "orders", column_name: str = "status", dict_json: str | None = None
+):
     return SimpleNamespace(
         id=1,
         group_id=group_id,
         table_name=table_name,
         column_name=column_name,
-        dict_json=dict_json or json.dumps({"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}, ensure_ascii=False),
+        dict_json=dict_json
+        or json.dumps(
+            {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""},
+            ensure_ascii=False,
+        ),
         delete_flag=0,
         create_time=None,
         update_time=None,
@@ -155,17 +163,19 @@ class _FakeExecuteResult:
         return _FakeScalarResult(self._rows)
 
     def mappings(self):
-        return _FakeScalarResult([
-            {
-                "semantic_config_id": row.semantic_config_id,
-                "semantic_config_name": row.semantic_config_name,
-                "semantic_config_desc": row.semantic_config_desc,
-                "enabled_flag": row.enabled_flag,
-                "metrics_json": row.metrics_json,
-                "dimensions_json": row.dimensions_json,
-            }
-            for row in self._rows
-        ])
+        return _FakeScalarResult(
+            [
+                {
+                    "semantic_config_id": row.semantic_config_id,
+                    "semantic_config_name": row.semantic_config_name,
+                    "semantic_config_desc": row.semantic_config_desc,
+                    "enabled_flag": row.enabled_flag,
+                    "metrics_json": row.metrics_json,
+                    "dimensions_json": row.dimensions_json,
+                }
+                for row in self._rows
+            ]
+        )
 
 
 class _FakeOrmSession:
@@ -283,7 +293,12 @@ def test_parse_member_source_entries_keep_valid_members():
     )
     assert legacy_entries[0]["source_line"] == "dw"
     assert legacy_entries[0]["host"] == "127.0.0.1"
-    assert _parse_member_source_entries("direct|127.0.0.1:3306:test_db", "direct|127.0.0.1:3306:test_db", "mysql", "direct") == []
+    assert (
+        _parse_member_source_entries(
+            "direct|127.0.0.1:3306:test_db", "direct|127.0.0.1:3306:test_db", "mysql", "direct"
+        )
+        == []
+    )
     duplicate_entries = _parse_member_source_entries(
         "机构A|ORG_A|direct|127.0.0.1:3306:demo\n机构A|ORG_A|direct|127.0.0.1:3306:demo",
         "",
@@ -302,7 +317,9 @@ def test_parse_member_source_entries_keep_valid_members():
 
 def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     warnings = []
-    monkeypatch.setattr("apps.chat_data_app.daos.datasource_dao_helpers.logger.warning", lambda *args, **_kwargs: warnings.append(args))
+    monkeypatch.setattr(
+        "apps.chat_data_app.daos.datasource_dao_helpers.logger.warning", lambda *args, **_kwargs: warnings.append(args)
+    )
 
     assert _format_time("2026-06-02") == "2026-06-02"
     assert _load_json(None, {"default": True}) == {"default": True}
@@ -312,9 +329,31 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _load_json(123, ["default"]) == ["default"]
     assert _load_json(b'["a"]', []) == ["a"]
     assert _build_source_line("", 3306, "demo") is None
-    assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "host": "", "port": 3306, "database": "demo"}) is None
-    assert _build_member_source_text_line({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"}) is None
-    assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.1", "port": 10000, "database": "dw"}) == "机构A|ORG_A|http|dw"
+    assert (
+        _build_member_source_text_line(
+            {"org_name": "机构A", "org_code": "ORG_A", "host": "", "port": 3306, "database": "demo"}
+        )
+        is None
+    )
+    assert (
+        _build_member_source_text_line(
+            {"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"}
+        )
+        is None
+    )
+    assert (
+        _build_member_source_text_line(
+            {
+                "org_name": "机构A",
+                "org_code": "ORG_A",
+                "query_executor_type": "http",
+                "host": "127.0.0.1",
+                "port": 10000,
+                "database": "dw",
+            }
+        )
+        == "机构A|ORG_A|http|dw"
+    )
     assert _build_member_identity("mysql", "direct", " ORG_A ", "h:1:d") == "ORG_A"
     assert _build_member_identity("mysql", "direct", "", "h:1:d") is None
     assert _normalize_query_executor_type_for_parse("mysql", "bad") == "direct"
@@ -331,7 +370,10 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _parse_member_source_entry("|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A||direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|direct|bad", "mysql", "direct") is None
-    assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "bad")["query_executor_type"] == "direct"
+    assert (
+        _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "bad")["query_executor_type"]
+        == "direct"
+    )
     monkeypatch.setattr(datasource_dao_helper_module, "_build_member_identity", lambda *_args: None)
     assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _unique_non_empty_texts([" a ", "", "a", "b"]) == ["a", "b"]
@@ -414,10 +456,12 @@ def test_datasource_dao_table_index_read_and_update_boundaries(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
     table = _table_model()
     table.columns_json = '[{"name":"id"},{"name":"status"}]'
-    table.indexes_json = json.dumps({
-        "physical": [{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}],
-        "manual": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
-    })
+    table.indexes_json = json.dumps(
+        {
+            "physical": [{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}],
+            "manual": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
+        }
+    )
     executed = []
     _patch_store_session(monkeypatch, {"datasource_table": [table]}, executed=executed)
     manual = [{"index_type": "unique", "index_name": "uniq_status", "columns": ["status"]}]
@@ -426,7 +470,9 @@ def test_datasource_dao_table_index_read_and_update_boundaries(monkeypatch):
         return (
             await store.get_datasource_table_indexes_async("group_a", "orders"),
             await store.get_datasource_table_indexes_async("group_a", "missing"),
-            await store.update_datasource_table_indexes_async("group_a", "orders", manual, update_by="u1", update_by_name="用户1"),
+            await store.update_datasource_table_indexes_async(
+                "group_a", "orders", manual, update_by="u1", update_by_name="用户1"
+            ),
             await store.update_datasource_table_indexes_async("", "orders", manual),
         )
 
@@ -468,15 +514,18 @@ def test_map_group_row_normalizes_malformed_recommended_questions():
 
 def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
-    _patch_store_session(monkeypatch, {
-        "datasource_group": [_group_model(is_default=1)],
-        "datasource_table": [_table_model()],
-        "datasource_column_dict": [_column_dict_model("group_a", "orders", "status")],
-        "datasource_table_group_rel": [
-            _table_group_model("group_a", "订单域", "orders"),
-            _table_group_model("group_a", "订单域", "orders"),
-        ],
-    })
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_group": [_group_model(is_default=1)],
+            "datasource_table": [_table_model()],
+            "datasource_column_dict": [_column_dict_model("group_a", "orders", "status")],
+            "datasource_table_group_rel": [
+                _table_group_model("group_a", "订单域", "orders"),
+                _table_group_model("group_a", "订单域", "orders"),
+            ],
+        },
+    )
 
     async def run_checks():
         return (
@@ -495,7 +544,21 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
             await store.get_column_dict_async("group_a", "orders", "status"),
         )
 
-    exists, missing, empty, all_datasources, all_without_tables, datasource, datasource_meta, empty_name, by_name, default, tables, member_ids, column_dict = asyncio.run(run_checks())
+    (
+        exists,
+        missing,
+        empty,
+        all_datasources,
+        all_without_tables,
+        datasource,
+        datasource_meta,
+        empty_name,
+        by_name,
+        default,
+        tables,
+        member_ids,
+        column_dict,
+    ) = asyncio.run(run_checks())
 
     assert exists is True
     assert missing is False
@@ -513,26 +576,38 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     assert tables[0]["primary_keys"] == []
     assert tables[0]["manual_indexes"] == []
     assert member_ids == ["ORG_A", "ORG_B"]
-    assert column_dict == {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
+    assert column_dict == {
+        "enum_values": [{"value": "1", "label": "有效"}],
+        "synonyms": ["状态"],
+        "storage_format": "",
+        "unit": "",
+    }
     assert asyncio.run(store.get_datasource_tables_by_group_id_async("")) == []
     assert asyncio.run(store.get_table_group_relations_async("")) == []
-    assert asyncio.run(store.get_column_dict_async("", "orders", "status")) == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
+    assert asyncio.run(store.get_column_dict_async("", "orders", "status")) == {
+        "enum_values": [],
+        "synonyms": [],
+        "storage_format": "",
+        "unit": "",
+    }
     assert asyncio.run(store._get_group_tables_map_async([])) == {}
 
 
 def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
-    normalized = _normalize_column_dict({
-        "enums": [
-            "bad",
-            {"enum_value": "", "enum_label": "空"},
-            {"enum_value": "1", "enum_label": "有效"},
-            {"value": "1", "label": "重复"},
-            *[{"value": str(index), "label": f"值{index}"} for index in range(2, 105)],
-        ],
-        "synonyms": [" 状态 ", "", "状态", *[f"别名{index}" for index in range(60)]],
-        "storage_format": "x" * 300,
-        "unit": "元" * 120,
-    })
+    normalized = _normalize_column_dict(
+        {
+            "enums": [
+                "bad",
+                {"enum_value": "", "enum_label": "空"},
+                {"enum_value": "1", "enum_label": "有效"},
+                {"value": "1", "label": "重复"},
+                *[{"value": str(index), "label": f"值{index}"} for index in range(2, 105)],
+            ],
+            "synonyms": [" 状态 ", "", "状态", *[f"别名{index}" for index in range(60)]],
+            "storage_format": "x" * 300,
+            "unit": "元" * 120,
+        }
+    )
 
     assert len(normalized["enum_values"]) == 100
     assert normalized["enum_values"][0] == {"value": "1", "label": "有效"}
@@ -540,18 +615,31 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
     assert normalized["synonyms"][0] == "状态"
     assert len(normalized["storage_format"]) == 255
     assert len(normalized["unit"]) == 100
-    assert _normalize_column_dict({"enum_values": "bad", "synonyms": "bad"}) == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
+    assert _normalize_column_dict({"enum_values": "bad", "synonyms": "bad"}) == {
+        "enum_values": [],
+        "synonyms": [],
+        "storage_format": "",
+        "unit": "",
+    }
 
     store = DataSourceDao.__new__(DataSourceDao)
-    _patch_store_session(monkeypatch, {
-        "datasource_column_dict": [
-            _column_dict_model("group_a", "orders", "status", json.dumps({"enum_values": [{"value": "1", "label": "有效"}]}, ensure_ascii=False)),
-            _column_dict_model("group_a", "orders", "", json.dumps({"unit": "元"}, ensure_ascii=False)),
-            _column_dict_model("group_a", "", "amount", json.dumps({"unit": "元"}, ensure_ascii=False)),
-            _column_dict_model("group_a", "orders", "empty", json.dumps({}, ensure_ascii=False)),
-            _column_dict_model("group_a", "users", "name", json.dumps({"synonyms": ["用户"]}, ensure_ascii=False)),
-        ],
-    })
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_column_dict": [
+                _column_dict_model(
+                    "group_a",
+                    "orders",
+                    "status",
+                    json.dumps({"enum_values": [{"value": "1", "label": "有效"}]}, ensure_ascii=False),
+                ),
+                _column_dict_model("group_a", "orders", "", json.dumps({"unit": "元"}, ensure_ascii=False)),
+                _column_dict_model("group_a", "", "amount", json.dumps({"unit": "元"}, ensure_ascii=False)),
+                _column_dict_model("group_a", "orders", "empty", json.dumps({}, ensure_ascii=False)),
+                _column_dict_model("group_a", "users", "name", json.dumps({"synonyms": ["用户"]}, ensure_ascii=False)),
+            ],
+        },
+    )
 
     async def run_checks():
         return (
@@ -570,7 +658,12 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
     assert empty_table_group == {}
     assert empty_table_name == {}
     assert by_group == {
-        ("orders", "status"): {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "", "unit": ""},
+        ("orders", "status"): {
+            "enum_values": [{"value": "1", "label": "有效"}],
+            "synonyms": [],
+            "storage_format": "",
+            "unit": "",
+        },
         ("users", "name"): {"enum_values": [], "synonyms": ["用户"], "storage_format": "", "unit": ""},
     }
     assert by_table == {
@@ -604,14 +697,17 @@ def test_datasource_dao_empty_defaults_and_write_short_circuits(monkeypatch):
 
 def test_datasource_dao_table_group_queries_deduplicate(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
-    _patch_store_session(monkeypatch, {
-        "datasource_table_group_rel": [
-            _table_group_model("group_a", "订单域", "orders"),
-            _table_group_model("group_a", "订单域", "orders"),
-            _table_group_model("group_a", "", "orders"),
-            _table_group_model("group_b", "用户域", "users"),
-        ],
-    })
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_table_group_rel": [
+                _table_group_model("group_a", "订单域", "orders"),
+                _table_group_model("group_a", "订单域", "orders"),
+                _table_group_model("group_a", "", "orders"),
+                _table_group_model("group_b", "用户域", "users"),
+            ],
+        },
+    )
 
     async def run_checks():
         return (
@@ -632,16 +728,19 @@ def test_datasource_dao_table_group_queries_deduplicate(monkeypatch):
 
 def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
     store = SemanticConfigDao.__new__(SemanticConfigDao)
-    _patch_store_session(monkeypatch, {
-        "datasource_group": [_group_model()],
-        "datasource_table": [],
-        "semantic_config": [
-            _semantic_model("sc_private", "private", "user_a", name="个人订单", sort_no=1),
-            _semantic_model("sc_public_b", "public", "admin", name="订单分析", sort_no=3),
-            _semantic_model("sc_hidden", "private", "other", name="其他个人", sort_no=0),
-            _semantic_model("sc_public_a", "public", "admin", name="高规格", sort_no=2),
-        ],
-    })
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_group": [_group_model()],
+            "datasource_table": [],
+            "semantic_config": [
+                _semantic_model("sc_private", "private", "user_a", name="个人订单", sort_no=1),
+                _semantic_model("sc_public_b", "public", "admin", name="订单分析", sort_no=3),
+                _semantic_model("sc_hidden", "private", "other", name="其他个人", sort_no=0),
+                _semantic_model("sc_public_a", "public", "admin", name="高规格", sort_no=2),
+            ],
+        },
+    )
 
     async def run_checks():
         return (
@@ -657,9 +756,30 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
     assert [item["id"] for item in configs] == ["sc_public_b", "sc_public_a", "sc_private", "sc_hidden"]
     assert [item["id"] for item in visible_configs] == ["sc_public_b", "sc_public_a", "sc_private"]
     assert directory == [
-        {"id": "sc_public_b", "name": "订单分析", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
-        {"id": "sc_public_a", "name": "高规格", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
-        {"id": "sc_private", "name": "个人订单", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+        {
+            "id": "sc_public_b",
+            "name": "订单分析",
+            "description": "描述",
+            "enabled": True,
+            "metrics_total": 1,
+            "dimensions_total": 1,
+        },
+        {
+            "id": "sc_public_a",
+            "name": "高规格",
+            "description": "描述",
+            "enabled": True,
+            "metrics_total": 1,
+            "dimensions_total": 1,
+        },
+        {
+            "id": "sc_private",
+            "name": "个人订单",
+            "description": "描述",
+            "enabled": True,
+            "metrics_total": 1,
+            "dimensions_total": 1,
+        },
     ]
     assert config["name"] == "订单分析"
     assert config["metrics"] == [{"name": "订单金额"}]
@@ -677,13 +797,30 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
     _patch_store_session(monkeypatch, {"datasource_group": [_group_model()], "datasource_table": []}, executed=executed)
 
     async def run_checks():
-        await store.upsert_datasource_group_async("group_a", "订单组", "描述", "mysql", "机构A|ORG_A|direct|127.0.0.1:3306:demo", create_by="u1", update_by="u2")
-        await store.update_datasource_group_async("group_a", group_name="新名称", mapped_modules=["A"], is_default=True, update_by="u1")
+        await store.upsert_datasource_group_async(
+            "group_a",
+            "订单组",
+            "描述",
+            "mysql",
+            "机构A|ORG_A|direct|127.0.0.1:3306:demo",
+            create_by="u1",
+            update_by="u2",
+        )
+        await store.update_datasource_group_async(
+            "group_a", group_name="新名称", mapped_modules=["A"], is_default=True, update_by="u1"
+        )
         await store.clear_all_default_datasources_async(update_by="u3")
         await store.replace_datasource_tables_async("", [{"table_name": "orders"}])
         await store.replace_datasource_tables_async("group_a", [], update_by="u4")
-        await store.replace_datasource_tables_async("group_a", [{"table_name": "orders", "description": "订单表", "columns": [{"name": "id"}]}, {"table_name": ""}], create_by="u5", update_by="u6")
-        await store.update_datasource_table_business_desc_async("group_a", "orders", "业务说明", update_by="u7", update_by_name="用户7")
+        await store.replace_datasource_tables_async(
+            "group_a",
+            [{"table_name": "orders", "description": "订单表", "columns": [{"name": "id"}]}, {"table_name": ""}],
+            create_by="u5",
+            update_by="u6",
+        )
+        await store.update_datasource_table_business_desc_async(
+            "group_a", "orders", "业务说明", update_by="u7", update_by_name="用户7"
+        )
         saved_dict = await store.replace_column_dict_async(
             "group_a",
             "orders",
@@ -705,15 +842,46 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
             update_by_name="用户12",
         )
         await store.replace_table_group_relations_async("", [{"table_group_name": "订单域", "table_names": ["orders"]}])
-        await store.replace_table_group_relations_async("group_a", [{"table_group_name": "订单域", "table_names": ["orders", "orders", "items"]}, {"table_group_name": "", "table_names": ["x"]}], create_by="u7", update_by="u8")
+        await store.replace_table_group_relations_async(
+            "group_a",
+            [
+                {"table_group_name": "订单域", "table_names": ["orders", "orders", "items"]},
+                {"table_group_name": "", "table_names": ["x"]},
+            ],
+            create_by="u7",
+            update_by="u8",
+        )
         await store.soft_delete_group_async("group_a", update_by="u9")
         assert await semantic_store.upsert_async("", {"id": "sc_missing"}) is False
-        assert await semantic_store.upsert_many_async("group_a", [
-            {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"},
-            {"id": "sc_b", "name": "用户分析", "enabled": False, "dimensions": [{"name": "用户"}], "scope_type": "public"},
-        ]) is True
+        assert (
+            await semantic_store.upsert_many_async(
+                "group_a",
+                [
+                    {
+                        "id": "sc_a",
+                        "name": "订单分析",
+                        "enabled": False,
+                        "metrics": [{"name": "销售额"}],
+                        "scope_type": "private",
+                    },
+                    {
+                        "id": "sc_b",
+                        "name": "用户分析",
+                        "enabled": False,
+                        "dimensions": [{"name": "用户"}],
+                        "scope_type": "public",
+                    },
+                ],
+            )
+            is True
+        )
         await semantic_store.soft_delete_async("sc_a", update_by="u10")
-        assert saved_dict == {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
+        assert saved_dict == {
+            "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
+            "synonyms": ["状态"],
+            "storage_format": "",
+            "unit": "",
+        }
 
     asyncio.run(run_checks())
 
@@ -736,7 +904,9 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
     assert any("UPDATE datasource_group" in sql for sql in sql_texts)
     assert any("UPDATE datasource_table" in sql for sql in sql_texts)
     assert sum(re.search(r"INSERT INTO datasource_table\s", sql) is not None for sql in sql_texts) == 1
-    datasource_table_upserts = [sql for sql in sql_texts if re.search(r"INSERT INTO datasource_table\s", sql) is not None]
+    datasource_table_upserts = [
+        sql for sql in sql_texts if re.search(r"INSERT INTO datasource_table\s", sql) is not None
+    ]
     duplicate_update_clause = datasource_table_upserts[0].split("ON DUPLICATE KEY UPDATE", 1)[1]
     assert "table_business_desc" not in duplicate_update_clause
     assert sum("INSERT INTO datasource_column_dict" in sql for sql in sql_texts) == 1
@@ -775,15 +945,18 @@ def test_attach_table_groups_short_circuits():
 def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
     semantic_store = SemanticConfigDao.__new__(SemanticConfigDao)
-    _patch_store_session(monkeypatch, {
-        "datasource_group": [_group_model()],
-        "datasource_table": [
-            _table_model("", "orphan"),
-            _table_model("group_a", "orders"),
-        ],
-        "semantic_config": [_semantic_model("sc_public", "public", "admin")],
-        "datasource_table_group_rel": [],
-    })
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_group": [_group_model()],
+            "datasource_table": [
+                _table_model("", "orphan"),
+                _table_model("group_a", "orders"),
+            ],
+            "semantic_config": [_semantic_model("sc_public", "public", "admin")],
+            "datasource_table_group_rel": [],
+        },
+    )
 
     async def run_checks():
         return (
@@ -839,7 +1012,10 @@ def test_update_datasource_group_all_optional_fields_and_duplicate_relations(mon
     asyncio.run(run_checks())
 
     sql_texts = [str(stmt) for stmt in executed]
-    assert any("group_desc" in sql and "source_type" in sql and "template_source" in sql and "member_sources_text" in sql for sql in sql_texts)
+    assert any(
+        "group_desc" in sql and "source_type" in sql and "template_source" in sql and "member_sources_text" in sql
+        for sql in sql_texts
+    )
     assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1
 
 
@@ -850,19 +1026,39 @@ def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
     """仅填空：现有值非空的字段保留原值，空缺字段用导入值填充并合并成一次 upsert。"""
     store = DataSourceDao.__new__(DataSourceDao)
     executed = []
-    _patch_store_session(monkeypatch, {"datasource_column_dict": [
-        _column_dict_model(dict_json=json.dumps({
-            "enum_values": [{"value": "1", "label": "已有值"}],
-            "synonyms": [],
-            "storage_format": "",
-            "unit": "",
-        }, ensure_ascii=False)),
-    ]}, executed=executed)
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_column_dict": [
+                _column_dict_model(
+                    dict_json=json.dumps(
+                        {
+                            "enum_values": [{"value": "1", "label": "已有值"}],
+                            "synonyms": [],
+                            "storage_format": "",
+                            "unit": "",
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            ]
+        },
+        executed=executed,
+    )
 
-    filled = asyncio.run(store.fill_column_dict_async(
-        "group_a", "orders", "status",
-        {"enum_values": [{"value": "2", "label": "应忽略"}], "synonyms": ["付款"], "storage_format": "0/1", "unit": "元"},
-    ))
+    filled = asyncio.run(
+        store.fill_column_dict_async(
+            "group_a",
+            "orders",
+            "status",
+            {
+                "enum_values": [{"value": "2", "label": "应忽略"}],
+                "synonyms": ["付款"],
+                "storage_format": "0/1",
+                "unit": "元",
+            },
+        )
+    )
 
     assert filled == ["synonyms", "storage_format", "unit"]
     upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
@@ -880,10 +1076,18 @@ def test_fill_column_dict_creates_row_when_missing(monkeypatch):
     executed = []
     _patch_store_session(monkeypatch, {"datasource_column_dict": []}, executed=executed)
 
-    filled = asyncio.run(store.fill_column_dict_async(
-        "group_a", "orders", "status", {"unit": "元"},
-        create_by="user_a", update_by="user_a", create_by_name="张三", update_by_name="张三",
-    ))
+    filled = asyncio.run(
+        store.fill_column_dict_async(
+            "group_a",
+            "orders",
+            "status",
+            {"unit": "元"},
+            create_by="user_a",
+            update_by="user_a",
+            create_by_name="张三",
+            update_by_name="张三",
+        )
+    )
 
     assert filled == ["unit"]
     assert any("INSERT" in str(stmt).upper() for stmt in executed)
@@ -893,18 +1097,34 @@ def test_fill_column_dict_noop_when_all_fields_covered(monkeypatch):
     """现有字典已全覆盖：不做任何写入，返回空清单。"""
     store = DataSourceDao.__new__(DataSourceDao)
     executed = []
-    _patch_store_session(monkeypatch, {"datasource_column_dict": [
-        _column_dict_model(dict_json=json.dumps({
-            "enum_values": [{"value": "1", "label": "有效"}],
-            "synonyms": ["状态"],
-            "storage_format": "0/1",
-            "unit": "元",
-        }, ensure_ascii=False)),
-    ]}, executed=executed)
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_column_dict": [
+                _column_dict_model(
+                    dict_json=json.dumps(
+                        {
+                            "enum_values": [{"value": "1", "label": "有效"}],
+                            "synonyms": ["状态"],
+                            "storage_format": "0/1",
+                            "unit": "元",
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            ]
+        },
+        executed=executed,
+    )
 
-    filled = asyncio.run(store.fill_column_dict_async(
-        "group_a", "orders", "status", {"enum_values": [{"value": "2", "label": "应忽略"}], "unit": "元"},
-    ))
+    filled = asyncio.run(
+        store.fill_column_dict_async(
+            "group_a",
+            "orders",
+            "status",
+            {"enum_values": [{"value": "2", "label": "应忽略"}], "unit": "元"},
+        )
+    )
 
     assert filled == []
     assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]

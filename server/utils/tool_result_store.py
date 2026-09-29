@@ -40,9 +40,7 @@ class ToolResultRecord:
     @property
     def virtual_path(self) -> str:
         virtual_root = (
-            QUERY_RESULT_VIRTUAL_ROOT
-            if self.directory_name == QUERY_RESULT_DIR_NAME
-            else TOOL_OFFLOAD_VIRTUAL_ROOT
+            QUERY_RESULT_VIRTUAL_ROOT if self.directory_name == QUERY_RESULT_DIR_NAME else TOOL_OFFLOAD_VIRTUAL_ROOT
         )
         return f"{virtual_root}/{self.result_id}{self.suffix}"
 

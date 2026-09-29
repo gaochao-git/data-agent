@@ -47,7 +47,9 @@ def build_sql_result_cache_identity(
     datasource_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build identity fields for SQL result cache lookup."""
-    normalized_datasource_id = str(datasource_id or (execution_target or {}).get("datasource_id") or (execution_target or {}).get("id") or "").strip()
+    normalized_datasource_id = str(
+        datasource_id or (execution_target or {}).get("datasource_id") or (execution_target or {}).get("id") or ""
+    ).strip()
     member_datasource_id = str((execution_target or {}).get("member_datasource_id") or "").strip()
     executor_type = str((execution_target or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
     source_type = str((execution_target or {}).get("source_type") or "").strip().lower()
@@ -93,7 +95,9 @@ async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[
     if payload is None:
         return None
     cache_age_seconds = max(0, int((now - cache_item.create_time).total_seconds())) if cache_item.create_time else None
-    cache_expires_in_seconds = max(0, int((cache_item.expire_time - now).total_seconds())) if cache_item.expire_time else None
+    cache_expires_in_seconds = (
+        max(0, int((cache_item.expire_time - now).total_seconds())) if cache_item.expire_time else None
+    )
     payload["status"] = query_result_status(payload)
     payload.pop("success", None)
     payload["cache_hit"] = True
@@ -113,7 +117,9 @@ async def save_sql_result_cache(
     if not query_result_succeeded(result):
         return
     if str((cache_identity or {}).get("executor_type") or "").strip().lower() == "http":
-        await save_http_remote_ref_sql_result_cache(cache_identity, result, operator_id=operator_id, operator_name=operator_name)
+        await save_http_remote_ref_sql_result_cache(
+            cache_identity, result, operator_id=operator_id, operator_name=operator_name
+        )
         return
     payload = {
         "status": "succeeded",

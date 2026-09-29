@@ -62,7 +62,9 @@ async def list_plugins(request: Request, limit: int = 50, offset: int = 0):
         return business_response(data=data, msg="获取成功")
     except Exception as e:
         logger.error("获取插件列表失败: %s", e, exc_info=True)
-        return business_response(msg="获取插件列表失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取插件列表失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_LIST_FAILED, status="error"
+        )
 
 
 @router.post("/admin/plugins/install")
@@ -78,7 +80,9 @@ async def install_plugin(file: UploadFile, request: Request):
             )
         operator_id, operator_name = _resolve_operator(request)
         manifest = await plugin_service.install_plugin(
-            data, operator_id=operator_id, operator_name=operator_name,
+            data,
+            operator_id=operator_id,
+            operator_name=operator_name,
         )
         return business_response(
             data={"plugin": manifest.to_dict(), "effective": "新会话与下一次装配生效"},
@@ -90,7 +94,9 @@ async def install_plugin(file: UploadFile, request: Request):
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_MANIFEST_INVALID, status="error")
     except Exception as e:
         logger.error("安装插件失败: %s", e, exc_info=True)
-        return business_response(msg="安装插件失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED, status="error")
+        return business_response(
+            msg="安装插件失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED, status="error"
+        )
 
 
 @router.put("/admin/plugins/{plugin_id}/enabled")
@@ -99,10 +105,15 @@ async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, r
     try:
         operator_id, operator_name = _resolve_operator(request)
         updated = await plugin_service.set_plugin_enabled(
-            plugin_id, enabled=payload.enabled, operator_id=operator_id, operator_name=operator_name,
+            plugin_id,
+            enabled=payload.enabled,
+            operator_id=operator_id,
+            operator_name=operator_name,
         )
         if not updated:
-            return business_response(msg=f"插件不存在: {plugin_id}", code=ErrorCode.CHATDATA_PLUGIN_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"插件不存在: {plugin_id}", code=ErrorCode.CHATDATA_PLUGIN_NOT_FOUND, status="error"
+            )
         return business_response(
             data={"name": plugin_id, "enabled": payload.enabled},
             msg="插件已启用" if payload.enabled else "插件已禁用",
@@ -111,7 +122,9 @@ async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, r
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_MANIFEST_INVALID, status="error")
     except Exception as e:
         logger.error("切换插件启停失败: %s", e, exc_info=True)
-        return business_response(msg="切换插件状态失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error")
+        return business_response(
+            msg="切换插件状态失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error"
+        )
 
 
 @router.delete("/admin/plugins/{plugin_id}")
@@ -120,7 +133,9 @@ async def remove_plugin(plugin_id: str, request: Request):
     try:
         operator_id, operator_name = _resolve_operator(request)
         manifest = await plugin_service.uninstall_plugin(
-            plugin_id, operator_id=operator_id, operator_name=operator_name,
+            plugin_id,
+            operator_id=operator_id,
+            operator_name=operator_name,
         )
         return business_response(data={"name": manifest.name, "version": manifest.version}, msg="插件已卸载")
     except PluginNotFoundError as e:
@@ -129,4 +144,6 @@ async def remove_plugin(plugin_id: str, request: Request):
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error")
     except Exception as e:
         logger.error("卸载插件失败: %s", e, exc_info=True)
-        return business_response(msg="卸载插件失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error")
+        return business_response(
+            msg="卸载插件失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error"
+        )

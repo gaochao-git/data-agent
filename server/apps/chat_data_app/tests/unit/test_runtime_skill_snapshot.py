@@ -129,7 +129,9 @@ def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
         asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
 
     conv_dir = _conv_dir(tmp_path)
-    leftovers = [p for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")] if conv_dir.is_dir() else []
+    leftovers = (
+        [p for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")] if conv_dir.is_dir() else []
+    )
     assert leftovers == []
 
 

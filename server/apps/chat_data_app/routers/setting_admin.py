@@ -41,7 +41,9 @@ async def list_chat_data_settings(request: Request, keyword: str | None = None):
         raise
     except Exception as e:
         logger.error("获取配置变量列表失败: %s", e, exc_info=True)
-        return business_response(msg="获取配置变量列表失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取配置变量列表失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_LIST_FAILED, status="error"
+        )
 
 
 @router.put("/admin/settings/{setting_key}")
@@ -62,7 +64,9 @@ async def upsert_chat_data_setting(setting_key: str, payload: ChatDataSettingUps
         raise
     except Exception as e:
         logger.error("保存配置变量 %s 失败: %s", setting_key, e, exc_info=True)
-        return business_response(msg="保存配置变量失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_SAVE_FAILED, status="error")
+        return business_response(
+            msg="保存配置变量失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_SAVE_FAILED, status="error"
+        )
 
 
 @router.delete("/admin/settings")
@@ -79,7 +83,9 @@ async def reset_all_chat_data_settings(request: Request):
         raise
     except Exception as e:
         logger.error("全部重置配置变量失败: %s", e, exc_info=True)
-        return business_response(msg="全部重置失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_DELETE_FAILED, status="error")
+        return business_response(
+            msg="全部重置失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_DELETE_FAILED, status="error"
+        )
 
 
 @router.delete("/admin/settings/{setting_key}")
@@ -99,4 +105,6 @@ async def reset_chat_data_setting(setting_key: str, request: Request):
         raise
     except Exception as e:
         logger.error("重置配置变量 %s 失败: %s", setting_key, e, exc_info=True)
-        return business_response(msg="重置配置变量失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_DELETE_FAILED, status="error")
+        return business_response(
+            msg="重置配置变量失败，请稍后重试", code=ErrorCode.CHATDATA_SETTING_DELETE_FAILED, status="error"
+        )

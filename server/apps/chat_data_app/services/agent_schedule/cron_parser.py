@@ -120,7 +120,9 @@ def _advance_day(candidate: datetime) -> datetime:
     return (candidate + timedelta(days=1)).replace(hour=0, minute=0)
 
 
-def _resolve_fire_time_in_day(candidate: datetime, minute_set: frozenset[int], hour_set: frozenset[int]) -> datetime | None:
+def _resolve_fire_time_in_day(
+    candidate: datetime, minute_set: frozenset[int], hour_set: frozenset[int]
+) -> datetime | None:
     """在已命中日期的 candidate 上解析当日触发时刻；当日无触发点返回 None。"""
     if candidate.hour not in hour_set:
         later_hours = [hour for hour in hour_set if hour > candidate.hour]

@@ -246,6 +246,7 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
 # 统一构建入口
 # ---------------------------------------------------------------------------
 
+
 def build_unified_system_prompt(
     runtime_options: AgentRuntimeOptions,
     *,
@@ -280,11 +281,13 @@ def build_unified_system_prompt(
     # 空集合，不能回退扫描管理域，否则提示词与实际 /mnt/skills 发生版本漂移。
     sections.append(available_skills_xml if available_skills_xml is not None else EMPTY_AVAILABLE_SKILLS_XML)
 
-    sections.extend([
-        SKILLS_USAGE_BLOCK,
-        SCENE_ROUTING_BLOCK,
-        SEMANTIC_QUERY_GATE_BLOCK,
-    ])
+    sections.extend(
+        [
+            SKILLS_USAGE_BLOCK,
+            SCENE_ROUTING_BLOCK,
+            SEMANTIC_QUERY_GATE_BLOCK,
+        ]
+    )
 
     sections.append(PRIORITY_BLOCK)
     sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])

@@ -24,7 +24,9 @@ def semantic_config_db(monkeypatch):
 
     async def create_tables():
         async with engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[SemanticConfig.__table__]))
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[SemanticConfig.__table__])
+            )
 
     asyncio.run(create_tables())
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -44,7 +46,9 @@ def semantic_config_db(monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def _build_row(config_id: str, *, group_id: str = "group_a", enabled: bool = True, delete_flag: int = 0) -> SemanticConfig:
+def _build_row(
+    config_id: str, *, group_id: str = "group_a", enabled: bool = True, delete_flag: int = 0
+) -> SemanticConfig:
     return SemanticConfig(
         semantic_config_id=config_id,
         group_id=group_id,
@@ -63,13 +67,15 @@ def test_batch_update_enabled_async_only_touches_alive_rows_in_group(semantic_co
 
     async def run_checks():
         async with semantic_config_db() as session:
-            session.add_all([
-                _build_row("sc_1"),
-                _build_row("sc_2"),
-                _build_row("sc_3"),
-                _build_row("sc_other", group_id="group_b"),
-                _build_row("sc_deleted", delete_flag=1),
-            ])
+            session.add_all(
+                [
+                    _build_row("sc_1"),
+                    _build_row("sc_2"),
+                    _build_row("sc_3"),
+                    _build_row("sc_other", group_id="group_b"),
+                    _build_row("sc_deleted", delete_flag=1),
+                ]
+            )
             await session.commit()
 
         assert await dao.batch_update_enabled_async("group_a", ["sc_1", "sc_2"], False, "u1", "张三") == 2
@@ -90,6 +96,9 @@ def test_batch_update_enabled_async_only_touches_alive_rows_in_group(semantic_co
 
         # 反向切换同样生效
         assert await dao.batch_update_enabled_async("group_a", ["sc_1"], True) == 1
-        assert next(config for config in await dao.get_by_group_id_async("group_a") if config["id"] == "sc_1")["enabled"] is True
+        assert (
+            next(config for config in await dao.get_by_group_id_async("group_a") if config["id"] == "sc_1")["enabled"]
+            is True
+        )
 
     asyncio.run(run_checks())

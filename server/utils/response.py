@@ -2,6 +2,7 @@
 统一响应格式封装
 提供标准的 API 响应格式，便于前后端统一处理
 """
+
 from http import HTTPStatus
 
 from fastapi import status as http_status
@@ -78,11 +79,7 @@ def business_response(
     if status == "error":
         msg = safe_user_error_message(msg)
 
-    response = {
-        "status": status,
-        "msg": msg,
-        "code": code
-    }
+    response = {"status": status, "msg": msg, "code": code}
     if data is not None:
         response["data"] = data
 

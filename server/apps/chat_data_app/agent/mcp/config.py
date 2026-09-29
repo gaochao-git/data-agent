@@ -74,9 +74,7 @@ def _string_list_field(raw: dict, key: str, source: str) -> list[str]:
 def _string_mapping_field(raw: dict, key: str, source: str) -> dict:
     """校验 ``raw[key]`` 为字符串到字符串的映射（缺省为空映射）。"""
     value = raw.get(key) or {}
-    if not isinstance(value, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in value.items()
-    ):
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
         raise MCPServerConfigError(f"{source}: {key} 必须是字符串到字符串的映射")
     return value
 

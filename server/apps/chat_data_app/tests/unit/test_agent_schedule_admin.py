@@ -72,15 +72,17 @@ def harness(monkeypatch):
 
     async def seed_run(job_id="job-1", trigger_status="succeeded", plan_time=None):
         async with get_test_session() as session:
-            session.add(ChatDataAgentScheduleRun(
-                job_id=job_id,
-                user_id="user-1",
-                conversation_id="conv-1",
-                plan_time=plan_time or datetime.now() - timedelta(minutes=5),
-                trigger_status=trigger_status,
-                delete_flag=0,
-                create_time=datetime.now(),
-            ))
+            session.add(
+                ChatDataAgentScheduleRun(
+                    job_id=job_id,
+                    user_id="user-1",
+                    conversation_id="conv-1",
+                    plan_time=plan_time or datetime.now() - timedelta(minutes=5),
+                    trigger_status=trigger_status,
+                    delete_flag=0,
+                    create_time=datetime.now(),
+                )
+            )
 
     yield types.SimpleNamespace(
         service=service,
@@ -112,7 +114,10 @@ async def test_overview_counts_jobs_and_runs(harness):
 @pytest.mark.asyncio
 async def test_set_paused_roundtrip(harness):
     paused = await harness.service.set_paused(
-        paused=True, reason="发布窗口", user_id="admin-1", username="管理员",
+        paused=True,
+        reason="发布窗口",
+        user_id="admin-1",
+        username="管理员",
     )
     assert paused["paused_flag"] == 1
     assert paused["pause_reason"] == "发布窗口"
@@ -121,7 +126,10 @@ async def test_set_paused_roundtrip(harness):
     assert overview["paused_flag"] == 1
 
     resumed = await harness.service.set_paused(
-        paused=False, reason="", user_id="admin-1", username="管理员",
+        paused=False,
+        reason="",
+        user_id="admin-1",
+        username="管理员",
     )
     assert resumed["paused_flag"] == 0
     json.dumps(resumed)
@@ -132,9 +140,9 @@ async def test_control_row_lazily_created(harness):
     overview = await harness.service.get_admin_overview()
     assert overview["paused_flag"] == 0
     async with harness.session_factory() as session:
-        control = (await session.execute(
-            select(ChatDataAgentScheduleControl).where(ChatDataAgentScheduleControl.id == 1)
-        )).scalar_one()
+        control = (
+            await session.execute(select(ChatDataAgentScheduleControl).where(ChatDataAgentScheduleControl.id == 1))
+        ).scalar_one()
     assert control.paused_flag == 0
 
 
@@ -193,13 +201,19 @@ async def test_admin_set_job_enabled(harness):
     await harness.seed_job("job-1", enabled_flag=0)
 
     enabled = await harness.service.admin_set_job_enabled(
-        job_id="job-1", enabled_flag=1, user_id="admin-1", username="管理员",
+        job_id="job-1",
+        enabled_flag=1,
+        user_id="admin-1",
+        username="管理员",
     )
     assert enabled["enabled_flag"] == 1
     assert enabled["next_trigger_time"] is not None
 
     disabled = await harness.service.admin_set_job_enabled(
-        job_id="job-1", enabled_flag=0, user_id="admin-1", username="管理员",
+        job_id="job-1",
+        enabled_flag=0,
+        user_id="admin-1",
+        username="管理员",
     )
     assert disabled["enabled_flag"] == 0
     assert disabled["next_trigger_time"] is None
@@ -208,13 +222,22 @@ async def test_admin_set_job_enabled(harness):
 
     # 与用户侧停用同口径：未终态触发实例一并清退，防僵尸计入执行中统计
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id="user-1", conversation_id="conv-1",
-            plan_time=datetime.now() + timedelta(minutes=5),
-            trigger_status="pending", delete_flag=0, create_time=datetime.now(),
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id="user-1",
+                conversation_id="conv-1",
+                plan_time=datetime.now() + timedelta(minutes=5),
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=datetime.now(),
+            )
+        )
     await harness.service.admin_set_job_enabled(
-        job_id="job-1", enabled_flag=0, user_id="admin-1", username="管理员",
+        job_id="job-1",
+        enabled_flag=0,
+        user_id="admin-1",
+        username="管理员",
     )
     async with harness.session_factory() as session:
         trigger = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
@@ -223,20 +246,29 @@ async def test_admin_set_job_enabled(harness):
 
     with pytest.raises(AgentScheduleNotFoundError):
         await harness.service.admin_set_job_enabled(
-            job_id="missing", enabled_flag=1, user_id="admin-1", username="管理员",
+            job_id="missing",
+            enabled_flag=1,
+            user_id="admin-1",
+            username="管理员",
         )
 
 
 @pytest.mark.asyncio
 async def test_admin_enable_once_job_without_plan_time_rejected(harness):
     await harness.seed_job(
-        "job-once", enabled_flag=0, schedule_type="once", cron_expr="",
+        "job-once",
+        enabled_flag=0,
+        schedule_type="once",
+        cron_expr="",
         plan_time=datetime.now() - timedelta(hours=1),
         next_trigger_time=None,
     )
     with pytest.raises(AgentScheduleValidationError):
         await harness.service.admin_set_job_enabled(
-            job_id="job-once", enabled_flag=1, user_id="admin-1", username="管理员",
+            job_id="job-once",
+            enabled_flag=1,
+            user_id="admin-1",
+            username="管理员",
         )
 
 
@@ -251,9 +283,9 @@ async def test_resume_fast_forwards_cron_cursor(harness):
     await harness.service.set_paused(paused=False, reason="", user_id="admin-1", username="管理员")
 
     async with harness.session_factory() as session:
-        job = (await session.execute(
-            select(ChatDataAgentSchedule).where(ChatDataAgentSchedule.job_id == "job-1")
-        )).scalar_one()
+        job = (
+            await session.execute(select(ChatDataAgentSchedule).where(ChatDataAgentSchedule.job_id == "job-1"))
+        ).scalar_one()
     assert job.next_trigger_time is not None
     assert job.next_trigger_time > now
 

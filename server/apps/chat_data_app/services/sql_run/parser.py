@@ -156,7 +156,7 @@ def _consume_quoted_char(text: str, i: int, in_quote: str, result: list[str]) ->
             return i + 2, in_quote
         return i + 1, in_quote
     if char == in_quote:
-        if in_quote == "'" and text[i + 1:i + 2] == "'":
+        if in_quote == "'" and text[i + 1 : i + 2] == "'":
             result.append("'")
             return i + 2, in_quote
         return i + 1, ""
@@ -387,7 +387,6 @@ def extract_physical_tables(sql: str, source_type: str | None = None) -> SqlPars
         return SqlParseResult(success=False, error="SQL 为空")
 
     try:
-
         expressions = _parse_sql(text, source_type)
     except Exception as err:
         return SqlParseResult(success=False, error=str(err) or "SQL 解析失败")

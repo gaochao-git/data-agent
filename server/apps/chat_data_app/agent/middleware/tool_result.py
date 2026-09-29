@@ -105,15 +105,17 @@ async def _finalize_query_result(
         result_id=record.result_id,
     )
 
-    public_meta.update({
-        "result_id": record.result_id,
-        "result_path": record.virtual_path,
-        "total_count": query_result.get("total_count", 0),
-        "execution_time_ms": query_result.get("execution_time_ms"),
-        "result_size_chars": result_size_chars,
-        "content_in_context": False,
-        "message": "查询已完成，完整结果已保存；前端会自动加载结果。",
-    })
+    public_meta.update(
+        {
+            "result_id": record.result_id,
+            "result_path": record.virtual_path,
+            "total_count": query_result.get("total_count", 0),
+            "execution_time_ms": query_result.get("execution_time_ms"),
+            "result_size_chars": result_size_chars,
+            "content_in_context": False,
+            "message": "查询已完成，完整结果已保存；前端会自动加载结果。",
+        }
+    )
     if query_result.get("sql"):
         public_meta["sql"] = query_result["sql"]
 

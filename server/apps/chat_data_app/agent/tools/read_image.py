@@ -50,8 +50,7 @@ def create_read_image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
                 "read_image",
                 {
                     "success": False,
-                    "error": f"不支持的图片格式: .{suffix or '(无后缀)'}，仅支持 "
-                    + "/".join(sorted(IMAGE_EXTENSIONS)),
+                    "error": f"不支持的图片格式: .{suffix or '(无后缀)'}，仅支持 " + "/".join(sorted(IMAGE_EXTENSIONS)),
                 },
             )
         if not physical.exists() or not physical.is_file():

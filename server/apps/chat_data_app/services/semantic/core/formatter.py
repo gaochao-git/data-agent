@@ -25,25 +25,22 @@ def _format_expression_operand(operand: Any) -> str:
 
 def _format_filter_displays(filters: List[Dict]) -> List[str]:
     """把过滤条件格式化为「维度 操作符 值」片段。"""
-    return [
-        f"{f.get('dimension', '')} {f.get('operator', '=')} {f.get('value', '')}"
-        for f in filters
-    ]
+    return [f"{f.get('dimension', '')} {f.get('operator', '=')} {f.get('value', '')}" for f in filters]
 
 
 def _format_having_displays(having: List[Dict]) -> List[str]:
     """把 HAVING 条件格式化为片段；表达式操作数递归格式化。"""
     having_displays = []
     for h in having:
-        if isinstance(h.get('left'), dict) and 'right' in h:
-            left = _format_expression_operand(h.get('left'))
-            op = h.get('operator', '>')
-            right = _format_expression_operand(h.get('right'))
+        if isinstance(h.get("left"), dict) and "right" in h:
+            left = _format_expression_operand(h.get("left"))
+            op = h.get("operator", ">")
+            right = _format_expression_operand(h.get("right"))
             having_displays.append(f"{left} {op} {right}".strip())
             continue
-        metric = h.get('metric', '')
-        op = h.get('operator', '>')
-        val = h.get('value', '')
+        metric = h.get("metric", "")
+        op = h.get("operator", ">")
+        val = h.get("value", "")
         having_displays.append(f"{metric} {op} {val}")
     return having_displays
 
@@ -52,9 +49,9 @@ def _format_order_displays(order_by: List[Dict]) -> List[str]:
     """把排序条件格式化为「字段 升序/降序」片段。"""
     order_displays = []
     for o in order_by:
-        field = o.get('field', '')
-        direction = o.get('direction', 'DESC').upper()
-        direction_text = '降序' if direction == 'DESC' else '升序'
+        field = o.get("field", "")
+        direction = o.get("direction", "DESC").upper()
+        direction_text = "降序" if direction == "DESC" else "升序"
         order_displays.append(f"{field} {direction_text}")
     return order_displays
 
@@ -66,7 +63,7 @@ def format_params_for_display(
     having: List[Dict],
     order_by: List[Dict] = None,
     limit: int = None,
-    offset: int = None
+    offset: int = None,
 ) -> str:
     """
     格式化语义参数为前端展示的文本块

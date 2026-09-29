@@ -119,9 +119,9 @@ DEFAULT_CONTEXT_WINDOW = 128000
 #   （local+true 即子进程以宿主权限执行代码，仅在可信 / 纯本地开发场景使用）。两个维度正交，组合交给部署者。
 # - bash_enabled=false（受控模式）时文件工具仍严格路径管控，用 local 即可，无需 sandbox 开销。
 # 完整选型矩阵见 chat_data_app/README.md「运行环境后端与 Bash 安全模型」。
-CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = str(
-    os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local"
-).strip().lower() or "local"
+CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = (
+    str(os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local").strip().lower() or "local"
+)
 if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
     logger.warning(
         "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND=%r 非法，回退 local",
@@ -132,13 +132,9 @@ if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
 # env 或请求覆盖误开时，工具执行只会返回「功能已禁用」，命令不会真正触达运行时。
 CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
 # 是否注册 data-explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
-CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env(
-    "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False
-)
+CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
 # 是否注册 plan 子智能体（统一规划：产出计划文件，只规划不执行）。
-CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env(
-    "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False
-)
+CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
 # 是否注册 general-purpose 子智能体（业内通行的通用执行角色：产出交付物/批量加工/查询汇总）。
 CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED = read_bool_env(
     "CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED", False
@@ -209,9 +205,7 @@ def read_compression_trigger_ratio_env() -> float:
     except ValueError as exc:
         raise RuntimeError(f"{name} 必须是 0 到 {CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO} 之间的数字") from exc
     if not math.isfinite(value) or value <= 0 or value > CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO:
-        raise RuntimeError(
-            f"{name} 必须大于 0 且不超过 {CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO}，当前值: {value}"
-        )
+        raise RuntimeError(f"{name} 必须大于 0 且不超过 {CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO}，当前值: {value}")
     return value
 
 

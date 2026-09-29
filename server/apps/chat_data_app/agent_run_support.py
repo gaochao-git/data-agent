@@ -56,7 +56,7 @@ USER_INPUT_PREVIEW_CHARS = 200
 
 def _get_timestamp() -> str:
     """获取当前时间戳字符串，格式：YYYY-MM-DD HH:MM:SS"""
-    return time.strftime('%Y-%m-%d %H:%M:%S')
+    return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def prepare_conversation_workspace(
@@ -121,7 +121,9 @@ async def materialize_conversation_semantic_models(
     except Exception as err:
         logger.warning(
             "会话创建时语义模型物化失败（首轮运行将重试）: conversation_id=%s datasource_id=%s error=%s",
-            conversation_id, normalized_datasource_id, err,
+            conversation_id,
+            normalized_datasource_id,
+            err,
         )
         return {"total": 0, "failed_ids": []}
 
@@ -158,7 +160,11 @@ async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any
     if additional_kwargs.get("timestamp") or not hasattr(agent, "aupdate_state"):
         return state
     try:
-        patched_message = latest_ai_message.model_copy(deep=True) if hasattr(latest_ai_message, "model_copy") else latest_ai_message.copy(deep=True)
+        patched_message = (
+            latest_ai_message.model_copy(deep=True)
+            if hasattr(latest_ai_message, "model_copy")
+            else latest_ai_message.copy(deep=True)
+        )
         patched_message.additional_kwargs = dict(additional_kwargs)
         patched_message.additional_kwargs["timestamp"] = _get_timestamp()
         await agent.aupdate_state(config, {"messages": [patched_message]}, as_node="model")
@@ -172,8 +178,7 @@ def _resolve_history_turn_ids(messages: list[Any], turn_id: str) -> list[str]:
     turn_ids = [
         message_id
         for message in messages
-        if isinstance(message, HumanMessage)
-        and (message_id := _stream_message_id(message))
+        if isinstance(message, HumanMessage) and (message_id := _stream_message_id(message))
     ]
     if turn_id and turn_id not in turn_ids:
         turn_ids.insert(0, turn_id)
@@ -315,11 +320,7 @@ def _merge_message_snapshots(
 ) -> list[BaseMessage]:
     """Merge monotonic turn snapshots while retaining original full payloads."""
     merged = list(existing)
-    seen = {
-        key
-        for index, message in enumerate(merged)
-        if (key := _stream_message_key(message, index)) is not None
-    }
+    seen = {key for index, message in enumerate(merged) if (key := _stream_message_key(message, index)) is not None}
     for index, message in enumerate(incoming):
         key = _stream_message_key(message, index)
         if key is not None and key in seen:
@@ -371,11 +372,7 @@ def _checkpoint_message_ids(checkpoint_tuple: Any | None) -> set[str]:
     messages = channel_values.get("messages") if isinstance(channel_values, dict) else None
     if not isinstance(messages, list):
         return set()
-    return {
-        message_id
-        for message in messages
-        if (message_id := _stream_message_id(message))
-    }
+    return {message_id for message in messages if (message_id := _stream_message_id(message))}
 
 
 def _checkpoint_resume_status(checkpoint_tuple: Any | None) -> bool | None:
@@ -390,9 +387,7 @@ def _checkpoint_resume_status(checkpoint_tuple: Any | None) -> bool | None:
     if pending_writes is None:
         return None
     has_pending_interrupt = any(
-        isinstance(write, (tuple, list))
-        and len(write) >= 2
-        and str(write[1]) == "__interrupt__"
+        isinstance(write, (tuple, list)) and len(write) >= 2 and str(write[1]) == "__interrupt__"
         for write in pending_writes
     )
     return not has_pending_interrupt
@@ -444,9 +439,12 @@ def _resolve_agent_turn_id(
     adopted_messages: list[HumanMessage] | None,
 ) -> str:
     """当前轮次 ID：恢复轮 > 请求轮 > 用户消息 ID > 首条接管消息 ID。"""
-    return resume_turn_id or turn_id or str(
-        user_message.id if user_message else (adopted_messages[0].id if adopted_messages else "")
-    ) or ""
+    return (
+        resume_turn_id
+        or turn_id
+        or str(user_message.id if user_message else (adopted_messages[0].id if adopted_messages else ""))
+        or ""
+    )
 
 
 async def _prepare_agent_semantic_context(
@@ -526,20 +524,26 @@ async def _prepare_agent_workspace_runtime(
     except Exception as err:
         logger.error(
             "语义模型预物化失败，终止本轮: thread_id=%s datasource_id=%s error=%s",
-            thread_id, datasource_id, err,
+            thread_id,
+            datasource_id,
+            err,
         )
         raise _AgentRunPreparationError("语义模型目录初始化失败，请稍后重试。") from None
     if prematerialized["total"]:
         logger.info(
             "语义模型预物化完成: thread_id=%s datasource_id=%s files=%s",
-            thread_id, datasource_id, prematerialized["total"],
+            thread_id,
+            datasource_id,
+            prematerialized["total"],
         )
     failed_ids = [str(item) for item in prematerialized.get("failed_ids") or [] if str(item).strip()]
     if not failed_ids:
         return workspace_paths, workspace_runtime, ""
     logger.error(
         "语义模型预物化部分失败: thread_id=%s datasource_id=%s failed_ids=%s",
-        thread_id, datasource_id, failed_ids,
+        thread_id,
+        datasource_id,
+        failed_ids,
     )
     materialize_note = (
         "注意：本轮语义目录物化不完整，以下语义模型未能生成 YAML 文件："
@@ -593,13 +597,15 @@ async def _resolve_file_attachments(
         if info.get("thread_id") and thread_id and info["thread_id"] != thread_id:
             logger.warning("关联文件会话归属不匹配，已忽略: file_id=%s", fid)
             continue
-        attachments.append({
-            "file_id": fid,
-            "original_filename": info["original_filename"],
-            "file_type": info["file_type"],
-            "file_size": info["file_size"],
-            "virtual_path": f"/mnt/user-data/uploads/{info['storage_dir']}",
-        })
+        attachments.append(
+            {
+                "file_id": fid,
+                "original_filename": info["original_filename"],
+                "file_type": info["file_type"],
+                "file_size": info["file_size"],
+                "virtual_path": f"/mnt/user-data/uploads/{info['storage_dir']}",
+            }
+        )
     return attachments
 
 
@@ -656,10 +662,7 @@ async def _resolve_checkpointed_turn_state(
         resume_answer is not None
         and recovering
         and checkpoint_tuple is not None
-        and (
-            checkpoint_resume_status is True
-            or (checkpoint_resume_status is None and resume_started)
-        )
+        and (checkpoint_resume_status is True or (checkpoint_resume_status is None and resume_started))
     )
     if recovering and current_turn_checkpointed and run_id and owner_token:
         await agent_inbox_service.reconcile_recovered_messages(
@@ -743,7 +746,10 @@ class _AgentRunStreamCallbacks:
     @property
     def effective_turn_id(self) -> str:
         return _resolve_agent_turn_id(
-            self.resume_turn_id, self.turn_id, self.user_message, self.adopted_messages,
+            self.resume_turn_id,
+            self.turn_id,
+            self.user_message,
+            self.adopted_messages,
         )
 
 

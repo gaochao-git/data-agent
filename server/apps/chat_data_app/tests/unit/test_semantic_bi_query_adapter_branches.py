@@ -161,18 +161,14 @@ def test_map_filter_node_rejects_non_dict_child(adapter):
 
 def test_map_filter_node_and_group_flattens_multi_leaf_child(adapter):
     """时间维度等值过滤会展开成两个叶子，and 组用 extend 展平（966->967）。"""
-    mapped = adapter._map_filter_node(
-        {"and": [{"name": "下单日期", "operator": "=", "value": "2024"}]}
-    )
+    mapped = adapter._map_filter_node({"and": [{"name": "下单日期", "operator": "=", "value": "2024"}]})
     assert len(mapped["and"]) == 2
     assert [item["operator"] for item in mapped["and"]] == [">=", "<"]
 
 
 def test_map_filter_node_or_group_wraps_multi_leaf_child(adapter):
     """or 组不能展平叶子，必须包一层 and 保持语义（982->983）。"""
-    mapped = adapter._map_filter_node(
-        {"or": [{"name": "下单日期", "operator": "=", "value": "2024"}]}
-    )
+    mapped = adapter._map_filter_node({"or": [{"name": "下单日期", "operator": "=", "value": "2024"}]})
     assert len(mapped["or"]) == 1
     assert set(mapped["or"][0]) == {"and"}
     assert len(mapped["or"][0]["and"]) == 2
@@ -197,9 +193,7 @@ def test_map_filter_node_routes_aggfunc_to_having(adapter):
     ``_map_having_filter`` 只把 ``semanticName`` 透传给 ``_map_aggregation``，
     ``name`` 会被丢弃，因此这里必须用 ``semanticName`` 才能命中指标。
     """
-    mapped = adapter._map_filter_node(
-        {"semanticName": "GMV", "aggFunc": "SUM", "operator": ">", "value": 1000}
-    )
+    mapped = adapter._map_filter_node({"semanticName": "GMV", "aggFunc": "SUM", "operator": ">", "value": 1000})
     assert mapped["aggFunc"] == "SUM"
     assert "rightOperand" not in mapped
 
@@ -224,9 +218,7 @@ def test_validate_filter_value_skips_null_operators(adapter, operator):
 
 def test_validate_filter_value_requires_field_ref_target(adapter):
     with pytest.raises(ValueError, match="请选择右侧字段"):
-        adapter._validate_filter_value(
-            {"name": "城市", "valueType": "field_ref", "rightTable": "orders"}
-        )
+        adapter._validate_filter_value({"name": "城市", "valueType": "field_ref", "rightTable": "orders"})
 
 
 def test_validate_filter_value_accepts_complete_field_ref(adapter):
@@ -471,9 +463,7 @@ def test_map_having_filter_honours_explicit_logic(adapter):
 
 
 def test_map_having_filter_defaults_logic_and_copies_value(adapter):
-    mapped = adapter._map_having_filter(
-        {"semanticName": "GMV", "aggFunc": "SUM", "operator": ">", "value": 1000}
-    )
+    mapped = adapter._map_having_filter({"semanticName": "GMV", "aggFunc": "SUM", "operator": ">", "value": 1000})
     assert mapped["logic"] == "AND"
     assert mapped["value"] == 1000
 
@@ -684,5 +674,10 @@ def test_validate_filter_value_rejects_unsafe_expression(adapter):
 
 def test_validate_filter_value_allows_normal_expression(adapter):
     adapter._validate_filter_value(
-        {"name": "城市", "operator": "IN", "valueType": "expression", "rightExpression": "(SELECT city FROM white_list)"}
+        {
+            "name": "城市",
+            "operator": "IN",
+            "valueType": "expression",
+            "rightExpression": "(SELECT city FROM white_list)",
+        }
     )

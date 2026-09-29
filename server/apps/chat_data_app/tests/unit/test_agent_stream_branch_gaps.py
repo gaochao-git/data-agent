@@ -28,11 +28,11 @@ from apps.chat_data_app.agent.run.completion_options import normalize_thinking_e
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("HIGH", "high"),          # 大小写与空白都要归一化
+        ("HIGH", "high"),  # 大小写与空白都要归一化
         ("  Medium  ", "medium"),
-        ("", None),                # 空串归一后仍是空 → None
+        ("", None),  # 空串归一后仍是空 → None
         ("   ", None),
-        (None, None),              # 非 str 直接 None
+        (None, None),  # 非 str 直接 None
         (3, None),
         (["high"], None),
     ],
@@ -53,6 +53,7 @@ class _FakeTimestampAgent:
         self.aupdate_calls: list[dict] = []
         self._aupdate_error = aupdate_error
         if with_aget_state:
+
             async def aget_state(config):
                 return SimpleNamespace(values={"messages": [], "source": "aget_state"})
 
@@ -73,9 +74,7 @@ async def test_persist_timestamp_returns_state_when_no_ai_message():
     """消息里没有 AIMessage 时直接原样返回，不触碰 agent（305->304、308->309）。"""
     state = _state_with([HumanMessage(content="用户问题"), ToolMessage(content="工具结果", tool_call_id="c1")])
 
-    result = await agent_stream._persist_latest_ai_message_timestamp(
-        _FakeTimestampAgent(), {"configurable": {}}, state
-    )
+    result = await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {"configurable": {}}, state)
 
     assert result is state
 
@@ -96,10 +95,12 @@ async def test_persist_timestamp_handles_none_state_and_empty_messages():
 async def test_persist_timestamp_skips_when_timestamp_already_present():
     """latest AI 消息已带 timestamp 时不重复回填（311->312）。"""
     agent = _FakeTimestampAgent()
-    state = _state_with([
-        HumanMessage(content="问题"),
-        AIMessage(content="答案", additional_kwargs={"timestamp": "2026-08-30 00:00:00"}),
-    ])
+    state = _state_with(
+        [
+            HumanMessage(content="问题"),
+            AIMessage(content="答案", additional_kwargs={"timestamp": "2026-08-30 00:00:00"}),
+        ]
+    )
 
     result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
@@ -367,13 +368,15 @@ def test_handle_tool_calls_records_index_and_args_fallback():
     """带 index 的调用登记到下标记映射，dict args 存入兜底表（722->723）。"""
     state = agent_stream._ToolStreamState()
 
-    state.handle_tool_calls([
-        {"id": "call-1", "name": "file_read", "index": 0, "args": {"path": "/a"}},
-        {"id": "call-2", "name": "file_write", "index": "not-an-int", "args": {"path": "/b"}},
-        {"id": "call-3", "name": "glob", "index": 1, "args": "raw-string"},
-        {"id": "", "name": "missing-id"},
-        {"id": "call-4", "name": ""},
-    ])
+    state.handle_tool_calls(
+        [
+            {"id": "call-1", "name": "file_read", "index": 0, "args": {"path": "/a"}},
+            {"id": "call-2", "name": "file_write", "index": "not-an-int", "args": {"path": "/b"}},
+            {"id": "call-3", "name": "glob", "index": 1, "args": "raw-string"},
+            {"id": "", "name": "missing-id"},
+            {"id": "call-4", "name": ""},
+        ]
+    )
 
     assert state.index_map == {0: "call-1", 1: "call-3"}
     assert state.args_fallback == {"call-1": {"path": "/a"}, "call-2": {"path": "/b"}}
@@ -385,9 +388,11 @@ def test_handle_tool_calls_accepts_json_string_args():
     """内网 Qwen3.6 经 vLLM 返回的 args 是 JSON 字符串（非 dict），直播侧不得丢弃。"""
     state = agent_stream._ToolStreamState()
 
-    events = state.handle_tool_calls([
-        {"id": "call-1", "name": "calculator_tool", "args": '{"calculations": [{"expression": "1 + 1"}]}'},
-    ])
+    events = state.handle_tool_calls(
+        [
+            {"id": "call-1", "name": "calculator_tool", "args": '{"calculations": [{"expression": "1 + 1"}]}'},
+        ]
+    )
 
     assert state.args_fallback["call-1"] == {"calculations": [{"expression": "1 + 1"}]}
     assert state.args_buffer["call-1"] == '{"calculations": [{"expression": "1 + 1"}]}'
@@ -443,9 +448,11 @@ def test_handle_tool_call_chunks_records_index_and_emits_running():
     """带 index 且能解析出工具名时登记下标并补发 running（743->744）。"""
     state = agent_stream._ToolStreamState()
 
-    events = state.handle_tool_call_chunks([
-        {"id": "call-x", "name": "file_read", "index": 3, "args": '{"pa'},
-    ])
+    events = state.handle_tool_call_chunks(
+        [
+            {"id": "call-x", "name": "file_read", "index": 3, "args": '{"pa'},
+        ]
+    )
 
     assert state.index_map == {3: "call-x"}
     assert state.tool_names["call-x"] == "file_read"
@@ -472,9 +479,7 @@ def test_build_tool_message_payload_attaches_accumulated_args():
     state.args_fallback["call-1"] = {"path": "/fallback"}
     state.tool_names["call-1"] = "file_read"
 
-    payload = state.build_tool_message_payload(
-        ToolMessageChunk(content="文件内容", tool_call_id="call-1")
-    )
+    payload = state.build_tool_message_payload(ToolMessageChunk(content="文件内容", tool_call_id="call-1"))
 
     assert payload["type"] == "tool"
     assert payload["tool_name"] == "file_read"
@@ -520,9 +525,7 @@ def test_build_tool_message_payload_skips_args_without_tool_call_id():
 
 
 def _adapter_with(**kwargs) -> agent_stream._AgentSseStreamAdapter:
-    adapter = agent_stream._AgentSseStreamAdapter(
-        agent=SimpleNamespace(), initial_state={}, config={}
-    )
+    adapter = agent_stream._AgentSseStreamAdapter(agent=SimpleNamespace(), initial_state={}, config={})
     for key, value in kwargs.items():
         setattr(adapter, key, value)
     return adapter
@@ -829,29 +832,44 @@ def test_handle_custom_payload_translates_subagent_tool_events():
         config={},
     )
 
-    started = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
-        "event_type": "tool_started",
-        "tool_call_id": "inner-1",
-        "tool_name": "calculator_tool",
-        "args": {"expression": "1 + 1"},
-        "parent_tool_call_id": "call-parent",
-    }})
-    completed = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
-        "event_type": "tool_completed",
-        "tool_call_id": "inner-1",
-        "tool_name": "calculator_tool",
-        "content": "2",
-        "truncated": False,
-        "parent_tool_call_id": "call-parent",
-    }})
-    unknown = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
-        "event_type": "bogus",
-    }})
+    started = adapter._handle_custom_payload(
+        {
+            "type": "subagent_tool",
+            "event": {
+                "event_type": "tool_started",
+                "tool_call_id": "inner-1",
+                "tool_name": "calculator_tool",
+                "args": {"expression": "1 + 1"},
+                "parent_tool_call_id": "call-parent",
+            },
+        }
+    )
+    completed = adapter._handle_custom_payload(
+        {
+            "type": "subagent_tool",
+            "event": {
+                "event_type": "tool_completed",
+                "tool_call_id": "inner-1",
+                "tool_name": "calculator_tool",
+                "content": "2",
+                "truncated": False,
+                "parent_tool_call_id": "call-parent",
+            },
+        }
+    )
+    unknown = adapter._handle_custom_payload(
+        {
+            "type": "subagent_tool",
+            "event": {
+                "event_type": "bogus",
+            },
+        }
+    )
     malformed = adapter._handle_custom_payload({"type": "subagent_tool", "event": "not-dict"})
 
     assert len(started) == 1 and started[0].startswith("event: tool_started")
     assert "parent_tool_call_id" in started[0]
-    assert "\"tool_call_id\": \"inner-1\"" in started[0].replace(" ", " ") or "inner-1" in started[0]
+    assert '"tool_call_id": "inner-1"' in started[0].replace(" ", " ") or "inner-1" in started[0]
     assert len(completed) == 1 and completed[0].startswith("event: tool_completed")
     assert unknown == []
     assert malformed == []
@@ -865,19 +883,29 @@ def test_handle_custom_payload_translates_subagent_message_events():
         config={},
     )
 
-    emitted = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
-        "event_type": "subagent_message",
-        "message_id": "msg-1",
-        "content": "先算一下 1+1",
-        "truncated": False,
-        "parent_tool_call_id": "call-parent",
-    }})
-    blank = adapter._handle_custom_payload({"type": "subagent_tool", "event": {
-        "event_type": "subagent_message",
-        "message_id": "msg-2",
-        "content": "   ",
-        "parent_tool_call_id": "call-parent",
-    }})
+    emitted = adapter._handle_custom_payload(
+        {
+            "type": "subagent_tool",
+            "event": {
+                "event_type": "subagent_message",
+                "message_id": "msg-1",
+                "content": "先算一下 1+1",
+                "truncated": False,
+                "parent_tool_call_id": "call-parent",
+            },
+        }
+    )
+    blank = adapter._handle_custom_payload(
+        {
+            "type": "subagent_tool",
+            "event": {
+                "event_type": "subagent_message",
+                "message_id": "msg-2",
+                "content": "   ",
+                "parent_tool_call_id": "call-parent",
+            },
+        }
+    )
 
     assert len(emitted) == 1
     assert emitted[0].startswith("event: subagent_message")
@@ -1001,10 +1029,10 @@ def _stub_completion_runtime(monkeypatch):
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("单个技能", ["单个技能"]),                      # str → 单元素列表（1702->1703）
+        ("单个技能", ["单个技能"]),  # str → 单元素列表（1702->1703）
         ([" 技能A ", "技能B", "", None], ["技能A", "技能B"]),  # list → 去空白去空
         ("非法类型", ["非法类型"]),
-        (123, []),                                    # 既不是 str 也不是 list（1704->1707）
+        (123, []),  # 既不是 str 也不是 list（1704->1707）
         ({"name": "x"}, []),
         (None, []),
     ],

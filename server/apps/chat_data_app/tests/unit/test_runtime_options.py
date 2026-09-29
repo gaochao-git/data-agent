@@ -45,7 +45,8 @@ def test_resolve_applies_hot_subagent_defaults(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
 
     options = ro.resolve_agent_runtime_options(
-        explore_subagent_enabled=True, plan_subagent_enabled=True,
+        explore_subagent_enabled=True,
+        plan_subagent_enabled=True,
         general_purpose_subagent_enabled=True,
     )
     assert options.explore_subagent_enabled is True

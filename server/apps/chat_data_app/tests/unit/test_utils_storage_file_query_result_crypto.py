@@ -42,18 +42,29 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
 
     assert record.virtual_path == f"/mnt/user-data/outputs/query_result/{record.result_id}.json"
     assert (
-        tmp_path / "threads" / "u1" / date_str / "conv_a" / "user-data" / "outputs" / "query_result" / f"{record.result_id}.json"
+        tmp_path
+        / "threads"
+        / "u1"
+        / date_str
+        / "conv_a"
+        / "user-data"
+        / "outputs"
+        / "query_result"
+        / f"{record.result_id}.json"
     ).is_file()
     assert store.load_query_result_for_conversation(
         result_id=record.result_id,
         conversation_id="conv_a",
         user_id="u1",
     ) == {"rows": [1]}
-    assert store.load_query_result_for_conversation(
-        result_id=record.result_id,
-        conversation_id="conv_a",
-        user_id="u2",
-    ) is None
+    assert (
+        store.load_query_result_for_conversation(
+            result_id=record.result_id,
+            conversation_id="conv_a",
+            user_id="u2",
+        )
+        is None
+    )
     with pytest.raises(ValueError, match="result_id"):
         store.load_query_result_for_conversation(
             result_id="../outside",
@@ -68,11 +79,14 @@ def test_tool_result_store_handles_corrupt_json(tmp_path):
     bad_path = tmp_path / "threads" / "u1" / date_str / "conv" / "user-data" / "outputs" / "query_result" / "bad.json"
     bad_path.parent.mkdir(parents=True)
     bad_path.write_text("{bad", encoding="utf-8")
-    assert store.load_query_result_for_conversation(
-        result_id="bad",
-        conversation_id="conv",
-        user_id="u1",
-    ) is None
+    assert (
+        store.load_query_result_for_conversation(
+            result_id="bad",
+            conversation_id="conv",
+            user_id="u1",
+        )
+        is None
+    )
 
 
 def test_crypto_key_validation_encrypt_decrypt_and_errors(monkeypatch):
@@ -102,7 +116,7 @@ def test_crypto_key_validation_encrypt_decrypt_and_errors(monkeypatch):
     with pytest.raises(ValueError, match="IV 长度错误"):
         crypto.decrypt_password(short_iv)
     with pytest.raises(ValueError, match="密码解密失败"):
-        crypto.decrypt_password(f"{base64.b64encode(b'1'*16).decode()}:{base64.b64encode(b'bad').decode()}")
+        crypto.decrypt_password(f"{base64.b64encode(b'1' * 16).decode()}:{base64.b64encode(b'bad').decode()}")
 
 
 def test_decrypt_env_value_requires_ciphertext_when_configured(monkeypatch):

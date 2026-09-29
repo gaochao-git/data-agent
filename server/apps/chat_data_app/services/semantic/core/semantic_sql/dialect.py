@@ -243,6 +243,7 @@ class HiveDialect(SQLDialect):
 
 # ========== 方言注册表 ==========
 
+
 class DialectRegistry:
     """
     方言注册表

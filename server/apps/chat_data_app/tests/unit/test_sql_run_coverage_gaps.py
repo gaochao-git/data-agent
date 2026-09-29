@@ -33,7 +33,9 @@ def _make_service(**overrides):
 
 def test_validate_before_task_submit_skips_empty_sql_and_blocks_dangerous(monkeypatch):
     alarms = []
-    monkeypatch.setattr(query_runtime, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        query_runtime, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs))
+    )
 
     empty_sql = SimpleNamespace(sql="", datasource_id="ds_a", user_id="u1", limit=None)
     query_runtime._validate_sql_before_task_submit(empty_sql, {"source_type": "mysql"})
@@ -146,7 +148,9 @@ def test_create_task_for_execute_request_builds_internal_payload(monkeypatch):
         skip_query_cache=True,
     )
 
-    result = asyncio.run(query_runtime.create_task_for_execute_request(request, query_type="agent", operator_name="张三"))
+    result = asyncio.run(
+        query_runtime.create_task_for_execute_request(request, query_type="agent", operator_name="张三")
+    )
     assert result["task_id"] == "task_1"
     assert captured["query_type"] == "agent"
     assert captured["operator_name"] == "张三"
@@ -174,12 +178,14 @@ def test_execute_sql_for_member_direct_cache_hit_returns_cached(monkeypatch):
     monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", should_not_execute)
 
-    result = asyncio.run(query_runtime.execute_sql_for_member(
-        execution_target={"member_datasource_id": "m1", "member_name": "成员1", "query_executor_type": "direct"},
-        sql="select 1",
-        limit=10,
-        timeout=None,
-    ))
+    result = asyncio.run(
+        query_runtime.execute_sql_for_member(
+            execution_target={"member_datasource_id": "m1", "member_name": "成员1", "query_executor_type": "direct"},
+            sql="select 1",
+            limit=10,
+            timeout=None,
+        )
+    )
 
     assert executed == []
     assert result["data"] == [{"id": 1}]
@@ -202,10 +208,12 @@ def test_run_sql_batch_query_task_cancelled_and_empty_statements(monkeypatch):
     asyncio.run(query_runtime.run_sql_batch_query_task("task_cancelled", {"request_payload": "{}"}))
     assert updates == []
 
-    asyncio.run(query_runtime.run_sql_batch_query_task(
-        "task_empty",
-        {"request_payload": '{"sql": ["  "], "operator_name": "张三", "datasource_id": "ds_a"}'},
-    ))
+    asyncio.run(
+        query_runtime.run_sql_batch_query_task(
+            "task_empty",
+            {"request_payload": '{"sql": ["  "], "operator_name": "张三", "datasource_id": "ds_a"}'},
+        )
+    )
     assert updates[0][1]["status"] == "failed"
     assert updates[0][1]["error_message"] == "SQL 批次为空"
 
@@ -231,10 +239,12 @@ def test_run_sql_batch_query_task_cancel_before_statement_marks_remaining(monkey
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
     monkeypatch.setattr(query_runtime, "mark_sql_batch_remaining_cancelled", mark_remaining)
 
-    asyncio.run(query_runtime.run_sql_batch_query_task(
-        "task_1",
-        {"request_payload": '{"sql": ["select 1"], "operator_name": "张三", "datasource_id": "ds_a"}'},
-    ))
+    asyncio.run(
+        query_runtime.run_sql_batch_query_task(
+            "task_1",
+            {"request_payload": '{"sql": ["select 1"], "operator_name": "张三", "datasource_id": "ds_a"}'},
+        )
+    )
     assert {"marked_from": 0} in [item[1] for item in updates]
 
 
@@ -258,10 +268,12 @@ def test_run_sql_batch_query_task_statement_exception_marks_failed(monkeypatch):
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
     monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_raises)
 
-    asyncio.run(query_runtime.run_sql_batch_query_task(
-        "task_1",
-        {"request_payload": '{"sql": ["select 1"], "operator_name": "张三", "datasource_id": "ds_a"}'},
-    ))
+    asyncio.run(
+        query_runtime.run_sql_batch_query_task(
+            "task_1",
+            {"request_payload": '{"sql": ["select 1"], "operator_name": "张三", "datasource_id": "ds_a"}'},
+        )
+    )
 
     final_update = updates[-1][1]
     assert final_update["status"] == "failed"
@@ -281,12 +293,14 @@ def test_mark_sql_batch_precreation_failed_survives_execution_update_error(monke
         {"statement_index": 1, "sql": "select 2", "status": "pending", "results": []},
     ]
 
-    asyncio.run(query_runtime.mark_sql_batch_precreation_failed(
-        statement_results,
-        {0: {"m1": "exec_1"}},
-        1,
-        "创建执行记录失败",
-    ))
+    asyncio.run(
+        query_runtime.mark_sql_batch_precreation_failed(
+            statement_results,
+            {0: {"m1": "exec_1"}},
+            1,
+            "创建执行记录失败",
+        )
+    )
     assert statement_results[1]["status"] == "failed"
 
 
@@ -360,15 +374,17 @@ def test_create_query_task_for_user_rejects_unknown_query_type():
 def test_build_sql_task_results_falls_back_to_execution_views_without_results_key():
     results = QueryTaskService.build_sql_task_results(
         {"sql": "select 1"},
-        [{
-            "execution_id": "exec_1",
-            "member_datasource_id": "m1",
-            "member_name": "成员1",
-            "sql_status": "succeeded",
-            "sql_text": "select 1",
-            "execution_time_ms": 12,
-            "result_row_count": 3,
-        }],
+        [
+            {
+                "execution_id": "exec_1",
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "sql_status": "succeeded",
+                "sql_text": "select 1",
+                "execution_time_ms": 12,
+                "result_row_count": 3,
+            }
+        ],
     )
 
     assert results[0]["member_datasource_id"] == "m1"
@@ -419,12 +435,14 @@ def test_build_sql_batch_statement_results_marks_cancelled_execution():
             {"remote_task_id": "rt_1", "statement_index": 0, "member_datasource_id": "m1", "member_name": "成员1"},
         ],
     }
-    executions = [{
-        "remote_task_id": "rt_1",
-        "sql_status": "kill_failed",
-        "error_message": "停止执行失败",
-        "execution_time_ms": 8,
-    }]
+    executions = [
+        {
+            "remote_task_id": "rt_1",
+            "sql_status": "kill_failed",
+            "error_message": "停止执行失败",
+            "execution_time_ms": 8,
+        }
+    ]
 
     statements = asyncio.run(service.build_sql_batch_statement_results(response_data, executions))
     member = statements[0]["results"][0]
@@ -440,10 +458,12 @@ def test_build_sql_batch_statement_results_marks_pending_cancelled_when_task_can
     response_data = {
         "status": "cancelled",
         "request_payload": {"user_id": "u1", "operator_name": "张三"},
-        "result_payload": {"statement_results": [
-            {"sql": "select 1", "results": [{"member_datasource_id": "m1", "status": "running"}]},
-            {"sql": "select 2", "status": "pending"},
-        ]},
+        "result_payload": {
+            "statement_results": [
+                {"sql": "select 1", "results": [{"member_datasource_id": "m1", "status": "running"}]},
+                {"sql": "select 2", "status": "pending"},
+            ]
+        },
         "remote_tasks": [
             {"remote_task_id": "rt_1", "statement_index": 0, "member_datasource_id": "m1", "member_name": "成员1"},
         ],
@@ -458,7 +478,12 @@ def test_build_sql_batch_statement_results_marks_pending_cancelled_when_task_can
 def test_resolve_sql_batch_status_branch_matrix():
     resolve = QueryTaskService.resolve_sql_batch_status
 
-    status, _progress, error = resolve([{"status": "failed", "error": "boom"}], fallback_status="failed", fallback_progress_text="执行失败", fallback_error_message="boom")
+    status, _progress, error = resolve(
+        [{"status": "failed", "error": "boom"}],
+        fallback_status="failed",
+        fallback_progress_text="执行失败",
+        fallback_error_message="boom",
+    )
     assert (status, error) == ("failed", "boom")
 
     assert resolve([{"status": "pending"}], fallback_status="running")[0] == "running"
@@ -469,13 +494,17 @@ def test_resolve_sql_batch_status_branch_matrix():
     status, _progress, error = resolve([{"status": "succeeded"}, {"status": "cancelled"}], fallback_status="running")
     assert (status, error) == ("partial_success", "部分 SQL 已停止")
 
-    status, _progress, error = resolve([{"status": "succeeded"}, {"status": "failed", "error": "e1"}], fallback_status="running")
+    status, _progress, error = resolve(
+        [{"status": "succeeded"}, {"status": "failed", "error": "e1"}], fallback_status="running"
+    )
     assert (status, error) == ("partial_success", "部分 SQL 执行失败")
 
     status, progress, error = resolve([{"status": "succeeded"}], fallback_status="running")
     assert (status, progress, error) == ("succeeded", "执行完成", None)
 
-    status, _progress, error = resolve([{"status": "failed", "error": "e1"}, {"status": "failed", "error": "e2"}], fallback_status="running")
+    status, _progress, error = resolve(
+        [{"status": "failed", "error": "e1"}, {"status": "failed", "error": "e2"}], fallback_status="running"
+    )
     assert (status, error) == ("failed", "e1；e2")
 
 

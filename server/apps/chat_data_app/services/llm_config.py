@@ -90,6 +90,7 @@ def get_context_compression_summary_output_max_tokens() -> int | None:
 # 模型注册表（models.json）加载与校验
 # ---------------------------------------------------------------------------
 
+
 def get_chat_data_models_file_path() -> str:
     """读取注册表路径；旧 CHAT_DATA_MODEL 变量存在时直接报迁移错误。"""
     legacy = str(os.getenv("CHAT_DATA_MODEL") or "").strip()
@@ -118,9 +119,7 @@ def _parse_thinking_efforts(raw: dict, dialect: str, prefix: str) -> tuple[str, 
     if invalid:
         raise ValueError(f"{prefix}: efforts 含非法等级 {invalid}（支持: {list(EFFORT_LEVELS)}）")
     if dialect == THINKING_DIALECT_CHAT_TEMPLATE:
-        raise ValueError(
-            f"{prefix}: chat_template 方言为纯布尔协议不支持等级，请移除 efforts 或改用其它方言"
-        )
+        raise ValueError(f"{prefix}: chat_template 方言为纯布尔协议不支持等级，请移除 efforts 或改用其它方言")
     return tuple(efforts_raw)
 
 
@@ -133,9 +132,7 @@ def _parse_thinking_default_effort(raw: dict, efforts: tuple[str, ...], prefix: 
             f"default_effort={default_effort_raw!r}）"
         )
     if default_effort_raw is not None and default_effort_raw not in efforts:
-        raise ValueError(
-            f"{prefix}: default_effort={default_effort_raw!r} 不在 efforts {list(efforts)} 中"
-        )
+        raise ValueError(f"{prefix}: default_effort={default_effort_raw!r} 不在 efforts {list(efforts)} 中")
     return default_effort_raw
 
 
@@ -159,9 +156,7 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
 
     dialect = str(raw.get("dialect") or "").strip()
     if dialect not in _THINKING_DIALECTS:
-        raise ValueError(
-            f"{prefix}: dialect 必须是 {_THINKING_DIALECTS} 之一，当前值: {raw.get('dialect')!r}"
-        )
+        raise ValueError(f"{prefix}: dialect 必须是 {_THINKING_DIALECTS} 之一，当前值: {raw.get('dialect')!r}")
     efforts = _parse_thinking_efforts(raw, dialect, prefix)
     default_effort_raw = _parse_thinking_default_effort(raw, efforts, prefix)
 
@@ -169,9 +164,7 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
     if mode == THINKING_MODE_FORCED:
         if default_on_raw is not None:
             raise ValueError(f"{prefix}: mode=forced 时不得配置 default_on")
-        return ThinkingCapability(
-            mode=mode, dialect=dialect, efforts=efforts, default_effort=default_effort_raw
-        )
+        return ThinkingCapability(mode=mode, dialect=dialect, efforts=efforts, default_effort=default_effort_raw)
     # optional：default_on 必填（无隐式默认）
     if not isinstance(default_on_raw, bool):
         raise ValueError(f"{prefix}: mode=optional 时 default_on 必填且为布尔")
@@ -209,9 +202,7 @@ def _parse_model_entry(entry: Any, *, path: str) -> dict[str, Any]:
     max_output_tokens: int | None = None
     if max_output_raw is not None:
         if not isinstance(max_output_raw, int) or isinstance(max_output_raw, bool) or max_output_raw <= 0:
-            raise ValueError(
-                f"{path} 中模型 {model_id} 的 max_output_tokens 无效: {max_output_raw!r}（应为正整数）"
-            )
+            raise ValueError(f"{path} 中模型 {model_id} 的 max_output_tokens 无效: {max_output_raw!r}（应为正整数）")
         if max_output_raw >= int(context_window):
             raise ValueError(
                 f"{path} 中模型 {model_id} 的 max_output_tokens={max_output_raw} "
@@ -295,6 +286,7 @@ def get_chat_data_model_max_output_tokens(model: str | None = None) -> int:
 # 决策层与协议层
 # ---------------------------------------------------------------------------
 
+
 def resolve_thinking(
     capability: ThinkingCapability,
     user_enabled: bool | None,
@@ -345,9 +337,7 @@ def _get_chat_data_extra_body(
     if capability.dialect == THINKING_DIALECT_REASONING_EFFORT:
         extra_body["reasoning_effort"] = level if decision == "on" else "none"
     elif capability.dialect == THINKING_DIALECT_OPENROUTER:
-        extra_body["reasoning"] = (
-            {"effort": level} if decision == "on" else {"enabled": False}
-        )
+        extra_body["reasoning"] = {"effort": level} if decision == "on" else {"enabled": False}
     return extra_body
 
 
@@ -358,18 +348,20 @@ def get_chat_data_model_options() -> dict[str, Any]:
     models = []
     for config in raw_models:
         cap: ThinkingCapability = config["thinking"]
-        models.append({
-            "id": config["id"],
-            "label": config["id"],
-            "value": config["id"],
-            "is_default": config["id"] == default_model,
-            "thinking": {
-                "mode": cap.mode,
-                "efforts": list(cap.efforts),
-                "default_on": cap.default_on,
-                "default_effort": cap.default_effort,
-            },
-        })
+        models.append(
+            {
+                "id": config["id"],
+                "label": config["id"],
+                "value": config["id"],
+                "is_default": config["id"] == default_model,
+                "thinking": {
+                    "mode": cap.mode,
+                    "efforts": list(cap.efforts),
+                    "default_on": cap.default_on,
+                    "default_effort": cap.default_effort,
+                },
+            }
+        )
     return {"models": models, "default_model": default_model}
 
 

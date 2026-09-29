@@ -416,7 +416,10 @@ class AgentScheduleService:
             job.next_trigger_time = None
             # 停用后 pending/claimed 实例永不会被派发，主动清退防僵尸
             await self._dao.cancel_unfinished_triggers(
-                session, job.job_id, now, "任务已停用，未执行的触发已取消",
+                session,
+                job.job_id,
+                now,
+                "任务已停用，未执行的触发已取消",
             )
             return
         if schedule_changed:
@@ -440,7 +443,10 @@ class AgentScheduleService:
             job.enabled_flag = 0
             job.next_trigger_time = None
             await self._dao.cancel_unfinished_triggers(
-                session, job.job_id, now, "任务已删除，未执行的触发已取消",
+                session,
+                job.job_id,
+                now,
+                "任务已删除，未执行的触发已取消",
             )
             job.update_time = now
             job.update_by = user_id
@@ -516,7 +522,9 @@ class AgentScheduleService:
             control = await self._dao.get_control(session)
             total_jobs, enabled_jobs = await self._dao.count_all_jobs(session)
             status_counts = await self._dao.count_runs_by_status(session)
-            runs_last_24h = await self._dao.count_runs_since(session, await self._dao.now(session) - timedelta(hours=24))
+            runs_last_24h = await self._dao.count_runs_since(
+                session, await self._dao.now(session) - timedelta(hours=24)
+            )
             return {
                 "paused_flag": int(bool(control.paused_flag)) if control else 0,
                 "pause_reason": control.pause_reason if control else "",
@@ -528,7 +536,9 @@ class AgentScheduleService:
                 "failed_runs": status_counts.get("failed", 0),
                 "cancelled_runs": status_counts.get("cancelled", 0),
                 "skipped_runs": status_counts.get("skipped", 0),
-                "running_runs": status_counts.get("dispatched", 0) + status_counts.get("claimed", 0) + status_counts.get("pending", 0),
+                "running_runs": status_counts.get("dispatched", 0)
+                + status_counts.get("claimed", 0)
+                + status_counts.get("pending", 0),
                 "runs_last_24h": runs_last_24h,
             }
 
@@ -549,17 +559,23 @@ class AgentScheduleService:
             control.update_by = user_id
             control.update_by_name = username
             if not paused:
-                due_jobs = (await session.execute(
-                    select(ChatDataAgentSchedule)
-                    .where(
-                        ChatDataAgentSchedule.enabled_flag == 1,
-                        ChatDataAgentSchedule.delete_flag == 0,
-                        ChatDataAgentSchedule.schedule_type == SCHEDULE_TYPE_CRON,
-                        ChatDataAgentSchedule.next_trigger_time.is_not(None),
-                        ChatDataAgentSchedule.next_trigger_time <= now,
+                due_jobs = (
+                    (
+                        await session.execute(
+                            select(ChatDataAgentSchedule)
+                            .where(
+                                ChatDataAgentSchedule.enabled_flag == 1,
+                                ChatDataAgentSchedule.delete_flag == 0,
+                                ChatDataAgentSchedule.schedule_type == SCHEDULE_TYPE_CRON,
+                                ChatDataAgentSchedule.next_trigger_time.is_not(None),
+                                ChatDataAgentSchedule.next_trigger_time <= now,
+                            )
+                            .with_for_update()
+                        )
                     )
-                    .with_for_update()
-                )).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for job in due_jobs:
                     job.next_trigger_time = compute_next_trigger(
                         schedule_type=SCHEDULE_TYPE_CRON,
@@ -603,12 +619,20 @@ class AgentScheduleService:
             enabled_flag = None if enabled is None else (1 if enabled else 0)
             now = await self._dao.now(session) if expired is not None else None
             rows = await self._dao.list_jobs_with_stats(
-                session, limit, offset, normalized_keyword,
-                enabled_flag=enabled_flag, expired=expired, now=now,
+                session,
+                limit,
+                offset,
+                normalized_keyword,
+                enabled_flag=enabled_flag,
+                expired=expired,
+                now=now,
             )
             total = await self._dao.count_jobs_filtered(
-                session, normalized_keyword,
-                enabled_flag=enabled_flag, expired=expired, now=now,
+                session,
+                normalized_keyword,
+                enabled_flag=enabled_flag,
+                expired=expired,
+                now=now,
             )
             latest_runs = await self._dao.latest_runs_by_jobs(session, [job.job_id for job, _stats in rows])
             titles = await self._dao.list_conversation_titles(session, [job.conversation_id for job, _stats in rows])
@@ -640,7 +664,10 @@ class AgentScheduleService:
                 # 与用户侧 update_job 停用分支同口径：清退未终态触发实例防僵尸
                 job.next_trigger_time = None
                 await self._dao.cancel_unfinished_triggers(
-                    session, job.job_id, now, "任务已停用，未执行的触发已取消",
+                    session,
+                    job.job_id,
+                    now,
+                    "任务已停用，未执行的触发已取消",
                 )
             job.update_time = now
             job.update_by = user_id

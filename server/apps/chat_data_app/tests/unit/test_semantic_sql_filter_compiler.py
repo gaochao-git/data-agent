@@ -25,10 +25,12 @@ def test_build_filter_tree_clause_preserves_nested_parentheses():
         {
             "and": [
                 {"table": "orders", "column": "status", "operator": "=", "value": "paid"},
-                {"or": [
-                    {"table": "orders", "column": "region", "operator": "=", "value": "east"},
-                    {"table": "orders", "column": "region", "operator": "=", "value": "west"},
-                ]},
+                {
+                    "or": [
+                        {"table": "orders", "column": "region", "operator": "=", "value": "east"},
+                        {"table": "orders", "column": "region", "operator": "=", "value": "west"},
+                    ]
+                },
             ]
         },
         for_having=False,
@@ -111,7 +113,13 @@ def test_build_where_leaf_clause_rejects_unsafe_dimension_expression():
     column = lambda table, name, multi: f"`{name}`"
     with pytest.raises(ValueError, match="维度表达式"):
         build_where_leaf_clause(
-            {"table": "orders", "column": "amount", "operator": "=", "expression": "amount; DROP TABLE users", "value": 1},
+            {
+                "table": "orders",
+                "column": "amount",
+                "operator": "=",
+                "expression": "amount; DROP TABLE users",
+                "value": 1,
+            },
             is_multi_table=False,
             dimension_expr_map={},
             main_table="orders",

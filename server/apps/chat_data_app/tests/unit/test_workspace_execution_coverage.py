@@ -121,7 +121,7 @@ class FakeFiles:
             start_text, _, end_text = span.partition("-")
             start = int(start_text or 0)
             end = int(end_text) if end_text else len(raw) - 1
-            return raw[start:end + 1]
+            return raw[start : end + 1]
         if "offset" in kwargs or "limit" in kwargs:
             # Files API 的 offset/limit 是按行（1 基）分页
             text = raw.decode("utf-8", errors="replace")
@@ -130,7 +130,7 @@ class FakeFiles:
                 lines.pop()
             offset = max(1, int(kwargs.get("offset") or 1))
             limit = max(1, int(kwargs.get("limit") or 1))
-            page = lines[offset - 1:offset - 1 + limit]
+            page = lines[offset - 1 : offset - 1 + limit]
             if not page:
                 return b""
             return ("\n".join(page) + "\n").encode("utf-8")
@@ -159,15 +159,17 @@ class FakeFiles:
         for candidate in sorted(self._sandbox.remote_kinds):
             if not candidate.startswith(f"{path}/"):
                 continue
-            remainder = candidate[len(path) + 1:]
+            remainder = candidate[len(path) + 1 :]
             if "/" in remainder and depth < remainder.count("/") + 1:
                 continue
-            children.append(SimpleNamespace(
-                path=candidate,
-                entry_type=self._sandbox.remote_kinds[candidate],
-                size=len(self._sandbox.remote_files.get(candidate, b"")),
-                modified_at=self._sandbox.modified_at,
-            ))
+            children.append(
+                SimpleNamespace(
+                    path=candidate,
+                    entry_type=self._sandbox.remote_kinds[candidate],
+                    size=len(self._sandbox.remote_files.get(candidate, b"")),
+                    modified_at=self._sandbox.modified_at,
+                )
+            )
         return children
 
     async def create_directories(self, entries):
@@ -202,7 +204,8 @@ class FakeFiles:
         for entry in entries:
             self.replace_calls.append((entry.path, entry.old_content, entry.new_content))
             self._sandbox.remote_files[entry.path] = self._sandbox.remote_files[entry.path].replace(
-                entry.old_content.encode("utf-8"), entry.new_content.encode("utf-8"),
+                entry.old_content.encode("utf-8"),
+                entry.new_content.encode("utf-8"),
             )
 
     async def search(self, entry):
@@ -409,8 +412,10 @@ def test_application_manifests(tmp_path, monkeypatch):
 
     full = we_sync._application_manifest(root)
     assert set(full) == {
-        "workspace/a.txt", "workspace/semantic/model.yaml",
-        "outputs/.tool-offload/r.json", "uploads/u.csv",
+        "workspace/a.txt",
+        "workspace/semantic/model.yaml",
+        "outputs/.tool-offload/r.json",
+        "uploads/u.csv",
     }
     mutable = we_sync._mutable_application_manifest(root)
     assert set(mutable) == {"workspace/a.txt"}
@@ -438,13 +443,20 @@ def test_write_sandbox_file_requires_writer():
 
 def test_write_and_read_sandbox_file():
     sandbox = FakeSandbox()
-    asyncio.run(we_api._write_sandbox_file(
-        sandbox=sandbox, path="/mnt/user-data/workspace/a.txt", data=b"hello",
-    ))
+    asyncio.run(
+        we_api._write_sandbox_file(
+            sandbox=sandbox,
+            path="/mnt/user-data/workspace/a.txt",
+            data=b"hello",
+        )
+    )
     assert sandbox.remote_files["/mnt/user-data/workspace/a.txt"] == b"hello"
-    data = asyncio.run(we_api._read_sandbox_file_bytes(
-        sandbox=sandbox, path="/mnt/user-data/workspace/a.txt",
-    ))
+    data = asyncio.run(
+        we_api._read_sandbox_file_bytes(
+            sandbox=sandbox,
+            path="/mnt/user-data/workspace/a.txt",
+        )
+    )
     assert data == b"hello"
     with pytest.raises(ValueError, match="files.read_bytes"):
         asyncio.run(we_api._read_sandbox_file_bytes(sandbox=SimpleNamespace(), path="/x"))
@@ -454,31 +466,46 @@ def test_replace_sandbox_file_content():
     sandbox = FakeSandbox()
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"old-new"
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
-    asyncio.run(we_api._replace_sandbox_file_content(
-        sandbox=sandbox,
-        path="/mnt/user-data/workspace/a.txt",
-        old_content="old",
-        new_content="brand",
-    ))
+    asyncio.run(
+        we_api._replace_sandbox_file_content(
+            sandbox=sandbox,
+            path="/mnt/user-data/workspace/a.txt",
+            old_content="old",
+            new_content="brand",
+        )
+    )
     assert sandbox.remote_files["/mnt/user-data/workspace/a.txt"] == b"brand-new"
     with pytest.raises(ValueError, match="files.replace_contents"):
-        asyncio.run(we_api._replace_sandbox_file_content(
-            sandbox=SimpleNamespace(), path="/x", old_content="a", new_content="b",
-        ))
+        asyncio.run(
+            we_api._replace_sandbox_file_content(
+                sandbox=SimpleNamespace(),
+                path="/x",
+                old_content="a",
+                new_content="b",
+            )
+        )
 
 
 def test_create_sandbox_directories():
     sandbox = FakeSandbox()
     asyncio.run(we_api._create_sandbox_directories(sandbox=sandbox, paths=[], mode=777))
     assert sandbox.files.create_dir_calls == []
-    asyncio.run(we_api._create_sandbox_directories(
-        sandbox=sandbox, paths=["/mnt/user-data/workspace", ""], mode=777,
-    ))
+    asyncio.run(
+        we_api._create_sandbox_directories(
+            sandbox=sandbox,
+            paths=["/mnt/user-data/workspace", ""],
+            mode=777,
+        )
+    )
     assert sandbox.files.create_dir_calls == [{"path": "/mnt/user-data/workspace", "mode": 777}]
     with pytest.raises(ValueError, match="files.create_directories"):
-        asyncio.run(we_api._create_sandbox_directories(
-            sandbox=SimpleNamespace(), paths=["/x"], mode=777,
-        ))
+        asyncio.run(
+            we_api._create_sandbox_directories(
+                sandbox=SimpleNamespace(),
+                paths=["/x"],
+                mode=777,
+            )
+        )
 
 
 def test_is_sandbox_descendant():
@@ -521,13 +548,19 @@ def test_sandbox_path_info_branches():
     sandbox = FakeSandbox()
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"abc"
-    entry = asyncio.run(we_api._sandbox_path_info(
-        session=_make_session(sandbox, Path("/host/user-data")), path="/mnt/user-data/workspace/a.txt",
-    ))
+    entry = asyncio.run(
+        we_api._sandbox_path_info(
+            session=_make_session(sandbox, Path("/host/user-data")),
+            path="/mnt/user-data/workspace/a.txt",
+        )
+    )
     assert entry.size == 3
-    missing = asyncio.run(we_api._sandbox_path_info(
-        session=_make_session(sandbox, Path("/host/user-data")), path="/mnt/user-data/workspace/missing",
-    ))
+    missing = asyncio.run(
+        we_api._sandbox_path_info(
+            session=_make_session(sandbox, Path("/host/user-data")),
+            path="/mnt/user-data/workspace/missing",
+        )
+    )
     assert missing is None
 
     async def raise_not_found(_paths):
@@ -535,14 +568,23 @@ def test_sandbox_path_info_branches():
 
     weird = FakeSandbox()
     weird.files.get_file_info = raise_not_found
-    assert asyncio.run(we_api._sandbox_path_info(
-        session=_make_session(weird, Path("/host/user-data")), path="/x",
-    )) is None
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_info(
+                session=_make_session(weird, Path("/host/user-data")),
+                path="/x",
+            )
+        )
+        is None
+    )
 
     with pytest.raises(ValueError, match="files.get_file_info"):
-        asyncio.run(we_api._sandbox_path_info(
-            session=_make_session(SimpleNamespace(), Path("/host/user-data")), path="/x",
-        ))
+        asyncio.run(
+            we_api._sandbox_path_info(
+                session=_make_session(SimpleNamespace(), Path("/host/user-data")),
+                path="/x",
+            )
+        )
 
 
 def test_sandbox_path_kind_branches():
@@ -551,15 +593,33 @@ def test_sandbox_path_kind_branches():
         asyncio.run(we_api._sandbox_path_kind(session=session, path="/none"))
     symlink_session = _make_session(FakeSandbox(), Path("/host/user-data"))
     with pytest.raises(ValueError, match="符号链接"):
-        asyncio.run(we_api._sandbox_path_kind(
-            session=symlink_session, path="/x", entry=SimpleNamespace(entry_type="symlink"),
-        ))
-    assert asyncio.run(we_api._sandbox_path_kind(
-        session=session, path="/x", entry=SimpleNamespace(entry_type="directory"),
-    )) == "dir"
-    assert asyncio.run(we_api._sandbox_path_kind(
-        session=session, path="/x", entry=SimpleNamespace(entry_type="file"),
-    )) == "file"
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=symlink_session,
+                path="/x",
+                entry=SimpleNamespace(entry_type="symlink"),
+            )
+        )
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=session,
+                path="/x",
+                entry=SimpleNamespace(entry_type="directory"),
+            )
+        )
+        == "dir"
+    )
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=session,
+                path="/x",
+                entry=SimpleNamespace(entry_type="file"),
+            )
+        )
+        == "file"
+    )
 
 
 def test_sandbox_path_kind_falls_back_to_depth0_listing(monkeypatch):
@@ -573,21 +633,36 @@ def test_sandbox_path_kind_falls_back_to_depth0_listing(monkeypatch):
 
     monkeypatch.setattr(sandbox.files, "list_directory", lister)
     session = _make_session(sandbox, Path("/host/user-data"))
-    assert asyncio.run(we_api._sandbox_path_kind(
-        session=session, path="/mnt/user-data/workspace/notdir",
-        entry=SimpleNamespace(entry_type=""),
-    )) == "file"
-    assert asyncio.run(we_api._sandbox_path_kind(
-        session=session, path="/mnt/user-data/workspace",
-        entry=SimpleNamespace(entry_type=""),
-    )) == "dir"
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=session,
+                path="/mnt/user-data/workspace/notdir",
+                entry=SimpleNamespace(entry_type=""),
+            )
+        )
+        == "file"
+    )
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=session,
+                path="/mnt/user-data/workspace",
+                entry=SimpleNamespace(entry_type=""),
+            )
+        )
+        == "dir"
+    )
 
     no_lister = SimpleNamespace()
     with pytest.raises(ValueError, match="files.list_directory"):
-        asyncio.run(we_api._sandbox_path_kind(
-            session=_make_session(no_lister, Path("/host/user-data")),
-            path="/x", entry=SimpleNamespace(entry_type=""),
-        ))
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=_make_session(no_lister, Path("/host/user-data")),
+                path="/x",
+                entry=SimpleNamespace(entry_type=""),
+            )
+        )
 
 
 def test_list_sandbox_directory_entries(tmp_path):
@@ -596,11 +671,15 @@ def test_list_sandbox_directory_entries(tmp_path):
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
     session = _make_session(sandbox, _workspace_root(tmp_path))
-    entries = asyncio.run(we_api._list_sandbox_directory_entries(
-        session=session, path="/mnt/user-data/workspace",
-    ))
+    entries = asyncio.run(
+        we_api._list_sandbox_directory_entries(
+            session=session,
+            path="/mnt/user-data/workspace",
+        )
+    )
     assert sorted(entry.path for entry in entries) == [
-        "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/sub",
+        "/mnt/user-data/workspace/a.txt",
+        "/mnt/user-data/workspace/sub",
     ]
 
     async def not_found(_entry):
@@ -608,13 +687,22 @@ def test_list_sandbox_directory_entries(tmp_path):
 
     sandbox2 = FakeSandbox()
     sandbox2.files.list_directory = not_found
-    assert asyncio.run(we_api._list_sandbox_directory_entries(
-        session=_make_session(sandbox2, Path("/host/user-data")), path="/x",
-    )) == []
+    assert (
+        asyncio.run(
+            we_api._list_sandbox_directory_entries(
+                session=_make_session(sandbox2, Path("/host/user-data")),
+                path="/x",
+            )
+        )
+        == []
+    )
     with pytest.raises(ValueError, match="files.list_directory"):
-        asyncio.run(we_api._list_sandbox_directory_entries(
-            session=_make_session(SimpleNamespace(), Path("/host/user-data")), path="/x",
-        ))
+        asyncio.run(
+            we_api._list_sandbox_directory_entries(
+                session=_make_session(SimpleNamespace(), Path("/host/user-data")),
+                path="/x",
+            )
+        )
 
 
 def test_walk_sandbox_tree(tmp_path):
@@ -625,12 +713,15 @@ def test_walk_sandbox_tree(tmp_path):
     sandbox.remote_kinds["/mnt/user-data/workspace/sub/b.txt"] = "file"
     sandbox.remote_kinds["/mnt/user-data/workspace/link"] = "symlink"
     sandbox.remote_kinds[""] = "directory"  # 不会被遍历到
-    files, directories = asyncio.run(we_api._walk_sandbox_tree(
-        session=_make_session(sandbox, _workspace_root(tmp_path)),
-        root="/mnt/user-data/workspace",
-    ))
+    files, directories = asyncio.run(
+        we_api._walk_sandbox_tree(
+            session=_make_session(sandbox, _workspace_root(tmp_path)),
+            root="/mnt/user-data/workspace",
+        )
+    )
     assert [item.path for item in files] == [
-        "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/sub/b.txt",
+        "/mnt/user-data/workspace/a.txt",
+        "/mnt/user-data/workspace/sub/b.txt",
     ]
     assert [item.path for item in directories] == ["/mnt/user-data/workspace/sub"]
 
@@ -650,10 +741,12 @@ def test_application_path_for_sandbox_path_errors(tmp_path, monkeypatch):
         we_sync._application_path_for_sandbox_path(session, "/mnt/user-data/uploads/a.txt")
     with pytest.raises(ValueError, match="越界"):
         we_sync._application_path_for_sandbox_path(
-            session, "/mnt/user-data/workspace/../../etc/passwd",
+            session,
+            "/mnt/user-data/workspace/../../etc/passwd",
         )
     resolved = we_sync._application_path_for_sandbox_path(
-        session, "/mnt/user-data/workspace/a.txt",
+        session,
+        "/mnt/user-data/workspace/a.txt",
     )
     assert resolved == root / "workspace" / "a.txt"
 
@@ -708,11 +801,13 @@ def test_persist_sandbox_paths_success_and_deletion(tmp_path, monkeypatch):
     session = _make_session(sandbox, root)
     session.application_manifest = we_sync._mutable_application_manifest(root)
 
-    asyncio.run(we_sync._persist_sandbox_paths(
-        session=session,
-        changed_paths=["/mnt/user-data/workspace/changed.txt"],
-        deleted_paths=["/mnt/user-data/workspace/doomed.txt"],
-    ))
+    asyncio.run(
+        we_sync._persist_sandbox_paths(
+            session=session,
+            changed_paths=["/mnt/user-data/workspace/changed.txt"],
+            deleted_paths=["/mnt/user-data/workspace/doomed.txt"],
+        )
+    )
     assert (root / "workspace" / "changed.txt").read_bytes() == b"new"
     assert not doomed.exists()
     assert session.pending_persistence is False
@@ -729,9 +824,12 @@ def test_persist_sandbox_paths_failure_marks_pending(tmp_path, monkeypatch):
     monkeypatch.setattr(we_sync, "_read_sandbox_file_bytes", boom)
     session = _make_session(sandbox, root)
     with pytest.raises(RuntimeError, match="download failed"):
-        asyncio.run(we_sync._persist_sandbox_paths(
-            session=session, changed_paths=["/mnt/user-data/workspace/x.txt"],
-        ))
+        asyncio.run(
+            we_sync._persist_sandbox_paths(
+                session=session,
+                changed_paths=["/mnt/user-data/workspace/x.txt"],
+            )
+        )
     assert session.pending_persistence is True
 
 
@@ -777,7 +875,8 @@ def test_sync_sandbox_working_trees_full_flow(tmp_path, monkeypatch):
     # 应用侧工作区根目录不允许被目录同步覆盖
     with pytest.raises(ValueError, match="根目录"):
         we_sync._application_directory_for_sandbox_path(
-            session, "/mnt/user-data/workspace",
+            session,
+            "/mnt/user-data/workspace",
         )
 
 
@@ -849,12 +948,15 @@ def test_extract_command_output_branches():
 
     execution.error = None
     exit_code, stdout, stderr = we_api._extract_command_output(
-        execution, None, status_lookup_error="lost",
+        execution,
+        None,
+        status_lookup_error="lost",
     )
     assert exit_code == 1 and "未能确认" in stderr
 
     exit_code, _, _ = we_api._extract_command_output(
-        execution, SimpleNamespace(exit_code=7),
+        execution,
+        SimpleNamespace(exit_code=7),
     )
     assert exit_code == 7
 
@@ -863,24 +965,33 @@ def test_run_command_in_sandbox(tmp_path):
     sandbox = FakeSandbox()
     sandbox.command_result = (0, "hello", "")
     session = _make_session(sandbox, _workspace_root(tmp_path))
-    exit_code, stdout, stderr = asyncio.run(we_api.run_command_in_sandbox(
-        session=session, command="echo hello",
-    ))
+    exit_code, stdout, stderr = asyncio.run(
+        we_api.run_command_in_sandbox(
+            session=session,
+            command="echo hello",
+        )
+    )
     assert (exit_code, stdout, stderr) == (0, "hello", "")
     assert sandbox.commands.run_calls == ["echo hello"]
 
     sandbox.status_error = RuntimeError("status lost")
     sandbox.command_result = (0, "x", "")
-    exit_code, _, stderr = asyncio.run(we_api.run_command_in_sandbox(
-        session=session, command="echo x",
-    ))
+    exit_code, _, stderr = asyncio.run(
+        we_api.run_command_in_sandbox(
+            session=session,
+            command="echo x",
+        )
+    )
     assert exit_code == 1 and "status lost" in stderr
 
     sandbox.status_error = None
     sandbox.command_result = (-1, "", "exploded")
-    exit_code, _, stderr = asyncio.run(we_api.run_command_in_sandbox(
-        session=session, command="bad",
-    ))
+    exit_code, _, stderr = asyncio.run(
+        we_api.run_command_in_sandbox(
+            session=session,
+            command="bad",
+        )
+    )
     assert exit_code == 1 and "exploded" in stderr
 
 
@@ -942,8 +1053,8 @@ def test_get_workspace_execution_session_skips_mismatched_cache(tmp_path, monkey
         return False
 
     monkeypatch.setattr(we_session, "_cached_session_matches_application", always)
-    we_session._WORKSPACE_EXECUTION_SESSION_CACHE[_cache_key(root)] = (
-        we_session.CachedSandboxExecutionSession(session=stale, expires_at=1e12)
+    we_session._WORKSPACE_EXECUTION_SESSION_CACHE[_cache_key(root)] = we_session.CachedSandboxExecutionSession(
+        session=stale, expires_at=1e12
     )
     assert asyncio.run(we_session.get_workspace_execution_session(str(root))) is fresh
     assert stale.sandbox.closed == 1
@@ -971,8 +1082,7 @@ def test_cleanup_and_release_session(tmp_path):
     asyncio.run(we_session.cleanup_workspace_execution_session(None))
     asyncio.run(we_session.release_workspace_execution_session(None))
     session = _make_session(FakeSandbox(), root)
-    asyncio.run(we_session.attach_workspace_execution_session(session)
-                )
+    asyncio.run(we_session.attach_workspace_execution_session(session))
     session.sandbox.kill_error = RuntimeError("kill fail")
     session.sandbox.close_error = RuntimeError("close fail")
     asyncio.run(we_session.cleanup_workspace_execution_session(session))
@@ -1025,9 +1135,15 @@ def test_prepare_workspace_execution_session_failures(tmp_path, monkeypatch):
 
     # 超时分支只在 context 内生效，避免污染后面的连接失败分支
     with monkeypatch.context() as m:
-        m.setattr(we_session, "asyncio", SimpleNamespace(
-            wait_for=fast_timeout, to_thread=real_asyncio.to_thread, Lock=real_asyncio.Lock,
-        ))
+        m.setattr(
+            we_session,
+            "asyncio",
+            SimpleNamespace(
+                wait_for=fast_timeout,
+                to_thread=real_asyncio.to_thread,
+                Lock=real_asyncio.Lock,
+            ),
+        )
         m.setattr("opensandbox.Sandbox", TimeoutSdkSandbox)
         with pytest.raises(ValueError, match="创建超时"):
             asyncio.run(we_session.prepare_workspace_execution_session(str(root)))
@@ -1091,32 +1207,54 @@ def test_sandbox_artifact_payload_branches(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     ref = _ref(session)
     sandbox.command_result = (0, "1", "")
-    assert asyncio.run(we_ops.sandbox_artifact_payload(
-        session_ref=ref, file_path="/mnt/user-data/outputs/.tool-offload/x.json",
-    )) == {}
-    assert asyncio.run(we_ops.sandbox_artifact_payload(
-        session_ref=ref, file_path="/mnt/user-data/workspace/missing.txt",
-    )) == {}
+    assert (
+        asyncio.run(
+            we_ops.sandbox_artifact_payload(
+                session_ref=ref,
+                file_path="/mnt/user-data/outputs/.tool-offload/x.json",
+            )
+        )
+        == {}
+    )
+    assert (
+        asyncio.run(
+            we_ops.sandbox_artifact_payload(
+                session_ref=ref,
+                file_path="/mnt/user-data/workspace/missing.txt",
+            )
+        )
+        == {}
+    )
     sandbox.remote_kinds["/mnt/user-data/outputs/report.md"] = "file"
     sandbox.remote_files["/mnt/user-data/outputs/report.md"] = "# 结论".encode("utf-8")
-    payload = asyncio.run(we_ops.sandbox_artifact_payload(
-        session_ref=ref, file_path="/mnt/user-data/outputs/report.md",
-    ))
+    payload = asyncio.run(
+        we_ops.sandbox_artifact_payload(
+            session_ref=ref,
+            file_path="/mnt/user-data/outputs/report.md",
+        )
+    )
     assert payload["artifact_type"] == "markdown"
     assert payload["file_path"] == "/mnt/user-data/outputs/report.md"
     no_session = SandboxExecutionSessionRef()
     with pytest.raises(ValueError, match="未准备"):
-        asyncio.run(we_ops.sandbox_artifact_payload(
-            session_ref=no_session, file_path="/mnt/user-data/outputs/chart.json",
-        ))
+        asyncio.run(
+            we_ops.sandbox_artifact_payload(
+                session_ref=no_session,
+                file_path="/mnt/user-data/outputs/chart.json",
+            )
+        )
 
 
 def test_render_office_html_rejects_suffix(tmp_path, monkeypatch):
     _root, _sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match=".docx、.xlsx、.pptx"):
-        asyncio.run(we_ops.sandbox_render_office_html(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", max_chars=100,
-        ))
+        asyncio.run(
+            we_ops.sandbox_render_office_html(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                max_chars=100,
+            )
+        )
 
 
 def test_render_office_html_success_and_truncation(tmp_path, monkeypatch):
@@ -1140,9 +1278,13 @@ def test_render_office_html_success_and_truncation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(we_ops, "run_command_in_sandbox", fake_run)
     monkeypatch.setattr(we_ops, "_sandbox_path_info", fake_path_info)
-    result = asyncio.run(we_ops.sandbox_render_office_html(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/report.docx", max_chars=100,
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_render_office_html(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/report.docx",
+            max_chars=100,
+        )
+    )
     assert result["html"] == "<html>small</html>" and result["truncated"] is False
 
     async def failing_run(*, session, command, timeout_seconds=30):
@@ -1150,9 +1292,13 @@ def test_render_office_html_success_and_truncation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(we_ops, "run_command_in_sandbox", failing_run)
     with pytest.raises(RuntimeError, match="officecli exploded"):
-        asyncio.run(we_ops.sandbox_render_office_html(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/report.docx", max_chars=100,
-        ))
+        asyncio.run(
+            we_ops.sandbox_render_office_html(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/report.docx",
+                max_chars=100,
+            )
+        )
 
 
 def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
@@ -1160,29 +1306,53 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
     ref = _ref(session)
     sandbox.command_result = (0, "2", "")
 
-    missing = asyncio.run(we_ops.sandbox_read_text_file(
-        session_ref=ref, file_path="/mnt/user-data/workspace/missing.txt", offset=0, limit=10, max_chars=100,
-    ))
+    missing = asyncio.run(
+        we_ops.sandbox_read_text_file(
+            session_ref=ref,
+            file_path="/mnt/user-data/workspace/missing.txt",
+            offset=0,
+            limit=10,
+            max_chars=100,
+        )
+    )
     assert missing["exists"] is False
 
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
-    is_dir = asyncio.run(we_ops.sandbox_read_text_file(
-        session_ref=ref, file_path="/mnt/user-data/workspace/sub", offset=0, limit=10, max_chars=100,
-    ))
+    is_dir = asyncio.run(
+        we_ops.sandbox_read_text_file(
+            session_ref=ref,
+            file_path="/mnt/user-data/workspace/sub",
+            offset=0,
+            limit=10,
+            max_chars=100,
+        )
+    )
     assert is_dir["is_dir"] is True
 
     sandbox.remote_kinds["/mnt/user-data/workspace/bin.dat"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/bin.dat"] = b"a\x00b"
-    binary = asyncio.run(we_ops.sandbox_read_text_file(
-        session_ref=ref, file_path="/mnt/user-data/workspace/bin.dat", offset=0, limit=10, max_chars=100,
-    ))
+    binary = asyncio.run(
+        we_ops.sandbox_read_text_file(
+            session_ref=ref,
+            file_path="/mnt/user-data/workspace/bin.dat",
+            offset=0,
+            limit=10,
+            max_chars=100,
+        )
+    )
     assert binary["is_binary"] is True
 
     sandbox.remote_kinds["/mnt/user-data/workspace/text.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/text.txt"] = b"one\ntwo\n"
-    result = asyncio.run(we_ops.sandbox_read_text_file(
-        session_ref=ref, file_path="/mnt/user-data/workspace/text.txt", offset=0, limit=1, max_chars=10000,
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_read_text_file(
+            session_ref=ref,
+            file_path="/mnt/user-data/workspace/text.txt",
+            offset=0,
+            limit=1,
+            max_chars=10000,
+        )
+    )
     assert result["lines"] == ["one"]
     assert result["has_more"] is True
     assert result["total_lines"] == 2
@@ -1190,9 +1360,15 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
     assert session.text_line_counts["/mnt/user-data/workspace/text.txt"][2] == 2
 
     # 越界偏移返回空页（不带 lines 字段，用 offset_out_of_range 表达）
-    empty = asyncio.run(we_ops.sandbox_read_text_file(
-        session_ref=ref, file_path="/mnt/user-data/workspace/text.txt", offset=99, limit=10, max_chars=100,
-    ))
+    empty = asyncio.run(
+        we_ops.sandbox_read_text_file(
+            session_ref=ref,
+            file_path="/mnt/user-data/workspace/text.txt",
+            offset=99,
+            limit=10,
+            max_chars=100,
+        )
+    )
     assert empty.get("lines", []) == [] and empty["offset_out_of_range"] is True
 
     # reader 缺失
@@ -1202,10 +1378,15 @@ def test_sandbox_read_text_file_variants(tmp_path, monkeypatch):
     readerless.files.read_bytes = None
     session2 = _make_session(readerless, root)
     with pytest.raises(ValueError, match="files.read_bytes"):
-        asyncio.run(we_ops.sandbox_read_text_file(
-            session_ref=_ref(session2), file_path="/mnt/user-data/workspace/text.txt",
-            offset=0, limit=1, max_chars=100,
-        ))
+        asyncio.run(
+            we_ops.sandbox_read_text_file(
+                session_ref=_ref(session2),
+                file_path="/mnt/user-data/workspace/text.txt",
+                offset=0,
+                limit=1,
+                max_chars=100,
+            )
+        )
 
 
 def test_sandbox_text_line_count_errors(tmp_path, monkeypatch):
@@ -1213,20 +1394,35 @@ def test_sandbox_text_line_count_errors(tmp_path, monkeypatch):
     entry = SimpleNamespace(size=4, modified_at="m")
     sandbox.command_result = (1, "", "awk failed")
     with pytest.raises(RuntimeError, match="awk failed"):
-        asyncio.run(we_ops._sandbox_text_line_count(
-            session=session, path="/mnt/user-data/workspace/x.txt", entry=entry,
-        ))
+        asyncio.run(
+            we_ops._sandbox_text_line_count(
+                session=session,
+                path="/mnt/user-data/workspace/x.txt",
+                entry=entry,
+            )
+        )
     sandbox.command_result = (0, "not-a-number", "")
     with pytest.raises(RuntimeError, match="无效"):
-        asyncio.run(we_ops._sandbox_text_line_count(
-            session=session, path="/mnt/user-data/workspace/x.txt", entry=entry,
-        ))
+        asyncio.run(
+            we_ops._sandbox_text_line_count(
+                session=session,
+                path="/mnt/user-data/workspace/x.txt",
+                entry=entry,
+            )
+        )
     # 元数据未变时命中缓存
     session.text_line_counts["/mnt/user-data/workspace/x.txt"] = (4, "m", 7)
     sandbox.command_result = (1, "", "should not run")
-    assert asyncio.run(we_ops._sandbox_text_line_count(
-        session=session, path="/mnt/user-data/workspace/x.txt", entry=entry,
-    )) == 7
+    assert (
+        asyncio.run(
+            we_ops._sandbox_text_line_count(
+                session=session,
+                path="/mnt/user-data/workspace/x.txt",
+                entry=entry,
+            )
+        )
+        == 7
+    )
 
 
 def test_sandbox_list_dir(tmp_path, monkeypatch):
@@ -1234,42 +1430,63 @@ def test_sandbox_list_dir(tmp_path, monkeypatch):
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"abc"
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
-    entries = asyncio.run(we_ops.sandbox_list_dir(
-        session_ref=_ref(session), path="/mnt/user-data/workspace", max_depth=1,
-    ))
+    entries = asyncio.run(
+        we_ops.sandbox_list_dir(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace",
+            max_depth=1,
+        )
+    )
     assert entries == [
         {"type": "dir", "path": "/mnt/user-data/workspace/sub/", "size": "-", "mtime": "2026-08-10 00:00"},
         {"type": "file", "path": "/mnt/user-data/workspace/a.txt", "size": 3, "mtime": "2026-08-10 00:00"},
     ]
     with pytest.raises(ValueError, match="不是目录"):
-        asyncio.run(we_ops.sandbox_list_dir(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", max_depth=1,
-        ))
+        asyncio.run(
+            we_ops.sandbox_list_dir(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/a.txt",
+                max_depth=1,
+            )
+        )
     no_lister_sandbox = FakeSandbox()
     no_lister_sandbox.remote_kinds["/mnt/user-data/workspace"] = "directory"
     no_lister_sandbox.files.list_directory = None
     no_lister = _make_session(no_lister_sandbox, root)
     with pytest.raises(ValueError, match="files.list_directory"):
-        asyncio.run(we_ops.sandbox_list_dir(
-            session_ref=_ref(no_lister), path="/mnt/user-data/workspace", max_depth=1,
-        ))
+        asyncio.run(
+            we_ops.sandbox_list_dir(
+                session_ref=_ref(no_lister),
+                path="/mnt/user-data/workspace",
+                max_depth=1,
+            )
+        )
 
 
 def test_sandbox_create_dir(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
-    result = asyncio.run(we_ops.sandbox_create_dir(
-        session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_create_dir(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace/newdir",
+        )
+    )
     assert result == {"path": "/mnt/user-data/workspace/newdir", "type": "dir"}
     assert "/mnt/user-data/workspace/newdir" in sandbox.remote_kinds
     with pytest.raises(ValueError, match="已存在"):
-        asyncio.run(we_ops.sandbox_create_dir(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
-        ))
+        asyncio.run(
+            we_ops.sandbox_create_dir(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/newdir",
+            )
+        )
     with pytest.raises(ValueError, match="根目录"):
-        asyncio.run(we_ops.sandbox_create_dir(
-            session_ref=_ref(session), path="/mnt/user-data/workspace",
-        ))
+        asyncio.run(
+            we_ops.sandbox_create_dir(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace",
+            )
+        )
 
 
 def test_sandbox_delete_path(tmp_path, monkeypatch):
@@ -1281,20 +1498,40 @@ def test_sandbox_delete_path(tmp_path, monkeypatch):
     sandbox.remote_files["/mnt/user-data/workspace/sub/inner.txt"] = b"inner"
 
     with pytest.raises(ValueError, match="不能作为dir删除"):
-        asyncio.run(we_ops.sandbox_delete_path(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", recursive=False, expected_type="dir",
-        ))
+        asyncio.run(
+            we_ops.sandbox_delete_path(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/a.txt",
+                recursive=False,
+                expected_type="dir",
+            )
+        )
     with pytest.raises(ValueError, match="目录非空"):
-        asyncio.run(we_ops.sandbox_delete_path(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/sub", recursive=False, expected_type="dir",
-        ))
-    result = asyncio.run(we_ops.sandbox_delete_path(
-        session_ref=_ref(session), path="/mnt/user-data/workspace/a.txt", recursive=False, expected_type="file",
-    ))
+        asyncio.run(
+            we_ops.sandbox_delete_path(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/sub",
+                recursive=False,
+                expected_type="dir",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_delete_path(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace/a.txt",
+            recursive=False,
+            expected_type="file",
+        )
+    )
     assert result["type"] == "file"
-    result = asyncio.run(we_ops.sandbox_delete_path(
-        session_ref=_ref(session), path="/mnt/user-data/workspace/sub", recursive=True, expected_type="dir",
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_delete_path(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace/sub",
+            recursive=True,
+            expected_type="dir",
+        )
+    )
     assert result["type"] == "dir"
     assert "/mnt/user-data/workspace/sub" not in sandbox.remote_kinds
 
@@ -1305,39 +1542,53 @@ def test_sandbox_delete_path(tmp_path, monkeypatch):
     no_deleter_sandbox.files.delete_files = None
     no_deleter = _make_session(no_deleter_sandbox, root)
     with pytest.raises(ValueError, match="删除 Files API"):
-        asyncio.run(we_ops.sandbox_delete_path(
-            session_ref=_ref(no_deleter), path="/mnt/user-data/workspace/b.txt", recursive=False, expected_type="file",
-        ))
+        asyncio.run(
+            we_ops.sandbox_delete_path(
+                session_ref=_ref(no_deleter),
+                path="/mnt/user-data/workspace/b.txt",
+                recursive=False,
+                expected_type="file",
+            )
+        )
 
 
 def test_sandbox_move_path(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
-    result = asyncio.run(we_ops.sandbox_move_path(
-        session_ref=_ref(session),
-        source_path="/mnt/user-data/workspace/a.txt",
-        destination_path="/mnt/user-data/workspace/b.txt",
-    ))
-    assert result["type"] == "file"
-    assert sandbox.files.move_calls == [(
-        "/mnt/user-data/workspace/a.txt", "/mnt/user-data/workspace/b.txt",
-    )]
-    with pytest.raises(ValueError, match="已存在"):
-        asyncio.run(we_ops.sandbox_move_path(
+    result = asyncio.run(
+        we_ops.sandbox_move_path(
             session_ref=_ref(session),
-            source_path="/mnt/user-data/workspace/b.txt",
+            source_path="/mnt/user-data/workspace/a.txt",
             destination_path="/mnt/user-data/workspace/b.txt",
-        ))
+        )
+    )
+    assert result["type"] == "file"
+    assert sandbox.files.move_calls == [
+        (
+            "/mnt/user-data/workspace/a.txt",
+            "/mnt/user-data/workspace/b.txt",
+        )
+    ]
+    with pytest.raises(ValueError, match="已存在"):
+        asyncio.run(
+            we_ops.sandbox_move_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/workspace/b.txt",
+                destination_path="/mnt/user-data/workspace/b.txt",
+            )
+        )
     sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
     sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"x"
     sandbox.remote_kinds["/mnt/user-data/workspace/c.txt"] = "file"
     with pytest.raises(ValueError, match="父路径不是目录"):
-        asyncio.run(we_ops.sandbox_move_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/workspace/c.txt",
-            destination_path="/mnt/user-data/workspace/a.txt/deep.txt",
-        ))
+        asyncio.run(
+            we_ops.sandbox_move_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/workspace/c.txt",
+                destination_path="/mnt/user-data/workspace/a.txt/deep.txt",
+            )
+        )
     no_mover_sandbox = FakeSandbox()
     no_mover_sandbox.remote_kinds["/mnt/user-data/workspace"] = "directory"
     no_mover_sandbox.remote_kinds["/mnt/user-data/workspace/c.txt"] = "file"
@@ -1345,11 +1596,13 @@ def test_sandbox_move_path(tmp_path, monkeypatch):
     no_mover_sandbox.files.move_files = None
     no_mover = _make_session(no_mover_sandbox, root)
     with pytest.raises(ValueError, match="files.move_files"):
-        asyncio.run(we_ops.sandbox_move_path(
-            session_ref=_ref(no_mover),
-            source_path="/mnt/user-data/workspace/c.txt",
-            destination_path="/mnt/user-data/workspace/d.txt",
-        ))
+        asyncio.run(
+            we_ops.sandbox_move_path(
+                session_ref=_ref(no_mover),
+                source_path="/mnt/user-data/workspace/c.txt",
+                destination_path="/mnt/user-data/workspace/d.txt",
+            )
+        )
 
 
 def test_sandbox_copy_path(tmp_path, monkeypatch):
@@ -1357,38 +1610,48 @@ def test_sandbox_copy_path(tmp_path, monkeypatch):
     sandbox.remote_kinds["/mnt/user-data/uploads/src.csv"] = "file"
     sandbox.remote_files["/mnt/user-data/uploads/src.csv"] = b"csv"
     with pytest.raises(ValueError, match="不能复制"):
-        asyncio.run(we_ops.sandbox_copy_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/outputs/.tool-offload/r.json",
-            destination_path="/mnt/user-data/workspace/r.json",
-        ))
+        asyncio.run(
+            we_ops.sandbox_copy_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+                destination_path="/mnt/user-data/workspace/r.json",
+            )
+        )
     sandbox.remote_kinds["/mnt/user-data/workspace/sub"] = "directory"
     with pytest.raises(ValueError, match="只支持复制单个文件"):
-        asyncio.run(we_ops.sandbox_copy_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/workspace/sub",
-            destination_path="/mnt/user-data/workspace/sub2",
-        ))
-    result = asyncio.run(we_ops.sandbox_copy_path(
-        session_ref=_ref(session),
-        source_path="/mnt/user-data/uploads/src.csv",
-        destination_path="/mnt/user-data/workspace/src.csv",
-    ))
-    assert result["bytes"] == 3
-    assert (root / "workspace" / "src.csv").read_bytes() == b"csv"
-    with pytest.raises(ValueError, match="已存在"):
-        asyncio.run(we_ops.sandbox_copy_path(
+        asyncio.run(
+            we_ops.sandbox_copy_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/workspace/sub",
+                destination_path="/mnt/user-data/workspace/sub2",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_copy_path(
             session_ref=_ref(session),
             source_path="/mnt/user-data/uploads/src.csv",
             destination_path="/mnt/user-data/workspace/src.csv",
-        ))
+        )
+    )
+    assert result["bytes"] == 3
+    assert (root / "workspace" / "src.csv").read_bytes() == b"csv"
+    with pytest.raises(ValueError, match="已存在"):
+        asyncio.run(
+            we_ops.sandbox_copy_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/uploads/src.csv",
+                destination_path="/mnt/user-data/workspace/src.csv",
+            )
+        )
     sandbox.remote_kinds["/mnt/user-data/uploads/other.csv"] = "file"
     with pytest.raises(ValueError, match="父路径不是目录"):
-        asyncio.run(we_ops.sandbox_copy_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/uploads/other.csv",
-            destination_path="/mnt/user-data/workspace/src.csv/deep.csv",
-        ))
+        asyncio.run(
+            we_ops.sandbox_copy_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/uploads/other.csv",
+                destination_path="/mnt/user-data/workspace/src.csv/deep.csv",
+            )
+        )
 
 
 def test_sandbox_search_files(tmp_path, monkeypatch):
@@ -1396,15 +1659,25 @@ def test_sandbox_search_files(tmp_path, monkeypatch):
     sandbox.remote_kinds["/mnt/user-data/workspace/a.csv"] = "file"
     sandbox.remote_kinds["/mnt/user-data/workspace/b.csv"] = "file"
     sandbox.remote_kinds["/mnt/user-data/workspace/c.txt"] = "file"
-    results = asyncio.run(we_ops.sandbox_search_files(
-        session_ref=_ref(session), path="/mnt/user-data/workspace", pattern="*.csv", max_results=1,
-    ))
+    results = asyncio.run(
+        we_ops.sandbox_search_files(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace",
+            pattern="*.csv",
+            max_results=1,
+        )
+    )
     assert results == [{"path": "/mnt/user-data/workspace/a.csv", "type": "file"}]
     no_search = _make_session(SimpleNamespace(files=SimpleNamespace()), root)
     with pytest.raises(ValueError, match="files.search"):
-        asyncio.run(we_ops.sandbox_search_files(
-            session_ref=_ref(no_search), path="/mnt/user-data/workspace", pattern="*", max_results=10,
-        ))
+        asyncio.run(
+            we_ops.sandbox_search_files(
+                session_ref=_ref(no_search),
+                path="/mnt/user-data/workspace",
+                pattern="*",
+                max_results=10,
+            )
+        )
 
 
 def test_matches_sandbox_glob():
@@ -1415,7 +1688,9 @@ def test_matches_sandbox_glob():
 
 def test_build_rg_command_str():
     command = we_search.build_rg_command_str(
-        "/mnt/user-data/workspace", ["hello world", "foo"], glob="**/*.py",
+        "/mnt/user-data/workspace",
+        ["hello world", "foo"],
+        glob="**/*.py",
     )
     assert command.startswith("rg --json --hidden -F")
     assert "--glob '**/*.py'" in command
@@ -1423,30 +1698,42 @@ def test_build_rg_command_str():
 
     # 新旋钮：正则去 -F、忽略大小写加 -i、上下文加 --context、聚合模式不带 --context
     regex_cmd = we_search.build_rg_command_str(
-        "/tmp/x", ["a|b"], use_regex=True, ignore_case=True, context_lines=2,
+        "/tmp/x",
+        ["a|b"],
+        use_regex=True,
+        ignore_case=True,
+        context_lines=2,
     )
     assert "-F" not in regex_cmd.split()
     assert "-i" in regex_cmd.split()
     assert "--context 2" in regex_cmd
     count_cmd = we_search.build_rg_command_str(
-        "/tmp/x", ["a"], output_mode="count", context_lines=3,
+        "/tmp/x",
+        ["a"],
+        output_mode="count",
+        context_lines=3,
     )
     assert "--context" not in count_cmd
     assert "-F" in count_cmd.split()
 
 
 def test_parse_rg_output():
-    stdout = "\n".join([
-        '{"type": "summary"}',
-        'not json',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 3, "lines": {"text": "hello\\n"}}}',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace"}, "line_number": 1, "lines": {"text": "root"}}}',
-        '{"type": "match", "data": {"path": {"text": "/other/x.py"}, "line_number": 1, "lines": {"text": "skip"}}}',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}}}',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/c.py"}, "line_number": 2, "lines": {"text": "tail"}}}',
-    ])
+    stdout = "\n".join(
+        [
+            '{"type": "summary"}',
+            "not json",
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 3, "lines": {"text": "hello\\n"}}}',
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace"}, "line_number": 1, "lines": {"text": "root"}}}',
+            '{"type": "match", "data": {"path": {"text": "/other/x.py"}, "line_number": 1, "lines": {"text": "skip"}}}',
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}}}',
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/c.py"}, "line_number": 2, "lines": {"text": "tail"}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stdout, "/mnt/user-data/workspace", max_results=2, max_chars=10000,
+        stdout,
+        "/mnt/user-data/workspace",
+        max_results=2,
+        max_chars=10000,
     )
     assert [item["file"] for item in matches] == ["a.py", ""]
     assert has_more is True
@@ -1455,18 +1742,24 @@ def test_parse_rg_output():
 def test_parse_rg_output_after_budget_cap_and_file_boundary():
     # 文件边界后、本文件首个 match 前，context 行只进 before 缓冲，
     # 不得挂到上一文件末条命中的 after（matches 列表跨文件共享）
-    stream = "\n".join([
-        '{"type": "begin"}',
-        '{"type": "match", "data": {"path": {"text": "/t/one.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 2, "lines": {"text": "a1"}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 3, "lines": {"text": "a2"}}}',
-        '{"type": "begin"}',
-        '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 1, "lines": {"text": "p1"}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 2, "lines": {"text": "p2"}}}',
-        '{"type": "match", "data": {"path": {"text": "/t/two.txt"}, "line_number": 3, "lines": {"text": "HIT2"}}}',
-    ])
+    stream = "\n".join(
+        [
+            '{"type": "begin"}',
+            '{"type": "match", "data": {"path": {"text": "/t/one.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 2, "lines": {"text": "a1"}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/one.txt"}, "line_number": 3, "lines": {"text": "a2"}}}',
+            '{"type": "begin"}',
+            '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 1, "lines": {"text": "p1"}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/two.txt"}, "line_number": 2, "lines": {"text": "p2"}}}',
+            '{"type": "match", "data": {"path": {"text": "/t/two.txt"}, "line_number": 3, "lines": {"text": "HIT2"}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stream, "/t", max_results=10, max_chars=10000, context_lines=2,
+        stream,
+        "/t",
+        max_results=10,
+        max_chars=10000,
+        context_lines=2,
     )
     assert matches[0]["after"] == ["a1", "a2"]
     assert matches[1]["before"] == ["p1", "p2"]
@@ -1475,29 +1768,41 @@ def test_parse_rg_output_after_budget_cap_and_file_boundary():
 
     # 尾随 after 行装不进剩余预算：该行不进入结果，has_more 置位（max_chars 硬上限）
     long_line = "A" * 100
-    stream = "\n".join([
-        '{"type": "begin"}',
-        '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
-        f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 2, "lines": {{"text": "{long_line}"}}}}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "B"}}}',
-    ])
+    stream = "\n".join(
+        [
+            '{"type": "begin"}',
+            '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+            f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 2, "lines": {{"text": "{long_line}"}}}}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "B"}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stream, "/t", max_results=10, max_chars=10, context_lines=3,
+        stream,
+        "/t",
+        max_results=10,
+        max_chars=10,
+        context_lines=3,
     )
     assert len(matches) == 1
     assert "after" not in matches[0]
     assert has_more is True
 
     # 部分装得下：短 after 行正常吸收，装不下的长行处截断
-    stream = "\n".join([
-        '{"type": "begin"}',
-        '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 2, "lines": {"text": "s1"}}}',
-        '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "s2"}}}',
-        f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 4, "lines": {{"text": "{long_line}"}}}}}}',
-    ])
+    stream = "\n".join(
+        [
+            '{"type": "begin"}',
+            '{"type": "match", "data": {"path": {"text": "/t/x.txt"}, "line_number": 1, "lines": {"text": "HIT"}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 2, "lines": {"text": "s1"}}}',
+            '{"type": "context", "data": {"path": {"text": "/t/x.txt"}, "line_number": 3, "lines": {"text": "s2"}}}',
+            f'{{"type": "context", "data": {{"path": {{"text": "/t/x.txt"}}, "line_number": 4, "lines": {{"text": "{long_line}"}}}}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stream, "/t", max_results=10, max_chars=20, context_lines=3,
+        stream,
+        "/t",
+        max_results=10,
+        max_chars=20,
+        context_lines=3,
     )
     assert matches[0]["after"] == ["s1", "s2"]
     assert has_more is True
@@ -1511,30 +1816,48 @@ def test_sandbox_grep_text(tmp_path, monkeypatch):
 
     monkeypatch.setattr(we_search, "run_command_in_sandbox", run_127)
     with pytest.raises(RuntimeError, match="ripgrep"):
-        asyncio.run(we_search.sandbox_grep_text(
-            session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["x"],
-            glob="**/*", max_results=10, max_chars=1000,
-        ))
+        asyncio.run(
+            we_search.sandbox_grep_text(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace",
+                patterns=["x"],
+                glob="**/*",
+                max_results=10,
+                max_chars=1000,
+            )
+        )
 
     async def run_fail(*, session, command, timeout_seconds=30):
         return 2, "", "boom"
 
     monkeypatch.setattr(we_search, "run_command_in_sandbox", run_fail)
     with pytest.raises(RuntimeError, match="rg 执行失败"):
-        asyncio.run(we_search.sandbox_grep_text(
-            session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["x"],
-            glob="**/*", max_results=10, max_chars=1000,
-        ))
+        asyncio.run(
+            we_search.sandbox_grep_text(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace",
+                patterns=["x"],
+                glob="**/*",
+                max_results=10,
+                max_chars=1000,
+            )
+        )
 
     async def run_ok(*, session, command, timeout_seconds=30):
         line = '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 5, "lines": {"text": "hello"}}}'
         return 0, line, ""
 
     monkeypatch.setattr(we_search, "run_command_in_sandbox", run_ok)
-    payload = asyncio.run(we_search.sandbox_grep_text(
-        session_ref=_ref(session), path="/mnt/user-data/workspace", patterns=["hello"],
-        glob="**/*", max_results=10, max_chars=1000,
-    ))
+    payload = asyncio.run(
+        we_search.sandbox_grep_text(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace",
+            patterns=["hello"],
+            glob="**/*",
+            max_results=10,
+            max_chars=1000,
+        )
+    )
     assert payload["matches"] == [
         {"path": "/mnt/user-data/workspace/a.py", "line_number": 5, "line": "hello"},
     ]
@@ -1544,12 +1867,22 @@ def test_sandbox_grep_text(tmp_path, monkeypatch):
 def test_sandbox_write_text_file(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="只支持 overwrite"):
-        asyncio.run(we_ops.sandbox_write_text_file(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="x", mode="append",
-        ))
-    result = asyncio.run(we_ops.sandbox_write_text_file(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="hello", mode="overwrite",
-    ))
+        asyncio.run(
+            we_ops.sandbox_write_text_file(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                content="x",
+                mode="append",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_write_text_file(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/a.txt",
+            content="hello",
+            mode="overwrite",
+        )
+    )
     assert result["bytes"] == 5
     assert (root / "workspace" / "a.txt").read_bytes() == b"hello"
 
@@ -1557,13 +1890,18 @@ def test_sandbox_write_text_file(tmp_path, monkeypatch):
 def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="语义模型"):
-        asyncio.run(we_ops.sandbox_write_internal_text_files(
-            session_ref=_ref(session), entries=[("/mnt/user-data/workspace/plain.txt", "x")],
-        ))
-    results = asyncio.run(we_ops.sandbox_write_internal_text_files(
-        session_ref=_ref(session),
-        entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
-    ))
+        asyncio.run(
+            we_ops.sandbox_write_internal_text_files(
+                session_ref=_ref(session),
+                entries=[("/mnt/user-data/workspace/plain.txt", "x")],
+            )
+        )
+    results = asyncio.run(
+        we_ops.sandbox_write_internal_text_files(
+            session_ref=_ref(session),
+            entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
+        )
+    )
     assert results[0]["bytes"] == 4
     target = "/mnt/user-data/workspace/semantic/model.yaml"
     assert sandbox.remote_files[target] == b"a: 1"
@@ -1571,9 +1909,12 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     no_writer_sandbox.files.write_files = None
     no_writer = _make_session(no_writer_sandbox, root)
     with pytest.raises(ValueError, match="files.write_files"):
-        asyncio.run(we_ops.sandbox_write_internal_text_files(
-            session_ref=_ref(no_writer), entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
-        ))
+        asyncio.run(
+            we_ops.sandbox_write_internal_text_files(
+                session_ref=_ref(no_writer),
+                entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
+            )
+        )
 
 
 def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
@@ -1584,12 +1925,18 @@ def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
 
     # 策略层先拒：内部通道只允许 semantic 下的 YAML
     with pytest.raises(ValueError, match="内部语义模型写入"):
-        asyncio.run(we_ops.sandbox_delete_internal_text_file(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/plain.yaml",
-        ))
-    result = asyncio.run(we_ops.sandbox_delete_internal_text_file(
-        session_ref=_ref(session), path=stale,
-    ))
+        asyncio.run(
+            we_ops.sandbox_delete_internal_text_file(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/plain.yaml",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_delete_internal_text_file(
+            session_ref=_ref(session),
+            path=stale,
+        )
+    )
     assert result == {"path": stale, "type": "file"}
     assert stale not in sandbox.remote_kinds
     assert stale not in sandbox.remote_files
@@ -1599,9 +1946,12 @@ def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
     no_deleter_sandbox.files.delete_files = None
     no_deleter = _make_session(no_deleter_sandbox, root)
     with pytest.raises(ValueError, match="files.delete_files"):
-        asyncio.run(we_ops.sandbox_delete_internal_text_file(
-            session_ref=_ref(no_deleter), path=stale,
-        ))
+        asyncio.run(
+            we_ops.sandbox_delete_internal_text_file(
+                session_ref=_ref(no_deleter),
+                path=stale,
+            )
+        )
 
 
 def test_sandbox_replace_text_file(tmp_path, monkeypatch):
@@ -1610,25 +1960,41 @@ def test_sandbox_replace_text_file(tmp_path, monkeypatch):
     sandbox.remote_kinds[target] = "file"
     sandbox.remote_files[target] = b"\xff\xfe binary"
     with pytest.raises(ValueError, match="二进制"):
-        asyncio.run(we_ops.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
-            old_content="a", new_content="b",
-        ))
+        asyncio.run(
+            we_ops.sandbox_replace_text_file(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                old_content="a",
+                new_content="b",
+            )
+        )
     sandbox.remote_files[target] = b"one two"
     with pytest.raises(ValueError, match="未在文件中找到"):
-        asyncio.run(we_ops.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
-            old_content="zzz", new_content="b",
-        ))
+        asyncio.run(
+            we_ops.sandbox_replace_text_file(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                old_content="zzz",
+                new_content="b",
+            )
+        )
     with pytest.raises(ValueError, match="匹配多处"):
-        asyncio.run(we_ops.sandbox_replace_text_file(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
-            old_content="o", new_content="0",
-        ))
-    result = asyncio.run(we_ops.sandbox_replace_text_file(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt",
-        old_content="two", new_content="THREE",
-    ))
+        asyncio.run(
+            we_ops.sandbox_replace_text_file(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                old_content="o",
+                new_content="0",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_replace_text_file(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/a.txt",
+            old_content="two",
+            new_content="THREE",
+        )
+    )
     assert result["replaced_count"] == 1
     assert sandbox.remote_files[target] == b"one THREE"
 
@@ -1636,17 +2002,29 @@ def test_sandbox_replace_text_file(tmp_path, monkeypatch):
 def test_sandbox_write_tool_result(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="系统结果目录"):
-        asyncio.run(we_ops.sandbox_write_tool_result(
-            session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.txt", content="x",
-        ))
-    result = asyncio.run(we_ops.sandbox_write_tool_result(
-        session_ref=_ref(session), file_path="/mnt/user-data/outputs/.tool-offload/r_1.json", content="{}",
-    ))
+        asyncio.run(
+            we_ops.sandbox_write_tool_result(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/workspace/a.txt",
+                content="x",
+            )
+        )
+    result = asyncio.run(
+        we_ops.sandbox_write_tool_result(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/outputs/.tool-offload/r_1.json",
+            content="{}",
+        )
+    )
     assert result["bytes"] == 2
     with pytest.raises(ValueError, match="已存在"):
-        asyncio.run(we_ops.sandbox_write_tool_result(
-            session_ref=_ref(session), file_path="/mnt/user-data/outputs/.tool-offload/r_1.json", content="{}",
-        ))
+        asyncio.run(
+            we_ops.sandbox_write_tool_result(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/outputs/.tool-offload/r_1.json",
+                content="{}",
+            )
+        )
 
 
 def test_truncate_output():
@@ -1666,12 +2044,17 @@ def test_truncate_output():
 
 def test_parse_rg_output_skips_paths_outside_target():
     """搜索结果路径不在 target 前缀下时跳过（原缺失分支 1761->1764）。"""
-    stdout = "\n".join([
-        '{"type": "match", "data": {"path": {"text": "/other/outside.py"}, "line_number": 1, "lines": {"text": "x"}}}',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/in.py"}, "line_number": 2, "lines": {"text": "y"}}}',
-    ])
+    stdout = "\n".join(
+        [
+            '{"type": "match", "data": {"path": {"text": "/other/outside.py"}, "line_number": 1, "lines": {"text": "x"}}}',
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/in.py"}, "line_number": 2, "lines": {"text": "y"}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=10000,
+        stdout,
+        "/mnt/user-data/workspace",
+        max_results=10,
+        max_chars=10000,
     )
     assert [item["file"] for item in matches] == ["in.py"]
     assert has_more is False
@@ -1681,7 +2064,10 @@ def test_parse_rg_output_skips_match_without_line_number():
     """缺少 line_number 的匹配被跳过（原缺失分支 1766->1767）。"""
     stdout = '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}}}'
     matches, has_more = we_search.parse_rg_output(
-        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=10000,
+        stdout,
+        "/mnt/user-data/workspace",
+        max_results=10,
+        max_chars=10000,
     )
     assert matches == []
     assert has_more is False
@@ -1693,12 +2079,17 @@ def test_parse_rg_output_stops_when_body_chars_exhausted():
     第一条 line_cost = 4（内容长度）+ 0（结果列表为空不加分隔符）；
     第二条 = 4 + 1（结果列表非空需补分隔符）= 5，累计 9 > max_chars=6 触发截断。
     """
-    stdout = "\n".join([
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 1, "lines": {"text": "aaaa"}}}',
-        '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}, "line_number": 2, "lines": {"text": "bbbb"}}}',
-    ])
+    stdout = "\n".join(
+        [
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/a.py"}, "line_number": 1, "lines": {"text": "aaaa"}}}',
+            '{"type": "match", "data": {"path": {"text": "/mnt/user-data/workspace/b.py"}, "line_number": 2, "lines": {"text": "bbbb"}}}',
+        ]
+    )
     matches, has_more = we_search.parse_rg_output(
-        stdout, "/mnt/user-data/workspace", max_results=10, max_chars=6,
+        stdout,
+        "/mnt/user-data/workspace",
+        max_results=10,
+        max_chars=6,
     )
     assert [item["file"] for item in matches] == ["a.py"]
     assert has_more is True
@@ -1730,7 +2121,8 @@ def test_resolve_sandbox_target_for_batch_is_guarded_upstream():
     """
     with pytest.raises(ValueError, match="内部语义模型写入只能覆盖"):
         we_ops._resolve_sandbox_target_for_batch(
-            None, "/mnt/user-data/workspace/notes.txt",
+            None,
+            "/mnt/user-data/workspace/notes.txt",
         )
 
 
@@ -1791,9 +2183,12 @@ def test_list_sandbox_directory_entries_reraises_unexpected_error(tmp_path, monk
 
     monkeypatch.setattr(sandbox.files, "list_directory", _boom)
     with pytest.raises(PermissionError):
-        asyncio.run(we_api._list_sandbox_directory_entries(
-            session=session, path="/mnt/user-data/workspace",
-        ))
+        asyncio.run(
+            we_api._list_sandbox_directory_entries(
+                session=session,
+                path="/mnt/user-data/workspace",
+            )
+        )
 
 
 def test_walk_sandbox_tree_skips_already_visited_directory(tmp_path, monkeypatch):
@@ -1812,9 +2207,12 @@ def test_walk_sandbox_tree_skips_already_visited_directory(tmp_path, monkeypatch
     monkeypatch.setattr(we_api, "_list_sandbox_directory_entries", _fake_list)
     monkeypatch.setattr(we_api, "_sandbox_path_kind", _fake_kind)
 
-    files, directories = asyncio.run(we_api._walk_sandbox_tree(
-        session=session, root="/mnt/user-data/workspace",
-    ))
+    files, directories = asyncio.run(
+        we_api._walk_sandbox_tree(
+            session=session,
+            root="/mnt/user-data/workspace",
+        )
+    )
     assert files == []
     assert [str(getattr(item, "path", "")) for item in directories] == ["/mnt/user-data/workspace/sub"]
     # 子目录被列出一次、入队两次；第二次出队时命中 visited 直接 continue，
@@ -1835,9 +2233,12 @@ def test_walk_sandbox_tree_ignores_unknown_entry_types(tmp_path, monkeypatch):
     monkeypatch.setattr(we_api, "_list_sandbox_directory_entries", _fake_list)
     monkeypatch.setattr(we_api, "_sandbox_path_kind", _fake_kind)
 
-    files, directories = asyncio.run(we_api._walk_sandbox_tree(
-        session=session, root="/mnt/user-data/workspace",
-    ))
+    files, directories = asyncio.run(
+        we_api._walk_sandbox_tree(
+            session=session,
+            root="/mnt/user-data/workspace",
+        )
+    )
     assert files == [] and directories == []
 
 
@@ -1905,9 +2306,12 @@ def test_sandbox_path_info_reraises_unexpected_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sandbox.files, "get_file_info", _boom)
     with pytest.raises(PermissionError):
-        asyncio.run(we_api._sandbox_path_info(
-            session=session, path="/mnt/user-data/workspace/a.txt",
-        ))
+        asyncio.run(
+            we_api._sandbox_path_info(
+                session=session,
+                path="/mnt/user-data/workspace/a.txt",
+            )
+        )
 
 
 def test_sandbox_path_info_returns_none_for_non_dict_payload(tmp_path, monkeypatch):
@@ -1918,9 +2322,15 @@ def test_sandbox_path_info_returns_none_for_non_dict_payload(tmp_path, monkeypat
         return ["not", "a", "dict"]
 
     monkeypatch.setattr(sandbox.files, "get_file_info", _unexpected)
-    assert asyncio.run(we_api._sandbox_path_info(
-        session=session, path="/mnt/user-data/workspace/a.txt",
-    )) is None
+    assert (
+        asyncio.run(
+            we_api._sandbox_path_info(
+                session=session,
+                path="/mnt/user-data/workspace/a.txt",
+            )
+        )
+        is None
+    )
 
 
 def test_sandbox_path_kind_reraises_unexpected_error(tmp_path, monkeypatch):
@@ -1936,11 +2346,13 @@ def test_sandbox_path_kind_reraises_unexpected_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sandbox.files, "list_directory", _boom)
     with pytest.raises(PermissionError):
-        asyncio.run(we_api._sandbox_path_kind(
-            session=session,
-            path="/mnt/user-data/workspace/a.txt",
-            entry=SimpleNamespace(path="/mnt/user-data/workspace/a.txt"),
-        ))
+        asyncio.run(
+            we_api._sandbox_path_kind(
+                session=session,
+                path="/mnt/user-data/workspace/a.txt",
+                entry=SimpleNamespace(path="/mnt/user-data/workspace/a.txt"),
+            )
+        )
 
 
 def test_sandbox_artifact_payload_returns_empty_on_read_error(tmp_path, monkeypatch):
@@ -1953,9 +2365,15 @@ def test_sandbox_artifact_payload_returns_empty_on_read_error(tmp_path, monkeypa
         raise RuntimeError("transport broken")
 
     monkeypatch.setattr(sandbox.files, "read_bytes", _boom)
-    assert asyncio.run(we_ops.sandbox_artifact_payload(
-        session_ref=_ref(session), file_path="/mnt/user-data/outputs/report.json",
-    )) == {}
+    assert (
+        asyncio.run(
+            we_ops.sandbox_artifact_payload(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/outputs/report.json",
+            )
+        )
+        == {}
+    )
 
 
 def _office_preview_setup(sandbox):
@@ -1973,9 +2391,13 @@ def test_sandbox_render_office_html_truncates_oversized_preview(tmp_path, monkey
         return SimpleNamespace(path=path, size=10_000_000)
 
     monkeypatch.setattr(we_ops, "_sandbox_path_info", _fake_info)
-    result = asyncio.run(we_ops.sandbox_render_office_html(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=100,
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_render_office_html(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/a.docx",
+            max_chars=100,
+        )
+    )
     assert result["truncated"] is True
     assert result["html"] == ""
 
@@ -1998,9 +2420,13 @@ def test_sandbox_render_office_html_swallows_cleanup_error(tmp_path, monkeypatch
     monkeypatch.setattr(we_ops, "_read_sandbox_file_bytes", _fake_read)
     monkeypatch.setattr(sandbox.files, "delete_files", _boom)
 
-    result = asyncio.run(we_ops.sandbox_render_office_html(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=1000,
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_render_office_html(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/a.docx",
+            max_chars=1000,
+        )
+    )
     assert result["html"] == "<p>preview</p>"
     assert result["truncated"] is False
 
@@ -2020,9 +2446,13 @@ def test_sandbox_render_office_html_skips_cleanup_without_deleter(tmp_path, monk
     monkeypatch.setattr(we_ops, "_read_sandbox_file_bytes", _fake_read)
     monkeypatch.setattr(sandbox.files, "delete_files", None)
 
-    result = asyncio.run(we_ops.sandbox_render_office_html(
-        session_ref=_ref(session), file_path="/mnt/user-data/workspace/a.docx", max_chars=1000,
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_render_office_html(
+            session_ref=_ref(session),
+            file_path="/mnt/user-data/workspace/a.docx",
+            max_chars=1000,
+        )
+    )
     assert result["html"] == "<p>preview</p>"
 
 
@@ -2035,9 +2465,12 @@ def test_sandbox_create_dir_reraises_unexpected_probe_error(tmp_path, monkeypatc
 
     monkeypatch.setattr(we_api, "_sandbox_path_kind", _boom)
     with pytest.raises(PermissionError):
-        asyncio.run(we_ops.sandbox_create_dir(
-            session_ref=_ref(session), path="/mnt/user-data/workspace/newdir",
-        ))
+        asyncio.run(
+            we_ops.sandbox_create_dir(
+                session_ref=_ref(session),
+                path="/mnt/user-data/workspace/newdir",
+            )
+        )
 
 
 def test_sandbox_delete_path_allows_empty_directory(tmp_path, monkeypatch):
@@ -2045,10 +2478,14 @@ def test_sandbox_delete_path_allows_empty_directory(tmp_path, monkeypatch):
     _root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
     sandbox.remote_kinds["/mnt/user-data/workspace/empty"] = "directory"
 
-    result = asyncio.run(we_ops.sandbox_delete_path(
-        session_ref=_ref(session), path="/mnt/user-data/workspace/empty",
-        recursive=False, expected_type="dir",
-    ))
+    result = asyncio.run(
+        we_ops.sandbox_delete_path(
+            session_ref=_ref(session),
+            path="/mnt/user-data/workspace/empty",
+            recursive=False,
+            expected_type="dir",
+        )
+    )
     assert result["type"] == "dir"
     assert ("dir", ["/mnt/user-data/workspace/empty"]) in sandbox.files.delete_calls
 
@@ -2066,11 +2503,13 @@ def test_sandbox_move_path_reraises_unexpected_probe_error(tmp_path, monkeypatch
 
     monkeypatch.setattr(we_api, "_sandbox_path_kind", _fake_kind)
     with pytest.raises(PermissionError):
-        asyncio.run(we_ops.sandbox_move_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/workspace/a.txt",
-            destination_path="/mnt/user-data/workspace/b.txt",
-        ))
+        asyncio.run(
+            we_ops.sandbox_move_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/workspace/a.txt",
+                destination_path="/mnt/user-data/workspace/b.txt",
+            )
+        )
 
 
 def test_sandbox_copy_path_reraises_unexpected_probe_error(tmp_path, monkeypatch):
@@ -2086,11 +2525,13 @@ def test_sandbox_copy_path_reraises_unexpected_probe_error(tmp_path, monkeypatch
 
     monkeypatch.setattr(we_ops, "_sandbox_path_kind", _fake_kind)
     with pytest.raises(PermissionError):
-        asyncio.run(we_ops.sandbox_copy_path(
-            session_ref=_ref(session),
-            source_path="/mnt/user-data/workspace/a.txt",
-            destination_path="/mnt/user-data/workspace/b.txt",
-        ))
+        asyncio.run(
+            we_ops.sandbox_copy_path(
+                session_ref=_ref(session),
+                source_path="/mnt/user-data/workspace/a.txt",
+                destination_path="/mnt/user-data/workspace/b.txt",
+            )
+        )
 
 
 def test_sandbox_write_tool_result_reraises_unexpected_read_error(tmp_path, monkeypatch):
@@ -2102,8 +2543,10 @@ def test_sandbox_write_tool_result_reraises_unexpected_read_error(tmp_path, monk
 
     monkeypatch.setattr(sandbox.files, "read_bytes", _boom)
     with pytest.raises(PermissionError):
-        asyncio.run(we_ops.sandbox_write_tool_result(
-            session_ref=_ref(session),
-            file_path="/mnt/user-data/outputs/.tool-offload/r_9.json",
-            content="{}",
-        ))
+        asyncio.run(
+            we_ops.sandbox_write_tool_result(
+                session_ref=_ref(session),
+                file_path="/mnt/user-data/outputs/.tool-offload/r_9.json",
+                content="{}",
+            )
+        )

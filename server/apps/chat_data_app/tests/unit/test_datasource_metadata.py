@@ -61,7 +61,9 @@ async def test_mysql_metadata_adapter_delegates_with_resolved_credentials(monkey
             captured["table_names"] = table_names
             return [{"table_name": "orders"}]
 
-    monkeypatch.setattr(datasource_metadata, "resolve_mysql_credentials", lambda _config: {"user": "u", "password": "p"})
+    monkeypatch.setattr(
+        datasource_metadata, "resolve_mysql_credentials", lambda _config: {"user": "u", "password": "p"}
+    )
     monkeypatch.setattr(datasource_metadata, "MySQLSyncService", FakeSyncService)
 
     adapter = MySQLMetadataAdapter({"host": "db", "port": 3307, "database": "demo"})
@@ -92,7 +94,9 @@ async def test_hive_direct_metadata_adapter_delegates_with_resolved_credentials(
         async def get_full_schema_async(self, table_names):
             return [{"table_name": table_names[0]}]
 
-    monkeypatch.setattr(datasource_metadata, "resolve_hive_credentials", lambda _config: {"username": "u", "password": "p"})
+    monkeypatch.setattr(
+        datasource_metadata, "resolve_hive_credentials", lambda _config: {"username": "u", "password": "p"}
+    )
     monkeypatch.setattr(datasource_metadata, "HiveSyncService", FakeSyncService)
 
     adapter = HiveDirectMetadataAdapter({"host": "hive", "port": 10001, "database": "dw"})

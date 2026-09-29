@@ -57,11 +57,14 @@ async def _dashboard_permission_error(service: Any, dashboard_id: str):
     """区分看板不存在与非本人无管理权限。"""
     existing_dashboard = await service.get_dashboard(dashboard_id, user_id=None, include_public=False)
     if existing_dashboard:
-        return business_response(msg="无权限操作该看板", code=ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED, status="error")
+        return business_response(
+            msg="无权限操作该看板", code=ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED, status="error"
+        )
     return business_response(msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
 
 # ============ 分析大屏接口 ============
+
 
 def _truncate_text(value: str, max_length: int) -> str:
     """裁剪文本长度并去除首尾空白。"""
@@ -119,17 +122,12 @@ async def list_dashboards(request: Request, scope: str = "mine"):
         dashboards = await service.list_dashboards(user_id=user_id, scope=normalized_scope)
         dashboards = _with_dashboards_permission(dashboards, user_id)
 
-        return business_response(
-            data={"dashboards": dashboards, "total": len(dashboards)},
-            msg="获取成功"
-        )
+        return business_response(data={"dashboards": dashboards, "total": len(dashboards)}, msg="获取成功")
 
     except Exception as e:
         logger.error(f"获取大屏列表失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED,
-            status="error"
+            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED, status="error"
         )
 
 
@@ -160,40 +158,40 @@ async def create_dashboard(request: DashboardCreateRequest, http_request: Reques
         )
         dashboard = _with_dashboard_permission(dashboard, user_id)
 
-        return business_response(
-            data=dashboard,
-            msg="创建成功"
-        )
+        return business_response(data=dashboard, msg="创建成功")
 
     except Exception as e:
         logger.error(f"创建大屏失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"创建失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED,
-            status="error"
+            msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED, status="error"
         )
 
 
 def _spec_cards_have_semantic_config(cards: List[Any]) -> bool:
     """判断规格卡片中是否任一携带语义模型 ID。"""
-    return any(
-        isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
-        for card in cards
-    )
+    return any(isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip() for card in cards)
 
 
 def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: Dict[str, Any], cards: List[Any]):
     """校验 AI 看板规格；非法时返回错误响应，合法时返回 None。"""
     datasource_id = str(request.datasource_id or "").strip()
     if not datasource_id:
-        return business_response(msg="缺少数据源ID，无法创建看板", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+        return business_response(
+            msg="缺少数据源ID，无法创建看板", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error"
+        )
     if spec.get("need_clarify"):
-        return business_response(msg="当前方案仍需补充确认，暂不能写入看板", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
+        return business_response(
+            msg="当前方案仍需补充确认，暂不能写入看板", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error"
+        )
     if not cards:
-        return business_response(msg="看板规格缺少卡片，无法创建看板", code=ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED, status="error")
+        return business_response(
+            msg="看板规格缺少卡片，无法创建看板", code=ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED, status="error"
+        )
     semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
     if not semantic_config_id and not _spec_cards_have_semantic_config(cards):
-        return business_response(msg="看板规格缺少语义模型ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error")
+        return business_response(
+            msg="看板规格缺少语义模型ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error"
+        )
     return None
 
 
@@ -219,13 +217,20 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
             username=str(current_user.username),
         )
         if not result.get("panels"):
-            return business_response(msg="看板创建失败：没有可创建的有效卡片", data={"warnings": result.get("warnings") or []}, code=ErrorCode.CHATDATA_DASHBOARD_NO_VALID_CARD, status="error")
+            return business_response(
+                msg="看板创建失败：没有可创建的有效卡片",
+                data={"warnings": result.get("warnings") or []},
+                code=ErrorCode.CHATDATA_DASHBOARD_NO_VALID_CARD,
+                status="error",
+            )
         return business_response(data=result, msg="看板创建成功")
     except HTTPException:
         raise
     except Exception as e:
         logger.error("根据 AI 看板规格创建大屏失败: %s", e, exc_info=True)
-        return business_response(msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED, status="error")
+        return business_response(
+            msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED, status="error"
+        )
 
 
 @router.post("/dashboards/{dashboard_id}/publish")
@@ -236,14 +241,18 @@ async def publish_dashboard(dashboard_id: str, request: Request):
         user_id = str(current_user.user_id)
         operator_name = str(current_user.username or "")
         service = get_dashboard_service()
-        dashboard = await service.set_dashboard_public(dashboard_id, user_id=user_id, is_public=True, operator_name=operator_name)
+        dashboard = await service.set_dashboard_public(
+            dashboard_id, user_id=user_id, is_public=True, operator_name=operator_name
+        )
         if not dashboard:
             return await _dashboard_permission_error(service, dashboard_id)
         dashboard = _with_dashboard_permission(dashboard, user_id)
         return business_response(data=dashboard, msg="发布成功")
     except Exception as e:
         logger.error("发布大屏失败: %s", e, exc_info=True)
-        return business_response(msg=f"发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED, status="error")
+        return business_response(
+            msg=f"发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED, status="error"
+        )
 
 
 @router.post("/dashboards/{dashboard_id}/unpublish")
@@ -254,14 +263,18 @@ async def unpublish_dashboard(dashboard_id: str, request: Request):
         user_id = str(current_user.user_id)
         operator_name = str(current_user.username or "")
         service = get_dashboard_service()
-        dashboard = await service.set_dashboard_public(dashboard_id, user_id=user_id, is_public=False, operator_name=operator_name)
+        dashboard = await service.set_dashboard_public(
+            dashboard_id, user_id=user_id, is_public=False, operator_name=operator_name
+        )
         if not dashboard:
             return await _dashboard_permission_error(service, dashboard_id)
         dashboard = _with_dashboard_permission(dashboard, user_id)
         return business_response(data=dashboard, msg="已取消发布")
     except Exception as e:
         logger.error("取消发布大屏失败: %s", e, exc_info=True)
-        return business_response(msg=f"取消发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED, status="error")
+        return business_response(
+            msg=f"取消发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED, status="error"
+        )
 
 
 @router.get("/dashboards/{dashboard_id}")
@@ -283,9 +296,7 @@ async def get_dashboard(dashboard_id: str, request: Request):
 
         if not dashboard:
             return business_response(
-                msg=f"大屏不存在: {dashboard_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
+                msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
 
         return business_response(data=_with_dashboard_permission(dashboard, user_id), msg="获取成功")
@@ -293,9 +304,7 @@ async def get_dashboard(dashboard_id: str, request: Request):
     except Exception as e:
         logger.error(f"获取大屏详情失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_GET_FAILED,
-            status="error"
+            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_GET_FAILED, status="error"
         )
 
 
@@ -334,9 +343,7 @@ async def update_dashboard(dashboard_id: str, request: DashboardUpdateRequest, h
     except Exception as e:
         logger.error(f"更新大屏失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"更新失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED,
-            status="error"
+            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED, status="error"
         )
 
 
@@ -361,21 +368,17 @@ async def delete_dashboard(dashboard_id: str, request: Request):
         if not success:
             return await _dashboard_permission_error(service, dashboard_id)
 
-        return business_response(
-            data={"dashboard_id": dashboard_id},
-            msg="删除成功"
-        )
+        return business_response(data={"dashboard_id": dashboard_id}, msg="删除成功")
 
     except Exception as e:
         logger.error(f"删除大屏失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"删除失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED,
-            status="error"
+            msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED, status="error"
         )
 
 
 # ============ 面板接口 ============
+
 
 @router.post("/dashboards/{dashboard_id}/panels")
 async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request: Request):
@@ -416,22 +419,15 @@ async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request
 
         if not panel:
             return business_response(
-                msg=f"大屏不存在: {dashboard_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
+                msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
 
-        return business_response(
-            data=panel,
-            msg="添加成功"
-        )
+        return business_response(data=panel, msg="添加成功")
 
     except Exception as e:
         logger.error(f"添加面板失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"添加失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED,
-            status="error"
+            msg=f"添加失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED, status="error"
         )
 
 
@@ -440,21 +436,13 @@ async def generate_panel_name(request: PanelNameGenerateRequest):
     """生成面板标题。"""
     try:
         panel_name = await _resolve_panel_name(
-            sql=request.sql,
-            chart_type=request.chart_type,
-            provided_name=request.name,
-            max_length=24
+            sql=request.sql, chart_type=request.chart_type, provided_name=request.name, max_length=24
         )
-        return business_response(
-            data={"name": panel_name},
-            msg="生成成功"
-        )
+        return business_response(data={"name": panel_name}, msg="生成成功")
     except Exception as e:
         logger.error(f"生成面板标题失败: {str(e)}", exc_info=True)
         return business_response(
-            msg="生成面板标题失败，请稍后重试",
-            code=ErrorCode.CHATDATA_DASHBOARD_LAYOUT_FAILED,
-            status="error"
+            msg="生成面板标题失败，请稍后重试", code=ErrorCode.CHATDATA_DASHBOARD_LAYOUT_FAILED, status="error"
         )
 
 
@@ -495,23 +483,14 @@ async def update_panel(dashboard_id: str, panel_id: str, request: PanelUpdateReq
         )
 
         if not panel:
-            return business_response(
-                msg=f"面板不存在: {panel_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
-            )
+            return business_response(msg=f"面板不存在: {panel_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        return business_response(
-            data=panel,
-            msg="更新成功"
-        )
+        return business_response(data=panel, msg="更新成功")
 
     except Exception as e:
         logger.error(f"更新面板失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"更新失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED,
-            status="error"
+            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED, status="error"
         )
 
 
@@ -531,26 +510,19 @@ async def delete_panel(dashboard_id: str, panel_id: str, request: Request):
         current_user = _current_user(request)
         operator_name = str(current_user.username or "")
         service = get_dashboard_service()
-        success = await service.delete_panel(dashboard_id, panel_id, user_id=str(current_user.user_id), operator_name=operator_name)
+        success = await service.delete_panel(
+            dashboard_id, panel_id, user_id=str(current_user.user_id), operator_name=operator_name
+        )
 
         if not success:
-            return business_response(
-                msg=f"面板不存在: {panel_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
-            )
+            return business_response(msg=f"面板不存在: {panel_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        return business_response(
-            data={"panel_id": panel_id},
-            msg="删除成功"
-        )
+        return business_response(data={"panel_id": panel_id}, msg="删除成功")
 
     except Exception as e:
         logger.error(f"删除面板失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"删除失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED,
-            status="error"
+            msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED, status="error"
         )
 
 
@@ -580,22 +552,15 @@ async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_re
         )
         if updated_count is None:
             return business_response(
-                msg=f"大屏不存在: {dashboard_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
+                msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
 
-        return business_response(
-            data={"dashboard_id": dashboard_id, "updated": updated_count},
-            msg="布局更新成功"
-        )
+        return business_response(data={"dashboard_id": dashboard_id, "updated": updated_count}, msg="布局更新成功")
 
     except Exception as e:
         logger.error(f"更新布局失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"更新失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED,
-            status="error"
+            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED, status="error"
         )
 
 
@@ -674,17 +639,12 @@ async def execute_panels_batch(
         dashboard = await service.get_dashboard(dashboard_id, user_id=str(current_user.user_id), include_public=True)
         if not dashboard:
             return business_response(
-                msg=f"大屏不存在: {dashboard_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
+                msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
         panel_ids = [p["id"] for p in dashboard.get("panels", [])]
 
     if not panel_ids:
-        return business_response(
-            data={"results": {}},
-            msg="无面板需要执行"
-        )
+        return business_response(data={"results": {}}, msg="无面板需要执行")
 
     try:
         panel_map, execution_target_map = await dashboard_runtime.prepare_dashboard_batch_context(
@@ -724,7 +684,13 @@ async def execute_panels_batch(
         },
         progress_text="看板执行中",
     )
-    await dashboard_runtime.dashboard_runtime().update_query_task(task_info["task_id"], status="running", progress_text="看板执行中", started_time=datetime.now(), error_message=None)
+    await dashboard_runtime.dashboard_runtime().update_query_task(
+        task_info["task_id"],
+        status="running",
+        progress_text="看板执行中",
+        started_time=datetime.now(),
+        error_message=None,
+    )
 
     return StreamingResponse(
         dashboard_runtime.stream_dashboard_batch_execution(
@@ -742,7 +708,7 @@ async def execute_panels_batch(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-        }
+        },
     )
 
 
@@ -759,9 +725,7 @@ async def create_dashboard_query_task(
         dashboard = await service.get_dashboard(dashboard_id, user_id=str(current_user.user_id), include_public=True)
         if not dashboard:
             return business_response(
-                msg=f"大屏不存在: {dashboard_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
+                msg=f"大屏不存在: {dashboard_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
 
         panel_ids, panel_member_datasource_ids = _resolve_panel_batch_request(request)
@@ -802,12 +766,10 @@ async def create_dashboard_query_task(
                 "status": task_info["status"],
                 "poll_interval_ms": dashboard_runtime.dashboard_runtime().query_task_poll_interval_ms,
             },
-            msg="任务已创建"
+            msg="任务已创建",
         )
     except Exception as e:
         logger.error(f"创建看板异步任务失败: {str(e)}", exc_info=True)
         return business_response(
-            msg="创建看板异步任务失败，请稍后重试",
-            code=ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED,
-            status="error"
+            msg="创建看板异步任务失败，请稍后重试", code=ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED, status="error"
         )

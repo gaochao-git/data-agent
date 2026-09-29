@@ -225,7 +225,9 @@ def test_resolvers_fall_back_when_state_values_are_blank():
 def test_alarm_entry_exposes_platform_contract_fields(monkeypatch):
     """alarm_id / error_code 属 OMS 平台契约，ext1 带会话与阈值上下文。"""
     captured = {}
-    monkeypatch.setattr(alarm_module, "emit_alarm", lambda message, **kwargs: captured.update({"message": message, **kwargs}))
+    monkeypatch.setattr(
+        alarm_module, "emit_alarm", lambda message, **kwargs: captured.update({"message": message, **kwargs})
+    )
 
     alarm_module.emit_tool_call_rate_alarm(
         conversation_id="conv-x",

@@ -100,7 +100,11 @@ def test_collect_operand_tables_walks_metric_and_binary():
     operand = {
         "type": "binary",
         "left": {"type": "metric", "tableAlias": "m1"},
-        "right": {"type": "binary", "left": {"type": "metric", "table": "m2"}, "right": {"type": "literal", "value": 1}},
+        "right": {
+            "type": "binary",
+            "left": {"type": "metric", "table": "m2"},
+            "right": {"type": "literal", "value": 1},
+        },
     }
     collect_operand_tables(operand, tables, lambda op, acc: acc.add(op.get("tableAlias") or op.get("table")))
     assert tables == {"m1", "m2"}

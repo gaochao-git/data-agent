@@ -107,11 +107,7 @@ def column_dict_has_enum_mapping(column_dict: Optional[Dict[str, Any]]) -> bool:
     enum_values = (column_dict or {}).get("enum_values") if isinstance(column_dict, dict) else []
     if not isinstance(enum_values, list):
         return False
-    return any(
-        str((item or {}).get("value") or "").strip()
-        for item in enum_values
-        if isinstance(item, dict)
-    )
+    return any(str((item or {}).get("value") or "").strip() for item in enum_values if isinstance(item, dict))
 
 
 async def validate_semantic_logical_types(
@@ -280,9 +276,7 @@ class SemanticConfigService:
     def _enum_mapping_covers_values(values: List[str], mapping: Dict[str, str]) -> bool:
         value_set = {str(value).strip() for value in values if str(value or "").strip()}
         mapping_keys = {
-            str(key).strip()
-            for key, value in mapping.items()
-            if str(key or "").strip() and str(value or "").strip()
+            str(key).strip() for key, value in mapping.items() if str(key or "").strip() and str(value or "").strip()
         }
         return bool(value_set and value_set <= mapping_keys)
 
@@ -336,12 +330,10 @@ class SemanticConfigService:
             return config
         result = dict(config)
         result["dimensions"] = [
-            cls._with_export_column_dict(raw, column_dicts, metric=False)
-            for raw in result.get("dimensions") or []
+            cls._with_export_column_dict(raw, column_dicts, metric=False) for raw in result.get("dimensions") or []
         ]
         result["metrics"] = [
-            cls._with_export_column_dict(raw, column_dicts, metric=True)
-            for raw in result.get("metrics") or []
+            cls._with_export_column_dict(raw, column_dicts, metric=True) for raw in result.get("metrics") or []
         ]
         return result
 
@@ -360,7 +352,9 @@ class SemanticConfigService:
         return item
 
     @classmethod
-    def _merge_column_dict(cls, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]) -> Dict[str, Any]:
+    def _merge_column_dict(
+        cls, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]
+    ) -> Dict[str, Any]:
         result = dict(config or {})
         dimensions = []
         for raw_dimension in result.get("dimensions") or []:
@@ -486,15 +480,9 @@ class SemanticConfigService:
         """扫描数据源组现有公共模型，返回 (已配置物理表, 已占用名称, 全部配置)。"""
         all_configs = await self.dao.get_by_group_id_async(group_id)
         visible_configs = [config for config in all_configs if is_public_semantic_config(config)]
-        configured_tables = {
-            table
-            for config in visible_configs
-            for table in self._config_physical_tables(config)
-        }
+        configured_tables = {table for config in visible_configs for table in self._config_physical_tables(config)}
         existing_names = {
-            str(config.get("name") or "").strip()
-            for config in visible_configs
-            if str(config.get("name") or "").strip()
+            str(config.get("name") or "").strip() for config in visible_configs if str(config.get("name") or "").strip()
         }
         return configured_tables, existing_names, all_configs
 
@@ -574,7 +562,9 @@ class SemanticConfigService:
                     item_order,
                 )
         except Exception as exc:
-            logger.warning("批量写入基础语义模型失败，回退到单表写入: datasource_id=%s error=%s", datasource_id, exc, exc_info=True)
+            logger.warning(
+                "批量写入基础语义模型失败，回退到单表写入: datasource_id=%s error=%s", datasource_id, exc, exc_info=True
+            )
             for table_name, config in pending_configs:
                 try:
                     if not await self.dao.upsert_async(group_id, config):
@@ -635,10 +625,17 @@ class SemanticConfigService:
             )
             if status == "skipped":
                 result["skipped"] += 1
-                self._set_generation_item(result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order)
+                self._set_generation_item(
+                    result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order
+                )
             elif status == "failed":
                 result["failed"] += 1
-                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": payload or "模型生成失败"}, item_order)
+                self._set_generation_item(
+                    result,
+                    table_name,
+                    {"table": table_name, "status": "failed", "reason": payload or "模型生成失败"},
+                    item_order,
+                )
             else:
                 pending_configs.append(payload)
         if not pending_configs:
@@ -647,7 +644,9 @@ class SemanticConfigService:
         return result
 
     @staticmethod
-    def _set_generation_item(result: Dict[str, Any], table_name: str, item: Dict[str, Any], item_order: List[str]) -> None:
+    def _set_generation_item(
+        result: Dict[str, Any], table_name: str, item: Dict[str, Any], item_order: List[str]
+    ) -> None:
         for index, current in enumerate(result["items"]):
             if current.get("table") == table_name:
                 result["items"][index] = item
@@ -689,7 +688,7 @@ class SemanticConfigService:
             return raw_name
         digest = sha1(table_name.encode("utf-8")).hexdigest()[:8]
         stable_suffix = f"_{digest}{suffix}"
-        return f"{table_name[:128 - len(stable_suffix)]}{stable_suffix}"
+        return f"{table_name[: 128 - len(stable_suffix)]}{stable_suffix}"
 
     @staticmethod
     def _basic_single_table_description(table_name: str) -> str:
@@ -734,20 +733,29 @@ class SemanticConfigService:
             display_name = str(column.get("description") or "").strip() or column_name
             display_name = cls._unique_dimension_name(display_name, used_names)
             used_names.add(display_name)
-            physical_type = str(
-                column.get("mysql_type") or column.get("hive_type")
-                or column.get("type") or column.get("data_type") or ""
-            ).strip().lower()
-            dimensions.append({
-                "name": display_name,
-                "field_name": column_name,
-                "column": column_name,
-                "expression": f"`{column_name.replace('`', '``')}`",
-                "table": table_name,
-                "table_alias": table_name,
-                "logical_type": cls._infer_basic_logical_type(physical_type),
-                "description": "",
-            })
+            physical_type = (
+                str(
+                    column.get("mysql_type")
+                    or column.get("hive_type")
+                    or column.get("type")
+                    or column.get("data_type")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
+            dimensions.append(
+                {
+                    "name": display_name,
+                    "field_name": column_name,
+                    "column": column_name,
+                    "expression": f"`{column_name.replace('`', '``')}`",
+                    "table": table_name,
+                    "table_alias": table_name,
+                    "logical_type": cls._infer_basic_logical_type(physical_type),
+                    "description": "",
+                }
+            )
         return {
             "name": name,
             "description": cls._basic_single_table_description(table_name),
@@ -822,11 +830,17 @@ class SemanticConfigService:
             "update_by_name": str(kwargs.get("update_by_name") or current.get("update_by_name") or "").strip(),
         }
 
-    async def delete_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = "") -> bool:
+    async def delete_async(
+        self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = ""
+    ) -> bool:
         config = await self.get_config_async(datasource_id, config_id)
         if not config:
             return False
-        await self.dao.soft_delete_async(config_id, update_by=update_by or config.get("update_by") or "", update_by_name=update_by_name or config.get("update_by_name") or "")
+        await self.dao.soft_delete_async(
+            config_id,
+            update_by=update_by or config.get("update_by") or "",
+            update_by_name=update_by_name or config.get("update_by_name") or "",
+        )
         return True
 
     async def batch_toggle_enabled_async(
@@ -856,8 +870,7 @@ class SemanticConfigService:
         if not requested:
             return empty_batch_toggle_result()
         current_map = {
-            str(config.get("id") or ""): config
-            for config in await self.dao.get_by_group_id_async(group_id, user_id)
+            str(config.get("id") or ""): config for config in await self.dao.get_by_group_id_async(group_id, user_id)
         }
         classified = classify_batch_toggle_ids(requested, current_map, enabled, user_id, admin_manage)
         updatable = classified["updatable"]
@@ -882,6 +895,7 @@ def get_semantic_config_service() -> SemanticConfigService:
     global _semantic_config_service
     if _semantic_config_service is None:
         from ...datasource.manager import get_datasource_manager
+
         _semantic_config_service = SemanticConfigService(get_datasource_manager())
     return _semantic_config_service
 
@@ -1011,7 +1025,9 @@ async def _apply_physical_validation(
     try:
         column_dicts = await ds_manager.get_datasource_column_dicts_async(datasource_id)
     except Exception as exc:
-        logger.warning("批量读取字段数据字典失败，枚举校验降级逐维度查询: datasource_id=%s error=%s", datasource_id, exc)
+        logger.warning(
+            "批量读取字段数据字典失败，枚举校验降级逐维度查询: datasource_id=%s error=%s", datasource_id, exc
+        )
         column_dicts = None
     for item in imports:
         if not item.importable:
@@ -1077,19 +1093,13 @@ async def cross_model_findings_for_imports(
         logger.warning("跨模型口径检查读取存量配置失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
         return {}
     import_names = {item.name for item in importable}
-    comparison_pool: List[Dict[str, Any]] = [
-        {**item.to_config_payload(), "enabled": False}
-        for item in importable
-    ]
+    comparison_pool: List[Dict[str, Any]] = [{**item.to_config_payload(), "enabled": False} for item in importable]
     comparison_pool.extend(
         config
         for config in _cross_model_comparison_pool(existing_configs, user_id)
         if str(config.get("name") or "").strip() not in import_names
     )
-    return {
-        item.name: check_cross_model_metrics(comparison_pool, focus_config_name=item.name)
-        for item in importable
-    }
+    return {item.name: check_cross_model_metrics(comparison_pool, focus_config_name=item.name) for item in importable}
 
 
 async def quality_findings_for_imports(
@@ -1117,7 +1127,8 @@ async def quality_findings_for_imports(
             # enabled/scope_type 仅占位，不参与检查项（与保存链路占位口径一致）
             {**item.to_config_payload(), "enabled": False, "scope_type": "public"},
             physical_columns=physical_columns,
-        ).to_payload()["findings"] + cross_by_model.get(item.name, [])
+        ).to_payload()["findings"]
+        + cross_by_model.get(item.name, [])
         for item in imports
         if item.importable
     }
@@ -1314,7 +1325,11 @@ async def persist_ossie_imports(
         )
         if kind in ("created", "replaced") and item.column_dicts:
             payload["column_dict_filled"] = await fill_ossie_column_dicts(
-                item, ds_manager, datasource_id, user_id, username,
+                item,
+                ds_manager,
+                datasource_id,
+                user_id,
+                username,
             )
         buckets[kind].append(payload)
     return created, replaced, skipped

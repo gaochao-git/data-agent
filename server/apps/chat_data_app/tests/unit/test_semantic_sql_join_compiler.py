@@ -6,15 +6,17 @@ from apps.chat_data_app.services.semantic.core.semantic_sql.join_compiler import
 def test_build_join_clauses_supports_alias_and_multiple_conditions():
     clauses = build_join_clauses(
         "orders",
-        [{
-            "rightTable": "users",
-            "rightAlias": "u",
-            "joinType": "LEFT",
-            "joinConditions": [
-                {"leftAlias": "o", "leftColumn": "user_id", "rightColumn": "id"},
-                {"leftAlias": "o", "leftColumn": "tenant_id", "rightColumn": "tenant_id"},
-            ],
-        }],
+        [
+            {
+                "rightTable": "users",
+                "rightAlias": "u",
+                "joinType": "LEFT",
+                "joinConditions": [
+                    {"leftAlias": "o", "leftColumn": "user_id", "rightColumn": "id"},
+                    {"leftAlias": "o", "leftColumn": "tenant_id", "rightColumn": "tenant_id"},
+                ],
+            }
+        ],
         main_alias="o",
     )
 

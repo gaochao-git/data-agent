@@ -94,6 +94,7 @@ def _format_size_limit(max_bytes: int) -> str:
         return f"{mb:g}MB"
     return f"{max_bytes} 字节"
 
+
 # 这些状态下的 Run 正在写工作区，此时删除会让沙箱回写被判成「应用侧已变更」而使该 Run 落盘失败。
 # 「waiting_user」是挂起等待用户输入，Run 自身不在写盘，且前端 runBusy 已为 false，故放行。
 _BLOCKING_WORKSPACE_DELETE_RUN_STATUSES = frozenset({"pending", "active", "cancelling"})
@@ -256,15 +257,17 @@ def list_workspace_files(
                 stat = item.stat()
             except (OSError, ValueError):
                 continue
-            files.append({
-                "path": to_visible_path(str(root), resolved_item),
-                "relative_path": relative_path,
-                "directory": directory_name,
-                "name": item.name,
-                "size": stat.st_size,
-                "mtime": stat.st_mtime,
-                "source": directory_name,
-            })
+            files.append(
+                {
+                    "path": to_visible_path(str(root), resolved_item),
+                    "relative_path": relative_path,
+                    "directory": directory_name,
+                    "name": item.name,
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                    "source": directory_name,
+                }
+            )
     return files
 
 
@@ -481,8 +484,6 @@ def _validate_office_preview_source(workspace_root: str, path: str, *, max_bytes
         raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的 Office 文件")
 
 
-
-
 async def render_conversation_workspace_office_preview(
     conversation_id: str,
     *,
@@ -567,13 +568,10 @@ async def read_conversation_query_result(
     )
 
 
-
 def __getattr__(name: str):
     """向后兼容：Local/Sandbox 后端实现类转发到 agent.workspace.runtime。"""
     if name in {"LocalWorkspaceBackend", "SandboxWorkspaceBackend"}:
         import importlib
 
-        return getattr(importlib.import_module(
-            "apps.chat_data_app.agent.workspace.runtime"
-        ), name)
+        return getattr(importlib.import_module("apps.chat_data_app.agent.workspace.runtime"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,6 +1,5 @@
 """Cached workspace execution session lifecycle."""
 
-
 from __future__ import annotations
 
 import asyncio
@@ -63,8 +62,7 @@ async def _cached_session_matches_application(session: SandboxExecutionSession) 
         _application_workspace_root(session.workspace_root),
     )
     expected_manifest = {
-        path: (fingerprint[0], fingerprint[1])
-        for path, fingerprint in (session.application_manifest or {}).items()
+        path: (fingerprint[0], fingerprint[1]) for path, fingerprint in (session.application_manifest or {}).items()
     }
     return current_manifest == expected_manifest
 
@@ -103,9 +101,7 @@ def _has_exception_type(exc: BaseException, expected_types: tuple[type[BaseExcep
 
 def _raise_sandbox_create_error(exc: Exception) -> None:
     if _has_exception_type(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
-        raise ValueError(
-            "OpenSandbox 服务不可达，请检查服务状态、OPENSANDBOX_URL 和网络连通性"
-        ) from exc
+        raise ValueError("OpenSandbox 服务不可达，请检查服务状态、OPENSANDBOX_URL 和网络连通性") from exc
     if _has_exception_type(exc, (httpx.TimeoutException,)):
         raise ValueError("OpenSandbox 控制面请求超时，请检查服务状态和网络质量") from exc
     raise exc
@@ -194,7 +190,12 @@ async def prepare_workspace_execution_session(
         "ready_timeout": timedelta(seconds=ready_timeout),
         "entrypoint": ["sleep", "infinity"],
         "connection_config": _connection_config(request_timeout),
-        "metadata": {"managed_by": "fxcjg", "module": "chat_data_app", "workspace_backend": OPENSANDBOX_BACKEND, "sandbox_mode": mode},
+        "metadata": {
+            "managed_by": "fxcjg",
+            "module": "chat_data_app",
+            "workspace_backend": OPENSANDBOX_BACKEND,
+            "sandbox_mode": mode,
+        },
     }
     network_policy = _build_network_policy()
     if network_policy is not None:
@@ -205,9 +206,7 @@ async def prepare_workspace_execution_session(
             timeout=create_timeout,
         )
     except TimeoutError as exc:
-        raise ValueError(
-            f"OpenSandbox 创建超时（{create_timeout} 秒），请检查服务状态、镜像和网络连通性"
-        ) from exc
+        raise ValueError(f"OpenSandbox 创建超时（{create_timeout} 秒），请检查服务状态、镜像和网络连通性") from exc
     except Exception as exc:
         _raise_sandbox_create_error(exc)
     session = SandboxExecutionSession(
@@ -290,7 +289,9 @@ async def attach_workspace_execution_session(session: SandboxExecutionSession | 
     )
 
 
-async def invalidate_workspace_execution_session(session: SandboxExecutionSession | None, user_id: str = "system") -> None:
+async def invalidate_workspace_execution_session(
+    session: SandboxExecutionSession | None, user_id: str = "system"
+) -> None:
     if session is None:
         return
     cache_key = session.cache_key or _workspace_session_cache_key(

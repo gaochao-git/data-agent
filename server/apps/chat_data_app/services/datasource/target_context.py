@@ -34,7 +34,9 @@ def get_execution_target_name(target: Dict[str, Any], index: int) -> str:
 def get_execution_target_org_code(target: Dict[str, Any]) -> str:
     """Return the organization code for matching and prompt display."""
     source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
-    return str(target.get("org_code") or source_config.get("org_code") or get_execution_target_member_id(target) or "").strip()
+    return str(
+        target.get("org_code") or source_config.get("org_code") or get_execution_target_member_id(target) or ""
+    ).strip()
 
 
 def source_type_to_dialect(source_type: Any) -> str:

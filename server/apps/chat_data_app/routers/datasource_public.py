@@ -37,18 +37,13 @@ async def get_datasources(request: Request, include_tables: bool = True):
             user_id=str(current_user.user_id),
             username=str(current_user.username or ""),
         )
-        return business_response(
-            data={"datasources": datasources},
-            msg="获取成功"
-        )
+        return business_response(data={"datasources": datasources}, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"获取数据源列表失败: {str(e)}", exc_info=True)
         return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED,
-            status="error"
+            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED, status="error"
         )
 
 
@@ -72,11 +67,16 @@ async def get_datasource_column_dict(datasource_id: str, table_name: str, column
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("获取字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s", datasource_id, table_name, column_name, e, exc_info=True)
+        logger.error(
+            "获取字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s",
+            datasource_id,
+            table_name,
+            column_name,
+            e,
+            exc_info=True,
+        )
         return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
-            status="error"
+            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
         )
 
 
@@ -100,11 +100,15 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("批量获取字段数据字典失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
+        logger.error(
+            "批量获取字段数据字典失败: datasource_id=%s table_name=%s error=%s",
+            datasource_id,
+            table_name,
+            e,
+            exc_info=True,
+        )
         return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
-            status="error"
+            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
         )
 
 
@@ -134,31 +138,14 @@ async def get_schema(
             table_names=table_names,
         )
         return business_response(
-            data={
-                "tables": schema_tables,
-                "count": len(schema_tables),
-                "source": "cache"
-            },
-            msg="获取成功"
+            data={"tables": schema_tables, "count": len(schema_tables), "source": "cache"}, msg="获取成功"
         )
     except ValueError as e:
-        return business_response(
-            msg=str(e),
-            code=ErrorCode.CHATDATA_BAD_REQUEST,
-            status="error"
-        )
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except ConnectionError as e:
-        return business_response(
-            msg=str(e),
-            code=ErrorCode.CHATDATA_QUERY_FAILED,
-            status="error"
-        )
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_QUERY_FAILED, status="error")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"获取表结构失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_QUERY_FAILED,
-            status="error"
-        )
+        return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_QUERY_FAILED, status="error")

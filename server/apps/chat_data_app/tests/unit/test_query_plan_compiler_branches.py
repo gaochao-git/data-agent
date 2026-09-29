@@ -83,13 +83,14 @@ def test_having_operand_metric_falls_back_to_expression():
     """RAW / 缺省 aggFunc 时看 expression 是否聚合表达式（164->166）。"""
     assert qpc._having_operand_has_real_aggregation({"type": "metric", "aggFunc": "RAW"}) is False
     assert qpc._having_operand_has_real_aggregation({"type": "metric"}) is False
-    assert qpc._having_operand_has_real_aggregation(
-        {"type": "metric", "aggFunc": "RAW", "expression": "SUM(amount)"}
-    ) is True
+    assert (
+        qpc._having_operand_has_real_aggregation({"type": "metric", "aggFunc": "RAW", "expression": "SUM(amount)"})
+        is True
+    )
     # 非聚合表达式仍然算 False
-    assert qpc._having_operand_has_real_aggregation(
-        {"type": "metric", "aggFunc": "RAW", "expression": "amount"}
-    ) is False
+    assert (
+        qpc._having_operand_has_real_aggregation({"type": "metric", "aggFunc": "RAW", "expression": "amount"}) is False
+    )
 
 
 def test_having_operand_binary_recurses_into_both_sides():
@@ -98,25 +99,42 @@ def test_having_operand_binary_recurses_into_both_sides():
     def literal(value=1):
         return {"type": "literal", "value": value}
 
-    assert qpc._having_operand_has_real_aggregation(
-        {"type": "binary", "operator": "/", "left": literal(), "right": {"type": "metric", "aggFunc": "SUM"}}
-    ) is True
-    assert qpc._having_operand_has_real_aggregation(
-        {"type": "binary", "operator": "/", "left": {"type": "metric", "aggFunc": "COUNT"}, "right": literal()}
-    ) is True
+    assert (
+        qpc._having_operand_has_real_aggregation(
+            {"type": "binary", "operator": "/", "left": literal(), "right": {"type": "metric", "aggFunc": "SUM"}}
+        )
+        is True
+    )
+    assert (
+        qpc._having_operand_has_real_aggregation(
+            {"type": "binary", "operator": "/", "left": {"type": "metric", "aggFunc": "COUNT"}, "right": literal()}
+        )
+        is True
+    )
     # 两侧都没有聚合 → False
-    assert qpc._having_operand_has_real_aggregation(
-        {"type": "binary", "operator": "/", "left": literal(10), "right": literal(2)}
-    ) is False
+    assert (
+        qpc._having_operand_has_real_aggregation(
+            {"type": "binary", "operator": "/", "left": literal(10), "right": literal(2)}
+        )
+        is False
+    )
     # 嵌套多层也要能穿透
-    assert qpc._having_operand_has_real_aggregation(
-        {
-            "type": "binary",
-            "operator": "+",
-            "left": literal(),
-            "right": {"type": "binary", "operator": "*", "left": literal(), "right": {"type": "metric", "aggFunc": "MAX"}},
-        }
-    ) is True
+    assert (
+        qpc._having_operand_has_real_aggregation(
+            {
+                "type": "binary",
+                "operator": "+",
+                "left": literal(),
+                "right": {
+                    "type": "binary",
+                    "operator": "*",
+                    "left": literal(),
+                    "right": {"type": "metric", "aggFunc": "MAX"},
+                },
+            }
+        )
+        is True
+    )
 
 
 def test_having_operand_unknown_type_is_not_aggregation():
@@ -154,9 +172,12 @@ def test_filter_has_real_aggregation_ignores_right_operand_without_aggregation()
 
 
 def test_filter_has_real_aggregation_tree_node_recurses():
-    assert qpc._filter_has_real_aggregation(
-        {"and": [{"column": "a", "operator": ">=", "value": 1}, {"aggFunc": "RAW", "expression": "SUM(amount)"}]}
-    ) is True
+    assert (
+        qpc._filter_has_real_aggregation(
+            {"and": [{"column": "a", "operator": ">=", "value": 1}, {"aggFunc": "RAW", "expression": "SUM(amount)"}]}
+        )
+        is True
+    )
 
 
 def test_filter_has_real_aggregation_rejects_non_dict():
@@ -254,9 +275,7 @@ def test_order_by_prefers_agg_id_over_table_column_matching():
                 {"id": "a1", "table": "orders", "column": "amount", "func": "SUM", "name": "销售额"},
                 {"id": "a2", "table": "orders", "column": "fee", "func": "MAX", "name": "最大手续费"},
             ],
-            orderBy=[
-                {"table": "orders", "column": "fee", "aggId": "a2", "aggFunc": "MAX", "direction": "DESC"}
-            ],
+            orderBy=[{"table": "orders", "column": "fee", "aggId": "a2", "aggFunc": "MAX", "direction": "DESC"}],
         )
     )
 

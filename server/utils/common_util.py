@@ -34,6 +34,7 @@ def get_local_ips() -> tuple[str, ...]:
         # 主机名解析失败不影响主流程,仅保留本地环回/首选 IP;此处函数内导入是因为
         # utils.logger 头部反向引用了本模块,文件头导入会形成循环依赖。
         from utils.logger import get_logger
+
         get_logger(__name__).warning("解析本机 hostname 对应 IP 列表失败,仅保留本地环回/首选 IP: %s", exc)
     return tuple(dict.fromkeys(ip for ip in ips if ip))
 
@@ -85,7 +86,9 @@ def resolve_deploy_env(hosts_config: dict[str, tuple[str, ...]], local_ips: tupl
         if any(_host_matches(host, ip) for host in hosts for ip in ips):
             matched_envs.append(env_name)
     if not matched_envs:
-        raise RuntimeError(f"未识别当前机器所属环境，请在 {DEPLOY_ENV_HOSTS_FILE} 中配置本机 IP: {', '.join(ips) or '-'}")
+        raise RuntimeError(
+            f"未识别当前机器所属环境，请在 {DEPLOY_ENV_HOSTS_FILE} 中配置本机 IP: {', '.join(ips) or '-'}"
+        )
     if len(matched_envs) > 1:
         raise RuntimeError(f"当前机器 IP 同时匹配多个环境: {', '.join(matched_envs)}")
     return matched_envs[0]

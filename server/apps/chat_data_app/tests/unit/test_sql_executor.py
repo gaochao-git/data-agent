@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -43,13 +43,17 @@ def test_serialize_value_formats_datetime_without_iso_t_separator():
 
 def test_http_payload_extractors_and_normalizers():
     assert sql_executor._http_response_summary(["bad"]) == {"payload_type": "list"}
-    assert sql_executor._http_response_summary({"code": 20000, "data": {"data": [{"a": 1}], "columns": ["a"], "tables": ["t1"]}}) == {
+    assert sql_executor._http_response_summary(
+        {"code": 20000, "data": {"data": [{"a": 1}], "columns": ["a"], "tables": ["t1"]}}
+    ) == {
         "code": 20000,
         "row_count": 1,
         "column_count": 1,
         "table_count": 1,
     }
-    assert sql_executor._http_response_summary({"message": "ok", "rows": [[1]], "status": "done", "taskId": "task_1"}) == {
+    assert sql_executor._http_response_summary(
+        {"message": "ok", "rows": [[1]], "status": "done", "taskId": "task_1"}
+    ) == {
         "msg": "ok",
         "status": "done",
         "task_id": "task_1",
@@ -59,15 +63,17 @@ def test_http_payload_extractors_and_normalizers():
         "row_count": 1,
         "column_count": 1,
     }
-    assert sql_executor._http_response_summary({
-        "code": 20000,
-        "data": {
-            "status": "succeeded",
-            "cost": 1780,
-            "startTime": "2026-07-07 16:58:47",
-            "result": {"rows": [[1]], "columns": ["a"]},
-        },
-    }) == {
+    assert sql_executor._http_response_summary(
+        {
+            "code": 20000,
+            "data": {
+                "status": "succeeded",
+                "cost": 1780,
+                "startTime": "2026-07-07 16:58:47",
+                "result": {"rows": [[1]], "columns": ["a"]},
+            },
+        }
+    ) == {
         "code": 20000,
         "status": "succeeded",
         "cost": 1780,
@@ -104,13 +110,21 @@ def test_http_payload_extractors_and_normalizers():
     assert sql_executor._extract_remote_status({"data": {"status": "processing"}}) == "running"
     assert sql_executor._extract_result_payload({"data": {"query_result": {"columns": ["a"]}}}) == {"columns": ["a"]}
     assert sql_executor._extract_result_payload({"data": {"result": {"columns": ["b"]}}}) == {"columns": ["b"]}
-    assert sql_executor._extract_result_payload({"data": "raw text", "result": {"columns": ["root"]}}) == {"columns": ["root"]}
-    assert sql_executor._extract_result_payload({"data": "raw text", "status": "running"}) == {"data": "raw text", "status": "running"}
+    assert sql_executor._extract_result_payload({"data": "raw text", "result": {"columns": ["root"]}}) == {
+        "columns": ["root"]
+    }
+    assert sql_executor._extract_result_payload({"data": "raw text", "status": "running"}) == {
+        "data": "raw text",
+        "status": "running",
+    }
     assert sql_executor._extract_result_payload({"data": []}) == {"data": []}
     assert sql_executor._extract_result_payload({"rows": [[1]]}) == {"rows": [[1]]}
     assert sql_executor._extract_result_payload({"data": {"status": "done"}}) == {"data": {"status": "done"}}
     assert sql_executor._extract_result_payload({"data": [], "meta": "only"}) == {"data": [], "meta": "only"}
-    assert sql_executor._extract_result_payload({"data": {"meta": "only"}, "meta": "root-only"}) == {"data": {"meta": "only"}, "meta": "root-only"}
+    assert sql_executor._extract_result_payload({"data": {"meta": "only"}, "meta": "root-only"}) == {
+        "data": {"meta": "only"},
+        "meta": "root-only",
+    }
     assert sql_executor._extract_result_payload({"meta": "root-only"}) == {}
     assert sql_executor._extract_result_payload(["bad"]) == {}
 
@@ -157,12 +171,14 @@ def test_extract_result_payload_skips_non_dict_remote_data(monkeypatch):
 
 
 def test_get_executor_returns_hive_http_executor():
-    executor = sql_executor.get_executor({
-        "source_type": "hive",
-        "query_executor_type": "http",
-        "member_name": "hive-localhost",
-        "source_config": {"org_code": "ORG_HIVE", "database": "dw"},
-    })
+    executor = sql_executor.get_executor(
+        {
+            "source_type": "hive",
+            "query_executor_type": "http",
+            "member_name": "hive-localhost",
+            "source_config": {"org_code": "ORG_HIVE", "database": "dw"},
+        }
+    )
 
     assert isinstance(executor, sql_executor.HiveHttpExecutor)
     assert executor.namespace == "ORG_HIVE"
@@ -173,12 +189,14 @@ def test_get_executor_returns_hive_http_executor():
 
 
 def test_get_executor_returns_mysql_http_executor():
-    executor = sql_executor.get_executor({
-        "source_type": "mysql",
-        "query_executor_type": "http",
-        "member_name": "mysql-http-a",
-        "source_config": {"org_code": "ORG_MYSQL", "database": "test_db"},
-    })
+    executor = sql_executor.get_executor(
+        {
+            "source_type": "mysql",
+            "query_executor_type": "http",
+            "member_name": "mysql-http-a",
+            "source_config": {"org_code": "ORG_MYSQL", "database": "test_db"},
+        }
+    )
 
     assert isinstance(executor, sql_executor.HiveHttpExecutor)
     assert executor.namespace == "ORG_MYSQL"
@@ -194,28 +212,33 @@ def test_get_executor_rejects_unknown_source_types():
 
 
 def test_get_executor_keeps_http_org_fields():
-    executor = sql_executor.get_executor({
-        "source_type": "hive",
-        "query_executor_type": "http",
-        "member_name": "上海付费通支付服务有限公司",
-        "source_config": {
-            "database": "dw",
-            "org_code": "Z2002131000014",
-            "org_name": "上海付费通支付服务有限公司",
-        },
-    })
+    executor = sql_executor.get_executor(
+        {
+            "source_type": "hive",
+            "query_executor_type": "http",
+            "member_name": "上海付费通支付服务有限公司",
+            "source_config": {
+                "database": "dw",
+                "org_code": "Z2002131000014",
+                "org_name": "上海付费通支付服务有限公司",
+            },
+        }
+    )
 
     assert executor.namespace == "Z2002131000014"
     assert executor.org_code == "Z2002131000014"
     assert executor.org_name == "上海付费通支付服务有限公司"
 
 
-@pytest.mark.parametrize("sql", [
-    "select 1; drop table orders",
-    "show tables; drop table orders",
-    "desc orders; drop table orders",
-    "select 1--1; drop table orders",
-])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select 1; drop table orders",
+        "show tables; drop table orders",
+        "desc orders; drop table orders",
+        "select 1--1; drop table orders",
+    ],
+)
 def test_validate_sql_rejects_multiple_statements(sql):
     is_valid, error = sql_executor.validate_sql(sql, source_type="mysql")
 
@@ -236,11 +259,14 @@ def test_validate_sql_analyzes_raw_sql_without_comment_cleanup():
     assert sql_executor.validate_sql("/* leading */ select * from orders", source_type="mysql") == (True, "")
 
 
-@pytest.mark.parametrize("sql", [
-    "WITH t AS (select 1) select * from t",
-    "(select 1)",
-    "select 1 union select 2",
-])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH t AS (select 1) select * from t",
+        "(select 1)",
+        "select 1 union select 2",
+    ],
+)
 def test_validate_sql_allows_query_shapes_when_select_is_allowed(sql):
     assert sql_executor.validate_sql(sql, source_type="mysql") == (True, "")
 
@@ -261,13 +287,16 @@ def test_get_sql_operation_type_parser_error_edges(monkeypatch):
     assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
 
 
-@pytest.mark.parametrize("sql", [
-    "show tables",
-    "show create table orders",
-    "describe orders",
-    "desc orders",
-    "explain select * from orders",
-])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "show tables",
+        "show create table orders",
+        "describe orders",
+        "desc orders",
+        "explain select * from orders",
+    ],
+)
 def test_validate_sql_rejects_metadata_commands_by_default(sql):
     is_valid, error = sql_executor.validate_sql(sql, source_type="mysql")
 
@@ -275,15 +304,18 @@ def test_validate_sql_rejects_metadata_commands_by_default(sql):
     assert error == "只允许执行以下类型的 SQL: SELECT"
 
 
-@pytest.mark.parametrize("sql", [
-    "delete from orders",
-    "drop table orders",
-    "alter table orders add column x int",
-    "truncate table orders",
-    "create table t(id int)",
-    "update orders set amount = 1",
-    "insert into orders(id) values (1)",
-])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "delete from orders",
+        "drop table orders",
+        "alter table orders add column x int",
+        "truncate table orders",
+        "create table t(id int)",
+        "update orders set amount = 1",
+        "insert into orders(id) values (1)",
+    ],
+)
 def test_validate_sql_rejects_disallowed_operations(sql):
     is_valid, error = sql_executor.validate_sql(sql, source_type="mysql")
 
@@ -300,32 +332,67 @@ def test_auto_add_limit_only_for_query_sql():
     assert sql_executor._add_limit_if_needed("describe orders", 10) == "describe orders"
     assert sql_executor._add_limit_if_needed("explain select * from orders", 10) == "explain select * from orders"
     assert sql_executor._add_limit_if_needed("select * from orders limit 5", 10) == "select * from orders limit 5"
-    assert sql_executor._add_limit_if_needed("select * from orders limit 5 offset 10", 20) == "select * from orders limit 5 offset 10"
+    assert (
+        sql_executor._add_limit_if_needed("select * from orders limit 5 offset 10", 20)
+        == "select * from orders limit 5 offset 10"
+    )
     assert sql_executor._add_limit_if_needed("select * from orders limit 10,5", 20) == "select * from orders limit 10,5"
-    assert sql_executor._add_limit_if_needed("select * from (select * from orders limit 5) t", 10) == "select * from (select * from orders limit 5) t LIMIT 10"
+    assert (
+        sql_executor._add_limit_if_needed("select * from (select * from orders limit 5) t", 10)
+        == "select * from (select * from orders limit 5) t LIMIT 10"
+    )
 
 
 def test_auto_add_limit_ignores_nested_limit_strings_and_comments():
-    assert sql_executor._add_limit_if_needed("select 'limit 5' as txt from orders", 10) == "select 'limit 5' as txt from orders LIMIT 10"
-    assert sql_executor._add_limit_if_needed('select "limit 5" as txt from orders', 10) == 'select "limit 5" as txt from orders LIMIT 10'
+    assert (
+        sql_executor._add_limit_if_needed("select 'limit 5' as txt from orders", 10)
+        == "select 'limit 5' as txt from orders LIMIT 10"
+    )
+    assert (
+        sql_executor._add_limit_if_needed('select "limit 5" as txt from orders', 10)
+        == 'select "limit 5" as txt from orders LIMIT 10'
+    )
     assert sql_executor._add_limit_if_needed("select `limit` from orders", 10) == "select `limit` from orders LIMIT 10"
-    assert sql_executor._add_limit_if_needed("select * from orders -- limit 5\nwhere id > 0", 10) == "select * from orders -- limit 5\nwhere id > 0 LIMIT 10"
-    assert sql_executor._add_limit_if_needed("select * from orders /* limit 5 */ where id > 0", 10) == "select * from orders /* limit 5 */ where id > 0 LIMIT 10"
-    assert sql_executor._add_limit_if_needed("select * from orders -- trailing comment", 10) == "select * from orders -- trailing comment\nLIMIT 10"
-    assert sql_executor._add_limit_if_needed("select '-- not comment' as txt from orders", 10) == "select '-- not comment' as txt from orders LIMIT 10"
+    assert (
+        sql_executor._add_limit_if_needed("select * from orders -- limit 5\nwhere id > 0", 10)
+        == "select * from orders -- limit 5\nwhere id > 0 LIMIT 10"
+    )
+    assert (
+        sql_executor._add_limit_if_needed("select * from orders /* limit 5 */ where id > 0", 10)
+        == "select * from orders /* limit 5 */ where id > 0 LIMIT 10"
+    )
+    assert (
+        sql_executor._add_limit_if_needed("select * from orders -- trailing comment", 10)
+        == "select * from orders -- trailing comment\nLIMIT 10"
+    )
+    assert (
+        sql_executor._add_limit_if_needed("select '-- not comment' as txt from orders", 10)
+        == "select '-- not comment' as txt from orders LIMIT 10"
+    )
     assert sql_executor._line_has_comment_marker("select 'can\\'t -- comment' as txt") is False
     assert sql_executor._line_has_comment_marker("select 'it''s -- not comment' as txt") is False
 
 
 def test_auto_add_limit_detects_only_top_level_limit():
-    assert sql_executor._add_limit_if_needed("select * from (select * from orders limit 5 offset 2) t", 10).endswith("LIMIT 10")
-    assert sql_executor._add_limit_if_needed("select * from (select * from orders limit 2,5) t", 10).endswith("LIMIT 10")
-    assert sql_executor._add_limit_if_needed("with t as (select * from orders limit 5) select * from t", 10).endswith("LIMIT 10")
-    assert sql_executor._add_limit_if_needed("select * from orders where name = 'limit 5' limit 20", 10).endswith("limit 20")
+    assert sql_executor._add_limit_if_needed("select * from (select * from orders limit 5 offset 2) t", 10).endswith(
+        "LIMIT 10"
+    )
+    assert sql_executor._add_limit_if_needed("select * from (select * from orders limit 2,5) t", 10).endswith(
+        "LIMIT 10"
+    )
+    assert sql_executor._add_limit_if_needed("with t as (select * from orders limit 5) select * from t", 10).endswith(
+        "LIMIT 10"
+    )
+    assert sql_executor._add_limit_if_needed("select * from orders where name = 'limit 5' limit 20", 10).endswith(
+        "limit 20"
+    )
 
 
 def test_build_effective_sql_only_adds_limit():
-    assert sql_executor.build_effective_sql("select amount as 销售额 from orders", 10) == "select amount as 销售额 from orders LIMIT 10"
+    assert (
+        sql_executor.build_effective_sql("select amount as 销售额 from orders", 10)
+        == "select amount as 销售额 from orders LIMIT 10"
+    )
     assert sql_executor.build_effective_sql("select * from orders limit 5", 10) == "select * from orders limit 5"
 
 
@@ -371,7 +438,9 @@ def test_auto_add_limit_rejects_limit_over_global_max():
     with pytest.raises(ValueError, match=f"最多返回 {sql_executor.DEFAULT_ROW_LIMIT} 条"):
         sql_executor._add_limit_if_needed(f"select * from orders limit 10,{over_limit}", sql_executor.DEFAULT_ROW_LIMIT)
     with pytest.raises(ValueError, match=f"最多返回 {sql_executor.DEFAULT_ROW_LIMIT} 条"):
-        sql_executor._add_limit_if_needed(f"select * from orders limit {over_limit} offset 10", sql_executor.DEFAULT_ROW_LIMIT)
+        sql_executor._add_limit_if_needed(
+            f"select * from orders limit {over_limit} offset 10", sql_executor.DEFAULT_ROW_LIMIT
+        )
 
 
 def test_hive_http_executor_returns_limit_error_without_generic_sql_error(monkeypatch):
@@ -416,13 +485,15 @@ def test_hive_http_executor_submits_sql_org_code_limit_and_user_id(monkeypatch):
     captured_remote_tasks = []
 
     async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
-        captured_requests.append({
-            "method": method,
-            "url": url,
-            "json_payload": json_payload,
-            "task_id": task_id,
-            "params": params,
-        })
+        captured_requests.append(
+            {
+                "method": method,
+                "url": url,
+                "json_payload": json_payload,
+                "task_id": task_id,
+                "params": params,
+            }
+        )
         if method == "POST":
             return {"code": 20000, "data": {"task_id": "task_001"}, "msg": "提交成功"}
         return {
@@ -449,7 +520,15 @@ def test_hive_http_executor_submits_sql_org_code_limit_and_user_id(monkeypatch):
         org_code="Z2002131000014",
         org_name="上海付费通支付服务有限公司",
     )
-    result = asyncio.run(executor.execute("select 1", limit=50, user_id="10001", username="测试用户", remote_task_callback=captured_remote_tasks.append))
+    result = asyncio.run(
+        executor.execute(
+            "select 1",
+            limit=50,
+            user_id="10001",
+            username="测试用户",
+            remote_task_callback=captured_remote_tasks.append,
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert captured_requests[0]["json_payload"] == {
@@ -463,11 +542,13 @@ def test_hive_http_executor_submits_sql_org_code_limit_and_user_id(monkeypatch):
     }
     assert "namespace" not in captured_requests[0]["json_payload"]
     assert captured_requests[1]["params"] == {"userId": "10001", "username": "测试用户"}
-    assert captured_remote_tasks == [{
-        "remote_task_id": "task_001",
-        "namespace": "hive-localhost",
-        "source_type": "hive",
-    }]
+    assert captured_remote_tasks == [
+        {
+            "remote_task_id": "task_001",
+            "namespace": "hive-localhost",
+            "source_type": "hive",
+        }
+    ]
 
 
 def test_mysql_http_executor_uses_mysql_timeout(monkeypatch):
@@ -514,7 +595,11 @@ def test_hive_http_executor_rejects_disallowed_sql_before_submit(monkeypatch):
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
     monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
 
-    result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
+    result = asyncio.run(
+        sql_executor.HiveHttpExecutor(namespace="ns_a").execute(
+            "delete from orders", user_id="u_9", datasource_id="ds_7"
+        )
+    )
 
     assert result["status"] != "succeeded"
     assert "只允许执行以下类型" in result["error"]
@@ -596,7 +681,10 @@ def test_hive_http_executor_polls_running_then_success_and_async_callback(monkey
     responses = [
         {"code": 20000, "data": {"task_id": "task_001"}, "msg": "提交成功"},
         {"code": 20000, "data": {"status": "running"}, "msg": "运行中"},
-        {"code": 20000, "data": {"status": "succeeded", "columns": ["a"], "rows": [[1]], "row_count": 1, "duration_ms": 5}},
+        {
+            "code": 20000,
+            "data": {"status": "succeeded", "columns": ["a"], "rows": [[1]], "row_count": 1, "duration_ms": 5},
+        },
     ]
     captured_remote_tasks = []
 
@@ -624,7 +712,9 @@ def test_hive_http_executor_polls_running_then_success_and_async_callback(monkey
     monkeypatch.setattr(sql_executor.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
 
-    result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1", remote_task_callback=fake_callback))
+    result = asyncio.run(
+        sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1", remote_task_callback=fake_callback)
+    )
 
     assert result["status"] == "succeeded"
     assert result["remote_task_id"] == "task_001"
@@ -691,12 +781,14 @@ def test_stop_http_query_task_uses_stop_url(monkeypatch):
     captured = {}
 
     async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
-        captured.update({
-            "method": method,
-            "url": url,
-            "task_id": task_id,
-            "json_payload": json_payload,
-        })
+        captured.update(
+            {
+                "method": method,
+                "url": url,
+                "task_id": task_id,
+                "json_payload": json_payload,
+            }
+        )
         return {"code": 20000, "msg": "已取消"}
 
     monkeypatch.setattr(sql_executor, "HTTP_STOP_URL", "http://hive/query-tasks/cancel")
@@ -746,7 +838,13 @@ def test_stop_http_query_task_returns_remote_error_and_exception(monkeypatch):
 
 def test_fetch_http_query_task_result_status_variants(monkeypatch):
     responses = [
-        {"code": 20000, "data": {"status": "succeeded", "result": {"columns": ["a"], "rows": [[1]], "row_count": 1, "duration_ms": 9}}},
+        {
+            "code": 20000,
+            "data": {
+                "status": "succeeded",
+                "result": {"columns": ["a"], "rows": [[1]], "row_count": 1, "duration_ms": 9},
+            },
+        },
         {"code": 20000, "data": {"status": "running"}},
         {"code": 20000, "data": {"status": "cancelled"}, "msg": "已取消"},
         {"code": 50000, "data": {"status": "failed"}, "msg": "执行失败"},
@@ -907,7 +1005,11 @@ def test_hive_executor_sync_success_value_error_and_connection_test(monkeypatch)
     assert connected is True
     assert close_result is None
 
-    monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")))
+    monkeypatch.setattr(
+        sql_executor,
+        "build_effective_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")),
+    )
     failed = executor._execute_sync("select 1", 10)
 
     assert failed["status"] != "succeeded"
@@ -945,7 +1047,9 @@ def test_kill_mysql_query_success_and_init_error(monkeypatch):
     monkeypatch.setattr(sql_executor, "get_executor", lambda _datasource: fake_executor)
     success = asyncio.run(sql_executor.kill_mysql_query({"source_type": "mysql", "source_config": {}}, "123"))
 
-    monkeypatch.setattr(sql_executor, "get_executor", lambda _datasource: (_ for _ in ()).throw(RuntimeError("init failed")))
+    monkeypatch.setattr(
+        sql_executor, "get_executor", lambda _datasource: (_ for _ in ()).throw(RuntimeError("init failed"))
+    )
     failed = asyncio.run(sql_executor.kill_mysql_query({"source_type": "mysql", "source_config": {}}, "123"))
 
     assert success == {"status": "succeeded", "connection_id": "123"}
@@ -1074,11 +1178,13 @@ def test_mysql_executor_optional_connection_and_sync_callback_branches(monkeypat
     tuple_cursor.fetchone = lambda: asyncio.sleep(0, result=67890)
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(tuple_cursor)))
 
-    result = asyncio.run(executor.execute(
-        "select 1",
-        limit=10,
-        db_connection_callback=lambda payload: callback_payloads.append(payload),
-    ))
+    result = asyncio.run(
+        executor.execute(
+            "select 1",
+            limit=10,
+            db_connection_callback=lambda payload: callback_payloads.append(payload),
+        )
+    )
 
     assert result["db_connection_id"] == "67890"
     assert callback_payloads == [{"db_connection_id": "67890"}]
@@ -1091,8 +1197,12 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     executor = sql_executor.MySQLExecutor("127.0.0.1", 3306, "demo", "u", "p")
     dangerous_alarms = []
     db_alarms = []
-    monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
-    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs))
+    )
 
     invalid_sql = asyncio.run(executor.execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
     assert invalid_sql["status"] != "succeeded"
@@ -1136,7 +1246,9 @@ def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
         async def execute(self, sql):
             raise Exception(2003, "connect failed")
 
-    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs))
+    )
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(ConnectionErrorCursor())))
 
     failed = asyncio.run(executor.execute("select 1", user_id="u_9", datasource_id="ds_7"))
@@ -1173,8 +1285,12 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
     executor = sql_executor.HiveExecutor("127.0.0.1", 10000, "default")
     dangerous_alarms = []
     db_alarms = []
-    monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
-    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs))
+    )
 
     invalid_sql = asyncio.run(executor.execute("delete from orders", user_id="u_9", datasource_id="ds_7"))
     assert invalid_sql["status"] != "succeeded"
@@ -1187,7 +1303,9 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
         return 0.001
 
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", _fake_timeout)
-    monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"status": "succeeded"})
+    monkeypatch.setattr(
+        executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"status": "succeeded"}
+    )
     timeout = asyncio.run(executor.execute("select 1"))
     assert timeout["status"] != "succeeded"
     assert timeout["error"] == "查询超时（0.001秒）"
@@ -1207,6 +1325,7 @@ def test_hive_executor_connection_and_sync_generic_error(monkeypatch):
             return SimpleNamespace(_transport=None)
 
     from types import SimpleNamespace
+
     monkeypatch.setitem(sys.modules, "pyhive", SimpleNamespace(hive=FakeHiveModule))
     monkeypatch.setitem(sys.modules, "pyhive.hive", FakeHiveModule)
     monkeypatch.setattr(sql_executor, "_apply_socket_timeout", lambda transport, timeout: None)
@@ -1247,13 +1366,20 @@ def test_hive_http_request_json_builds_get_and_post_requests(monkeypatch):
             return FakeResponse()
 
     import types
+
     monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=FakeAsyncClient))
     monkeypatch.setattr(sql_executor, "HTTP_AUTH_TOKEN", "token_a")
     monkeypatch.setattr(datasource_credentials, "HTTP_VERIFY_TLS", True)
     executor = sql_executor.HiveHttpExecutor(namespace="ns_a")
 
-    get_payload = asyncio.run(executor._request_json("GET", "http://host/tasks", task_id="task_1", params={"userId": "u1"}))
-    post_payload = asyncio.run(executor._request_json("POST", "http://host/tasks/{task_id}", task_id="task_2", json_payload={"sql": "select 1"}))
+    get_payload = asyncio.run(
+        executor._request_json("GET", "http://host/tasks", task_id="task_1", params={"userId": "u1"})
+    )
+    post_payload = asyncio.run(
+        executor._request_json(
+            "POST", "http://host/tasks/{task_id}", task_id="task_2", json_payload={"sql": "select 1"}
+        )
+    )
 
     assert get_payload == {"code": 20000, "data": {"ok": True}}
     assert post_payload == {"code": 20000, "data": {"ok": True}}
@@ -1284,6 +1410,7 @@ def test_hive_http_request_json_failure_writes_external_api_alarm(monkeypatch):
             raise RuntimeError("network down")
 
     import types
+
     monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=FakeAsyncClient))
     monkeypatch.setattr(sql_executor, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
 
@@ -1323,6 +1450,7 @@ def test_hive_http_request_json_get_without_task_id_uses_plain_url(monkeypatch):
             return FakeResponse()
 
     import types
+
     monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=FakeAsyncClient))
     monkeypatch.setattr(sql_executor, "HTTP_AUTH_TOKEN", "")
     executor = sql_executor.HiveHttpExecutor(namespace="ns_a")
@@ -1337,7 +1465,9 @@ def test_hive_http_request_json_get_without_task_id_uses_plain_url(monkeypatch):
 
 
 def test_hive_http_payload_and_connection_helpers(monkeypatch):
-    hive_executor = sql_executor.HiveHttpExecutor(namespace="ORG_A", source_type="hive", database="dw", org_code="ORG_A", org_name="机构A")
+    hive_executor = sql_executor.HiveHttpExecutor(
+        namespace="ORG_A", source_type="hive", database="dw", org_code="ORG_A", org_name="机构A"
+    )
     mysql_executor = sql_executor.HiveHttpExecutor(namespace="ORG_M", source_type="mysql")
 
     assert hive_executor._build_headers() == {"Content-Type": "application/json"}
@@ -1357,21 +1487,25 @@ def test_hive_http_payload_and_connection_helpers(monkeypatch):
 def test_hive_http_normalize_result_falls_back_to_records_and_row_count():
     executor = sql_executor.HiveHttpExecutor(namespace="ns_a")
 
-    records_result = executor._normalize_result({
-        "data": {
-            "status": "succeeded",
-            "records": [{"id": 1}],
-            "columns": [{"name": "id"}],
-            "row_count": 3,
+    records_result = executor._normalize_result(
+        {
+            "data": {
+                "status": "succeeded",
+                "records": [{"id": 1}],
+                "columns": [{"name": "id"}],
+                "row_count": 3,
+            }
         }
-    })
-    rows_result = executor._normalize_result({
-        "data": {
-            "status": "succeeded",
-            "rows": [[2]],
-            "columns": ["id"],
+    )
+    rows_result = executor._normalize_result(
+        {
+            "data": {
+                "status": "succeeded",
+                "rows": [[2]],
+                "columns": ["id"],
+            }
         }
-    })
+    )
 
     assert records_result["data"] == [{"id": 1}]
     assert records_result["total_count"] == 3
@@ -1395,6 +1529,7 @@ def test_hive_http_execute_deadline_timeout_and_value_error(monkeypatch):
 
     monkeypatch.setattr(sql_executor, "HTTP_SUBMIT_URL", "http://submit")
     monkeypatch.setattr(sql_executor, "HTTP_STATUS_URL", "http://status/{task_id}")
+
     async def _fake_timeout_zero(*_args, **_kwargs):
         return 0
 
@@ -1406,46 +1541,91 @@ def test_hive_http_execute_deadline_timeout_and_value_error(monkeypatch):
     assert timeout["status"] != "succeeded"
     assert "查询超时" in timeout["error"]
 
-    monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")))
+    monkeypatch.setattr(
+        sql_executor,
+        "build_effective_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit too large")),
+    )
     value_error = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns").execute("select 1"))
     assert value_error["status"] != "succeeded"
     assert value_error["error"] == "limit too large"
 
 
 def test_get_executor_fills_direct_credentials(monkeypatch):
-    monkeypatch.setattr(datasource_credentials, "resolve_mysql_credentials", lambda config: {"user": "mysql_user", "password": "mysql_pwd"})
-    mysql_executor = sql_executor.get_executor({"source_type": "mysql", "source_config": {"host": "h", "port": 3306, "database": "d"}})
-    explicit_mysql_executor = sql_executor.get_executor({"source_type": "mysql", "source_config": {"host": "h", "port": 3306, "database": "d", "user": "explicit", "password": "pwd"}})
+    monkeypatch.setattr(
+        datasource_credentials,
+        "resolve_mysql_credentials",
+        lambda config: {"user": "mysql_user", "password": "mysql_pwd"},
+    )
+    mysql_executor = sql_executor.get_executor(
+        {"source_type": "mysql", "source_config": {"host": "h", "port": 3306, "database": "d"}}
+    )
+    explicit_mysql_executor = sql_executor.get_executor(
+        {
+            "source_type": "mysql",
+            "source_config": {"host": "h", "port": 3306, "database": "d", "user": "explicit", "password": "pwd"},
+        }
+    )
     assert isinstance(mysql_executor, sql_executor.MySQLExecutor)
     assert mysql_executor.user == "mysql_user"
     assert mysql_executor.password == "mysql_pwd"
     assert explicit_mysql_executor.user == "explicit"
     assert explicit_mysql_executor.password == "pwd"
 
-    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"username": "hive_user", "password": "hive_pwd"})
-    hive_executor = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "port": 10000, "database": "d"}})
-    explicit_hive_executor = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "port": 10000, "database": "d", "username": "explicit", "password": "pwd"}})
+    monkeypatch.setattr(
+        datasource_credentials,
+        "resolve_hive_credentials",
+        lambda config=None: {"username": "hive_user", "password": "hive_pwd"},
+    )
+    hive_executor = sql_executor.get_executor(
+        {"source_type": "hive", "source_config": {"host": "h", "port": 10000, "database": "d"}}
+    )
+    explicit_hive_executor = sql_executor.get_executor(
+        {
+            "source_type": "hive",
+            "source_config": {"host": "h", "port": 10000, "database": "d", "username": "explicit", "password": "pwd"},
+        }
+    )
     assert isinstance(hive_executor, sql_executor.HiveExecutor)
     assert hive_executor.username == "hive_user"
     assert hive_executor.password == "hive_pwd"
     assert explicit_hive_executor.username == "explicit"
     assert explicit_hive_executor.password == "pwd"
 
-    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"username": "hive_only"})
-    hive_username_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "password": ""}})
+    monkeypatch.setattr(
+        datasource_credentials, "resolve_hive_credentials", lambda config=None: {"username": "hive_only"}
+    )
+    hive_username_only = sql_executor.get_executor(
+        {"source_type": "hive", "source_config": {"host": "h", "database": "d", "password": ""}}
+    )
     assert hive_username_only.username == "hive_only"
     assert hive_username_only.password is None
 
-    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"password": "pwd_only"})
-    hive_password_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "username": ""}})
+    monkeypatch.setattr(
+        datasource_credentials, "resolve_hive_credentials", lambda config=None: {"password": "pwd_only"}
+    )
+    hive_password_only = sql_executor.get_executor(
+        {"source_type": "hive", "source_config": {"host": "h", "database": "d", "username": ""}}
+    )
     assert hive_password_only.username == ""
     assert hive_password_only.password == "pwd_only"
 
 
 def test_abstract_executor_and_mysql_error_branches(monkeypatch):
     class BareExecutor(sql_executor.SQLExecutor):
-        async def execute(self, sql, limit=100, timeout=None, user_id=None, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
-            return await super().execute(sql, limit, timeout, user_id, datasource_id, remote_task_callback, db_connection_callback)
+        async def execute(
+            self,
+            sql,
+            limit=100,
+            timeout=None,
+            user_id=None,
+            datasource_id=None,
+            remote_task_callback=None,
+            db_connection_callback=None,
+        ):
+            return await super().execute(
+                sql, limit, timeout, user_id, datasource_id, remote_task_callback, db_connection_callback
+            )
 
         async def test_connection(self):
             return await super().test_connection()
@@ -1491,12 +1671,22 @@ def test_abstract_executor_and_mysql_error_branches(monkeypatch):
             return FakeAcquire()
 
     monkeypatch.setattr(sql_executor, "validate_sql", lambda *_args, **_kwargs: (True, ""))
-    monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit invalid")))
+    monkeypatch.setattr(
+        sql_executor,
+        "build_effective_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit invalid")),
+    )
     monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=FakePool()))
     invalid = asyncio.run(mysql.execute("select 1"))
     assert invalid["status"] != "succeeded"
     assert invalid["error"] == "limit invalid"
 
-    monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=SimpleNamespace(acquire=lambda: (_ for _ in ()).throw(RuntimeError("pool down")))))
+    monkeypatch.setattr(
+        mysql,
+        "_get_pool",
+        lambda: asyncio.sleep(
+            0, result=SimpleNamespace(acquire=lambda: (_ for _ in ()).throw(RuntimeError("pool down")))
+        ),
+    )
     assert asyncio.run(mysql.test_connection()) is False
     assert asyncio.run(mysql.kill_query("123"))["status"] != "succeeded"

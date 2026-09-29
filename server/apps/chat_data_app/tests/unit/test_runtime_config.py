@@ -54,7 +54,6 @@ def test_read_bool_env_rejects_synonyms_and_invalid_with_error(monkeypatch):
             runtime_config.read_bool_env("CHATDATA_TEST_BOOL", False)
 
 
-
 def test_read_bounded_float_env_clamps_compression_ratio(monkeypatch):
     monkeypatch.setenv("CHATDATA_TEST_RATIO", "0.75")
     assert runtime_config.read_bounded_float_env("CHATDATA_TEST_RATIO", 0.70, minimum=0.01, maximum=0.80) == 0.75
@@ -83,12 +82,27 @@ def test_context_window_reads_chat_data_model_config(monkeypatch, tmp_path):
     import json
 
     registry = tmp_path / "models.json"
-    registry.write_text(json.dumps([
-        {"id": "glm-5.1", "temperature": 0.2, "context_window": 128000, "vlm": False,
-         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
-        {"id": "kimi-k2.5", "temperature": 0.1, "context_window": 256000, "vlm": False,
-         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
-    ]), encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "glm-5.1",
+                    "temperature": 0.2,
+                    "context_window": 128000,
+                    "vlm": False,
+                    "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False},
+                },
+                {
+                    "id": "kimi-k2.5",
+                    "temperature": 0.1,
+                    "context_window": 256000,
+                    "vlm": False,
+                    "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
     assert runtime_config.get_context_window("") == 128000
     assert runtime_config.get_context_window("glm-5.1") == 128000

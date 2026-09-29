@@ -186,10 +186,7 @@ class MCPCatalog:
             entries.append(entry)
             name_tokens = _tokenize(entry.qualified_name) * _NAME_TOKEN_REPEAT
             docs.append(
-                name_tokens
-                + _tokenize(entry.label)
-                + _tokenize(entry.description)
-                + _tokenize(entry.param_docs)
+                name_tokens + _tokenize(entry.label) + _tokenize(entry.description) + _tokenize(entry.param_docs)
             )
         self._entries = entries
         self._entries_by_name = {entry.qualified_name: entry for entry in entries}
@@ -304,7 +301,9 @@ def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool
         ),
         limit=(
             int,
-            Field(default=_SEARCH_RESULT_LIMIT_DEFAULT, description=f"最多返回条数，默认 {_SEARCH_RESULT_LIMIT_DEFAULT}。"),
+            Field(
+                default=_SEARCH_RESULT_LIMIT_DEFAULT, description=f"最多返回条数，默认 {_SEARCH_RESULT_LIMIT_DEFAULT}。"
+            ),
         ),
         intent=(
             str,

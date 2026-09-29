@@ -153,8 +153,16 @@ def create_tool_call_rate_alert_middleware(
 
     @wrap_tool_call(name="ToolCallRateAlertMiddleware")
     async def tool_call_rate_alert_middleware(request, handler):
-        resolved_threshold = threshold if threshold is not None else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD")
-        resolved_window = window_seconds if window_seconds is not None else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_WINDOW_SECONDS")
+        resolved_threshold = (
+            threshold
+            if threshold is not None
+            else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD")
+        )
+        resolved_window = (
+            window_seconds
+            if window_seconds is not None
+            else await get_runtime_setting("CHAT_DATA_TOOL_CALL_RATE_ALERT_WINDOW_SECONDS")
+        )
         record_tool_call_and_alert(request, threshold=resolved_threshold, window_seconds=resolved_window)
         return await handler(request)
 

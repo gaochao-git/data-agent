@@ -108,7 +108,16 @@ def _access_ext1(client_ip: str, user: str | None) -> str:
 
 
 class _ResponseLogState:
-    def __init__(self, request_id: str, method: str, path: str, query: dict[str, str], client_ip: str, user: str | None, started_at: float):
+    def __init__(
+        self,
+        request_id: str,
+        method: str,
+        path: str,
+        query: dict[str, str],
+        client_ip: str,
+        user: str | None,
+        started_at: float,
+    ):
         self.request_id = request_id
         self.method = method
         self.path = path

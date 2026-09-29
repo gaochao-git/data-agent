@@ -93,7 +93,10 @@ async def calculator_tool(
     """
     getcontext().prec = 50
     results = [_calculate_item(item) for item in calculations]
-    return json.dumps({
-        "success": all(item.get("success") for item in results),
-        "results": results,
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "success": all(item.get("success") for item in results),
+            "results": results,
+        },
+        ensure_ascii=False,
+    )

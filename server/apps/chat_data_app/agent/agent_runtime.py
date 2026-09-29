@@ -67,6 +67,7 @@ def create_streaming_chat_model(
 
 def create_response_timestamp_middleware():
     """创建模型响应时间戳 middleware，确保 checkpoint 中助手消息有服务端时间。"""
+
     @wrap_model_call(name="ResponseTimestampMiddleware")
     async def response_timestamp_middleware(request, handler):
         response = await handler(request)
@@ -121,22 +122,22 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 # 位置并写明原因；tests/unit/test_middleware_ordering.py 枚举全部启用组合，
 # 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
-    "ToolExecutionFenceMiddleware",     # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
-    "ImageInjectionMiddleware",         # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
-    "MCPToolDiscoveryMiddleware",       # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
-    "ToolTimingMiddleware",             # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
-    "ToolCallRateAlertMiddleware",      # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
+    "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
+    "MCPToolDiscoveryMiddleware",  # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
+    "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
+    "ToolCallRateAlertMiddleware",  # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
-    "SteeringMiddleware",               # 在压缩之前注入插话，避免被摘要吞掉
-    "SubagentMiddleware",               # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
-    "TodoListMiddleware",               # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
-    "AfterModelHistoryMiddleware",      # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
+    "SteeringMiddleware",  # 在压缩之前注入插话，避免被摘要吞掉
+    "SubagentMiddleware",  # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
+    "TodoListMiddleware",  # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
+    "AfterModelHistoryMiddleware",  # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
     "ContextCompressionMiddleware",
     "ContextUsageMiddleware",
     "ResponseTimestampMiddleware",
     "ToolCallNameNormalizerMiddleware",
     "ToolResultMiddleware",
-    "ToolErrorMiddleware",              # 恒为最内层兜底
+    "ToolErrorMiddleware",  # 恒为最内层兜底
 )
 
 
@@ -183,7 +184,9 @@ def build_standard_agent_middleware(
         "ContextCompressionMiddleware": context_compression_middleware,
         "ContextUsageMiddleware": context_usage_middleware,
         "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
-        "ToolCallNameNormalizerMiddleware": (create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None),
+        "ToolCallNameNormalizerMiddleware": (
+            create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None
+        ),
         "ToolResultMiddleware": tool_result_middleware,
         "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),
     }

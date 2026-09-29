@@ -46,11 +46,11 @@ def _extract_streaming_text_field(args_text: str, field_name: str) -> tuple[str 
     idx = args_text.find(marker)
     if idx < 0:
         return None, False
-    rest = args_text[idx + len(marker):]
-    colon = rest.find(':')
+    rest = args_text[idx + len(marker) :]
+    colon = rest.find(":")
     if colon < 0:
         return None, False
-    rest = rest[colon + 1:].lstrip()
+    rest = rest[colon + 1 :].lstrip()
     if not rest.startswith('"'):
         return None, False
     out: list[str] = []
@@ -58,9 +58,9 @@ def _extract_streaming_text_field(args_text: str, field_name: str) -> tuple[str 
     closed = False
     while i < len(rest):
         c = rest[i]
-        if c == '\\' and i + 1 < len(rest):
+        if c == "\\" and i + 1 < len(rest):
             nxt = rest[i + 1]
-            mapping = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', '\\': '\\', '/': '/'}
+            mapping = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
             out.append(mapping.get(nxt, nxt))
             i += 2
         elif c == '"':
@@ -69,14 +69,14 @@ def _extract_streaming_text_field(args_text: str, field_name: str) -> tuple[str 
         else:
             out.append(c)
             i += 1
-    return ''.join(out), closed
+    return "".join(out), closed
 
 
 def _count_text_lines(text: str) -> int:
     """统计文本行数（空文本 0 行；以换行结尾不计额外空行）。"""
     if not text:
         return 0
-    return text.count('\n') + (0 if text.endswith('\n') else 1)
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
 def _format_tool_progress_event(

@@ -32,11 +32,26 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (  # no
 
 # 与 TOOL_SPECS 声明一一对应（bash_run 受运行选项控制，单独断言）
 EXPECTED_WITHOUT_BASH = [
-    "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete",
-    "file_glob", "file_grep", "file_diff", "dir_create", "dir_list", "dir_delete",
-    "parse_document", "read_image", "present_artifacts", "get_current_time",
+    "file_read",
+    "file_edit",
+    "file_write",
+    "file_move",
+    "file_copy",
+    "file_delete",
+    "file_glob",
+    "file_grep",
+    "file_diff",
+    "dir_create",
+    "dir_list",
+    "dir_delete",
+    "parse_document",
+    "read_image",
+    "present_artifacts",
+    "get_current_time",
     "data_analyzing_tool",
-    "calculator_tool", "ask_user_question", "officecli_run",
+    "calculator_tool",
+    "ask_user_question",
+    "officecli_run",
 ]
 
 

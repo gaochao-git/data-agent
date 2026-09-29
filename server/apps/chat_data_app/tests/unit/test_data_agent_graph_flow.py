@@ -47,20 +47,46 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     runtime, without_bash = _runtime(tmp_path, bash_enabled=False)
     _, with_bash = _runtime(tmp_path, bash_enabled=True)
 
-    tool_names = [tool.name for tool in assemble_tools(
-        without_bash, runtime,
-        identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
-    )]
-    bash_tool_names = [tool.name for tool in assemble_tools(
-        with_bash, runtime,
-        identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
-    )]
+    tool_names = [
+        tool.name
+        for tool in assemble_tools(
+            without_bash,
+            runtime,
+            identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
+            datasource_context=DatasourceContext(datasource_id="ds_a"),
+        )
+    ]
+    bash_tool_names = [
+        tool.name
+        for tool in assemble_tools(
+            with_bash,
+            runtime,
+            identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
+            datasource_context=DatasourceContext(datasource_id="ds_a"),
+        )
+    ]
 
     assert tool_names == [
-        "file_read", "file_edit", "file_write", "file_move", "file_copy", "file_delete", "file_glob", "file_grep", "file_diff", "dir_create", "dir_list", "dir_delete", "parse_document", "read_image", "present_artifacts", "get_current_time",
-        "data_analyzing_tool", "calculator_tool", "ask_user_question", "officecli_run",
+        "file_read",
+        "file_edit",
+        "file_write",
+        "file_move",
+        "file_copy",
+        "file_delete",
+        "file_glob",
+        "file_grep",
+        "file_diff",
+        "dir_create",
+        "dir_list",
+        "dir_delete",
+        "parse_document",
+        "read_image",
+        "present_artifacts",
+        "get_current_time",
+        "data_analyzing_tool",
+        "calculator_tool",
+        "ask_user_question",
+        "officecli_run",
     ]
     assert bash_tool_names[-1] == "bash_run"
     assert bash_tool_names[:-1] == tool_names
@@ -88,7 +114,9 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     monkeypatch.setattr(data_agent, "create_request_context_usage_middleware", fake_context_usage_middleware)
     monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
-    monkeypatch.setattr(data_agent, "bind_context_usage_middleware", lambda agent, middleware: bound.append((agent, middleware)))
+    monkeypatch.setattr(
+        data_agent, "bind_context_usage_middleware", lambda agent, middleware: bound.append((agent, middleware))
+    )
 
     agent = data_agent.create_data_agent(
         options,
@@ -159,9 +187,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
 def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatch, tmp_path):
     captured = {}
     runtime, base_options = _runtime(tmp_path)
-    options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True
-    )
+    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True)
 
     def fake_create_agent(**kwargs):
         captured.update(kwargs)
@@ -199,16 +225,10 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
-    monkeypatch.setattr(
-        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
-    )
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
     # 伪工具对象无法走真实 create_agent 编译，桩掉子图编译步骤
-    monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
-    )
-    options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True
-    )
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_grep"),
@@ -235,15 +255,9 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
-    monkeypatch.setattr(
-        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
-    )
-    monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
-    )
-    options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False, plan_subagent_enabled=True
-    )
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, plan_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
@@ -268,15 +282,13 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
-    monkeypatch.setattr(
-        data_agent, "create_streaming_chat_model", lambda **_kwargs: object()
-    )
-    monkeypatch.setattr(
-        subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace()
-    )
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
     options = AgentRuntimeOptions(
-        workspace_backend="local", bash_enabled=False,
-        explore_subagent_enabled=True, plan_subagent_enabled=True,
+        workspace_backend="local",
+        bash_enabled=False,
+        explore_subagent_enabled=True,
+        plan_subagent_enabled=True,
         general_purpose_subagent_enabled=True,
     )
     tools = [
@@ -309,16 +321,20 @@ async def test_tool_call_name_normalizer_middleware():
     middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])
 
     async def handler(_request):
-        return SimpleNamespace(result=[
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "id": "call_select",
-                    "name": "semantic_searchsemantic_search",
-                    "args": {"query": "查询入金金额"},
-                }],
-            ),
-        ])
+        return SimpleNamespace(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_select",
+                            "name": "semantic_searchsemantic_search",
+                            "args": {"query": "查询入金金额"},
+                        }
+                    ],
+                ),
+            ]
+        )
 
     response = await middleware.awrap_model_call(SimpleNamespace(), handler)
 
@@ -337,15 +353,24 @@ async def test_tool_call_name_normalizer_covers_middleware_injected_tools(repeat
     修不回来（内网 vLLM/GLM 实测）。同时确认：不在候选集内的名称仍原样返回，不做猜测。
     """
     middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])
-    request = SimpleNamespace(tools=[
-        SimpleNamespace(name="write_todos"),
-        SimpleNamespace(name="semantic_search"),
-    ])
+    request = SimpleNamespace(
+        tools=[
+            SimpleNamespace(name="write_todos"),
+            SimpleNamespace(name="semantic_search"),
+        ]
+    )
 
     async def handler(_request):
-        return AIMessage(content="", tool_calls=[{
-            "id": "call_todos", "name": repeated_name, "args": {"todos": []},
-        }])
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_todos",
+                    "name": repeated_name,
+                    "args": {"todos": []},
+                }
+            ],
+        )
 
     response = await middleware.awrap_model_call(request, handler)
 
@@ -359,9 +384,16 @@ async def test_tool_call_name_normalizer_leaves_unmatched_names_untouched():
     request = SimpleNamespace(tools=[SimpleNamespace(name="write_todos")])
 
     async def handler(_request):
-        return AIMessage(content="", tool_calls=[{
-            "id": "call_x", "name": "write_todos_extra", "args": {},
-        }])
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_x",
+                    "name": "write_todos_extra",
+                    "args": {},
+                }
+            ],
+        )
 
     response = await middleware.awrap_model_call(request, handler)
 

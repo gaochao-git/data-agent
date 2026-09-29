@@ -65,7 +65,11 @@ def test_production_business_response_codes_are_centralized():
                 if name != "business_response":
                     continue
                 for keyword in node.keywords:
-                    if keyword.arg == "code" and isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, int):
+                    if (
+                        keyword.arg == "code"
+                        and isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, int)
+                    ):
                         violations.append(f"{path}:{node.lineno}: business_response code must use ErrorCode")
     assert violations == []
 
@@ -85,7 +89,11 @@ def test_error_code_values_are_unique():
 
 def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monkeypatch):
     records = []
-    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+    monkeypatch.setattr(
+        alarm_module,
+        "get_alarm_logger",
+        lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))),
+    )
 
     alarm_module.emit_alarm(
         "boom" * 200,
@@ -132,7 +140,11 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
 def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
     """外部依赖与平台自身接口异常共用 API_CALL_EXCEPTION，细分落在 error_code。"""
     records = []
-    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+    monkeypatch.setattr(
+        alarm_module,
+        "get_alarm_logger",
+        lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))),
+    )
 
     alarm_module.emit_external_api_alarm("hive-gateway", TimeoutError("timed out"), method="POST", url="http://x/y")
     alarm_module.emit_api_call_exception_path = None
@@ -150,7 +162,11 @@ def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
     """alarm_id 固定为 OMS 契约值，细分原因落在 error_code。"""
     records = []
     warnings = []
-    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+    monkeypatch.setattr(
+        alarm_module,
+        "get_alarm_logger",
+        lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))),
+    )
     monkeypatch.setattr(alarm_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
 
     cases = [
@@ -317,7 +333,9 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
     monkeypatch.setattr(checkpoint, "MYSQL_USER", "user")
     monkeypatch.setattr(checkpoint, "MYSQL_HOST", "127.0.0.1")
-    monkeypatch.setattr(checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306")))
+    monkeypatch.setattr(
+        checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306"))
+    )
     monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
     monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pwd")
     assert checkpoint.get_checkpoint_info()["type"] == "mysql"
@@ -329,9 +347,15 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
 
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
     get_context = checkpoint.get_checkpointer()
-    assert get_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert (
+        get_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"]
+        == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    )
     mysql_context = checkpoint._get_mysql_checkpointer()
-    assert mysql_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert (
+        mysql_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"]
+        == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    )
 
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
     with pytest.raises(ValueError, match="不支持"):
@@ -405,7 +429,9 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
         DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
     )
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(
+        checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
+    )
 
     class FakeContext:
         def __init__(self, conn_string):
@@ -473,7 +499,9 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(
+        checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
+    )
 
     class Context:
         async def __aenter__(self):
@@ -538,7 +566,11 @@ def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
 
     events.clear()
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
-    monkeypatch.setattr(checkpoint, "select_available_checkpointer_endpoint", lambda: asyncio.sleep(0, result=events.append(("checkpoint", None))))
+    monkeypatch.setattr(
+        checkpoint,
+        "select_available_checkpointer_endpoint",
+        lambda: asyncio.sleep(0, result=events.append(("checkpoint", None))),
+    )
     asyncio.run(checkpoint.setup_checkpointer())
     assert events == [("checkpoint", None), ("init", None)]
 
@@ -610,7 +642,9 @@ def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monke
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
     alarm_records = []
-    monkeypatch.setattr(checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(
+        checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
+    )
 
     with pytest.raises(ValueError, match="所有 checkpoint 库节点均不可用"):
         asyncio.run(checkpoint.select_available_checkpointer_endpoint())
@@ -621,7 +655,9 @@ def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monke
 def test_database_session_commit_rollback_and_info(monkeypatch):
     database._engine = None
     database._session_factory = None
-    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306")))
+    monkeypatch.setattr(
+        database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306"))
+    )
     monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
     url = database.get_database_url()
     assert url.drivername == "mysql+aiomysql"
@@ -730,7 +766,9 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
     database._engine = None
     database._session_factory = None
     alarm_records = []
-    monkeypatch.setattr(database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(
+        database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
+    )
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
@@ -780,8 +818,14 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
 
 def test_database_startup_probe_failure_writes_alarm(monkeypatch):
     alarm_records = []
-    monkeypatch.setattr(database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
-    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")))
+    monkeypatch.setattr(
+        database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        database,
+        "_endpoint_selector",
+        DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
+    )
     monkeypatch.setattr(database, "_probe_database_endpoint", lambda _endpoint: asyncio.sleep(0, result=False))
 
     with pytest.raises(ValueError, match="所有业务库节点均不可用"):
@@ -1054,7 +1098,10 @@ def test_log_file_derivation_and_formatters(monkeypatch):
     access_record.error_code = "0"
     access_record.ext1 = "client_ip:127.0.0.1"
     access_record.ext2 = "path:/demo"
-    assert "|trace-1|-|GET|chat-data|idc-a|10.0.0.2|2026-06-25 12:00:00.000|12ms|0|client_ip:127.0.0.1|path:/demo" in logger_module.AccessLogFormatter().format(access_record)
+    assert (
+        "|trace-1|-|GET|chat-data|idc-a|10.0.0.2|2026-06-25 12:00:00.000|12ms|0|client_ip:127.0.0.1|path:/demo"
+        in logger_module.AccessLogFormatter().format(access_record)
+    )
 
     alarm_record = logging.LogRecord("alarm", logging.ERROR, __file__, 1, "boom", (), None)
     alarm_record.request_id = "trace-2"
@@ -1065,16 +1112,24 @@ def test_log_file_derivation_and_formatters(monkeypatch):
     alarm_record.error_code = "500"
     alarm_record.ext1 = "client_ip:127.0.0.2"
     alarm_record.ext2 = "path:/fail"
-    assert "|trace-2|-|POST|chat-data|idc-b|10.0.0.3|500|boom|client_ip:127.0.0.2|path:/fail" in logger_module.AlarmLogFormatter().format(alarm_record)
+    assert (
+        "|trace-2|-|POST|chat-data|idc-b|10.0.0.3|500|boom|client_ip:127.0.0.2|path:/fail"
+        in logger_module.AlarmLogFormatter().format(alarm_record)
+    )
 
 
 def test_runtime_env_loading_from_ip_mapping(monkeypatch, tmp_path):
     conf_dir = tmp_path / "conf"
     conf_dir.mkdir()
-    (conf_dir / "deploy_env_hosts.json").write_text(json.dumps({
-        "dev": ["172.20.10.2"],
-        "bj12": ["10.96."],
-    }), encoding="utf-8")
+    (conf_dir / "deploy_env_hosts.json").write_text(
+        json.dumps(
+            {
+                "dev": ["172.20.10.2"],
+                "bj12": ["10.96."],
+            }
+        ),
+        encoding="utf-8",
+    )
     (conf_dir / ".env-dev").write_text("UNIT_RUNTIME_ENV_VALUE=dev-value\n", encoding="utf-8")
     (conf_dir / ".env-bj12").write_text("UNIT_RUNTIME_ENV_VALUE=bj12-value\n", encoding="utf-8")
 
@@ -1100,10 +1155,15 @@ def test_runtime_env_loading_from_ip_mapping(monkeypatch, tmp_path):
 def test_runtime_env_loading_errors_and_explicit_env(monkeypatch, tmp_path):
     conf_dir = tmp_path / "conf"
     conf_dir.mkdir()
-    (conf_dir / "deploy_env_hosts.json").write_text(json.dumps({
-        "dev": ["172.20."],
-        "uat": ["172.20.10."],
-    }), encoding="utf-8")
+    (conf_dir / "deploy_env_hosts.json").write_text(
+        json.dumps(
+            {
+                "dev": ["172.20."],
+                "uat": ["172.20.10."],
+            }
+        ),
+        encoding="utf-8",
+    )
     (conf_dir / ".env-dev").write_text("UNIT_RUNTIME_ENV_VALUE=dev-value\n", encoding="utf-8")
 
     monkeypatch.setattr(common_util, "get_local_ips", lambda: ("172.20.10.2",))
@@ -1168,14 +1228,24 @@ def test_pipe_log_formatter_and_context_helpers(monkeypatch):
 async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
     records = {"set": [], "clear": 0, "access_info": [], "exception": []}
 
-    monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
-        exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
-    ))
-    monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
-        info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
-    ))
+    monkeypatch.setattr(
+        api_logging_module,
+        "logger",
+        SimpleNamespace(
+            exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
+        ),
+    )
+    monkeypatch.setattr(
+        api_logging_module,
+        "access_logger",
+        SimpleNamespace(
+            info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
+        ),
+    )
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
-    monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
+    monkeypatch.setattr(
+        api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1)
+    )
     monkeypatch.setattr(api_logging_module, "dump_masked_payload", lambda payload: payload)
     monkeypatch.setattr(api_logging_module, "_build_request_id", lambda: "req-abc")
 
@@ -1217,15 +1287,27 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
 async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatch):
     records = {"set": [], "clear": 0, "access_info": [], "exception": [], "alarm": []}
 
-    monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
-        exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
-    ))
-    monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
-        info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
-    ))
-    monkeypatch.setattr(api_logging_module, "emit_api_call_alarm", lambda *args, **kwargs: records["alarm"].append((args, kwargs)))
+    monkeypatch.setattr(
+        api_logging_module,
+        "logger",
+        SimpleNamespace(
+            exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
+        ),
+    )
+    monkeypatch.setattr(
+        api_logging_module,
+        "access_logger",
+        SimpleNamespace(
+            info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
+        ),
+    )
+    monkeypatch.setattr(
+        api_logging_module, "emit_api_call_alarm", lambda *args, **kwargs: records["alarm"].append((args, kwargs))
+    )
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
-    monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
+    monkeypatch.setattr(
+        api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1)
+    )
     monkeypatch.setattr(api_logging_module, "dump_masked_payload", lambda payload: payload)
     monkeypatch.setattr(api_logging_module, "_build_request_id", lambda: "req-err")
 
@@ -1271,23 +1353,35 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
         "(2003, \"Can't connect to MySQL server on '62.234.152.217'\") "
         "(Background on this error at: https://sqlalche.me/e/20/e3q8)"
     )
-    sanitized = _payload(response_module.business_response(msg=internal_error, code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED, status="error"))
+    sanitized = _payload(
+        response_module.business_response(
+            msg=internal_error, code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED, status="error"
+        )
+    )
     assert sanitized["msg"] == "后端服务异常，请稍后重试"
     assert "62.234.152.217" not in sanitized["msg"]
     assert "pymysql" not in sanitized["msg"].lower()
-    business_error = _payload(response_module.business_response(msg="数据源不存在: ds_a", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"))
+    business_error = _payload(
+        response_module.business_response(msg="数据源不存在: ds_a", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    )
     assert business_error["msg"] == "数据源不存在: ds_a"
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
 
-    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    monkeypatch.setattr(
+        dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="用户")
+    )
     with pytest.raises(dependencies.HTTPException, match="Missing user_id"):
         dependencies._get_current_user(SimpleNamespace(headers={}))
 
-    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    monkeypatch.setattr(
+        dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="用户")
+    )
     assert dependencies._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
 
-    assert build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
+    assert build_table_columns_map(
+        {"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}
+    ) == {"orders": {"id"}}
 
     for field, value, message in [
         ("org_name", " ", "org_name"),
@@ -1295,16 +1389,25 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
         ("host", " ", "host"),
         ("database", " ", "database"),
     ]:
-        payload = {"org_name": "机构", "org_code": "ORG", "query_executor_type": "direct", "host": "127.0.0.1", "database": "demo"}
+        payload = {
+            "org_name": "机构",
+            "org_code": "ORG",
+            "query_executor_type": "direct",
+            "host": "127.0.0.1",
+            "database": "demo",
+        }
         payload[field] = value
         with pytest.raises(ValueError, match=message):
             DatasourceSourceItem(**payload)
-    assert DatasourceSourceItem(
-        org_name="机构",
-        org_code="ORG",
-        query_executor_type="http",
-        database="demo",
-    ).host == ""
+    assert (
+        DatasourceSourceItem(
+            org_name="机构",
+            org_code="ORG",
+            query_executor_type="http",
+            database="demo",
+        ).host
+        == ""
+    )
     with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
         DatasourceSourceItem(
             org_name="机构",
@@ -1320,12 +1423,7 @@ def test_skills_loader_frontmatter_metadata_and_activation(tmp_path, monkeypatch
     skill_dir.mkdir()
     skill_file = skill_dir / "SKILL.md"
     skill_file.write_text(
-        "---\n"
-        "name: skill-a\n"
-        "metadata: not-a-dict\n"
-        "input_schema: bad\n"
-        "---\n"
-        "正文",
+        "---\nname: skill-a\nmetadata: not-a-dict\ninput_schema: bad\n---\n正文",
         encoding="utf-8",
     )
     meta = loader.parse_metadata(skill_file)
@@ -1352,8 +1450,13 @@ def test_skills_loader_frontmatter_metadata_and_activation(tmp_path, monkeypatch
 
 
 def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
-    monkeypatch.setattr(loader, "yaml", SimpleNamespace(safe_load=lambda _raw: (_ for _ in ()).throw(RuntimeError("bad yaml"))))
-    assert loader._parse_frontmatter("---\nname: fallback\nquoted: 'v'\n---\nbody") == {"name": "fallback", "quoted": "v"}
+    monkeypatch.setattr(
+        loader, "yaml", SimpleNamespace(safe_load=lambda _raw: (_ for _ in ()).throw(RuntimeError("bad yaml")))
+    )
+    assert loader._parse_frontmatter("---\nname: fallback\nquoted: 'v'\n---\nbody") == {
+        "name": "fallback",
+        "quoted": "v",
+    }
     assert loader._parse_frontmatter("no frontmatter") == {}
     monkeypatch.setattr(loader, "yaml", None)
     assert loader._parse_frontmatter("---\nname: no-yaml\nignored-line\n---\nbody") == {"name": "no-yaml"}
@@ -1388,7 +1491,9 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     assert "good" in metadata
     assert "hidden" not in metadata
     assert "bad" not in metadata
-    prompt = loader.format_skills_prompt([{"name": "good", "title": "G", "description": "A&B", "domain": "d", "category": "c"}])
+    prompt = loader.format_skills_prompt(
+        [{"name": "good", "title": "G", "description": "A&B", "domain": "d", "category": "c"}]
+    )
     assert "&amp;" in prompt
     # 提示词只保留 name/skill_file/title/description，domain/category 不再注入（匹配规则只按 name/title/description）
     assert "<domain>" not in prompt

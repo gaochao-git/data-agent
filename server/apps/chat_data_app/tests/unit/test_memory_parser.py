@@ -62,14 +62,7 @@ def test_split_scope_boundary_cases_via_parse():
 
 
 def test_parse_memory_document_ignores_headers_blanks_and_dedups():
-    text = (
-        "# 会话记忆（conversation: c1）\n"
-        "\n"
-        "- [口径] A\n"
-        "- [口径] A\n"
-        "普通文本\n"
-        "- [偏好] B（报表）\n"
-    )
+    text = "# 会话记忆（conversation: c1）\n\n- [口径] A\n- [口径] A\n普通文本\n- [偏好] B（报表）\n"
     items = parse_memory_document(text)
     assert items == [MemoryItem(category="口径", content="A"), MemoryItem(category="偏好", content="B", scope="报表")]
 

@@ -22,9 +22,7 @@ def _payload(resp):
 
 @pytest.fixture(autouse=True)
 def _current_user(monkeypatch):
-    monkeypatch.setattr(
-        qh, "_get_current_user", lambda request: SimpleNamespace(user_id="u1", username="tester")
-    )
+    monkeypatch.setattr(qh, "_get_current_user", lambda request: SimpleNamespace(user_id="u1", username="tester"))
 
 
 class FakeHistoryService:

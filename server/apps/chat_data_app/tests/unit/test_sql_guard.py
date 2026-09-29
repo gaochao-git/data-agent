@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -21,6 +21,7 @@ from apps.chat_data_app.services.sql_run.sql_guard import (
 )
 
 # ============ 管线规则：单语句与命令类型 ============
+
 
 def test_clean_select_and_metadata_commands_pass():
     assert run_sql_guard("SELECT * FROM orders LIMIT 50", "mysql") is None
@@ -51,6 +52,7 @@ def test_command_type_whitelist_rejects_writes():
 
 # ============ 管线规则：副作用构造 ============
 
+
 def test_select_into_family_blocked_as_side_effect():
     for sql in (
         "SELECT * FROM t INTO OUTFILE '/tmp/x'",
@@ -68,7 +70,13 @@ def test_select_into_not_triggered_by_string_literal_or_comment():
 
 
 def test_dangerous_functions_blocked():
-    for expression in ("LOAD_FILE('/etc/passwd')", "SLEEP(5)", "BENCHMARK(1, MD5('x'))", "GET_LOCK('a', 1)", "RELEASE_LOCK('a')"):
+    for expression in (
+        "LOAD_FILE('/etc/passwd')",
+        "SLEEP(5)",
+        "BENCHMARK(1, MD5('x'))",
+        "GET_LOCK('a', 1)",
+        "RELEASE_LOCK('a')",
+    ):
         violation = run_sql_guard(f"SELECT {expression}", "mysql")
         assert violation.rule == "dangerous_functions", expression
         assert violation.reason_code == "DANGEROUS_FUNCTION_BLOCKED"
@@ -86,6 +94,7 @@ def test_locking_reads_blocked():
 
 
 # ============ 管线规则：LIMIT 与方言 ============
+
 
 def test_explicit_limit_over_cap_rejected_with_stable_message():
     violation = run_sql_guard("SELECT * FROM t LIMIT 150", "mysql")
@@ -108,6 +117,7 @@ def test_subquery_limit_does_not_count_as_top_level():
 
 
 # ============ 终检门与 build_effective_sql ============
+
 
 def test_effective_limit_gate_requires_top_level_limit():
     assert check_effective_limit_gate("SELECT * FROM t LIMIT 100", "mysql") is None
@@ -184,6 +194,7 @@ def test_validate_sql_compat_surface():
 
 # ============ 超时上限 ============
 
+
 def test_resolve_query_timeout_clamps_request_value():
     assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 10**9)) == 3600
     assert asyncio.run(sql_executor.resolve_query_timeout("mysql", 30)) == 30
@@ -201,6 +212,7 @@ def test_schema_rejects_timeout_over_cap():
 
 
 # ============ 成员级联隔离 ============
+
 
 def test_coerce_member_result_isolates_exceptions():
     ok = {"status": "succeeded", "columns": ["a"], "data": [[1]], "total_count": 1}
@@ -240,12 +252,14 @@ def test_execute_sql_for_member_survives_close_and_persist_failures(monkeypatch)
     monkeypatch.setattr(query_runtime, "update_query_execution", record_running)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", failing_persist)
 
-    result = asyncio.run(query_runtime.execute_sql_for_member(
-        execution_target=target,
-        sql="SELECT * FROM t",
-        limit=10,
-        timeout=None,
-        execution_id="ex_1",
-    ))
+    result = asyncio.run(
+        query_runtime.execute_sql_for_member(
+            execution_target=target,
+            sql="SELECT * FROM t",
+            limit=10,
+            timeout=None,
+            execution_id="ex_1",
+        )
+    )
     assert result["status"] == "succeeded"
     assert ("final", "ex_1") in calls

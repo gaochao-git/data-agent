@@ -26,6 +26,7 @@
 （09-22）：早期 vendored 第三方复刻算法系统性低估（漏计条件内 BoolOp、推导式、
 elif 罚等），报 0 超标而 Sonar 实测超标——本地结论必须以与本实现/Sonar 对齐为准。
 """
+
 import argparse
 import ast
 import sys
@@ -72,7 +73,7 @@ class CognitiveComplexityVisitor:
             self._scan_if(node)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             self._add(1 + self._level(), "for")
-            self.scan_expr(node.iter)                 # 迭代对象里的表达式照常计分
+            self.scan_expr(node.iter)  # 迭代对象里的表达式照常计分
             self.scan_stmts(node.body, True)
             if node.orelse:
                 self._add(1, "for-else")
@@ -85,24 +86,24 @@ class CognitiveComplexityVisitor:
                 self._add(1, "while-else")
                 self.scan_stmts(node.orelse, True)
         elif isinstance(node, ast.Try) or (hasattr(ast, "TryStar") and isinstance(node, ast.TryStar)):
-            self.scan_stmts(node.body, False)            # TRY_STMT 体内不加嵌套
+            self.scan_stmts(node.body, False)  # TRY_STMT 体内不加嵌套
             for handler in node.handlers:
                 self._add(1 + self._level(), "except")
                 self.scan_stmts(handler.body, True)
             if node.orelse:
                 self._add(1, "try-else")
                 self.scan_stmts(node.orelse, True)
-            self.scan_stmts(node.finalbody, False)       # FINALLY_CLAUSE 不加嵌套
+            self.scan_stmts(node.finalbody, False)  # FINALLY_CLAUSE 不加嵌套
         elif isinstance(node, (ast.With, ast.AsyncWith)):
-            self.scan_stmts(node.body, False)            # WITH_STMT 不加嵌套
+            self.scan_stmts(node.body, False)  # WITH_STMT 不加嵌套
         elif isinstance(node, ast.Match):
-            for case in node.cases:                      # visitor 无 match 计分，仅 case 体内加嵌套
+            for case in node.cases:  # visitor 无 match 计分，仅 case 体内加嵌套
                 self.scan_expr(case.guard)
                 self.scan_stmts(case.body, True)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             self._scan_nested_function(node)
         elif isinstance(node, ast.ClassDef):
-            self._push("class", 0, node)                 # CLASSDEF 归零（visitClassDef）
+            self._push("class", 0, node)  # CLASSDEF 归零（visitClassDef）
             self.scan_stmts(node.body, False)
             self.stack.pop()
         else:
@@ -114,7 +115,7 @@ class CognitiveComplexityVisitor:
             self._add(1, "elif")
         else:
             self._add(1 + self._level(), "if")
-        self.scan_expr(node.test)                 # 条件里的 BoolOp/三元照常计分
+        self.scan_expr(node.test)  # 条件里的 BoolOp/三元照常计分
         self.scan_stmts(node.body, True)
         orelse = node.orelse
         if not orelse:
@@ -122,7 +123,7 @@ class CognitiveComplexityVisitor:
         if len(orelse) == 1 and isinstance(orelse[0], ast.If):
             self._scan_if(orelse[0], is_elif=True)
         else:
-            self._add(1, "else")                          # visitElseClause：恒 +1
+            self._add(1, "else")  # visitElseClause：恒 +1
             self.scan_stmts(orelse, True)
 
     def _scan_nested_function(self, node) -> None:
@@ -136,7 +137,7 @@ class CognitiveComplexityVisitor:
         for decorator in node.decorator_list:
             self.scan_expr(decorator)
         self._scan_signature(node)
-        self.scan_stmts(node.body, False)                 # FUNCDEF 体内不加嵌套
+        self.scan_stmts(node.body, False)  # FUNCDEF 体内不加嵌套
         self.stack.pop()
 
     def _scan_signature(self, node) -> None:
@@ -163,7 +164,7 @@ class CognitiveComplexityVisitor:
             return
         if isinstance(node, ast.IfExp):
             self._add(1 + self._level(), "ternary")
-            self.stack[-1]["level"] += 1              # 三元内部嵌套再 +1
+            self.stack[-1]["level"] += 1  # 三元内部嵌套再 +1
             self.scan_expr(node.test)
             self.scan_expr(node.body)
             self.scan_expr(node.orelse)
@@ -199,10 +200,7 @@ class CognitiveComplexityVisitor:
 
 def _is_wrapper(parent_func, child_func) -> bool:
     """对应 NestingLevel.isWrapperFunction：父函数体内除子函数外全是简单 return <名>。"""
-    return all(
-        stmt is child_func or _is_simple_return(stmt)
-        for stmt in parent_func.body
-    )
+    return all(stmt is child_func or _is_simple_return(stmt) for stmt in parent_func.body)
 
 
 def _is_simple_return(stmt) -> bool:
@@ -254,13 +252,15 @@ def _collect_functions(root: Path, exclude_dirs):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     if not in_function:
-                        results.append((
-                            cognitive_complexity(child),
-                            str(py.relative_to(root)),
-                            child.lineno,
-                            child.name,
-                            child,
-                        ))
+                        results.append(
+                            (
+                                cognitive_complexity(child),
+                                str(py.relative_to(root)),
+                                child.lineno,
+                                child.name,
+                                child,
+                            )
+                        )
                     walk(child, True)
                 else:
                     walk(child, in_function)

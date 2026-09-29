@@ -1,7 +1,7 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -47,12 +47,14 @@ from apps.chat_data_app.services.dashboard.spec_service import (
 
 
 def test_normalize_semantic_dsl_payload_accepts_field_op_filters():
-    payload = normalize_semantic_dsl_payload({
-        "metrics": ["订单金额"],
-        "dimensions": [{"dimension": "下单月份", "grain": "month"}],
-        "filters": [{"field": "订单状态", "op": "=", "value": "已支付"}],
-        "order_by": [{"dimension": "下单月份", "order": "asc"}],
-    })
+    payload = normalize_semantic_dsl_payload(
+        {
+            "metrics": ["订单金额"],
+            "dimensions": [{"dimension": "下单月份", "grain": "month"}],
+            "filters": [{"field": "订单状态", "op": "=", "value": "已支付"}],
+            "order_by": [{"dimension": "下单月份", "order": "asc"}],
+        }
+    )
 
     assert payload["dimensions"] == [{"name": "下单月份", "time_grain": "month"}]
     assert payload["filters"] == [{"dimension": "订单状态", "operator": "=", "value": "已支付"}]
@@ -60,14 +62,16 @@ def test_normalize_semantic_dsl_payload_accepts_field_op_filters():
 
 
 def test_normalize_semantic_dsl_payload_accepts_metric_objects():
-    payload = normalize_semantic_dsl_payload({
-        "metrics": [
-            {"name": "订单金额", "aggregate": "SUM"},
-            {"metric": "订单数量"},
-            {"field": "用户数量"},
-        ],
-        "dimensions": [],
-    })
+    payload = normalize_semantic_dsl_payload(
+        {
+            "metrics": [
+                {"name": "订单金额", "aggregate": "SUM"},
+                {"metric": "订单数量"},
+                {"field": "用户数量"},
+            ],
+            "dimensions": [],
+        }
+    )
 
     assert payload["metrics"] == ["订单金额", "订单数量", "用户数量"]
 
@@ -81,10 +85,13 @@ def test_remove_mixed_raw_metrics_for_aggregate_dsl_keeps_aggregate_metrics():
         ]
     }
 
-    payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl({
-        "metrics": ["订单金额", "订单数量", "用户数量"],
-        "dimensions": ["下单月份"],
-    }, semantic_config)
+    payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(
+        {
+            "metrics": ["订单金额", "订单数量", "用户数量"],
+            "dimensions": ["下单月份"],
+        },
+        semantic_config,
+    )
 
     assert payload["metrics"] == ["订单金额", "订单数量"]
     assert warnings
@@ -120,7 +127,9 @@ def test_get_dashboard_spec_semantic_config_keeps_selected_source_type(monkeypat
             return datasource["semantic_configs"][0] if datasource and config_id == "sc_a" else None
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: manager)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: FakeSemanticService())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: FakeSemanticService()
+    )
 
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "sc_a"))
 
@@ -151,22 +160,24 @@ def test_build_panel_sql_from_dashboard_card_rejects_compare():
 
 
 def test_validate_dashboard_spec_structure_rejects_compare():
-    errors = validate_dashboard_spec_structure({
-        "dashboard_name": "同比看板",
-        "semantic_config_id": "sem_1",
-        "cards": [
-            {
-                "title": "同比卡片",
-                "chart_type": "line",
-                "layout": {"x": 0, "y": 0, "w": 6, "h": 4},
-                "dsl": {
-                    "metrics": ["订单金额"],
-                    "dimensions": [{"name": "下单时间", "time_grain": "month"}],
-                    "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
-                },
-            }
-        ],
-    })
+    errors = validate_dashboard_spec_structure(
+        {
+            "dashboard_name": "同比看板",
+            "semantic_config_id": "sem_1",
+            "cards": [
+                {
+                    "title": "同比卡片",
+                    "chart_type": "line",
+                    "layout": {"x": 0, "y": 0, "w": 6, "h": 4},
+                    "dsl": {
+                        "metrics": ["订单金额"],
+                        "dimensions": [{"name": "下单时间", "time_grain": "month"}],
+                        "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
+                    },
+                }
+            ],
+        }
+    )
 
     assert any("不支持 compare" in item for item in errors)
 
@@ -188,15 +199,15 @@ def test_filter_executable_dashboard_panel_plans_filters_failed_sql(monkeypatch)
         {"index": 1, "card": {"title": "失败卡片"}, "sql": "select bad_column from t", "chart_type": "table"},
     ]
 
-    executable, warnings = asyncio.run(filter_executable_dashboard_panel_plans(plans, datasource_id="ds_a", username="测试用户"))
+    executable, warnings = asyncio.run(
+        filter_executable_dashboard_panel_plans(plans, datasource_id="ds_a", username="测试用户")
+    )
 
     assert len(executable) == 2
     assert executable[0]["card"]["title"] == "可执行卡片"
     assert executable[1]["card"]["title"] == "失败卡片"
     assert executable[1]["error"] == "字段不存在"
     assert warnings == ["卡片「失败卡片」预执行失败：字段不存在"]
-
-
 
 
 def test_create_dashboard_from_spec_payload_skips_sql_precheck(monkeypatch):
@@ -217,7 +228,10 @@ def test_create_dashboard_from_spec_payload_skips_sql_precheck(monkeypatch):
             }
 
         async def get_dashboard(self, _dashboard_id):
-            return {"id": "dash_1", "panels": [{"id": "panel_订单状态分布", "layout": {"x": 9, "y": 0, "w": 3, "h": 2}}]}
+            return {
+                "id": "dash_1",
+                "panels": [{"id": "panel_订单状态分布", "layout": {"x": 9, "y": 0, "w": 3, "h": 2}}],
+            }
 
         async def delete_dashboard(self, _dashboard_id):
             return None
@@ -230,32 +244,43 @@ def test_create_dashboard_from_spec_payload_skips_sql_precheck(monkeypatch):
             "valid": True,
             "valid_count": 1,
             "warnings": [],
-            "panels": [{
-                "index": 0,
-                "title": "订单状态分布",
-                "chart_type": "pie",
-                "sql": "select status, count(*) as cnt from orders group by status",
-            }],
+            "panels": [
+                {
+                    "index": 0,
+                    "title": "订单状态分布",
+                    "chart_type": "pie",
+                    "sql": "select status, count(*) as cnt from orders group by status",
+                }
+            ],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: FakeService())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload",
+        fake_validate_dashboard_spec_payload,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: FakeService()
+    )
 
-    result = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={
-            "dashboard_name": "订单经营分析看板",
-            "semantic_config_id": "sem_from_spec",
-            "cards": [{
-                "title": "订单状态分布",
-                "chart_type": "pie",
-                "layout": {"x": 9, "y": 0, "w": 3, "h": 2},
-                "dsl": {"metrics": ["订单数"], "dimensions": ["订单状态"]},
-            }],
-        },
-        datasource_id="ds_a",
-        conversation_id="conv_1",
-        user_id="u_1",
-    ))
+    result = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "订单经营分析看板",
+                "semantic_config_id": "sem_from_spec",
+                "cards": [
+                    {
+                        "title": "订单状态分布",
+                        "chart_type": "pie",
+                        "layout": {"x": 9, "y": 0, "w": 3, "h": 2},
+                        "dsl": {"metrics": ["订单数"], "dimensions": ["订单状态"]},
+                    }
+                ],
+            },
+            datasource_id="ds_a",
+            conversation_id="conv_1",
+            user_id="u_1",
+        )
+    )
 
     assert result["dashboard"]["id"] == "dash_1"
     assert len(result["panels"]) == 1
@@ -308,32 +333,37 @@ def test_create_dashboard_from_spec_payload_keeps_invalid_sql_cards(monkeypatch)
             ],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate_dashboard_spec_payload)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload",
+        fake_validate_dashboard_spec_payload,
+    )
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
-    result = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={
-            "dashboard_name": "订单经营分析看板",
-            "cards": [
-                {
-                    "title": "有效趋势",
-                    "chart_type": "line",
-                    "layout": {"x": 0, "y": 0, "w": 6, "h": 4},
-                    "dsl": {"metrics": ["订单金额"], "dimensions": ["下单月份"]},
-                },
-                {
-                    "title": "失败排行",
-                    "chart_type": "horizontal_bar",
-                    "layout": {"x": 6, "y": 0, "w": 6, "h": 4},
-                    "dsl": {"metrics": ["不存在指标"], "dimensions": ["商品名称"]},
-                },
-            ],
-        },
-        datasource_id="ds_a",
-        semantic_config_id="sem_1",
-        conversation_id="conv_1",
-        user_id="u_1",
-    ))
+    result = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "订单经营分析看板",
+                "cards": [
+                    {
+                        "title": "有效趋势",
+                        "chart_type": "line",
+                        "layout": {"x": 0, "y": 0, "w": 6, "h": 4},
+                        "dsl": {"metrics": ["订单金额"], "dimensions": ["下单月份"]},
+                    },
+                    {
+                        "title": "失败排行",
+                        "chart_type": "horizontal_bar",
+                        "layout": {"x": 6, "y": 0, "w": 6, "h": 4},
+                        "dsl": {"metrics": ["不存在指标"], "dimensions": ["商品名称"]},
+                    },
+                ],
+            },
+            datasource_id="ds_a",
+            semantic_config_id="sem_1",
+            conversation_id="conv_1",
+            user_id="u_1",
+        )
+    )
 
     assert len(result["panels"]) == 2
     assert result["panels"][1]["name"] == "失败排行"
@@ -341,6 +371,7 @@ def test_create_dashboard_from_spec_payload_keeps_invalid_sql_cards(monkeypatch)
     assert result["panels"][1]["layout"] == {"x": 6, "y": 0, "w": 6, "h": 4}
     assert result["panels"][1]["chart_config"]["creation_status"] == "invalid_sql"
     assert result["panels"][1]["chart_config"]["creation_error"] == "字段不存在"
+
     class FakeGenerator:
         semantic_config = {"metrics": [{"name": "订单数", "expression": "COUNT(*)"}]}
 
@@ -380,17 +411,19 @@ def test_build_panel_sql_from_dashboard_card_does_not_add_default_limit():
 
 
 def test_normalize_dashboard_card_chart_config_keeps_allowed_style_options():
-    config = normalize_dashboard_card_chart_config({
-        "purpose": "展示风险规模",
-        "diagnosis": "关注风险变化",
-        "chart_config": {
-            "kpiIcon": "fa-bolt",
-            "kpiColor": "#ffdc3d",
-            "chartColor": "#00e5ff",
-            "lineStyle": "smooth",
-            "unsafe": "ignored",
-        },
-    })
+    config = normalize_dashboard_card_chart_config(
+        {
+            "purpose": "展示风险规模",
+            "diagnosis": "关注风险变化",
+            "chart_config": {
+                "kpiIcon": "fa-bolt",
+                "kpiColor": "#ffdc3d",
+                "chartColor": "#00e5ff",
+                "lineStyle": "smooth",
+                "unsafe": "ignored",
+            },
+        }
+    )
 
     assert config["kpiIcon"] == "fa-bolt"
     assert config["kpiColor"] == "#ffdc3d"
@@ -402,15 +435,17 @@ def test_normalize_dashboard_card_chart_config_keeps_allowed_style_options():
 
 
 def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
-    config = normalize_dashboard_card_chart_config({
-        "chart_config": {
-            "kpiIcon": "fa-not-exists",
-            "kpiColor": "red",
-            "chartColor": "javascript:alert(1)",
-            "lineStyle": "curved",
-            "xField": "月份",
-        },
-    })
+    config = normalize_dashboard_card_chart_config(
+        {
+            "chart_config": {
+                "kpiIcon": "fa-not-exists",
+                "kpiColor": "red",
+                "chartColor": "javascript:alert(1)",
+                "lineStyle": "curved",
+                "xField": "月份",
+            },
+        }
+    )
 
     assert "kpiIcon" not in config
     assert "kpiColor" not in config
@@ -420,60 +455,72 @@ def test_normalize_dashboard_card_chart_config_drops_invalid_style_values():
 
 
 def test_validate_dashboard_spec_structure_requires_layout():
-    errors = validate_dashboard_spec_structure({
-        "dashboard_name": "订单经营看板",
-        "semantic_config_id": "sem_1",
-        "cards": [
-            {
-                "title": "总订单金额",
-                "chart_type": "kpi",
-                "dsl": {"metrics": ["订单金额"], "dimensions": []},
-            }
-        ],
-    })
+    errors = validate_dashboard_spec_structure(
+        {
+            "dashboard_name": "订单经营看板",
+            "semantic_config_id": "sem_1",
+            "cards": [
+                {
+                    "title": "总订单金额",
+                    "chart_type": "kpi",
+                    "dsl": {"metrics": ["订单金额"], "dimensions": []},
+                }
+            ],
+        }
+    )
 
     assert "卡片「总订单金额」缺少 layout 对象" in errors
 
 
 def test_validate_dashboard_spec_structure_rejects_invalid_layout_range():
-    errors = validate_dashboard_spec_structure({
-        "dashboard_name": "订单经营看板",
-        "semantic_config_id": "sem_1",
-        "cards": [
-            {
-                "title": "趋势",
-                "chart_type": "line",
-                "layout": {"x": 8, "y": 0, "w": 6, "h": 4},
-                "dsl": {"metrics": ["订单金额"], "dimensions": ["下单月份"]},
-            }
-        ],
-    })
+    errors = validate_dashboard_spec_structure(
+        {
+            "dashboard_name": "订单经营看板",
+            "semantic_config_id": "sem_1",
+            "cards": [
+                {
+                    "title": "趋势",
+                    "chart_type": "line",
+                    "layout": {"x": 8, "y": 0, "w": 6, "h": 4},
+                    "dsl": {"metrics": ["订单金额"], "dimensions": ["下单月份"]},
+                }
+            ],
+        }
+    )
 
     assert "卡片「趋势」layout.x + layout.w 不能超过 12" in errors
 
 
 def test_dashboard_spec_normalizers_drop_invalid_values():
-    assert normalize_dashboard_spec_dimensions([
-        {"dimension": "", "grain": "month"},
-        {"dimension": "下单时间", "grain": "day"},
-        "",
-        "商品分类",
-    ]) == [{"name": "下单时间", "time_grain": "day"}, "商品分类"]
+    assert normalize_dashboard_spec_dimensions(
+        [
+            {"dimension": "", "grain": "month"},
+            {"dimension": "下单时间", "grain": "day"},
+            "",
+            "商品分类",
+        ]
+    ) == [{"name": "下单时间", "time_grain": "day"}, "商品分类"]
     assert normalize_dashboard_spec_filters({"dimension": "状态"}) == []
-    assert normalize_dashboard_spec_filters([
-        {"and": [{"field": "状态", "op": "=", "value": "paid"}, "bad"]},
-        "bad",
-    ]) == [{"and": [{"dimension": "状态", "operator": "=", "value": "paid"}]}]
+    assert normalize_dashboard_spec_filters(
+        [
+            {"and": [{"field": "状态", "op": "=", "value": "paid"}, "bad"]},
+            "bad",
+        ]
+    ) == [{"and": [{"dimension": "状态", "operator": "=", "value": "paid"}]}]
     assert normalize_dashboard_spec_having({"metric": "销售额"}) == []
-    assert normalize_dashboard_spec_having([
-        {"field": "销售额", "op": ">", "value": 100},
-        "bad",
-    ]) == [{"metric": "销售额", "operator": ">", "value": 100}]
-    assert normalize_dashboard_spec_order_by([
-        {"metric": "", "order": "asc"},
-        {"dimension": "月份", "order": "asc"},
-        "bad",
-    ]) == [{"field": "月份", "direction": "ASC"}]
+    assert normalize_dashboard_spec_having(
+        [
+            {"field": "销售额", "op": ">", "value": 100},
+            "bad",
+        ]
+    ) == [{"metric": "销售额", "operator": ">", "value": 100}]
+    assert normalize_dashboard_spec_order_by(
+        [
+            {"metric": "", "order": "asc"},
+            {"dimension": "月份", "order": "asc"},
+            "bad",
+        ]
+    ) == [{"field": "月份", "direction": "ASC"}]
 
 
 def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch):
@@ -487,8 +534,13 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_config_async(self, datasource_id, config_id, user_id=""):
             return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: missing_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: MissingSemanticService())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: missing_manager
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service",
+        lambda: MissingSemanticService(),
+    )
     try:
         asyncio.run(get_dashboard_spec_semantic_config("missing", "sc_a"))
     except ValueError as err:
@@ -508,7 +560,10 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
             return {"source_type": "mysql", "ds_tables": [{"table_name": "orders"}], "semantic_configs": None}
 
         async def get_semantic_configs_async(self, datasource_id):
-            return [{"id": "disabled", "enabled": False}, {"id": "enabled", "enabled": True, "relationships": [{"left_table": "a"}]}]
+            return [
+                {"id": "disabled", "enabled": False},
+                {"id": "enabled", "enabled": True, "relationships": [{"left_table": "a"}]},
+            ]
 
         async def get_cached_schema_async(self, datasource_id):
             return [{"table_name": "orders"}]
@@ -517,14 +572,22 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
 
     class LazySemanticService:
         async def get_config_async(self, datasource_id, config_id, user_id=""):
-            return {
-                "id": config_id,
-                "enabled": config_id == "enabled",
-                "relationships": [{"left_table": "a"}],
-            } if config_id in {"enabled", "disabled"} else None
+            return (
+                {
+                    "id": config_id,
+                    "enabled": config_id == "enabled",
+                    "relationships": [{"left_table": "a"}],
+                }
+                if config_id in {"enabled", "disabled"}
+                else None
+            )
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: lazy_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: LazySemanticService())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: lazy_manager
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: LazySemanticService()
+    )
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "enabled"))
     assert config["id"] == "enabled"
     assert config["joins"] == [{"left_table": "a"}]
@@ -543,8 +606,13 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_config_async(self, datasource_id, config_id, user_id=""):
             return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: no_config_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service", lambda: NoConfigSemanticService())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: no_config_manager
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_semantic_config_service",
+        lambda: NoConfigSemanticService(),
+    )
     try:
         asyncio.run(get_dashboard_spec_semantic_config("ds_a", "missing_config"))
     except ValueError as err:
@@ -612,12 +680,15 @@ def test_build_panel_sql_from_dashboard_card_raises_generator_error():
 
 
 def test_validate_dashboard_card_structure_reports_invalid_shape():
-    errors = validate_dashboard_card_structure({
-        "title": "坏卡片",
-        "chart_type": "unknown",
-        "dsl": [],
-        "layout": {"x": True, "y": 1.5, "w": 0, "h": 0},
-    }, 0)
+    errors = validate_dashboard_card_structure(
+        {
+            "title": "坏卡片",
+            "chart_type": "unknown",
+            "dsl": [],
+            "layout": {"x": True, "y": 1.5, "w": 0, "h": 0},
+        },
+        0,
+    )
 
     assert "卡片「坏卡片」chart_type 缺失或不支持" in errors
     assert "卡片「坏卡片」缺少 dsl 对象" in errors
@@ -633,27 +704,34 @@ def test_validate_dashboard_spec_structure_rejects_missing_name_and_non_object_c
 
 
 def test_dashboard_card_semantic_config_id_supports_card_override_and_legacy_default():
-    assert resolve_dashboard_card_semantic_config_id({"semantic_config_id": "card_model"}, "default_model") == "card_model"
+    assert (
+        resolve_dashboard_card_semantic_config_id({"semantic_config_id": "card_model"}, "default_model") == "card_model"
+    )
     assert resolve_dashboard_card_semantic_config_id({}, "default_model") == "default_model"
-    assert validate_dashboard_spec_structure({
-        "dashboard_name": "多模型看板",
-        "cards": [
+    assert (
+        validate_dashboard_spec_structure(
             {
-                "title": "订单卡片",
-                "semantic_config_id": "order_model",
-                "chart_type": "kpi",
-                "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
-                "dsl": {},
-            },
-            {
-                "title": "支付卡片",
-                "semantic_config_id": "payment_model",
-                "chart_type": "kpi",
-                "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
-                "dsl": {},
-            },
-        ],
-    }) == []
+                "dashboard_name": "多模型看板",
+                "cards": [
+                    {
+                        "title": "订单卡片",
+                        "semantic_config_id": "order_model",
+                        "chart_type": "kpi",
+                        "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                        "dsl": {},
+                    },
+                    {
+                        "title": "支付卡片",
+                        "semantic_config_id": "payment_model",
+                        "chart_type": "kpi",
+                        "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                        "dsl": {},
+                    },
+                ],
+            }
+        )
+        == []
+    )
 
 
 def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeypatch):
@@ -682,36 +760,38 @@ def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeyp
         FakeGenerator,
     )
 
-    result = asyncio.run(validate_dashboard_spec_payload(
-        dashboard_spec={
-            "dashboard_name": "多模型看板",
-            "cards": [
-                {
-                    "title": "订单卡片",
-                    "semantic_config_id": "orders",
-                    "chart_type": "kpi",
-                    "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
-                    "dsl": {"metrics": ["订单数"]},
-                },
-                {
-                    "title": "支付卡片",
-                    "semantic_config_id": "payments",
-                    "chart_type": "kpi",
-                    "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
-                    "dsl": {"metrics": ["支付数"]},
-                },
-                {
-                    "title": "订单趋势",
-                    "semantic_config_id": "orders",
-                    "chart_type": "line",
-                    "layout": {"x": 0, "y": 2, "w": 12, "h": 4},
-                    "dsl": {"metrics": ["订单数"]},
-                },
-            ],
-        },
-        datasource_id="ds_a",
-        user_id="user_a",
-    ))
+    result = asyncio.run(
+        validate_dashboard_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "多模型看板",
+                "cards": [
+                    {
+                        "title": "订单卡片",
+                        "semantic_config_id": "orders",
+                        "chart_type": "kpi",
+                        "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                        "dsl": {"metrics": ["订单数"]},
+                    },
+                    {
+                        "title": "支付卡片",
+                        "semantic_config_id": "payments",
+                        "chart_type": "kpi",
+                        "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                        "dsl": {"metrics": ["支付数"]},
+                    },
+                    {
+                        "title": "订单趋势",
+                        "semantic_config_id": "orders",
+                        "chart_type": "line",
+                        "layout": {"x": 0, "y": 2, "w": 12, "h": 4},
+                        "dsl": {"metrics": ["订单数"]},
+                    },
+                ],
+            },
+            datasource_id="ds_a",
+            user_id="user_a",
+        )
+    )
 
     assert generator_calls == [("orders", "user_a"), ("payments", "user_a")]
     assert result["valid"] is True
@@ -723,9 +803,7 @@ def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeyp
         "select 'orders' as model_id",
     ]
     # 适配器必须收到运行期热值 max_rows（不再落回导入期 DEFAULT_ROW_LIMIT）
-    assert adapter_init_kwargs and all(
-        kwargs["max_rows"] == 100 for kwargs in adapter_init_kwargs
-    )
+    assert adapter_init_kwargs and all(kwargs["max_rows"] == 100 for kwargs in adapter_init_kwargs)
 
 
 def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
@@ -742,12 +820,19 @@ def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
                 return {"success": True, "sql": ""}
             return {"success": True, "sql": f"select {metrics[0]} from orders"}
 
-    plans, warnings = build_dashboard_panel_plans([
-        "bad",
-        {"title": "混用指标", "chart_type": "line", "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]}},
-        {"title": "空SQL", "chart_type": "table", "dsl": {"metrics": ["空SQL"]}},
-        {"title": "同比", "chart_type": "line", "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}}},
-    ], FakeGenerator())
+    plans, warnings = build_dashboard_panel_plans(
+        [
+            "bad",
+            {
+                "title": "混用指标",
+                "chart_type": "line",
+                "dsl": {"metrics": ["销售额", "用户ID"], "dimensions": ["月份"]},
+            },
+            {"title": "空SQL", "chart_type": "table", "dsl": {"metrics": ["空SQL"]}},
+            {"title": "同比", "chart_type": "line", "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}}},
+        ],
+        FakeGenerator(),
+    )
 
     assert len(plans) == 3
     assert plans[0]["sql"].startswith("select 销售额")
@@ -824,7 +909,9 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
                 return []
             return [{"source_type": "mysql", "mode": datasource_id}]
 
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+        async def get_authorized_execution_datasources_async(
+            self, datasource_id, member_ids=None, user_id=None, username=None
+        ):
             return await self.get_execution_datasources_async(datasource_id, member_ids)
 
     class FakeExecutor:
@@ -843,17 +930,32 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
         async def close(self):
             self.closed = True
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda target: FakeExecutor(target))
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager()
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda target: FakeExecutor(target)
+    )
+
     async def _fake_timeout_600(source_type):
         return 600
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.resolve_query_timeout", _fake_timeout_600)
 
-    assert asyncio.run(execute_dashboard_panel_sql_preflight("empty", "select 1")) == (False, "当前数据源组下没有可执行的数据源")
-    assert asyncio.run(execute_dashboard_panel_sql_preflight("ok", "select 1", user_id="u1", username="测试用户")) == (True, "")
-    assert asyncio.run(execute_dashboard_panel_sql_preflight("fail", "select 1", user_id="u1", username="测试用户")) == (False, "表不存在")
-    assert asyncio.run(execute_dashboard_panel_sql_preflight("raise", "select 1", user_id="u1", username="测试用户")) == (False, "连接失败")
+    assert asyncio.run(execute_dashboard_panel_sql_preflight("empty", "select 1")) == (
+        False,
+        "当前数据源组下没有可执行的数据源",
+    )
+    assert asyncio.run(execute_dashboard_panel_sql_preflight("ok", "select 1", user_id="u1", username="测试用户")) == (
+        True,
+        "",
+    )
+    assert asyncio.run(
+        execute_dashboard_panel_sql_preflight("fail", "select 1", user_id="u1", username="测试用户")
+    ) == (False, "表不存在")
+    assert asyncio.run(
+        execute_dashboard_panel_sql_preflight("raise", "select 1", user_id="u1", username="测试用户")
+    ) == (False, "连接失败")
 
 
 def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch):
@@ -865,7 +967,9 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
         raise AssertionError("missing datasource should be rejected")
 
     try:
-        asyncio.run(validate_dashboard_spec_payload(dashboard_spec={"need_clarify": True, "cards": []}, datasource_id="ds_a"))
+        asyncio.run(
+            validate_dashboard_spec_payload(dashboard_spec={"need_clarify": True, "cards": []}, datasource_id="ds_a")
+        )
     except ValueError as err:
         assert "需补充确认" in str(err)
     else:
@@ -878,10 +982,12 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
     else:
         raise AssertionError("missing cards should be rejected")
 
-    invalid = asyncio.run(validate_dashboard_spec_payload(
-        dashboard_spec={"dashboard_name": "", "semantic_config_id": "sem_1", "cards": ["bad"]},
-        datasource_id="ds_a",
-    ))
+    invalid = asyncio.run(
+        validate_dashboard_spec_payload(
+            dashboard_spec={"dashboard_name": "", "semantic_config_id": "sem_1", "cards": ["bad"]},
+            datasource_id="ds_a",
+        )
+    )
     assert invalid["valid"] is False
     assert invalid["panels"] == []
 
@@ -898,20 +1004,33 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
     async def fake_filter(plans, **_kwargs):
         return plans, ["预执行警告"]
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_spec_semantic_config", fake_semantic_config)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_dashboard_spec_semantic_config", fake_semantic_config
+    )
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.SemanticAIQueryAdapter", FakeGenerator)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.filter_executable_dashboard_panel_plans", fake_filter)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.filter_executable_dashboard_panel_plans", fake_filter
+    )
 
-    valid = asyncio.run(validate_dashboard_spec_payload(
-        dashboard_spec={
-            "dashboard_name": "看板",
-            "semantic_config_id": "sem_1",
-            "cards": [{"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {"metrics": ["订单数"]}}],
-        },
-        datasource_id="ds_a",
-        execute_sql=True,
-        username="测试用户",
-    ))
+    valid = asyncio.run(
+        validate_dashboard_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "看板",
+                "semantic_config_id": "sem_1",
+                "cards": [
+                    {
+                        "title": "卡片",
+                        "chart_type": "kpi",
+                        "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
+                        "dsl": {"metrics": ["订单数"]},
+                    }
+                ],
+            },
+            datasource_id="ds_a",
+            execute_sql=True,
+            username="测试用户",
+        )
+    )
     assert valid["valid"] is True
     assert valid["valid_count"] == 1
     assert valid["warnings"] == ["预执行警告"]
@@ -926,11 +1045,13 @@ def test_dashboard_layout_and_chart_config_error_helpers():
     )
     assert layout == {"x": 11, "y": 0, "w": 1, "h": 3}
 
-    config = normalize_dashboard_card_chart_config({
-        "chart_config": {"seriesField": "机构", "xField": "月份", "yField": "销售额", "yField2": "订单数"},
-        "metrics": ["销售额"],
-        "dimensions": ["月份"],
-    })
+    config = normalize_dashboard_card_chart_config(
+        {
+            "chart_config": {"seriesField": "机构", "xField": "月份", "yField": "销售额", "yField2": "订单数"},
+            "metrics": ["销售额"],
+            "dimensions": ["月份"],
+        }
+    )
     assert config["seriesField"] == "机构"
     assert config["xField"] == "月份"
     assert config["yField"] == "销售额"
@@ -963,30 +1084,52 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
     async def invalid_validation(**_kwargs):
         return {"valid": False, "warnings": ["结构错误"], "panels": []}
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", invalid_validation)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", invalid_validation
+    )
     result = asyncio.run(create_dashboard_from_spec_payload(dashboard_spec={"cards": []}, datasource_id="ds_a"))
     assert result == {"dashboard": None, "panels": [], "warnings": ["结构错误"]}
 
     async def valid_validation(**_kwargs):
-        return {"valid": True, "warnings": [], "panels": [{"index": 0, "title": "卡片", "chart_type": "kpi", "sql": "select 1", "error": ""}]}
+        return {
+            "valid": True,
+            "warnings": [],
+            "panels": [{"index": 0, "title": "卡片", "chart_type": "kpi", "sql": "select 1", "error": ""}],
+        }
 
     service = FakeService("add_fail")
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", valid_validation)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", valid_validation
+    )
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
-    failed = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={"dashboard_name": "看板", "cards": [{"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}]},
-        datasource_id="ds_a",
-    ))
+    failed = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "看板",
+                "cards": [
+                    {"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}
+                ],
+            },
+            datasource_id="ds_a",
+        )
+    )
     assert failed["dashboard"] is None
     assert service.deleted == ["dash_1"]
     assert any("写入失败" in item for item in failed["warnings"])
 
     service = FakeService("read_empty")
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
-    unreadable = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={"dashboard_name": "看板", "cards": [{"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}]},
-        datasource_id="ds_a",
-    ))
+    unreadable = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "看板",
+                "cards": [
+                    {"title": "卡片", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}, "dsl": {}}
+                ],
+            },
+            datasource_id="ds_a",
+        )
+    )
     assert unreadable["dashboard"] is None
     assert service.deleted == ["dash_1"]
     assert "看板写入后回读失败，未确认数据已持久化" in unreadable["warnings"]
@@ -1023,26 +1166,32 @@ def test_dashboard_spec_normalizers_cover_empty_and_tree_branches():
     ]
     assert normalize_dashboard_spec_metrics([{}, {"field": "销售额"}, " 订单数 ", ""]) == ["销售额", "订单数"]
     assert normalize_dashboard_spec_filters({"bad": True}) == []
-    assert normalize_dashboard_spec_filters([
-        {"and": [{"field": "城市", "op": "=", "value": "上海"}, "skip"]},
-        "skip",
-    ]) == [{"and": [{"dimension": "城市", "operator": "=", "value": "上海"}]}]
+    assert normalize_dashboard_spec_filters(
+        [
+            {"and": [{"field": "城市", "op": "=", "value": "上海"}, "skip"]},
+            "skip",
+        ]
+    ) == [{"and": [{"dimension": "城市", "operator": "=", "value": "上海"}]}]
     assert normalize_dashboard_spec_having({"bad": True}) == []
-    assert normalize_dashboard_spec_having([
-        "skip",
-        {"field": "销售额", "op": ">", "value": 10},
-        {"metric": "订单数", "operator": ">", "value": 1},
-    ]) == [
+    assert normalize_dashboard_spec_having(
+        [
+            "skip",
+            {"field": "销售额", "op": ">", "value": 10},
+            {"metric": "订单数", "operator": ">", "value": 1},
+        ]
+    ) == [
         {"metric": "销售额", "operator": ">", "value": 10},
         {"metric": "订单数", "operator": ">", "value": 1},
     ]
     assert normalize_dashboard_spec_order_by({"bad": True}) == []
-    assert normalize_dashboard_spec_order_by([
-        "skip",
-        {"field": "", "direction": "asc"},
-        {"metric": "销售额", "order": "asc"},
-        {"dimension": "城市"},
-    ]) == [
+    assert normalize_dashboard_spec_order_by(
+        [
+            "skip",
+            {"field": "", "direction": "asc"},
+            {"metric": "销售额", "order": "asc"},
+            {"dimension": "城市"},
+        ]
+    ) == [
         {"field": "销售额", "direction": "ASC"},
         {"field": "城市", "direction": "DESC"},
     ]
@@ -1084,11 +1233,13 @@ def test_dashboard_spec_structure_invalid_layout_branches():
     assert any("layout.y 必须大于等于 0" in item for item in overflow)
     assert any("layout.x + layout.w 不能超过 12" in item for item in overflow)
 
-    spec_errors = validate_dashboard_spec_structure({
-        "dashboard_name": "",
-        "semantic_config_id": "",
-        "cards": [{"title": "无 DSL", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}}],
-    })
+    spec_errors = validate_dashboard_spec_structure(
+        {
+            "dashboard_name": "",
+            "semantic_config_id": "",
+            "cards": [{"title": "无 DSL", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}}],
+        }
+    )
     assert "dashboard_name 必填" in spec_errors
     assert any(item.startswith("semantic_config_id 必填") for item in spec_errors)
     assert any("缺少 dsl 对象" in item for item in spec_errors)
@@ -1167,15 +1318,23 @@ def test_create_dashboard_from_spec_payload_skips_non_dict_cards(monkeypatch):
         }
 
     service = FakeService()
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate
+    )
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
-    result = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={"dashboard_name": "", "analysis_target": "  " + "x" * 300, "cards": ["skip", {"title": "", "chart_type": "kpi", "layout": {}}]},
-        datasource_id="ds_a",
-        semantic_config_id="sem_1",
-        username="测试用户",
-    ))
+    result = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "",
+                "analysis_target": "  " + "x" * 300,
+                "cards": ["skip", {"title": "", "chart_type": "kpi", "layout": {}}],
+            },
+            datasource_id="ds_a",
+            semantic_config_id="sem_1",
+            username="测试用户",
+        )
+    )
 
     assert result["dashboard"]["id"] == "dash_1"
     assert len(service.added) == 1
@@ -1211,11 +1370,18 @@ def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
         async def get_execution_datasources_async(self, datasource_id, member_ids):
             return [{"source_type": "mysql", "source_config": {"host": "h"}}]
 
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+        async def get_authorized_execution_datasources_async(
+            self, datasource_id, member_ids=None, user_id=None, username=None
+        ):
             return await self.get_execution_datasources_async(datasource_id, member_ids)
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager())
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda _target: FakeExecutor())
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_datasource_manager", lambda: FakeManager()
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.get_executor", lambda _target: FakeExecutor()
+    )
+
     async def _fake_timeout_60(_source_type):
         return 60
 
@@ -1253,13 +1419,20 @@ def test_create_dashboard_from_spec_payload_skips_empty_panel_and_deletes(monkey
         }
 
     service = FakeService()
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard.spec_service.validate_dashboard_spec_payload", fake_validate
+    )
     monkeypatch.setattr("apps.chat_data_app.services.dashboard.spec_service.get_dashboard_service", lambda: service)
 
-    result = asyncio.run(create_dashboard_from_spec_payload(
-        dashboard_spec={"dashboard_name": "空面板看板", "cards": [{"title": "空面板", "chart_type": "kpi", "layout": {}}]},
-        datasource_id="ds_a",
-    ))
+    result = asyncio.run(
+        create_dashboard_from_spec_payload(
+            dashboard_spec={
+                "dashboard_name": "空面板看板",
+                "cards": [{"title": "空面板", "chart_type": "kpi", "layout": {}}],
+            },
+            datasource_id="ds_a",
+        )
+    )
 
     assert result == {"dashboard": None, "panels": [], "warnings": []}
     assert service.deleted == ["dash_empty"]

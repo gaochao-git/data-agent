@@ -154,9 +154,7 @@ def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_r
     from apps.chat_data_app.services import plugin_service as plugin_service_mod
 
     reset_calls = []
-    monkeypatch.setattr(
-        plugin_service_mod, "reset_mcp_tool_manager", lambda: reset_calls.append("reset") or None
-    )
+    monkeypatch.setattr(plugin_service_mod, "reset_mcp_tool_manager", lambda: reset_calls.append("reset") or None)
 
     installed = client.post(
         "/api/chatdata/admin/plugins/install",

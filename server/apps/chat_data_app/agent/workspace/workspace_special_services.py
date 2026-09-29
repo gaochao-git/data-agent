@@ -68,9 +68,7 @@ class SemanticModelWorkspaceService:
         entries: list[tuple[str, str]],
     ) -> list[dict[str, Any]]:
         normalized = [
-            (str(path or "").strip(), str(content or ""))
-            for path, content in entries
-            if str(path or "").strip()
+            (str(path or "").strip(), str(content or "")) for path, content in entries if str(path or "").strip()
         ]
         if not normalized:
             return []

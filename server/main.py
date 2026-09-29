@@ -13,7 +13,9 @@ from utils.common_util import load_runtime_env
 
 _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
-print(f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}")
+print(
+    f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
+)
 
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app.agent.context.context_budget import validate_context_budget_startup_config  # noqa: E402
@@ -78,4 +80,4 @@ if __name__ == "__main__":
     reload_enabled = _env_flag("FASTAPI_RELOAD", False)
     target_app = "main:app" if reload_enabled else app
     logger.info("[startup] host=0.0.0.0 port=%s reload=%s", port, reload_enabled)
-    uvicorn.run(target_app,host="0.0.0.0",port=port,reload=reload_enabled,access_log=False,log_level="warning")
+    uvicorn.run(target_app, host="0.0.0.0", port=port, reload=reload_enabled, access_log=False, log_level="warning")

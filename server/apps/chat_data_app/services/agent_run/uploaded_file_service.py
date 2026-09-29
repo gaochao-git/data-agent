@@ -85,9 +85,7 @@ class UploadedFileService:
     def __init__(self, dao: Optional[UploadedFileDao] = None):
         self.dao = dao or UploadedFileDao()
 
-    async def upload_file(
-        self, file: UploadFile, thread_id: str, user_id: str = "system"
-    ) -> Dict[str, Any]:
+    async def upload_file(self, file: UploadFile, thread_id: str, user_id: str = "system") -> Dict[str, Any]:
         if not await self.dao.thread_belongs_to_user(thread_id, user_id=user_id):
             raise ValueError("会话不存在或无权访问")
         file_id = str(uuid.uuid4())
@@ -134,15 +132,15 @@ class UploadedFileService:
             "storage_dir": storage_name,
         }
 
-    async def get_file_info(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
+    async def get_file_info(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> Optional[Dict[str, Any]]:
         row = await self.dao.get_file(file_id, user_id=user_id)
         if row and thread_id and row.thread_id != thread_id:
             return None
         return _file_info(row) if row else None
 
-    async def delete_file(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> bool:
+    async def delete_file(self, file_id: str, user_id: str = "system", thread_id: str = "") -> bool:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return False
@@ -165,9 +163,7 @@ class UploadedFileService:
         logger.info("文件删除成功: %s", file_id)
         return True
 
-    async def get_file_content(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> Optional[bytes]:
+    async def get_file_content(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[bytes]:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
@@ -177,15 +173,11 @@ class UploadedFileService:
         file_path = uploads_root / info["storage_dir"]
         return await asyncio.to_thread(file_path.read_bytes) if file_path.exists() else None
 
-    async def list_files_by_thread(
-        self, thread_id: str, user_id: str = "system"
-    ) -> list:
+    async def list_files_by_thread(self, thread_id: str, user_id: str = "system") -> list:
         rows = await self.dao.list_files_by_thread(thread_id, user_id=user_id)
         return [_file_summary(row) for row in rows]
 
-    async def get_files_by_thread(
-        self, thread_id: str, user_id: str = "system"
-    ) -> list:
+    async def get_files_by_thread(self, thread_id: str, user_id: str = "system") -> list:
         rows = await self.dao.list_files_by_thread(thread_id, user_id=user_id, ascending=True)
         return [
             {
@@ -202,9 +194,7 @@ class UploadedFileService:
             for row in rows
         ]
 
-    async def get_file_path_by_id(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> Optional[str]:
+    async def get_file_path_by_id(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None

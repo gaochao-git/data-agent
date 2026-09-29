@@ -304,12 +304,14 @@ def flush_sse_event(*, state: dict[str, Any], tool_traces: list[ToolTrace]) -> N
     if event_error:
         state["error"] = event_error
     if current_event == "tool" and isinstance(payload, dict):
-        tool_traces.append(ToolTrace(
-            name=str(payload.get("tool_name") or payload.get("name") or ""),
-            status=str(payload.get("status") or ""),
-            args=payload.get("accumulated_args") or payload.get("args") or {},
-            content=str(payload.get("content") or ""),
-        ))
+        tool_traces.append(
+            ToolTrace(
+                name=str(payload.get("tool_name") or payload.get("name") or ""),
+                status=str(payload.get("status") or ""),
+                args=payload.get("accumulated_args") or payload.get("args") or {},
+                content=str(payload.get("content") or ""),
+            )
+        )
     state["current_event"] = "message"
     state["data_lines"] = []
 
@@ -387,7 +389,12 @@ async def compile_dsl_locally(
     payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl, semantic_config)
     payload = normalize_pagination_values(payload)
     if payload.get("compare"):
-        return {"success": False, "sql": "", "error": "DSL2SQL 不支持 compare；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析", "warnings": warnings}
+        return {
+            "success": False,
+            "sql": "",
+            "error": "DSL2SQL 不支持 compare；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
+            "warnings": warnings,
+        }
     result = compile_semantic_ai_dsl(
         semantic_config,
         payload,
@@ -406,7 +413,9 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
         return {"success": False, "error": "SQL 为空"}
     from apps.chat_data_app.services.semantic.run.semantic_query_service import execute_semantic_query_sql
 
-    return await execute_semantic_query_sql(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
+    return await execute_semantic_query_sql(
+        sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id
+    )
 
 
 def build_completion_options(args: AccuracyRunConfig, datasource_id: str, semantic_config_id: str) -> dict[str, Any]:
@@ -781,7 +790,7 @@ def select_cases(cases: list[dict[str, Any]], args: AccuracyRunConfig) -> list[d
         if missing:
             raise ValueError(f"指定 case-id 不存在: {', '.join(missing)}")
     if args.limit is not None:
-        selected = selected[:args.limit]
+        selected = selected[: args.limit]
     if not selected:
         raise ValueError("没有匹配的评估用例")
     return selected

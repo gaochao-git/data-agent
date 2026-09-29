@@ -56,16 +56,12 @@ def _compile_dimension_field(
     column = dimension.get("column", "")
     transform = dimension.get("transform") or "raw"
     display_name = dimension.get("displayName") or dimension.get("alias") or column
-    expression = normalize_raw_expression(
-        dimension.get("expression"), table, column, is_multi_table, physical_table
-    )
+    expression = normalize_raw_expression(dimension.get("expression"), table, column, is_multi_table, physical_table)
     dimension_alias = allocator.allocate(display_name, column or "col")
 
     if transform != "raw":
         transformed = dialect.format_date(expression, transform)
-        transformed_alias = allocator.allocate(
-            f"{dimension_alias}_{transform}", f"{column}_{transform}"
-        )
+        transformed_alias = allocator.allocate(f"{dimension_alias}_{transform}", f"{column}_{transform}")
         fields.append(f"{transformed} AS {quote_identifier(transformed_alias)}")
         dimension_expr_map[(table, column)] = expression
         group_expr_map[(table, column)] = transformed
@@ -92,9 +88,7 @@ def _aggregate_function_value(
 
 
 def _metric_display_name(aggregation: Dict[str, Any], column: str) -> str:
-    return aggregation.get("displayName") or aggregation.get("alias") or (
-        "all" if column == "*" else column
-    )
+    return aggregation.get("displayName") or aggregation.get("alias") or ("all" if column == "*" else column)
 
 
 def _metric_fallback_alias(column: str) -> str:
@@ -123,15 +117,11 @@ def _compile_aggregation_field(
     alias = allocator.allocate(_metric_display_name(aggregation, column), _metric_fallback_alias(column))
 
     if function == "RAW" and (expression or "").strip():
-        normalized = normalize_raw_expression(
-            expression, table, column, is_multi_table, physical_table
-        )
+        normalized = normalize_raw_expression(expression, table, column, is_multi_table, physical_table)
         fields.append(f"{normalized} AS {quote_identifier(alias)}")
         return
     if function != "RAW" and (expression or "").strip() and is_aggregate_expression(expression):
-        normalized = normalize_aggregate_expression(
-            expression, table, column, is_multi_table, physical_table
-        )
+        normalized = normalize_aggregate_expression(expression, table, column, is_multi_table, physical_table)
         fields.append(f"{normalized} AS {quote_identifier(alias)}")
         return
 
@@ -191,7 +181,3 @@ def compile_select_fields(
         )
 
     return SelectCompilation(fields, dimension_expr_map, group_expr_map, dimension_alias_map)
-
-
-
-

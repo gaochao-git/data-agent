@@ -47,40 +47,42 @@ DB_HOST = "62.234.152.217"
 DB_PORT = 3307
 DB_USER = "xxxx"
 DB_PASSWORD = "xxxx"
-DB_NAME = "langchian_checkpoint"          # checkpointer 库
+DB_NAME = "langchian_checkpoint"  # checkpointer 库
 
 # ============ 清理策略 ============
-MIN_MB = 20.0                # checkpoint 总体积超过该值才进入裁剪
-MIN_IDLE_DAYS = 60           # 最后活动早于该天数才裁剪（活跃会话跳过）
-BATCH_ROWS = 200             # 单条 DELETE 覆盖的最大行数
-BLOB_BATCH_MB = 8            # blob 表单条 DELETE 的累计字节上限（binlog_format=ROW
-                             # 时前像整行进 undo/binlog，messages blob 均值 84KB，
-                             # 纯按行 200 条可放大到 16MB+，按字节再切一刀）
-SLEEP_MS = 100               # 每批提交后的间歇
-LOCK_TIMEOUT = 5             # innodb_lock_wait_timeout 秒
+MIN_MB = 20.0  # checkpoint 总体积超过该值才进入裁剪
+MIN_IDLE_DAYS = 60  # 最后活动早于该天数才裁剪（活跃会话跳过）
+BATCH_ROWS = 200  # 单条 DELETE 覆盖的最大行数
+BLOB_BATCH_MB = 8  # blob 表单条 DELETE 的累计字节上限（binlog_format=ROW
+# 时前像整行进 undo/binlog，messages blob 均值 84KB，
+# 纯按行 200 条可放大到 16MB+，按字节再切一刀）
+SLEEP_MS = 100  # 每批提交后的间歇
+LOCK_TIMEOUT = 5  # innodb_lock_wait_timeout 秒
 MAX_RETRIES = 3
 
 MB = 1048576
 RETRYABLE_MYSQL_CODES = (1205, 1213)
 # checkpoint 的 ts 形如 2026-09-09T10:13:56.098897+00:00
-TS_PATTERN = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
-)
+TS_PATTERN = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$")
 
 
 def parse_mode() -> bool:
     """解析必填 mode，返回是否执行真删。"""
-    parser = argparse.ArgumentParser(
-        description="LangGraph MySQL checkpoint keep-latest 裁剪", allow_abbrev=False)
-    parser.add_argument("mode", choices=["dry-run", "execute"],
-                        help="dry-run=只统计不写库；execute=真正删除")
+    parser = argparse.ArgumentParser(description="LangGraph MySQL checkpoint keep-latest 裁剪", allow_abbrev=False)
+    parser.add_argument("mode", choices=["dry-run", "execute"], help="dry-run=只统计不写库；execute=真正删除")
     return parser.parse_args().mode == "execute"
 
 
 def connect(db_name: str):
-    conn = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER,
-                           password=DB_PASSWORD, database=db_name,
-                           charset="utf8mb4", autocommit=True)
+    conn = pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=db_name,
+        charset="utf8mb4",
+        autocommit=True,
+    )
     with conn.cursor() as cur:
         cur.execute("SET SESSION innodb_lock_wait_timeout = %s", (LOCK_TIMEOUT,))
     return conn
@@ -88,7 +90,7 @@ def connect(db_name: str):
 
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
-        yield items[i:i + size]
+        yield items[i : i + size]
 
 
 def _zone_offset(raw: Optional[str]) -> timedelta:
@@ -111,8 +113,9 @@ def _parse_ts(raw) -> Optional[datetime]:
         return None
     year, month, day, hour, minute, second, frac, zone = match.groups()
     try:
-        local = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second),
-                         int((frac or "0")[:6].ljust(6, "0")))
+        local = datetime(
+            int(year), int(month), int(day), int(hour), int(minute), int(second), int((frac or "0")[:6].ljust(6, "0"))
+        )
         return (local - _zone_offset(zone)).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
@@ -158,11 +161,9 @@ def _idle_cutoff_id(days: int) -> str:
     """
     unix_ns = int(time.time()) * 10**9 - days * 86400 * 10**9
     ts100 = unix_ns // 100 + _UUID_EPOCH_100NS_OFFSET
-    value = (((ts100 >> 12) & 0xFFFFFFFFFFFF) << 80) \
-        | (6 << 76) | ((ts100 & 0x0FFF) << 64) | (0x8000 << 48)
+    value = (((ts100 >> 12) & 0xFFFFFFFFFFFF) << 80) | (6 << 76) | ((ts100 & 0x0FFF) << 64) | (0x8000 << 48)
     hex32 = "%032x" % value
-    return "%s-%s-%s-%s-%s" % (hex32[:8], hex32[8:12], hex32[12:16],
-                               hex32[16:20], hex32[20:32])
+    return "%s-%s-%s-%s-%s" % (hex32[:8], hex32[8:12], hex32[12:16], hex32[16:20], hex32[20:32])
 
 
 def discover_prune_targets(cur) -> List[dict]:
@@ -175,14 +176,14 @@ def discover_prune_targets(cur) -> List[dict]:
     一次往返算一批，避免逐线程点查的网络往返放大，再按体积过滤。
     """
     cutoff = _idle_cutoff_id(MIN_IDLE_DAYS)
-    cur.execute(
-        "SELECT thread_id, MAX(checkpoint_id) FROM checkpoints GROUP BY thread_id")
-    candidates = [row[0] for row in cur.fetchall()
-                  if str(row[1] or "") < cutoff]
+    cur.execute("SELECT thread_id, MAX(checkpoint_id) FROM checkpoints GROUP BY thread_id")
+    candidates = [row[0] for row in cur.fetchall() if str(row[1] or "") < cutoff]
     targets = []
-    sql_tpl = ("SELECT thread_id, COALESCE(SUM(LENGTH(`blob`)), 0)/{mb_div} AS mb"
-               " FROM checkpoint_blobs WHERE thread_id IN ({ph})"
-               " GROUP BY thread_id HAVING mb > %s")
+    sql_tpl = (
+        "SELECT thread_id, COALESCE(SUM(LENGTH(`blob`)), 0)/{mb_div} AS mb"
+        " FROM checkpoint_blobs WHERE thread_id IN ({ph})"
+        " GROUP BY thread_id HAVING mb > %s"
+    )
     for chunk in _chunks(candidates, 1000):
         sql = sql_tpl.format(mb_div=MB, ph=", ".join(["%s"] * len(chunk)))
         cur.execute(sql, tuple(chunk) + (MIN_MB,))
@@ -193,6 +194,7 @@ def discover_prune_targets(cur) -> List[dict]:
 
 
 # ---------------- keep-latest 裁剪 ----------------
+
 
 def load_keepers(cur, thread_id: str) -> List[dict]:
     """每个命名空间保留最新一份快照（checkpoint_id 为时间序 UUID，字典序即时间序）。"""
@@ -297,37 +299,37 @@ def keeper_old_format_ids(cur, thread_id: str, keepers: List[dict]) -> List[str]
 def prune_blobs(conn, thread_id: str, plan: Dict[tuple, list]) -> int:
     """删除待删 blob。plan 值为 (version, 字节数) 列表（见 plan_blobs），
     按累计字节 ≤ BLOB_BATCH_MB 且行数 ≤ BATCH_ROWS 双限分批。"""
-    sql_tpl = ("DELETE FROM checkpoint_blobs WHERE thread_id = %s AND checkpoint_ns_hash = %s "
-               "AND channel = %s AND version IN ({ph})")
+    sql_tpl = (
+        "DELETE FROM checkpoint_blobs WHERE thread_id = %s AND checkpoint_ns_hash = %s "
+        "AND channel = %s AND version IN ({ph})"
+    )
     byte_limit = BLOB_BATCH_MB * MB
     deleted = 0
     for (ns_hash, channel), items in plan.items():
-        chunk = []          # type: List[str]
+        chunk = []  # type: List[str]
         chunk_bytes = 0
         for version, nbytes in items:
             chunk.append(version)
             chunk_bytes += nbytes
             if len(chunk) >= BATCH_ROWS or chunk_bytes >= byte_limit:
                 sql = sql_tpl.format(ph=", ".join(["%s"] * len(chunk)))
-                deleted += run_with_retry(conn, sql,
-                                          (thread_id, ns_hash, channel) + tuple(chunk))
+                deleted += run_with_retry(conn, sql, (thread_id, ns_hash, channel) + tuple(chunk))
                 time.sleep(SLEEP_MS / 1000)
                 chunk = []
                 chunk_bytes = 0
         if chunk:
             sql = sql_tpl.format(ph=", ".join(["%s"] * len(chunk)))
-            deleted += run_with_retry(conn, sql,
-                                      (thread_id, ns_hash, channel) + tuple(chunk))
+            deleted += run_with_retry(conn, sql, (thread_id, ns_hash, channel) + tuple(chunk))
             time.sleep(SLEEP_MS / 1000)
     return deleted
 
 
 def prune_snapshots(conn, thread_id: str, old_ids: Dict[bytes, list]) -> Tuple[int, int]:
     """先清 writes 再清 checkpoints（同批 checkpoint_id）。"""
-    ck_sql = ("DELETE FROM checkpoints WHERE thread_id = %s AND checkpoint_ns_hash = %s "
-              "AND checkpoint_id IN ({ph})")
-    wr_sql = ("DELETE FROM checkpoint_writes WHERE thread_id = %s AND checkpoint_ns_hash = %s "
-              "AND checkpoint_id IN ({ph})")
+    ck_sql = "DELETE FROM checkpoints WHERE thread_id = %s AND checkpoint_ns_hash = %s AND checkpoint_id IN ({ph})"
+    wr_sql = (
+        "DELETE FROM checkpoint_writes WHERE thread_id = %s AND checkpoint_ns_hash = %s AND checkpoint_id IN ({ph})"
+    )
     ck_del = wr_del = 0
     for ns_hash, ids in old_ids.items():
         for chunk in _chunks(ids, BATCH_ROWS):
@@ -368,14 +370,14 @@ def collect_orphan_writes(cur, thread_id: str) -> Dict[bytes, list]:
 
 
 def prune_orphan_writes(conn, thread_id: str, orphans: Dict[bytes, list]) -> int:
-    wr_sql = ("DELETE FROM checkpoint_writes WHERE thread_id = %s AND checkpoint_ns_hash = %s "
-              "AND checkpoint_id IN ({ph})")
+    wr_sql = (
+        "DELETE FROM checkpoint_writes WHERE thread_id = %s AND checkpoint_ns_hash = %s AND checkpoint_id IN ({ph})"
+    )
     deleted = 0
     for ns_hash, ids in orphans.items():
         for chunk in _chunks(ids, BATCH_ROWS):
             ph = ", ".join(["%s"] * len(chunk))
-            deleted += run_with_retry(conn, wr_sql.format(ph=ph),
-                                      (thread_id, ns_hash) + tuple(chunk))
+            deleted += run_with_retry(conn, wr_sql.format(ph=ph), (thread_id, ns_hash) + tuple(chunk))
             time.sleep(SLEEP_MS / 1000)
     return deleted
 
@@ -456,12 +458,24 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
             orphan_rows = sum(len(v) for v in orphans.values())
             old_keepers = keeper_old_format_ids(cur, thread_id, keepers)
 
-        print("  [裁剪] %s… %.0fMB, 闲置至 %s | 待删 blob %d 行/%.1fMB, 旧快照 %d, 孤儿 writes %d, 保留 %d 行" % (
-            thread_id[:13], target["mb"], last.strftime("%m-%d"), blob_rows,
-            blob_bytes / MB, ck_rows, orphan_rows, kept_rows))
+        print(
+            "  [裁剪] %s… %.0fMB, 闲置至 %s | 待删 blob %d 行/%.1fMB, 旧快照 %d, 孤儿 writes %d, 保留 %d 行"
+            % (
+                thread_id[:13],
+                target["mb"],
+                last.strftime("%m-%d"),
+                blob_rows,
+                blob_bytes / MB,
+                ck_rows,
+                orphan_rows,
+                kept_rows,
+            )
+        )
         if old_keepers:
-            print("    !! 警告：keeper 含 %d 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
-                  "将不可迁移（仅影响中断续跑），请人工确认" % len(old_keepers))
+            print(
+                "    !! 警告：keeper 含 %d 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
+                "将不可迁移（仅影响中断续跑），请人工确认" % len(old_keepers)
+            )
         result["reclaim_mb"] = round(blob_bytes / MB, 1)
         if not apply_delete:
             result["status"] = "dry-run"
@@ -475,7 +489,12 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
     with conn.cursor() as cur:
         problems = verify_kept(cur, thread_id, keepers, kept_rows)
     result["status"] = "ok(blob %d/ckpt %d/writes %d/孤儿 %d) 自检 %s" % (
-        deleted, ck_del, wr_del, orphan_del, "PASS" if not problems else "FAIL")
+        deleted,
+        ck_del,
+        wr_del,
+        orphan_del,
+        "PASS" if not problems else "FAIL",
+    )
     for problem in problems[:5]:
         print("    !! 自检异常：%s" % problem)
     return result
@@ -483,13 +502,16 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
 
 # ---------------- 主流程 ----------------
 
+
 def main() -> int:
     started_at = datetime.now()
     apply_delete = parse_mode()
     mode = "EXECUTE(真删)" if apply_delete else "DRY-RUN(只统计)"
     print("开始时间 %s" % started_at.strftime("%Y-%m-%d %H:%M:%S"))
-    print("目标库 %s:%s/%s  模式 %s  策略: 体积>%sMB 且闲置>%s天 → keep-latest 裁剪" % (
-        DB_HOST, DB_PORT, DB_NAME, mode, MIN_MB, MIN_IDLE_DAYS))
+    print(
+        "目标库 %s:%s/%s  模式 %s  策略: 体积>%sMB 且闲置>%s天 → keep-latest 裁剪"
+        % (DB_HOST, DB_PORT, DB_NAME, mode, MIN_MB, MIN_IDLE_DAYS)
+    )
     conn = connect(DB_NAME)
     results = []  # type: List[dict]
     try:
@@ -502,28 +524,25 @@ def main() -> int:
                 results.append(prune_one(conn, target, apply_delete))
             except Exception as err:  # 单会话失败不影响其余（prune_one 的
                 # finally 已收口其规划事务，此处无遗留事务需要 rollback）
-                print("    !! 裁剪失败 %s: %s: %s" % (
-                    target["thread_id"], type(err).__name__, err))
-                results.append({"thread_id": target["thread_id"], "status": "error:%s" % err,
-                                "reclaim_mb": 0.0})
+                print("    !! 裁剪失败 %s: %s: %s" % (target["thread_id"], type(err).__name__, err))
+                results.append({"thread_id": target["thread_id"], "status": "error:%s" % err, "reclaim_mb": 0.0})
     finally:
         conn.close()
 
     total_mb = sum(r.get("reclaim_mb", 0.0) for r in results)
     print("\n===== 汇总 =====")
     for r in results:
-        print("  %-38s %-46s 回收 %sMB" % (r["thread_id"][:36], r.get("status", ""),
-                                          r.get("reclaim_mb", 0.0)))
+        print("  %-38s %-46s 回收 %sMB" % (r["thread_id"][:36], r.get("status", ""), r.get("reclaim_mb", 0.0)))
     print("合计 %.1fMB" % total_mb)
     if not apply_delete:
         print("（dry-run 未做任何修改；确认无误后把参数换成 execute）")
     else:
         print("提示：InnoDB 不自动归还磁盘空间，页仅作 free 复用；确需缩表低峰执行 OPTIMIZE TABLE。")
-    failed = [r for r in results
-              if str(r.get("status", "")).startswith("error") or "FAIL" in str(r.get("status", ""))]
+    failed = [r for r in results if str(r.get("status", "")).startswith("error") or "FAIL" in str(r.get("status", ""))]
     ended_at = datetime.now()
-    print("结束时间 %s  耗时 %.1f 秒" % (
-        ended_at.strftime("%Y-%m-%d %H:%M:%S"), (ended_at - started_at).total_seconds()))
+    print(
+        "结束时间 %s  耗时 %.1f 秒" % (ended_at.strftime("%Y-%m-%d %H:%M:%S"), (ended_at - started_at).total_seconds())
+    )
     if failed:
         print("!! %d 个会话失败或自检未通过，请人工复核" % len(failed))
         return 1

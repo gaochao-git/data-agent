@@ -54,8 +54,8 @@ def _format_thread(t: UserThread, run_status: Optional[str] = None) -> Dict[str,
         "title": t.thread_title,
         "agent_id": t.agent_id,
         "datasource_id": t.datasource_id or "",
-        "create_time": t.create_time.strftime('%Y-%m-%d %H:%M:%S') if t.create_time else "",
-        "update_time": t.update_time.strftime('%Y-%m-%d %H:%M:%S') if t.update_time else "",
+        "create_time": t.create_time.strftime("%Y-%m-%d %H:%M:%S") if t.create_time else "",
+        "update_time": t.update_time.strftime("%Y-%m-%d %H:%M:%S") if t.update_time else "",
         "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False,
     }
     result["run_status"] = run_status
@@ -74,9 +74,9 @@ def _clean_title(title: str, fallback: str = "") -> str:
     """清理标题文本"""
     title = title.strip()
     # 这里的意图是「去掉其中任意字符」，strip 的字符集语义正合用（非去除整串），故豁免 B005
-    title = title.strip('"').strip("'").strip('《》""''').strip()  # noqa: B005
+    title = title.strip('"').strip("'").strip('《》""').strip()  # noqa: B005
     # 移除表情符号和特殊字符
-    title = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', title)
+    title = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", title)
     title = title[:15]  # 限制最大长度
 
     if not title or len(title) < 5:
@@ -87,11 +87,8 @@ def _clean_title(title: str, fallback: str = "") -> str:
 
 # ============ 公共函数 ============
 
-async def get_or_create_conversation(
-    agent_id: str,
-    conversation_id: str,
-    user_id: str = "system"
-) -> str:
+
+async def get_or_create_conversation(agent_id: str, conversation_id: str, user_id: str = "system") -> str:
     """
     获取或创建会话（确保会话记录存在）
 
@@ -144,7 +141,7 @@ async def create(agent_id: str, user_id: str = "system", datasource_id: str | No
     )
 
     logger.info(f"创建新对话: {thread_id}, agent: {agent_id}")
-    return {"id": thread_id, "create_time": now.strftime('%Y-%m-%d %H:%M:%S')}
+    return {"id": thread_id, "create_time": now.strftime("%Y-%m-%d %H:%M:%S")}
 
 
 async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -165,12 +162,16 @@ async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int 
     return await _format_threads(threads, user_id)
 
 
-async def list_by_agent_ids(agent_ids: List[str], user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+async def list_by_agent_ids(
+    agent_ids: List[str], user_id: str = None, limit: int = 50, offset: int = 0
+) -> List[Dict[str, Any]]:
     """获取多个智能体的历史会话列表"""
     if not agent_ids:
         return []
 
-    threads = await conversation_dao.list_threads_by_agent_ids(agent_ids=agent_ids, user_id=user_id, limit=limit, offset=offset)
+    threads = await conversation_dao.list_threads_by_agent_ids(
+        agent_ids=agent_ids, user_id=user_id, limit=limit, offset=offset
+    )
 
     return await _format_threads(threads, user_id)
 
@@ -189,7 +190,7 @@ def _parse_group_key(group_key: str) -> tuple[str, Optional[str]]:
     if normalized == UNCLASSIFIED_GROUP_KEY:
         return "unclassified", None
     if normalized.startswith(DATASOURCE_GROUP_PREFIX):
-        datasource_id = normalized[len(DATASOURCE_GROUP_PREFIX):].strip()
+        datasource_id = normalized[len(DATASOURCE_GROUP_PREFIX) :].strip()
         if datasource_id:
             return "datasource", datasource_id
     raise ValueError("无效的会话分组")
@@ -222,7 +223,7 @@ def _format_conversation_group(
     page_size: int,
     statuses: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX):] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
+    datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX) :] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
     visible_rows = rows[:page_size]
     has_more = len(rows) > page_size
     return {
@@ -286,7 +287,9 @@ async def list_grouped(
     }
 
 
-async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+async def list_all(
+    agent_configs: Dict[str, Dict[str, Any]], user_id: str = None, limit: int = 50
+) -> List[Dict[str, Any]]:
     """
     获取所有智能体的历史会话列表
 
@@ -402,10 +405,7 @@ async def update_title(conversation_id: str, title: str, user_id: Optional[str] 
     return True
 
 
-async def generate_title(
-    conversation_id: str,
-    user_id: Optional[str] = None
-) -> Optional[str]:
+async def generate_title(conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
     """根据事件表中的第一条用户消息生成会话标题。
 
     标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
@@ -439,10 +439,7 @@ async def _generate_and_update_title(
     llm = None
     try:
         llm = _get_title_llm()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", TITLE_GENERATION_PROMPT),
-            ("human", "{query}")
-        ])
+        prompt = ChatPromptTemplate.from_messages([("system", TITLE_GENERATION_PROMPT), ("human", "{query}")])
 
         chain = prompt | llm
         result = await chain.ainvoke({"query": query})

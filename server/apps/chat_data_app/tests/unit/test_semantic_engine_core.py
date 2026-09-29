@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -145,7 +145,12 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}, "出金总额": {"name": "出金总额"}, "入金总额": {"name": "入金总额"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
+            "订单状态": {
+                "name": "订单状态",
+                "logical_type": "enum",
+                "allowed_values": ["已支付", "已取消"],
+                "mapping": {"已支付": "paid", "已取消": "cancelled"},
+            },
             "下单时间": {"name": "下单时间"},
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
@@ -163,82 +168,158 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     filters, err = validator.validate_filters([{"dimension": "订单状态", "operator": "=", "value": "已支付"}])
     assert err is None
     assert filters[0]["value"] == "paid"
-    assert "不在允许值范围" in validator.validate_filters([{"dimension": "订单状态", "operator": "=", "value": "unknown"}])[1]
-    assert validator.validate_filters([{"dimension": "下单时间", "operator": "BETWEEN", "value": ["2026-01-01", "current_date()"], "value_type": ["literal", "sql_function"]}])[1] is None
-    assert "value_type 仅支持" in validator.validate_filters([{"dimension": "下单时间", "operator": "=", "value": "today", "value_type": "expression"}])[1]
-    assert "value_type 仅支持" in validator.validate_filters([{"dimension": "下单时间", "operator": "IN", "value": ["today"], "value_type": []}])[1]
+    assert (
+        "不在允许值范围"
+        in validator.validate_filters([{"dimension": "订单状态", "operator": "=", "value": "unknown"}])[1]
+    )
+    assert (
+        validator.validate_filters(
+            [
+                {
+                    "dimension": "下单时间",
+                    "operator": "BETWEEN",
+                    "value": ["2026-01-01", "current_date()"],
+                    "value_type": ["literal", "sql_function"],
+                }
+            ]
+        )[1]
+        is None
+    )
+    assert (
+        "value_type 仅支持"
+        in validator.validate_filters(
+            [{"dimension": "下单时间", "operator": "=", "value": "today", "value_type": "expression"}]
+        )[1]
+    )
+    assert (
+        "value_type 仅支持"
+        in validator.validate_filters(
+            [{"dimension": "下单时间", "operator": "IN", "value": ["today"], "value_type": []}]
+        )[1]
+    )
     assert validator.validate_filters([{"dimension": "订单状态", "operator": "LIKE", "value": "pa"}])[1] is None
-    assert "操作符 'DROP TABLE'" in validator.validate_filters([{"dimension": "订单状态", "operator": "DROP TABLE", "value": "paid"}])[1]
+    assert (
+        "操作符 'DROP TABLE'"
+        in validator.validate_filters([{"dimension": "订单状态", "operator": "DROP TABLE", "value": "paid"}])[1]
+    )
     assert validator.validate_filters([{"dimension": "受限状态", "operator": "in", "value": ["paid"]}])[1] is None
-    assert "不允许操作符 'LIKE'" in validator.validate_filters([{"dimension": "受限状态", "operator": "LIKE", "value": "paid"}])[1]
-    assert "不允许操作符 '>'" in validator.validate_filters([{
-        "left": {"type": "dimension", "name": "受限状态"},
-        "operator": ">",
-        "right": {"type": "literal", "value": "paid"},
-    }])[1]
-    structured_filters, structured_err = validator.validate_filters([
-        {
-            "left": {"type": "dimension", "name": "出金金额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "*",
-                "left": {"type": "dimension", "name": "入金金额"},
-                "right": {"type": "literal", "value": 10},
-            },
-        }
-    ])
+    assert (
+        "不允许操作符 'LIKE'"
+        in validator.validate_filters([{"dimension": "受限状态", "operator": "LIKE", "value": "paid"}])[1]
+    )
+    assert (
+        "不允许操作符 '>'"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "受限状态"},
+                    "operator": ">",
+                    "right": {"type": "literal", "value": "paid"},
+                }
+            ]
+        )[1]
+    )
+    structured_filters, structured_err = validator.validate_filters(
+        [
+            {
+                "left": {"type": "dimension", "name": "出金金额"},
+                "operator": ">",
+                "right": {
+                    "type": "binary",
+                    "operator": "*",
+                    "left": {"type": "dimension", "name": "入金金额"},
+                    "right": {"type": "literal", "value": 10},
+                },
+            }
+        ]
+    )
     assert structured_err is None
     assert structured_filters[0]["right"]["operator"] == "*"
-    assert "除以 0" in validator.validate_filters([
-        {
-            "left": {"type": "dimension", "name": "出金金额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "/",
-                "left": {"type": "dimension", "name": "入金金额"},
-                "right": {"type": "literal", "value": 0},
-            },
-        }
-    ])[1]
+    assert (
+        "除以 0"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "出金金额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "/",
+                        "left": {"type": "dimension", "name": "入金金额"},
+                        "right": {"type": "literal", "value": 0},
+                    },
+                }
+            ]
+        )[1]
+    )
     assert "必须是数组" in validator.validate_filters([{"or": {"dimension": "订单状态"}}])[1]
     assert "必须是数组" in validator.validate_filters([{"and": {"dimension": "订单状态"}}])[1]
     assert "无效的过滤条件格式" in validator.validate_filters([{"bad": []}])[1]
     assert "无效的过滤条件格式" in validator.validate_filters([{"and": [{"bad": []}]}])[1]
 
     assert validator.validate_having([{"metric": "订单数", "operator": ">", "value": 1}])[1] is None
-    structured_having, structured_having_err = validator.validate_having([
-        {
-            "left": {"type": "metric", "name": "出金总额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "*",
-                "left": {"type": "metric", "name": "入金总额"},
-                "right": {"type": "literal", "value": 10},
-            },
-        }
-    ])
+    structured_having, structured_having_err = validator.validate_having(
+        [
+            {
+                "left": {"type": "metric", "name": "出金总额"},
+                "operator": ">",
+                "right": {
+                    "type": "binary",
+                    "operator": "*",
+                    "left": {"type": "metric", "name": "入金总额"},
+                    "right": {"type": "literal", "value": 10},
+                },
+            }
+        ]
+    )
     assert structured_having_err is None
     assert structured_having[0]["right"]["operator"] == "*"
     assert validator.validate_having([{}]) == ([], None)
     assert "HAVING 条件中的指标" in validator.validate_having([{"metric": "未知指标"}])[1]
-    assert "HAVING 条件中的指标" in validator.validate_having([{"left": {"type": "metric", "name": "未知指标"}, "operator": ">", "right": {"type": "literal", "value": 1}}])[1]
-    assert "不允许除以 0" in validator.validate_having([
-        {
-            "left": {"type": "metric", "name": "出金总额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "/",
-                "left": {"type": "metric", "name": "入金总额"},
-                "right": {"type": "literal", "value": 0},
-            },
-        }
-    ])[1]
-    assert "只支持 metric、literal、binary" in validator.validate_having([{"left": {"type": "metric", "name": "出金总额"}, "operator": ">", "right": {"type": "dimension", "name": "订单状态"}}])[1]
-    assert validator.validate_order_by([{"field": "订单数", "direction": "asc"}], ["订单数"], [])[0] == [{"field": "订单数", "direction": "ASC"}]
+    assert (
+        "HAVING 条件中的指标"
+        in validator.validate_having(
+            [
+                {
+                    "left": {"type": "metric", "name": "未知指标"},
+                    "operator": ">",
+                    "right": {"type": "literal", "value": 1},
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "不允许除以 0"
+        in validator.validate_having(
+            [
+                {
+                    "left": {"type": "metric", "name": "出金总额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "/",
+                        "left": {"type": "metric", "name": "入金总额"},
+                        "right": {"type": "literal", "value": 0},
+                    },
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "只支持 metric、literal、binary"
+        in validator.validate_having(
+            [
+                {
+                    "left": {"type": "metric", "name": "出金总额"},
+                    "operator": ">",
+                    "right": {"type": "dimension", "name": "订单状态"},
+                }
+            ]
+        )[1]
+    )
+    assert validator.validate_order_by([{"field": "订单数", "direction": "asc"}], ["订单数"], [])[0] == [
+        {"field": "订单数", "direction": "ASC"}
+    ]
     assert "不是字典" in validator.validate_order_by(["bad"], ["订单数"], [])[1]
     assert "缺少 'field'" in validator.validate_order_by([{"direction": "DESC"}], ["订单数"], [])[1]
     assert "不在当前查询输出字段中" in validator.validate_order_by([{"field": "下单时间"}], ["订单数"], [])[1]
@@ -254,148 +335,273 @@ def test_input_validator_tree_mapping_and_null_allowed_values():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付"], "mapping": {"已支付": "paid"}},
+            "订单状态": {
+                "name": "订单状态",
+                "logical_type": "enum",
+                "allowed_values": ["已支付"],
+                "mapping": {"已支付": "paid"},
+            },
             "下单时间": {"name": "下单时间", "allowed_values": ["today"]},
         },
     )
 
-    filters, err = validator.validate_filters([{"and": [
-        {"dimension": "订单状态", "operator": "=", "value": "已支付"},
-        {"dimension": "下单时间", "operator": "IS NOT NULL"},
-    ]}])
+    filters, err = validator.validate_filters(
+        [
+            {
+                "and": [
+                    {"dimension": "订单状态", "operator": "=", "value": "已支付"},
+                    {"dimension": "下单时间", "operator": "IS NOT NULL"},
+                ]
+            }
+        ]
+    )
 
     assert err is None
-    assert filters == [{"and": [
-        {"dimension": "订单状态", "operator": "=", "value": "paid"},
-        {"dimension": "下单时间", "operator": "IS NOT NULL"},
-    ]}]
+    assert filters == [
+        {
+            "and": [
+                {"dimension": "订单状态", "operator": "=", "value": "paid"},
+                {"dimension": "下单时间", "operator": "IS NOT NULL"},
+            ]
+        }
+    ]
     assert validator._normalize_allowed_value({"mapping": None}, "x") == "x"
     assert validator._normalize_allowed_value({"mapping": []}, "x") == "x"
     assert validator._normalize_allowed_value({"mapping": {"A": "a"}}, None) is None
-    assert validator.validate_filters([{"dimension": "未知维度", "operator": "=", "value": "x"}])[1].startswith("错误：过滤条件中的维度")
+    assert validator.validate_filters([{"dimension": "未知维度", "operator": "=", "value": "x"}])[1].startswith(
+        "错误：过滤条件中的维度"
+    )
 
 
 def test_input_validator_or_tree_validation_and_normalization_branches():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
+            "订单状态": {
+                "name": "订单状态",
+                "logical_type": "enum",
+                "allowed_values": ["已支付", "已取消"],
+                "mapping": {"已支付": "paid", "已取消": "cancelled"},
+            },
             "用户等级": {"name": "用户等级"},
         },
     )
 
-    filters, err = validator.validate_filters([{"or": [
-        {"dimension": "订单状态", "operator": "=", "value": "已支付"},
-        {"dimension": "订单状态", "operator": "IN", "value": ["已取消", "已支付"]},
-    ]}])
+    filters, err = validator.validate_filters(
+        [
+            {
+                "or": [
+                    {"dimension": "订单状态", "operator": "=", "value": "已支付"},
+                    {"dimension": "订单状态", "operator": "IN", "value": ["已取消", "已支付"]},
+                ]
+            }
+        ]
+    )
 
     assert err is None
-    assert filters == [{"or": [
-        {"dimension": "订单状态", "operator": "=", "value": "paid"},
-        {"dimension": "订单状态", "operator": "IN", "value": ["cancelled", "paid"]},
-    ]}]
-    assert validator.validate_filters([
-        {"or": [{"dimension": "未知维度", "operator": "=", "value": "x"}]}
-    ])[1].startswith("错误：过滤条件中的维度")
-    assert "不在允许值范围" in validator.validate_filters([
-        {"or": [{"dimension": "订单状态", "operator": "=", "value": "unknown"}]}
-    ])[1]
-    assert validator.validate_filters([
-        {"dimension": "用户等级", "operator": "=", "value": "VIP"},
-        {"dimension": "订单状态", "operator": "=", "value": "已支付"},
-    ])[0][-1]["value"] == "paid"
+    assert filters == [
+        {
+            "or": [
+                {"dimension": "订单状态", "operator": "=", "value": "paid"},
+                {"dimension": "订单状态", "operator": "IN", "value": ["cancelled", "paid"]},
+            ]
+        }
+    ]
+    assert validator.validate_filters([{"or": [{"dimension": "未知维度", "operator": "=", "value": "x"}]}])[
+        1
+    ].startswith("错误：过滤条件中的维度")
+    assert (
+        "不在允许值范围"
+        in validator.validate_filters([{"or": [{"dimension": "订单状态", "operator": "=", "value": "unknown"}]}])[1]
+    )
+    assert (
+        validator.validate_filters(
+            [
+                {"dimension": "用户等级", "operator": "=", "value": "VIP"},
+                {"dimension": "订单状态", "operator": "=", "value": "已支付"},
+            ]
+        )[0][-1]["value"]
+        == "paid"
+    )
 
 
 def test_input_validator_expression_filter_error_and_normalization_edges():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
+            "订单状态": {
+                "name": "订单状态",
+                "logical_type": "enum",
+                "allowed_values": ["已支付", "已取消"],
+                "mapping": {"已支付": "paid", "已取消": "cancelled"},
+            },
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
         },
     )
 
     assert "必须是对象" in validator.validate_filters(["bad"])[1]
-    assert "left 只支持 dimension" in validator.validate_filters([
-        {"left": {"type": "literal", "value": "x"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
-    ])[1]
-    assert "不能混用" in validator.validate_filters([
-        {
-            "left": {"type": "dimension", "name": "出金金额"},
-            "operator": ">",
-            "right": {"type": "literal", "value": 1},
-            "valueType": "expression",
-            "rightExpression": "1 + 1",
-        }
-    ])[1]
-    free_expression, err = validator.validate_filters([
-        {
-            "dimension": "出金金额",
-            "operator": ">",
-            "valueType": "expression",
-            "rightExpression": "1 + 1",
-        }
-    ])
-    assert err is None
-    assert free_expression[0]["rightExpression"] == "1 + 1"
-    assert "必须同时使用" in validator.validate_filters([
-        {"dimension": "出金金额", "operator": ">", "rightExpression": "1 + 1"}
-    ])[1]
-    assert "非空字符串" in validator.validate_filters([
-        {"dimension": "出金金额", "operator": ">", "valueType": "expression", "rightExpression": ""}
-    ])[1]
-    for unsafe_expression in ("1; DROP TABLE orders", "1 -- comment", "DELETE FROM orders"):
-        assert "只允许单条只读 SQL 表达式" in validator.validate_filters([
+    assert (
+        "left 只支持 dimension"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "literal", "value": "x"},
+                    "operator": "=",
+                    "right": {"type": "literal", "value": "paid"},
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "不能混用"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "出金金额"},
+                    "operator": ">",
+                    "right": {"type": "literal", "value": 1},
+                    "valueType": "expression",
+                    "rightExpression": "1 + 1",
+                }
+            ]
+        )[1]
+    )
+    free_expression, err = validator.validate_filters(
+        [
             {
                 "dimension": "出金金额",
                 "operator": ">",
                 "valueType": "expression",
-                "rightExpression": unsafe_expression,
+                "rightExpression": "1 + 1",
             }
-        ])[1]
-    assert "过滤条件中的维度 '未知维度' 不存在" in validator.validate_filters([
-        {"left": {"type": "dimension", "name": "未知维度"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
-    ])[1]
-    assert "right 必须是对象" in validator.validate_filters([
-        {"left": {"type": "dimension", "name": "出金金额"}, "operator": ">", "right": 10}
-    ])[1]
-    assert "right.value 只支持字符串" in validator.validate_filters([
-        {"left": {"type": "dimension", "name": "出金金额"}, "operator": ">", "right": {"type": "literal", "value": {"raw": 1}}}
-    ])[1]
-    assert "right.left 必须是对象" in validator.validate_filters([
-        {
-            "left": {"type": "dimension", "name": "出金金额"},
-            "operator": ">",
-            "right": {"type": "binary", "operator": "+", "left": None, "right": {"type": "literal", "value": 1}},
-        }
-    ])[1]
-    assert "right.right.type 只支持" in validator.validate_filters([
-        {
-            "left": {"type": "dimension", "name": "出金金额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "+",
-                "left": {"type": "dimension", "name": "入金金额"},
-                "right": {"type": "unknown", "value": 1},
-            },
-        }
-    ])[1]
+        ]
+    )
+    assert err is None
+    assert free_expression[0]["rightExpression"] == "1 + 1"
+    assert (
+        "必须同时使用"
+        in validator.validate_filters([{"dimension": "出金金额", "operator": ">", "rightExpression": "1 + 1"}])[1]
+    )
+    assert (
+        "非空字符串"
+        in validator.validate_filters(
+            [{"dimension": "出金金额", "operator": ">", "valueType": "expression", "rightExpression": ""}]
+        )[1]
+    )
+    for unsafe_expression in ("1; DROP TABLE orders", "1 -- comment", "DELETE FROM orders"):
+        assert (
+            "只允许单条只读 SQL 表达式"
+            in validator.validate_filters(
+                [
+                    {
+                        "dimension": "出金金额",
+                        "operator": ">",
+                        "valueType": "expression",
+                        "rightExpression": unsafe_expression,
+                    }
+                ]
+            )[1]
+        )
+    assert (
+        "过滤条件中的维度 '未知维度' 不存在"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "未知维度"},
+                    "operator": "=",
+                    "right": {"type": "literal", "value": "paid"},
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "right 必须是对象"
+        in validator.validate_filters(
+            [{"left": {"type": "dimension", "name": "出金金额"}, "operator": ">", "right": 10}]
+        )[1]
+    )
+    assert (
+        "right.value 只支持字符串"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "出金金额"},
+                    "operator": ">",
+                    "right": {"type": "literal", "value": {"raw": 1}},
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "right.left 必须是对象"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "出金金额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "+",
+                        "left": None,
+                        "right": {"type": "literal", "value": 1},
+                    },
+                }
+            ]
+        )[1]
+    )
+    assert (
+        "right.right.type 只支持"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "出金金额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "+",
+                        "left": {"type": "dimension", "name": "入金金额"},
+                        "right": {"type": "unknown", "value": 1},
+                    },
+                }
+            ]
+        )[1]
+    )
 
-    normalized, err = validator.validate_filters([
-        {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": "已支付"}}
-    ])
+    normalized, err = validator.validate_filters(
+        [
+            {
+                "left": {"type": "dimension", "name": "订单状态"},
+                "operator": "=",
+                "right": {"type": "literal", "value": "已支付"},
+            }
+        ]
+    )
     assert err is None
     assert normalized[0]["right"]["value"] == "paid"
-    none_literal, err = validator.validate_filters([
-        {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": None}}
-    ])
+    none_literal, err = validator.validate_filters(
+        [
+            {
+                "left": {"type": "dimension", "name": "订单状态"},
+                "operator": "=",
+                "right": {"type": "literal", "value": None},
+            }
+        ]
+    )
     assert err is None
     assert none_literal[0]["right"]["value"] is None
-    assert "不在允许值范围" in validator.validate_filters([
-        {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": "unknown"}}
-    ])[1]
+    assert (
+        "不在允许值范围"
+        in validator.validate_filters(
+            [
+                {
+                    "left": {"type": "dimension", "name": "订单状态"},
+                    "operator": "=",
+                    "right": {"type": "literal", "value": "unknown"},
+                }
+            ]
+        )[1]
+    )
     assert validator._is_zero_literal("not-number") is False
 
 
@@ -419,7 +625,7 @@ def test_compile_semantic_ai_dsl_is_the_shared_compile_facade():
 
     assert result == {"success": True, "sql": "SELECT 1", "error": None, "warnings": ["warning"]}
     assert compile_semantic_ai_dsl(None, {})["error"] == "语义模型必须是对象"
-    assert compile_semantic_ai_dsl({}, []) ["error"] == "语义 DSL 必须是对象"
+    assert compile_semantic_ai_dsl({}, [])["error"] == "语义 DSL 必须是对象"
 
 
 @pytest.mark.asyncio
@@ -455,7 +661,9 @@ async def test_semantic_model_repository_keeps_runtime_and_full_modes_distinct()
             return (await manager.get_semantic_configs_async(datasource_id, user_id))[0]
 
     semantic_service = FakeSemanticService()
-    runtime = await load_semantic_model("ds", "runtime", mode="runtime", manager=manager, semantic_service=semantic_service)
+    runtime = await load_semantic_model(
+        "ds", "runtime", mode="runtime", manager=manager, semantic_service=semantic_service
+    )
     full = await load_semantic_model("ds", "full", mode="full", manager=manager, semantic_service=semantic_service)
 
     assert runtime["source_type"] == "hive"
@@ -483,7 +691,12 @@ def test_input_validator_logical_type_filter_values():
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
             "文本字段": {"name": "文本字段", "logical_type": ""},
-            "显式文本字段": {"name": "显式文本字段", "logical_type": "text", "allowed_values": ["A"], "mapping": {"A": "a"}},
+            "显式文本字段": {
+                "name": "显式文本字段",
+                "logical_type": "text",
+                "allowed_values": ["A"],
+                "mapping": {"A": "a"},
+            },
             "数值字段": {"name": "数值字段", "logical_type": "number"},
             "日期字段": {"name": "日期字段", "logical_type": "date"},
             "时间字段": {"name": "时间字段", "logical_type": "datetime"},
@@ -497,16 +710,30 @@ def test_input_validator_logical_type_filter_values():
     )
 
     assert validator.validate_filters([{"dimension": "文本字段", "operator": "=", "value": "100"}])[1] is None
-    text_filters, text_err = validator.validate_filters([{"dimension": "显式文本字段", "operator": "=", "value": "100"}])
+    text_filters, text_err = validator.validate_filters(
+        [{"dimension": "显式文本字段", "operator": "=", "value": "100"}]
+    )
     assert text_err is None
     assert text_filters[0]["value"] == "100"
     assert validator.validate_filters([{"dimension": "数值字段", "operator": "=", "value": 100}])[1] is None
     assert "必须是数字" in validator.validate_filters([{"dimension": "数值字段", "operator": "=", "value": "100"}])[1]
     assert validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "2026-07-10"}])[1] is None
-    assert "yyyy-MM-dd 格式" in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "20260710"}])[1]
-    assert "yyyy-MM-dd 格式" in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "2026-02-30"}])[1]
-    assert validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10 12:30:45"}])[1] is None
-    assert "yyyy-MM-dd HH:mm:ss 格式" in validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10"}])[1]
+    assert (
+        "yyyy-MM-dd 格式"
+        in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "20260710"}])[1]
+    )
+    assert (
+        "yyyy-MM-dd 格式"
+        in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "2026-02-30"}])[1]
+    )
+    assert (
+        validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10 12:30:45"}])[1]
+        is None
+    )
+    assert (
+        "yyyy-MM-dd HH:mm:ss 格式"
+        in validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10"}])[1]
+    )
 
     filters, err = validator.validate_filters([{"dimension": "状态", "operator": "=", "value": "有效"}])
     assert err is None
@@ -587,10 +814,14 @@ def test_sql_parser_parse_empty_expression_branches(monkeypatch):
     assert prepare_sql_for_execution("select 1", "mysql").error == "SQL 解析失败"
     assert extract_top_level_limit_count("select 1", "mysql") is None
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()])
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()]
+    )
     assert "注释移除后为空" in prepare_sql_for_execution("select 1", "mysql").error
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()])
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()]
+    )
     assert extract_top_level_limit_count("select * from orders limit bad", "mysql") is None
 
 
@@ -634,11 +865,15 @@ def test_sql_parser_prepare_and_limit_error_branches(monkeypatch):
     assert "注释移除后为空" in prepare_sql_for_execution("select 1", "mysql").error
 
     monkeypatch.setattr(sql_parser, "_split_sql_statements", _split_sql_statements)
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: [ValidExpression("SELECT 1"), ValidExpression("SELECT 2")])
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: [ValidExpression("SELECT 1"), ValidExpression("SELECT 2")]
+    )
     assert "一次只能执行一条 SQL" in prepare_sql_for_execution("select 1", "mysql").error
 
     assert extract_top_level_limit_count("", "mysql") is None
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     assert extract_top_level_limit_count("select 1", "mysql") is None
     monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: [StringLimitExpression()])
     assert extract_top_level_limit_count("select * from orders limit '5'", "mysql") is None

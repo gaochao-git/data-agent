@@ -134,7 +134,10 @@ def test_create_agent_schedule_contract(client, auth_headers, fake_service):
 
 def test_create_agent_schedule_maps_service_errors(client, auth_headers, fake_service):
     cases = [
-        (schedule_routes.AgentScheduleConversationInvalidError("会话无效"), ErrorCode.CHATDATA_SCHEDULE_CONVERSATION_INVALID),
+        (
+            schedule_routes.AgentScheduleConversationInvalidError("会话无效"),
+            ErrorCode.CHATDATA_SCHEDULE_CONVERSATION_INVALID,
+        ),
         (schedule_routes.AgentScheduleValidationError("参数无效"), ErrorCode.CHATDATA_SCHEDULE_INVALID),
         (schedule_routes.AgentScheduleLimitExceededError("超出配额"), ErrorCode.CHATDATA_SCHEDULE_LIMIT_EXCEEDED),
     ]
@@ -298,17 +301,61 @@ def test_admin_list_runs_unexpected_error(client, auth_headers, fake_service):
     "method,path,body,service_call,code",
     [
         ("get", "/api/chatdata/agent-schedules", None, "list_jobs", ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED),
-        ("put", "/api/chatdata/agent-schedules/job_a", {"title": "n"}, "update_job", ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED),
-        ("delete", "/api/chatdata/agent-schedules/job_a", None, "delete_job", ErrorCode.CHATDATA_SCHEDULE_DELETE_FAILED),
-        ("get", "/api/chatdata/agent-schedules/job_a/runs", None, "list_job_runs", ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED),
-        ("post", "/api/chatdata/agent-schedules/job_a/trigger-now", None, "trigger_now", ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED),
-        ("get", "/api/chatdata/admin/agent-schedules/overview", None, "get_admin_overview", ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED),
-        ("put", "/api/chatdata/admin/agent-schedules/pause", {"paused": False}, "set_paused", ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED),
+        (
+            "put",
+            "/api/chatdata/agent-schedules/job_a",
+            {"title": "n"},
+            "update_job",
+            ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED,
+        ),
+        (
+            "delete",
+            "/api/chatdata/agent-schedules/job_a",
+            None,
+            "delete_job",
+            ErrorCode.CHATDATA_SCHEDULE_DELETE_FAILED,
+        ),
+        (
+            "get",
+            "/api/chatdata/agent-schedules/job_a/runs",
+            None,
+            "list_job_runs",
+            ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED,
+        ),
+        (
+            "post",
+            "/api/chatdata/agent-schedules/job_a/trigger-now",
+            None,
+            "trigger_now",
+            ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED,
+        ),
+        (
+            "get",
+            "/api/chatdata/admin/agent-schedules/overview",
+            None,
+            "get_admin_overview",
+            ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED,
+        ),
+        (
+            "put",
+            "/api/chatdata/admin/agent-schedules/pause",
+            {"paused": False},
+            "set_paused",
+            ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED,
+        ),
         ("get", "/api/chatdata/admin/agent-schedules", None, "list_all_jobs", ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED),
-        ("put", "/api/chatdata/admin/agent-schedules/job_a/enabled", {"enabled_flag": 1}, "admin_set_job_enabled", ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED),
+        (
+            "put",
+            "/api/chatdata/admin/agent-schedules/job_a/enabled",
+            {"enabled_flag": 1},
+            "admin_set_job_enabled",
+            ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED,
+        ),
     ],
 )
-def test_endpoints_map_unexpected_errors_to_business_codes(client, auth_headers, fake_service, method, path, body, service_call, code):
+def test_endpoints_map_unexpected_errors_to_business_codes(
+    client, auth_headers, fake_service, method, path, body, service_call, code
+):
     fake_service.errors[service_call] = RuntimeError("boom")
     kwargs = {"json": body} if body is not None else {}
     response = getattr(client, method)(path, headers=auth_headers, **kwargs)
@@ -327,6 +374,16 @@ def test_trigger_agent_schedule_now_maps_validation_error(client, auth_headers, 
 def test_endpoints_reraise_http_exception_from_auth(client, auth_headers):
     """认证失败抛出的 HTTPException 必须原样穿透（不做业务错误码包装）。"""
     service_only_headers = {"X-Service-Token": auth_headers["X-Service-Token"]}
-    assert client.put("/api/chatdata/admin/agent-schedules/pause", json={"paused": True}, headers=service_only_headers).status_code == 401
-    assert client.put("/api/chatdata/admin/agent-schedules/job_a/enabled", json={"enabled_flag": 1}, headers=service_only_headers).status_code == 401
+    assert (
+        client.put(
+            "/api/chatdata/admin/agent-schedules/pause", json={"paused": True}, headers=service_only_headers
+        ).status_code
+        == 401
+    )
+    assert (
+        client.put(
+            "/api/chatdata/admin/agent-schedules/job_a/enabled", json={"enabled_flag": 1}, headers=service_only_headers
+        ).status_code
+        == 401
+    )
     assert client.delete("/api/chatdata/agent-schedules/job_a", headers=service_only_headers).status_code == 401

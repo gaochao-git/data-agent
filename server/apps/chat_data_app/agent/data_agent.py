@@ -161,22 +161,17 @@ def validate_agent_assembly_spec(spec: AgentAssemblySpec) -> None:
     unknown_includes = set(spec.tool_includes or ()) - registered
     if unknown_includes:
         raise ValueError(
-            f"Agent 装配规格 {spec.agent_id} 的 tool_includes 引用了未注册工具: "
-            f"{sorted(unknown_includes)}"
+            f"Agent 装配规格 {spec.agent_id} 的 tool_includes 引用了未注册工具: {sorted(unknown_includes)}"
         )
     unknown_excludes = set(spec.tool_excludes) - registered
     if unknown_excludes:
         raise ValueError(
-            f"Agent 装配规格 {spec.agent_id} 的 tool_excludes 引用了未注册工具: "
-            f"{sorted(unknown_excludes)}"
+            f"Agent 装配规格 {spec.agent_id} 的 tool_excludes 引用了未注册工具: {sorted(unknown_excludes)}"
         )
     if spec.tool_includes is not None:
         conflict = spec.tool_includes & spec.tool_excludes
         if conflict:
-            raise ValueError(
-                f"Agent 装配规格 {spec.agent_id} 的工具同时出现在 includes/excludes: "
-                f"{sorted(conflict)}"
-            )
+            raise ValueError(f"Agent 装配规格 {spec.agent_id} 的工具同时出现在 includes/excludes: {sorted(conflict)}")
     if spec.mcp_tool_search not in VALID_MCP_TOOL_SEARCH_MODES:
         raise ValueError(
             f"Agent 装配规格 {spec.agent_id} 的 mcp_tool_search 必须是 "
@@ -187,24 +182,18 @@ def validate_agent_assembly_spec(spec: AgentAssemblySpec) -> None:
             f"Agent 装配规格 {spec.agent_id} 的 mcp_tool_search_threshold 必须在 (0, 1] 内: "
             f"{spec.mcp_tool_search_threshold!r}"
         )
-    invalid_server_ids = {
-        server_id for server_id in (spec.mcp_server_ids or ()) if not str(server_id or "").strip()
-    }
+    invalid_server_ids = {server_id for server_id in (spec.mcp_server_ids or ()) if not str(server_id or "").strip()}
     if invalid_server_ids:
-        raise ValueError(
-            f"Agent 装配规格 {spec.agent_id} 的 mcp_server_ids 含空项: {sorted(invalid_server_ids)}"
-        )
+        raise ValueError(f"Agent 装配规格 {spec.agent_id} 的 mcp_server_ids 含空项: {sorted(invalid_server_ids)}")
 
 
 def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     """按规格对内置工具做工具名级筛选；excludes 优先于 includes。"""
     return [
-        tool for tool in tools
+        tool
+        for tool in tools
         if str(getattr(tool, "name", "") or "") not in spec.tool_excludes
-        and (
-            spec.tool_includes is None
-            or str(getattr(tool, "name", "") or "") in spec.tool_includes
-        )
+        and (spec.tool_includes is None or str(getattr(tool, "name", "") or "") in spec.tool_includes)
     ]
 
 
@@ -270,10 +259,7 @@ GENERAL_PURPOSE_SUBAGENT_DESCRIPTION = (
 
 def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
     """按排除集过滤子智能体工具。"""
-    return [
-        tool for tool in tools
-        if str(getattr(tool, "name", "") or "") not in excluded
-    ]
+    return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
 
 
 def build_subagent_middleware(
@@ -299,47 +285,53 @@ def build_subagent_middleware(
     """
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
-        specs.append(SubagentSpec(
-            name=DATA_EXPLORE_SUBAGENT_NAME,
-            description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
-            system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
-            tools=_filter_subagent_tools(
-                tools,
-                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
-            ),
-            model=model,
-            model_id=model_id,
-            available_skills_xml=available_skills_xml or "",
-            memory_block=memory_block or "",
-        ))
+        specs.append(
+            SubagentSpec(
+                name=DATA_EXPLORE_SUBAGENT_NAME,
+                description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
+                system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
+                tools=_filter_subagent_tools(
+                    tools,
+                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+                ),
+                model=model,
+                model_id=model_id,
+                available_skills_xml=available_skills_xml or "",
+                memory_block=memory_block or "",
+            )
+        )
     if runtime_options.plan_subagent_enabled:
-        specs.append(SubagentSpec(
-            name=PLAN_SUBAGENT_NAME,
-            description=PLAN_SUBAGENT_DESCRIPTION,
-            system_prompt=PLAN_SUBAGENT_PROMPT,
-            tools=_filter_subagent_tools(
-                tools,
-                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
-            ),
-            model=model,
-            model_id=model_id,
-            available_skills_xml=available_skills_xml or "",
-            memory_block=memory_block or "",
-        ))
+        specs.append(
+            SubagentSpec(
+                name=PLAN_SUBAGENT_NAME,
+                description=PLAN_SUBAGENT_DESCRIPTION,
+                system_prompt=PLAN_SUBAGENT_PROMPT,
+                tools=_filter_subagent_tools(
+                    tools,
+                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+                ),
+                model=model,
+                model_id=model_id,
+                available_skills_xml=available_skills_xml or "",
+                memory_block=memory_block or "",
+            )
+        )
     if runtime_options.general_purpose_subagent_enabled:
-        specs.append(SubagentSpec(
-            name=GENERAL_PURPOSE_SUBAGENT_NAME,
-            description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
-            system_prompt=GENERAL_PURPOSE_SUBAGENT_PROMPT,
-            tools=_filter_subagent_tools(
-                tools,
-                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
-            ),
-            model=model,
-            model_id=model_id,
-            available_skills_xml=available_skills_xml or "",
-            memory_block=memory_block or "",
-        ))
+        specs.append(
+            SubagentSpec(
+                name=GENERAL_PURPOSE_SUBAGENT_NAME,
+                description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
+                system_prompt=GENERAL_PURPOSE_SUBAGENT_PROMPT,
+                tools=_filter_subagent_tools(
+                    tools,
+                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
+                ),
+                model=model,
+                model_id=model_id,
+                available_skills_xml=available_skills_xml or "",
+                memory_block=memory_block or "",
+            )
+        )
     if not specs:
         return None
     return SubagentMiddleware(specs, run_controls=run_controls)
@@ -362,7 +354,12 @@ def _env_mcp_tool_search_mode() -> str:
     if not raw:
         return "auto"
     if raw not in VALID_MCP_TOOL_SEARCH_MODES:
-        logger.warning("环境变量 %s 非法（需为 %s 之一），忽略并使用 auto: %r", MCP_TOOL_SEARCH_ENV, sorted(VALID_MCP_TOOL_SEARCH_MODES), raw)
+        logger.warning(
+            "环境变量 %s 非法（需为 %s 之一），忽略并使用 auto: %r",
+            MCP_TOOL_SEARCH_ENV,
+            sorted(VALID_MCP_TOOL_SEARCH_MODES),
+            raw,
+        )
         return "auto"
     return raw
 
@@ -403,9 +400,7 @@ def _resolve_mcp_tool_search_service(
     """
     if spec.mcp_tool_search == "off" or not tool_tokens:
         return None
-    threshold_tokens = int(
-        get_model_context_budget(model_id).context_window * spec.mcp_tool_search_threshold
-    )
+    threshold_tokens = int(get_model_context_budget(model_id).context_window * spec.mcp_tool_search_threshold)
     if spec.mcp_tool_search == "auto" and tool_tokens <= threshold_tokens:
         return None
     from .mcp.catalog import MCPToolSearchService
@@ -529,7 +524,11 @@ def create_agent_from_spec(
         llm_factory=get_chat_data_llm,
     )
     subagent_middleware = build_subagent_middleware(
-        options, builtin_tools, model=model, model_id=model_id, run_controls=run_controls,
+        options,
+        builtin_tools,
+        model=model,
+        model_id=model_id,
+        run_controls=run_controls,
         available_skills_xml=invocation.available_skills_xml,
         memory_block=invocation.memory_block,
     )

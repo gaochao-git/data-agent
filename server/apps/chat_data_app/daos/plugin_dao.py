@@ -23,19 +23,13 @@ class PluginDao:
     async def list_enabled_names(self) -> Set[str]:
         """返回当前启用且未删除的插件名集合（供装配/技能快照读取）。"""
         async with self._session_context() as db:
-            result = await db.execute(
-                select(ChatDataPlugin.plugin_name).filter_by(enabled_flag=1, delete_flag=0)
-            )
+            result = await db.execute(select(ChatDataPlugin.plugin_name).filter_by(enabled_flag=1, delete_flag=0))
             return {str(name) for name in result.scalars().all()}
 
     async def list_active(self) -> List[ChatDataPlugin]:
         """返回全部未删除插件记录（供管理端列表）。"""
         async with self._session_context() as db:
-            result = await db.execute(
-                select(ChatDataPlugin)
-                .filter_by(delete_flag=0)
-                .order_by(ChatDataPlugin.id.asc())
-            )
+            result = await db.execute(select(ChatDataPlugin).filter_by(delete_flag=0).order_by(ChatDataPlugin.id.asc()))
             return list(result.scalars().all())
 
     async def upsert_installed(
@@ -57,24 +51,24 @@ class PluginDao:
         若误加 ``delete_flag==0`` 过滤，会查不到墓碑转而 insert，撞上单列唯一索引直接失败。
         """
         async with self._session_context() as db:
-            result = await db.execute(
-                select(ChatDataPlugin).filter_by(plugin_name=plugin_name)
-            )
+            result = await db.execute(select(ChatDataPlugin).filter_by(plugin_name=plugin_name))
             row = result.scalar_one_or_none()
             if row is None:
-                db.add(ChatDataPlugin(
-                    plugin_name=plugin_name,
-                    version=version,
-                    display_name=display_name,
-                    description=description,
-                    manifest_text=manifest_text,
-                    enabled_flag=1,
-                    delete_flag=0,
-                    create_by=operator_id,
-                    create_by_name=operator_name,
-                    update_by=operator_id,
-                    update_by_name=operator_name,
-                ))
+                db.add(
+                    ChatDataPlugin(
+                        plugin_name=plugin_name,
+                        version=version,
+                        display_name=display_name,
+                        description=description,
+                        manifest_text=manifest_text,
+                        enabled_flag=1,
+                        delete_flag=0,
+                        create_by=operator_id,
+                        create_by_name=operator_name,
+                        update_by=operator_id,
+                        update_by_name=operator_name,
+                    )
+                )
                 return
             row.version = version
             row.display_name = display_name
@@ -100,11 +94,7 @@ class PluginDao:
         """
         async with self._session_context() as db:
             exists = (
-                await db.execute(
-                    select(ChatDataPlugin.id)
-                    .filter_by(plugin_name=plugin_name, delete_flag=0)
-                    .limit(1)
-                )
+                await db.execute(select(ChatDataPlugin.id).filter_by(plugin_name=plugin_name, delete_flag=0).limit(1))
             ).first()
             if exists is None:
                 return False

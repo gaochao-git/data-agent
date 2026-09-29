@@ -472,9 +472,7 @@ class AgentScheduleRuntime:
         batch_size = await self._resolve_dispatch_batch_size()
         async with get_session() as session:
             dispatched = await self._dao.list_dispatched_runs(session, batch_size * 3)
-            run_statuses = await self._dao.list_run_statuses(
-                session, [run.run_id for run in dispatched if run.run_id]
-            )
+            run_statuses = await self._dao.list_run_statuses(session, [run.run_id for run in dispatched if run.run_id])
             finished = [
                 (run.id, RUN_STATUS_TO_TRIGGER_STATUS[run_statuses[run.run_id]])
                 for run in dispatched

@@ -49,17 +49,19 @@ def harness(monkeypatch):
 
     async def create_conversation(conversation_id="conv-1", user_id="user-1"):
         async with get_test_session() as session:
-            session.add(UserThread(
-                user_id=user_id,
-                thread_id=conversation_id,
-                agent_id="chat_data",
-                delete_flag=0,
-                create_time=datetime.now(),
-                create_by=user_id,
-                create_by_name=user_id,
-                update_by=user_id,
-                update_by_name=user_id,
-            ))
+            session.add(
+                UserThread(
+                    user_id=user_id,
+                    thread_id=conversation_id,
+                    agent_id="chat_data",
+                    delete_flag=0,
+                    create_time=datetime.now(),
+                    create_by=user_id,
+                    create_by_name=user_id,
+                    update_by=user_id,
+                    update_by_name=user_id,
+                )
+            )
 
     def create_payload(**overrides):
         payload = {
@@ -108,9 +110,15 @@ async def test_create_job_computes_next_trigger_and_merges_datasource(harness):
 async def test_create_once_job(harness):
     service, create_conversation, create_payload, _session = harness
     await create_conversation()
-    job = await service.create_job(**_create_kwargs(create_payload(
-        schedule_type="once", cron_expr=None, plan_time=FUTURE,
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                schedule_type="once",
+                cron_expr=None,
+                plan_time=FUTURE,
+            )
+        )
+    )
     assert job["schedule_type"] == "once"
     assert datetime.fromisoformat(job["next_trigger_time"]) == FUTURE
 
@@ -126,11 +134,19 @@ async def test_create_job_validation_errors(harness):
     with pytest.raises(AgentScheduleValidationError):
         await service.create_job(**_create_kwargs(create_payload(schedule_type="once", cron_expr=None)))
     with pytest.raises(AgentScheduleValidationError):
-        await service.create_job(**_create_kwargs(create_payload(
-            schedule_type="once", cron_expr=None, plan_time=datetime.now() - timedelta(minutes=1),
-        )))
+        await service.create_job(
+            **_create_kwargs(
+                create_payload(
+                    schedule_type="once",
+                    cron_expr=None,
+                    plan_time=datetime.now() - timedelta(minutes=1),
+                )
+            )
+        )
     with pytest.raises(AgentScheduleValidationError):
-        await service.create_job(**_create_kwargs(create_payload(effective_end_time=datetime.now() - timedelta(days=1))))
+        await service.create_job(
+            **_create_kwargs(create_payload(effective_end_time=datetime.now() - timedelta(days=1)))
+        )
     # 会话不存在 / 属于他人
     with pytest.raises(AgentScheduleConversationInvalidError):
         await service.create_job(**_create_kwargs(create_payload(conversation_id="missing")))
@@ -278,9 +294,14 @@ async def test_delete_job_soft_deletes(harness):
 @pytest.mark.asyncio
 async def test_create_new_each_run_mode_without_conversation(harness):
     service, _create_conversation, create_payload, get_session = harness
-    job = await service.create_job(**_create_kwargs(create_payload(
-        conversation_id="", conversation_mode="new_each_run",
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                conversation_id="",
+                conversation_mode="new_each_run",
+            )
+        )
+    )
     assert job["conversation_mode"] == "new_each_run"
     assert job["conversation_id"] == ""
 
@@ -374,11 +395,17 @@ async def test_disable_job_cancels_pending_triggers(harness):
     now = datetime.now()
 
     async with get_session() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id=job["job_id"], user_id="user-1", conversation_id="conv-1",
-            plan_time=now + timedelta(minutes=5),
-            trigger_status="pending", delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id=job["job_id"],
+                user_id="user-1",
+                conversation_id="conv-1",
+                plan_time=now + timedelta(minutes=5),
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await service.update_job(
         job_id=job["job_id"],
@@ -414,27 +441,31 @@ async def test_list_job_runs_joins_agent_run_status(harness):
     now = datetime.now()
 
     async with get_session() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id=job["job_id"],
-            user_id="user-1",
-            conversation_id="conv-1",
-            plan_time=now - timedelta(minutes=5),
-            trigger_status="dispatched",
-            run_id="run-1",
-            delete_flag=0,
-            create_time=now,
-        ))
-        session.add(ChatDataAgentInbox(
-            conversation_id="conv-1",
-            user_id="user-1",
-            run_id="run-1",
-            message_id="run-1",
-            record_type="run",
-            record_content="{}",
-            record_status="finished",
-            delete_flag=0,
-            create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id=job["job_id"],
+                user_id="user-1",
+                conversation_id="conv-1",
+                plan_time=now - timedelta(minutes=5),
+                trigger_status="dispatched",
+                run_id="run-1",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id="conv-1",
+                user_id="user-1",
+                run_id="run-1",
+                message_id="run-1",
+                record_type="run",
+                record_content="{}",
+                record_status="finished",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     result = await service.list_job_runs(job_id=job["job_id"], user_id="user-1")
     runs = result["runs"]
@@ -457,25 +488,29 @@ async def test_list_job_runs_pagination(harness):
     now = datetime.now()
     async with get_session() as session:
         for i in range(3):
-            session.add(ChatDataAgentScheduleRun(
+            session.add(
+                ChatDataAgentScheduleRun(
+                    job_id=job["job_id"],
+                    user_id="user-1",
+                    conversation_id="conv-1",
+                    plan_time=now - timedelta(minutes=i + 1),
+                    trigger_status="succeeded",
+                    delete_flag=0,
+                    create_time=now,
+                )
+            )
+        # 软删行不计入 total 也不出现在任何页
+        session.add(
+            ChatDataAgentScheduleRun(
                 job_id=job["job_id"],
                 user_id="user-1",
                 conversation_id="conv-1",
-                plan_time=now - timedelta(minutes=i + 1),
-                trigger_status="succeeded",
-                delete_flag=0,
+                plan_time=now,
+                trigger_status="cancelled",
+                delete_flag=1,
                 create_time=now,
-            ))
-        # 软删行不计入 total 也不出现在任何页
-        session.add(ChatDataAgentScheduleRun(
-            job_id=job["job_id"],
-            user_id="user-1",
-            conversation_id="conv-1",
-            plan_time=now,
-            trigger_status="cancelled",
-            delete_flag=1,
-            create_time=now,
-        ))
+            )
+        )
 
     page1 = await service.list_job_runs(job_id=job["job_id"], user_id="user-1", limit=2, offset=0)
     page2 = await service.list_job_runs(job_id=job["job_id"], user_id="user-1", limit=2, offset=2)
@@ -494,7 +529,9 @@ async def test_trigger_now_creates_manual_trigger(harness):
     job = await service.create_job(**_create_kwargs(create_payload()))
 
     created = await service.trigger_now(
-        job_id=job["job_id"], user_id="user-1", username="用户一",
+        job_id=job["job_id"],
+        user_id="user-1",
+        username="用户一",
     )
     assert created["job_id"] == job["job_id"]
     json.dumps(created)
@@ -552,9 +589,13 @@ async def test_update_job_treats_options_as_patch(harness):
     """编辑提交的 options 是补丁：未提交的键必须原样保留，null 表示清除该键。"""
     service, create_conversation, create_payload, _session = harness
     await create_conversation()
-    job = await service.create_job(**_create_kwargs(create_payload(
-        options={"model_id": "m1", "semantic_config_id": "sc-1", "skill_names": ["a"]},
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                options={"model_id": "m1", "semantic_config_id": "sc-1", "skill_names": ["a"]},
+            )
+        )
+    )
 
     updated = await service.update_job(
         job_id=job["job_id"],
@@ -589,10 +630,14 @@ async def test_create_job_drops_null_options(harness):
     """创建路径没有既有配置，null 视为未设置：不应在 options_json 里留下空键。"""
     service, create_conversation, create_payload, _session = harness
     await create_conversation()
-    job = await service.create_job(**_create_kwargs(create_payload(
-        datasource_id=None,
-        options={"model_id": None, "enable_thinking": False},
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                datasource_id=None,
+                options={"model_id": None, "enable_thinking": False},
+            )
+        )
+    )
     assert job["options"] == {"enable_thinking": False}
 
 
@@ -601,9 +646,15 @@ async def test_update_expired_once_job_allows_title_edit(harness):
     """执行时间已过期的单次任务仍可改标题：调度未变就不重新校验。"""
     service, create_conversation, create_payload, get_session = harness
     await create_conversation()
-    job = await service.create_job(**_create_kwargs(create_payload(
-        schedule_type="once", cron_expr=None, plan_time=FUTURE,
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                schedule_type="once",
+                cron_expr=None,
+                plan_time=FUTURE,
+            )
+        )
+    )
     expired = datetime.now() - timedelta(hours=2)
     async with get_session() as session:
         row = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
@@ -638,9 +689,13 @@ async def test_update_job_clears_effective_end_time(harness):
     """显式清空有效期：effective_end_time 字段真的出现在请求里且为 null。"""
     service, create_conversation, create_payload, _session = harness
     await create_conversation()
-    job = await service.create_job(**_create_kwargs(create_payload(
-        effective_end_time=FUTURE + timedelta(days=1),
-    )))
+    job = await service.create_job(
+        **_create_kwargs(
+            create_payload(
+                effective_end_time=FUTURE + timedelta(days=1),
+            )
+        )
+    )
     assert job["effective_end_time"] is not None
 
     cleared = await service.update_job(
@@ -676,9 +731,7 @@ async def test_update_job_clears_effective_end_time(harness):
 def test_validate_options_normalizes_and_rejects_non_dict():
     """options 序列化口径：None 直接透传、null 值剔除、非对象拒绝。"""
     assert service_module._validate_options(None) is None
-    assert json.loads(service_module._validate_options({"model_id": "m1", "datasource_id": None})) == {
-        "model_id": "m1"
-    }
+    assert json.loads(service_module._validate_options({"model_id": "m1", "datasource_id": None})) == {"model_id": "m1"}
     with pytest.raises(AgentScheduleValidationError):
         service_module._validate_options("不是对象")
 
@@ -703,10 +756,14 @@ async def test_create_job_rejects_cron_without_fire_before_effective_end(harness
 
     # 「每年 1 月 1 日」的下一次命中远在半年后，而有效期只到几分钟后
     with pytest.raises(AgentScheduleValidationError, match="没有可触发的时间点"):
-        await service.create_job(**_create_kwargs(create_payload(
-            cron_expr="0 0 1 1 *",
-            effective_end_time=datetime.now() + timedelta(minutes=5),
-        )))
+        await service.create_job(
+            **_create_kwargs(
+                create_payload(
+                    cron_expr="0 0 1 1 *",
+                    effective_end_time=datetime.now() + timedelta(minutes=5),
+                )
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -717,12 +774,16 @@ async def test_create_once_job_rejects_plan_after_effective_end(harness):
     plan = datetime.now() + timedelta(hours=3)
 
     with pytest.raises(AgentScheduleValidationError, match="不能晚于有效期结束时间"):
-        await service.create_job(**_create_kwargs(create_payload(
-            schedule_type="once",
-            cron_expr=None,
-            plan_time=plan,
-            effective_end_time=plan - timedelta(hours=1),
-        )))
+        await service.create_job(
+            **_create_kwargs(
+                create_payload(
+                    schedule_type="once",
+                    cron_expr=None,
+                    plan_time=plan,
+                    effective_end_time=plan - timedelta(hours=1),
+                )
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -730,18 +791,20 @@ async def test_list_jobs_attaches_live_conversation_titles(harness):
     """任务列表附上绑定会话的实时标题，供前端直接展示。"""
     service, create_conversation, create_payload, get_session = harness
     async with get_session() as session:
-        session.add(UserThread(
-            user_id="user-1",
-            thread_id="conv-1",
-            thread_title="昨日销售分析",
-            agent_id="chat_data",
-            delete_flag=0,
-            create_time=datetime.now(),
-            create_by="user-1",
-            create_by_name="用户一",
-            update_by="user-1",
-            update_by_name="用户一",
-        ))
+        session.add(
+            UserThread(
+                user_id="user-1",
+                thread_id="conv-1",
+                thread_title="昨日销售分析",
+                agent_id="chat_data",
+                delete_flag=0,
+                create_time=datetime.now(),
+                create_by="user-1",
+                create_by_name="用户一",
+                update_by="user-1",
+                update_by_name="用户一",
+            )
+        )
     await service.create_job(**_create_kwargs(create_payload()))
 
     data = await service.list_jobs(user_id="user-1")
@@ -756,10 +819,7 @@ async def test_list_jobs_pagination(harness):
     """任务列表按 limit/offset 分页，total 为去软删后的全量计数。"""
     service, create_conversation, create_payload, get_session = harness
     await create_conversation()
-    created = [
-        await service.create_job(**_create_kwargs(create_payload(title=f"任务{i}")))
-        for i in range(3)
-    ]
+    created = [await service.create_job(**_create_kwargs(create_payload(title=f"任务{i}"))) for i in range(3)]
     # 软删一个：不应计入 total，也不出现在任何页
     await service.delete_job(job_id=created[0]["job_id"], user_id="user-1", username="用户一")
 
@@ -827,17 +887,19 @@ async def test_update_job_rejects_switching_to_foreign_conversation(harness):
     service, create_conversation, create_payload, get_session = harness
     await create_conversation()
     async with get_session() as session:
-        session.add(UserThread(
-            user_id="user-2",
-            thread_id="conv-of-user-2",
-            agent_id="chat_data",
-            delete_flag=0,
-            create_time=datetime.now(),
-            create_by="user-2",
-            create_by_name="用户二",
-            update_by="user-2",
-            update_by_name="用户二",
-        ))
+        session.add(
+            UserThread(
+                user_id="user-2",
+                thread_id="conv-of-user-2",
+                agent_id="chat_data",
+                delete_flag=0,
+                create_time=datetime.now(),
+                create_by="user-2",
+                create_by_name="用户二",
+                update_by="user-2",
+                update_by_name="用户二",
+            )
+        )
     job = await service.create_job(**_create_kwargs(create_payload()))
 
     with pytest.raises(AgentScheduleConversationInvalidError):

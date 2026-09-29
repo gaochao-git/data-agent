@@ -80,6 +80,7 @@ DATA_ANALYZING_TOOL_NAME = "data_analyzing_tool"
 # execute_query：执行语义查询（原 semantic_query_tool 逻辑平移）
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _PreparedToolRequest:
     dsl: dict[str, Any] | None
@@ -139,12 +140,8 @@ def _get_datasource_id_from_state(state: dict | None) -> str | None:
 
 def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[str]]:
     context = _get_execution_context(state)
-    available_member_ids = normalize_member_datasource_ids(
-        context.get("available_member_datasource_ids")
-    )
-    matched_member_ids = normalize_member_datasource_ids(
-        context.get("matched_member_datasource_ids")
-    )
+    available_member_ids = normalize_member_datasource_ids(context.get("available_member_datasource_ids"))
+    matched_member_ids = normalize_member_datasource_ids(context.get("matched_member_datasource_ids"))
     return available_member_ids, matched_member_ids
 
 
@@ -220,9 +217,7 @@ def _validate_member_scope(
         )
     if matched_member_datasource_ids:
         invalid_matched_member_ids = [
-            member_id
-            for member_id in requested_member_datasource_ids
-            if member_id not in matched_member_datasource_ids
+            member_id for member_id in requested_member_datasource_ids if member_id not in matched_member_datasource_ids
         ]
         if invalid_matched_member_ids:
             raise ValueError(
@@ -231,9 +226,7 @@ def _validate_member_scope(
             )
 
     invalid_member_ids = [
-        member_id
-        for member_id in requested_member_datasource_ids
-        if member_id not in available_member_datasource_ids
+        member_id for member_id in requested_member_datasource_ids if member_id not in available_member_datasource_ids
     ]
     if invalid_member_ids:
         raise ValueError(
@@ -357,6 +350,7 @@ async def _run_execute_query(
 # validate_dsl / validate_dashboard：DSL 校验（原 dsl2sql_tool 逻辑平移）
 # ---------------------------------------------------------------------------
 
+
 def _batch_result_payload(
     result: dict[str, Any],
     datasource_id: str,
@@ -477,8 +471,7 @@ async def _run_validate_dashboard(
         )
     if isinstance(dsl, list):
         if not effective_semantic_config_id and not any(
-            isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
-            for card in dsl
+            isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip() for card in dsl
         ):
             raise ValueError(f"批量看板卡片缺少 semantic_config_id，请先{SEMANTIC_MODEL_DISCOVERY_HINT}")
         result = await validate_dashboard_spec_payload(
@@ -533,23 +526,29 @@ async def _run_check_yaml(
             user_id=str(user_id or ""),
         )
     except ValueError as exc:
-        return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
-            "success": False,
-            "stage": "parse",
-            "datasource_id": datasource_id,
-            "error": str(exc),
-            "models": [],
-            "all_importable": False,
-        })
+        return tool_result_payload(
+            DATA_ANALYZING_TOOL_NAME,
+            {
+                "success": False,
+                "stage": "parse",
+                "datasource_id": datasource_id,
+                "error": str(exc),
+                "models": [],
+                "all_importable": False,
+            },
+        )
     if duplicate_error:
-        return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
-            "success": False,
-            "stage": "duplicate_names",
-            "datasource_id": datasource_id,
-            "error": duplicate_error,
-            "models": [],
-            "all_importable": False,
-        })
+        return tool_result_payload(
+            DATA_ANALYZING_TOOL_NAME,
+            {
+                "success": False,
+                "stage": "duplicate_names",
+                "datasource_id": datasource_id,
+                "error": duplicate_error,
+                "models": [],
+                "all_importable": False,
+            },
+        )
 
     physical_columns = await load_semantic_physical_columns(ds_manager, datasource_id)
     # 质量检查（单模型 5 维 + 跨模型口径）统一编排入口，与导入预览同源
@@ -583,18 +582,22 @@ async def _run_check_yaml(
         )
         models.append(model_payload)
 
-    return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
-        "success": True,
-        "stage": "checked",
-        "datasource_id": datasource_id,
-        "all_importable": bool(models) and all(model["importable"] for model in models),
-        "models": models,
-    })
+    return tool_result_payload(
+        DATA_ANALYZING_TOOL_NAME,
+        {
+            "success": True,
+            "stage": "checked",
+            "datasource_id": datasource_id,
+            "all_importable": bool(models) and all(model["importable"] for model in models),
+            "models": models,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # list_execution_targets：实时获取当前用户可用执行对象（只读发现通道）
 # ---------------------------------------------------------------------------
+
 
 def _execution_target_entry(target: dict[str, Any], index: int) -> dict[str, Any]:
     """单条执行对象的对外展示字段：只透出名称/ID/机构编码，不透出连接信息。"""
@@ -645,21 +648,22 @@ async def _run_list_execution_targets(
         username=operator_name,
     )
     meta = await manager.get_datasource_meta_async(datasource_id) or {}
-    entries = [
-        _execution_target_entry(target, index)
-        for index, target in enumerate(targets, start=1)
-    ]
-    return tool_result_payload(DATA_ANALYZING_TOOL_NAME, {
-        "success": True,
-        **_datasource_overview(meta),
-        "count": len(entries),
-        "execution_targets": entries,
-    })
+    entries = [_execution_target_entry(target, index) for index, target in enumerate(targets, start=1)]
+    return tool_result_payload(
+        DATA_ANALYZING_TOOL_NAME,
+        {
+            "success": True,
+            **_datasource_overview(meta),
+            "count": len(entries),
+            "execution_targets": entries,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # 合并工具本体
 # ---------------------------------------------------------------------------
+
 
 async def _run_data_analyzing_impl(
     action: str,

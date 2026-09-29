@@ -160,9 +160,7 @@ class SandboxWorkspaceBackend:
         *,
         file_path: str,
     ) -> dict[str, Any]:
-        return await sandbox_artifact_payload(
-            session_ref=await self._session_ref(runtime), file_path=file_path
-        )
+        return await sandbox_artifact_payload(session_ref=await self._session_ref(runtime), file_path=file_path)
 
     async def render_office_html(
         self,
@@ -184,9 +182,7 @@ class SandboxWorkspaceBackend:
         path: str,
         max_depth: int,
     ) -> list[dict[str, Any]]:
-        return await sandbox_list_dir(
-            session_ref=await self._session_ref(runtime), path=path, max_depth=max_depth
-        )
+        return await sandbox_list_dir(session_ref=await self._session_ref(runtime), path=path, max_depth=max_depth)
 
     async def create_dir(
         self,
@@ -292,10 +288,7 @@ class SandboxWorkspaceBackend:
             except ValueError:
                 invalid.append(token)
         if invalid:
-            raise ValueError(
-                "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: "
-                + ", ".join(invalid[:3])
-            )
+            raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(invalid[:3]))
 
     async def run_bash(
         self,

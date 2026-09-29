@@ -75,11 +75,7 @@ def render_pdf_pages(
             current_dpi = dpi
             target = out_dir / f"page-{number:03d}.png"
             page.get_pixmap(dpi=current_dpi).save(str(target))
-            while (
-                max_bytes is not None
-                and target.stat().st_size > max_bytes
-                and current_dpi > _RENDER_MIN_DPI
-            ):
+            while max_bytes is not None and target.stat().st_size > max_bytes and current_dpi > _RENDER_MIN_DPI:
                 current_dpi = max(_RENDER_MIN_DPI, current_dpi // 2)
                 page.get_pixmap(dpi=current_dpi).save(str(target))
             rendered.append(target)
@@ -131,20 +127,22 @@ async def transcribe_scanned_pdf(source_path: Path, *, llm_factory=None) -> str:
         sections: list[str] = []
         try:
             for start in range(0, len(rendered), _TRANSCRIBE_BATCH_SIZE):
-                batch = rendered[start:start + _TRANSCRIBE_BATCH_SIZE]
+                batch = rendered[start : start + _TRANSCRIBE_BATCH_SIZE]
                 first_page = page_numbers[start]
                 last_page = page_numbers[min(start + _TRANSCRIBE_BATCH_SIZE, len(page_numbers)) - 1]
-                message = HumanMessage(content=[
-                    {
-                        "type": "text",
-                        "text": (
-                            "把这些 PDF 页面图片中的全部文字内容忠实转写为 Markdown。"
-                            "保持原有标题层级、列表与表格结构，表格用 GFM 表格；"
-                            "看不清的字用〔?〕占位；不要添加图片中不存在的内容。"
-                        ),
-                    },
-                    *[_image_content_block(png) for png in batch],
-                ])
+                message = HumanMessage(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": (
+                                "把这些 PDF 页面图片中的全部文字内容忠实转写为 Markdown。"
+                                "保持原有标题层级、列表与表格结构，表格用 GFM 表格；"
+                                "看不清的字用〔?〕占位；不要添加图片中不存在的内容。"
+                            ),
+                        },
+                        *[_image_content_block(png) for png in batch],
+                    ]
+                )
                 response = await factory().ainvoke([message])
                 text = str(getattr(response, "content", "") or "").strip()
                 if text:

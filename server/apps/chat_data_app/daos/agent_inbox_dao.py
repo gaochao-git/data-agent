@@ -113,17 +113,13 @@ class AgentInboxDao:
             ChatDataAgentInbox.delete_flag == 0,
             or_(
                 ChatDataAgentInbox.record_status == "pending",
-                (ChatDataAgentInbox.record_status == "claimed")
-                & (ChatDataAgentInbox.lease_expire_time < now),
+                (ChatDataAgentInbox.record_status == "claimed") & (ChatDataAgentInbox.lease_expire_time < now),
             ),
         ]
         if queue_type:
             conditions.append(ChatDataAgentInbox.queue_type == queue_type)
         statement = (
-            select(ChatDataAgentInbox)
-            .where(*conditions)
-            .order_by(ChatDataAgentInbox.id.asc())
-            .with_for_update()
+            select(ChatDataAgentInbox).where(*conditions).order_by(ChatDataAgentInbox.id.asc()).with_for_update()
         )
         if limit is not None:
             statement = statement.limit(limit)
@@ -178,8 +174,7 @@ class AgentInboxDao:
         message_ids: list[str],
     ) -> list[ChatDataAgentInbox]:
         result = await session.execute(
-            select(ChatDataAgentInbox)
-            .where(
+            select(ChatDataAgentInbox).where(
                 ChatDataAgentInbox.run_id == run_id,
                 ChatDataAgentInbox.message_id.in_(message_ids),
                 ChatDataAgentInbox.record_type == "message",

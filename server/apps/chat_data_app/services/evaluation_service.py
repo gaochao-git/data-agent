@@ -221,28 +221,33 @@ class EvaluationService:
         if operator_name:
             request_payload["operator_name"] = operator_name
         async with self._session_context() as db:
-            await self.dao.create_eval_run(db, ChatDataEvalRun(
-                run_id=run_id,
-                case_set_id=scene_case_set_id(payload.datasource_id or "", payload.semantic_config_id or "") if payload.datasource_id and payload.semantic_config_id else "",
-                datasource_id=payload.datasource_id or "",
-                semantic_config_id=payload.semantic_config_id or "",
-                user_id=user_id,
-                run_mode="live",
-                run_status="running",
-                request_payload=json.dumps(request_payload, ensure_ascii=False),
-                total_count=0,
-                scored_count=0,
-                passed_count=0,
-                failed_count=0,
-                semantic_accuracy_bp=0,
-                started_time=now,
-                create_time=now,
-                update_time=now,
-                create_by=operator_user_id,
-                create_by_name=operator_name,
-                update_by=operator_user_id,
-                update_by_name=operator_name,
-            ))
+            await self.dao.create_eval_run(
+                db,
+                ChatDataEvalRun(
+                    run_id=run_id,
+                    case_set_id=scene_case_set_id(payload.datasource_id or "", payload.semantic_config_id or "")
+                    if payload.datasource_id and payload.semantic_config_id
+                    else "",
+                    datasource_id=payload.datasource_id or "",
+                    semantic_config_id=payload.semantic_config_id or "",
+                    user_id=user_id,
+                    run_mode="live",
+                    run_status="running",
+                    request_payload=json.dumps(request_payload, ensure_ascii=False),
+                    total_count=0,
+                    scored_count=0,
+                    passed_count=0,
+                    failed_count=0,
+                    semantic_accuracy_bp=0,
+                    started_time=now,
+                    create_time=now,
+                    update_time=now,
+                    create_by=operator_user_id,
+                    create_by_name=operator_name,
+                    update_by=operator_user_id,
+                    update_by_name=operator_name,
+                ),
+            )
             await self._commit(db)
 
     async def upsert_eval_run_case_record(
@@ -255,23 +260,26 @@ class EvaluationService:
     ) -> None:
         now = datetime.now()
         async with self._session_context() as db:
-            await self.dao.upsert_eval_run_case(db, {
-                "run_case_id": uuid.uuid4().hex,
-                "run_id": run_id,
-                "case_id": case_id_value,
-                "case_status": "passed" if is_eval_case_passed(result) else "failed",
-                "result_payload": json.dumps(result, ensure_ascii=False),
-                "semantic_accuracy_bp": accuracy_bp(result.get("semantic_accuracy")),
-                "elapsed_ms": int(result.get("elapsed_ms") or 0) if result.get("elapsed_ms") is not None else None,
-                "error_message": str(result.get("error") or "") or None,
-                "delete_flag": 0,
-                "create_time": now,
-                "update_time": now,
-                "create_by": str(operator_id or "accuracy-evaluator").strip(),
-                "create_by_name": str(operator_name or "").strip(),
-                "update_by": str(operator_id or "accuracy-evaluator").strip(),
-                "update_by_name": str(operator_name or "").strip(),
-            })
+            await self.dao.upsert_eval_run_case(
+                db,
+                {
+                    "run_case_id": uuid.uuid4().hex,
+                    "run_id": run_id,
+                    "case_id": case_id_value,
+                    "case_status": "passed" if is_eval_case_passed(result) else "failed",
+                    "result_payload": json.dumps(result, ensure_ascii=False),
+                    "semantic_accuracy_bp": accuracy_bp(result.get("semantic_accuracy")),
+                    "elapsed_ms": int(result.get("elapsed_ms") or 0) if result.get("elapsed_ms") is not None else None,
+                    "error_message": str(result.get("error") or "") or None,
+                    "delete_flag": 0,
+                    "create_time": now,
+                    "update_time": now,
+                    "create_by": str(operator_id or "accuracy-evaluator").strip(),
+                    "create_by_name": str(operator_name or "").strip(),
+                    "update_by": str(operator_id or "accuracy-evaluator").strip(),
+                    "update_by_name": str(operator_name or "").strip(),
+                },
+            )
             await self._commit(db)
 
     async def update_eval_run_record(
@@ -288,13 +296,15 @@ class EvaluationService:
             if status in {"succeeded", "failed", "cancelled"}:
                 values["finished_time"] = values["update_time"]
         if summary is not None:
-            values.update({
-                "summary_payload": json.dumps(summary, ensure_ascii=False),
-                "total_count": int(summary.get("total") or 0),
-                "scored_count": int(summary.get("scored") or 0),
-                "failed_count": int(summary.get("failed") or 0),
-                "semantic_accuracy_bp": accuracy_bp(summary.get("semantic_accuracy")),
-            })
+            values.update(
+                {
+                    "summary_payload": json.dumps(summary, ensure_ascii=False),
+                    "total_count": int(summary.get("total") or 0),
+                    "scored_count": int(summary.get("scored") or 0),
+                    "failed_count": int(summary.get("failed") or 0),
+                    "semantic_accuracy_bp": accuracy_bp(summary.get("semantic_accuracy")),
+                }
+            )
             values["passed_count"] = max(0, values["scored_count"] - values["failed_count"])
         if error_message is not None:
             values["error_message"] = error_message or None
@@ -359,7 +369,10 @@ ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
 def looks_like_sql(text: str) -> bool:
     """判断用户输入是否更像 SQL。"""
     normalized = str(text or "").strip().lower()
-    return bool(re.search(r"^\s*(select|with)\b", normalized) or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL))
+    return bool(
+        re.search(r"^\s*(select|with)\b", normalized)
+        or re.search(r"\bfrom\b.+\bselect\b|\bselect\b.+\bfrom\b", normalized, flags=re.DOTALL)
+    )
 
 
 async def invoke_evaluation_draft_llm(prompt: str, config_id: str):

@@ -1,6 +1,5 @@
 """Application manifest fingerprinting, sandbox seeding and persistence sync."""
 
-
 from __future__ import annotations
 
 import asyncio
@@ -60,9 +59,7 @@ def _iter_application_directories(root: Path) -> list[str]:
     if not root.is_dir() or root.is_symlink():
         return []
     return sorted(
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_dir() and not path.is_symlink()
+        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_dir() and not path.is_symlink()
     )
 
 
@@ -90,9 +87,8 @@ def _mutable_application_manifest(workspace_root: Path) -> dict[str, tuple[int, 
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
-            if (
-                _is_hidden_tool_results_local_path(workspace_root, path)
-                or _is_managed_semantic_model_local_path(workspace_root, path)
+            if _is_hidden_tool_results_local_path(workspace_root, path) or _is_managed_semantic_model_local_path(
+                workspace_root, path
             ):
                 continue
             manifest[f"{directory_name}/{relative}"] = _file_fingerprint(path)
@@ -105,9 +101,8 @@ def _mutable_application_metadata_manifest(workspace_root: Path) -> dict[str, tu
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
-            if (
-                _is_hidden_tool_results_local_path(workspace_root, path)
-                or _is_managed_semantic_model_local_path(workspace_root, path)
+            if _is_hidden_tool_results_local_path(workspace_root, path) or _is_managed_semantic_model_local_path(
+                workspace_root, path
             ):
                 continue
             stat = path.stat()
@@ -156,21 +151,25 @@ async def _initialize_sandbox_filesystem(
     """Seed the isolated sandbox from application-owned persistent files."""
     application_root = _application_workspace_root(session.workspace_root)
     user_data_directories = _sandbox_tree_directories(application_root, sandbox_thread_root())
-    user_data_directories.extend([
-        sandbox_workspace_dir(),
-        sandbox_outputs_dir(),
-        f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
-        f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
-        sandbox_uploads_dir(),
-    ])
+    user_data_directories.extend(
+        [
+            sandbox_workspace_dir(),
+            sandbox_outputs_dir(),
+            f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+            f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
+            sandbox_uploads_dir(),
+        ]
+    )
     writable_directories = [
-        path for path in user_data_directories
+        path
+        for path in user_data_directories
         if not _is_managed_semantic_model_sandbox_path(path)
         and not _is_tool_results_sandbox_path(path)
         and not _is_uploads_sandbox_path(path)
     ]
     readonly_directories = [
-        path for path in user_data_directories
+        path
+        for path in user_data_directories
         if (
             _is_managed_semantic_model_sandbox_path(path)
             or _is_tool_results_sandbox_path(path)
@@ -229,10 +228,7 @@ async def _initialize_sandbox_filesystem(
 
 
 def _tree_manifest(root: Path, prefix: str) -> dict[str, tuple[int, int, str]]:
-    return {
-        f"{prefix}/{relative}": _file_fingerprint(path)
-        for relative, path in _iter_application_files(root)
-    }
+    return {f"{prefix}/{relative}": _file_fingerprint(path) for relative, path in _iter_application_files(root)}
 
 
 async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
@@ -243,9 +239,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
     if session.uploads_manifest == current_manifest:
         return
 
-    local_files = {
-        relative: path for relative, path in _iter_application_files(uploads_root)
-    }
+    local_files = {relative: path for relative, path in _iter_application_files(uploads_root)}
     await _create_sandbox_directories(
         sandbox=session.sandbox,
         paths=_sandbox_tree_directories(uploads_root, sandbox_uploads_dir()),
@@ -253,8 +247,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
     )
     previous_manifest = session.uploads_manifest or {}
     changed_files = sorted(
-        relative for relative, fingerprint in current_manifest.items()
-        if previous_manifest.get(relative) != fingerprint
+        relative for relative, fingerprint in current_manifest.items() if previous_manifest.get(relative) != fingerprint
     )
     for relative in changed_files:
         path = local_files[relative.removeprefix("uploads/")]
@@ -270,8 +263,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
         root=sandbox_uploads_dir(),
     )
     expected_remote_paths = {
-        f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}"
-        for relative in current_manifest
+        f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}" for relative in current_manifest
     }
     stale_remote_paths = sorted(
         str(getattr(entry, "path", "") or "")
@@ -347,10 +339,7 @@ async def _persist_sandbox_paths(
         _ensure_application_paths_unchanged(
             session=session,
             paths=[path for path, _ in staged]
-            + [
-                _application_path_for_sandbox_path(session, sandbox_path)
-                for sandbox_path in deleted_paths or []
-            ],
+            + [_application_path_for_sandbox_path(session, sandbox_path) for sandbox_path in deleted_paths or []],
         )
         for local_path, data in staged:
             await asyncio.to_thread(_write_application_bytes_atomically, local_path, data)
@@ -390,9 +379,7 @@ def _ensure_application_paths_unchanged(
         if current.get(relative) != expected.get(relative):
             conflicts.append(relative)
     if conflicts:
-        raise ValueError(
-            "应用侧文件在沙箱运行期间已变更，拒绝覆盖: " + ", ".join(conflicts[:3])
-        )
+        raise ValueError("应用侧文件在沙箱运行期间已变更，拒绝覆盖: " + ", ".join(conflicts[:3]))
 
 
 def _application_directory_for_sandbox_path(session: SandboxExecutionSession, sandbox_path: str) -> Path:
@@ -428,16 +415,15 @@ def _collect_local_application_paths(application_root: Path) -> tuple[list[Path]
     local_directories: list[Path] = []
     for directory_name in ("workspace", "outputs"):
         local_files.extend(
-            path for _, path in _iter_application_files(application_root / directory_name)
+            path
+            for _, path in _iter_application_files(application_root / directory_name)
             if _is_unmanaged_local_path(application_root, path)
         )
         root = application_root / directory_name
         local_directories.extend(
             path
             for path in root.rglob("*")
-            if path.is_dir()
-            and not path.is_symlink()
-            and _is_unmanaged_local_path(application_root, path)
+            if path.is_dir() and not path.is_symlink() and _is_unmanaged_local_path(application_root, path)
         )
     return local_files, local_directories
 

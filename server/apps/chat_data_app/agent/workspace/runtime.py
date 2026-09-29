@@ -147,7 +147,6 @@ class WorkspaceBackend(Protocol):
     ) -> dict[str, Any]: ...
 
 
-
 @runtime_checkable
 class ExecutableWorkspaceBackend(WorkspaceBackend, Protocol):
     """Workspace backend extension whose commands share the file environment."""
@@ -394,9 +393,7 @@ class ConversationWorkspaceRuntime:
         cwd: str | None,
         timeout_seconds: int,
     ) -> dict[str, Any]:
-        return await self._executable_backend().run_officecli(
-            self, args=args, cwd=cwd, timeout_seconds=timeout_seconds
-        )
+        return await self._executable_backend().run_officecli(self, args=args, cwd=cwd, timeout_seconds=timeout_seconds)
 
 
 def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> ConversationWorkspaceRuntime:
@@ -503,10 +500,7 @@ def resolve_workspace_path(
     if writable:
         if is_system_result_workspace_path(str(root), target):
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
-        if (
-            is_managed_semantic_model_workspace_path(str(root), target)
-            and not allow_managed_semantic_model_write
-        ):
+        if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
             raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
 
     return target
@@ -622,9 +616,7 @@ class WorkspacePathMapping:
         # 1) 裸别名规范化成 /mnt/user-data/ 形式（边界安全，不误伤物理根内部段）。
         out = self._ALIAS_RE.sub(r"/mnt/user-data/\1", out)
         # 2) 技能虚拟 → 物理（最长优先）。
-        for virtual_root, physical in sorted(
-            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
-        ):
+        for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             out = out.replace(virtual_root, physical)
         # 3) 工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
         out = self._VIRTUAL_RE.sub(lambda m: f"{self._root}/{m.group(1)}", out)
@@ -636,17 +628,13 @@ class WorkspacePathMapping:
             return text
         out = text
         # 1) 技能物理 → 虚拟（最长优先）。
-        for virtual_root, physical in sorted(
-            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
-        ):
+        for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             if physical:
                 out = out.replace(physical, virtual_root)
         # 2) 工作区物理 → 虚拟。
         for name, physical in self._physical_workspace.items():
             out = out.replace(physical, f"/mnt/user-data/{name}")
         return out
-
-
 
 
 def _render_local_office_html(
@@ -705,15 +693,12 @@ def _render_local_office_html(
     }
 
 
-
-
 def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
     """确保服务端直接读取的会话根仍属于 ChatData 共享数据目录。"""
     root = Path(CHAT_DATA_HOME).expanduser().resolve()
     target = Path(workspace_root).expanduser().resolve()
     if target != root and root not in target.parents:
         raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
-
 
 
 def create_workspace_backend(name: str) -> WorkspaceBackend:

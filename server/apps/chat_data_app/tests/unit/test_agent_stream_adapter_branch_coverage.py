@@ -49,7 +49,9 @@ def test_stream_message_key_branches():
     assert agent_run_support._stream_message_key(AIMessage(content="回答"), 5) == ("ai", "回答")
     # 其它消息类型退化为 (类型, 内容, 序号)
     assert agent_run_support._stream_message_key(SystemMessage(content="sys"), 6) == (
-        "SystemMessage", "sys", 6,
+        "SystemMessage",
+        "sys",
+        6,
     )
 
 
@@ -103,6 +105,7 @@ async def test_handle_disconnect_branches():
 def _const(value):
     async def inner():
         return value
+
     return inner()
 
 
@@ -121,18 +124,24 @@ def test_handle_custom_payload_branches():
     assert len(events) == 1 and "event: token_usage" in events[0]
     assert adapter.latest_token_usage == {"total": 12}
 
-    events = adapter._handle_custom_payload({
-        "type": "context_compression",
-        "event": {"archived": 3},
-        "archived_turn_messages": [HumanMessage(content="旧问题", id="h-1")],
-    })
+    events = adapter._handle_custom_payload(
+        {
+            "type": "context_compression",
+            "event": {"archived": 3},
+            "archived_turn_messages": [HumanMessage(content="旧问题", id="h-1")],
+        }
+    )
     assert len(events) == 1 and "event: context_compression" in events[0]
     assert [message.id for message in adapter.archived_turn_messages] == ["h-1"]
 
     # 非列表 archived 不应污染已归档消息
-    adapter._handle_custom_payload({
-        "type": "context_compression", "event": {}, "archived_turn_messages": "坏数据",
-    })
+    adapter._handle_custom_payload(
+        {
+            "type": "context_compression",
+            "event": {},
+            "archived_turn_messages": "坏数据",
+        }
+    )
     assert len(adapter.archived_turn_messages) == 1
 
     assert adapter._handle_custom_payload({"type": "inbox_admitted", "message_ids": []}) == []
@@ -142,10 +151,15 @@ def test_handle_custom_payload_branches():
 
     # tool_progress 缺字段一律忽略
     assert adapter._handle_custom_payload({"type": "tool_progress", "tool_call_id": "c"}) == []
-    events = adapter._handle_custom_payload({
-        "type": "tool_progress", "tool_call_id": "c-9", "tool_name": "run_sql",
-        "message": "执行中", "progress": 40,
-    })
+    events = adapter._handle_custom_payload(
+        {
+            "type": "tool_progress",
+            "tool_call_id": "c-9",
+            "tool_name": "run_sql",
+            "message": "执行中",
+            "progress": 40,
+        }
+    )
     assert len(events) == 1 and '"progress": 40' in events[0]
 
 
@@ -160,7 +174,8 @@ async def test_first_token_timeout_watchdog_disabled_returns_early(monkeypatch):
     adapter = _adapter()
     called = []
     monkeypatch.setattr(
-        adapter, "_emit_first_token_timeout_if_needed",
+        adapter,
+        "_emit_first_token_timeout_if_needed",
         lambda *_a, **_k: called.append(True),
     )
     await adapter._first_token_timeout_watchdog(0.0)
@@ -173,7 +188,8 @@ async def test_first_token_timeout_watchdog_fires_when_no_payload(monkeypatch):
     adapter = _adapter()
     fired = []
     monkeypatch.setattr(
-        adapter, "_emit_first_token_timeout_if_needed",
+        adapter,
+        "_emit_first_token_timeout_if_needed",
         lambda *_a, **_k: fired.append(True),
     )
     await adapter._first_token_timeout_watchdog(0.0)
@@ -198,7 +214,8 @@ def test_emit_first_token_timeout_alarm_once(monkeypatch):
     monkeypatch.setattr(agent_stream, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
     alarms = []
     monkeypatch.setattr(
-        agent_stream, "emit_llm_first_token_timeout_alarm",
+        agent_stream,
+        "emit_llm_first_token_timeout_alarm",
         lambda **kwargs: alarms.append(kwargs),
     )
     adapter = _adapter(debug_label="AI Content from model")
@@ -222,7 +239,8 @@ def test_emit_first_token_timeout_alarm_once(monkeypatch):
 async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
     submitted = []
     monkeypatch.setattr(
-        agent_stream.agent_run_runtime, "submit",
+        agent_stream.agent_run_runtime,
+        "submit",
         lambda **kwargs: submitted.append(kwargs),
     )
 
@@ -234,18 +252,29 @@ async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
     monkeypatch.setattr(agent_stream.agent_run_event_service, "stream", fake_stream)
 
     response = await agent_stream.resume_chat_data_question_handler(
-        conversation_id="conv-1", user_id="u1", username="张三", run_id="run-9",
-        runtime_context={}, answer={"a": 1}, turn_id="turn-1",
-        last_event_id="3-0", request=None,
+        conversation_id="conv-1",
+        user_id="u1",
+        username="张三",
+        run_id="run-9",
+        runtime_context={},
+        answer={"a": 1},
+        turn_id="turn-1",
+        last_event_id="3-0",
+        request=None,
     )
     assert response.headers["X-ChatData-Run-Id"] == "run-9"
     assert response.media_type == "text/event-stream"
 
     body = [chunk async for chunk in response.body_iterator]
     assert body == ["id: 3-1\ndata: chunk-a\n\n", "id: 3-2\ndata: chunk-b\n\n"]
-    assert submitted == [{
-        "run_id": "run-9", "conversation_id": "conv-1", "user_id": "u1", "operator_name": "张三",
-    }]
+    assert submitted == [
+        {
+            "run_id": "run-9",
+            "conversation_id": "conv-1",
+            "user_id": "u1",
+            "operator_name": "张三",
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -279,13 +308,15 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
     monkeypatch.setattr(agent_run_support, "prepare_semantic_conversation_context", fake_prepare_semantic)
     monkeypatch.setattr(agent_run_support, "prepare_conversation_workspace", fake_workspace)
     monkeypatch.setattr(
-        agent_stream, "resolve_agent_runtime_options",
+        agent_stream,
+        "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
     )
     monkeypatch.setattr(agent_run_support, "build_runtime_skill_snapshot_async", fake_snapshot)
     monkeypatch.setattr(agent_run_support, "list_snapshot_skill_metadata", lambda _dir: [])
     monkeypatch.setattr(
-        agent_run_support, "ConversationWorkspaceRuntime",
+        agent_run_support,
+        "ConversationWorkspaceRuntime",
         runtime_cls or SimpleNamespace,
     )
 
@@ -325,25 +356,27 @@ async def test_stream_fails_fast_on_semantic_config_error(monkeypatch):
         workspace_root="/tmp/unused",
     )
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
-            thread_id="t1",
-            user_query="今天销量",
-            datasource_id=None,
-            user_id="u1",
-            username="张三",
-            member_datasource_ids=None,
-            semantic_config_id=None,
-            request=None,
-            model_id=None,
-            file_selections=None,
-            enable_thinking=None,
-            thinking_effort=None,
-            skill_names=[],
-            options={},
-            file_ids=None,
-            run_id=None,
-        ),
-        log_phase=lambda *_a, **_k: None,)
+        agent_stream._run_chat_data_agent_stream(
+            req=ChatDataStreamRequest(
+                thread_id="t1",
+                user_query="今天销量",
+                datasource_id=None,
+                user_id="u1",
+                username="张三",
+                member_datasource_ids=None,
+                semantic_config_id=None,
+                request=None,
+                model_id=None,
+                file_selections=None,
+                enable_thinking=None,
+                thinking_effort=None,
+                skill_names=[],
+                options={},
+                file_ids=None,
+                run_id=None,
+            ),
+            log_phase=lambda *_a, **_k: None,
+        )
     )
     assert any("指标集不存在" in event for event in events)
 
@@ -364,25 +397,27 @@ async def test_stream_rejects_datasource_binding_conflict(monkeypatch, tmp_path)
     monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
 
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
-            thread_id="t1",
-            user_query="今天销量",
-            datasource_id="ds-2",
-            user_id="u1",
-            username="张三",
-            member_datasource_ids=None,
-            semantic_config_id=None,
-            request=None,
-            model_id=None,
-            file_selections=None,
-            enable_thinking=None,
-            thinking_effort=None,
-            skill_names=[],
-            options={},
-            file_ids=None,
-            run_id=None,
-        ),
-        log_phase=lambda *_a, **_k: None,)
+        agent_stream._run_chat_data_agent_stream(
+            req=ChatDataStreamRequest(
+                thread_id="t1",
+                user_query="今天销量",
+                datasource_id="ds-2",
+                user_id="u1",
+                username="张三",
+                member_datasource_ids=None,
+                semantic_config_id=None,
+                request=None,
+                model_id=None,
+                file_selections=None,
+                enable_thinking=None,
+                thinking_effort=None,
+                skill_names=[],
+                options={},
+                file_ids=None,
+                run_id=None,
+            ),
+            log_phase=lambda *_a, **_k: None,
+        )
     )
     assert any("已绑定其他数据源组" in event for event in events)
     # 必须在 checkpointer 之前退出
@@ -411,11 +446,21 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
     )
 
     files = {
-        "f-ok": {"thread_id": "t1", "original_filename": "a.csv", "file_type": "csv",
-                 "file_size": 10, "storage_dir": "a.csv"},
+        "f-ok": {
+            "thread_id": "t1",
+            "original_filename": "a.csv",
+            "file_type": "csv",
+            "file_size": 10,
+            "storage_dir": "a.csv",
+        },
         "f-missing": None,
-        "f-other": {"thread_id": "t2", "original_filename": "b.csv", "file_type": "csv",
-                    "file_size": 10, "storage_dir": "b.csv"},
+        "f-other": {
+            "thread_id": "t2",
+            "original_filename": "b.csv",
+            "file_type": "csv",
+            "file_size": 10,
+            "storage_dir": "b.csv",
+        },
     }
 
     async def fake_get_file_info(file_id, **_kwargs):
@@ -427,25 +472,27 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
 
     long_query = "销" * (agent_stream.USER_INPUT_OFFLOAD_THRESHOLD + 10)
     events = await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
-            thread_id="t1",
-            user_query=long_query,
-            datasource_id=None,
-            user_id="u1",
-            username="张三",
-            member_datasource_ids=None,
-            semantic_config_id=None,
-            request=None,
-            model_id=None,
-            file_selections=None,
-            enable_thinking=None,
-            thinking_effort=None,
-            skill_names=["demo-skill"],
-            options={},
-            file_ids=["f-ok", "f-missing", "f-other"],
-            run_id=None,
-        ),
-        log_phase=lambda *_a, **_k: None,)
+        agent_stream._run_chat_data_agent_stream(
+            req=ChatDataStreamRequest(
+                thread_id="t1",
+                user_query=long_query,
+                datasource_id=None,
+                user_id="u1",
+                username="张三",
+                member_datasource_ids=None,
+                semantic_config_id=None,
+                request=None,
+                model_id=None,
+                file_selections=None,
+                enable_thinking=None,
+                thinking_effort=None,
+                skill_names=["demo-skill"],
+                options={},
+                file_ids=["f-ok", "f-missing", "f-other"],
+                run_id=None,
+            ),
+            log_phase=lambda *_a, **_k: None,
+        )
     )
     assert events  # 至少产出了兜底 error 事件
     # 确实走完了附件解析与超长输入转写，才到达 checkpointer
@@ -472,31 +519,36 @@ async def test_stream_without_attachments_skips_offload(monkeypatch, tmp_path):
             return {"bytes": 0}
 
     _patch_stream_preamble(
-        monkeypatch, _semantic_context(), workspace_root=str(tmp_path), runtime_cls=RecordingRuntime,
+        monkeypatch,
+        _semantic_context(),
+        workspace_root=str(tmp_path),
+        runtime_cls=RecordingRuntime,
     )
 
     checkpointer = _ExplodingCheckpointer("短输入不应写文件")
     monkeypatch.setattr(agent_stream, "get_checkpointer", checkpointer)
     await _drain_until_checkpointer_failure(
-        agent_stream._run_chat_data_agent_stream(req=ChatDataStreamRequest(
-            thread_id="t1",
-            user_query="短问题",
-            datasource_id=None,
-            user_id="u1",
-            username="张三",
-            member_datasource_ids=None,
-            semantic_config_id=None,
-            request=None,
-            model_id=None,
-            file_selections=None,
-            enable_thinking=None,
-            thinking_effort=None,
-            skill_names=[],
-            options={},
-            file_ids=None,
-            run_id=None,
-        ),
-        log_phase=lambda *_a, **_k: None,)
+        agent_stream._run_chat_data_agent_stream(
+            req=ChatDataStreamRequest(
+                thread_id="t1",
+                user_query="短问题",
+                datasource_id=None,
+                user_id="u1",
+                username="张三",
+                member_datasource_ids=None,
+                semantic_config_id=None,
+                request=None,
+                model_id=None,
+                file_selections=None,
+                enable_thinking=None,
+                thinking_effort=None,
+                skill_names=[],
+                options={},
+                file_ids=None,
+                run_id=None,
+            ),
+            log_phase=lambda *_a, **_k: None,
+        )
     )
     # 走完了前段流程，但短输入没有触发任何转写
     assert checkpointer.entered is True

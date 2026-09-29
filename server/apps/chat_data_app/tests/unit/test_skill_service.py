@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -170,13 +170,15 @@ def test_skill_service_get_skill_metadata_does_not_return_content():
 def test_skill_service_reads_system_skill_file():
     clear_metadata_cache()
 
-    file_data = asyncio.run(skill_service.read_skill_version_file_async(
-        "skill-creator",
-        1,
-        "references",
-        "workflows",
-        "test-user",
-    ))
+    file_data = asyncio.run(
+        skill_service.read_skill_version_file_async(
+            "skill-creator",
+            1,
+            "references",
+            "workflows",
+            "test-user",
+        )
+    )
 
     assert file_data["dir_name"] == "references"
     assert file_data["file_path"] == "references/workflows.md"
@@ -187,14 +189,16 @@ def test_skill_service_rejects_system_skill_file_write():
     clear_metadata_cache()
 
     try:
-        asyncio.run(skill_service.save_skill_version_file_async(
-            "skill-creator",
-            1,
-            "references",
-            "workflows.md",
-            "# changed",
-            "test-user",
-        ))
+        asyncio.run(
+            skill_service.save_skill_version_file_async(
+                "skill-creator",
+                1,
+                "references",
+                "workflows.md",
+                "# changed",
+                "test-user",
+            )
+        )
     except ValueError as exc:
         assert str(exc) == "技能不存在"
     except PermissionError as exc:
@@ -205,13 +209,16 @@ def test_skill_service_rejects_system_skill_file_write():
 
 def test_skill_service_creates_fixed_skill_dirs(tmp_path):
     version_dir = tmp_path / "skill" / "versions" / "v1"
-    skill_service_module._write_skill_md(version_dir, {
-        "skill_name": "demo-skill",
-        "skill_title": "示例技能",
-        "skill_desc": "示例说明",
-        "skill_category": "custom",
-        "content": "# 示例技能",
-    })
+    skill_service_module._write_skill_md(
+        version_dir,
+        {
+            "skill_name": "demo-skill",
+            "skill_title": "示例技能",
+            "skill_desc": "示例说明",
+            "skill_category": "custom",
+            "content": "# 示例技能",
+        },
+    )
 
     assert (version_dir / "references").is_dir()
     assert (version_dir / "assets").is_dir()
@@ -220,10 +227,12 @@ def test_skill_service_creates_fixed_skill_dirs(tmp_path):
 
 def test_skill_service_rejects_missing_skill_name():
     try:
-        skill_service_module._validate_skill_payload({
-            "skill_title": "示例技能",
-            "content": "# 示例技能",
-        })
+        skill_service_module._validate_skill_payload(
+            {
+                "skill_title": "示例技能",
+                "content": "# 示例技能",
+            }
+        )
     except ValueError as exc:
         assert str(exc) == "技能名称只允许小写字母、数字和中划线，不能以中划线开头或结尾，也不能出现连续中划线"
     else:
@@ -232,39 +241,47 @@ def test_skill_service_rejects_missing_skill_name():
 
 def test_skill_service_accepts_single_segment_skill_name():
     """Agent Skills 规范不要求必须含中划线，单个单词是合法技能名（早前版本会误拒）。"""
-    skill_service_module._validate_skill_payload({
-        "skill_name": "dashboard",
-        "skill_title": "看板生成",
-        "content": "# 看板生成",
-    })
+    skill_service_module._validate_skill_payload(
+        {
+            "skill_name": "dashboard",
+            "skill_title": "看板生成",
+            "content": "# 看板生成",
+        }
+    )
 
 
 def test_skill_service_accepts_digits_in_skill_name():
     """规范允许 0-9（`a-z`、`0-9`、`-`），早前版本会误拒含数字的名字。"""
-    skill_service_module._validate_skill_payload({
-        "skill_name": "pdf2x",
-        "skill_title": "PDF 转换",
-        "content": "# PDF 转换",
-    })
+    skill_service_module._validate_skill_payload(
+        {
+            "skill_name": "pdf2x",
+            "skill_title": "PDF 转换",
+            "content": "# PDF 转换",
+        }
+    )
 
 
 def test_skill_service_rejects_malformed_skill_name():
     """放宽后仍须拒绝真正非法的名字：首尾中划线、连续中划线、下划线、空格、中文、大写。"""
     for bad in ("-sales", "sales-", "sales--analysis", "sales_analysis", "sales analysis", "销售分析", "Sales"):
         with pytest.raises(ValueError, match="技能名称"):
-            skill_service_module._validate_skill_payload({
-                "skill_name": bad,
-                "skill_title": "销售分析",
-                "content": "# 销售分析",
-            })
+            skill_service_module._validate_skill_payload(
+                {
+                    "skill_name": bad,
+                    "skill_title": "销售分析",
+                    "content": "# 销售分析",
+                }
+            )
 
 
 def test_skill_service_accepts_hyphenated_letters_skill_name():
-    skill_service_module._validate_skill_payload({
-        "skill_name": "sales-analysis",
-        "skill_title": "销售分析",
-        "content": "# 销售分析",
-    })
+    skill_service_module._validate_skill_payload(
+        {
+            "skill_name": "sales-analysis",
+            "skill_title": "销售分析",
+            "content": "# 销售分析",
+        }
+    )
 
 
 def test_skill_service_helper_branches_copy_and_frontmatter(tmp_path, monkeypatch):
@@ -313,15 +330,19 @@ def test_skill_service_safe_db_reads_fallback_to_system_skills(monkeypatch):
 
     service._dao = BadStore()
     fake_skill_path = Path("/tmp/SKILL.md")
-    monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "system-skill": {
-            "name": "system-skill",
-            "title": "系统技能",
-            "description": "说明",
-            "category": "demo",
-            "path": str(fake_skill_path),
-        }
-    })
+    monkeypatch.setattr(
+        skill_service_module,
+        "load_metadata",
+        lambda: {
+            "system-skill": {
+                "name": "system-skill",
+                "title": "系统技能",
+                "description": "说明",
+                "category": "demo",
+                "path": str(fake_skill_path),
+            }
+        },
+    )
 
     assert asyncio.run(service._safe_db_skills_async()) is None
     assert asyncio.run(service.list_skills_async(category="demo"))[0]["name"] == "system-skill"
@@ -330,20 +351,26 @@ def test_skill_service_safe_db_reads_fallback_to_system_skills(monkeypatch):
 def test_skill_service_db_metadata_filters_and_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     version_dir = tmp_path / "u1" / "sales-analysis" / "versions" / "v1"
-    skill_md = skill_service_module._write_skill_md(version_dir, {
-        "skill_name": "sales-analysis",
-        "skill_title": "销售分析",
-        "skill_desc": "描述",
-        "skill_category": "custom",
-        "content": "# 销售分析\n\n正文",
-    })
-    skill_service_module._write_skill_md(tmp_path / "u1" / "sales-analysis" / "versions" / "v2", {
-        "skill_name": "sales-analysis",
-        "skill_title": "销售分析",
-        "skill_desc": "描述",
-        "skill_category": "custom",
-        "content": "# 销售分析\n\n正文",
-    })
+    skill_md = skill_service_module._write_skill_md(
+        version_dir,
+        {
+            "skill_name": "sales-analysis",
+            "skill_title": "销售分析",
+            "skill_desc": "描述",
+            "skill_category": "custom",
+            "content": "# 销售分析\n\n正文",
+        },
+    )
+    skill_service_module._write_skill_md(
+        tmp_path / "u1" / "sales-analysis" / "versions" / "v2",
+        {
+            "skill_name": "sales-analysis",
+            "skill_title": "销售分析",
+            "skill_desc": "描述",
+            "skill_category": "custom",
+            "content": "# 销售分析\n\n正文",
+        },
+    )
     row = {
         "skill_id": "skill_1",
         "skill_name": "sales-analysis",
@@ -367,7 +394,12 @@ def test_skill_service_db_metadata_filters_and_detail(tmp_path, monkeypatch):
             return self.source_row
 
         async def get_version_async(self, _skill_id, _version_no):
-            return {"skill_id": "skill_1", "skill_version_no": _version_no, "skill_version_dir": str(version_dir), "version_publish_status": "published"}
+            return {
+                "skill_id": "skill_1",
+                "skill_version_no": _version_no,
+                "skill_version_dir": str(version_dir),
+                "version_publish_status": "published",
+            }
 
         async def get_published_version_async(self, _skill_id, _version_no):
             return await self.get_version_async(_skill_id, _version_no)
@@ -380,8 +412,12 @@ def test_skill_service_db_metadata_filters_and_detail(tmp_path, monkeypatch):
 
     service = SkillService()
     service._dao = Store(dict(row))
-    async_metadata = asyncio.run(service._get_db_skill_metadata_async("sales-analysis", user_id="u1", user_names={"u1": "张三"}))
-    async_detail = asyncio.run(service._get_db_skill_detail_async("sales-analysis", user_id="u1", user_names={"u1": "张三"}))
+    async_metadata = asyncio.run(
+        service._get_db_skill_metadata_async("sales-analysis", user_id="u1", user_names={"u1": "张三"})
+    )
+    async_detail = asyncio.run(
+        service._get_db_skill_detail_async("sales-analysis", user_id="u1", user_names={"u1": "张三"})
+    )
 
     assert async_metadata["path"] == str(skill_md)
     assert async_metadata["creator_name"] == "张三"
@@ -392,8 +428,13 @@ def test_skill_service_db_metadata_filters_and_detail(tmp_path, monkeypatch):
 
     draft_row = dict(row, skill_publish_status="draft", current_skill_version_no=0)
     service._dao = Store(draft_row)
-    assert asyncio.run(service._get_db_skill_metadata_async("sales-analysis", include_draft=False, user_id="u1")) is None
-    assert asyncio.run(service._get_db_skill_metadata_async("sales-analysis", include_draft=True, user_id="u1")) is not None
+    assert (
+        asyncio.run(service._get_db_skill_metadata_async("sales-analysis", include_draft=False, user_id="u1")) is None
+    )
+    assert (
+        asyncio.run(service._get_db_skill_metadata_async("sales-analysis", include_draft=True, user_id="u1"))
+        is not None
+    )
 
 
 def test_skill_service_db_metadata_handles_dao_errors(monkeypatch):
@@ -461,15 +502,29 @@ def test_skill_service_remaining_private_helper_edges(tmp_path, monkeypatch):
 
     draft = {"skill_version_no": 2}
     service._dao = CopyStore(draft=draft)
-    assert asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u1"}, "u1")) is draft
+    assert (
+        asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u1"}, "u1"))
+        is draft
+    )
 
     latest = {"skill_version_no": 1}
     service._dao = CopyStore(latest=latest)
-    assert asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1")) is latest
+    assert (
+        asyncio.run(
+            service._get_copy_source_version_async(
+                {"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1"
+            )
+        )
+        is latest
+    )
 
     service._dao = CopyStore()
     with pytest.raises(ValueError, match="没有可复制的技能版本"):
-        asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1"))
+        asyncio.run(
+            service._get_copy_source_version_async(
+                {"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1"
+            )
+        )
 
     system_dir = tmp_path / "system-skill"
     system_dir.mkdir()
@@ -497,10 +552,12 @@ def test_skill_service_remaining_private_helper_edges(tmp_path, monkeypatch):
 
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     service._dao = ArchiveStore()
-    asyncio.run(service._archive_user_skill_async(
-        {"skill_id": "skill_1", "skill_name": "demo-skill", "owner_user_id": "u1"},
-        "u1",
-    ))
+    asyncio.run(
+        service._archive_user_skill_async(
+            {"skill_id": "skill_1", "skill_name": "demo-skill", "owner_user_id": "u1"},
+            "u1",
+        )
+    )
     assert archived["skill_id"] == "skill_1"
     assert archived["archive_name"].startswith("demo-skill--deleted-")
 
@@ -552,11 +609,16 @@ def test_create_user_skill_async_uses_async_dao(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
 
-    result = asyncio.run(service.create_user_skill_async({
-        "skill_name": "demo-skill",
-        "skill_title": "示例技能",
-        "content": "# 示例技能",
-    }, user_id="u1"))
+    result = asyncio.run(
+        service.create_user_skill_async(
+            {
+                "skill_name": "demo-skill",
+                "skill_title": "示例技能",
+                "content": "# 示例技能",
+            },
+            user_id="u1",
+        )
+    )
 
     assert archived["skill"] == existing
     assert archived["user_id"] == "u1"
@@ -587,7 +649,9 @@ def test_save_skill_file_reuses_existing_draft_version(tmp_path, monkeypatch):
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "assets", "demo.txt", "print('draft')\n", "u1"))
+    result = asyncio.run(
+        service.save_skill_version_file_async("skill-1", 1, "assets", "demo.txt", "print('draft')\n", "u1")
+    )
 
     assert result["skill_version_no"] == 2
     assert (draft_dir / "assets" / "demo.txt").read_text(encoding="utf-8") == "print('draft')\n"
@@ -607,7 +671,7 @@ def test_upload_skill_file_writes_bytes_and_validates(tmp_path, monkeypatch):
             self._offset = 0
 
         async def read(self, size: int) -> bytes:
-            chunk = self._data[self._offset:self._offset + size]
+            chunk = self._data[self._offset : self._offset + size]
             self._offset += len(chunk)
             return chunk
 
@@ -626,19 +690,31 @@ def test_upload_skill_file_writes_bytes_and_validates(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_dao", FakeStore())
 
     # assets 目录允许二进制素材；路径穿越部分被 basename 剥离
-    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "assets", "../logo.png", FakeUploadStream(b"\x89PNG\r\n"), "u1"))
+    result = asyncio.run(
+        service.upload_skill_version_file_async(
+            "skill-1", 1, "assets", "../logo.png", FakeUploadStream(b"\x89PNG\r\n"), "u1"
+        )
+    )
     assert result["uploaded"] is True
     assert result["file_path"] == "assets/logo.png"
     assert (draft_dir / "assets" / "logo.png").read_bytes() == b"\x89PNG\r\n"
 
     # references 不再限定 .md：与主对话上传同一份类型白名单
-    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "references", "notes.txt", FakeUploadStream(b"hello"), "u1"))
+    result = asyncio.run(
+        service.upload_skill_version_file_async(
+            "skill-1", 1, "references", "notes.txt", FakeUploadStream(b"hello"), "u1"
+        )
+    )
     assert result["uploaded"] is True
     assert result["file_path"] == "references/notes.txt"
     assert (draft_dir / "references" / "notes.txt").read_bytes() == b"hello"
 
     # 同名文件按保存语义原子覆盖
-    result = asyncio.run(service.upload_skill_version_file_async("skill-1", 1, "assets", "logo.png", FakeUploadStream(b"\x89PNG-overwrite"), "u1"))
+    result = asyncio.run(
+        service.upload_skill_version_file_async(
+            "skill-1", 1, "assets", "logo.png", FakeUploadStream(b"\x89PNG-overwrite"), "u1"
+        )
+    )
     assert result["uploaded"] is True
     assert (draft_dir / "assets" / "logo.png").read_bytes() == b"\x89PNG-overwrite"
 
@@ -647,16 +723,23 @@ def test_upload_skill_file_writes_bytes_and_validates(tmp_path, monkeypatch):
             await service.upload_skill_version_file_async("skill-1", 1, "assets", "", FakeUploadStream(b"x"), "u1")
         # 不在主对话上传白名单内的类型拒绝（两个目录同口径）
         with pytest.raises(ValueError, match="不支持的文件类型"):
-            await service.upload_skill_version_file_async("skill-1", 1, "assets", "tool.exe", FakeUploadStream(b"x"), "u1")
+            await service.upload_skill_version_file_async(
+                "skill-1", 1, "assets", "tool.exe", FakeUploadStream(b"x"), "u1"
+            )
         with pytest.raises(ValueError, match="不支持的文件类型"):
-            await service.upload_skill_version_file_async("skill-1", 1, "references", "tool.exe", FakeUploadStream(b"x"), "u1")
+            await service.upload_skill_version_file_async(
+                "skill-1", 1, "references", "tool.exe", FakeUploadStream(b"x"), "u1"
+            )
+
         # 大小上限复用主对话 CHAT_DATA_MAX_UPLOAD_SIZE_MB 口径（patch 配置读取调小以便验证）
         async def fake_upload_limit():
             return 1, 4
 
         monkeypatch.setattr(skill_service_module, "get_upload_size_limit", fake_upload_limit)
         with pytest.raises(ValueError, match="文件大小不能超过1MB"):
-            await service.upload_skill_version_file_async("skill-1", 1, "assets", "big.pdf", FakeUploadStream(b"x" * 5), "u1")
+            await service.upload_skill_version_file_async(
+                "skill-1", 1, "assets", "big.pdf", FakeUploadStream(b"x" * 5), "u1"
+            )
         # 超限失败后不残留临时文件、不落目标文件（流式写盘的清理语义）
         assert (draft_dir / "assets" / "big.pdf").exists() is False
         assert list(draft_dir.rglob(".*.upload")) == []
@@ -700,7 +783,11 @@ def test_save_skill_file_async_creates_draft_from_published_version(tmp_path, mo
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.save_skill_version_file_async("skill-1", 1, "assets", "new.txt", "print('new')\n", "u1", operator_name="测试用户"))
+    result = asyncio.run(
+        service.save_skill_version_file_async(
+            "skill-1", 1, "assets", "new.txt", "print('new')\n", "u1", operator_name="测试用户"
+        )
+    )
     draft_dir = root_dir / "versions" / "v2"
 
     assert result["skill_version_no"] == 2
@@ -748,7 +835,9 @@ def test_delete_skill_file_creates_draft_from_published_version(tmp_path, monkey
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    result = asyncio.run(service.delete_skill_version_file_async("skill-1", 1, "assets", "old.txt", "u1", operator_name="测试用户"))
+    result = asyncio.run(
+        service.delete_skill_version_file_async("skill-1", 1, "assets", "old.txt", "u1", operator_name="测试用户")
+    )
     draft_dir = root_dir / "versions" / "v2"
 
     assert result["skill_version_no"] == 2
@@ -797,7 +886,9 @@ def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(t
     monkeypatch.setattr(service, "_dao", FakeStore())
     monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
 
-    asyncio.run(service.update_user_skill_draft_async("skill-1", {"skill_title": "New title", "skill_desc": "New desc"}, "u1"))
+    asyncio.run(
+        service.update_user_skill_draft_async("skill-1", {"skill_title": "New title", "skill_desc": "New desc"}, "u1")
+    )
 
     saved = (draft_dir / "SKILL.md").read_text(encoding="utf-8")
     assert "title: Old title" in saved
@@ -826,8 +917,12 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
         "enabled_flag": 0,
     }
     info = skill_service_module._skill_row_to_info(row, user_id="u1", user_names={"creator": "创建人"})
-    version = skill_service_module._skill_version_to_info({"skill_id": "skill-1", "skill_version_no": "2", "version_publish_status": ""}, current_version_no=2)
-    system = skill_service_module._system_metadata_to_info({"name": "system-skill", "title": "", "description": None, "input_schema": {"type": "object"}})
+    version = skill_service_module._skill_version_to_info(
+        {"skill_id": "skill-1", "skill_version_no": "2", "version_publish_status": ""}, current_version_no=2
+    )
+    system = skill_service_module._system_metadata_to_info(
+        {"name": "system-skill", "title": "", "description": None, "input_schema": {"type": "object"}}
+    )
 
     class FakeStore:
         def __init__(self):
@@ -930,17 +1025,41 @@ def test_skill_service_rejects_symlink_fixed_dirs(tmp_path, monkeypatch):
 def test_list_skills_async_filters_user_and_system_metadata(monkeypatch):
     service = skill_service_module.SkillService()
     rows = [
-        {"skill_id": "u1-skill", "skill_name": "private-skill", "skill_title": "私有技能", "skill_desc": "描述", "skill_category": "custom", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1, "favorite_flag": 1},
-        {"skill_id": "u2-skill", "skill_name": "other-skill", "skill_title": "他人技能", "skill_desc": "描述", "skill_category": "custom", "skill_source": "user", "owner_user_id": "u2", "current_skill_version_no": 0, "favorite_flag": 0},
+        {
+            "skill_id": "u1-skill",
+            "skill_name": "private-skill",
+            "skill_title": "私有技能",
+            "skill_desc": "描述",
+            "skill_category": "custom",
+            "skill_source": "user",
+            "owner_user_id": "u1",
+            "current_skill_version_no": 1,
+            "favorite_flag": 1,
+        },
+        {
+            "skill_id": "u2-skill",
+            "skill_name": "other-skill",
+            "skill_title": "他人技能",
+            "skill_desc": "描述",
+            "skill_category": "custom",
+            "skill_source": "user",
+            "owner_user_id": "u2",
+            "current_skill_version_no": 0,
+            "favorite_flag": 0,
+        },
     ]
 
     async def fake_safe_db_skills_async(user_id="", include_disabled=False):
         return rows
 
     monkeypatch.setattr(service, "_safe_db_skills_async", fake_safe_db_skills_async)
-    monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "metadata-only": {"name": "metadata-only", "title": "元数据技能", "category": "system"},
-    })
+    monkeypatch.setattr(
+        skill_service_module,
+        "load_metadata",
+        lambda: {
+            "metadata-only": {"name": "metadata-only", "title": "元数据技能", "category": "system"},
+        },
+    )
 
     runtime = asyncio.run(service.list_skills_async(scope="runtime", user_id="u1"))
     mine = asyncio.run(service.list_skills_async(scope="mine", user_id="u1"))
@@ -993,10 +1112,18 @@ def test_db_skill_metadata_and_detail_resolve_draft_and_published_versions(tmp_p
 
     monkeypatch.setattr(service, "_dao", FakeStore())
 
-    metadata = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"}))
-    detail = asyncio.run(service._get_db_skill_detail_async("demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"}))
+    metadata = asyncio.run(
+        service._get_db_skill_metadata_async(
+            "demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"}
+        )
+    )
+    detail = asyncio.run(
+        service._get_db_skill_detail_async("demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"})
+    )
     published_meta = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=False, user_id="u1"))
-    other_user_metadata = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u2"))
+    other_user_metadata = asyncio.run(
+        service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u2")
+    )
     other_user_detail = asyncio.run(service._get_db_skill_detail_async("demo-skill", include_draft=True, user_id="u2"))
 
     assert metadata["path"] == str(draft_dir / "SKILL.md")
@@ -1049,7 +1176,13 @@ def test_db_skill_metadata_ignores_legacy_system_record(tmp_path, monkeypatch):
 def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     calls = []
-    skill = {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1}
+    skill = {
+        "skill_id": "skill-1",
+        "skill_name": "demo-skill",
+        "skill_source": "user",
+        "owner_user_id": "u1",
+        "current_skill_version_no": 1,
+    }
     version_dir = tmp_path / "demo-skill" / "versions" / "v1"
 
     class FakeStore:
@@ -1094,7 +1227,10 @@ def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(tmp_path,
         assert (await service.list_skill_versions_async("skill-1", "u1"))[0]["current"] is True
         assert (await service.get_skill_version_detail_async("skill-1", 1, "u1"))["current"] is True
         assert (await service.rollback_user_skill_async("skill-1", 1, "u1"))["ok"] is True
-        assert await service.favorite_skill_async("demo-skill", "u1", False) == {"skill_id": "skill-1", "favorite": False}
+        assert await service.favorite_skill_async("demo-skill", "u1", False) == {
+            "skill_id": "skill-1",
+            "favorite": False,
+        }
         await service.delete_user_skill_async("skill-1", "u1")
 
     asyncio.run(run_checks())
@@ -1146,11 +1282,13 @@ def test_publish_user_skill_async_rejects_system_name_conflict(monkeypatch):
 def test_skill_payload_build_and_validation_edge_cases(tmp_path, monkeypatch):
     version_dir = tmp_path / "skill" / "versions" / "v1"
 
-    frontmatter = skill_service_module._build_skill_md({
-        "skill_name": "demo-skill",
-        "skill_title": "Demo",
-        "content": "---\nname: demo-skill\n---\n# Demo",
-    })
+    frontmatter = skill_service_module._build_skill_md(
+        {
+            "skill_name": "demo-skill",
+            "skill_title": "Demo",
+            "content": "---\nname: demo-skill\n---\n# Demo",
+        }
+    )
     assert frontmatter.endswith("\n")
     assert frontmatter.count("---") == 2
 
@@ -1184,7 +1322,12 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
             if name == "async-skill":
                 return None
             if name == "new-id":
-                return {"skill_id": "new-id", "skill_name": "async-skill", "skill_source": "user", "owner_user_id": "u1"}
+                return {
+                    "skill_id": "new-id",
+                    "skill_name": "async-skill",
+                    "skill_source": "user",
+                    "owner_user_id": "u1",
+                }
             return None
 
         async def create_skill_with_version_async(self, skill, version):
@@ -1195,7 +1338,11 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
             return False
 
         async def get_version_async(self, skill_id, version_no):
-            return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(tmp_path / "user" / "async-skill" / "versions" / "v1")}
+            return {
+                "skill_id": skill_id,
+                "skill_version_no": version_no,
+                "skill_version_dir": str(tmp_path / "user" / "async-skill" / "versions" / "v1"),
+            }
 
     async def fake_get_skill(skill_id, include_draft=False, user_id=""):
         return {"skill_id": skill_id, "name": "async-skill", "draft_version_no": 1}
@@ -1205,7 +1352,9 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
     monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "new-id"})())
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path / "user")
 
-    result = asyncio.run(service.import_user_skill_from_directory_async(source_dir, user_id="u1", operator_name="测试用户"))
+    result = asyncio.run(
+        service.import_user_skill_from_directory_async(source_dir, user_id="u1", operator_name="测试用户")
+    )
 
     assert result["name"] == "async-skill"
     assert created["skill"]["skill_name"] == "async-skill"
@@ -1213,7 +1362,9 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
     assert created["skill"]["create_by_name"] == "测试用户"
     assert created["version"]["update_by"] == "u1"
     assert created["version"]["update_by_name"] == "测试用户"
-    assert (tmp_path / "user" / "u1" / "async-skill" / "versions" / "v1" / "references" / "guide.md").read_text(encoding="utf-8") == "guide"
+    assert (tmp_path / "user" / "u1" / "async-skill" / "versions" / "v1" / "references" / "guide.md").read_text(
+        encoding="utf-8"
+    ) == "guide"
 
 
 def test_import_user_skill_from_directory_async_rejects_invalid_inputs(tmp_path, monkeypatch):
@@ -1254,13 +1405,33 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
 
         async def get_skill_async(self, name, user_id=""):
             if name == "source-id":
-                return {"skill_id": "source-id", "skill_name": "source-skill", "skill_title": "源技能", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 0}
+                return {
+                    "skill_id": "source-id",
+                    "skill_name": "source-skill",
+                    "skill_title": "源技能",
+                    "skill_source": "user",
+                    "owner_user_id": "u1",
+                    "current_skill_version_no": 0,
+                }
             if name in {"source-skill-copy", "new-id"}:
-                return None if name == "source-skill-copy" else {"skill_id": "new-id", "skill_name": "source-skill-copy", "skill_source": "user", "owner_user_id": "u1"}
+                return (
+                    None
+                    if name == "source-skill-copy"
+                    else {
+                        "skill_id": "new-id",
+                        "skill_name": "source-skill-copy",
+                        "skill_source": "user",
+                        "owner_user_id": "u1",
+                    }
+                )
             return None
 
         async def get_latest_draft_version_async(self, skill_id):
-            return {"skill_id": skill_id, "skill_version_no": 2, "skill_version_dir": str(draft_dir)} if self.with_version else None
+            return (
+                {"skill_id": skill_id, "skill_version_no": 2, "skill_version_dir": str(draft_dir)}
+                if self.with_version
+                else None
+            )
 
         async def get_published_version_async(self, skill_id, version_no):
             return None
@@ -1276,7 +1447,11 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
             return False
 
         async def get_version_async(self, skill_id, version_no):
-            return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(user_skill_root / "source-skill-copy" / "versions" / "v1")}
+            return {
+                "skill_id": skill_id,
+                "skill_version_no": version_no,
+                "skill_version_dir": str(user_skill_root / "source-skill-copy" / "versions" / "v1"),
+            }
 
     async def fake_get_skill(skill_id, include_draft=False, user_id=""):
         return {"skill_id": skill_id, "name": "source-skill-copy", "draft_version_no": 1}
@@ -1292,7 +1467,9 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
 
         monkeypatch.setattr(service, "_dao", FakeStore(with_version=False))
         with pytest.raises(ValueError, match="没有可复制的技能版本"):
-            await service._get_copy_source_version_async({"skill_id": "source-id", "owner_user_id": "other", "current_skill_version_no": 0}, "u1")
+            await service._get_copy_source_version_async(
+                {"skill_id": "source-id", "owner_user_id": "other", "current_skill_version_no": 0}, "u1"
+            )
 
     asyncio.run(run_checks())
 
@@ -1381,7 +1558,12 @@ def test_read_raw_and_office_preview_skill_files_async(tmp_path, monkeypatch):
         # 正常渲染：复用引擎，源文件暂存到临时 workspace/ 结构、以标准虚拟路径渲染
         patch_office({"renderer": "officecli-html", "html": "<html>ok</html>", "truncated": False})
         preview = await service.render_skill_office_preview_async("skill-1", 1, "references", "report.docx", "u1")
-        assert preview == {"available": True, "renderer": "officecli-html", "html": "<html>ok</html>", "truncated": False}
+        assert preview == {
+            "available": True,
+            "renderer": "officecli-html",
+            "html": "<html>ok</html>",
+            "truncated": False,
+        }
         assert captured["staged_exists"] is True
         assert captured["user_id"] == "u1"
         assert captured["backend"] == "local"
@@ -1500,21 +1682,46 @@ def test_skill_service_additional_helper_branches(tmp_path, monkeypatch):
 def test_list_skills_async_filter_skip_branches(monkeypatch):
     service = skill_service_module.SkillService()
     rows = [
-        {"skill_id": "u1-skill", "skill_name": "private-skill", "skill_title": "私有技能", "skill_desc": "描述", "skill_category": "custom", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1, "favorite_flag": 0},
-        {"skill_id": "sys", "skill_name": "duplicate-skill", "skill_title": "数据库内置", "skill_category": "system", "skill_source": "system", "current_skill_version_no": 1, "favorite_flag": 0},
+        {
+            "skill_id": "u1-skill",
+            "skill_name": "private-skill",
+            "skill_title": "私有技能",
+            "skill_desc": "描述",
+            "skill_category": "custom",
+            "skill_source": "user",
+            "owner_user_id": "u1",
+            "current_skill_version_no": 1,
+            "favorite_flag": 0,
+        },
+        {
+            "skill_id": "sys",
+            "skill_name": "duplicate-skill",
+            "skill_title": "数据库内置",
+            "skill_category": "system",
+            "skill_source": "system",
+            "current_skill_version_no": 1,
+            "favorite_flag": 0,
+        },
     ]
 
     async def fake_safe_db_skills_async(user_id="", include_disabled=False):
         return rows
 
     monkeypatch.setattr(service, "_safe_db_skills_async", fake_safe_db_skills_async)
-    monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "duplicate-skill": {"name": "duplicate-skill", "title": "重复内置", "category": "system"},
-        "metadata-only": {"name": "metadata-only", "title": "元数据技能", "category": "system"},
-    })
+    monkeypatch.setattr(
+        skill_service_module,
+        "load_metadata",
+        lambda: {
+            "duplicate-skill": {"name": "duplicate-skill", "title": "重复内置", "category": "system"},
+            "metadata-only": {"name": "metadata-only", "title": "元数据技能", "category": "system"},
+        },
+    )
 
     assert asyncio.run(service.list_skills_async(scope="favorites", user_id="u1")) == []
-    assert [item["name"] for item in asyncio.run(service.list_skills_async(scope="system", user_id="u1"))] == ["duplicate-skill", "metadata-only"]
+    assert [item["name"] for item in asyncio.run(service.list_skills_async(scope="system", user_id="u1"))] == [
+        "duplicate-skill",
+        "metadata-only",
+    ]
     assert asyncio.run(service.list_skills_async(category="missing", user_id="u1")) == []
     assert asyncio.run(service.list_skills_async(search="不存在", user_id="u1")) == []
 
@@ -1544,7 +1751,9 @@ def test_get_skill_async_and_system_metadata_async_branches(monkeypatch):
     monkeypatch.setattr(service, "_get_db_skill_detail_async", no_db_detail)
     monkeypatch.setattr(skill_service_module, "activate_skill", fake_activate)
     monkeypatch.setattr(skill_service_module, "load_metadata", fake_load_metadata)
-    monkeypatch.setattr(skill_service_module, "clear_metadata_cache", lambda: calls.__setitem__("clear", calls["clear"] + 1))
+    monkeypatch.setattr(
+        skill_service_module, "clear_metadata_cache", lambda: calls.__setitem__("clear", calls["clear"] + 1)
+    )
 
     skill = asyncio.run(service.get_skill_async("async-skill"))
     assert skill["name"] == "async-skill"
@@ -1580,12 +1789,19 @@ def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path,
 
     class ConflictStore:
         async def get_skill_async(self, name, user_id=""):
-            return {"skill_id": "exists", "skill_source": "user", "owner_user_id": "u1", "skill_publish_status": "published"}
+            return {
+                "skill_id": "exists",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+                "skill_publish_status": "published",
+            }
 
     async def run_conflict():
         monkeypatch.setattr(service, "_dao", ConflictStore())
         with pytest.raises(ValueError, match="技能标识已存在"):
-            await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1")
+            await service.create_user_skill_async(
+                {"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1"
+            )
 
     asyncio.run(run_conflict())
 
@@ -1607,7 +1823,9 @@ def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path,
         monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "new-id"})())
         monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
         monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
-        await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "visibility_type": "bad", "content": "# 示例"}, "u1")
+        await service.create_user_skill_async(
+            {"skill_name": "demo-skill", "skill_title": "示例", "visibility_type": "bad", "content": "# 示例"}, "u1"
+        )
 
     asyncio.run(run_create())
 
@@ -1659,7 +1877,9 @@ def test_create_user_skill_async_rejects_globally_occupied_name(tmp_path, monkey
     async def run_create():
         monkeypatch.setattr(service, "_dao", OccupiedStore())
         with pytest.raises(ValueError, match="技能标识已存在"):
-            await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1")
+            await service.create_user_skill_async(
+                {"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1"
+            )
 
     asyncio.run(run_create())
 
@@ -1686,7 +1906,9 @@ def test_create_user_skill_async_converts_integrity_error(tmp_path, monkeypatch)
         monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
         monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
         with pytest.raises(ValueError, match="技能标识已存在"):
-            await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1")
+            await service.create_user_skill_async(
+                {"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1"
+            )
 
     asyncio.run(run_create())
 
@@ -1718,7 +1940,13 @@ def test_copy_user_skill_async_missing_system_and_invalid_version(monkeypatch, t
 
     class UserStore:
         async def get_skill_async(self, name, user_id=""):
-            return {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1}
+            return {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+                "current_skill_version_no": 1,
+            }
 
     async def fake_source_version(*_args, **_kwargs):
         return {"skill_version_dir": str(tmp_path / "missing-version")}
@@ -1772,7 +2000,13 @@ def test_update_user_skill_draft_async_content_and_error_branches(tmp_path, monk
         monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
         result = await service.update_user_skill_draft_async(
             "skill-1",
-            {"skill_title": "新标题", "skill_desc": None, "skill_category": None, "visibility_type": "bad", "content": "# 新内容"},
+            {
+                "skill_title": "新标题",
+                "skill_desc": None,
+                "skill_category": None,
+                "visibility_type": "bad",
+                "content": "# 新内容",
+            },
             "u1",
         )
         assert result["draft_version_no"] == 2
@@ -1822,7 +2056,12 @@ def test_async_lifecycle_rejects_missing_wrong_owner_and_invalid_versions(monkey
             with pytest.raises(ValueError, match=expected):
                 await getattr(service, method_name)(*args)
 
-        wrong_owner = {"skill_id": "skill-1", "skill_source": "user", "owner_user_id": "u2", "current_skill_version_no": 1}
+        wrong_owner = {
+            "skill_id": "skill-1",
+            "skill_source": "user",
+            "owner_user_id": "u2",
+            "current_skill_version_no": 1,
+        }
         for method_name, args in [
             ("publish_user_skill_async", ("skill-1", "u1")),
             ("list_skill_versions_async", ("skill-1", "u1")),
@@ -1902,11 +2141,23 @@ def test_db_skill_metadata_async_filter_and_missing_path_branches(tmp_path, monk
             return None
 
     async def run_checks():
-        draft_row = {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "skill_publish_status": "draft", "current_skill_version_no": 1}
+        draft_row = {
+            "skill_id": "skill-1",
+            "skill_name": "demo-skill",
+            "skill_source": "user",
+            "skill_publish_status": "draft",
+            "current_skill_version_no": 1,
+        }
         monkeypatch.setattr(service, "_dao", Store(draft_row))
         assert await service._get_db_skill_metadata_async("demo-skill", include_draft=False) is None
 
-        no_current_row = {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "skill_publish_status": "published", "current_skill_version_no": 0}
+        no_current_row = {
+            "skill_id": "skill-1",
+            "skill_name": "demo-skill",
+            "skill_source": "user",
+            "skill_publish_status": "published",
+            "current_skill_version_no": 0,
+        }
         monkeypatch.setattr(service, "_dao", Store(no_current_row))
         assert await service._get_db_skill_metadata_async("demo-skill", include_draft=False) is None
 
@@ -1954,7 +2205,15 @@ def test_editable_version_dir_and_draft_creation_async_edge_branches(tmp_path, m
             with pytest.raises((ValueError, PermissionError), match=error):
                 await service._get_editable_version_dir_async("skill-1", 1, "u1")
 
-        dao = Store({"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 0})
+        dao = Store(
+            {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+                "current_skill_version_no": 0,
+            }
+        )
         monkeypatch.setattr(service, "_dao", dao)
         monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
         draft = await service._ensure_user_skill_draft_version_async(dao.skill, "u1")
@@ -2057,7 +2316,11 @@ def test_skill_service_remaining_file_and_archive_branches(tmp_path, monkeypatch
     monkeypatch.setattr(service, "_dao", ArchiveStore())
     monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "abcdefff0000"})())
-    asyncio.run(service._archive_user_skill_async({"skill_id": "skill-1", "skill_name": "demo-skill", "owner_user_id": "u1"}, "u1"))
+    asyncio.run(
+        service._archive_user_skill_async(
+            {"skill_id": "skill-1", "skill_name": "demo-skill", "owner_user_id": "u1"}, "u1"
+        )
+    )
 
     assert not root_dir.exists()
     assert (tmp_path / "u1" / "demo-skill--deleted-abcdefff").exists()
@@ -2113,17 +2376,21 @@ def test_skill_service_extra_private_helper_branches(tmp_path, monkeypatch):
             raise AssertionError("current published version should be used")
 
     monkeypatch.setattr(service, "_dao", CurrentVersionStore())
-    assert asyncio.run(service._get_copy_source_version_async(
-        {"skill_id": "skill-1", "owner_user_id": "u2", "current_skill_version_no": 3},
-        "u1",
-    )) == {"skill_version_no": 3}
+    assert asyncio.run(
+        service._get_copy_source_version_async(
+            {"skill_id": "skill-1", "owner_user_id": "u2", "current_skill_version_no": 3},
+            "u1",
+        )
+    ) == {"skill_version_no": 3}
 
     class UserReadableStore:
         async def get_skill_async(self, *_args, **_kwargs):
             return {"skill_id": "skill-1", "skill_source": "user", "owner_user_id": "u1"}
 
     monkeypatch.setattr(service, "_dao", UserReadableStore())
-    monkeypatch.setattr(service, "_get_editable_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path))
+    monkeypatch.setattr(
+        service, "_get_editable_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path)
+    )
     assert asyncio.run(service._get_readable_version_dir_async("skill-1", 1, "u1")) == tmp_path
 
     system_root = tmp_path / "system-root"

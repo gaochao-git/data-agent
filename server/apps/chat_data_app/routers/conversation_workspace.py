@@ -59,7 +59,8 @@ def _is_internal_workspace_file(path: str) -> bool:
 
 def _filter_visible_workspace_files(files: list[dict]) -> list[dict]:
     return [
-        item for item in files
+        item
+        for item in files
         if not _is_internal_workspace_file(str(item.get("relative_path") or item.get("path") or ""))
     ]
 
@@ -82,7 +83,9 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("获取会话工作区文件失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
-        return business_response(msg="获取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED, status="error"
+        )
 
 
 @router.delete("/conversations/{conversation_id}/workspace-files")
@@ -114,8 +117,12 @@ async def delete_conversation_workspace_file(conversation_id: str, path: str, re
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("删除会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
-        return business_response(msg="删除工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_DELETE_FAILED, status="error")
+        logger.error(
+            "删除会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True
+        )
+        return business_response(
+            msg="删除工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_DELETE_FAILED, status="error"
+        )
 
 
 @router.get("/conversations/{conversation_id}/workspace-files/content")
@@ -140,8 +147,12 @@ async def read_conversation_workspace_file(conversation_id: str, path: str, requ
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("读取会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
-        return business_response(msg="读取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
+        logger.error(
+            "读取会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True
+        )
+        return business_response(
+            msg="读取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error"
+        )
 
 
 @router.get(
@@ -179,7 +190,9 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("读取工作区原始文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
+        logger.error(
+            "读取工作区原始文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True
+        )
         return business_response(
             msg="读取文件失败，请稍后重试",
             code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED,
@@ -192,9 +205,7 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
     operation_id="download_conversation_workspace_archive",
     responses=BINARY_RESPONSES,
 )
-async def download_conversation_workspace_archive(
-    conversation_id: str, directory: str, request: Request
-):
+async def download_conversation_workspace_archive(conversation_id: str, directory: str, request: Request):
     """把会话工作区的目录（顶层目录或其下子目录，UI 当前只放开 outputs）打包为 zip 下载。
 
     目录合法性由 service 层 ``normalize_archive_directory`` 单点校验（首段必须在工作区
@@ -229,8 +240,16 @@ async def download_conversation_workspace_archive(
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
-        logger.error("打包下载工作区目录失败: conversation_id=%s directory=%s error=%s", conversation_id, directory, e, exc_info=True)
-        return business_response(msg="打包下载失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
+        logger.error(
+            "打包下载工作区目录失败: conversation_id=%s directory=%s error=%s",
+            conversation_id,
+            directory,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg="打包下载失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error"
+        )
 
 
 @router.get(
@@ -297,11 +316,15 @@ async def get_conversation_query_result(conversation_id: str, result_id: str, re
             e,
             exc_info=True,
         )
-        return business_response(msg="读取查询结果失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
+        return business_response(
+            msg="读取查询结果失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error"
+        )
 
 
 @router.post("/conversations/{conversation_id}/workspace-skills/import")
-async def import_conversation_workspace_skill(conversation_id: str, payload: SkillImportFromWorkspaceRequest, request: Request):
+async def import_conversation_workspace_skill(
+    conversation_id: str, payload: SkillImportFromWorkspaceRequest, request: Request
+):
     """把会话工作区生成的技能目录导入为用户技能草稿。"""
     try:
         current_user = _get_current_user(request)
@@ -322,5 +345,13 @@ async def import_conversation_workspace_skill(conversation_id: str, payload: Ski
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID, status="error")
     except Exception as e:
-        logger.error("导入会话工作区技能失败: conversation_id=%s path=%s error=%s", conversation_id, payload.skill_dir_path, e, exc_info=True)
-        return business_response(msg="导入技能失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED, status="error")
+        logger.error(
+            "导入会话工作区技能失败: conversation_id=%s path=%s error=%s",
+            conversation_id,
+            payload.skill_dir_path,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg="导入技能失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED, status="error"
+        )

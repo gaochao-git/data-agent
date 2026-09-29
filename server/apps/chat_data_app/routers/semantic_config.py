@@ -72,7 +72,9 @@ def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
     return is_private_semantic_config_owner(config, user_id)
 
 
-def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False) -> Dict[str, Any]:
+def _with_semantic_config_permissions(
+    config: Dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False
+) -> Dict[str, Any]:
     """补充指标集权限字段。"""
     item = dict(config or {})
     item["scope_type"] = item.get("scope_type") or "public"
@@ -80,22 +82,36 @@ def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, user
     return item
 
 
-async def _get_semantic_configs_for_user(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_semantic_configs_for_user(
+    semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
+) -> List[Dict[str, Any]]:
     """读取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id, user_id)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
 
 
-async def _get_my_semantic_configs(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_my_semantic_configs(
+    semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
+) -> List[Dict[str, Any]]:
     """读取普通维护页可维护的个人指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id, user_id)
-    return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or []) if is_private_semantic_config_owner(config, user_id)]
+    return [
+        _with_semantic_config_permissions(config, user_id, username)
+        for config in (configs or [])
+        if is_private_semantic_config_owner(config, user_id)
+    ]
 
 
-async def _get_admin_semantic_configs(semantic_service: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+async def _get_admin_semantic_configs(
+    semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
+) -> List[Dict[str, Any]]:
     """读取后台维护页可维护的公共指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id)
-    return [_with_semantic_config_permissions(config, user_id, username, admin_manage=True) for config in (configs or []) if is_public_semantic_config(config)]
+    return [
+        _with_semantic_config_permissions(config, user_id, username, admin_manage=True)
+        for config in (configs or [])
+        if is_public_semantic_config(config)
+    ]
 
 
 def _history_table_parser(sql: str, source_type: str):
@@ -154,7 +170,9 @@ async def list_semantic_configs(datasource_id: str, request: Request):
         username = str(getattr(current_user, "username", "") or "")
         ds_manager = get_datasource_manager()
         if not await ds_manager.has_datasource_async(datasource_id):
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         configs = await _get_semantic_configs_for_user(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
@@ -172,7 +190,9 @@ async def list_my_semantic_configs(datasource_id: str, request: Request):
         username = str(getattr(current_user, "username", "") or "")
         ds_manager = get_datasource_manager()
         if not await ds_manager.has_datasource_async(datasource_id):
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         configs = await _get_my_semantic_configs(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
@@ -190,7 +210,9 @@ async def list_admin_semantic_configs(datasource_id: str, request: Request):
         username = str(getattr(current_user, "username", "") or "")
         ds_manager = get_datasource_manager()
         if not await ds_manager.has_datasource_async(datasource_id):
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         configs = await _get_admin_semantic_configs(get_semantic_config_service(), datasource_id, user_id, username)
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
@@ -215,7 +237,9 @@ async def _create_semantic_config_with_scope(
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         metrics = [m.model_dump() for m in payload.metrics]
         dimensions = [d.model_dump() for d in payload.dimensions]
@@ -248,7 +272,9 @@ async def _create_semantic_config_with_scope(
             return business_response(msg="创建失败", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
         logger.info(f"创建语义配置: {config['id']} - {config['name']}")
-        return business_response(data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="创建成功")
+        return business_response(
+            data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="创建成功"
+        )
     except Exception as e:
         logger.error(f"创建语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -264,7 +290,9 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
 async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
     """创建公共指标集。"""
     _get_current_user(request)
-    return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
+    return await _create_semantic_config_with_scope(
+        datasource_id, payload, request, scope_type="public", admin_manage=True
+    )
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/generate-basic")
@@ -314,7 +342,9 @@ async def _prepare_ossie_import(
     ds_manager = get_datasource_manager()
     datasource = await ds_manager.get_datasource_async(datasource_id)
     if not datasource:
-        return None, business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        return None, business_response(
+            msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+        )
     try:
         imports, duplicate_error = await prepare_ossie_import_models(
             ds_manager,
@@ -379,7 +409,9 @@ async def preview_admin_ossie_semantic_import(
         )
     except Exception as e:
         logger.error(f"Ossie 导入预览失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
-        return business_response(msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="Ossie 导入预览失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 def _collect_metric_dimension_tables(config: Dict[str, Any]) -> set:
@@ -427,7 +459,9 @@ async def check_admin_semantic_config_quality(
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         service = get_semantic_config_service()
         configs = [
             config
@@ -458,7 +492,9 @@ async def check_admin_semantic_config_quality(
         return business_response(data={"configs": reports, "overall": overall}, msg="质量检查完成")
     except Exception as e:
         logger.error(f"语义质量检查失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
-        return business_response(msg="语义质量检查失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="语义质量检查失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import")
@@ -512,10 +548,14 @@ async def import_admin_ossie_semantic_configs(
             )
         except _OssieImportWriteError as e:
             logger.error("Ossie 导入写入失败，已回滚: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+            return business_response(
+                msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+            )
         except ValueError as e:
             logger.warning("Ossie 导入内容校验失败，已回滚: datasource_id=%s error=%s", datasource_id, e)
-            return business_response(msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+            return business_response(
+                msg=f"导入失败，已回滚：{e}", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error"
+            )
         logger.info(
             "Ossie 导入草稿: datasource_id=%s created=%s replaced=%s skipped=%s",
             datasource_id,
@@ -529,7 +569,9 @@ async def import_admin_ossie_semantic_configs(
         )
     except Exception as e:
         logger.error(f"Ossie 导入失败: datasource_id={datasource_id} error={str(e)}", exc_info=True)
-        return business_response(msg="Ossie 导入失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="Ossie 导入失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Dict[str, str], Optional[str]]:
@@ -538,8 +580,7 @@ def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Di
     存在 replace/skip 之外的动作时返回错误文案，调用方据此直接回错误响应。
     """
     actions = {
-        str(name).strip(): str(action).strip().lower()
-        for name, action in (payload.conflict_actions or {}).items()
+        str(name).strip(): str(action).strip().lower() for name, action in (payload.conflict_actions or {}).items()
     }
     invalid_actions = sorted({action for action in actions.values() if action not in {"replace", "skip"}})
     if invalid_actions:
@@ -562,12 +603,18 @@ async def _learn_semantic_config_from_history_route(
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
         if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         if not can_mutate_semantic_config(config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
+            return business_response(
+                msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error"
+            )
 
         data = await _build_history_learning_service().learn(
             datasource_id=datasource_id,
@@ -598,7 +645,9 @@ async def learn_semantic_config_from_history(
     request: Request,
 ):
     """基于个人指标集的查询历史生成维护建议。"""
-    return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=False)
+    return await _learn_semantic_config_from_history_route(
+        datasource_id, config_id, payload, request, admin_manage=False
+    )
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/history-learning")
@@ -610,7 +659,9 @@ async def learn_admin_semantic_config_from_history(
 ):
     """后台基于公共指标集的查询历史生成维护建议。"""
     _get_current_user(request)
-    return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
+    return await _learn_semantic_config_from_history_route(
+        datasource_id, config_id, payload, request, admin_manage=True
+    )
 
 
 _SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "business_notes", "enabled")
@@ -647,13 +698,19 @@ async def _update_semantic_config(
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         semantic_service = get_semantic_config_service()
         current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         if not can_mutate_semantic_config(current_config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
+            return business_response(
+                msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error"
+            )
 
         update_kwargs = _build_semantic_update_kwargs(payload)
 
@@ -679,10 +736,14 @@ async def _update_semantic_config(
             **update_kwargs,
         )
         if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         logger.info(f"更新语义配置: {config_id}")
-        return business_response(data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="更新成功")
+        return business_response(
+            data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="更新成功"
+        )
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -707,7 +768,9 @@ async def _validate_semantic_config_with_scope(
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         metrics = [m.model_dump() for m in payload.metrics]
         dimensions = [d.model_dump() for d in payload.dimensions]
         relationships = [r.model_dump() for r in payload.relationships]
@@ -749,7 +812,9 @@ async def validate_semantic_config(
     exclude_config_id: str = "",
 ):
     """个人指标集保存前校验（dry-run，不落库）。"""
-    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
+    return await _validate_semantic_config_with_scope(
+        datasource_id, payload, request, exclude_config_id=exclude_config_id
+    )
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/validate")
@@ -761,7 +826,9 @@ async def validate_admin_semantic_config(
 ):
     """公共指标集保存前校验（dry-run，不落库）。"""
     _get_current_user(request)
-    return await _validate_semantic_config_with_scope(datasource_id, payload, request, exclude_config_id=exclude_config_id)
+    return await _validate_semantic_config_with_scope(
+        datasource_id, payload, request, exclude_config_id=exclude_config_id
+    )
 
 
 async def _delete_semantic_config(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
@@ -773,13 +840,21 @@ async def _delete_semantic_config(datasource_id: str, config_id: str, request: R
         semantic_service = get_semantic_config_service()
         current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         if not can_mutate_semantic_config(current_config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
+            return business_response(
+                msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error"
+            )
 
-        success = await semantic_service.delete_async(datasource_id, config_id, update_by=user_id, update_by_name=username)
+        success = await semantic_service.delete_async(
+            datasource_id, config_id, update_by=user_id, update_by_name=username
+        )
         if not success:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         logger.info(f"删除语义配置: {config_id}")
         return business_response(data={"config_id": config_id}, msg="删除成功")
@@ -788,7 +863,9 @@ async def _delete_semantic_config(datasource_id: str, config_id: str, request: R
         return business_response(msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
-async def _toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request, *, admin_manage: bool = False):
+async def _toggle_semantic_config(
+    datasource_id: str, config_id: str, enabled: bool, request: Request, *, admin_manage: bool = False
+):
     """切换指标集启用状态。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -797,9 +874,13 @@ async def _toggle_semantic_config(datasource_id: str, config_id: str, enabled: b
         semantic_service = get_semantic_config_service()
         current_config = await semantic_service.get_config_async(datasource_id, config_id)
         if not current_config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
         if not can_mutate_semantic_config(current_config, user_id, admin_manage):
-            return business_response(msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error")
+            return business_response(
+                msg="无权限操作该指标集", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED, status="error"
+            )
 
         config = await semantic_service.update_async(
             datasource_id=datasource_id,
@@ -809,7 +890,9 @@ async def _toggle_semantic_config(datasource_id: str, config_id: str, enabled: b
             update_by_name=username,
         )
         if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+            return business_response(
+                msg=f"语义配置不存在: {config_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
+            )
 
         logger.info(f"切换语义配置: {config_id}, enabled={enabled}")
         data = _with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage)
@@ -882,7 +965,9 @@ async def _batch_toggle_semantic_configs(
         username = str(getattr(current_user, "username", "") or "")
         config_ids = dedupe_semantic_config_ids(payload.config_ids)
         if not config_ids:
-            return business_response(msg="请至少选择一个指标集", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+            return business_response(
+                msg="请至少选择一个指标集", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error"
+            )
         if len(config_ids) > SEMANTIC_BATCH_TOGGLE_MAX_IDS:
             return business_response(
                 msg=f"单次批量操作最多支持 {SEMANTIC_BATCH_TOGGLE_MAX_IDS} 个指标集",
@@ -922,13 +1007,17 @@ async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabl
 
 
 @router.patch("/datasources/{datasource_id}/semantic-configs/batch-toggle")
-async def batch_toggle_semantic_configs(datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request):
+async def batch_toggle_semantic_configs(
+    datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request
+):
     """批量切换个人指标集启用状态。"""
     return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=False)
 
 
 @router.patch("/admin/datasources/{datasource_id}/semantic-configs/batch-toggle")
-async def batch_toggle_admin_semantic_configs(datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request):
+async def batch_toggle_admin_semantic_configs(
+    datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request
+):
     """后台批量切换公共指标集启用状态。"""
     _get_current_user(request)
     return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=True)

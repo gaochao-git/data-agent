@@ -28,24 +28,26 @@ class QueryExecutionDao:
         now = datetime.now()
         async with self._session_context() as db:
             for spec in specs:
-                db.add(ChatDataQueryExecution(
-                    execution_id=spec["execution_id"],
-                    task_id=spec["task_id"],
-                    user_id=spec["user_id"],
-                    datasource_id=spec["datasource_id"],
-                    member_datasource_id=spec["member_datasource_id"],
-                    member_name=spec["member_name"],
-                    executor_type=spec["executor_type"],
-                    sql_text=spec["sql_text"],
-                    sql_status="pending",
-                    delete_flag=0,
-                    create_time=now,
-                    update_time=now,
-                    create_by=spec["user_id"],
-                    create_by_name=spec["operator_name"],
-                    update_by=spec["user_id"],
-                    update_by_name=spec["operator_name"],
-                ))
+                db.add(
+                    ChatDataQueryExecution(
+                        execution_id=spec["execution_id"],
+                        task_id=spec["task_id"],
+                        user_id=spec["user_id"],
+                        datasource_id=spec["datasource_id"],
+                        member_datasource_id=spec["member_datasource_id"],
+                        member_name=spec["member_name"],
+                        executor_type=spec["executor_type"],
+                        sql_text=spec["sql_text"],
+                        sql_status="pending",
+                        delete_flag=0,
+                        create_time=now,
+                        update_time=now,
+                        create_by=spec["user_id"],
+                        create_by_name=spec["operator_name"],
+                        update_by=spec["user_id"],
+                        update_by_name=spec["operator_name"],
+                    )
+                )
         return [spec["execution_id"] for spec in specs]
 
     async def update_execution_locked(
@@ -61,9 +63,7 @@ class QueryExecutionDao:
         """
         async with self._session_context() as db:
             result = await db.execute(
-                select(ChatDataQueryExecution)
-                .filter_by(execution_id=execution_id, delete_flag=0)
-                .with_for_update()
+                select(ChatDataQueryExecution).filter_by(execution_id=execution_id, delete_flag=0).with_for_update()
             )
             execution = result.scalar_one_or_none()
             if not execution:

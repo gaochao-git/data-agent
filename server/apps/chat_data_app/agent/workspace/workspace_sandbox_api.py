@@ -1,6 +1,5 @@
 """OpenSandbox SDK access, Files API primitives and command execution."""
 
-
 from __future__ import annotations
 
 import asyncio
@@ -63,7 +62,9 @@ def _import_opensandbox_sdk() -> tuple[Any, Any, Any, Any]:
         from opensandbox.models.execd import RunCommandOpts
         from opensandbox.models.sandboxes import NetworkPolicy, NetworkRule
     except ImportError as exc:
-        raise ValueError("OpenSandbox Python SDK 未安装或不支持 Files API / NetworkPolicy，请升级 `opensandbox`") from exc
+        raise ValueError(
+            "OpenSandbox Python SDK 未安装或不支持 Files API / NetworkPolicy，请升级 `opensandbox`"
+        ) from exc
     return Sandbox, ConnectionConfig, RunCommandOpts, (NetworkPolicy, NetworkRule)
 
 
@@ -87,8 +88,7 @@ def _import_opensandbox_directory_list_entry() -> Any:
     try:
         from opensandbox.models.filesystem import DirectoryListEntry
     except ImportError as exc:
-        raise ValueError(
-            "当前 OpenSandbox SDK 不支持 files.list_directory，请升级 `opensandbox`") from exc
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.list_directory，请升级 `opensandbox`") from exc
     return DirectoryListEntry
 
 
@@ -124,13 +124,15 @@ async def _replace_sandbox_file_content(
     if not callable(replacer):
         raise ValueError("当前 OpenSandbox SDK 不支持 files.replace_contents")
     ContentReplaceEntry = _import_opensandbox_content_replace_entry()
-    await replacer([
-        ContentReplaceEntry(
-            path=path,
-            old_content=old_content,
-            new_content=new_content,
-        )
-    ])
+    await replacer(
+        [
+            ContentReplaceEntry(
+                path=path,
+                old_content=old_content,
+                new_content=new_content,
+            )
+        ]
+    )
     logger.info(
         "OpenSandbox Files API 精确替换完成: sandbox_id=%s path=%s",
         str(getattr(sandbox, "id", "") or ""),
@@ -181,11 +183,7 @@ async def _list_sandbox_directory_entries(
         if _is_sandbox_file_not_found(exc):
             return []
         raise
-    return [
-        entry
-        for entry in entries
-        if _is_sandbox_descendant(str(getattr(entry, "path", "") or ""), path)
-    ]
+    return [entry for entry in entries if _is_sandbox_descendant(str(getattr(entry, "path", "") or ""), path)]
 
 
 async def _walk_sandbox_tree(
@@ -224,12 +222,29 @@ async def _walk_sandbox_tree(
     )
 
 
-def _extract_command_output(execution: Any, command_status: Any | None, status_lookup_error: str = "") -> tuple[int, str, str]:
-    stdout = "\n".join(str(getattr(item, "text", "")) for item in getattr(getattr(execution, "logs", None), "stdout", []) or [] if str(getattr(item, "text", "")))
-    stderr_parts = [str(getattr(item, "text", "")) for item in getattr(getattr(execution, "logs", None), "stderr", []) or [] if str(getattr(item, "text", ""))]
+def _extract_command_output(
+    execution: Any, command_status: Any | None, status_lookup_error: str = ""
+) -> tuple[int, str, str]:
+    stdout = "\n".join(
+        str(getattr(item, "text", ""))
+        for item in getattr(getattr(execution, "logs", None), "stdout", []) or []
+        if str(getattr(item, "text", ""))
+    )
+    stderr_parts = [
+        str(getattr(item, "text", ""))
+        for item in getattr(getattr(execution, "logs", None), "stderr", []) or []
+        if str(getattr(item, "text", ""))
+    ]
     execution_error = getattr(execution, "error", None)
     if execution_error is not None:
-        error_text = ": ".join(part for part in (str(getattr(execution_error, "name", "")).strip(), str(getattr(execution_error, "value", "")).strip()) if part)
+        error_text = ": ".join(
+            part
+            for part in (
+                str(getattr(execution_error, "name", "")).strip(),
+                str(getattr(execution_error, "value", "")).strip(),
+            )
+            if part
+        )
         if error_text:
             stderr_parts.append(error_text)
     elif status_lookup_error:

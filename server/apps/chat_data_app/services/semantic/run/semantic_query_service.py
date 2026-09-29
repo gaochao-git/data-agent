@@ -27,7 +27,9 @@ from .semantic_model_repository import load_semantic_model
 from .semantic_query_plan_builder import normalize_text
 
 
-async def load_runtime_semantic_config_strict(datasource_id: str, semantic_config_id: str, user_id: str | None = None) -> Dict[str, Any]:
+async def load_runtime_semantic_config_strict(
+    datasource_id: str, semantic_config_id: str, user_id: str | None = None
+) -> Dict[str, Any]:
     """加载运行时语义配置并做错误映射；与 repository 的静默版(load_runtime_semantic_config)
     不同：未找到/未启用时抛出带用户可读信息的 LookupError/ValueError，供编译流程直出错误。"""
     normalized_datasource_id = normalize_text(datasource_id)
@@ -196,4 +198,3 @@ def build_member_query_result(
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
     }
-

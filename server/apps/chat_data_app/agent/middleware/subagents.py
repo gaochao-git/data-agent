@@ -63,13 +63,15 @@ logger = get_logger(__name__)
 # 已被替换成信封），正文/思考单独配置。三者都保留截断逻辑作为安全兜底，
 # 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
 
-SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset({
-    "user_id",
-    "operator_name",
-    "conversation_id",
-    "execution_context",
-    "workspace",
-})
+SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
+    {
+        "user_id",
+        "operator_name",
+        "conversation_id",
+        "execution_context",
+        "workspace",
+    }
+)
 """允许从主对话复制进子智能体的状态键白名单（身份/数据域/工作区上下文）。
 
 主图的压缩账本（context_compression_events / context_summary）、token_usage
@@ -251,7 +253,7 @@ class _StreamingToolCallMarkupFilter:
                     self._pending = self._partial_suffix(text, _TOOL_CALL_CLOSER)
                     text = ""
                 else:
-                    text = text[idx + len(_TOOL_CALL_CLOSER):]
+                    text = text[idx + len(_TOOL_CALL_CLOSER) :]
                     self._inside = False
                 continue
             idx = text.find("<")
@@ -266,7 +268,7 @@ class _StreamingToolCallMarkupFilter:
                 text = ""
             elif text.startswith(_TOOL_CALL_OPENER):
                 self._inside = True
-                text = text[len(_TOOL_CALL_OPENER):]
+                text = text[len(_TOOL_CALL_OPENER) :]
             else:
                 # 与 opener 无关的普通 "<" 文本，透传后继续扫描
                 out.append("<")
@@ -355,7 +357,10 @@ def create_subagent_budget_alert_middleware(
         percent = min(int(used * 100 / threshold), 999)
         logger.info(
             "[subagent] 预算提示注入 spec=%s used=%s threshold=%s percent=%s%%",
-            spec.name, used, threshold, percent,
+            spec.name,
+            used,
+            threshold,
+            percent,
         )
         # 注入通道=隐藏 HumanMessage 追加在消息尾部（2026-09-21 从 system prompt
         # 追加改来）：system 末尾的追加提示实测服从率低（模型触发后仍快速补读），
@@ -403,6 +408,7 @@ _SUBAGENT_MEMORY_SECTION_TEMPLATE = """## 会话记忆（只读）
 以下是主对话中已沉淀的本会话记忆条目，供你沿用已确认的口径、纠错结论与偏好：
 {memory_block}
 子任务只引用以上记忆，不写入、不修改记忆文件（`/mnt/user-data/memory/memory.md`）。"""
+
 
 def _subagent_system_prompt(spec: SubagentSpec) -> str:
     """返回子图实际生效的 system prompt：spec.system_prompt + 会话级共享段。
@@ -493,18 +499,22 @@ def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
             state_schema=ChatDataSubAgentState,
         ),
         create_subagent_budget_alert_middleware(
-            spec, tools, system_prompt=effective_system_prompt,
+            spec,
+            tools,
+            system_prompt=effective_system_prompt,
         ),
         create_tool_call_name_normalizer_middleware(tools),
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
     ]
     if run_controls is not None and run_controls.is_complete():
-        middleware.append(create_tool_execution_fence_middleware(
-            run_id=run_controls.run_id,
-            owner_token=run_controls.owner_token,
-            inbox_service=run_controls.inbox_service,
-        ))
+        middleware.append(
+            create_tool_execution_fence_middleware(
+                run_id=run_controls.run_id,
+                owner_token=run_controls.owner_token,
+                inbox_service=run_controls.inbox_service,
+            )
+        )
     return create_agent(
         spec.model,
         tools=tools,
@@ -547,10 +557,7 @@ def build_subagent_invocation_config(
 def _plain_text(content: Any) -> str:
     """把消息 content 归一化成纯文本（多模态 list 按行拼接）。"""
     if isinstance(content, list):
-        return "\n".join(
-            part if isinstance(part, str) else str(part)
-            for part in content
-        )
+        return "\n".join(part if isinstance(part, str) else str(part) for part in content)
     return content if isinstance(content, str) else str(content or "")
 
 
@@ -664,25 +671,29 @@ def _iter_chunk_stream_events(
             cap = text_caps.setdefault(message_id, _StreamCapState())
             allowed, was_capped = cap.take(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS)
             if allowed:
-                events.append({
-                    "event_type": "subagent_message_delta",
-                    "message_id": message_id,
-                    "delta": allowed,
-                    "truncated": was_capped,
-                    "parent_tool_call_id": parent_tool_call_id,
-                })
+                events.append(
+                    {
+                        "event_type": "subagent_message_delta",
+                        "message_id": message_id,
+                        "delta": allowed,
+                        "truncated": was_capped,
+                        "parent_tool_call_id": parent_tool_call_id,
+                    }
+                )
     reasoning = _chunk_reasoning_text(chunk)
     if reasoning:
         cap = think_caps.setdefault(message_id, _StreamCapState())
         allowed, was_capped = cap.take(reasoning, SUBAGENT_THINKING_PREVIEW_MAX_CHARS)
         if allowed:
-            events.append({
-                "event_type": "subagent_thinking_delta",
-                "message_id": message_id,
-                "delta": allowed,
-                "truncated": was_capped,
-                "parent_tool_call_id": parent_tool_call_id,
-            })
+            events.append(
+                {
+                    "event_type": "subagent_thinking_delta",
+                    "message_id": message_id,
+                    "delta": allowed,
+                    "truncated": was_capped,
+                    "parent_tool_call_id": parent_tool_call_id,
+                }
+            )
     return events
 
 
@@ -731,12 +742,14 @@ def _iter_subagent_stream_events(
             message_id = getattr(message, "id", None) or (id_resolver(message) if id_resolver else None)
             text = _plain_text(getattr(message, "content", ""))
             if text.strip():
-                events.append(_subagent_message_event(
-                    message_id,
-                    text,
-                    parent_tool_call_id,
-                    already_streamed=bool(message_id and message_id in streamed_text_ids),
-                ))
+                events.append(
+                    _subagent_message_event(
+                        message_id,
+                        text,
+                        parent_tool_call_id,
+                        already_streamed=bool(message_id and message_id in streamed_text_ids),
+                    )
+                )
             events.extend(_subagent_tool_started_events(message, parent_tool_call_id))
         elif isinstance(message, ToolMessage):
             events.append(_subagent_tool_result_event(message, parent_tool_call_id))
@@ -785,13 +798,15 @@ def _subagent_tool_started_events(message: AIMessage, parent_tool_call_id: str |
     for tool_call in getattr(message, "tool_calls", None) or []:
         if not isinstance(tool_call, dict):
             continue
-        events.append({
-            "event_type": "tool_started",
-            "tool_call_id": tool_call.get("id"),
-            "tool_name": tool_call.get("name"),
-            "args": coerce_tool_call_args(tool_call.get("args")) or {},
-            "parent_tool_call_id": parent_tool_call_id,
-        })
+        events.append(
+            {
+                "event_type": "tool_started",
+                "tool_call_id": tool_call.get("id"),
+                "tool_name": tool_call.get("name"),
+                "args": coerce_tool_call_args(tool_call.get("args")) or {},
+                "parent_tool_call_id": parent_tool_call_id,
+            }
+        )
     return events
 
 
@@ -842,8 +857,11 @@ class _SubagentStreamState:
     def emit_messages_chunk(self, chunk_obj: Any, writer: Any) -> None:
         """messages 模式：正文/思考增量转发并记录已达标的 message id。"""
         for event in _iter_chunk_stream_events(
-            chunk_obj, self.parent_tool_call_id,
-            self.text_caps, self.think_caps, self.text_markup_filters,
+            chunk_obj,
+            self.parent_tool_call_id,
+            self.text_caps,
+            self.think_caps,
+            self.text_markup_filters,
         ):
             if event["event_type"] == "subagent_message_delta":
                 self.streamed_text_ids.add(event["message_id"])
@@ -911,8 +929,7 @@ class _SubagentStreamState:
         for removed_id in targeted_ids:
             self.seen_ids.discard(removed_id)
             self.collected[:] = [
-                message for message in self.collected
-                if str(getattr(message, "id", "") or "") != removed_id
+                message for message in self.collected if str(getattr(message, "id", "") or "") != removed_id
             ]
 
     def _apply_message_removals(self, node_messages: list, new_messages: list) -> None:
@@ -952,7 +969,9 @@ def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dic
     }
 
 
-def _process_subagent_chunk(chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None) -> bool:
+def _process_subagent_chunk(
+    chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None
+) -> bool:
     """消费单个子图流 chunk：messages 模式转发增量、updates 模式发工具生命周期事件。
 
     返回是否为 updates 模式（调用方据此推送 subagent_context_usage）。
@@ -968,8 +987,10 @@ def _process_subagent_chunk(chunk: Any, stream_state: "_SubagentStreamState", wr
         return False
     new_messages = stream_state.collect_update_messages(payload)
     for event in _iter_subagent_stream_events(
-        new_messages, parent_tool_call_id,
-        stream_state.streamed_text_ids, stream_state.streamed_think_ids,
+        new_messages,
+        parent_tool_call_id,
+        stream_state.streamed_text_ids,
+        stream_state.streamed_think_ids,
         stream_state.resolve_anonymous_id,
     ):
         _emit_subagent_tool_event(writer, event)
@@ -1019,11 +1040,14 @@ async def _run_subagent_with_events(
             return None
         usage = _subagent_usage_snapshot(usage_meta, stream_state.collected)
         if emit:
-            _emit_subagent_tool_event(writer, {
-                "event_type": "subagent_context_usage",
-                "parent_tool_call_id": parent_tool_call_id,
-                **usage,
-            })
+            _emit_subagent_tool_event(
+                writer,
+                {
+                    "event_type": "subagent_context_usage",
+                    "parent_tool_call_id": parent_tool_call_id,
+                    **usage,
+                },
+            )
         return usage
 
     try:
@@ -1039,11 +1063,7 @@ async def _run_subagent_with_events(
 
 
 def _build_subagent_state(runtime: ToolRuntime, description: str) -> dict[str, Any]:
-    state = {
-        key: value
-        for key, value in dict(runtime.state or {}).items()
-        if key in SUBAGENT_STATE_PASSTHROUGH_KEYS
-    }
+    state = {key: value for key, value in dict(runtime.state or {}).items() if key in SUBAGENT_STATE_PASSTHROUGH_KEYS}
     state["messages"] = [HumanMessage(content=description)]
     return state
 
@@ -1194,7 +1214,9 @@ async def _build_task_tool_impl(
             collected=collected,
             captured=captured,
             usage_meta=_safe_subagent_budget_meta(
-                spec, list(spec.tools or []), system_prompt=_subagent_system_prompt(spec),
+                spec,
+                list(spec.tools or []),
+                system_prompt=_subagent_system_prompt(spec),
             ),
         )
     except Exception as exc:
@@ -1232,14 +1254,18 @@ async def _build_task_tool_impl(
     # 标题行还原最后一次用量（直播路径走 subagent_context_usage SSE 事件）。
     if context_usage:
         additional_kwargs["subagent_context_usage"] = context_usage
-    return Command(update={
-        "messages": [ToolMessage(
-            content=report,
-            tool_call_id=runtime.tool_call_id or "",
-            status=tool_status,
-            additional_kwargs=additional_kwargs,
-        )],
-    })
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=report,
+                    tool_call_id=runtime.tool_call_id or "",
+                    status=tool_status,
+                    additional_kwargs=additional_kwargs,
+                )
+            ],
+        }
+    )
 
 
 def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredTool:
@@ -1285,10 +1311,12 @@ def _append_system_prompt(request, extra: str):
     if system_message is None:
         return request.override(system_message=SystemMessage(content=extra))
     merged = str(getattr(system_message, "content", "") or "").rstrip()
-    return request.override(system_message=SystemMessage(
-        content=f"{merged}\n\n{extra}",
-        additional_kwargs=dict(getattr(system_message, "additional_kwargs", {}) or {}),
-    ))
+    return request.override(
+        system_message=SystemMessage(
+            content=f"{merged}\n\n{extra}",
+            additional_kwargs=dict(getattr(system_message, "additional_kwargs", {}) or {}),
+        )
+    )
 
 
 def _default_system_prompt() -> str:

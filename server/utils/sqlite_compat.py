@@ -8,6 +8,7 @@ pysqlite3-binary 自带新版 SQLite C 库，替换后 aiosqlite / sqlalchemy
 必须在任何 aiosqlite / sqlalchemy / sqlite3 导入之前调用
 :func:`apply_sqlite_compat`（main.py 与 conftest.py 顶部各接一次）。
 """
+
 import logging
 import sys
 

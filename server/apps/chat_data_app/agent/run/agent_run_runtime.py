@@ -27,7 +27,7 @@ def _sse_event_type(payload: str) -> str | None:
     """从 SSE payload 中解析事件名（如 "message" / "question_requested"）。"""
     for line in payload.splitlines():
         if line.startswith("event: "):
-            return line[len("event: "):].strip()
+            return line[len("event: ") :].strip()
     return None
 
 
@@ -348,7 +348,9 @@ class AgentRunRuntime:
             owner_token=prepared["owner_token"],
         )
 
-    async def _decide_terminal_state(self, state: _RunExecutionState, prepared: dict, saw_question_requested: bool) -> str:
+    async def _decide_terminal_state(
+        self, state: _RunExecutionState, prepared: dict, saw_question_requested: bool
+    ) -> str:
         """流结束后决定终态：waiting_user 直接复用，否则落库收口。"""
         if saw_question_requested:
             # waiting_user 已由 mark_waiting_for_user 落库，无需重复收口。
@@ -378,7 +380,9 @@ class AgentRunRuntime:
         # 正常结束：唯一生命周期 owner 在此收口——先落库，再发布结构化 done。
         return await self._decide_terminal_state(state, prepared, saw_question_requested)
 
-    async def _finalize_cancelled_run(self, state: _RunExecutionState, prepared: dict | None, exc: asyncio.CancelledError) -> None:
+    async def _finalize_cancelled_run(
+        self, state: _RunExecutionState, prepared: dict | None, exc: asyncio.CancelledError
+    ) -> None:
         if prepared is None or not (exc.args and exc.args[0] == "agent_run_cancelled"):
             return
         # 用户主动停止也是终态：落库 cancelled 后发布结构化 done。

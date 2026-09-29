@@ -52,69 +52,80 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
     dao = SkillDao()
 
     async def run_checks():
-        await dao.create_skill_with_version_async({
-            "skill_id": "skill_owner",
-            "skill_name": "owner-skill",
-            "skill_title": "Owner Skill",
-            "skill_desc": "desc",
-            "skill_category": "cat",
-            "skill_source": "user",
-            "visibility_type": "private",
-            "enabled_flag": 1,
-            "skill_publish_status": "draft",
-            "current_skill_version_no": 0,
-            "owner_user_id": "u1",
-            "create_by": "u1",
-            "create_by_name": "用户一",
-            "update_by": "u1",
-            "update_by_name": "用户一",
-        }, {
-            "skill_id": "skill_owner",
-            "skill_version_no": 1,
-            "version_publish_status": "draft",
-            "create_by": "u1",
-            "create_by_name": "用户一",
-            "update_by": "u1",
-            "update_by_name": "用户一",
-        })
-        await dao.create_skill_with_version_async({
-            "skill_id": "skill_global",
-            "skill_name": "global-skill",
-            "skill_title": "Global Skill",
-            "skill_source": "user",
-            "visibility_type": "global",
-            "skill_publish_status": "published",
-            "current_skill_version_no": 1,
-            "owner_user_id": "u1",
-        }, {
-            "skill_id": "skill_global",
-            "skill_version_no": 1,
-            "version_publish_status": "published",
-        })
+        await dao.create_skill_with_version_async(
+            {
+                "skill_id": "skill_owner",
+                "skill_name": "owner-skill",
+                "skill_title": "Owner Skill",
+                "skill_desc": "desc",
+                "skill_category": "cat",
+                "skill_source": "user",
+                "visibility_type": "private",
+                "enabled_flag": 1,
+                "skill_publish_status": "draft",
+                "current_skill_version_no": 0,
+                "owner_user_id": "u1",
+                "create_by": "u1",
+                "create_by_name": "用户一",
+                "update_by": "u1",
+                "update_by_name": "用户一",
+            },
+            {
+                "skill_id": "skill_owner",
+                "skill_version_no": 1,
+                "version_publish_status": "draft",
+                "create_by": "u1",
+                "create_by_name": "用户一",
+                "update_by": "u1",
+                "update_by_name": "用户一",
+            },
+        )
+        await dao.create_skill_with_version_async(
+            {
+                "skill_id": "skill_global",
+                "skill_name": "global-skill",
+                "skill_title": "Global Skill",
+                "skill_source": "user",
+                "visibility_type": "global",
+                "skill_publish_status": "published",
+                "current_skill_version_no": 1,
+                "owner_user_id": "u1",
+            },
+            {
+                "skill_id": "skill_global",
+                "skill_version_no": 1,
+                "version_publish_status": "published",
+            },
+        )
         async with skill_db() as session:
-            session.add(ChatDataSkill(
-                skill_id="legacy_system",
-                skill_name="legacy-system-skill",
-                skill_title="Legacy System Skill",
-                skill_source="system",
-                visibility_type="global",
-                skill_publish_status="published",
-                current_skill_version_no=1,
-            ))
-        await dao.create_skill_with_version_async({
-            "skill_id": "global_draft",
-            "skill_name": "global-draft-skill",
-            "skill_title": "Global Draft Skill",
-            "skill_source": "user",
-            "visibility_type": "global",
-            "skill_publish_status": "draft",
-            "current_skill_version_no": 0,
-            "owner_user_id": "u1",
-        }, {
-            "skill_id": "global_draft",
-            "skill_version_no": 1,
-            "version_publish_status": "draft",
-        })
+            session.add(
+                ChatDataSkill(
+                    skill_id="legacy_system",
+                    skill_name="legacy-system-skill",
+                    skill_title="Legacy System Skill",
+                    skill_source="system",
+                    visibility_type="global",
+                    skill_publish_status="published",
+                    current_skill_version_no=1,
+                )
+            )
+        await dao.create_skill_with_version_async(
+            {
+                "skill_id": "global_draft",
+                "skill_name": "global-draft-skill",
+                "skill_title": "Global Draft Skill",
+                "skill_source": "user",
+                "visibility_type": "global",
+                "skill_publish_status": "draft",
+                "current_skill_version_no": 0,
+                "owner_user_id": "u1",
+            },
+            {
+                "skill_id": "global_draft",
+                "skill_version_no": 1,
+                "version_publish_status": "draft",
+            },
+        )
 
         owner_rows = await dao.list_skills_async(user_id="u1")
         assert {row["skill_id"] for row in owner_rows} == {"skill_owner", "skill_global", "global_draft"}
@@ -142,30 +153,41 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
     dao = SkillDao()
 
     async def run_checks():
-        await dao.create_skill_with_version_async({
-            "skill_id": "skill_a",
-            "skill_name": "demo-skill",
-            "skill_title": "Demo",
-            "skill_source": "user",
-            "visibility_type": "private",
-            "skill_publish_status": "draft",
-            "owner_user_id": "u1",
-        }, {
-            "skill_id": "skill_a",
-            "skill_version_no": 1,
-            "version_publish_status": "draft",
-        })
-        assert await dao.insert_version_async({
-            "skill_id": "skill_a",
-            "skill_version_no": 2,
-            "version_publish_status": "draft",
-            "create_by": "u1",
-            "create_by_name": "用户一",
-            "update_by": "u1",
-            "update_by_name": "用户一",
-        }) == 1
+        await dao.create_skill_with_version_async(
+            {
+                "skill_id": "skill_a",
+                "skill_name": "demo-skill",
+                "skill_title": "Demo",
+                "skill_source": "user",
+                "visibility_type": "private",
+                "skill_publish_status": "draft",
+                "owner_user_id": "u1",
+            },
+            {
+                "skill_id": "skill_a",
+                "skill_version_no": 1,
+                "version_publish_status": "draft",
+            },
+        )
+        assert (
+            await dao.insert_version_async(
+                {
+                    "skill_id": "skill_a",
+                    "skill_version_no": 2,
+                    "version_publish_status": "draft",
+                    "create_by": "u1",
+                    "create_by_name": "用户一",
+                    "update_by": "u1",
+                    "update_by_name": "用户一",
+                }
+            )
+            == 1
+        )
 
-        assert await dao.update_skill_async("skill_a", {"skill_title": "Changed"}, update_by="u2", update_by_name="用户二") == 1
+        assert (
+            await dao.update_skill_async("skill_a", {"skill_title": "Changed"}, update_by="u2", update_by_name="用户二")
+            == 1
+        )
         changed = await dao.get_skill_async("skill_a", user_id="u1")
         assert changed["skill_title"] == "Changed"
         assert changed["update_by"] == "u2"
@@ -191,7 +213,12 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
         with pytest.raises(ValueError, match="用户技能不存在"):
             await dao.set_favorite_async("u1", "missing-skill", True)
 
-        assert await dao.delete_skill_async("skill_a", "demo-skill--deleted-12345678", update_by="u5", update_by_name="用户五") == 1
+        assert (
+            await dao.delete_skill_async(
+                "skill_a", "demo-skill--deleted-12345678", update_by="u5", update_by_name="用户五"
+            )
+            == 1
+        )
         assert await dao.get_skill_async("skill_a", user_id="u1") is None
         assert await dao.delete_skill_async("skill_a", "again", update_by="u5") == 0
 

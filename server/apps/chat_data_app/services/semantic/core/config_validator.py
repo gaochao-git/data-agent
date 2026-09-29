@@ -52,7 +52,9 @@ def _validate_field_display_names(dimensions: List[Dict], metrics: List[Dict]) -
     return None
 
 
-def _validate_dimensions_against_tables(dimensions: List[Dict], table_columns_map: Dict[str, Set[str]]) -> Optional[str]:
+def _validate_dimensions_against_tables(
+    dimensions: List[Dict], table_columns_map: Dict[str, Set[str]]
+) -> Optional[str]:
     for dimension in dimensions or []:
         table_name = dimension.get("table")
         column_name = dimension.get("column")
@@ -73,10 +75,40 @@ _FUNCTION_CALL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _IDENTIFIER_TOKEN_PATTERN = re.compile(r"[^\W\d][\w]*", re.UNICODE)
 _TABLE_PREFIX_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.")
 _SQL_KEYWORD_TOKENS: Set[str] = {
-    "select", "from", "where", "group", "by", "having", "order", "case",
-    "when", "then", "else", "end", "and", "or", "not", "in", "is", "null",
-    "as", "between", "like", "distinct", "interval", "asc", "desc", "cast",
-    "union", "all", "exists", "join", "on", "over", "partition", "div",
+    "select",
+    "from",
+    "where",
+    "group",
+    "by",
+    "having",
+    "order",
+    "case",
+    "when",
+    "then",
+    "else",
+    "end",
+    "and",
+    "or",
+    "not",
+    "in",
+    "is",
+    "null",
+    "as",
+    "between",
+    "like",
+    "distinct",
+    "interval",
+    "asc",
+    "desc",
+    "cast",
+    "union",
+    "all",
+    "exists",
+    "join",
+    "on",
+    "over",
+    "partition",
+    "div",
 }
 
 
@@ -134,7 +166,9 @@ def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dic
             return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
         unknown_columns = _find_unknown_expression_columns(expression, table_columns_map[table_name])
         if unknown_columns:
-            return f"指标 {metric.get('name', '')} 表达式引用了表 {table_name} 不存在的字段: {', '.join(unknown_columns)}"
+            return (
+                f"指标 {metric.get('name', '')} 表达式引用了表 {table_name} 不存在的字段: {', '.join(unknown_columns)}"
+            )
     return None
 
 
@@ -373,11 +407,7 @@ def _semantic_alias(item: Dict[str, Any]) -> str:
 
 
 def _relationship_alias(relationship: Dict[str, Any], side: str) -> str:
-    return str(
-        relationship.get(f"{side}_alias")
-        or relationship.get(f"{side}_table")
-        or ""
-    ).strip()
+    return str(relationship.get(f"{side}_alias") or relationship.get(f"{side}_table") or "").strip()
 
 
 def _relationship_conditions(relationship: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -385,10 +415,12 @@ def _relationship_conditions(relationship: Dict[str, Any]) -> List[Dict[str, str
     if conditions:
         return conditions
     if relationship.get("left_column") or relationship.get("right_column"):
-        return [{
-            "left_column": relationship.get("left_column"),
-            "right_column": relationship.get("right_column"),
-        }]
+        return [
+            {
+                "left_column": relationship.get("left_column"),
+                "right_column": relationship.get("right_column"),
+            }
+        ]
     return []
 
 
@@ -484,7 +516,11 @@ def _validate_single_relationship(
     if not conditions:
         return f"{label}缺少关联条件"
     error = _validate_relationship_conditions(
-        table_columns_map, label, left_table, right_table, conditions,
+        table_columns_map,
+        label,
+        left_table,
+        right_table,
+        conditions,
     )
     if error:
         return error
@@ -524,7 +560,11 @@ def validate_semantic_relationships(
     adjacency: Dict[str, Set[str]] = {}
     for index, relationship in enumerate(relationships):
         error = _validate_single_relationship(
-            table_columns_map, alias_tables, adjacency, index, relationship,
+            table_columns_map,
+            alias_tables,
+            adjacency,
+            index,
+            relationship,
         )
         if error:
             return error

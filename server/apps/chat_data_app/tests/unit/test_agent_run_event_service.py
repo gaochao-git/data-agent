@@ -15,12 +15,14 @@ class _Bus:
         return "1740000000000-0"
 
     async def read_run(self, _run_id, _cursor):
-        return [{
-            "stream_id": "1740000000000-0",
-            "event_type": "done",
-            "sequence_no": "2",
-            "payload": "event: done\\ndata: [DONE]\\n\\n",
-        }]
+        return [
+            {
+                "stream_id": "1740000000000-0",
+                "event_type": "done",
+                "sequence_no": "2",
+                "payload": "event: done\\ndata: [DONE]\\n\\n",
+            }
+        ]
 
 
 class _InboxDao:
@@ -134,7 +136,7 @@ async def test_stream_after_resume_cursor_does_not_replay_old_question():
                     "stream_id": "new-message-0",
                     "event_type": "message",
                     "sequence_no": "3",
-                    "payload": "event: message\ndata: {\"content\": \"继续\"}\n\n",
+                    "payload": 'event: message\ndata: {"content": "继续"}\n\n',
                 },
                 {
                     "stream_id": "new-done-0",
@@ -305,12 +307,14 @@ async def test_stream_keeps_waiting_while_run_is_active(monkeypatch):
             self.reads += 1
             if self.reads < 3:
                 return []
-            return [{
-                "stream_id": "1740000000001-0",
-                "event_type": "done",
-                "sequence_no": "1",
-                "payload": "event: done\ndata: [DONE]\n\n",
-            }]
+            return [
+                {
+                    "stream_id": "1740000000001-0",
+                    "event_type": "done",
+                    "sequence_no": "1",
+                    "payload": "event: done\ndata: [DONE]\n\n",
+                }
+            ]
 
         async def run_stream_exists(self, _run_id):
             return True
@@ -378,12 +382,14 @@ async def test_read_run_events_logs_failure_once_and_recovery():
             self.calls += 1
             if self.calls in (1, 3):
                 raise ConnectionError("redis down")
-            return [{
-                "stream_id": "1740000000001-0",
-                "event_type": "message",
-                "sequence_no": "1",
-                "payload": "event: message\ndata: {}\n\n",
-            }]
+            return [
+                {
+                    "stream_id": "1740000000001-0",
+                    "event_type": "message",
+                    "sequence_no": "1",
+                    "payload": "event: message\ndata: {}\n\n",
+                }
+            ]
 
     service = AgentRunEventService(bus=FlakyBus())
 
@@ -440,12 +446,14 @@ async def test_stream_continues_after_non_done_events_and_skips_failed_snapshot(
         async def read_run(self, _run_id, _cursor):
             self.reads += 1
             if self.reads == 1:
-                return [{
-                    "stream_id": "1740000000001-0",
-                    "event_type": "message",
-                    "sequence_no": "1",
-                    "payload": "event: message\ndata: {}\n\n",
-                }]
+                return [
+                    {
+                        "stream_id": "1740000000001-0",
+                        "event_type": "message",
+                        "sequence_no": "1",
+                        "payload": "event: message\ndata: {}\n\n",
+                    }
+                ]
             return []
 
     class BoomDao:

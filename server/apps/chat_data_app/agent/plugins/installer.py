@@ -52,9 +52,7 @@ def _find_zip_root(members: list[zipfile.ZipInfo]) -> str:
         return ""
     if len(top_names) == 1 and f"{next(iter(top_names))}/{PLUGIN_MANIFEST_FILENAME}" in all_names:
         return next(iter(top_names)) + "/"
-    raise PluginInstallError(
-        f"zip 根目录下必须包含 {PLUGIN_MANIFEST_FILENAME}（或仅有一个包含它的顶层目录）"
-    )
+    raise PluginInstallError(f"zip 根目录下必须包含 {PLUGIN_MANIFEST_FILENAME}（或仅有一个包含它的顶层目录）")
 
 
 def _validate_zip_members(archive: zipfile.ZipFile) -> None:
@@ -84,7 +82,7 @@ def _safe_extract(archive: zipfile.ZipFile, members: list[zipfile.ZipInfo], targ
         name = member.filename.replace("\\", "/")
         if zip_root and not name.startswith(zip_root):
             continue
-        relative = name[len(zip_root):] if zip_root else name
+        relative = name[len(zip_root) :] if zip_root else name
         if not relative or relative.endswith("/"):
             # 目录成员由文件成员的 mkdir(parents=True) 隐式创建。
             continue

@@ -48,7 +48,9 @@ async def list_agent_schedules(request: Request, limit: int = 50, offset: int = 
         raise
     except Exception as e:
         logger.error("获取定时任务列表失败: %s", e, exc_info=True)
-        return business_response(msg="获取定时任务列表失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取定时任务列表失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error"
+        )
 
 
 @router.post("/agent-schedules")
@@ -81,7 +83,9 @@ async def create_agent_schedule(payload: AgentScheduleCreateRequest, request: Re
         raise
     except Exception as e:
         logger.error("创建定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="创建定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_CREATE_FAILED, status="error")
+        return business_response(
+            msg="创建定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_CREATE_FAILED, status="error"
+        )
 
 
 @router.put("/agent-schedules/{job_id}")
@@ -123,7 +127,9 @@ async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest
         raise
     except Exception as e:
         logger.error("更新定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="更新定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error")
+        return business_response(
+            msg="更新定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error"
+        )
 
 
 @router.delete("/agent-schedules/{job_id}")
@@ -143,7 +149,9 @@ async def delete_agent_schedule(job_id: str, request: Request):
         raise
     except Exception as e:
         logger.error("删除定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="删除定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_DELETE_FAILED, status="error")
+        return business_response(
+            msg="删除定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_DELETE_FAILED, status="error"
+        )
 
 
 @router.get("/agent-schedules/{job_id}/runs")
@@ -164,7 +172,9 @@ async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 5
         raise
     except Exception as e:
         logger.error("获取定时任务执行历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取执行历史失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED, status="error")
+        return business_response(
+            msg="获取执行历史失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED, status="error"
+        )
 
 
 @router.post("/agent-schedules/{job_id}/trigger-now")
@@ -189,4 +199,6 @@ async def trigger_agent_schedule_now(job_id: str, request: Request):
         raise
     except Exception as e:
         logger.error("立即执行定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="立即执行失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED, status="error")
+        return business_response(
+            msg="立即执行失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED, status="error"
+        )

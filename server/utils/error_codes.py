@@ -175,6 +175,7 @@ _assert_unique_error_code_values()
 
 _DEFINED_ERROR_CODE_VALUES = frozenset(int(item.value) for item in ErrorCode)
 
+
 def ensure_defined_error_code(code: int | ErrorCode) -> int:
     """校验业务响应错误码必须已在 ErrorCode 中定义。"""
     try:

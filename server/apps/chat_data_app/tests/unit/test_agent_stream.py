@@ -10,7 +10,7 @@ import openai
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -49,14 +49,15 @@ from utils.builtin_skills import DATA_ANALYZING_SKILL
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
     semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_ids = list(dict.fromkeys(
-        str(member_id).strip()
-        for member_id in kwargs.get("member_datasource_ids") or []
-        if str(member_id).strip()
-    ))
+    selected_ids = list(
+        dict.fromkeys(
+            str(member_id).strip() for member_id in kwargs.get("member_datasource_ids") or [] if str(member_id).strip()
+        )
+    )
     semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
-        if semantic_config_id else None
+        if semantic_config_id
+        else None
     )
     targets = [
         {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
@@ -79,10 +80,7 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
 def _override_semantic_context(monkeypatch, **overrides):
     async def prepare_context(**kwargs):
         context = _semantic_context_from_request(**kwargs)
-        values = {
-            key: value(context, kwargs) if callable(value) else value
-            for key, value in overrides.items()
-        }
+        values = {key: value(context, kwargs) if callable(value) else value for key, value in overrides.items()}
         return replace(context, **values)
 
     monkeypatch.setattr(
@@ -119,6 +117,7 @@ def _stub_semantic_conversation_context(monkeypatch):
         "apps.chat_data_app.agent_stream.conversation_event_service.persist_turn",
         noop_event_write,
     )
+
     # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”，
     # 需要验证物化行为的用例自行覆盖。
     async def noop_prematerialize(**_kwargs):
@@ -200,19 +199,27 @@ def test_reasoning_and_thinking_helper_branches():
     assert _extract_reasoning_content(SimpleNamespace()) == ""
     assert _extract_reasoning_content(SimpleNamespace(additional_kwargs={"reasoning_content": "思考A"})) == "思考A"
     assert _extract_reasoning_content(SimpleNamespace(response_metadata={"reasoning": "思考B"})) == "思考B"
-    assert _extract_reasoning_content(
-        SimpleNamespace(additional_kwargs={}),
-        {"response_metadata": {"reasoning_text": "思考C"}},
-    ) == "思考C"
-    assert _extract_reasoning_content(
-        SimpleNamespace(additional_kwargs={}),
-        {"reasoning_content": "思考D"},
-    ) == "思考D"
+    assert (
+        _extract_reasoning_content(
+            SimpleNamespace(additional_kwargs={}),
+            {"response_metadata": {"reasoning_text": "思考C"}},
+        )
+        == "思考C"
+    )
+    assert (
+        _extract_reasoning_content(
+            SimpleNamespace(additional_kwargs={}),
+            {"reasoning_content": "思考D"},
+        )
+        == "思考D"
+    )
     assert _format_thinking_event(SimpleNamespace(additional_kwargs={})) is None
     thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
     assert thinking_event.startswith("event: thinking")
     assert "正在分析" in thinking_event
-    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"}))
+    tool_thinking_event = _format_thinking_event(
+        SimpleNamespace(additional_kwargs={"reasoning_content": "调用 data_analyzing_tool"})
+    )
     assert "数据分析" in tool_thinking_event
     assert "data_analyzing_tool" not in tool_thinking_event
     assert _format_reasoning_for_display("调用 data_analyzing_tool") == "调用 数据分析"
@@ -257,24 +264,29 @@ def test_parse_file_selections_branches():
     assert parse_file_selections(["", "   "]) == []
     # 单字符串与列表都兼容；strip 后按序去重
     assert parse_file_selections(" uploads/a.pdf ") == ["uploads/a.pdf"]
-    assert parse_file_selections([
-        "uploads/a.pdf", " outputs/b.md ", "uploads/a.pdf", "",
-    ]) == ["uploads/a.pdf", "outputs/b.md"]
+    assert parse_file_selections(
+        [
+            "uploads/a.pdf",
+            " outputs/b.md ",
+            "uploads/a.pdf",
+            "",
+        ]
+    ) == ["uploads/a.pdf", "outputs/b.md"]
     # 首尾斜杠归一（前端容错）
     assert parse_file_selections("/workspace/semantic/a__1.yaml/") == ["workspace/semantic/a__1.yaml"]
 
 
 def test_file_selection_mention_suffix_lists_files():
-    assert _file_selection_mention_suffix([
-        "uploads/a.pdf", "workspace/semantic/b__1.yaml",
-    ]) == (
-        "\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/semantic/b__1.yaml]"
-    )
+    assert _file_selection_mention_suffix(
+        [
+            "uploads/a.pdf",
+            "workspace/semantic/b__1.yaml",
+        ]
+    ) == ("\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/semantic/b__1.yaml]")
     assert _file_selection_mention_suffix([]) == ""
 
 
 def test_validate_workspace_file_selections_filters_invalid(tmp_path):
-
     root = tmp_path / "user-data"
     (root / "uploads").mkdir(parents=True)
     (root / "outputs" / "query_result").mkdir(parents=True)
@@ -312,7 +324,10 @@ async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypa
     # 无随行元数据的消息原样返回（快速路径，不触任何 IO）
     plain = HumanMessage(id="m0", content="纯文本", additional_kwargs={"timestamp": "t"})
     resolved = await agent_stream._resolve_inbox_message_references(
-        plain, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+        plain,
+        workspace_root=root_str,
+        user_id="u1",
+        thread_id="conv-1",
     )
     assert resolved is plain
 
@@ -320,13 +335,15 @@ async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypa
     async def fake_resolve_file_attachments(file_ids, *, user_id, thread_id):
         assert file_ids == ["file-1"]
         assert user_id == "u1" and thread_id == "conv-1"
-        return [{
-            "file_id": "file-1",
-            "original_filename": "b.md",
-            "file_type": "md",
-            "file_size": 3,
-            "virtual_path": "/mnt/user-data/uploads/b.md",
-        }]
+        return [
+            {
+                "file_id": "file-1",
+                "original_filename": "b.md",
+                "file_type": "md",
+                "file_size": 3,
+                "virtual_path": "/mnt/user-data/uploads/b.md",
+            }
+        ]
 
     monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_resolve_file_attachments)
     message = HumanMessage(
@@ -339,13 +356,14 @@ async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypa
         },
     )
     resolved = await agent_stream._resolve_inbox_message_references(
-        message, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+        message,
+        workspace_root=root_str,
+        user_id="u1",
+        thread_id="conv-1",
     )
     # 正文 = 原文 + 引用短句（只含校验通过的）+ 附件占位行，与普通发送同构
     assert resolved.content == (
-        "排队消息"
-        "\n\n[引用文件：/mnt/user-data/uploads/a.pdf]"
-        "\n[attachment] /mnt/user-data/uploads/b.md"
+        "排队消息\n\n[引用文件：/mnt/user-data/uploads/a.pdf]\n[attachment] /mnt/user-data/uploads/b.md"
     )
     assert resolved.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
     # md 非图片：不打 vision 标记
@@ -354,20 +372,27 @@ async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypa
 
     # 图片附件：vision 标记进 kwargs，供 ImageInjectionMiddleware 装载
     async def fake_image_attachments(file_ids, *, user_id, thread_id):
-        return [{
-            "file_id": "file-img",
-            "original_filename": "shot.png",
-            "file_type": "png",
-            "file_size": 10,
-            "virtual_path": "/mnt/user-data/uploads/shot.png",
-        }]
+        return [
+            {
+                "file_id": "file-img",
+                "original_filename": "shot.png",
+                "file_type": "png",
+                "file_size": 10,
+                "virtual_path": "/mnt/user-data/uploads/shot.png",
+            }
+        ]
 
     monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_image_attachments)
     image_message = HumanMessage(
-        id="m2", content="看图", additional_kwargs={"file_ids": ["file-img"]},
+        id="m2",
+        content="看图",
+        additional_kwargs={"file_ids": ["file-img"]},
     )
     resolved = await agent_stream._resolve_inbox_message_references(
-        image_message, workspace_root=root_str, user_id="u1", thread_id="conv-1",
+        image_message,
+        workspace_root=root_str,
+        user_id="u1",
+        thread_id="conv-1",
     )
     assert resolved.additional_kwargs["vision_attachments"] == ["/mnt/user-data/uploads/shot.png"]
     assert "[attachment] /mnt/user-data/uploads/shot.png" in resolved.content
@@ -380,18 +405,26 @@ def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkey
     from apps.chat_data_app import agent_run_support
 
     # datasource_id 缺省：短路，不触任何 IO
-    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
-        "conv_x", user_id="u1", datasource_id="",
-    )) == {"total": 0, "failed_ids": []}
+    assert asyncio.run(
+        agent_run_support.materialize_conversation_semantic_models(
+            "conv_x",
+            user_id="u1",
+            datasource_id="",
+        )
+    ) == {"total": 0, "failed_ids": []}
 
     # 前置步骤（读会话日期）失败：吞异常
     def date_boom(*args, **kwargs):
         raise RuntimeError("date boom")
 
     monkeypatch.setattr(agent_run_support, "get_conversation_created_date", date_boom)
-    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
-        "conv_x", user_id="u1", datasource_id="ds_1",
-    )) == {"total": 0, "failed_ids": []}
+    assert asyncio.run(
+        agent_run_support.materialize_conversation_semantic_models(
+            "conv_x",
+            user_id="u1",
+            datasource_id="ds_1",
+        )
+    ) == {"total": 0, "failed_ids": []}
 
     # 正常路径：透传 prematerialize 结果
     async def fake_created_date(conversation_id, user_id=None):
@@ -418,9 +451,13 @@ def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkey
     monkeypatch.setattr(agent_run_support, "get_datasource_manager", lambda: _FakeManager())
     monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", fake_prematerialize)
 
-    assert asyncio.run(agent_run_support.materialize_conversation_semantic_models(
-        "conv_x", user_id="u1", datasource_id="ds_1",
-    )) == {"total": 2, "failed_ids": []}
+    assert asyncio.run(
+        agent_run_support.materialize_conversation_semantic_models(
+            "conv_x",
+            user_id="u1",
+            datasource_id="ds_1",
+        )
+    ) == {"total": 2, "failed_ids": []}
 
 
 def test_parse_tool_args_buffer_falls_back_on_invalid_json():
@@ -463,7 +500,7 @@ def test_is_tool_result_error_ignores_plain_text_errors():
     assert _is_tool_result_error('{"type":"query_result","status":"failed"}') is True
     assert _is_tool_result_error('{"type":"query_result","status":"cancelled"}') is True
     assert _is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
-    assert _is_tool_result_error("[dashboard_write] {\"success\": false}") is False
+    assert _is_tool_result_error('[dashboard_write] {"success": false}') is False
     assert _is_tool_result_error("执行完成") is False
 
 
@@ -516,6 +553,7 @@ def test_model_failure_user_message_maps_friendly_text():
 
 def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
     import asyncio
+
     calls = {}
 
     monkeypatch.setattr(
@@ -617,12 +655,18 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
     _override_semantic_context(monkeypatch)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_auto_file_grep",
-        user_query="5+5等于多少",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_auto_file_grep",
+                    user_query="5+5等于多少",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "5+5=10" in joined
@@ -660,12 +704,18 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
     )
     _override_semantic_context(monkeypatch)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_partial_prematerialize",
-        user_query="查询订单数",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_partial_prematerialize",
+                    user_query="查询订单数",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
     assert "本轮语义目录物化不完整" in system_prompt
@@ -696,12 +746,18 @@ def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(mon
         failing_prematerialize,
     )
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_prematerialize_failed",
-        user_query="查询订单数",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_prematerialize_failed",
+                    user_query="查询订单数",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     assert failure is not None
     assert "语义模型目录初始化失败" in "".join(events)
@@ -743,12 +799,18 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_snapshot",
-        user_query="查询订单",
-        datasource_id="ds_a",
-        user_id="u1",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_snapshot",
+                    user_query="查询订单",
+                    datasource_id="ds_a",
+                    user_id="u1",
+                )
+            )
+        )
+    )
 
     assert "完成" in "".join(events)
     system_prompt = captured_agent_kwargs["model_invocation"].system_prompt
@@ -774,9 +836,26 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_select", "name": "file_grep", "args": "{\"query\":\"查交易金额\"}"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"id": "call_select", "name": "file_grep", "args": '{"query":"查交易金额"}'}],
+                ),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
             (_FakeMessageChunk(content="已查询支付数据"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -785,11 +864,17 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_select_tool_event",
-        user_query="按机构查询交易金额",
-        datasource_id="ds_a",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_select_tool_event",
+                    user_query="按机构查询交易金额",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -824,12 +909,18 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_file_selections",
-        user_query="分析这个文件",
-        datasource_id="ds_a",
-        file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_file_selections",
+                    user_query="分析这个文件",
+                    datasource_id="ds_a",
+                    file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "商品数量为 10" in joined
@@ -851,12 +942,18 @@ def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_query_skill_names",
-        user_query="查询金额",
-        datasource_id="ds_a",
-        skill_names=["custom-query-skill", "risk-query-skill"],
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_query_skill_names",
+                    user_query="查询金额",
+                    datasource_id="ds_a",
+                    skill_names=["custom-query-skill", "risk-query-skill"],
+                )
+            )
+        )
+    )
 
     assert "完成" in "".join(events)
     human_message = fake_graph.initial_state["messages"][0]
@@ -876,8 +973,19 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
             (_FakeMessageChunk(content="请选择指标集"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -886,12 +994,18 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_multiple_file_grep_event",
-        user_query="查询金额",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_multiple_file_grep_event",
+                    user_query="查询金额",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -915,8 +1029,19 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
             (_FakeMessageChunk(content="已按多个指标集完成查询"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -925,12 +1050,18 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_retrieval_tool_event",
-        user_query="查询订单金额和用户数",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_retrieval_tool_event",
+                    user_query="查询订单金额和用户数",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -952,8 +1083,19 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
             (_FakeMessageChunk(content="这个问题需要跨指标集合并，当前不支持。"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -962,12 +1104,18 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_cross_config_retrieval",
-        user_query="按用户等级关联订单金额",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_cross_config_retrieval",
+                    user_query="按用户等级关联订单金额",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -987,12 +1135,18 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_selected_semantic_no_precheck",
-        user_query="查询明细",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_order",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_selected_semantic_no_precheck",
+                    user_query="查询明细",
+                    datasource_id="ds_a",
+                    semantic_config_id="cfg_order",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
@@ -1011,12 +1165,18 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_keep_semantic",
-        user_query="查询订单金额",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_order",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_keep_semantic",
+                    user_query="查询订单金额",
+                    datasource_id="ds_a",
+                    semantic_config_id="cfg_order",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
@@ -1035,12 +1195,18 @@ def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(m
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_selected_ambiguous_semantic",
-        user_query="商品数量是多少",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_order",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_selected_ambiguous_semantic",
+                    user_query="商品数量是多少",
+                    datasource_id="ds_a",
+                    semantic_config_id="cfg_order",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: semantic_config_select_required" not in joined
@@ -1058,12 +1224,18 @@ def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_no_preblock_semantic",
-        user_query="查询退款金额",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_order",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_no_preblock_semantic",
+                    user_query="查询退款金额",
+                    datasource_id="ds_a",
+                    semantic_config_id="cfg_order",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "当前选择的指标集不支持该问题：缺少退款金额指标" not in joined
@@ -1083,8 +1255,19 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
@@ -1092,12 +1275,18 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_multiple_semantic",
-        user_query="查询金额",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_multiple_semantic",
+                    user_query="查询金额",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -1119,8 +1308,19 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="file_grep"), {"langgraph_node": "tools"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "file_grep"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="[file_grep]\n" + json.dumps(payload, ensure_ascii=False),
+                    type_="tool",
+                    tool_call_id="call_select",
+                    name="file_grep",
+                ),
+                {"langgraph_node": "tools"},
+            ),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
@@ -1128,12 +1328,18 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_cross_semantic_retrieval",
-        user_query="查询订单金额和商品库存",
-        datasource_id="ds_a",
-        semantic_config_id=None,
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_cross_semantic_retrieval",
+                    user_query="查询订单金额和商品库存",
+                    datasource_id="ds_a",
+                    semantic_config_id=None,
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "event: tool" in joined
@@ -1147,8 +1353,19 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "data_analyzing_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "data_analyzing_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "model"}),
+            (
+                _FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "data_analyzing_tool"}]),
+                {"langgraph_node": "model"},
+            ),
+            (
+                _FakeMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"id": "call_1", "name": "data_analyzing_tool", "args": '{"dsl":{"metrics":["订单数"]}}'}
+                    ],
+                ),
+                {"langgraph_node": "model"},
+            ),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询订单数据"), {"langgraph_node": "model"}),
             (_FakeMessageChunk(content="内部工具模型输出"), {"langgraph_node": "tools"}),
@@ -1159,20 +1376,26 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_a",
-        user_query="查订单数",
-        datasource_id="ds_a",
-        user_id="user_a",
-        username="测试用户",
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_a",
+                    user_query="查订单数",
+                    datasource_id="ds_a",
+                    user_id="user_a",
+                    username="测试用户",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert '"status": "running"' in joined
     assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "已查询订单数据" in joined
     assert "内部工具模型输出" not in joined
-    assert 'event: message_end' in joined
+    assert "event: message_end" in joined
     assert '"usage": {"total_tokens": 12}' in joined
     assert '"timestamp":' in joined
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
@@ -1197,14 +1420,20 @@ def test_generate_chat_data_stream_projects_visible_members_from_shared_context(
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_query_members",
-        user_query="查询所有机构订单数",
-        datasource_id="ds_a",
-        user_id="user_a",
-        member_datasource_ids=["m1"],
-        semantic_config_id="cfg_a",
-    ))))
+    asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_query_members",
+                    user_query="查询所有机构订单数",
+                    datasource_id="ds_a",
+                    user_id="user_a",
+                    member_datasource_ids=["m1"],
+                    semantic_config_id="cfg_a",
+                )
+            )
+        )
+    )
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
@@ -1227,14 +1456,20 @@ def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_query_members",
-        user_query="查询所有机构订单数",
-        datasource_id="ds_a",
-        user_id="user_a",
-        member_datasource_ids=[],
-        semantic_config_id="cfg_a",
-    ))))
+    asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_query_members",
+                    user_query="查询所有机构订单数",
+                    datasource_id="ds_a",
+                    user_id="user_a",
+                    member_datasource_ids=[],
+                    semantic_config_id="cfg_a",
+                )
+            )
+        )
+    )
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
@@ -1257,14 +1492,20 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
 
-    asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_query_member_selected",
-        user_query="查询订单数",
-        datasource_id="ds_a",
-        user_id="user_a",
-        member_datasource_ids=["m1"],
-        semantic_config_id="cfg_a",
-    ))))
+    asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_query_member_selected",
+                    user_query="查询订单数",
+                    datasource_id="ds_a",
+                    user_id="user_a",
+                    member_datasource_ids=["m1"],
+                    semantic_config_id="cfg_a",
+                )
+            )
+        )
+    )
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
 
@@ -1273,13 +1514,21 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True))
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True)
+    )
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_error",
-        user_query="查订单数",
-        datasource_id="ds_a",
-    ))))
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_error",
+                    user_query="查订单数",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert 'event: error\ndata: {"error": "智能问数执行失败，请稍后重试。"}' in joined
@@ -1299,13 +1548,21 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
 
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph()
+    )
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_context_limit",
-        user_query="查订单数",
-        datasource_id="ds_a",
-    ))))
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_context_limit",
+                    user_query="查订单数",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "当前输入内容过长，请拆分问题后重试。" in joined
@@ -1322,15 +1579,20 @@ def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
         semantic_config=None,
         semantic_config_error="未找到可用指标集: cfg_missing",
     )
-    missing_events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_missing_semantic",
-        user_query="查订单",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_missing",
-    ))))
+    missing_events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_missing_semantic",
+                    user_query="查订单",
+                    datasource_id="ds_a",
+                    semantic_config_id="cfg_missing",
+                )
+            )
+        )
+    )
     assert "未找到可用指标集: cfg_missing" in "".join(missing_events)
     assert failure is not None  # 失败异常抛给 Runtime 收口
-
 
 
 def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypatch):
@@ -1348,12 +1610,18 @@ def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypa
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_disconnect",
-        user_query="查订单",
-        datasource_id="ds_a",
-        request=DisconnectRequest(),
-    ))))
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_disconnect",
+                    user_query="查订单",
+                    datasource_id="ds_a",
+                    request=DisconnectRequest(),
+                )
+            )
+        )
+    )
 
     assert events == []
     assert fake_graph.initial_state is None
@@ -1366,18 +1634,31 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
         async def aget_state(self, config):
             raise RuntimeError("state missing")
 
-    fake_graph = StateFailGraph(events=[
-        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "data_analyzing_tool", "args": ""}]), {"langgraph_node": "model"}),
-        (_FakeMessageChunk(content="完成"), {"langgraph_node": "model"}),
-    ])
+    fake_graph = StateFailGraph(
+        events=[
+            (
+                _FakeMessageChunk(
+                    content="", tool_call_chunks=[{"id": "call_1", "name": "data_analyzing_tool", "args": ""}]
+                ),
+                {"langgraph_node": "model"},
+            ),
+            (_FakeMessageChunk(content="完成"), {"langgraph_node": "model"}),
+        ]
+    )
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
 
-    events, failure = asyncio.run(_collect_async_iter_until_failure(_generate_chat_data_stream(ChatDataStreamRequest(
-        thread_id="conv_state_fail",
-        user_query="查订单",
-        datasource_id="ds_a",
-    ))))
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    thread_id="conv_state_fail",
+                    user_query="查订单",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
 
     joined = "".join(events)
     assert "完成" in joined
@@ -1417,13 +1698,21 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent_stream.agent_run_runtime.submit", fake_submit)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.agent_run_event_service.stream", fake_event_stream)
 
-    response = asyncio.run(sql_completion_handler(
-        conversation_id="conv_sql",
-        query="查订单",
-        options={"datasource_id": "ds_a", "mode": "query", "semantic_config_id": "cfg", "model_id": "m1", "member_datasource_ids": ["m1"]},
-        user_id="u1",
-        username="测试用户",
-    ))
+    response = asyncio.run(
+        sql_completion_handler(
+            conversation_id="conv_sql",
+            query="查订单",
+            options={
+                "datasource_id": "ds_a",
+                "mode": "query",
+                "semantic_config_id": "cfg",
+                "model_id": "m1",
+                "member_datasource_ids": ["m1"],
+            },
+            user_id="u1",
+            username="测试用户",
+        )
+    )
     assert response.media_type == "text/event-stream"
     assert response.headers["X-ChatData-Run-Id"] == "run-test"
     assert response.headers["X-Accel-Buffering"] == "no"
@@ -1464,21 +1753,40 @@ _VISION_LIMIT = 5 * 1024 * 1024
 def test_is_image_attachment_checks_type_and_size():
     ok = {"file_id": "f1", "file_type": "png", "file_size": 1024}
     assert _is_image_attachment(ok, max_image_size=_VISION_LIMIT)
-    assert not _is_image_attachment({"file_id": "f2", "file_type": "pdf", "file_size": 1024}, max_image_size=_VISION_LIMIT)
+    assert not _is_image_attachment(
+        {"file_id": "f2", "file_type": "pdf", "file_size": 1024}, max_image_size=_VISION_LIMIT
+    )
     assert not _is_image_attachment({"file_type": "png", "file_size": 1024}, max_image_size=_VISION_LIMIT)  # 无 file_id
     assert not _is_image_attachment({**ok, "file_size": 99 * 1024 * 1024}, max_image_size=_VISION_LIMIT)  # 超大小上限
     # 输入卸载附件（无 file_id 的 parsed_path 条目）
-    assert not _is_image_attachment({"original_filename": "input.txt", "parsed_path": "/mnt/x"}, max_image_size=_VISION_LIMIT)
+    assert not _is_image_attachment(
+        {"original_filename": "input.txt", "parsed_path": "/mnt/x"}, max_image_size=_VISION_LIMIT
+    )
 
 
 def test_select_vision_attachments_returns_image_paths_only():
     atts = [
-        {"file_id": "img1", "original_filename": "a.png", "file_type": "png",
-         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/a.png"},
-        {"file_id": "doc1", "original_filename": "b.pdf", "file_type": "pdf",
-         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
-        {"file_id": "img2", "original_filename": "c.jpg", "file_type": "jpg",
-         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/c.jpg"},
+        {
+            "file_id": "img1",
+            "original_filename": "a.png",
+            "file_type": "png",
+            "file_size": 10,
+            "virtual_path": "/mnt/user-data/uploads/a.png",
+        },
+        {
+            "file_id": "doc1",
+            "original_filename": "b.pdf",
+            "file_type": "pdf",
+            "file_size": 10,
+            "virtual_path": "/mnt/user-data/uploads/b.pdf",
+        },
+        {
+            "file_id": "img2",
+            "original_filename": "c.jpg",
+            "file_type": "jpg",
+            "file_size": 10,
+            "virtual_path": "/mnt/user-data/uploads/c.jpg",
+        },
     ]
     paths = _select_vision_attachments(atts, max_image_size=_VISION_LIMIT)
     assert paths == ["/mnt/user-data/uploads/a.png", "/mnt/user-data/uploads/c.jpg"]
@@ -1486,12 +1794,24 @@ def test_select_vision_attachments_returns_image_paths_only():
 
 def test_select_vision_attachments_caps_at_limit_and_skips_invalid():
     images = [
-        {"file_id": f"img{i}", "original_filename": f"{i}.png", "file_type": "png",
-         "file_size": 10, "virtual_path": f"/mnt/user-data/uploads/{i}.png"}
+        {
+            "file_id": f"img{i}",
+            "original_filename": f"{i}.png",
+            "file_type": "png",
+            "file_size": 10,
+            "virtual_path": f"/mnt/user-data/uploads/{i}.png",
+        }
         for i in range(MAX_IMAGES_PER_MESSAGE + 2)
     ]
-    oversized = [{"file_id": "big", "original_filename": "big.png", "file_type": "png",
-                  "file_size": 99 * 1024 * 1024, "virtual_path": "/mnt/user-data/uploads/big.png"}]
+    oversized = [
+        {
+            "file_id": "big",
+            "original_filename": "big.png",
+            "file_type": "png",
+            "file_size": 99 * 1024 * 1024,
+            "virtual_path": "/mnt/user-data/uploads/big.png",
+        }
+    ]
     paths = _select_vision_attachments(oversized + images, max_image_size=_VISION_LIMIT)
     assert len(paths) == MAX_IMAGES_PER_MESSAGE
     assert all(path.startswith("/mnt/user-data/uploads/") for path in paths)
@@ -1499,8 +1819,13 @@ def test_select_vision_attachments_caps_at_limit_and_skips_invalid():
 
 def test_select_vision_attachments_empty_without_images():
     atts = [
-        {"file_id": "doc1", "original_filename": "b.pdf", "file_type": "pdf",
-         "file_size": 10, "virtual_path": "/mnt/user-data/uploads/b.pdf"},
+        {
+            "file_id": "doc1",
+            "original_filename": "b.pdf",
+            "file_type": "pdf",
+            "file_size": 10,
+            "virtual_path": "/mnt/user-data/uploads/b.pdf",
+        },
         {"original_filename": "input.txt", "parsed_path": "/mnt/x"},
     ]
     assert _select_vision_attachments([], max_image_size=_VISION_LIMIT) == []

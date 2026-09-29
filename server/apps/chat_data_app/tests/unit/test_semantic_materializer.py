@@ -75,13 +75,15 @@ def _config(config_id="sc_order", enabled=True):
 
 
 def _materialize(runtime):
-    return asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_order", "sc_disabled"],
-    ))
+    return asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_order", "sc_disabled"],
+        )
+    )
 
 
 def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(monkeypatch):
@@ -144,12 +146,14 @@ def test_materializer_cache_key_includes_config_content(monkeypatch):
 def test_materializer_cache_key_includes_runtime_table_indexes(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     config = _config()
-    config["tables"] = [{
-        "table_name": "orders",
-        "primary_keys": [],
-        "unique_indexes": [],
-        "manual_indexes": [],
-    }]
+    config["tables"] = [
+        {
+            "table_name": "orders",
+            "primary_keys": [],
+            "unique_indexes": [],
+            "manual_indexes": [],
+        }
+    ]
     configs = [config]
     monkeypatch.setattr(
         semantic_materializer,
@@ -164,11 +168,13 @@ def test_materializer_cache_key_includes_runtime_table_indexes(monkeypatch):
 
     monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
     _materialize(_FakeRuntime())
-    config["tables"][0]["manual_indexes"] = [{
-        "index_type": "unique",
-        "index_name": "uniq_order_id",
-        "columns": ["order_id"],
-    }]
+    config["tables"][0]["manual_indexes"] = [
+        {
+            "index_type": "unique",
+            "index_name": "uniq_order_id",
+            "columns": ["order_id"],
+        }
+    ]
     runtime = _FakeRuntime()
     _materialize(runtime)
 
@@ -185,13 +191,15 @@ def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     )
     runtime = _FakeRuntime()
 
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=[],
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=[],
+        )
+    )
 
     assert result["directory"] == []
     assert result["paths"] == {}
@@ -213,25 +221,35 @@ def test_materializer_only_overwrites_selected_models(monkeypatch):
 
     monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
     runtime = _FakeRuntime()
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_keep"],
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+        )
+    )
 
     assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/semantic/订单模型__keep.yaml"]
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
 
 
 def test_prematerialize_skips_without_datasource_or_runtime():
-    assert asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
-        workspace_runtime=_FakeRuntime(), datasource_id=None, user_id="user_1",
-    )) == {"total": 0, "failed_ids": []}
-    assert asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
-        workspace_runtime=None, datasource_id="ds_1", user_id="user_1",
-    )) == {"total": 0, "failed_ids": []}
+    assert asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id=None,
+            user_id="user_1",
+        )
+    ) == {"total": 0, "failed_ids": []}
+    assert asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=None,
+            datasource_id="ds_1",
+            user_id="user_1",
+        )
+    ) == {"total": 0, "failed_ids": []}
 
 
 def test_materializer_reports_failed_ids_instead_of_silently_skipping(monkeypatch):
@@ -254,25 +272,29 @@ def test_materializer_reports_failed_ids_instead_of_silently_skipping(monkeypatc
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", failing_convert)
 
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=_FakeRuntime(),
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_ok", "sc_load_fail", "sc_render_fail"],
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_ok", "sc_load_fail", "sc_render_fail"],
+        )
+    )
 
     assert result["failed_ids"] == ["sc_load_fail", "sc_render_fail"]
     assert list(result["paths"]) == ["sc_ok"]
 
 
 def test_materializer_returns_empty_failed_ids_for_empty_scope():
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=_FakeRuntime(),
-        datasource_id="ds_1",
-        user_id="user_1",
-        semantic_config_ids=[],
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[],
+        )
+    )
 
     assert result["failed_ids"] == []
 
@@ -286,17 +308,20 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
         lambda: _FakeDatasourceManager(configs),
     )
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
     runtime = _FakeRuntime()
 
-    result = asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-    ))
+    result = asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+        )
+    )
 
     assert result == {"total": 2, "failed_ids": []}
     assert [path for path, _ in runtime.entries] == [
@@ -316,17 +341,20 @@ def test_prematerialize_loads_once_instead_of_per_model(monkeypatch):
     manager = _FakeDatasourceManager(configs)
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
     runtime = _FakeRuntime()
 
-    result = asyncio.run(semantic_materializer.prematerialize_enabled_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-    ))
+    result = asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+        )
+    )
 
     assert result == {"total": 20, "failed_ids": []}
     assert manager.bundle_calls == 1
@@ -349,20 +377,23 @@ def test_materializer_reuses_caller_supplied_configs(monkeypatch):
 
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", _NoService)
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
     runtime = _FakeRuntime()
 
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_a", "sc_off", "sc_missing"],
-        configs=configs,
-        column_dicts={},
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_a", "sc_off", "sc_missing"],
+            configs=configs,
+            column_dicts={},
+        )
+    )
 
     assert list(result["paths"]) == ["sc_a"]
     assert result["failed_ids"] == []
@@ -383,7 +414,8 @@ def test_cache_key_uses_update_time_and_batch_salt(monkeypatch):
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager([config]))
     calls = []
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, current, *, source_type="": calls.append(current["id"]) or "yaml",
     )
     _materialize(_FakeRuntime())
@@ -431,7 +463,9 @@ def test_normalize_loaded_config_backfills_id_and_joins_and_drops_disabled():
         "joins": [{"from": "a"}],
         "id": "sc_fallback",
     }
-    assert normalize({"enabled": True, "id": "sc_own", "joins": [{"from": "b"}], "relationships": [{"from": "a"}]}, "x") == {
+    assert normalize(
+        {"enabled": True, "id": "sc_own", "joins": [{"from": "b"}], "relationships": [{"from": "a"}]}, "x"
+    ) == {
         "enabled": True,
         "id": "sc_own",
         "joins": [{"from": "b"}],
@@ -452,24 +486,29 @@ def test_cache_eviction_respects_batch_size(monkeypatch):
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
     calls = []
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": calls.append(config["id"]) or "yaml",
     )
 
-    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=_FakeRuntime(),
-        datasource_id="ds_1",
-        user_id="user_1",
-        semantic_config_ids=[config["id"] for config in configs],
-    ))
+    asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[config["id"] for config in configs],
+        )
+    )
     assert len(calls) == 5
     # 容量按批扩到 5，第二轮全部命中
-    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=_FakeRuntime(),
-        datasource_id="ds_1",
-        user_id="user_1",
-        semantic_config_ids=[config["id"] for config in configs],
-    ))
+    asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[config["id"] for config in configs],
+        )
+    )
     assert len(calls) == 5
 
 
@@ -481,16 +520,19 @@ def test_cache_expansion_is_capped_by_hard_limit(monkeypatch):
     configs = [_config(f"sc_{index}") for index in range(5)]
     monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": "yaml",
     )
 
-    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=_FakeRuntime(),
-        datasource_id="ds_1",
-        user_id="user_1",
-        semantic_config_ids=[config["id"] for config in configs],
-    ))
+    asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=_FakeRuntime(),
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[config["id"] for config in configs],
+        )
+    )
 
     assert len(semantic_materializer._YAML_CACHE) == 3
 
@@ -504,7 +546,8 @@ def test_materializer_prunes_stale_files_only_for_full_scope(monkeypatch):
         lambda: _FakeDatasourceManager(configs),
     )
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
     stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
@@ -512,27 +555,31 @@ def test_materializer_prunes_stale_files_only_for_full_scope(monkeypatch):
     # 全量范围（prune_stale=True）：残留文件被清理，有效文件保留
     runtime = _FakeRuntime()
     runtime.files.add(stale)
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_keep"],
-        prune_stale=True,
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+            prune_stale=True,
+        )
+    )
     assert runtime.deleted == [stale]
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
 
     # 单模型范围（默认）：即使目录有残留也不清理，避免误删其它模型文件
     single_runtime = _FakeRuntime()
     single_runtime.files.add(stale)
-    asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=single_runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_keep"],
-    ))
+    asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=single_runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+        )
+    )
     assert single_runtime.deleted == []
 
 
@@ -544,7 +591,8 @@ def test_prune_stale_survives_list_dir_failure(monkeypatch):
         lambda: _FakeDatasourceManager([_config("sc_keep")]),
     )
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
 
@@ -553,14 +601,16 @@ def test_prune_stale_survives_list_dir_failure(monkeypatch):
             raise RuntimeError("backend unavailable")
 
     runtime = _BrokenListRuntime()
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_keep"],
-        prune_stale=True,
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+            prune_stale=True,
+        )
+    )
     # 清理失败不影响物化结果本身
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
     assert runtime.deleted == []
@@ -575,7 +625,8 @@ def test_prune_stale_survives_delete_failure(monkeypatch):
         lambda: _FakeDatasourceManager([_config("sc_keep")]),
     )
     monkeypatch.setattr(
-        semantic_materializer.ChatDataToOssieConverter, "convert",
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
     stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
@@ -586,14 +637,16 @@ def test_prune_stale_survives_delete_failure(monkeypatch):
 
     runtime = _BlockedDeleteRuntime()
     runtime.files.add(stale)
-    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
-        workspace_runtime=runtime,
-        datasource_id="ds_1",
-        user_id="user_1",
-        source_type="mysql",
-        semantic_config_ids=["sc_keep"],
-        prune_stale=True,
-    ))
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+            prune_stale=True,
+        )
+    )
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
     assert runtime.deleted == []
 

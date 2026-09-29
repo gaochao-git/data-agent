@@ -122,15 +122,15 @@ CHART_TYPE_ITEMS: tuple[ChartTypeItem, ...] = (
 CHART_TYPES = tuple(item["key"] for item in CHART_TYPE_ITEMS)
 CHART_TYPE_SET = set(CHART_TYPES)
 CHART_TYPE_LABELS = {item["key"]: item["label"] for item in CHART_TYPE_ITEMS}
-CHART_TYPES_REQUIRING_DATA: frozenset[ChartType] = frozenset({
-    "kpi", "bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"
-})
-CHART_TYPES_REQUIRING_X: frozenset[ChartType] = frozenset({
-    "bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"
-})
-CHART_TYPES_REQUIRING_Y: frozenset[ChartType] = frozenset({
-    "kpi", "bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"
-})
+CHART_TYPES_REQUIRING_DATA: frozenset[ChartType] = frozenset(
+    {"kpi", "bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"}
+)
+CHART_TYPES_REQUIRING_X: frozenset[ChartType] = frozenset(
+    {"bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"}
+)
+CHART_TYPES_REQUIRING_Y: frozenset[ChartType] = frozenset(
+    {"kpi", "bar", "horizontal_bar", "line", "area", "pie", "map", "combo", "funnel", "graph"}
+)
 
 
 def normalize_chart_type(chart_type: Any) -> ChartType:

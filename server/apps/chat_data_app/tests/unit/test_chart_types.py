@@ -33,13 +33,15 @@ def test_chart_type_normalization_does_not_accept_aliases():
 
 
 def test_graph_chart_spec_accepts_nodes_links_payload():
-    payload = parse_chart_spec_payload_value({
-        "version": "1.0",
-        "title": "商品订单关系图",
-        "chart_type": "graph",
-        "nodes": [{"name": "商品A"}, {"name": "订单1"}],
-        "links": [{"source": "商品A", "target": "订单1", "value": 1}],
-    })
+    payload = parse_chart_spec_payload_value(
+        {
+            "version": "1.0",
+            "title": "商品订单关系图",
+            "chart_type": "graph",
+            "nodes": [{"name": "商品A"}, {"name": "订单1"}],
+            "links": [{"source": "商品A", "target": "订单1", "value": 1}],
+        }
+    )
 
     assert payload is not None
     assert payload["chart_type"] == "graph"
@@ -47,15 +49,17 @@ def test_graph_chart_spec_accepts_nodes_links_payload():
 
 
 def test_graph_chart_spec_accepts_data_nodes_links_payload():
-    payload = parse_chart_spec_payload_value({
-        "version": "1.0",
-        "title": "订单-商品关系图",
-        "chart_type": "graph",
-        "data": {
-            "nodes": [{"id": "ORD2024000001", "label": "ORD2024000001"}],
-            "links": [{"source": "ORD2024000001", "target": "商品A", "value": 1}],
-        },
-    })
+    payload = parse_chart_spec_payload_value(
+        {
+            "version": "1.0",
+            "title": "订单-商品关系图",
+            "chart_type": "graph",
+            "data": {
+                "nodes": [{"id": "ORD2024000001", "label": "ORD2024000001"}],
+                "links": [{"source": "ORD2024000001", "target": "商品A", "value": 1}],
+            },
+        }
+    )
 
     assert payload is not None
     assert payload["chart_type"] == "graph"
@@ -63,15 +67,17 @@ def test_graph_chart_spec_accepts_data_nodes_links_payload():
 
 
 def test_graph_chart_spec_accepts_data_nodes_edges_payload():
-    payload = parse_chart_spec_payload_value({
-        "version": "1.0",
-        "title": "订单-商品关系图",
-        "chart_type": "graph",
-        "data": {
-            "nodes": [{"id": "ORD2024000001", "label": "ORD2024000001"}],
-            "edges": [{"source": "ORD2024000001", "target": "商品A", "value": 1}],
-        },
-    })
+    payload = parse_chart_spec_payload_value(
+        {
+            "version": "1.0",
+            "title": "订单-商品关系图",
+            "chart_type": "graph",
+            "data": {
+                "nodes": [{"id": "ORD2024000001", "label": "ORD2024000001"}],
+                "edges": [{"source": "ORD2024000001", "target": "商品A", "value": 1}],
+            },
+        }
+    )
 
     assert payload is not None
     assert payload["chart_type"] == "graph"

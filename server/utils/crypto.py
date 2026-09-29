@@ -61,11 +61,11 @@ def encrypt_password(password: str) -> str:
     # 加密（gmssl 默认使用 PKCS7 填充）
     crypt_sm4 = CryptSM4()
     crypt_sm4.set_key(key, SM4_ENCRYPT)
-    encrypted = crypt_sm4.crypt_cbc(iv, password.encode('utf-8'))
+    encrypted = crypt_sm4.crypt_cbc(iv, password.encode("utf-8"))
 
     # 格式：base64(iv):base64(ciphertext)
-    iv_b64 = base64.b64encode(iv).decode('ascii')
-    cipher_b64 = base64.b64encode(encrypted).decode('ascii')
+    iv_b64 = base64.b64encode(iv).decode("ascii")
+    cipher_b64 = base64.b64encode(encrypted).decode("ascii")
     return f"{iv_b64}:{cipher_b64}"
 
 
@@ -89,7 +89,9 @@ def decrypt_password(encrypted_password: str) -> str:
     # 解析格式：base64(iv):base64(ciphertext)
     parts = encrypted_password.split(":")
     if len(parts) != 2:
-        raise ValueError("密码格式错误，应为 base64(iv):base64(ciphertext)，请使用 python scripts/crypto.py encrypt 加密")
+        raise ValueError(
+            "密码格式错误，应为 base64(iv):base64(ciphertext)，请使用 python scripts/crypto.py encrypt 加密"
+        )
 
     try:
         iv = base64.b64decode(parts[0], validate=True)
@@ -105,7 +107,7 @@ def decrypt_password(encrypted_password: str) -> str:
         crypt_sm4 = CryptSM4()
         crypt_sm4.set_key(key, SM4_DECRYPT)
         decrypted = crypt_sm4.crypt_cbc(iv, ciphertext)
-        return decrypted.decode('utf-8')
+        return decrypted.decode("utf-8")
     except Exception:
         raise ValueError("密码解密失败，密钥或密文不匹配，请重新加密") from None
 

@@ -12,13 +12,15 @@ from apps.chat_data_app.services.datasource import credentials
 
 
 def test_sanitize_source_config_removes_sensitive_fields():
-    assert credentials.sanitize_source_config({
-        "host": "127.0.0.1",
-        "user": "root",
-        "username": "hive",
-        "password": "secret",
-        "database": "demo",
-    }) == {"host": "127.0.0.1", "database": "demo"}
+    assert credentials.sanitize_source_config(
+        {
+            "host": "127.0.0.1",
+            "user": "root",
+            "username": "hive",
+            "password": "secret",
+            "database": "demo",
+        }
+    ) == {"host": "127.0.0.1", "database": "demo"}
     assert credentials.sanitize_source_config(None) == {}
 
 

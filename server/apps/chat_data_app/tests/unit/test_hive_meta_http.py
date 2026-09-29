@@ -4,7 +4,7 @@ import sys
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -15,11 +15,16 @@ from apps.chat_data_app.services.datasource.metadata import _build_payload
 
 
 def test_hive_meta_payload_uses_internal_org_fields():
-    payload = _build_payload({
-        "org_code": "Z2002131000014",
-        "org_name": "机构名称xx",
-        "database": "default",
-    }, ["orders"], user_id="user_a", username="测试用户")
+    payload = _build_payload(
+        {
+            "org_code": "Z2002131000014",
+            "org_name": "机构名称xx",
+            "database": "default",
+        },
+        ["orders"],
+        user_id="user_a",
+        username="测试用户",
+    )
 
     assert payload == {
         "source_type": "hive",
@@ -30,13 +35,15 @@ def test_hive_meta_payload_uses_internal_org_fields():
         "username": "测试用户",
         "table_names": ["orders"],
     }
-    legacy_payload = _build_payload({
-        "org_code": "Z2002131000014",
-        "org_name": "机构名称xx",
-        "host": "localhost",
-        "port": 10000,
-        "database": "default",
-    })
+    legacy_payload = _build_payload(
+        {
+            "org_code": "Z2002131000014",
+            "org_name": "机构名称xx",
+            "host": "localhost",
+            "port": 10000,
+            "database": "default",
+        }
+    )
     assert legacy_payload["host"] == "localhost"
     assert legacy_payload["port"] == 10000
 
@@ -115,24 +122,29 @@ def test_hive_meta_log_summary_helpers():
 
 
 def test_hive_meta_table_and_schema_normalization():
-    tables = hive_meta_http._normalize_table_items([
-        {"table_name": "orders", "table_description": "订单表"},
-        {"table_name": "users"},
-    ])
+    tables = hive_meta_http._normalize_table_items(
+        [
+            {"table_name": "orders", "table_description": "订单表"},
+            {"table_name": "users"},
+        ]
+    )
     assert tables == [
         {"table_name": "orders", "description": "订单表"},
         {"table_name": "users", "description": ""},
     ]
 
-    schema = hive_meta_http._normalize_schema_tables([
-        {
-            "table_name": "orders",
-            "columns": [
-                {"name": "order_id", "type": "string", "description": "订单ID", "is_partition": False},
-                {"name": "dt", "type": "string", "is_partition": True},
-            ],
-        }
-    ], {"orders": "订单表"})
+    schema = hive_meta_http._normalize_schema_tables(
+        [
+            {
+                "table_name": "orders",
+                "columns": [
+                    {"name": "order_id", "type": "string", "description": "订单ID", "is_partition": False},
+                    {"name": "dt", "type": "string", "is_partition": True},
+                ],
+            }
+        ],
+        {"orders": "订单表"},
+    )
 
     assert schema[0]["description"] == "订单表"
     assert schema[0]["columns"][0] == {
@@ -154,7 +166,10 @@ def test_hive_meta_table_and_schema_normalization():
         ([{"table_name": "orders", "columns": [{"name": "", "type": "string", "is_partition": False}]}], "缺少 name"),
         ([{"table_name": "orders", "columns": [{"name": "id", "type": "", "is_partition": False}]}], "缺少 type"),
         ([{"table_name": "orders", "columns": [{"name": "id", "type": "string"}]}], "缺少 is_partition"),
-        ([{"table_name": "orders", "columns": [{"name": "id", "type": "string", "is_partition": "false"}]}], "必须是布尔值"),
+        (
+            [{"table_name": "orders", "columns": [{"name": "id", "type": "string", "is_partition": "false"}]}],
+            "必须是布尔值",
+        ),
     ]
     for payload, expected in invalid_payloads:
         with pytest.raises(RuntimeError, match=expected):
@@ -197,8 +212,13 @@ async def test_hive_meta_http_fetch_tables_and_schema(monkeypatch):
     monkeypatch.setattr(hive_meta_http, "_post_json", fake_post_json)
     source_config = {"org_code": "org_1", "host": "127.0.0.1", "database": "default"}
 
-    assert await hive_meta_http.get_hive_meta_tables_async(source_config, user_id="user_a", username="测试用户") == ["orders", "users"]
-    schema = await hive_meta_http.get_hive_meta_schema_async(source_config, ["users"], user_id="user_a", username="测试用户")
+    assert await hive_meta_http.get_hive_meta_tables_async(source_config, user_id="user_a", username="测试用户") == [
+        "orders",
+        "users",
+    ]
+    schema = await hive_meta_http.get_hive_meta_schema_async(
+        source_config, ["users"], user_id="user_a", username="测试用户"
+    )
 
     assert schema[0]["table_name"] == "users"
     assert schema[0]["description"] == "用户表"
@@ -218,7 +238,12 @@ async def test_hive_meta_http_fetch_schema_defaults_to_all_tables_and_filters_bl
     async def fake_post_json(url, payload):
         calls.append((url, payload))
         if url == "http://meta/tables":
-            return {"tables": [{"table_name": "orders", "table_description": ""}, {"table_name": "users", "table_description": ""}]}
+            return {
+                "tables": [
+                    {"table_name": "orders", "table_description": ""},
+                    {"table_name": "users", "table_description": ""},
+                ]
+            }
         table_name = payload["table_names"][0]
         return {
             "tables": [
@@ -325,11 +350,14 @@ async def test_hive_meta_post_json_uses_http_client(monkeypatch):
 
     assert result == {"tables": []}
     # 构造层：verify 单点 + timeout + headers；post 层只带 json 载荷
-    assert calls[0] == ("init", {
-        "verify": False,
-        "timeout": 12,
-        "headers": {"Content-Type": "application/json", "Authorization": "Bearer secret"},
-    })
+    assert calls[0] == (
+        "init",
+        {
+            "verify": False,
+            "timeout": 12,
+            "headers": {"Content-Type": "application/json", "Authorization": "Bearer secret"},
+        },
+    )
     assert calls[2] == ("post", "http://meta/tables", {"org_code": "org_1"})
     assert "raise_for_status" in calls
 
@@ -385,7 +413,9 @@ async def test_hive_meta_post_json_failure_writes_external_api_alarm(monkeypatch
             raise RuntimeError("meta down")
 
     monkeypatch.setattr(httpx, "AsyncClient", ErrorClient)
-    monkeypatch.setattr(hive_meta_http, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
+    monkeypatch.setattr(
+        hive_meta_http, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs))
+    )
 
     with pytest.raises(RuntimeError, match="meta down"):
         await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})

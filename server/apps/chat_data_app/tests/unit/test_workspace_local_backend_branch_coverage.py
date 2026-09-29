@@ -70,10 +70,12 @@ def test_iter_text_line_fragments_handles_cr_at_chunk_boundary():
 
 def test_iter_text_line_fragments_flushes_trailing_cr():
     assert list(lb._iter_text_line_fragments(_ChunkedReader(["xy\r"]))) == [
-        ("xy", False), ("\r", False),
+        ("xy", False),
+        ("\r", False),
     ]
     assert list(lb._iter_text_line_fragments(_ChunkedReader(["a\r\nb"]))) == [
-        ("a", True), ("b", False),
+        ("a", True),
+        ("b", False),
     ]
 
 
@@ -160,7 +162,8 @@ def test_delete_local_path_branches(tmp_path):
         lb._delete_local_path(str(root), "/mnt/user-data/workspace/sub", False, "file")
 
     assert lb._delete_local_path(str(root), "/mnt/user-data/workspace/a.txt", False, "file") == {
-        "path": "/mnt/user-data/workspace/a.txt", "type": "file",
+        "path": "/mnt/user-data/workspace/a.txt",
+        "type": "file",
     }
     assert not (workspace / "a.txt").exists()
     assert lb._delete_local_path(str(root), "/mnt/user-data/workspace/empty", False, "dir")["type"] == "dir"
@@ -204,14 +207,18 @@ def test_copy_local_path_branches(tmp_path):
 
     with pytest.raises(ValueError, match="系统结果目录"):
         lb._copy_local_path(
-            str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", "/mnt/user-data/workspace/r.json",
+            str(root),
+            f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json",
+            "/mnt/user-data/workspace/r.json",
         )
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
         lb._copy_local_path(str(root), "/mnt/user-data/workspace/missing.txt", "/mnt/user-data/workspace/x.txt")
     with pytest.raises(ValueError, match="只支持复制单个文件"):
         lb._copy_local_path(str(root), "/mnt/user-data/workspace/dir", "/mnt/user-data/workspace/x.txt")
     with pytest.raises(ValueError, match="不允许操作符号链接"):
-        lb._copy_local_resolved_path(str(root), link, "/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/x.txt")
+        lb._copy_local_resolved_path(
+            str(root), link, "/mnt/user-data/workspace/link.txt", "/mnt/user-data/workspace/x.txt"
+        )
     with pytest.raises(ValueError, match="目标路径已存在"):
         lb._copy_local_path(str(root), "/mnt/user-data/workspace/note.txt", "/mnt/user-data/workspace/note.txt")
 
@@ -279,10 +286,14 @@ def test_search_local_workspace_files_branches(tmp_path):
     assert lb._search_local_workspace_files(runtime, "", "*.nope", 10) == []
 
     skill_found = lb._search_local_workspace_files(
-        runtime, "/mnt/skills/demo-skill", "*.md", 10,
+        runtime,
+        "/mnt/skills/demo-skill",
+        "*.md",
+        10,
     )
     assert {item["path"] for item in skill_found} == {
-        "/mnt/skills/demo-skill/SKILL.md", "/mnt/skills/demo-skill/references/guide.md",
+        "/mnt/skills/demo-skill/SKILL.md",
+        "/mnt/skills/demo-skill/references/guide.md",
     }
 
     with pytest.raises(ValueError, match="搜索路径必须是目录"):
@@ -314,7 +325,12 @@ def test_grep_local_workspace_text_branches(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="路径不存在"):
         lb._grep_local_workspace_text(
-            runtime, "/mnt/user-data/workspace/missing-dir", ["x"], "**/*", 10, 100,
+            runtime,
+            "/mnt/user-data/workspace/missing-dir",
+            ["x"],
+            "**/*",
+            10,
+            100,
         )
 
     monkeypatch.setattr(lb, "_rg_available", False)
@@ -341,9 +357,13 @@ def test_grep_local_workspace_text_branches(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lb.subprocess, "run", ok)
     payload = lb._grep_local_workspace_text(runtime, "/mnt/user-data/workspace", ["hello"], "*.py", 10, 100)
-    assert payload["matches"] == [{
-        "path": "/mnt/user-data/workspace/a.py", "line_number": 1, "line": "hello world",
-    }]
+    assert payload["matches"] == [
+        {
+            "path": "/mnt/user-data/workspace/a.py",
+            "line_number": 1,
+            "line": "hello world",
+        }
+    ]
     assert payload["has_more"] is False
 
 
@@ -362,7 +382,12 @@ def test_grep_local_workspace_text_skill_paths(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lb.subprocess, "run", ok)
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/skills/demo-skill", ["guide"], "**/*", 10, 100,
+        runtime,
+        "/mnt/skills/demo-skill",
+        ["guide"],
+        "**/*",
+        10,
+        100,
     )
     assert payload["matches"][0]["path"].startswith("/mnt/skills/demo-skill")
 
@@ -380,21 +405,36 @@ def test_grep_local_workspace_text_regex_case_context_and_modes(tmp_path, monkey
 
     # 正则：-F 字面量模式下无法命中的 \w+ 模式
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", [r"def \w+_impl"], "**/*", 10, 20000,
+        runtime,
+        "/mnt/user-data/workspace",
+        [r"def \w+_impl"],
+        "**/*",
+        10,
+        20000,
         use_regex=True,
     )
     assert [m["line_number"] for m in payload["matches"]] == [4, 7]
 
     # 忽略大小写：字面 error 命中 Error/error 两行
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["error"], "*.md", 10, 20000,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["error"],
+        "*.md",
+        10,
+        20000,
         ignore_case=True,
     )
     assert [m["line_number"] for m in payload["matches"]] == [1, 2]
 
     # 上下文归属：前 1 行是空行（第 3 行），后 1 行是 return 2
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["two_impl"], "*.py", 10, 20000,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["two_impl"],
+        "*.py",
+        10,
+        20000,
         context_lines=1,
     )
     match = payload["matches"][0]
@@ -404,14 +444,24 @@ def test_grep_local_workspace_text_regex_case_context_and_modes(tmp_path, monkey
 
     # count 模式：可见路径 + 每文件命中计数
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["impl"],
+        "**/*",
+        10,
+        20000,
         output_mode="count",
     )
     assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py", "match_count": 2}]
 
     # files_with_matches 模式：仅命中文件清单
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["impl"], "**/*", 10, 20000,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["impl"],
+        "**/*",
+        10,
+        20000,
         output_mode="files_with_matches",
     )
     assert payload["entries"] == [{"path": "/mnt/user-data/workspace/a.py"}]
@@ -429,7 +479,12 @@ def test_grep_context_multi_file_multi_hit_no_pollution(tmp_path, monkeypatch):
     monkeypatch.setattr(lb, "_rg_available", True)
 
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 100000,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["HIT"],
+        "**/*",
+        50,
+        100000,
         context_lines=2,
     )
     by_key = {(m["path"].rsplit("/", 1)[-1], m["line_number"]): m for m in payload["matches"]}
@@ -445,7 +500,12 @@ def test_grep_context_multi_file_multi_hit_no_pollution(tmp_path, monkeypatch):
     # 预算按结果计费：紧预算（30 字符，足够 3-4 条命中）下截断发生在贴近预算处，
     # 而不是被上下文行重复计费提前腰斩
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["HIT"], "**/*", 50, 30,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["HIT"],
+        "**/*",
+        50,
+        30,
         context_lines=2,
     )
     assert payload["has_more"] is True
@@ -462,12 +522,18 @@ def test_grep_context_trailing_after_respects_max_chars(tmp_path, monkeypatch):
     runtime, root = _runtime(tmp_path)
     ws = root / "workspace"
     (ws / "tail.txt").write_text(
-        "HIT\n" + "A" * 100 + "\n" + "B" * 100 + "\n" + "C" * 100 + "\n", encoding="utf-8",
+        "HIT\n" + "A" * 100 + "\n" + "B" * 100 + "\n" + "C" * 100 + "\n",
+        encoding="utf-8",
     )
     monkeypatch.setattr(lb, "_rg_available", True)
 
     payload = lb._grep_local_workspace_text(
-        runtime, "/mnt/user-data/workspace", ["HIT"], "tail.txt", 50, 50,
+        runtime,
+        "/mnt/user-data/workspace",
+        ["HIT"],
+        "tail.txt",
+        50,
+        50,
         context_lines=3,
     )
     # 剩余预算装不下任何一条 after 行：全部不进入结果，has_more 置位
@@ -494,12 +560,17 @@ async def test_backend_dir_operations_delegate_to_local_helpers(tmp_path):
     created = await backend.create_dir(runtime, path="/mnt/user-data/workspace/via-backend")
     assert created["path"] == "/mnt/user-data/workspace/via-backend"
     deleted = await backend.delete_path(
-        runtime, path="/mnt/user-data/workspace/via-backend", recursive=False, expected_type="dir",
+        runtime,
+        path="/mnt/user-data/workspace/via-backend",
+        recursive=False,
+        expected_type="dir",
     )
     assert deleted["type"] == "dir"
     (root / "workspace" / "src.txt").write_text("s", encoding="utf-8")
     moved = await backend.move_path(
-        runtime, source_path="/mnt/user-data/workspace/src.txt", destination_path="/mnt/user-data/workspace/dst.txt",
+        runtime,
+        source_path="/mnt/user-data/workspace/src.txt",
+        destination_path="/mnt/user-data/workspace/dst.txt",
     )
     assert moved["destination_path"] == "/mnt/user-data/workspace/dst.txt"
 
@@ -518,7 +589,10 @@ async def test_backend_list_and_search_refresh_skill_snapshot(tmp_path, monkeypa
     entries = await backend.list_dir(runtime, path="/mnt/skills/demo-skill", max_depth=2)
     assert any("SKILL.md" in str(item["path"]) for item in entries)
     found = await backend.search_files(
-        runtime, path="/mnt/skills/demo-skill", pattern="*.md", max_results=5,
+        runtime,
+        path="/mnt/skills/demo-skill",
+        pattern="*.md",
+        max_results=5,
     )
     assert found
     assert refreshed == [True, True]
@@ -548,7 +622,9 @@ async def test_backend_render_office_html_delegates(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lb, "_render_local_office_html", fake_render)
     result = await runtime.backend.render_office_html(
-        runtime, file_path="/mnt/user-data/workspace/a.docx", max_chars=50,
+        runtime,
+        file_path="/mnt/user-data/workspace/a.docx",
+        max_chars=50,
     )
     assert result["html"] == "<html/>"
     assert seen["file_path"] == "/mnt/user-data/workspace/a.docx" and seen["max_chars"] == 50
@@ -566,7 +642,9 @@ async def test_run_bash_timeout_and_skill_cwd(tmp_path):
     assert timed_out["stderr"] == "command timed out"
 
     from_skill = await runtime.run_bash(
-        command="pwd", cwd="/mnt/skills/demo-skill", timeout_seconds=30,
+        command="pwd",
+        cwd="/mnt/skills/demo-skill",
+        timeout_seconds=30,
     )
     assert from_skill["exit_code"] == 0
     # runtime-skills 快照在工作区根之外，cwd 回落为物理路径（不做虚拟遮蔽）
@@ -584,7 +662,9 @@ async def test_run_officecli_requires_binary_and_rejects_skill_cwd(tmp_path, mon
     monkeypatch.setattr(lb.shutil, "which", lambda _name: "/usr/bin/officecli")
     with pytest.raises(ValueError, match="不允许将 cwd 设置为技能目录"):
         await runtime.run_officecli(
-            args=["view", "a.docx", "text"], cwd="/mnt/skills/demo-skill", timeout_seconds=10,
+            args=["view", "a.docx", "text"],
+            cwd="/mnt/skills/demo-skill",
+            timeout_seconds=10,
         )
 
 
@@ -613,7 +693,8 @@ def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
     # 列表口径同样对齐沙箱：跳过链接，不抛错、也不泄漏目标内容
     listed = lb._list_local_workspace_dir(
         SimpleNamespace(workspace_root=str(root), runtime_skills_dir=None),
-        "/mnt/user-data/workspace", 3,
+        "/mnt/user-data/workspace",
+        3,
     )
     paths = {item["path"] for item in listed}
     assert "/mnt/user-data/workspace/real.txt" in paths

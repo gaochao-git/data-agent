@@ -33,9 +33,9 @@ class FakeDao:
     """未显式配置的方法一律返回 None 并记录调用名，便于断言调用路径。"""
 
     def __init__(self, **returns):
-        returns.setdefault("now", NOW)   # 时间到处都要用，未显式覆盖时给稳定值
+        returns.setdefault("now", NOW)  # 时间到处都要用，未显式覆盖时给稳定值
         for list_method in ("claim_messages", "list_claimed_messages", "list_expired_runs"):
-            returns.setdefault(list_method, [])   # 列表型 DAO 真实实现不会返回 None
+            returns.setdefault(list_method, [])  # 列表型 DAO 真实实现不会返回 None
         self.returns = returns
         self.calls: list[str] = []
 
@@ -129,7 +129,7 @@ def test_load_run_content_handles_broken_payloads():
     load = AgentInboxService._load_run_content
     assert load("not json") == {}
     assert load(None) == {}
-    assert load("[1, 2]") == {}          # 非 dict
+    assert load("[1, 2]") == {}  # 非 dict
     assert load('{"a": 1}') == {"a": 1}
 
 
@@ -154,22 +154,18 @@ def test_question_response_requires_dict_payload():
     run = SimpleNamespace(run_id="r1", record_content=json.dumps({"pending_question": "not-a-dict"}))
     assert service._question_response(run) is None
 
-    valid = SimpleNamespace(
-        run_id="r1", record_content=json.dumps({"pending_question": {"question_id": "q1"}})
-    )
+    valid = SimpleNamespace(run_id="r1", record_content=json.dumps({"pending_question": {"question_id": "q1"}}))
     assert service._question_response(valid) == {"run_id": "r1", "question_id": "q1"}
 
 
 def test_validate_question_answer_rules():
     validate = AgentInboxService._validate_question_answer
     question = {
-        "questions": [
-            {"id": "scope", "options": [{"label": "全部"}, {"label": "本月"}], "multi_select": False}
-        ]
+        "questions": [{"id": "scope", "options": [{"label": "全部"}, {"label": "本月"}], "multi_select": False}]
     }
 
-    validate(question, {"cancelled": True})                                    # 取消：直接放行
-    validate(question, {"answers": [{"id": "scope", "skipped": True}]})       # 跳过
+    validate(question, {"cancelled": True})  # 取消：直接放行
+    validate(question, {"answers": [{"id": "scope", "skipped": True}]})  # 跳过
     validate(question, {"answers": [{"id": "scope", "selected": [], "custom": "其他"}]})
 
     with pytest.raises(ValueError, match="answers 必须是数组"):
@@ -193,7 +189,7 @@ def test_validate_question_answer_rules():
 def test_restore_unstarted_question_only_rolls_back_unstarted():
     content = {"resuming_question": {"question_id": "q"}, "pending_answer": {}, "resume_started": True}
     AgentInboxService._restore_unstarted_question(content)
-    assert content["resuming_question"] == {"question_id": "q"}      # 已开始：不回滚
+    assert content["resuming_question"] == {"question_id": "q"}  # 已开始：不回滚
 
     content = {"resuming_question": {"question_id": "q"}, "pending_answer": {"answers": []}}
     AgentInboxService._restore_unstarted_question(content)
@@ -231,13 +227,13 @@ async def test_start_run_selected_message_is_adopted():
     run_id, messages = await service.start_run("conv-1", "user-1", "用户一", selected_message_id="m1")
     assert run_id
     assert selected.run_id == run_id
-    assert "adopt_pending_messages" not in service._dao.calls   # 单条迁移不走批量接管
+    assert "adopt_pending_messages" not in service._dao.calls  # 单条迁移不走批量接管
 
 
 @pytest.mark.asyncio
 async def test_prepare_pending_run_returns_none_for_ineligible_runs():
-    assert await _service().prepare_pending_run("r1") is None                       # Run 不存在
-    assert await _service(get_run_by_id=_run()).prepare_pending_run("r1") is None   # 会话不存在
+    assert await _service().prepare_pending_run("r1") is None  # Run 不存在
+    assert await _service(get_run_by_id=_run()).prepare_pending_run("r1") is None  # 会话不存在
     assert await _service(get_run_by_id=_run(), lock_thread=SimpleNamespace()).prepare_pending_run("r1") is None
 
     # 非 pending 不接管
@@ -351,16 +347,16 @@ async def test_reconcile_recovered_messages():
         await _service().reconcile_recovered_messages("r1", set())
 
     checkpointed = SimpleNamespace(message_id="m1", record_status="claimed")
-    await _service(
-        get_run_by_id_for_update=_run(), list_claimed_messages=[checkpointed]
-    ).reconcile_recovered_messages("r1", {"m1"}, owner_token="tok-1")
+    await _service(get_run_by_id_for_update=_run(), list_claimed_messages=[checkpointed]).reconcile_recovered_messages(
+        "r1", {"m1"}, owner_token="tok-1"
+    )
     assert checkpointed.record_status == "consumed"
 
     orphan = SimpleNamespace(message_id="m2", record_status="claimed")
-    await _service(
-        get_run_by_id_for_update=_run(), list_claimed_messages=[orphan]
-    ).reconcile_recovered_messages("r1", set(), owner_token="tok-1")
-    assert orphan.record_status == "pending"          # 旧 Worker 已领取但未落检查点 → 退回中间件
+    await _service(get_run_by_id_for_update=_run(), list_claimed_messages=[orphan]).reconcile_recovered_messages(
+        "r1", set(), owner_token="tok-1"
+    )
+    assert orphan.record_status == "pending"  # 旧 Worker 已领取但未落检查点 → 退回中间件
 
 
 @pytest.mark.asyncio
@@ -405,7 +401,9 @@ async def test_claim_question_answer_rejects_ineligible():
         await _service(lock_thread=SimpleNamespace()).claim_question_answer(
             "conv-1", "user-1", "用户一", "q1", {"answers": []}
         )
-    mismatched = _run(record_status="waiting_user", record_content=json.dumps({"pending_question": {"question_id": "other"}}))
+    mismatched = _run(
+        record_status="waiting_user", record_content=json.dumps({"pending_question": {"question_id": "other"}})
+    )
     with pytest.raises(AgentQuestionNotFoundError):
         await _service(lock_thread=SimpleNamespace(), get_active_run=mismatched).claim_question_answer(
             "conv-1", "user-1", "用户一", "q1", {"answers": []}
@@ -414,7 +412,7 @@ async def test_claim_question_answer_rejects_ineligible():
 
 @pytest.mark.asyncio
 async def test_record_terminal_event():
-    await _service().record_terminal_event("r1", "1-1")      # Run 不存在：静默返回
+    await _service().record_terminal_event("r1", "1-1")  # Run 不存在：静默返回
 
     run = _run()
     await _service(get_run_by_id_for_update=run).record_terminal_event("r1", "1-1")
@@ -443,17 +441,21 @@ async def test_restore_question_answer_guards_and_rollback():
     await _service(get_run_by_id_for_update=without_question).restore_question_answer("r1", "user-1", "用户一", "tok-1")
     assert "pending_question" not in json.loads(without_question.record_content)
 
-    without_answer = _run(record_status="active", record_content=json.dumps({"resuming_question": {"question_id": "q"}}))
+    without_answer = _run(
+        record_status="active", record_content=json.dumps({"resuming_question": {"question_id": "q"}})
+    )
     await _service(get_run_by_id_for_update=without_answer).restore_question_answer("r1", "user-1", "用户一", "tok-1")
     assert json.loads(without_answer.record_content).get("pending_question") is None
 
     full = _run(
         record_status="active",
-        record_content=json.dumps({
-            "resuming_question": {"question_id": "q"},
-            "pending_answer": {"answers": []},
-            "resume_started": True,
-        }),
+        record_content=json.dumps(
+            {
+                "resuming_question": {"question_id": "q"},
+                "pending_answer": {"answers": []},
+                "resume_started": True,
+            }
+        ),
     )
     await _service(get_run_by_id_for_update=full).restore_question_answer("r1", "user-1", "用户一", "tok-1")
     content = json.loads(full.record_content)
@@ -476,8 +478,8 @@ async def test_enqueue_message_validation():
 
 @pytest.mark.asyncio
 async def test_mark_consumed_guards():
-    await _service().mark_consumed("r1", [], "tok-1")          # 空列表：直接返回
-    await _service().mark_consumed("r1", ["m1"], "tok-1")     # Run 不存在：静默返回
+    await _service().mark_consumed("r1", [], "tok-1")  # 空列表：直接返回
+    await _service().mark_consumed("r1", ["m1"], "tok-1")  # Run 不存在：静默返回
 
 
 @pytest.mark.asyncio

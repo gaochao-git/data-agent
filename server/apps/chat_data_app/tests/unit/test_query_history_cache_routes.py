@@ -58,9 +58,15 @@ def route_db(monkeypatch):
     monkeypatch.setattr(query_providers, "get_session", fake_get_session)
     monkeypatch.setattr(query_runtime, "get_session", fake_get_session)
     monkeypatch.setattr(query_cache, "get_session", fake_get_session)
-    monkeypatch.setattr(query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
-    monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
-    monkeypatch.setattr(query_favorites_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(
+        query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户")
+    )
+    monkeypatch.setattr(
+        query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户")
+    )
+    monkeypatch.setattr(
+        query_favorites_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户")
+    )
     yield session_factory
     asyncio.run(engine.dispose())
 
@@ -76,242 +82,255 @@ def _payload(response):
 async def _seed_query_history(session_factory):
     now = datetime(2026, 6, 2, 10, 0, 0)
     async with session_factory() as session:
-        session.add_all([
-            ChatDataQueryTask(
-                task_id="task_builder",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="builder",
-                task_status="succeeded",
-                request_payload=json.dumps({"operator_name": "可视化用户"}),
-                create_time=now,
-                update_time=now,
-                create_by_name="可视化用户",
-            ),
-            ChatDataQueryTask(
-                task_id="task_agent",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="agent",
-                task_status="cancelled",
-                request_payload=json.dumps({"operator_name": "智能用户"}),
-                create_time=now - timedelta(minutes=1),
-                update_time=now - timedelta(minutes=1),
-            ),
-            ChatDataQueryTask(
-                task_id="task_dashboard",
-                task_type="dashboard_batch",
-                datasource_id="ds1",
-                query_type="dashboard",
-                task_status="succeeded",
-                request_payload=json.dumps({
-                    "operator_name": "看板用户",
-                    "panel_execution_plan": {
-                        "panel_1": {
-                            "mode": "multi",
-                            "member_datasource_ids": ["m1", "m2"],
-                            "primary_member_datasource_id": "m1",
-                        }
-                    },
-                }, ensure_ascii=False),
-                create_time=now - timedelta(minutes=3),
-                update_time=now - timedelta(minutes=3),
-            ),
-            ChatDataQueryTask(
-                task_id="task_sql_batch_cancelled",
-                task_type="sql_batch",
-                datasource_id="ds1",
-                query_type="sql",
-                task_status="cancelled",
-                request_payload=json.dumps({"operator_name": "SQL用户", "sql": ["select 1", "select 2"]}),
-                create_time=now - timedelta(minutes=4),
-                update_time=now - timedelta(minutes=4),
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_sql",
-                task_id="",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="",
-                member_name="默认库",
-                executor_type="direct",
-                sql_text="select 1",
-                sql_status="succeeded",
-                execution_time_ms=5,
-                result_row_count=1,
-                result_payload='{"columns":["one"],"data":[{"one":1}]}',
-                started_time=now - timedelta(minutes=2),
-                finished_time=now - timedelta(minutes=2),
-                create_time=now - timedelta(minutes=2),
-                update_time=now - timedelta(minutes=2),
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_builder",
-                task_id="task_builder",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员库",
-                executor_type="direct",
-                sql_text="select city, sum(amount) from orders group by city",
-                sql_status="succeeded",
-                execution_time_ms=8,
-                result_row_count=2,
-                result_payload='{"columns":["city"],"data":[{"city":"杭州"}]}',
-                started_time=now,
-                finished_time=now,
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_agent_cancelled",
-                task_id="task_agent",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员库",
-                executor_type="direct",
-                sql_text="select * from orders",
-                sql_status="cancelled",
-                execution_time_ms=None,
-                result_row_count=None,
-                result_payload=None,
-                started_time=now - timedelta(minutes=1),
-                finished_time=None,
-                create_time=now - timedelta(minutes=1),
-                update_time=now - timedelta(minutes=1),
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_dashboard",
-                task_id="task_dashboard",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员库1",
-                executor_type="direct",
-                sql_text="select amount from dashboard_result",
-                sql_status="succeeded",
-                execution_time_ms=12,
-                result_row_count=2,
-                result_payload='{"columns":["amount"],"data":[{"amount":1}]}',
-                started_time=now - timedelta(minutes=3),
-                finished_time=now - timedelta(minutes=3),
-                create_time=now - timedelta(minutes=3),
-                update_time=now - timedelta(minutes=3),
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_sql_batch_done",
-                task_id="task_sql_batch_cancelled",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员库",
-                executor_type="direct",
-                sql_text="select 1",
-                sql_status="succeeded",
-                execution_time_ms=6,
-                result_row_count=1,
-                result_payload='{"status":"succeeded","columns":["one"],"data":[{"one":1}]}',
-                started_time=now - timedelta(minutes=4),
-                finished_time=now - timedelta(minutes=4),
-                create_time=now - timedelta(minutes=4),
-                update_time=now - timedelta(minutes=4),
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_sql_batch_pending",
-                task_id="task_sql_batch_cancelled",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员库",
-                executor_type="direct",
-                sql_text="select 2",
-                sql_status="pending",
-                execution_time_ms=None,
-                result_row_count=None,
-                result_payload=None,
-                started_time=None,
-                finished_time=None,
-                create_time=now - timedelta(minutes=4),
-                update_time=now - timedelta(minutes=4),
-                create_by="u1",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_other_user",
-                task_id="",
-                user_id="u2",
-                datasource_id="ds1",
-                sql_text="select other",
-                sql_status="succeeded",
-                create_time=now,
-                update_time=now,
-                create_by="u2",
-            ),
-        ])
+        session.add_all(
+            [
+                ChatDataQueryTask(
+                    task_id="task_builder",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="builder",
+                    task_status="succeeded",
+                    request_payload=json.dumps({"operator_name": "可视化用户"}),
+                    create_time=now,
+                    update_time=now,
+                    create_by_name="可视化用户",
+                ),
+                ChatDataQueryTask(
+                    task_id="task_agent",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="agent",
+                    task_status="cancelled",
+                    request_payload=json.dumps({"operator_name": "智能用户"}),
+                    create_time=now - timedelta(minutes=1),
+                    update_time=now - timedelta(minutes=1),
+                ),
+                ChatDataQueryTask(
+                    task_id="task_dashboard",
+                    task_type="dashboard_batch",
+                    datasource_id="ds1",
+                    query_type="dashboard",
+                    task_status="succeeded",
+                    request_payload=json.dumps(
+                        {
+                            "operator_name": "看板用户",
+                            "panel_execution_plan": {
+                                "panel_1": {
+                                    "mode": "multi",
+                                    "member_datasource_ids": ["m1", "m2"],
+                                    "primary_member_datasource_id": "m1",
+                                }
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                    create_time=now - timedelta(minutes=3),
+                    update_time=now - timedelta(minutes=3),
+                ),
+                ChatDataQueryTask(
+                    task_id="task_sql_batch_cancelled",
+                    task_type="sql_batch",
+                    datasource_id="ds1",
+                    query_type="sql",
+                    task_status="cancelled",
+                    request_payload=json.dumps({"operator_name": "SQL用户", "sql": ["select 1", "select 2"]}),
+                    create_time=now - timedelta(minutes=4),
+                    update_time=now - timedelta(minutes=4),
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_sql",
+                    task_id="",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="",
+                    member_name="默认库",
+                    executor_type="direct",
+                    sql_text="select 1",
+                    sql_status="succeeded",
+                    execution_time_ms=5,
+                    result_row_count=1,
+                    result_payload='{"columns":["one"],"data":[{"one":1}]}',
+                    started_time=now - timedelta(minutes=2),
+                    finished_time=now - timedelta(minutes=2),
+                    create_time=now - timedelta(minutes=2),
+                    update_time=now - timedelta(minutes=2),
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_builder",
+                    task_id="task_builder",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员库",
+                    executor_type="direct",
+                    sql_text="select city, sum(amount) from orders group by city",
+                    sql_status="succeeded",
+                    execution_time_ms=8,
+                    result_row_count=2,
+                    result_payload='{"columns":["city"],"data":[{"city":"杭州"}]}',
+                    started_time=now,
+                    finished_time=now,
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_agent_cancelled",
+                    task_id="task_agent",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员库",
+                    executor_type="direct",
+                    sql_text="select * from orders",
+                    sql_status="cancelled",
+                    execution_time_ms=None,
+                    result_row_count=None,
+                    result_payload=None,
+                    started_time=now - timedelta(minutes=1),
+                    finished_time=None,
+                    create_time=now - timedelta(minutes=1),
+                    update_time=now - timedelta(minutes=1),
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_dashboard",
+                    task_id="task_dashboard",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员库1",
+                    executor_type="direct",
+                    sql_text="select amount from dashboard_result",
+                    sql_status="succeeded",
+                    execution_time_ms=12,
+                    result_row_count=2,
+                    result_payload='{"columns":["amount"],"data":[{"amount":1}]}',
+                    started_time=now - timedelta(minutes=3),
+                    finished_time=now - timedelta(minutes=3),
+                    create_time=now - timedelta(minutes=3),
+                    update_time=now - timedelta(minutes=3),
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_sql_batch_done",
+                    task_id="task_sql_batch_cancelled",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员库",
+                    executor_type="direct",
+                    sql_text="select 1",
+                    sql_status="succeeded",
+                    execution_time_ms=6,
+                    result_row_count=1,
+                    result_payload='{"status":"succeeded","columns":["one"],"data":[{"one":1}]}',
+                    started_time=now - timedelta(minutes=4),
+                    finished_time=now - timedelta(minutes=4),
+                    create_time=now - timedelta(minutes=4),
+                    update_time=now - timedelta(minutes=4),
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_sql_batch_pending",
+                    task_id="task_sql_batch_cancelled",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员库",
+                    executor_type="direct",
+                    sql_text="select 2",
+                    sql_status="pending",
+                    execution_time_ms=None,
+                    result_row_count=None,
+                    result_payload=None,
+                    started_time=None,
+                    finished_time=None,
+                    create_time=now - timedelta(minutes=4),
+                    update_time=now - timedelta(minutes=4),
+                    create_by="u1",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_other_user",
+                    task_id="",
+                    user_id="u2",
+                    datasource_id="ds1",
+                    sql_text="select other",
+                    sql_status="succeeded",
+                    create_time=now,
+                    update_time=now,
+                    create_by="u2",
+                ),
+            ]
+        )
         await session.commit()
 
 
 async def _seed_http_query_history(session_factory):
     now = datetime(2026, 6, 2, 10, 0, 0)
     async with session_factory() as session:
-        session.add_all([
-            ChatDataQueryTask(
-                task_id="task_http",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="sql",
-                task_status="succeeded",
-                request_payload=json.dumps({"operator_name": "HTTP用户"}),
-                remote_task_payload=json.dumps([{
-                    "member_datasource_id": "m_http",
-                    "member_name": "HTTP成员",
-                    "remote_task_id": "remote_http_1",
-                    "source_type": "mysql",
-                }]),
-                create_time=now,
-                update_time=now,
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_http",
-                task_id="task_http",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m_http",
-                member_name="HTTP成员",
-                executor_type="http",
-                sql_text="select * from remote_orders",
-                sql_status="succeeded",
-                remote_task_id="remote_http_1",
-                execution_time_ms=10,
-                result_row_count=1,
-                result_payload=None,
-                started_time=now,
-                finished_time=now,
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="HTTP用户",
-            ),
-        ])
+        session.add_all(
+            [
+                ChatDataQueryTask(
+                    task_id="task_http",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="sql",
+                    task_status="succeeded",
+                    request_payload=json.dumps({"operator_name": "HTTP用户"}),
+                    remote_task_payload=json.dumps(
+                        [
+                            {
+                                "member_datasource_id": "m_http",
+                                "member_name": "HTTP成员",
+                                "remote_task_id": "remote_http_1",
+                                "source_type": "mysql",
+                            }
+                        ]
+                    ),
+                    create_time=now,
+                    update_time=now,
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_http",
+                    task_id="task_http",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m_http",
+                    member_name="HTTP成员",
+                    executor_type="http",
+                    sql_text="select * from remote_orders",
+                    sql_status="succeeded",
+                    remote_task_id="remote_http_1",
+                    execution_time_ms=10,
+                    result_row_count=1,
+                    result_payload=None,
+                    started_time=now,
+                    finished_time=now,
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="HTTP用户",
+                ),
+            ]
+        )
         await session.commit()
 
 
 def test_get_query_history_filters_builder_and_normalizes_page(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        page=-2,
-        page_size=200,
-        source="builder",
-        status="succeeded",
-    ))
+    response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            page=-2,
+            page_size=200,
+            source="builder",
+            status="succeeded",
+        )
+    )
 
     body = _payload(response)
     assert body["status"] == "success"
@@ -322,11 +341,13 @@ def test_get_query_history_filters_builder_and_normalizes_page(route_db):
 def test_get_query_history_exposes_dashboard_panel_execution_plan(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source="dashboard",
-    ))
+    response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source="dashboard",
+        )
+    )
 
     body = _payload(response)
     assert body["status"] == "success"
@@ -350,12 +371,14 @@ def test_get_query_history_exposes_dashboard_panel_execution_plan(route_db):
 def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    sql_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source="sql",
-        status="succeeded",
-    ))
+    sql_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source="sql",
+            status="succeeded",
+        )
+    )
     sql_body = _payload(sql_response)
     assert sql_body["data"]["total"] == 2
     sql_items = {item["execution_id"]: item for item in sql_body["data"]["queries"]}
@@ -363,32 +386,38 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     assert sql_items["ex_sql_batch_done"]["sql_status"] == "succeeded"
     assert sql_items["ex_sql_batch_done"]["success_flag"] == 1
 
-    sql_cancelled_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source="sql",
-        status="cancelled",
-    ))
+    sql_cancelled_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source="sql",
+            status="cancelled",
+        )
+    )
     sql_cancelled_body = _payload(sql_cancelled_response)
     assert sql_cancelled_body["data"]["total"] == 0
 
-    sql_pending_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source="sql",
-        status="pending",
-    ))
+    sql_pending_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source="sql",
+            status="pending",
+        )
+    )
     sql_pending_body = _payload(sql_pending_response)
     assert sql_pending_body["data"]["total"] == 1
     assert sql_pending_body["data"]["queries"][0]["execution_id"] == "ex_sql_batch_pending"
     assert sql_pending_body["data"]["queries"][0]["sql_status"] == "pending"
 
-    cancelled_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source="agent",
-        status="cancelled",
-    ))
+    cancelled_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source="agent",
+            status="cancelled",
+        )
+    )
     cancelled_body = _payload(cancelled_response)
     assert cancelled_body["data"]["total"] == 1
     assert cancelled_body["data"]["queries"][0]["execution_id"] == "ex_agent_cancelled"
@@ -396,12 +425,14 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     assert cancelled_body["data"]["queries"][0]["source"] == "智能问数"
     assert cancelled_body["data"]["queries"][0]["success_flag"] == 0
 
-    all_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        source=None,
-        status=None,
-    ))
+    all_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            source=None,
+            status=None,
+        )
+    )
     all_body = _payload(all_response)
     assert all_body["data"]["total"] == 6
     all_items = {item["execution_id"]: item for item in all_body["data"]["queries"]}
@@ -412,23 +443,27 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
 def test_get_query_history_filters_by_executed_time_range(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        start_time="2026-06-02 09:59:30",
-        end_time="2026-06-02 10:00:30",
-    ))
+    response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            start_time="2026-06-02 09:59:30",
+            end_time="2026-06-02 10:00:30",
+        )
+    )
 
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["total"] == 1
     assert body["data"]["queries"][0]["execution_id"] == "ex_builder"
 
-    invalid_response = asyncio.run(query_history_routes.get_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        start_time="bad-time",
-    ))
+    invalid_response = asyncio.run(
+        query_history_routes.get_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            start_time="bad-time",
+        )
+    )
     invalid_body = _payload(invalid_response)
     assert invalid_body["status"] == "error"
     assert invalid_body["code"] == ErrorCode.CHATDATA_BAD_REQUEST
@@ -443,16 +478,18 @@ def test_query_history_accepts_url_encoded_datetime():
 def test_get_admin_query_history_filters_globally(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.get_admin_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        user_id="u2",
-        keyword="other",
-        source="sql",
-        status="succeeded",
-        page=1,
-        page_size=20,
-    ))
+    response = asyncio.run(
+        query_history_routes.get_admin_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            user_id="u2",
+            keyword="other",
+            source="sql",
+            status="succeeded",
+            page=1,
+            page_size=20,
+        )
+    )
 
     body = _payload(response)
     assert body["status"] == "success"
@@ -464,23 +501,27 @@ def test_get_admin_query_history_filters_globally(route_db):
     assert item["source"] == "SQL编辑器"
     assert "result_payload" not in item
 
-    username_response = asyncio.run(query_history_routes.get_admin_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        username="可视化",
-        source="builder",
-        status="succeeded",
-    ))
+    username_response = asyncio.run(
+        query_history_routes.get_admin_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            username="可视化",
+            source="builder",
+            status="succeeded",
+        )
+    )
     username_body = _payload(username_response)
     assert username_body["data"]["total"] == 1
     assert username_body["data"]["queries"][0]["execution_id"] == "ex_builder"
 
-    time_response = asyncio.run(query_history_routes.get_admin_query_history(
-        _make_request(),
-        datasource_id="ds1",
-        start_time="2026-06-02 09:59:30",
-        end_time="2026-06-02 10:00:30",
-    ))
+    time_response = asyncio.run(
+        query_history_routes.get_admin_query_history(
+            _make_request(),
+            datasource_id="ds1",
+            start_time="2026-06-02 09:59:30",
+            end_time="2026-06-02 10:00:30",
+        )
+    )
     time_body = _payload(time_response)
     assert time_body["data"]["total"] == 2
     assert {item["execution_id"] for item in time_body["data"]["queries"]} == {"ex_builder", "ex_other_user"}
@@ -489,104 +530,106 @@ def test_get_admin_query_history_filters_globally(route_db):
 async def _seed_running_query_history(session_factory):
     now = datetime(2026, 6, 2, 11, 0, 0)
     async with session_factory() as session:
-        session.add_all([
-            ChatDataQueryTask(
-                task_id="task_u1_ds1",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="sql",
-                task_status="running",
-                request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="用户一",
-            ),
-            ChatDataQueryTask(
-                task_id="task_u2_ds1",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="sql",
-                task_status="running",
-                request_payload=json.dumps({"operator_name": "用户二", "user_id": "u2"}),
-                create_time=now,
-                update_time=now,
-                create_by="u2",
-                create_by_name="用户二",
-            ),
-            ChatDataQueryTask(
-                task_id="task_u1_ds2",
-                task_type="sql",
-                datasource_id="ds2",
-                query_type="sql",
-                task_status="running",
-                request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="用户一",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_u1_ds1_pending",
-                task_id="task_u1_ds1",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员1",
-                executor_type="direct",
-                sql_text="select sleep(10)",
-                sql_status="pending",
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="用户一",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_u1_ds2_pending",
-                task_id="task_u1_ds2",
-                user_id="u1",
-                datasource_id="ds2",
-                member_datasource_id="m2",
-                member_name="成员2",
-                executor_type="direct",
-                sql_text="select sleep(20)",
-                sql_status="pending",
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="用户一",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_u2_ds1_pending",
-                task_id="task_u2_ds1",
-                user_id="u2",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员1",
-                executor_type="direct",
-                sql_text="select sleep(30)",
-                sql_status="pending",
-                create_time=now,
-                update_time=now,
-                create_by="u2",
-                create_by_name="用户二",
-            ),
-            ChatDataQueryExecution(
-                execution_id="ex_u1_ds1_done",
-                task_id="",
-                user_id="u1",
-                datasource_id="ds1",
-                member_datasource_id="m1",
-                member_name="成员1",
-                executor_type="direct",
-                sql_text="select 1",
-                sql_status="succeeded",
-                create_time=now,
-                update_time=now,
-                create_by="u1",
-                create_by_name="用户一",
-            ),
-        ])
+        session.add_all(
+            [
+                ChatDataQueryTask(
+                    task_id="task_u1_ds1",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="sql",
+                    task_status="running",
+                    request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="用户一",
+                ),
+                ChatDataQueryTask(
+                    task_id="task_u2_ds1",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="sql",
+                    task_status="running",
+                    request_payload=json.dumps({"operator_name": "用户二", "user_id": "u2"}),
+                    create_time=now,
+                    update_time=now,
+                    create_by="u2",
+                    create_by_name="用户二",
+                ),
+                ChatDataQueryTask(
+                    task_id="task_u1_ds2",
+                    task_type="sql",
+                    datasource_id="ds2",
+                    query_type="sql",
+                    task_status="running",
+                    request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="用户一",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_u1_ds1_pending",
+                    task_id="task_u1_ds1",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员1",
+                    executor_type="direct",
+                    sql_text="select sleep(10)",
+                    sql_status="pending",
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="用户一",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_u1_ds2_pending",
+                    task_id="task_u1_ds2",
+                    user_id="u1",
+                    datasource_id="ds2",
+                    member_datasource_id="m2",
+                    member_name="成员2",
+                    executor_type="direct",
+                    sql_text="select sleep(20)",
+                    sql_status="pending",
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="用户一",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_u2_ds1_pending",
+                    task_id="task_u2_ds1",
+                    user_id="u2",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员1",
+                    executor_type="direct",
+                    sql_text="select sleep(30)",
+                    sql_status="pending",
+                    create_time=now,
+                    update_time=now,
+                    create_by="u2",
+                    create_by_name="用户二",
+                ),
+                ChatDataQueryExecution(
+                    execution_id="ex_u1_ds1_done",
+                    task_id="",
+                    user_id="u1",
+                    datasource_id="ds1",
+                    member_datasource_id="m1",
+                    member_name="成员1",
+                    executor_type="direct",
+                    sql_text="select 1",
+                    sql_status="succeeded",
+                    create_time=now,
+                    update_time=now,
+                    create_by="u1",
+                    create_by_name="用户一",
+                ),
+            ]
+        )
         await session.commit()
 
 
@@ -603,7 +646,9 @@ def test_cancel_my_running_query_history_only_current_user(route_db):
 
     async def read_statuses():
         async with route_db() as session:
-            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            execution_result = await session.execute(
+                select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status)
+            )
             task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
             return dict(execution_result.all()), dict(task_result.all())
 
@@ -620,7 +665,9 @@ def test_cancel_my_running_query_history_only_current_user(route_db):
 def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
     asyncio.run(_seed_running_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.cancel_admin_running_query_history(_make_request(), datasource_id="ds1"))
+    response = asyncio.run(
+        query_history_routes.cancel_admin_running_query_history(_make_request(), datasource_id="ds1")
+    )
     body = _payload(response)
 
     assert body["status"] == "success"
@@ -629,7 +676,9 @@ def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
 
     async def read_statuses():
         async with route_db() as session:
-            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            execution_result = await session.execute(
+                select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status)
+            )
             task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
             return dict(execution_result.all()), dict(task_result.all())
 
@@ -645,10 +694,12 @@ def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
 def test_cancel_query_history_execution_only_cancels_current_execution(route_db):
     asyncio.run(_seed_running_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.cancel_query_history_execution(
-        "ex_u1_ds1_pending",
-        _make_request(),
-    ))
+    response = asyncio.run(
+        query_history_routes.cancel_query_history_execution(
+            "ex_u1_ds1_pending",
+            _make_request(),
+        )
+    )
     body = _payload(response)
 
     assert body["status"] == "success"
@@ -657,7 +708,9 @@ def test_cancel_query_history_execution_only_cancels_current_execution(route_db)
 
     async def read_statuses():
         async with route_db() as session:
-            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            execution_result = await session.execute(
+                select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status)
+            )
             task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
             return dict(execution_result.all()), dict(task_result.all())
 
@@ -674,10 +727,12 @@ def test_cancel_query_history_execution_only_cancels_current_execution(route_db)
 def test_cancel_query_history_execution_hides_other_user_execution(route_db):
     asyncio.run(_seed_running_query_history(route_db))
 
-    response = asyncio.run(query_history_routes.cancel_query_history_execution(
-        "ex_u2_ds1_pending",
-        _make_request(),
-    ))
+    response = asyncio.run(
+        query_history_routes.cancel_query_history_execution(
+            "ex_u2_ds1_pending",
+            _make_request(),
+        )
+    )
     body = _payload(response)
 
     assert body["status"] == "error"
@@ -772,12 +827,14 @@ def test_get_query_history_result_fetches_remote_http_result(route_db, monkeypat
     captured = {}
 
     async def fake_fetch(remote_task_id, source_type="hive", user_id=None, username=None):
-        captured.update({
-            "remote_task_id": remote_task_id,
-            "source_type": source_type,
-            "user_id": user_id,
-            "username": username,
-        })
+        captured.update(
+            {
+                "remote_task_id": remote_task_id,
+                "source_type": source_type,
+                "user_id": user_id,
+                "username": username,
+            }
+        )
         return {
             "status": "succeeded",
             "success": True,
@@ -787,11 +844,13 @@ def test_get_query_history_result_fetches_remote_http_result(route_db, monkeypat
             "execution_time_ms": 15,
         }
 
-    response = asyncio.run(query_history_routes.get_query_history_result(
-        "ex_http",
-        _make_request(),
-        remote_result_fetcher=fake_fetch,
-    ))
+    response = asyncio.run(
+        query_history_routes.get_query_history_result(
+            "ex_http",
+            _make_request(),
+            remote_result_fetcher=fake_fetch,
+        )
+    )
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["columns"] == ["id"]
@@ -810,11 +869,13 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
     async def fake_fetch(*_args, **_kwargs):
         return {"status": "failed", "error": "结果文件已清理"}
 
-    response = asyncio.run(query_history_routes.get_query_history_result(
-        "ex_http",
-        _make_request(),
-        remote_result_fetcher=fake_fetch,
-    ))
+    response = asyncio.run(
+        query_history_routes.get_query_history_result(
+            "ex_http",
+            _make_request(),
+            remote_result_fetcher=fake_fetch,
+        )
+    )
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["status"] == "failed"
@@ -828,7 +889,9 @@ def test_query_history_routes_return_error_when_session_fails(monkeypatch):
         yield
 
     monkeypatch.setattr(query_providers, "get_session", broken_session)
-    monkeypatch.setattr(query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(
+        query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户")
+    )
 
     history = asyncio.run(query_history_routes.get_query_history(_make_request(), datasource_id="ds1"))
     detail = asyncio.run(query_history_routes.get_query_history_result("ex1", _make_request()))
@@ -860,11 +923,15 @@ def test_query_favorite_builder_validation_and_delete(route_db):
     assert created["builder_config"]["dimensions"][0]["name"] == "城市"
 
     edit_raw_payload = QueryFavoriteUpdateRequest(query_text="select amount from orders")
-    edit_raw_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], edit_raw_payload, _make_request()))
+    edit_raw_response = asyncio.run(
+        query_favorites_routes.update_query_favorite(created["id"], edit_raw_payload, _make_request())
+    )
     assert _payload(edit_raw_response)["code"] == ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED
 
     rename_payload = QueryFavoriteUpdateRequest(favorite_title="可视化收藏2", semantic_config_id="sc_builder")
-    rename_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], rename_payload, _make_request()))
+    rename_response = asyncio.run(
+        query_favorites_routes.update_query_favorite(created["id"], rename_payload, _make_request())
+    )
     renamed = _payload(rename_response)["data"]
     assert renamed["favorite_title"] == "可视化收藏2"
     assert renamed["semantic_config_id"] == "sc_builder"
@@ -872,7 +939,11 @@ def test_query_favorite_builder_validation_and_delete(route_db):
     delete_response = asyncio.run(query_favorites_routes.delete_query_favorite(created["id"], _make_request()))
     assert _payload(delete_response)["status"] == "success"
 
-    update_deleted_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()))
+    update_deleted_response = asyncio.run(
+        query_favorites_routes.update_query_favorite(
+            created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()
+        )
+    )
     assert _payload(update_deleted_response)["code"] == ErrorCode.CHATDATA_FAVORITE_NOT_FOUND
 
     delete_deleted_response = asyncio.run(query_favorites_routes.delete_query_favorite(created["id"], _make_request()))
@@ -896,7 +967,9 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
         semantic_config_id="sc2",
         builder_config={"sql": "select 2"},
     )
-    update_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], update_payload, _make_request()))
+    update_response = asyncio.run(
+        query_favorites_routes.update_query_favorite(created["id"], update_payload, _make_request())
+    )
     updated = _payload(update_response)["data"]
 
     assert updated["favorite_title"] == "SQL收藏2"
@@ -904,7 +977,9 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
     assert updated["semantic_config_id"] == "sc2"
     assert updated["builder_config"] == {"sql": "select 2"}
 
-    list_response = asyncio.run(query_favorites_routes.get_query_favorites(_make_request(), datasource_id="ds1", query_type=None, limit=20))
+    list_response = asyncio.run(
+        query_favorites_routes.get_query_favorites(_make_request(), datasource_id="ds1", query_type=None, limit=20)
+    )
     listed = _payload(list_response)
     assert listed["status"] == "success"
     assert listed["data"]["total"] >= 1
@@ -918,13 +993,19 @@ def test_sql_result_cache_insert_update_hit_and_invalid_payload(route_db, monkey
         datasource_id="ds1",
     )
 
-    asyncio.run(query_cache.save_sql_result_cache(identity, {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 1}],
-        "total_count": 1,
-        "execution_time_ms": 20,
-    }, operator_id="u1"))
+    asyncio.run(
+        query_cache.save_sql_result_cache(
+            identity,
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 1}],
+                "total_count": 1,
+                "execution_time_ms": 20,
+            },
+            operator_id="u1",
+        )
+    )
 
     first_hit = asyncio.run(query_cache.get_sql_result_cache(identity))
     assert first_hit["cache_hit"] is True
@@ -932,13 +1013,19 @@ def test_sql_result_cache_insert_update_hit_and_invalid_payload(route_db, monkey
     assert first_hit["data"] == [{"id": 1}]
     assert first_hit["cache_expires_in_seconds"] <= 60
 
-    asyncio.run(query_cache.save_sql_result_cache(identity, {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 2}],
-        "total_count": 1,
-        "execution_time_ms": 30,
-    }, operator_id="u2"))
+    asyncio.run(
+        query_cache.save_sql_result_cache(
+            identity,
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 2}],
+                "total_count": 1,
+                "execution_time_ms": 30,
+            },
+            operator_id="u2",
+        )
+    )
     second_hit = asyncio.run(query_cache.get_sql_result_cache(identity))
     assert second_hit["data"] == [{"id": 2}]
 
@@ -968,14 +1055,21 @@ def test_http_sql_result_cache_stores_remote_ref_only(route_db, monkeypatch):
         datasource_id="ds1",
     )
 
-    asyncio.run(query_cache.save_sql_result_cache(identity, {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 1}],
-        "total_count": 1,
-        "execution_time_ms": 20,
-        "remote_task_id": "remote_http_1",
-    }, operator_id="u1", operator_name="测试用户"))
+    asyncio.run(
+        query_cache.save_sql_result_cache(
+            identity,
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 1}],
+                "total_count": 1,
+                "execution_time_ms": 20,
+                "remote_task_id": "remote_http_1",
+            },
+            operator_id="u1",
+            operator_name="测试用户",
+        )
+    )
 
     async def read_cache_payload():
         async with route_db() as session:
@@ -1019,13 +1113,15 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
 
     monkeypatch.setattr(query_runtime.uuid, "uuid4", lambda: FixedUuid())
 
-    created = asyncio.run(query_providers.query_task_service.create_task_record(
-        task_type="sql",
-        datasource_id="ds1",
-        query_type="",
-        request_payload={"sql": "select 1", "user_id": "u1"},
-        progress_text="等待执行",
-    ))
+    created = asyncio.run(
+        query_providers.query_task_service.create_task_record(
+            task_type="sql",
+            datasource_id="ds1",
+            query_type="",
+            request_payload={"sql": "select 1", "user_id": "u1"},
+            progress_text="等待执行",
+        )
+    )
 
     assert created["task_id"] == "task_generated"
     assert created["query_type"] == "sql"
@@ -1034,20 +1130,22 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
     assert asyncio.run(query_runtime.get_query_task("missing")) is None
     assert asyncio.run(query_runtime.get_query_task("task_generated"))["status"] == "pending"
     assert asyncio.run(query_runtime.is_query_task_cancelled("task_generated")) is False
-    assert QueryHistoryService.task_user_id({"request_payload": "{\"user_id\": \"u1\"}"}) == "u1"
+    assert QueryHistoryService.task_user_id({"request_payload": '{"user_id": "u1"}'}) == "u1"
     assert QueryHistoryService.task_user_id({"request_payload": "{bad json"}) == ""
 
     started_time = datetime(2026, 6, 2, 11, 0, 0)
     finished_time = datetime(2026, 6, 2, 11, 0, 5)
-    updated = asyncio.run(query_providers.query_task_service.update_query_task(
-        "task_generated",
-        status="running",
-        progress_text="SQL 执行中",
-        result_payload={"rows": [1]},
-        error_message="",
-        started_time=started_time,
-        finished_time=finished_time,
-    ))
+    updated = asyncio.run(
+        query_providers.query_task_service.update_query_task(
+            "task_generated",
+            status="running",
+            progress_text="SQL 执行中",
+            result_payload={"rows": [1]},
+            error_message="",
+            started_time=started_time,
+            finished_time=finished_time,
+        )
+    )
 
     assert updated["status"] == "running"
     assert updated["progress_text"] == "SQL 执行中"
@@ -1055,64 +1153,86 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
     assert updated["started_time"] == started_time.isoformat()
     assert asyncio.run(query_providers.query_task_service.update_query_task("missing", status="running")) is None
 
-    remote_task = asyncio.run(query_runtime.append_query_task_remote_task(
-        "task_generated",
-        {
-            "member_datasource_id": "m1",
-            "member_name": "成员1",
-            "remote_task_id": "remote_1",
-            "source_type": "Hive",
-        },
-    ))
-    duplicate_task = asyncio.run(query_runtime.append_query_task_remote_task(
-        "task_generated",
-        {
-            "member_datasource_id": "m1",
-            "member_name": "成员1",
-            "remote_task_id": "remote_1",
-            "source_type": "hive",
-        },
-    ))
+    remote_task = asyncio.run(
+        query_runtime.append_query_task_remote_task(
+            "task_generated",
+            {
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "remote_task_id": "remote_1",
+                "source_type": "Hive",
+            },
+        )
+    )
+    duplicate_task = asyncio.run(
+        query_runtime.append_query_task_remote_task(
+            "task_generated",
+            {
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "remote_task_id": "remote_1",
+                "source_type": "hive",
+            },
+        )
+    )
 
-    assert remote_task["remote_tasks"] == [{
-        "member_datasource_id": "m1",
-        "member_name": "成员1",
-        "remote_task_id": "remote_1",
-        "source_type": "hive",
-    }]
+    assert remote_task["remote_tasks"] == [
+        {
+            "member_datasource_id": "m1",
+            "member_name": "成员1",
+            "remote_task_id": "remote_1",
+            "source_type": "hive",
+        }
+    ]
     assert duplicate_task["remote_tasks"] == remote_task["remote_tasks"]
-    first_statement_task = asyncio.run(query_runtime.append_query_task_remote_task(
-        "task_generated",
-        {
-            "member_datasource_id": "m1",
-            "member_name": "成员1",
-            "remote_task_id": "remote_1",
-            "source_type": "hive",
-            "statement_index": 0,
-        },
-    ))
-    second_statement_task = asyncio.run(query_runtime.append_query_task_remote_task(
-        "task_generated",
-        {
-            "member_datasource_id": "m1",
-            "member_name": "成员1",
-            "remote_task_id": "remote_1",
-            "source_type": "hive",
-            "statement_index": 1,
-        },
-    ))
+    first_statement_task = asyncio.run(
+        query_runtime.append_query_task_remote_task(
+            "task_generated",
+            {
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "remote_task_id": "remote_1",
+                "source_type": "hive",
+                "statement_index": 0,
+            },
+        )
+    )
+    second_statement_task = asyncio.run(
+        query_runtime.append_query_task_remote_task(
+            "task_generated",
+            {
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "remote_task_id": "remote_1",
+                "source_type": "hive",
+                "statement_index": 1,
+            },
+        )
+    )
     assert len(first_statement_task["remote_tasks"]) == 2
     assert len(second_statement_task["remote_tasks"]) == 3
     assert second_statement_task["remote_tasks"][-1]["statement_index"] == 1
-    assert asyncio.run(query_runtime.append_query_task_remote_task("task_generated", {"member_datasource_id": "m2"})) is None
-    assert asyncio.run(query_runtime.append_query_task_remote_task("missing", {"member_datasource_id": "m2", "remote_task_id": "remote_2"})) is None
+    assert (
+        asyncio.run(query_runtime.append_query_task_remote_task("task_generated", {"member_datasource_id": "m2"}))
+        is None
+    )
+    assert (
+        asyncio.run(
+            query_runtime.append_query_task_remote_task(
+                "missing", {"member_datasource_id": "m2", "remote_task_id": "remote_2"}
+            )
+        )
+        is None
+    )
 
-    bad_response = query_runtime.build_query_task_response_data({
-        "task_id": "bad",
-        "request_payload": "{bad json",
-        "result_payload": "{bad json",
-        "remote_task_payload": "{bad json",
-    })
+    bad_response = query_runtime.build_query_task_response_data(
+        {
+            "task_id": "bad",
+            "request_payload": "{bad json",
+            "result_payload": "{bad json",
+            "remote_task_payload": "{bad json",
+        }
+    )
     assert bad_response["request_payload"] is None
     assert bad_response["result_payload"] is None
     assert bad_response["remote_tasks"] == []
@@ -1137,7 +1257,9 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
                 },
             ]
 
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
+        async def get_authorized_execution_datasources_async(
+            self, datasource_id, member_datasource_ids=None, user_id=None, username=None
+        ):
             return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
     class FixedUuid:
@@ -1156,22 +1278,27 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
         user_id="u1",
         limit=5,
     )
+
     async def create_task():
         async with route_db() as session:
-            session.add(ChatDataQueryTask(
-                task_id="task_1",
-                task_type="sql",
-                datasource_id="ds1",
-                query_type="sql",
-                task_status="pending",
-                request_payload=json.dumps({"operator_name": "操作员"}),
-                create_time=datetime.now(),
-                update_time=datetime.now(),
-            ))
+            session.add(
+                ChatDataQueryTask(
+                    task_id="task_1",
+                    task_type="sql",
+                    datasource_id="ds1",
+                    query_type="sql",
+                    task_status="pending",
+                    request_payload=json.dumps({"operator_name": "操作员"}),
+                    create_time=datetime.now(),
+                    update_time=datetime.now(),
+                )
+            )
             await session.commit()
 
     asyncio.run(create_task())
-    execution_map = asyncio.run(query_runtime.create_query_executions_for_task("task_1", request, operator_name="操作员"))
+    execution_map = asyncio.run(
+        query_runtime.create_query_executions_for_task("task_1", request, operator_name="操作员")
+    )
 
     assert execution_map == {"m1": "exec_1", "m2": "exec_2"}
     assert query_runtime.get_execution_id_by_member(execution_map, {"member_datasource_id": "m1"}) == "exec_1"
@@ -1189,65 +1316,87 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
 
     started_time = datetime(2026, 6, 2, 12, 0, 0)
     finished_time = datetime(2026, 6, 2, 12, 0, 3)
-    asyncio.run(query_providers.query_task_service.update_query_execution(
-        "exec_1",
-        sql_status="running",
-        remote_task_id="remote_1",
-        db_connection_id="conn_1",
-        execution_time_ms=33,
-        result_row_count=2,
-        result_payload={"rows": [{"id": 1}]},
-        error_message="",
-        started_time=started_time,
-        finished_time=finished_time,
-    ))
+    asyncio.run(
+        query_providers.query_task_service.update_query_execution(
+            "exec_1",
+            sql_status="running",
+            remote_task_id="remote_1",
+            db_connection_id="conn_1",
+            execution_time_ms=33,
+            result_row_count=2,
+            result_payload={"rows": [{"id": 1}]},
+            error_message="",
+            started_time=started_time,
+            finished_time=finished_time,
+        )
+    )
     updated_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert updated_model.sql_status == "running"
     assert updated_model.remote_task_id == "remote_1"
     assert updated_model.db_connection_id == "conn_1"
     assert updated_model.result_payload
 
-    asyncio.run(query_runtime.update_query_execution_from_result("exec_1", {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 1}],
-        "total_count": 1,
-        "execution_time_ms": 12,
-        "cache_hit": True,
-        "cache_age_seconds": 3,
-        "cache_expires_in_seconds": 57,
-    }))
+    asyncio.run(
+        query_runtime.update_query_execution_from_result(
+            "exec_1",
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 1}],
+                "total_count": 1,
+                "execution_time_ms": 12,
+                "cache_hit": True,
+                "cache_age_seconds": 3,
+                "cache_expires_in_seconds": 57,
+            },
+        )
+    )
     succeeded_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert succeeded_model.sql_status == "succeeded"
     assert succeeded_model.result_row_count == 1
     assert json.loads(succeeded_model.result_payload)["cache_hit"] is True
 
-    asyncio.run(query_runtime.update_query_execution_from_result("exec_1", {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 2}],
-        "total_count": 1,
-        "execution_time_ms": 13,
-    }, store_result_payload=False))
+    asyncio.run(
+        query_runtime.update_query_execution_from_result(
+            "exec_1",
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 2}],
+                "total_count": 1,
+                "execution_time_ms": 13,
+            },
+            store_result_payload=False,
+        )
+    )
     not_stored_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert not_stored_model.sql_status == "succeeded"
     assert json.loads(not_stored_model.result_payload)["cache_hit"] is True
 
-    asyncio.run(query_runtime.update_query_execution_from_result("exec_1", {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 3}],
-        "total_count": 1,
-        "execution_time_ms": 1780,
-        "started_time": "2026-07-07 16:58:47",
-        "finished_time": "2026-07-07 16:58:48",
-    }))
+    asyncio.run(
+        query_runtime.update_query_execution_from_result(
+            "exec_1",
+            {
+                "success": True,
+                "columns": ["id"],
+                "data": [{"id": 3}],
+                "total_count": 1,
+                "execution_time_ms": 1780,
+                "started_time": "2026-07-07 16:58:47",
+                "finished_time": "2026-07-07 16:58:48",
+            },
+        )
+    )
     remote_time_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert remote_time_model.execution_time_ms == 1780
     assert remote_time_model.started_time == datetime(2026, 7, 7, 16, 58, 47)
     assert remote_time_model.finished_time == datetime(2026, 7, 7, 16, 58, 48)
 
-    asyncio.run(query_providers.query_task_service.update_query_execution("exec_2", sql_status="cancelled", error_message="已人工取消"))
+    asyncio.run(
+        query_providers.query_task_service.update_query_execution(
+            "exec_2", sql_status="cancelled", error_message="已人工取消"
+        )
+    )
     asyncio.run(query_runtime.update_query_execution_from_result("exec_2", {"success": False, "error": "不应覆盖"}))
     cancelled_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_2"))
     assert cancelled_model.sql_status == "cancelled"
@@ -1263,7 +1412,17 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     closed = []
 
     class CallbackExecutor:
-        async def execute(self, sql, limit=100, timeout=None, user_id=None, username=None, datasource_id=None, remote_task_callback=None, db_connection_callback=None):
+        async def execute(
+            self,
+            sql,
+            limit=100,
+            timeout=None,
+            user_id=None,
+            username=None,
+            datasource_id=None,
+            remote_task_callback=None,
+            db_connection_callback=None,
+        ):
             assert username == "测试用户"
             assert user_id == "u1"
             await remote_task_callback({"remote_task_id": "remote_1", "source_type": "Hive"})
@@ -1300,26 +1459,31 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
 
     async def fake_update_from_result(execution_id, result, **kwargs):
         result_updates.append((execution_id, result, kwargs))
+
     monkeypatch.setenv("CHAT_DATA_QUERY_CACHE_ENABLED", "false")
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", fake_limiter)
     monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "append_query_task_remote_task", fake_append_remote)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", fake_update_from_result)
-    monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
+    monkeypatch.setattr(
+        query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running")
+    )
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
 
-    result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
-        {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
-        "select 1",
-        10,
-        30,
-        user_id="u1",
-        username="测试用户",
-        query_task_id="task_1",
-        execution_id="exec_1",
-        datasource_id="ds1",
-    ))
+    result = asyncio.run(
+        query_providers.query_task_service.execute_sql_for_member(
+            {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
+            "select 1",
+            10,
+            30,
+            user_id="u1",
+            username="测试用户",
+            query_task_id="task_1",
+            execution_id="exec_1",
+            datasource_id="ds1",
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert "success" not in result
@@ -1327,53 +1491,73 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     assert updates[0][1]["sql_status"] == "running"
     assert ("exec_1", {"remote_task_id": "remote_1"}) in updates
     assert ("exec_1", {"db_connection_id": "conn_1"}) in updates
-    assert remote_tasks == [("task_1", {
-        "member_datasource_id": "m1",
-        "member_name": "成员1",
-        "remote_task_id": "remote_1",
-        "source_type": "hive",
-    })]
+    assert remote_tasks == [
+        (
+            "task_1",
+            {
+                "member_datasource_id": "m1",
+                "member_name": "成员1",
+                "remote_task_id": "remote_1",
+                "source_type": "hive",
+            },
+        )
+    ]
     assert result_updates[-1][0] == "exec_1"
     assert result_updates[-1][2] == {"store_result_payload": True}
     assert closed == ["callback"]
 
-    http_result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
-        {"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "mysql", "query_executor_type": "http"},
-        "select 1",
-        10,
-        30,
-        user_id="u1",
-        username="测试用户",
-        query_task_id="task_1",
-        execution_id="exec_http",
-        datasource_id="ds1",
-    ))
+    http_result = asyncio.run(
+        query_providers.query_task_service.execute_sql_for_member(
+            {
+                "member_datasource_id": "m_http",
+                "member_name": "HTTP成员",
+                "source_type": "mysql",
+                "query_executor_type": "http",
+            },
+            "select 1",
+            10,
+            30,
+            user_id="u1",
+            username="测试用户",
+            query_task_id="task_1",
+            execution_id="exec_http",
+            datasource_id="ds1",
+        )
+    )
     assert http_result["status"] == "succeeded"
     assert "success" not in http_result
     assert result_updates[-1][0] == "exec_http"
     assert result_updates[-1][2] == {"store_result_payload": False}
 
-    monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="cancelled"))
-    cancelled = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
-        {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
-        "select 1",
-        10,
-        30,
-        execution_id="exec_cancelled",
-    ))
+    monkeypatch.setattr(
+        query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="cancelled")
+    )
+    cancelled = asyncio.run(
+        query_providers.query_task_service.execute_sql_for_member(
+            {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
+            "select 1",
+            10,
+            30,
+            execution_id="exec_cancelled",
+        )
+    )
     assert cancelled["status"] == "cancelled"
     assert "success" not in cancelled
     assert cancelled["error"] == "已人工取消"
 
-    monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
+    monkeypatch.setattr(
+        query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running")
+    )
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FailingExecutor())
-    failed = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
-        {"member_datasource_id": "m2", "member_name": "成员2", "source_type": "mysql"},
-        "select 1",
-        10,
-        30,
-        execution_id="exec_failed",
-    ))
+    failed = asyncio.run(
+        query_providers.query_task_service.execute_sql_for_member(
+            {"member_datasource_id": "m2", "member_name": "成员2", "source_type": "mysql"},
+            "select 1",
+            10,
+            30,
+            execution_id="exec_failed",
+        )
+    )
     assert failed["status"] == "failed"
     assert "success" not in failed
     assert failed["error"] == "executor failed"
@@ -1433,23 +1617,36 @@ def test_execute_sql_for_member_uses_http_remote_ref_cache(monkeypatch):
     monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
     monkeypatch.setattr(query_runtime, "fetch_http_query_task_result", fake_fetch)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", raise_limiter)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: (_ for _ in ()).throw(AssertionError("cache hit should not get executor")))
+    monkeypatch.setattr(
+        query_runtime,
+        "get_executor",
+        lambda _target: (_ for _ in ()).throw(AssertionError("cache hit should not get executor")),
+    )
     monkeypatch.setattr(query_runtime, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "append_query_task_remote_task", fake_append_remote)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", fake_update_from_result)
-    monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
+    monkeypatch.setattr(
+        query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running")
+    )
 
-    result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
-        {"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "hive", "query_executor_type": "http"},
-        "select 1",
-        10,
-        30,
-        user_id="u1",
-        username="测试用户",
-        query_task_id="task_1",
-        execution_id="exec_http",
-        datasource_id="ds1",
-    ))
+    result = asyncio.run(
+        query_providers.query_task_service.execute_sql_for_member(
+            {
+                "member_datasource_id": "m_http",
+                "member_name": "HTTP成员",
+                "source_type": "hive",
+                "query_executor_type": "http",
+            },
+            "select 1",
+            10,
+            30,
+            user_id="u1",
+            username="测试用户",
+            query_task_id="task_1",
+            execution_id="exec_http",
+            datasource_id="ds1",
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert "success" not in result
@@ -1459,12 +1656,17 @@ def test_execute_sql_for_member_uses_http_remote_ref_cache(monkeypatch):
     assert result["cache_hit"] is True
     assert result["cache_age_seconds"] == 10
     assert ("exec_http", {"remote_task_id": "remote_cached"}) in updates
-    assert remote_tasks == [("task_1", {
-        "member_datasource_id": "m_http",
-        "member_name": "HTTP成员",
-        "remote_task_id": "remote_cached",
-        "source_type": "hive",
-    })]
+    assert remote_tasks == [
+        (
+            "task_1",
+            {
+                "member_datasource_id": "m_http",
+                "member_name": "HTTP成员",
+                "remote_task_id": "remote_cached",
+                "source_type": "hive",
+            },
+        )
+    ]
     assert result_updates[-1][0] == "exec_http"
     assert result_updates[-1][2] == {"store_result_payload": False}
 
@@ -1477,7 +1679,9 @@ def test_build_execute_sql_result_data_edge_cases(monkeypatch):
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: MissingDatasourceManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: MissingDatasourceManager())
     with pytest.raises(ValueError, match="数据源不存在"):
-        asyncio.run(query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="missing")))
+        asyncio.run(
+            query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="missing"))
+        )
 
     class EmptyTargetManager:
         async def get_datasource_async(self, _datasource_id):
@@ -1486,12 +1690,16 @@ def test_build_execute_sql_result_data_edge_cases(monkeypatch):
         async def get_execution_datasources_async(self, _datasource_id, _member_ids=None):
             return []
 
-        async def get_authorized_execution_datasources_async(self, _datasource_id, _member_ids=None, user_id=None, username=None):
+        async def get_authorized_execution_datasources_async(
+            self, _datasource_id, _member_ids=None, user_id=None, username=None
+        ):
             return await self.get_execution_datasources_async(_datasource_id, _member_ids)
 
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: EmptyTargetManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: EmptyTargetManager())
-    result = asyncio.run(query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="ds1")))
+    result = asyncio.run(
+        query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="ds1"))
+    )
     assert result["status"] == "failed"
     assert result["error"] == "所有执行对象均执行失败"
     assert result["results"] == []
@@ -1504,21 +1712,28 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
     assert QueryHistoryService.build_cancel_task_status([]) == "cancelled"
     assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}]) == "cancelled"
     assert QueryHistoryService.build_cancel_task_status([{"status": "kill_failed"}]) == "failed"
-    assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}]) == "partial_success"
-    assert query_providers.query_task_service.build_cancelled_execution_map([
-        {"member_datasource_id": "m1", "sql_status": "cancelled"},
-        {"member_datasource_id": "m2", "sql_status": "succeeded"},
-        {"member_datasource_id": "m3", "sql_status": "kill_failed"},
-        {"member_datasource_id": "", "sql_status": "cancelled"},
-    ]) == {
+    assert (
+        QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}])
+        == "partial_success"
+    )
+    assert query_providers.query_task_service.build_cancelled_execution_map(
+        [
+            {"member_datasource_id": "m1", "sql_status": "cancelled"},
+            {"member_datasource_id": "m2", "sql_status": "succeeded"},
+            {"member_datasource_id": "m3", "sql_status": "kill_failed"},
+            {"member_datasource_id": "", "sql_status": "cancelled"},
+        ]
+    ) == {
         "m1": {"member_datasource_id": "m1", "sql_status": "cancelled"},
         "m3": {"member_datasource_id": "m3", "sql_status": "kill_failed"},
     }
-    assert query_runtime.load_remote_tasks([
-        {"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "r1", "source_type": "Hive"},
-        {"member_datasource_id": "", "remote_task_id": "r2"},
-        "bad",
-    ]) == [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "r1", "source_type": "hive"}]
+    assert query_runtime.load_remote_tasks(
+        [
+            {"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "r1", "source_type": "Hive"},
+            {"member_datasource_id": "", "remote_task_id": "r2"},
+            "bad",
+        ]
+    ) == [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "r1", "source_type": "hive"}]
     assert query_runtime.load_remote_tasks("{}") == []
 
     task_by_id = {
@@ -1602,17 +1817,31 @@ def test_create_query_task_endpoint_branches(monkeypatch):
         async def get_datasource_async(self, _datasource_id):
             return self.datasource
 
-    monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(
+        query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户")
+    )
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager(None))
-    missing_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
-        datasource_id="missing",
-        sql=["select 1"],
-    )))
+    missing_response = asyncio.run(
+        query_execution_routes.create_query_task(
+            _make_request(),
+            QueryTaskCreateRequest(
+                datasource_id="missing",
+                sql=["select 1"],
+            ),
+        )
+    )
     assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
-    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
-    invalid_sql_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
-        datasource_id="ds1",
-        sql=["select 1; select 2"],
-    )))
+    monkeypatch.setattr(
+        query_providers, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"})
+    )
+    invalid_sql_response = asyncio.run(
+        query_execution_routes.create_query_task(
+            _make_request(),
+            QueryTaskCreateRequest(
+                datasource_id="ds1",
+                sql=["select 1; select 2"],
+            ),
+        )
+    )
     assert _payload(invalid_sql_response)["code"] == ErrorCode.CHATDATA_BAD_REQUEST

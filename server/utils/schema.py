@@ -597,12 +597,10 @@ MYSQL_TABLES = [
 
 # ============ 兼容接口 ============
 
+
 def _get_database_type() -> str:
     """获取业务表数据库类型。"""
-    if any(
-        os.getenv(key)
-        for key in ("FXCJG_DB_HOST", "FXCJG_DB", "FXCJG_DB_USER", "FXCJG_DB_PASSWORD")
-    ):
+    if any(os.getenv(key) for key in ("FXCJG_DB_HOST", "FXCJG_DB", "FXCJG_DB_USER", "FXCJG_DB_PASSWORD")):
         return "mysql"
     raise ValueError("缺少业务数据库配置: FXCJG_DB_*")
 
@@ -619,5 +617,6 @@ def get_tables(db_type: str = None) -> list:
 def _get_all_tables():
     _get_database_type()
     return MYSQL_TABLES
+
 
 ALL_TABLES = _get_all_tables()

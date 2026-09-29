@@ -54,23 +54,25 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
     async def finalize_resources(success: bool):
         calls.append(f"finalize:{success}")
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=adapter,
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-        ),
-        hooks=TurnLifecycleHooks(
-            before_stream=lambda: _before_stream(calls),
-            after_turn=lambda: hook("after"),
-        ),
-        resources=TurnResourceOptions(
-            finalize_resources=finalize_resources,
-            finalize_stream_kwargs={"persist_latest_ai_timestamp": True},
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=adapter,
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(
+                before_stream=lambda: _before_stream(calls),
+                after_turn=lambda: hook("after"),
+            ),
+            resources=TurnResourceOptions(
+                finalize_resources=finalize_resources,
+                finalize_stream_kwargs={"persist_latest_ai_timestamp": True},
+            ),
+        )
+    )
 
     assert events == ["event: message\n\n", "event: message_end\n\n"]
     assert adapter.finish_calls == [{"persist_latest_ai_timestamp": True}]
@@ -95,19 +97,19 @@ async def test_stream_agent_turn_starts_model_before_slow_user_persistence_finis
             release_user_persistence.set()
             yield "event: message\n\n"
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=Adapter([]),
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=persist_user,
-            persist_turn_history=lambda: _noop_async(),
-            persist_partial_history=lambda: _noop_async(),
-        ),
-        hooks=TurnLifecycleHooks(
-        ),
-        resources=TurnResourceOptions(
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=Adapter([]),
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=persist_user,
+                persist_turn_history=lambda: _noop_async(),
+                persist_partial_history=lambda: _noop_async(),
+            ),
+            hooks=TurnLifecycleHooks(),
+            resources=TurnResourceOptions(),
+        )
+    )
 
     assert model_started.is_set()
     assert events == ["event: message\n\n", "event: message_end\n\n"]
@@ -124,20 +126,21 @@ async def test_stream_agent_turn_persists_disconnected_turn_without_end_events()
     async def finalize_resources(success: bool):
         calls.append(f"finalize:{success}")
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=adapter,
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-        ),
-        hooks=TurnLifecycleHooks(
-        ),
-        resources=TurnResourceOptions(
-            finalize_resources=finalize_resources,
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=adapter,
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(),
+            resources=TurnResourceOptions(
+                finalize_resources=finalize_resources,
+            ),
+        )
+    )
 
     assert events == []
     assert adapter.finish_calls == [{}]
@@ -152,20 +155,21 @@ async def test_stream_agent_turn_notifies_disconnect_before_cleanup():
     async def hook(name: str):
         calls.append(name)
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=adapter,
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-        ),
-        hooks=TurnLifecycleHooks(
-            on_disconnect=lambda: hook("disconnect"),
-        ),
-        resources=TurnResourceOptions(
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=adapter,
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(
+                on_disconnect=lambda: hook("disconnect"),
+            ),
+            resources=TurnResourceOptions(),
+        )
+    )
 
     assert events == []
     assert calls == ["user", "history", "disconnect"]
@@ -183,20 +187,21 @@ async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_o
         calls.append(f"finalize:{success}")
 
     with pytest.raises(RuntimeError, match="stream failed"):
-        await _collect(stream_agent_turn(
-            stream_adapter=adapter,
-            format_sse=lambda event, _data: f"event: {event}\n\n",
-            persistence=TurnPersistenceHooks(
-                persist_user_message=lambda: hook("user"),
-                persist_turn_history=lambda: hook("history"),
-                persist_partial_history=lambda: hook("partial"),
-            ),
-            hooks=TurnLifecycleHooks(
-            ),
-            resources=TurnResourceOptions(
-                finalize_resources=finalize_resources,
-            ),
-        ))
+        await _collect(
+            stream_agent_turn(
+                stream_adapter=adapter,
+                format_sse=lambda event, _data: f"event: {event}\n\n",
+                persistence=TurnPersistenceHooks(
+                    persist_user_message=lambda: hook("user"),
+                    persist_turn_history=lambda: hook("history"),
+                    persist_partial_history=lambda: hook("partial"),
+                ),
+                hooks=TurnLifecycleHooks(),
+                resources=TurnResourceOptions(
+                    finalize_resources=finalize_resources,
+                ),
+            )
+        )
 
     assert calls == ["user", "partial", "finalize:False"]
 
@@ -205,23 +210,25 @@ async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_o
 async def test_stream_agent_turn_emits_final_events_once():
     calls: list[str] = []
     adapter = _FakeStreamAdapter(["event: message\n\n"])
+
     async def hook(name: str):
         calls.append(name)
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=adapter,
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-        ),
-        hooks=TurnLifecycleHooks(
-            after_stream=lambda: hook("after_stream"),
-        ),
-        resources=TurnResourceOptions(
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=adapter,
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(
+                after_stream=lambda: hook("after_stream"),
+            ),
+            resources=TurnResourceOptions(),
+        )
+    )
 
     assert events == [
         "event: message\n\n",
@@ -238,20 +245,21 @@ async def test_stream_agent_turn_runs_after_finish_before_history():
     async def hook(name: str):
         calls.append(name)
 
-    events = await _collect(stream_agent_turn(
-        stream_adapter=adapter,
-        format_sse=lambda event, _data: f"event: {event}\n\n",
-        persistence=TurnPersistenceHooks(
-            persist_user_message=lambda: hook("user"),
-            persist_turn_history=lambda: hook("history"),
-            persist_partial_history=lambda: hook("partial"),
-        ),
-        hooks=TurnLifecycleHooks(
-            after_finish=lambda: hook("checkpointed"),
-        ),
-        resources=TurnResourceOptions(
-        ),
-    ))
+    events = await _collect(
+        stream_agent_turn(
+            stream_adapter=adapter,
+            format_sse=lambda event, _data: f"event: {event}\n\n",
+            persistence=TurnPersistenceHooks(
+                persist_user_message=lambda: hook("user"),
+                persist_turn_history=lambda: hook("history"),
+                persist_partial_history=lambda: hook("partial"),
+            ),
+            hooks=TurnLifecycleHooks(
+                after_finish=lambda: hook("checkpointed"),
+            ),
+            resources=TurnResourceOptions(),
+        )
+    )
 
     assert events[-1:] == ["event: message_end\n\n"]
     assert calls == ["user", "checkpointed", "history"]

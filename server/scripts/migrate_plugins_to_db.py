@@ -49,19 +49,21 @@ async def _upsert_row(db, manifest: PluginManifest, *, enabled: bool) -> None:
     result = await db.execute(select(ChatDataPlugin).filter_by(plugin_name=manifest.name))
     row = result.scalar_one_or_none()
     if row is None:
-        db.add(ChatDataPlugin(
-            plugin_name=manifest.name,
-            version=manifest.version,
-            display_name=manifest.display_name,
-            description=manifest.description,
-            manifest_text=manifest_text,
-            enabled_flag=1 if enabled else 0,
-            delete_flag=0,
-            create_by=_OPERATOR_ID,
-            create_by_name=_OPERATOR_NAME,
-            update_by=_OPERATOR_ID,
-            update_by_name=_OPERATOR_NAME,
-        ))
+        db.add(
+            ChatDataPlugin(
+                plugin_name=manifest.name,
+                version=manifest.version,
+                display_name=manifest.display_name,
+                description=manifest.description,
+                manifest_text=manifest_text,
+                enabled_flag=1 if enabled else 0,
+                delete_flag=0,
+                create_by=_OPERATOR_ID,
+                create_by_name=_OPERATOR_NAME,
+                update_by=_OPERATOR_ID,
+                update_by_name=_OPERATOR_NAME,
+            )
+        )
         return
     row.version = manifest.version
     row.display_name = manifest.display_name

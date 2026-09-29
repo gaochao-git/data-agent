@@ -81,7 +81,8 @@ class SemanticBIQueryAdapter:
         )
         # 派生/复合指标统一预解析（共享入口）：编译配置 + 派生固定过滤叶子
         self._metric_base_cfgs, self._derived_fixed_leaves = build_metric_base_configs(
-            self.metrics_map, self.dimensions_map,
+            self.metrics_map,
+            self.dimensions_map,
         )
 
     def adapt(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -93,10 +94,18 @@ class SemanticBIQueryAdapter:
             raise ValueError(f"语义可视化 DSL 不允许包含前端表关系字段: {', '.join(sorted(forbidden))}")
 
         self._used_derived_names: List[str] = []
-        dimensions = [self._map_dimension(item) for item in _as_list(semantic_builder_config.get("dimensions"), "dimensions")]
-        aggregations = [self._map_aggregation(item) for item in _as_list(semantic_builder_config.get("aggregations"), "aggregations")]
+        dimensions = [
+            self._map_dimension(item) for item in _as_list(semantic_builder_config.get("dimensions"), "dimensions")
+        ]
+        aggregations = [
+            self._map_aggregation(item)
+            for item in _as_list(semantic_builder_config.get("aggregations"), "aggregations")
+        ]
         filters = self._map_filter_nodes(semantic_builder_config.get("filters") or [])
-        order_by = [self._map_order_by(item, aggregations, dimensions) for item in _as_list(semantic_builder_config.get("orderBy"), "orderBy")]
+        order_by = [
+            self._map_order_by(item, aggregations, dimensions)
+            for item in _as_list(semantic_builder_config.get("orderBy"), "orderBy")
+        ]
         # 不同周期的派生指标混用会因固定过滤交集而算错，提前拦截
         mixed_err = check_mixed_derived_periods(self._used_derived_names, self.metrics_map)
         if mixed_err:
@@ -166,7 +175,9 @@ class SemanticBIQueryAdapter:
                 dim_expression = normalize_text(dim.get("expression"))
                 if not item_expression or not dim_expression or item_expression == dim_expression:
                     return dim
-        raise ValueError(f"语义维度不存在或不在当前指标集内: {item.get('alias') or item.get('displayName') or item.get('column')}")
+        raise ValueError(
+            f"语义维度不存在或不在当前指标集内: {item.get('alias') or item.get('displayName') or item.get('column')}"
+        )
 
     @staticmethod
     def _metric_field_signature(metric: Dict[str, Any]) -> tuple[str, str, set]:
@@ -196,7 +207,9 @@ class SemanticBIQueryAdapter:
         if len(matched_by_field) == 1:
             return matched_by_field[0]
         if len(matched_by_field) > 1:
-            metric_names = "、".join(normalize_text(metric.get("name")) for metric in matched_by_field if normalize_text(metric.get("name")))
+            metric_names = "、".join(
+                normalize_text(metric.get("name")) for metric in matched_by_field if normalize_text(metric.get("name"))
+            )
             raise ValueError(f"指标字段匹配到多个语义指标，请传 semanticName 或 expression: {metric_names}")
         return None
 
@@ -233,11 +246,15 @@ class SemanticBIQueryAdapter:
         nodes: List[Dict[str, Any]] = []
         for metric_name in self._used_derived_names:
             for leaf in self._derived_fixed_leaves.get(metric_name) or []:
-                nodes.extend(self._map_dimension_filter_leaves({
-                    "semanticName": leaf.get("dimension"),
-                    "operator": leaf.get("operator"),
-                    "value": leaf.get("value"),
-                }))
+                nodes.extend(
+                    self._map_dimension_filter_leaves(
+                        {
+                            "semanticName": leaf.get("dimension"),
+                            "operator": leaf.get("operator"),
+                            "value": leaf.get("value"),
+                        }
+                    )
+                )
         return nodes
 
     def _map_dimension(self, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,7 +308,9 @@ class SemanticBIQueryAdapter:
         dim = self._resolve_dimension_config(item)
         func = normalize_text(item.get("func") or "RAW").upper()
         if func not in {"RAW", "COUNT", "SUM", "AVG", "MAX", "MIN", "COUNT_DISTINCT"}:
-            raise ValueError(f"字段 '{item.get('alias') or item.get('displayName') or item.get('column')}' 未配置为指标，不能作为聚合指标使用")
+            raise ValueError(
+                f"字段 '{item.get('alias') or item.get('displayName') or item.get('column')}' 未配置为指标，不能作为聚合指标使用"
+            )
         table = dim.get("table")
         column = dim.get("column")
         return (
@@ -306,7 +325,9 @@ class SemanticBIQueryAdapter:
     def _map_aggregation(self, item: Dict[str, Any]) -> Dict[str, Any]:
         metric = self._resolve_metric_config(item)
         if metric:
-            func, table, table_alias, column, expression, display_name = self._aggregation_fields_from_metric(item, metric)
+            func, table, table_alias, column, expression, display_name = self._aggregation_fields_from_metric(
+                item, metric
+            )
         else:
             func, table, table_alias, column, expression, display_name = self._aggregation_fields_from_dimension(item)
 
@@ -381,11 +402,7 @@ class SemanticBIQueryAdapter:
     @classmethod
     def _filter_label(cls, node: Dict[str, Any]) -> str:
         return normalize_text(
-            node.get("displayName")
-            or node.get("semanticName")
-            or node.get("name")
-            or node.get("column")
-            or "筛选条件"
+            node.get("displayName") or node.get("semanticName") or node.get("name") or node.get("column") or "筛选条件"
         )
 
     @classmethod
@@ -433,11 +450,13 @@ class SemanticBIQueryAdapter:
             if key in source:
                 target[key] = source.get(key)
         if source.get("valueType") == "field_ref":
-            right = self._resolve_dimension_config({
-                "table": source.get("rightTable"),
-                "tableAlias": source.get("rightTableAlias"),
-                "column": source.get("rightColumn"),
-            })
+            right = self._resolve_dimension_config(
+                {
+                    "table": source.get("rightTable"),
+                    "tableAlias": source.get("rightTableAlias"),
+                    "column": source.get("rightColumn"),
+                }
+            )
             target["rightTable"] = right.get("table")
             target["rightTableAlias"] = _semantic_alias(right) or right.get("table")
             target["rightColumn"] = right.get("column")
@@ -455,27 +474,33 @@ class SemanticBIQueryAdapter:
         raise ValueError("HAVING 表达式操作数只支持 metric、literal、binary")
 
     def _map_having_metric_operand(self, operand: Dict[str, Any]) -> Dict[str, Any]:
-        metric = self._resolve_metric_config({
-            "semanticName": operand.get("name") or operand.get("semanticName"),
-            "name": operand.get("name"),
-            "alias": operand.get("alias"),
-            "displayName": operand.get("displayName"),
-            "func": operand.get("aggFunc") or operand.get("func"),
-            "table": operand.get("table"),
-            "tableAlias": _normalize_alias(operand),
-            "column": operand.get("column"),
-            "expression": operand.get("expression"),
-        })
+        metric = self._resolve_metric_config(
+            {
+                "semanticName": operand.get("name") or operand.get("semanticName"),
+                "name": operand.get("name"),
+                "alias": operand.get("alias"),
+                "displayName": operand.get("displayName"),
+                "func": operand.get("aggFunc") or operand.get("func"),
+                "table": operand.get("table"),
+                "tableAlias": _normalize_alias(operand),
+                "column": operand.get("column"),
+                "expression": operand.get("expression"),
+            }
+        )
         if not metric:
-            raise ValueError(f"HAVING 表达式引用的指标不存在: {operand.get('name') or operand.get('semanticName') or operand.get('column')}")
-        agg = self._map_aggregation({
-            "semanticName": metric.get("name"),
-            "func": operand.get("aggFunc") or operand.get("func"),
-            "table": metric.get("table"),
-            "tableAlias": _semantic_alias(metric),
-            "column": operand.get("column"),
-            "expression": operand.get("expression"),
-        })
+            raise ValueError(
+                f"HAVING 表达式引用的指标不存在: {operand.get('name') or operand.get('semanticName') or operand.get('column')}"
+            )
+        agg = self._map_aggregation(
+            {
+                "semanticName": metric.get("name"),
+                "func": operand.get("aggFunc") or operand.get("func"),
+                "table": metric.get("table"),
+                "tableAlias": _semantic_alias(metric),
+                "column": operand.get("column"),
+                "expression": operand.get("expression"),
+            }
+        )
         return {
             "type": "metric",
             "name": metric.get("name"),
@@ -508,7 +533,9 @@ class SemanticBIQueryAdapter:
             except Exception as exc:
                 # 除零校验是防御性前置检查:读取 literal.value 的意外异常不在此处拦截,
                 # 交由后续表达式编译与参数校验兜底,这里仅留痕避免静默。
-                logger.warning("HAVING 除零校验读取 literal.value 异常,跳过前置校验: value=%r error=%s", right.get("value"), exc)
+                logger.warning(
+                    "HAVING 除零校验读取 literal.value 异常,跳过前置校验: value=%r error=%s", right.get("value"), exc
+                )
         return {
             "type": "binary",
             "operator": operator,
@@ -567,17 +594,19 @@ class SemanticBIQueryAdapter:
                 raise ValueError("HAVING 表达式 left 只支持 metric")
             agg = left
         else:
-            agg = self._map_aggregation({
-                "id": node.get("aggId"),
-                "func": node.get("aggFunc"),
-                "table": node.get("table"),
-                "tableAlias": _normalize_alias(node),
-                "column": node.get("column"),
-                "alias": node.get("displayName"),
-                "semanticName": node.get("semanticName"),
-                "displayName": node.get("displayName"),
-                "expression": node.get("expression"),
-            })
+            agg = self._map_aggregation(
+                {
+                    "id": node.get("aggId"),
+                    "func": node.get("aggFunc"),
+                    "table": node.get("table"),
+                    "tableAlias": _normalize_alias(node),
+                    "column": node.get("column"),
+                    "alias": node.get("displayName"),
+                    "semanticName": node.get("semanticName"),
+                    "displayName": node.get("displayName"),
+                    "expression": node.get("expression"),
+                }
+            )
         mapped = {
             "id": node.get("id") or f"having-{agg.get('name') or agg.get('alias')}",
             "table": agg.get("table"),
@@ -597,22 +626,26 @@ class SemanticBIQueryAdapter:
             self._copy_filter_value_fields(node, mapped)
         return mapped
 
-    def _map_order_by(self, item: Dict[str, Any], aggregations: List[Dict[str, Any]], dimensions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _map_order_by(
+        self, item: Dict[str, Any], aggregations: List[Dict[str, Any]], dimensions: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         direction = normalize_text(item.get("direction") or "ASC").upper()
         if direction not in {"ASC", "DESC"}:
             raise ValueError("排序方向只能是 ASC 或 DESC")
         if item.get("aggFunc"):
-            agg = self._find_selected_aggregation(item, aggregations) or self._map_aggregation({
-                "id": item.get("aggId"),
-                "func": item.get("aggFunc"),
-                "table": item.get("table"),
-                "tableAlias": _normalize_alias(item),
-                "column": item.get("column"),
-                "alias": item.get("displayName") or item.get("alias"),
-                "semanticName": item.get("semanticName"),
-                "displayName": item.get("displayName"),
-                "expression": item.get("expression"),
-            })
+            agg = self._find_selected_aggregation(item, aggregations) or self._map_aggregation(
+                {
+                    "id": item.get("aggId"),
+                    "func": item.get("aggFunc"),
+                    "table": item.get("table"),
+                    "tableAlias": _normalize_alias(item),
+                    "column": item.get("column"),
+                    "alias": item.get("displayName") or item.get("alias"),
+                    "semanticName": item.get("semanticName"),
+                    "displayName": item.get("displayName"),
+                    "expression": item.get("expression"),
+                }
+            )
             return {
                 "id": item.get("id") or f"order-{agg.get('alias')}",
                 "table": agg.get("table"),
@@ -641,7 +674,9 @@ class SemanticBIQueryAdapter:
         return None
 
     @staticmethod
-    def _find_selected_aggregation(item: Dict[str, Any], aggregations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _find_selected_aggregation(
+        item: Dict[str, Any], aggregations: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         agg_id = normalize_text(item.get("aggId"))
         if agg_id:
             for agg in aggregations:
@@ -656,7 +691,9 @@ class SemanticBIQueryAdapter:
         return SemanticBIQueryAdapter._find_aggregation_by_name_or_func(item, aggregations)
 
     @staticmethod
-    def _find_aggregation_by_name_or_func(item: Dict[str, Any], aggregations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _find_aggregation_by_name_or_func(
+        item: Dict[str, Any], aggregations: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         """先按显式名称（semanticName/name/alias/displayName）匹配别名；全部缺失时回退聚合函数+字段键匹配。"""
         name_candidates = [
             normalize_text(item.get("semanticName")),

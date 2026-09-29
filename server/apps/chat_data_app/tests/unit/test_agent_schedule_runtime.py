@@ -100,36 +100,40 @@ def harness(monkeypatch):
         user_id=USER_ID,
     ):
         async with get_test_session() as session:
-            session.add(UserThread(
-                user_id=user_id,
-                thread_id=CONVERSATION_ID,
-                agent_id="chat_data",
-                delete_flag=0,
-                create_time=datetime.now(),
-                create_by=user_id,
-                create_by_name=user_id,
-                update_by=user_id,
-                update_by_name=user_id,
-            ))
-            session.add(ChatDataAgentSchedule(
-                job_id=job_id,
-                user_id=user_id,
-                conversation_id=CONVERSATION_ID,
-                job_title="定时任务",
-                job_prompt="汇总昨日数据",
-                schedule_type=schedule_type,
-                cron_expr=cron_expr or "",
-                plan_time=plan_time,
-                effective_end_time=effective_end_time,
-                enabled_flag=enabled_flag,
-                next_trigger_time=next_trigger_time,
-                delete_flag=0,
-                create_time=datetime.now(),
-                create_by=user_id,
-                create_by_name="用户一",
-                update_by=user_id,
-                update_by_name="用户一",
-            ))
+            session.add(
+                UserThread(
+                    user_id=user_id,
+                    thread_id=CONVERSATION_ID,
+                    agent_id="chat_data",
+                    delete_flag=0,
+                    create_time=datetime.now(),
+                    create_by=user_id,
+                    create_by_name=user_id,
+                    update_by=user_id,
+                    update_by_name=user_id,
+                )
+            )
+            session.add(
+                ChatDataAgentSchedule(
+                    job_id=job_id,
+                    user_id=user_id,
+                    conversation_id=CONVERSATION_ID,
+                    job_title="定时任务",
+                    job_prompt="汇总昨日数据",
+                    schedule_type=schedule_type,
+                    cron_expr=cron_expr or "",
+                    plan_time=plan_time,
+                    effective_end_time=effective_end_time,
+                    enabled_flag=enabled_flag,
+                    next_trigger_time=next_trigger_time,
+                    delete_flag=0,
+                    create_time=datetime.now(),
+                    create_by=user_id,
+                    create_by_name="用户一",
+                    update_by=user_id,
+                    update_by_name="用户一",
+                )
+            )
 
     yield types.SimpleNamespace(
         make_runtime=make_runtime,
@@ -153,9 +157,11 @@ async def test_tick_plans_cron_trigger_within_misfire_window(harness):
     await runtime.tick(now=now)
 
     async with harness.session_factory() as session:
-        triggers = list((await session.execute(
-            select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.plan_time)
-        )).scalars())
+        triggers = list(
+            (
+                await session.execute(select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.plan_time))
+            ).scalars()
+        )
         job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
     # 昨天 09:00 在 misfire 窗口外被快进，只补今天 09:00 一个触发点
     assert [trigger.plan_time for trigger in triggers] == [datetime(2026, 9, 12, 9, 0)]
@@ -255,23 +261,25 @@ async def test_dispatch_respects_user_concurrency_gate(harness):
 
     # 预置一个在途触发，占满该用户的并发额度
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1",
-            user_id=USER_ID,
-            conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=10),
-            trigger_status="dispatched",
-            run_id="run-inflight",
-            delete_flag=0,
-            create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=10),
+                trigger_status="dispatched",
+                run_id="run-inflight",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
     async with harness.session_factory() as session:
-        triggers = list((await session.execute(
-            select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.id)
-        )).scalars())
+        triggers = list(
+            (await session.execute(select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.id))).scalars()
+        )
     # 计划阶段产生 08:59/09:00 两个新触发，均因额度占满被释放回 pending
     pending = [trigger for trigger in triggers if trigger.trigger_status == "pending"]
     assert len(pending) == 2
@@ -288,27 +296,31 @@ async def test_finalize_closes_dispatched_trigger_with_run_terminal_state(harnes
     runtime = harness.make_runtime()
 
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1",
-            user_id=USER_ID,
-            conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=1),
-            trigger_status="dispatched",
-            run_id="run-1",
-            delete_flag=0,
-            create_time=now,
-        ))
-        session.add(ChatDataAgentInbox(
-            conversation_id=CONVERSATION_ID,
-            user_id=USER_ID,
-            run_id="run-1",
-            message_id="run-1",
-            record_type="run",
-            record_content="{}",
-            record_status="finished",
-            delete_flag=0,
-            create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="dispatched",
+                run_id="run-1",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id=CONVERSATION_ID,
+                user_id=USER_ID,
+                run_id="run-1",
+                message_id="run-1",
+                record_type="run",
+                record_content="{}",
+                record_status="finished",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
@@ -325,27 +337,31 @@ async def test_finalize_marks_failed_run(harness):
     runtime = harness.make_runtime()
 
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1",
-            user_id=USER_ID,
-            conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=1),
-            trigger_status="dispatched",
-            run_id="run-1",
-            delete_flag=0,
-            create_time=now,
-        ))
-        session.add(ChatDataAgentInbox(
-            conversation_id=CONVERSATION_ID,
-            user_id=USER_ID,
-            run_id="run-1",
-            message_id="run-1",
-            record_type="run",
-            record_content="{}",
-            record_status="failed",
-            delete_flag=0,
-            create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="dispatched",
+                run_id="run-1",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id=CONVERSATION_ID,
+                user_id=USER_ID,
+                run_id="run-1",
+                message_id="run-1",
+                record_type="run",
+                record_content="{}",
+                record_status="failed",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
@@ -362,30 +378,38 @@ async def test_paused_control_freezes_plan_and_dispatch(harness):
 
     # 预置全局暂停；在途 dispatched 触发仍应被收口
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleControl(
-            id=1, paused_flag=1, delete_flag=0,
-        ))
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1",
-            user_id=USER_ID,
-            conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=5),
-            trigger_status="dispatched",
-            run_id="run-1",
-            delete_flag=0,
-            create_time=now,
-        ))
-        session.add(ChatDataAgentInbox(
-            conversation_id=CONVERSATION_ID,
-            user_id=USER_ID,
-            run_id="run-1",
-            message_id="run-1",
-            record_type="run",
-            record_content="{}",
-            record_status="finished",
-            delete_flag=0,
-            create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleControl(
+                id=1,
+                paused_flag=1,
+                delete_flag=0,
+            )
+        )
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=5),
+                trigger_status="dispatched",
+                run_id="run-1",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id=CONVERSATION_ID,
+                user_id=USER_ID,
+                run_id="run-1",
+                message_id="run-1",
+                record_type="run",
+                record_content="{}",
+                record_status="finished",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
@@ -410,10 +434,17 @@ async def test_dispatch_fixed_mode_uses_job_current_conversation(harness):
 
     async with harness.session_factory() as session:
         # 触发实例携带过期空串（new_each_run 时期计划出的）
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id="",
-            plan_time=plan, trigger_status="pending", delete_flag=0, create_time=plan,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id="",
+                plan_time=plan,
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=plan,
+            )
+        )
 
     runtime = harness.make_runtime()
     await runtime.tick(now=datetime(2026, 9, 12, 9, 0))
@@ -494,26 +525,41 @@ async def test_stale_claim_reaped_back_to_pending(harness):
 
     async with harness.session_factory() as session:
         # 悬挂 claimed（节点抢占后崩溃）+ 一条 attempt 耗尽的悬挂
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=10),
-            trigger_status="claimed", claimed_time=now - timedelta(minutes=10),
-            attempt_count=1, delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=10),
+                trigger_status="claimed",
+                claimed_time=now - timedelta(minutes=10),
+                attempt_count=1,
+                delete_flag=0,
+                create_time=now,
+            )
+        )
         stale_id = 2
-        session.add(ChatDataAgentScheduleRun(
-            id=stale_id, job_id="job-1", user_id=USER_ID, conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(minutes=9),
-            trigger_status="claimed", claimed_time=now - timedelta(minutes=9),
-            attempt_count=10, delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                id=stale_id,
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=9),
+                trigger_status="claimed",
+                claimed_time=now - timedelta(minutes=9),
+                attempt_count=10,
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
     async with harness.session_factory() as session:
-        rows = list((await session.execute(
-            select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.id)
-        )).scalars())
+        rows = list(
+            (await session.execute(select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.id))).scalars()
+        )
     # 悬挂未耗尽：释放回 pending 后同一轮 tick 的派发阶段会立即重试
     # （plan_time 已到期）→ dispatched，attempt 累加为 2；已耗尽：直接 skipped
     assert rows[0].trigger_status == "dispatched"
@@ -530,12 +576,19 @@ async def test_fresh_claim_not_reaped(harness):
     runtime = harness.make_runtime(claim_timeout_seconds=300)
 
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id=CONVERSATION_ID,
-            plan_time=now - timedelta(seconds=5),
-            trigger_status="claimed", claimed_time=now - timedelta(seconds=5),
-            attempt_count=1, delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(seconds=5),
+                trigger_status="claimed",
+                claimed_time=now - timedelta(seconds=5),
+                attempt_count=1,
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
@@ -598,11 +651,17 @@ async def test_fixed_mode_dispatch_prefers_job_conversation_over_stale_snapshot(
     runtime = harness.make_runtime()
 
     async with harness.session_factory() as session:
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id="",
-            plan_time=now - timedelta(minutes=1),
-            trigger_status="pending", delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id="",
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     await runtime.tick(now=now)
 
@@ -626,11 +685,17 @@ async def test_new_each_run_binds_job_datasource_to_fresh_conversation(harness):
         job.conversation_mode = "new_each_run"
         job.conversation_id = ""
         job.options_json = '{"datasource_id": "ds-1"}'
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id="",
-            plan_time=now - timedelta(minutes=1),
-            trigger_status="pending", delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id="",
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     created: list[dict] = []
     bound: list[dict] = []
@@ -654,11 +719,13 @@ async def test_new_each_run_binds_job_datasource_to_fresh_conversation(harness):
     assert len(created) == 1
     new_conversation_id = created[0]["thread_id"]
     assert new_conversation_id != CONVERSATION_ID
-    assert bound == [{
-        "conversation_id": new_conversation_id,
-        "user_id": USER_ID,
-        "requested_datasource_id": "ds-1",
-    }]
+    assert bound == [
+        {
+            "conversation_id": new_conversation_id,
+            "user_id": USER_ID,
+            "requested_datasource_id": "ds-1",
+        }
+    ]
     assert harness.started[0][0] == new_conversation_id
     async with harness.session_factory() as session:
         row = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
@@ -677,11 +744,17 @@ async def test_conversation_provision_failure_releases_trigger_to_pending(harnes
         job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
         job.conversation_mode = "new_each_run"
         job.conversation_id = ""
-        session.add(ChatDataAgentScheduleRun(
-            job_id="job-1", user_id=USER_ID, conversation_id="",
-            plan_time=now - timedelta(minutes=1),
-            trigger_status="pending", delete_flag=0, create_time=now,
-        ))
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id="",
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="pending",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
 
     original_create = runtime_module.bound_conversation_dao.create_thread
 
@@ -706,6 +779,7 @@ async def test_conversation_provision_failure_releases_trigger_to_pending(harnes
 # 说明：_MAX_PLAN_STEPS 快进分支里的 ONCE 子分支（runtime.py:219-220）不可达——
 # ONCE 的 compute_next_trigger 在 after==cursor 时必然返回 None，循环首轮即退出，
 # 步数永远到不了上限，属纵深防御代码，不造用例硬凑。
+
 
 async def _add_trigger(session_factory, *, plan_time, job_id="job-1", trigger_status="pending", **overrides):
     """插入一条触发实例并返回自增 ID（默认字段与 _build_trigger_row 同口径）。"""
@@ -744,11 +818,13 @@ def test_build_runtime_context_reuses_completion_options_parsing():
         inbox_service=AgentInboxService(),
         node_id="node-test",
     )
-    context = runtime._build_runtime_context({
-        "job_prompt": "汇总昨日数据",
-        "options_json": '{"model_id": "m1", "datasource_id": "ds-1", "skill_names": "officecli"}',
-        "create_by_name": "用户一",
-    })
+    context = runtime._build_runtime_context(
+        {
+            "job_prompt": "汇总昨日数据",
+            "options_json": '{"model_id": "m1", "datasource_id": "ds-1", "skill_names": "officecli"}',
+            "create_by_name": "用户一",
+        }
+    )
     assert context["query"] == "汇总昨日数据"
     assert context["model_id"] == "m1"
     assert context["datasource_id"] == "ds-1"
@@ -817,16 +893,21 @@ async def test_plan_keeps_existing_trigger_untouched(harness):
     plan = datetime(2026, 9, 12, 8, 59)
     await harness.seed_job(next_trigger_time=plan)
     kept_id = await _add_trigger(
-        harness.session_factory, plan_time=plan, trigger_status="skipped", error_message="保留我",
+        harness.session_factory,
+        plan_time=plan,
+        trigger_status="skipped",
+        error_message="保留我",
     )
     runtime = harness.make_runtime()
 
     await runtime.tick(now=datetime(2026, 9, 12, 9, 0))
 
     async with harness.session_factory() as session:
-        rows = list((await session.execute(
-            select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.plan_time)
-        )).scalars())
+        rows = list(
+            (
+                await session.execute(select(ChatDataAgentScheduleRun).order_by(ChatDataAgentScheduleRun.plan_time))
+            ).scalars()
+        )
     assert [row.plan_time for row in rows] == [plan, datetime(2026, 9, 12, 9, 0)]
     kept = next(row for row in rows if row.id == kept_id)
     assert kept.trigger_status == "skipped"
@@ -848,9 +929,9 @@ async def test_dispatch_skips_trigger_when_job_soft_deleted(harness):
 
     assert result["status"] == "skipped"
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "skipped"
     assert "已删除或停用" in row.error_message
     assert harness.started == []
@@ -865,9 +946,9 @@ async def test_mark_dispatched_ignores_trigger_not_claimed(harness):
     await runtime._mark_dispatched(trigger_id, "run-x")
 
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "pending"
     assert row.run_id == ""
     assert harness.submitted == []
@@ -877,16 +958,18 @@ async def test_mark_dispatched_ignores_trigger_not_claimed(harness):
 async def test_mark_dispatched_backfills_actual_conversation(harness):
     """new_each_run：派发成功后在实例上回填本次实际执行的会话，供历史追溯。"""
     trigger_id = await _add_trigger(
-        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0), trigger_status="claimed",
+        harness.session_factory,
+        plan_time=datetime(2026, 9, 12, 9, 0),
+        trigger_status="claimed",
     )
     runtime = harness.make_runtime()
 
     await runtime._mark_dispatched(trigger_id, "run-x", "conv-new")
 
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "dispatched"
     assert row.run_id == "run-x"
     assert row.conversation_id == "conv-new"
@@ -903,9 +986,9 @@ async def test_release_ignores_trigger_not_claimed(harness):
     await runtime._release(trigger_id, "pending", "")
 
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "pending"
     assert row.error_message == ""
     assert row.finished_time is None
@@ -915,8 +998,10 @@ async def test_release_ignores_trigger_not_claimed(harness):
 async def test_finalize_skips_trigger_flipped_before_update(harness):
     """终态收口竞态：扫描到 dispatched 快照后实例已被改判，更新前复查必须拦住。"""
     trigger_id = await _add_trigger(
-        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0),
-        trigger_status="cancelled", run_id="run-1",
+        harness.session_factory,
+        plan_time=datetime(2026, 9, 12, 9, 0),
+        trigger_status="cancelled",
+        run_id="run-1",
     )
     runtime = harness.make_runtime()
 
@@ -933,9 +1018,9 @@ async def test_finalize_skips_trigger_flipped_before_update(harness):
     await runtime._finalize_dispatched()
 
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "cancelled"
     assert row.finished_time is None
 
@@ -944,16 +1029,18 @@ async def test_finalize_skips_trigger_flipped_before_update(harness):
 async def test_mark_dispatched_keeps_snapshot_conversation_without_override(harness):
     """fixed 模式：不传实际会话（None）时保留触发实例快照里的会话，不被清空。"""
     trigger_id = await _add_trigger(
-        harness.session_factory, plan_time=datetime(2026, 9, 12, 9, 0), trigger_status="claimed",
+        harness.session_factory,
+        plan_time=datetime(2026, 9, 12, 9, 0),
+        trigger_status="claimed",
     )
     runtime = harness.make_runtime()
 
     await runtime._mark_dispatched(trigger_id, "run-y")
 
     async with harness.session_factory() as session:
-        row = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id)
-        )).scalar_one()
+        row = (
+            await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id == trigger_id))
+        ).scalar_one()
     assert row.trigger_status == "dispatched"
     assert row.run_id == "run-y"
     assert row.conversation_id == CONVERSATION_ID

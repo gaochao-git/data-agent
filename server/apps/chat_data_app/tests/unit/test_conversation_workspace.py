@@ -8,7 +8,7 @@ import zipfile
 from datetime import datetime
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -63,9 +63,7 @@ from utils import tool_result_store
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
-uploaded_file_service_module = importlib.import_module(
-    "apps.chat_data_app.services.agent_run.uploaded_file_service"
-)
+uploaded_file_service_module = importlib.import_module("apps.chat_data_app.services.agent_run.uploaded_file_service")
 
 
 def _isolated_workspace(
@@ -78,13 +76,15 @@ def _isolated_workspace(
 
 
 def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
-    runtime = workspace_runtime_from_state({
-        "user_id": "u1",
-        "workspace": {
-            "workspace_root": str(tmp_path),
-            "workspace_backend": "local",
-        },
-    })
+    runtime = workspace_runtime_from_state(
+        {
+            "user_id": "u1",
+            "workspace": {
+                "workspace_root": str(tmp_path),
+                "workspace_backend": "local",
+            },
+        }
+    )
 
     assert runtime.workspace_root == str(tmp_path)
     assert runtime.user_id == "u1"
@@ -330,13 +330,13 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
     semantic_root = Path(paths["workspace"]) / "semantic"
     semantic_root.mkdir()
     (semantic_root / "old.yaml").write_text("old", encoding="utf-8")
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=paths["root"], user_id="user_a", backend="local"
-    )
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
-    result = await runtime.write_internal_text_files([
-        ("/mnt/user-data/workspace/semantic/new.yaml", "new"),
-    ])
+    result = await runtime.write_internal_text_files(
+        [
+            ("/mnt/user-data/workspace/semantic/new.yaml", "new"),
+        ]
+    )
 
     assert (semantic_root / "old.yaml").read_text(encoding="utf-8") == "old"
     assert (semantic_root / "new.yaml").read_text(encoding="utf-8") == "new"
@@ -353,9 +353,7 @@ async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, mon
     semantic_root.mkdir()
     stale = semantic_root / "已停用模型__deadbeef.yaml"
     stale.write_text("stale", encoding="utf-8")
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=paths["root"], user_id="user_a", backend="local"
-    )
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     result = await runtime.delete_internal_text_files(
         path="/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
@@ -403,29 +401,31 @@ async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkey
     result_file.parent.mkdir()
     result_file.write_text('{\n  "rows": [1, 2]\n}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=paths["root"], user_id="user_a", backend="local",
+        workspace_root=paths["root"],
+        user_id="user_a",
+        backend="local",
     )
     file_read = next(
-        tool for tool in filesystem_tool_module.create_filesystem_tools(runtime)
-        if tool.name == "file_read"
+        tool for tool in filesystem_tool_module.create_filesystem_tools(runtime) if tool.name == "file_read"
     )
 
-    assert all(
-        item["name"] != "result_1.json"
-        for item in list_workspace_files("conv_query_result", "user_a")
+    assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_query_result", "user_a"))
+    content = await file_read.ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/query_result/result_1.json",
+            "offset": 0,
+            "limit": 2,
+        }
     )
-    content = await file_read.ainvoke({
-        "file_path": "/mnt/user-data/outputs/query_result/result_1.json",
-        "offset": 0,
-        "limit": 2,
-    })
 
     assert "total_lines=3" in content
     assert "     1 {" in content
     assert "has_more=true" in content
     with pytest.raises(ValueError, match="系统结果目录"):
         resolve_workspace_path(
-            paths["root"], "/mnt/user-data/outputs/query_result/result_1.json", writable=True,
+            paths["root"],
+            "/mnt/user-data/outputs/query_result/result_1.json",
+            writable=True,
         )
 
 
@@ -485,15 +485,26 @@ async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     with pytest.raises(ValueError, match="目标路径已存在"):
-        await runtime.copy_path(source_path="/mnt/user-data/uploads/a.bin", destination_path="/mnt/user-data/workspace/b.bin")
+        await runtime.copy_path(
+            source_path="/mnt/user-data/uploads/a.bin", destination_path="/mnt/user-data/workspace/b.bin"
+        )
     with pytest.raises(ValueError, match="只允许写入"):
-        await runtime.copy_path(source_path="/mnt/user-data/uploads/a.bin", destination_path="/mnt/user-data/uploads/c.bin")
+        await runtime.copy_path(
+            source_path="/mnt/user-data/uploads/a.bin", destination_path="/mnt/user-data/uploads/c.bin"
+        )
     with pytest.raises(ValueError, match="只支持复制单个文件"):
-        await runtime.copy_path(source_path="/mnt/user-data/workspace", destination_path="/mnt/user-data/workspace/d.bin")
+        await runtime.copy_path(
+            source_path="/mnt/user-data/workspace", destination_path="/mnt/user-data/workspace/d.bin"
+        )
     with pytest.raises(ValueError, match="tool-offload"):
-        await runtime.copy_path(source_path="/mnt/user-data/outputs/.tool-offload/r.json", destination_path="/mnt/user-data/workspace/e.json")
+        await runtime.copy_path(
+            source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+            destination_path="/mnt/user-data/workspace/e.json",
+        )
     with pytest.raises(FileNotFoundError):
-        await runtime.copy_path(source_path="/mnt/user-data/uploads/missing.bin", destination_path="/mnt/user-data/workspace/f.bin")
+        await runtime.copy_path(
+            source_path="/mnt/user-data/uploads/missing.bin", destination_path="/mnt/user-data/workspace/f.bin"
+        )
 
 
 @pytest.mark.asyncio
@@ -507,7 +518,9 @@ async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable
     (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# demo", encoding="utf-8")
     template.write_bytes(b"\x00pptx-template")
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root), user_id="u1", backend="local",
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="local",
     )
 
     payload = await runtime.copy_path(
@@ -547,7 +560,9 @@ def test_workspace_json_list_read_and_visible_paths():
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
     files = list_workspace_files(conversation_id)
-    assert any(item["path"] == "/mnt/user-data/workspace/context.json" and item["directory"] == "workspace" for item in files)
+    assert any(
+        item["path"] == "/mnt/user-data/workspace/context.json" and item["directory"] == "workspace" for item in files
+    )
 
     payload = read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/context.json")
     assert payload["path"] == "/mnt/user-data/workspace/context.json"
@@ -600,13 +615,9 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
 
     # 快照中不存在的技能名 → 无权限/不存在；隐藏名 → 路径无效
     with pytest.raises(ValueError, match="技能不存在或无权限访问"):
-        await runtime.resolve_readonly_skill_path_async(
-            "/mnt/skills/unknown/references/guide.md"
-        )
+        await runtime.resolve_readonly_skill_path_async("/mnt/skills/unknown/references/guide.md")
     with pytest.raises(ValueError, match="技能路径无效"):
-        await runtime.resolve_readonly_skill_path_async(
-            "/mnt/skills/.evil/references/guide.md"
-        )
+        await runtime.resolve_readonly_skill_path_async("/mnt/skills/.evil/references/guide.md")
 
 
 @pytest.mark.asyncio
@@ -633,7 +644,9 @@ def test_normalize_json_like_payload_accepts_escaped_json_string():
     payload = {"metrics": ["订单金额"], "dimensions": [], "filters": [], "order_by": [], "limit": 100}
 
     assert normalize_json_like_payload(json.dumps(payload, ensure_ascii=False)) == payload
-    assert normalize_json_like_payload(json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)) == payload
+    assert (
+        normalize_json_like_payload(json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)) == payload
+    )
     assert normalize_json_like_payload("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```") == payload
 
 
@@ -684,10 +697,12 @@ async def test_file_write_accepts_structured_content(monkeypatch):
     paths = ensure_conversation_workspace("conv_workspace_file_edit")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/plan.json",
-        "content": {"cards": [{"title": "风险总览"}]},
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/workspace/plan.json",
+            "content": {"cards": [{"title": "风险总览"}]},
+        }
+    )
 
     assert "[file_write]" in result
     assert '"风险总览"' in (Path(paths["workspace"]) / "plan.json").read_text(encoding="utf-8")
@@ -701,22 +716,28 @@ async def test_file_edit_requires_unique_existing_content(monkeypatch):
     target.write_text("title=old\nvalue=old\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="匹配多处"):
-        await tools["file_edit"].ainvoke({
+        await tools["file_edit"].ainvoke(
+            {
+                "file_path": "/mnt/user-data/workspace/report.txt",
+                "old_content": "old",
+                "new_content": "new",
+            }
+        )
+    success = await tools["file_edit"].ainvoke(
+        {
             "file_path": "/mnt/user-data/workspace/report.txt",
-            "old_content": "old",
-            "new_content": "new",
-        })
-    success = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/report.txt",
-        "old_content": "title=old",
-        "new_content": "title=new",
-    })
+            "old_content": "title=old",
+            "new_content": "title=new",
+        }
+    )
     with pytest.raises(ValueError, match="未在文件中找到"):
-        await tools["file_edit"].ainvoke({
-            "file_path": "/mnt/user-data/workspace/report.txt",
-            "old_content": "missing",
-            "new_content": "new",
-        })
+        await tools["file_edit"].ainvoke(
+            {
+                "file_path": "/mnt/user-data/workspace/report.txt",
+                "old_content": "missing",
+                "new_content": "new",
+            }
+        )
 
     assert "[file_edit]" in success
     assert target.read_text(encoding="utf-8") == "title=new\nvalue=old\n"
@@ -730,11 +751,13 @@ async def test_file_edit_rejects_identical_content(monkeypatch):
     target.write_text("title=old\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="old_content 与 new_content 相同"):
-        await tools["file_edit"].ainvoke({
-            "file_path": "/mnt/user-data/workspace/report.txt",
-            "old_content": "title=old",
-            "new_content": "title=old",
-        })
+        await tools["file_edit"].ainvoke(
+            {
+                "file_path": "/mnt/user-data/workspace/report.txt",
+                "old_content": "title=old",
+                "new_content": "title=old",
+            }
+        )
 
     assert target.read_text(encoding="utf-8") == "title=old\n"
 
@@ -747,22 +770,32 @@ async def test_file_write_and_edit_reject_uploads(monkeypatch):
     with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         await tools["file_write"].ainvoke({"file_path": "/mnt/user-data/uploads/a.txt", "content": "x"})
     with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
-        await tools["file_edit"].ainvoke({
-            "file_path": "/mnt/user-data/uploads/a.txt",
-            "old_content": "x",
-            "new_content": "y",
-        })
+        await tools["file_edit"].ainvoke(
+            {
+                "file_path": "/mnt/user-data/uploads/a.txt",
+                "old_content": "x",
+                "new_content": "y",
+            }
+        )
 
 
 @pytest.mark.asyncio
 async def test_present_artifacts_returns_outputs_artifact_payload(monkeypatch):
     paths = ensure_conversation_workspace("conv_present_artifacts")
     chart_path = Path(paths["outputs"]) / "sales.chart.json"
-    chart_path.write_text(json.dumps({
-        "version": "1.0", "title": "销售额趋势", "chart_type": "line",
-        "data": [{"month": "2026-01", "sales": 120}],
-        "encoding": {"x": "month", "y": ["sales"]},
-    }, ensure_ascii=False), encoding="utf-8")
+    chart_path.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "title": "销售额趋势",
+                "chart_type": "line",
+                "data": [{"month": "2026-01", "sales": 120}],
+                "encoding": {"x": "month", "y": ["sales"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["present_artifacts"].ainvoke({"files": ["/mnt/user-data/outputs/sales.chart.json"]})
@@ -786,20 +819,24 @@ async def test_present_artifacts_returns_office_document(monkeypatch):
     document_path.write_bytes(b"PK\x03\x04fake-docx")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["present_artifacts"].ainvoke({
-        "files": ["/mnt/user-data/outputs/公文报告.docx"],
-    })
+    result = await tools["present_artifacts"].ainvoke(
+        {
+            "files": ["/mnt/user-data/outputs/公文报告.docx"],
+        }
+    )
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["errors"] == []
-    assert payload["artifacts"] == [{
-        "file_path": "/mnt/user-data/outputs/公文报告.docx",
-        "artifact_type": "document",
-        "renderer": "document",
-        "artifact_version": "v1",
-        "name": "公文报告",
-        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }]
+    assert payload["artifacts"] == [
+        {
+            "file_path": "/mnt/user-data/outputs/公文报告.docx",
+            "artifact_type": "document",
+            "renderer": "document",
+            "artifact_version": "v1",
+            "name": "公文报告",
+            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -809,20 +846,24 @@ async def test_present_artifacts_returns_markdown_document(monkeypatch):
     markdown_path.write_text("# 语义模型分析报告\n", encoding="utf-8")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["present_artifacts"].ainvoke({
-        "files": ["/mnt/user-data/outputs/语义模型分析报告.md"],
-    })
+    result = await tools["present_artifacts"].ainvoke(
+        {
+            "files": ["/mnt/user-data/outputs/语义模型分析报告.md"],
+        }
+    )
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["errors"] == []
-    assert payload["artifacts"] == [{
-        "file_path": "/mnt/user-data/outputs/语义模型分析报告.md",
-        "artifact_type": "markdown",
-        "renderer": "markdown",
-        "artifact_version": "v1",
-        "name": "语义模型分析报告",
-        "mime_type": "text/markdown",
-    }]
+    assert payload["artifacts"] == [
+        {
+            "file_path": "/mnt/user-data/outputs/语义模型分析报告.md",
+            "artifact_type": "markdown",
+            "renderer": "markdown",
+            "artifact_version": "v1",
+            "name": "语义模型分析报告",
+            "mime_type": "text/markdown",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -831,32 +872,31 @@ async def test_present_artifacts_returns_valid_output_skill(monkeypatch):
     skill_dir = Path(paths["outputs"]) / "sales-analysis"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
-        "---\n"
-        "name: sales-analysis\n"
-        "title: 销售分析\n"
-        "description: 汇总并分析销售表现。\n"
-        "---\n\n"
-        "# 销售分析\n",
+        "---\nname: sales-analysis\ntitle: 销售分析\ndescription: 汇总并分析销售表现。\n---\n\n# 销售分析\n",
         encoding="utf-8",
     )
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["present_artifacts"].ainvoke({
-        "files": ["/mnt/user-data/outputs/sales-analysis/SKILL.md"],
-    })
+    result = await tools["present_artifacts"].ainvoke(
+        {
+            "files": ["/mnt/user-data/outputs/sales-analysis/SKILL.md"],
+        }
+    )
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["errors"] == []
-    assert payload["artifacts"] == [{
-        "file_path": "/mnt/user-data/outputs/sales-analysis/SKILL.md",
-        "artifact_type": "skill",
-        "renderer": "skill",
-        "artifact_version": "v1",
-        "skill_title": "销售分析",
-        "description": "汇总并分析销售表现。",
-        "name": "sales-analysis",
-        "mime_type": "text/markdown",
-    }]
+    assert payload["artifacts"] == [
+        {
+            "file_path": "/mnt/user-data/outputs/sales-analysis/SKILL.md",
+            "artifact_type": "skill",
+            "renderer": "skill",
+            "artifact_version": "v1",
+            "skill_title": "销售分析",
+            "description": "汇总并分析销售表现。",
+            "name": "sales-analysis",
+            "mime_type": "text/markdown",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -872,12 +912,14 @@ async def test_present_artifacts_rejects_invalid_output_skill(monkeypatch):
         )
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["present_artifacts"].ainvoke({
-        "files": [
-            "/mnt/user-data/outputs/sales-analysis/SKILL.md",
-            "/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
-        ],
-    })
+    result = await tools["present_artifacts"].ainvoke(
+        {
+            "files": [
+                "/mnt/user-data/outputs/sales-analysis/SKILL.md",
+                "/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
+            ],
+        }
+    )
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 0
@@ -907,17 +949,21 @@ async def test_present_artifacts_rejects_hidden_tool_result(monkeypatch):
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["present_artifacts"].ainvoke({
-        "files": ["/mnt/user-data/outputs/.tool-offload/result_1.json"],
-    })
+    result = await tools["present_artifacts"].ainvoke(
+        {
+            "files": ["/mnt/user-data/outputs/.tool-offload/result_1.json"],
+        }
+    )
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 0
     assert payload["artifacts"] == []
-    assert payload["errors"] == [{
-        "file_path": "/mnt/user-data/outputs/.tool-offload/result_1.json",
-        "error": "文件不是可展示的 outputs 产物",
-    }]
+    assert payload["errors"] == [
+        {
+            "file_path": "/mnt/user-data/outputs/.tool-offload/result_1.json",
+            "error": "文件不是可展示的 outputs 产物",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -930,12 +976,17 @@ async def test_present_artifacts_skips_empty_file_and_records_payload_errors(mon
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 0
     assert payload["artifacts"] == []
-    assert payload["errors"] == [{"file_path": "/mnt/user-data/outputs/bad.unknown", "error": "文件不是可展示的 outputs 产物"}]
+    assert payload["errors"] == [
+        {"file_path": "/mnt/user-data/outputs/bad.unknown", "error": "文件不是可展示的 outputs 产物"}
+    ]
 
 
 def test_present_artifacts_display_name_and_mime_helpers():
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/sales.chart.json") == "sales"
-    assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/dashboard.dashboard.json") == "dashboard"
+    assert (
+        present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/dashboard.dashboard.json")
+        == "dashboard"
+    )
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/report.pdf") == "report"
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/README") == "README"
     assert present_artifacts_tool_module._artifact_display_name("") == ""
@@ -985,13 +1036,19 @@ async def test_file_read_outputs_graph_chart_spec_returns_content(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_graph_chart_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "chart_spec_graph.json"
-    target.write_text(json.dumps({
-        "version": "1.0",
-        "title": "商品订单关系图",
-        "chart_type": "graph",
-        "nodes": [{"name": "商品A"}, {"name": "订单1"}],
-        "links": [{"source": "商品A", "target": "订单1", "value": 1}],
-    }, ensure_ascii=False), encoding="utf-8")
+    target.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "title": "商品订单关系图",
+                "chart_type": "graph",
+                "nodes": [{"name": "商品A"}, {"name": "订单1"}],
+                "links": [{"source": "商品A", "target": "订单1", "value": 1}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     result = await tools["file_read"].ainvoke({"file_path": "/mnt/user-data/outputs/chart_spec_graph.json"})
 
@@ -1022,10 +1079,12 @@ async def test_file_read_truncates_long_lines_without_char_continuation(monkeypa
     target.write_text("a" * 600 + "\n" + "b" * 600 + "\nnext", encoding="utf-8")
     monkeypatch.setattr(filesystem_tool_module, "FILE_READ_MAX_CHARS", 1000)
 
-    first_page = await tools["file_read"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/rows.jsonl",
-        "limit": 3,
-    })
+    first_page = await tools["file_read"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/workspace/rows.jsonl",
+            "limit": 3,
+        }
+    )
 
     assert "truncated=true" in first_page
     assert "truncated_lines=1,2" in first_page
@@ -1034,10 +1093,12 @@ async def test_file_read_truncates_long_lines_without_char_continuation(monkeypa
     assert f"     2 {'b' * 499}" in first_page
     assert "next_offset=2" in first_page
 
-    next_page = await tools["file_read"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/rows.jsonl",
-        "offset": 2,
-    })
+    next_page = await tools["file_read"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/workspace/rows.jsonl",
+            "offset": 2,
+        }
+    )
 
     assert "     3 next" in next_page
     assert "truncated=true" not in next_page
@@ -1050,7 +1111,10 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def read_text_file(self, _runtime, **kwargs):
             assert kwargs == {
-                "file_path": "/mnt/user-data/workspace/report.txt", "offset": 0, "limit": 200, "max_chars": 25000,
+                "file_path": "/mnt/user-data/workspace/report.txt",
+                "offset": 0,
+                "limit": 200,
+                "max_chars": 25000,
             }
             return {
                 "exists": True,
@@ -1218,10 +1282,18 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
     monkeypatch.setattr(workspace_runtime_module.subprocess, "run", fake_run)
 
     first = workspace_local_backend_module._read_text_page_from_path(
-        target, "/mnt/user-data/workspace/report with spaces.txt", offset=0, limit=1, max_chars=100,
+        target,
+        "/mnt/user-data/workspace/report with spaces.txt",
+        offset=0,
+        limit=1,
+        max_chars=100,
     )
     second = workspace_local_backend_module._read_text_page_from_path(
-        target, "/mnt/user-data/workspace/report with spaces.txt", offset=1, limit=1, max_chars=100,
+        target,
+        "/mnt/user-data/workspace/report with spaces.txt",
+        offset=1,
+        limit=1,
+        max_chars=100,
     )
 
     assert first["total_lines"] == second["total_lines"] == 3
@@ -1232,7 +1304,11 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
 
     target.write_text("first\nsecond\nthird\nfourth", encoding="utf-8")
     third = workspace_local_backend_module._read_text_page_from_path(
-        target, "/mnt/user-data/workspace/report with spaces.txt", offset=2, limit=1, max_chars=100,
+        target,
+        "/mnt/user-data/workspace/report with spaces.txt",
+        offset=2,
+        limit=1,
+        max_chars=100,
     )
 
     assert third["total_lines"] == 4
@@ -1298,10 +1374,12 @@ async def test_file_glob_recursively_matches_filenames_and_includes_tool_results
     hidden = Path(paths["outputs"]) / ".tool-offload" / "query.json"
     hidden.write_text("{}", encoding="utf-8")
 
-    result = await tools["file_glob"].ainvoke({
-        "path": "/mnt/user-data/workspace",
-        "pattern": "*.json",
-    })
+    result = await tools["file_glob"].ainvoke(
+        {
+            "path": "/mnt/user-data/workspace",
+            "pattern": "*.json",
+        }
+    )
 
     payload = json.loads(result.replace("[file_glob]\n", "", 1))
     assert payload["entries"] == [
@@ -1309,10 +1387,12 @@ async def test_file_glob_recursively_matches_filenames_and_includes_tool_results
         {"path": "/mnt/user-data/workspace/summary.json", "type": "file"},
     ]
 
-    offload_result = await tools["file_glob"].ainvoke({
-        "path": "/mnt/user-data/outputs",
-        "pattern": "*.json",
-    })
+    offload_result = await tools["file_glob"].ainvoke(
+        {
+            "path": "/mnt/user-data/outputs",
+            "pattern": "*.json",
+        }
+    )
     offload_payload = json.loads(offload_result.replace("[file_glob]\n", "", 1))
     assert {"path": "/mnt/user-data/outputs/.tool-offload/query.json", "type": "file"} in offload_payload["entries"]
 
@@ -1331,10 +1411,12 @@ async def test_file_write_returns_only_file_change_payload(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_draft_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/dashboard_draft.json",
-        "content": {"dashboard_name": "草稿看板", "cards": [{"title": "销售额"}]},
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/workspace/dashboard_draft.json",
+            "content": {"dashboard_name": "草稿看板", "cards": [{"title": "销售额"}]},
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/workspace/dashboard_draft.json"
@@ -1349,16 +1431,18 @@ async def test_file_write_does_not_classify_output_artifact(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/monthly_simple_bar.chart.json",
-        "content": {
-            "version": "1.0",
-            "title": "销售额趋势",
-            "chart_type": "line",
-            "data": [{"month": "2026-01", "sales": 120}],
-            "encoding": {"x": "month", "y": ["sales"]},
-        },
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/monthly_simple_bar.chart.json",
+            "content": {
+                "version": "1.0",
+                "title": "销售额趋势",
+                "chart_type": "line",
+                "data": [{"month": "2026-01", "sales": 120}],
+                "encoding": {"x": "month", "y": ["sales"]},
+            },
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/monthly_simple_bar.chart.json"
@@ -1373,16 +1457,18 @@ async def test_file_write_workspace_chart_spec_has_no_chart_artifact_type(monkey
     paths = ensure_conversation_workspace(f"conv_workspace_chart_draft_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/workspace/chart_spec_sales_trend_draft.json",
-        "content": {
-            "version": "1.0",
-            "title": "销售额趋势",
-            "chart_type": "line",
-            "data": [{"month": "2026-01", "sales": 120}],
-            "encoding": {"x": "month", "y": ["sales"]},
-        },
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/workspace/chart_spec_sales_trend_draft.json",
+            "content": {
+                "version": "1.0",
+                "title": "销售额趋势",
+                "chart_type": "line",
+                "data": [{"month": "2026-01", "sales": 120}],
+                "encoding": {"x": "month", "y": ["sales"]},
+            },
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/workspace/chart_spec_sales_trend_draft.json"
@@ -1394,10 +1480,12 @@ async def test_file_write_non_chart_json_has_no_chart_artifact_type(monkeypatch)
     paths = ensure_conversation_workspace(f"conv_workspace_non_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/query_result.json",
-        "content": {"rows": [{"month": "2026-01", "sales": 120}]},
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/query_result.json",
+            "content": {"rows": [{"month": "2026-01", "sales": 120}]},
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/query_result.json"
@@ -1409,16 +1497,18 @@ async def test_file_write_empty_line_chart_has_no_chart_artifact_type(monkeypatc
     paths = ensure_conversation_workspace(f"conv_workspace_empty_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/empty_chart.json",
-        "content": {
-            "version": "1.0",
-            "title": "空趋势图",
-            "chart_type": "line",
-            "data": [],
-            "encoding": {"x": "month", "y": ["sales"]},
-        },
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/empty_chart.json",
+            "content": {
+                "version": "1.0",
+                "title": "空趋势图",
+                "chart_type": "line",
+                "data": [],
+                "encoding": {"x": "month", "y": ["sales"]},
+            },
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/empty_chart.json"
@@ -1430,14 +1520,16 @@ async def test_file_write_invalid_chart_spec_has_no_chart_artifact_type(monkeypa
     paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/invalid_chart.json",
-        "content": {
-            "chart_type": "line",
-            "data": [{"month": "2026-01", "sales": 120}],
-            "encoding": {"x": "month", "y": ["sales"]},
-        },
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/invalid_chart.json",
+            "content": {
+                "chart_type": "line",
+                "data": [{"month": "2026-01", "sales": 120}],
+                "encoding": {"x": "month", "y": ["sales"]},
+            },
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/invalid_chart.json"
@@ -1449,16 +1541,18 @@ async def test_file_write_chart_spec_with_missing_encoding_field_has_no_chart_ar
     paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_encoding_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_write"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/invalid_chart_encoding.json",
-        "content": {
-            "version": "1.0",
-            "title": "同比趋势",
-            "chart_type": "line",
-            "data": [{"period": "2024-01", "sales_current": 87, "sales_previous": 71}],
-            "encoding": {"x": "period", "y": ["current", "previous"]},
-        },
-    })
+    result = await tools["file_write"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/invalid_chart_encoding.json",
+            "content": {
+                "version": "1.0",
+                "title": "同比趋势",
+                "chart_type": "line",
+                "data": [{"period": "2024-01", "sales_current": 87, "sales_previous": 71}],
+                "encoding": {"x": "period", "y": ["current", "previous"]},
+            },
+        }
+    )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/invalid_chart_encoding.json"
@@ -1470,20 +1564,31 @@ async def test_file_edit_does_not_classify_output_artifact(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_patch_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "dashboard.dashboard.json"
-    target.write_text(json.dumps({
-        "dashboard_name": "旧看板",
-        "cards": [{
-            "title": "订单金额",
-            "chart_type": "kpi",
-            "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
-            "dsl": {"metrics": ["订单金额"], "dimensions": [], "filters": [], "order_by": [], "limit": 100},
-        }],
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    result = await tools["file_edit"].ainvoke({
-        "file_path": "/mnt/user-data/outputs/dashboard.dashboard.json",
-        "old_content": '  "dashboard_name": "旧看板",',
-        "new_content": '  "dashboard_name": "新看板",',
-    })
+    target.write_text(
+        json.dumps(
+            {
+                "dashboard_name": "旧看板",
+                "cards": [
+                    {
+                        "title": "订单金额",
+                        "chart_type": "kpi",
+                        "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
+                        "dsl": {"metrics": ["订单金额"], "dimensions": [], "filters": [], "order_by": [], "limit": 100},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    result = await tools["file_edit"].ainvoke(
+        {
+            "file_path": "/mnt/user-data/outputs/dashboard.dashboard.json",
+            "old_content": '  "dashboard_name": "旧看板",',
+            "new_content": '  "dashboard_name": "新看板",',
+        }
+    )
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
     assert payload["file_path"] == "/mnt/user-data/outputs/dashboard.dashboard.json"
@@ -1501,11 +1606,13 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
     target.write_text("old", encoding="utf-8")
 
     with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
-        await tools["file_edit"].ainvoke({
-            "file_path": "/mnt/user-data/uploads/demo.txt",
-            "old_content": "old",
-            "new_content": "new",
-        })
+        await tools["file_edit"].ainvoke(
+            {
+                "file_path": "/mnt/user-data/uploads/demo.txt",
+                "old_content": "old",
+                "new_content": "new",
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -1527,20 +1634,24 @@ async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch)
             assert kwargs["dimensions"] == ["月份"]
             return {"success": True, "sql": "select month, sales from t"}
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, semantic_config_id=None, query_text=None, **kwargs):
+    async def fake_execute_sql_real(
+        sql, datasource_id, member_datasource_ids=None, user_id=None, semantic_config_id=None, query_text=None, **kwargs
+    ):
         assert sql == "select month, sales from t"
         assert query_text == "统计销售额"
         return {
             "status": "succeeded",
             "sql": sql,
-            "results": [{
-                "status": "succeeded",
-                "member_datasource_id": "m1",
-                "member_name": "机构1",
-                "columns": ["month", "sales"],
-                "data": [{"month": "2026-01", "sales": 120}],
-                "total_count": 1,
-            }],
+            "results": [
+                {
+                    "status": "succeeded",
+                    "member_datasource_id": "m1",
+                    "member_name": "机构1",
+                    "columns": ["month", "sales"],
+                    "data": [{"month": "2026-01", "sales": 120}],
+                    "total_count": 1,
+                }
+            ],
             "total_count": 1,
             "execution_time_ms": 12,
         }
@@ -1555,11 +1666,13 @@ async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch)
     )
     state = _analysis_query_state(paths, user_query="统计销售额")
 
-    result = await tools["data_analyzing_tool"].ainvoke({
-        "action": "execute_query",
-        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
-        "state": state,
-    })
+    result = await tools["data_analyzing_tool"].ainvoke(
+        {
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
+            "state": state,
+        }
+    )
 
     payload = json.loads(result)
     assert payload["type"] == "chatdata_internal_tool_result"
@@ -1586,19 +1699,23 @@ async def test_semantic_query_tool_keeps_full_result(monkeypatch):
             assert kwargs["metrics"] == ["订单数"]
             return {"success": True, "sql": "select count(*) cnt from t"}
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, semantic_config_id=None, query_text=None, **kwargs):
+    async def fake_execute_sql_real(
+        sql, datasource_id, member_datasource_ids=None, user_id=None, semantic_config_id=None, query_text=None, **kwargs
+    ):
         assert sql == "select count(*) cnt from t"
         return {
             "status": "succeeded",
             "sql": sql,
-            "results": [{
-                "status": "succeeded",
-                "member_datasource_id": "m1",
-                "member_name": "机构1",
-                "columns": ["cnt"],
-                "data": [{"cnt": 3}],
-                "total_count": 1,
-            }],
+            "results": [
+                {
+                    "status": "succeeded",
+                    "member_datasource_id": "m1",
+                    "member_name": "机构1",
+                    "columns": ["cnt"],
+                    "data": [{"cnt": 3}],
+                    "total_count": 1,
+                }
+            ],
             "total_count": 1,
         }
 
@@ -1612,11 +1729,13 @@ async def test_semantic_query_tool_keeps_full_result(monkeypatch):
     )
     state = _analysis_query_state(paths, user_query="查询订单数")
 
-    result = await tools["data_analyzing_tool"].ainvoke({
-        "action": "execute_query",
-        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
-        "state": state,
-    })
+    result = await tools["data_analyzing_tool"].ainvoke(
+        {
+            "action": "execute_query",
+            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": input_dsl},
+            "state": state,
+        }
+    )
 
     payload = json.loads(result)
     assert payload["type"] == "chatdata_internal_tool_result"
@@ -1642,14 +1761,16 @@ async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatc
         return {
             "status": "succeeded",
             "sql": sql,
-            "results": [{
-                "status": "succeeded",
-                "member_datasource_id": "m1",
-                "member_name": "机构1",
-                "columns": ["content"],
-                "data": [{"content": "x" * 200}],
-                "total_count": 1,
-            }],
+            "results": [
+                {
+                    "status": "succeeded",
+                    "member_datasource_id": "m1",
+                    "member_name": "机构1",
+                    "columns": ["content"],
+                    "data": [{"content": "x" * 200}],
+                    "total_count": 1,
+                }
+            ],
             "total_count": 1,
         }
 
@@ -1663,11 +1784,17 @@ async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatc
     )
     state = _analysis_query_state(paths, conversation_id="conv_large")
 
-    result = await tools["data_analyzing_tool"].ainvoke({
-        "action": "execute_query",
-        "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["内容"]}},
-        "state": state,
-    })
+    result = await tools["data_analyzing_tool"].ainvoke(
+        {
+            "action": "execute_query",
+            "action_payload": {
+                "semantic_config_id": "sc_1",
+                "member_datasource_ids": ["m1"],
+                "dsl": {"metrics": ["内容"]},
+            },
+            "state": state,
+        }
+    )
 
     payload = json.loads(result)
     assert payload["type"] == "chatdata_internal_tool_result"
@@ -1681,11 +1808,17 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await tools_without_datasource["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
-            "state": state_without_datasource,
-        })
+        await tools_without_datasource["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "semantic_config_id": "sc_1",
+                    "member_datasource_ids": ["m1"],
+                    "dsl": {"metrics": ["订单数"]},
+                },
+                "state": state_without_datasource,
+            }
+        )
 
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1694,30 +1827,50 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
     )
     state = _analysis_query_state(paths)
     with pytest.raises(ValueError, match="sql 必须放在顶层 sql 参数中"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"sql": "select 1"}},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "semantic_config_id": "sc_1",
+                    "member_datasource_ids": ["m1"],
+                    "dsl": {"sql": "select 1"},
+                },
+                "state": state,
+            }
+        )
 
     with pytest.raises(ValueError, match="semantic_config_id"):
-        await sql_tool_module.create_data_analyzing_tool().ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
-            "state": _analysis_query_state(paths),
-        })
+        await sql_tool_module.create_data_analyzing_tool().ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "semantic_config_id": "",
+                    "member_datasource_ids": ["m1"],
+                    "dsl": {"metrics": ["订单数"]},
+                },
+                "state": _analysis_query_state(paths),
+            }
+        )
     with pytest.raises(ValueError, match="dsl"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": [{"metrics": ["订单数"]}]},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "semantic_config_id": "sc_1",
+                    "member_datasource_ids": ["m1"],
+                    "dsl": [{"metrics": ["订单数"]}],
+                },
+                "state": state,
+            }
+        )
     with pytest.raises(ValueError, match="dsl 必须是单个查询对象"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"cards": []}},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"cards": []}},
+                "state": state,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -1754,17 +1907,21 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
 
     args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"]}
     with pytest.raises(ValueError, match="指标不存在"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {**args, "dsl": {"metrics": ["bad"]}},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {**args, "dsl": {"metrics": ["bad"]}},
+                "state": state,
+            }
+        )
     with pytest.raises(ValueError, match="DSL2SQL 未生成 SQL"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {**args, "dsl": {"metrics": ["empty"]}},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {**args, "dsl": {"metrics": ["empty"]}},
+                "state": state,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -1795,11 +1952,17 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     state = _analysis_query_state(paths)
 
     with pytest.raises(RuntimeError, match="执行失败"):
-        await tools["data_analyzing_tool"].ainvoke({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "dsl": {"metrics": ["订单数"]}},
-            "state": state,
-        })
+        await tools["data_analyzing_tool"].ainvoke(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "semantic_config_id": "sc_1",
+                    "member_datasource_ids": ["m1"],
+                    "dsl": {"metrics": ["订单数"]},
+                },
+                "state": state,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -1817,7 +1980,9 @@ async def test_file_read_reads_session_skill_snapshot(tmp_path):
     (snapshot_skill / "references" / "guide.md").write_text("# guide from snapshot\n", encoding="utf-8")
 
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root), user_id="u1", backend="local",
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="local",
     )
     tool = {item.name: item for item in filesystem_tool_module.create_filesystem_tools(runtime)}["file_read"]
     result = await tool.ainvoke({"file_path": "/mnt/skills/demo-skill/SKILL.md"})
@@ -1837,7 +2002,9 @@ async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
     (other / "SKILL.md").write_text("---\nname: other-skill\ntitle: 其他\n---\n# 其他\n", encoding="utf-8")
 
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root), user_id="u1", backend="local",
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="local",
     )
     tool = {item.name: item for item in filesystem_tool_module.create_filesystem_tools(runtime)}["file_read"]
     with pytest.raises(ValueError, match="技能不存在或无权限访问"):
@@ -1857,7 +2024,9 @@ async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=paths["root"], user_id="user_a", backend="local",
+        workspace_root=paths["root"],
+        user_id="user_a",
+        backend="local",
     )
     result = await runtime.grep_text(
         path="/mnt/user-data/outputs/order.dashboard.json",
@@ -1885,7 +2054,9 @@ async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp
     guide.write_text("# Demo\n关键词：订单数量\n", encoding="utf-8")
 
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root), user_id="u1", backend="local",
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="local",
     )
     result = await runtime.grep_text(
         path="/mnt/skills/demo-skill/references/guide.md",
@@ -2031,7 +2202,10 @@ def test_resolve_workspace_path_opens_uploads_only_for_explicit_switch(monkeypat
     ):
         with pytest.raises(ValueError, match="系统结果目录"):
             resolve_workspace_path(
-                paths["root"], audit_path, writable=True, allow_uploads_write=True,
+                paths["root"],
+                audit_path,
+                writable=True,
+                allow_uploads_write=True,
             )
 
 
@@ -2066,7 +2240,9 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
     # 目录不通过人侧接口删除（递归删除需要独立确认交互）
     with pytest.raises(ValueError, match="不能作为file删除"):
         workspace_local_backend_module.delete_local_workspace_file(
-            paths["root"], "/mnt/user-data/workspace/reports", allow_uploads=True,
+            paths["root"],
+            "/mnt/user-data/workspace/reports",
+            allow_uploads=True,
         )
     for root_path in (
         "/mnt/user-data/workspace",
@@ -2075,16 +2251,21 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
     ):
         with pytest.raises(ValueError, match="不允许操作工作区根目录"):
             workspace_local_backend_module.delete_local_workspace_file(
-                paths["root"], root_path, allow_uploads=True,
+                paths["root"],
+                root_path,
+                allow_uploads=True,
             )
     with pytest.raises(ValueError, match="系统结果目录"):
         workspace_local_backend_module.delete_local_workspace_file(
-            paths["root"], "/mnt/user-data/outputs/query_result/result_1.json", allow_uploads=True,
+            paths["root"],
+            "/mnt/user-data/outputs/query_result/result_1.json",
+            allow_uploads=True,
         )
     # 不开开关时（模型工具链路）uploads 同样不可删
     with pytest.raises(ValueError, match="只允许写入 workspace/、outputs/ 或 memory/"):
         workspace_local_backend_module.delete_local_workspace_file(
-            paths["root"], "/mnt/user-data/uploads/a.txt",
+            paths["root"],
+            "/mnt/user-data/uploads/a.txt",
         )
 
     assert audit.exists()
@@ -2111,11 +2292,14 @@ async def test_has_running_agent_run_blocks_only_running_statuses(monkeypatch):
         ("waiting_user", False),
         ("finished", False),
     ):
+
         async def snapshot(_session, _conversation_id, _user_id, _status=status):
             return SimpleNamespace(status=_status)
 
         monkeypatch.setattr(
-            conversation_workspace_module.agent_inbox_dao, "get_active_run_snapshot", snapshot,
+            conversation_workspace_module.agent_inbox_dao,
+            "get_active_run_snapshot",
+            snapshot,
         )
         assert await conversation_workspace_module._has_running_agent_run("conv_a", "user_a") is expected
 
@@ -2123,7 +2307,9 @@ async def test_has_running_agent_run_blocks_only_running_statuses(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        conversation_workspace_module.agent_inbox_dao, "get_active_run_snapshot", no_run,
+        conversation_workspace_module.agent_inbox_dao,
+        "get_active_run_snapshot",
+        no_run,
     )
     assert await conversation_workspace_module._has_running_agent_run("conv_a", "user_a") is False
 
@@ -2149,7 +2335,9 @@ async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit
     monkeypatch.setattr(conversation_workspace_module, "get_conversation_created_date", fixed_date)
 
     payload = await conversation_workspace_module.delete_conversation_workspace_file(
-        conversation_id, user_id="user_a", path="/mnt/user-data/outputs/report.docx",
+        conversation_id,
+        user_id="user_a",
+        path="/mnt/user-data/outputs/report.docx",
     )
 
     assert payload == {
@@ -2162,7 +2350,9 @@ async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit
     # 查询结果是审计留存：既不删文件，也不给「删了」的成功返回
     with pytest.raises(ValueError, match="留存审计"):
         await conversation_workspace_module.delete_conversation_workspace_file(
-            conversation_id, user_id="user_a", path="/mnt/user-data/outputs/query_result/result_1.json",
+            conversation_id,
+            user_id="user_a",
+            path="/mnt/user-data/outputs/query_result/result_1.json",
         )
     assert audit.exists()
 
@@ -2181,7 +2371,9 @@ async def test_delete_conversation_workspace_file_rejects_running_run(monkeypatc
 
     with pytest.raises(conversation_workspace_module.WorkspaceFileDeleteConflictError, match="正在执行"):
         await conversation_workspace_module.delete_conversation_workspace_file(
-            conversation_id, user_id="user_a", path="/mnt/user-data/workspace/draft.md",
+            conversation_id,
+            user_id="user_a",
+            path="/mnt/user-data/workspace/draft.md",
         )
 
     assert draft.exists()
@@ -2220,11 +2412,15 @@ async def test_delete_conversation_workspace_file_cleans_uploaded_file_record(mo
             return True
 
     monkeypatch.setattr(
-        uploaded_file_service_module, "get_uploaded_file_service", lambda: FakeUploadedFileService(),
+        uploaded_file_service_module,
+        "get_uploaded_file_service",
+        lambda: FakeUploadedFileService(),
     )
 
     payload = await conversation_workspace_module.delete_conversation_workspace_file(
-        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/月报.xlsx",
+        conversation_id,
+        user_id="user_a",
+        path="/mnt/user-data/uploads/月报.xlsx",
     )
 
     assert deleted == [("file_1", "user_a", conversation_id)]
@@ -2268,14 +2464,20 @@ async def test_delete_conversation_workspace_file_falls_back_when_upload_record_
             raise AssertionError("没有匹配记录时不应触碰上传记录")
 
     monkeypatch.setattr(
-        uploaded_file_service_module, "get_uploaded_file_service", lambda: FakeUploadedFileService(),
+        uploaded_file_service_module,
+        "get_uploaded_file_service",
+        lambda: FakeUploadedFileService(),
     )
 
     orphan_payload = await conversation_workspace_module.delete_conversation_workspace_file(
-        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/parse-cache.txt",
+        conversation_id,
+        user_id="user_a",
+        path="/mnt/user-data/uploads/parse-cache.txt",
     )
     nested_payload = await conversation_workspace_module.delete_conversation_workspace_file(
-        conversation_id, user_id="user_a", path="/mnt/user-data/uploads/2026/nested.csv",
+        conversation_id,
+        user_id="user_a",
+        path="/mnt/user-data/uploads/2026/nested.csv",
     )
 
     assert orphan_payload["record_cleaned"] is False
@@ -2287,6 +2489,7 @@ async def test_delete_conversation_workspace_file_falls_back_when_upload_record_
 # ---------------------------------------------------------------------------
 # 目录打包下载（archive）
 # ---------------------------------------------------------------------------
+
 
 def test_archive_workspace_directory_packages_outputs(monkeypatch, tmp_path):
     paths = _isolated_workspace(monkeypatch, tmp_path, "conv_zip_a")
@@ -2382,9 +2585,9 @@ def test_archive_supports_subdirectory_and_rejects_escape(monkeypatch, tmp_path)
 
 def test_archive_aborts_and_cleans_up_when_zip_exceeds_limit(monkeypatch, tmp_path):
     _isolated_workspace(monkeypatch, tmp_path, "conv_zip_d", "user_a")
-    outputs = Path(
-        conversation_workspace_module.ensure_conversation_workspace("conv_zip_d", "user_a")["root"]
-    ) / "outputs"
+    outputs = (
+        Path(conversation_workspace_module.ensure_conversation_workspace("conv_zip_d", "user_a")["root"]) / "outputs"
+    )
     outputs.mkdir(parents=True, exist_ok=True)
     # 随机字节不可压缩，8KB 源必然压出超过 512B 上限的产物
     (outputs / "raw.bin").write_bytes(os.urandom(8192))
@@ -2402,9 +2605,7 @@ def test_archive_aborts_and_cleans_up_when_zip_exceeds_limit(monkeypatch, tmp_pa
 
     monkeypatch.setattr(conversation_workspace_module.tempfile, "mkstemp", recording_mkstemp)
 
-    with pytest.raises(
-        conversation_workspace_module.WorkspaceArchiveTooLargeError, match="已中止打包"
-    ):
+    with pytest.raises(conversation_workspace_module.WorkspaceArchiveTooLargeError, match="已中止打包"):
         conversation_workspace_module._archive_workspace_directory("conv_zip_d", "outputs", "user_a")
 
     assert created["path"] and not os.path.exists(created["path"])
@@ -2420,15 +2621,17 @@ def test_archive_skips_files_deleted_between_listing_and_packaging(monkeypatch, 
 
     def list_with_phantom(*args, **kwargs):
         files = original_list(*args, **kwargs)
-        return files + [{
-            "path": "outputs/ghost.txt",
-            "relative_path": "outputs/ghost.txt",
-            "directory": "outputs",
-            "name": "ghost.txt",
-            "size": 10,
-            "mtime": 0,
-            "source": "outputs",
-        }]
+        return files + [
+            {
+                "path": "outputs/ghost.txt",
+                "relative_path": "outputs/ghost.txt",
+                "directory": "outputs",
+                "name": "ghost.txt",
+                "size": 10,
+                "mtime": 0,
+                "source": "outputs",
+            }
+        ]
 
     monkeypatch.setattr(conversation_workspace_module, "list_workspace_files", list_with_phantom)
 

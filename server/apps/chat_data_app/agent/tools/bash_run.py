@@ -82,9 +82,7 @@ async def run_bash_command(
         requested_timeout = DEFAULT_TIMEOUT_SECONDS
     # 0/负数按非法输入 clamp 到下限 1，而不是被 or 当成"未提供"落到默认值。
     timeout = max(1, min(requested_timeout, MAX_TIMEOUT_SECONDS))
-    execution = await workspace_runtime.run_bash(
-        command=safe_command, cwd=cwd, timeout_seconds=timeout
-    )
+    execution = await workspace_runtime.run_bash(command=safe_command, cwd=cwd, timeout_seconds=timeout)
     stdout, stdout_truncated = truncate_output(str(execution["stdout"]))
     stderr, stderr_truncated = truncate_output(str(execution["stderr"]))
     success = (int(execution["exit_code"]) == 0) and not bool(execution["timed_out"])
@@ -103,14 +101,20 @@ async def run_bash_command(
         "stderr_truncated": stderr_truncated,
         "next_required_action": (
             "如果命令生成了 workspace 中间产物，请校验后复制或写入 outputs，并使用 .chart.json / .dashboard.json 等产物后缀。"
-            if success else "修复命令、脚本或输入文件后重新执行。"
+            if success
+            else "修复命令、脚本或输入文件后重新执行。"
         ),
     }
 
 
 def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
     @tool("bash_run", parse_docstring=True)
-    async def bash_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS, intent: str = "") -> str:
+    async def bash_run(
+        command: str,
+        cwd: str = "/mnt/user-data/workspace",
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        intent: str = "",
+    ) -> str:
         """在当前会话工作区执行非交互命令，可用于 ls/find/python3/node/bash 等。
 
         command 必须是短生命周期非交互命令：不支持后台进程、服务管理或提权命令。

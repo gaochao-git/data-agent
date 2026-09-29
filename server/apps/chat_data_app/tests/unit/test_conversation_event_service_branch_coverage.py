@@ -55,9 +55,16 @@ class SnapshotDao:
 
 class InboxDao:
     def __init__(self, run=None, *, run_error=None):
-        self.run = run if run is not None else SimpleNamespace(
-            conversation_id="conv-1", user_id="user-1", record_status="active",
-            owner_token="tok-1", record_content="{}",
+        self.run = (
+            run
+            if run is not None
+            else SimpleNamespace(
+                conversation_id="conv-1",
+                user_id="user-1",
+                record_status="active",
+                owner_token="tok-1",
+                record_content="{}",
+            )
         )
         self.run_error = run_error
 
@@ -115,7 +122,10 @@ async def test_persist_turn_advances_checkpoint():
     dao = SnapshotDao()
     checkpoint = await _persist(_service(dao))
     assert checkpoint == {
-        "run_id": "run-1", "turn_id": "turn-1", "history_sequence_no": 7, "stream_id": "5-0",
+        "run_id": "run-1",
+        "turn_id": "turn-1",
+        "history_sequence_no": 7,
+        "stream_id": "5-0",
     }
     assert dao.append_calls == 1
 
@@ -138,8 +148,11 @@ async def test_persist_turn_propagates_lease_lost_without_retry(no_retry_delay):
 async def test_persist_turn_rejects_run_owned_by_another_worker(no_retry_delay):
     dao = SnapshotDao()
     stale_run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", record_status="active",
-        owner_token="other-token", record_content="{}",
+        conversation_id="conv-1",
+        user_id="user-1",
+        record_status="active",
+        owner_token="other-token",
+        record_content="{}",
     )
     with pytest.raises(AgentRunLeaseLostError, match="其他 Worker 接管"):
         await _persist(_service(dao, InboxDao(run=stale_run)))
@@ -149,8 +162,11 @@ async def test_persist_turn_rejects_run_owned_by_another_worker(no_retry_delay):
 async def test_persist_turn_rejects_finished_run():
     dao = SnapshotDao()
     finished = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", record_status="finished",
-        owner_token="tok-1", record_content="{}",
+        conversation_id="conv-1",
+        user_id="user-1",
+        record_status="finished",
+        owner_token="tok-1",
+        record_content="{}",
     )
     with pytest.raises(AgentRunLeaseLostError, match="当前运行已结束"):
         await _persist(_service(dao, InboxDao(run=finished)))
@@ -188,7 +204,10 @@ async def test_persist_turn_gives_up_after_max_attempts(no_retry_delay):
 @pytest.mark.asyncio
 async def test_checkpoint_keeps_newer_previous_watermark():
     run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", record_status="active", owner_token="tok-1",
+        conversation_id="conv-1",
+        user_id="user-1",
+        record_status="active",
+        owner_token="tok-1",
         record_content=json.dumps({"history_checkpoint": {"run_id": "run-1", "stream_id": "9-0"}}),
     )
     # 传入的 stream_id 比已记录的更旧：不回退，直接沿用旧水位
@@ -199,7 +218,10 @@ async def test_checkpoint_keeps_newer_previous_watermark():
 @pytest.mark.asyncio
 async def test_checkpoint_rejects_foreign_run_watermark():
     run = SimpleNamespace(
-        conversation_id="conv-1", user_id="user-1", record_status="active", owner_token="tok-1",
+        conversation_id="conv-1",
+        user_id="user-1",
+        record_status="active",
+        owner_token="tok-1",
         record_content=json.dumps({"history_checkpoint": {"run_id": "run-other", "stream_id": "2-0"}}),
     )
     with pytest.raises(AgentRunLeaseLostError, match="恢复水位归属已变化"):
@@ -211,7 +233,9 @@ async def test_validate_run_rejects_missing_or_mismatched_run():
     service = _service()
     with pytest.raises(AgentRunLeaseLostError, match="当前运行不存在"):
         service._validate_run_for_checkpoint(None, conversation_id="c", user_id="u", run_id="r", owner_token="t")
-    other = SimpleNamespace(conversation_id="other", user_id="u", record_status="active", owner_token="t", record_content="{}")
+    other = SimpleNamespace(
+        conversation_id="other", user_id="u", record_status="active", owner_token="t", record_content="{}"
+    )
     with pytest.raises(AgentRunLeaseLostError, match="归属已变化"):
         service._validate_run_for_checkpoint(other, conversation_id="c", user_id="u", run_id="r", owner_token="t")
 
@@ -229,7 +253,10 @@ def test_normalize_stream_id_trims_and_treats_blank_as_none():
 
 def _row(sequence_no, event_type, payload, turn_id="turn-1"):
     return SimpleNamespace(
-        sequence_no=sequence_no, event_type=event_type, payload=payload, turn_id=turn_id,
+        sequence_no=sequence_no,
+        event_type=event_type,
+        payload=payload,
+        turn_id=turn_id,
     )
 
 
@@ -282,7 +309,8 @@ async def test_load_history_in_session_survives_token_usage_failure():
             return None
 
     history = await _service(SessionDao(), SessionInboxDao()).load_history_with_recovery(
-        conversation_id="conv-1", user_id="user-1",
+        conversation_id="conv-1",
+        user_id="user-1",
     )
     assert history["messages"][0]["content"] == "保留"
     assert history["token_usage"] is None
@@ -299,7 +327,9 @@ async def test_load_history_with_recovery_exposes_active_run_watermark():
             return '{"total": 5}'
 
     active_run = SimpleNamespace(
-        run_id="run-9", record_status="active", turn_id="turn-1",
+        run_id="run-9",
+        record_status="active",
+        turn_id="turn-1",
         record_content=json.dumps({"history_checkpoint": {"run_id": "run-9", "stream_id": "4-0"}}),
     )
 
@@ -308,7 +338,8 @@ async def test_load_history_with_recovery_exposes_active_run_watermark():
             return active_run
 
     history = await _service(SessionDao(), SessionInboxDao()).load_history_with_recovery(
-        conversation_id="conv-1", user_id="user-1",
+        conversation_id="conv-1",
+        user_id="user-1",
     )
     assert history["token_usage"] == {"total": 5}
     assert history["active_run"]["run_id"] == "run-9"

@@ -53,7 +53,10 @@ def time_equal_value_to_range(value: Any) -> Optional[tuple[str, str]]:
         except ValueError:
             return None
         next_day = start + timedelta(days=1)
-        return f"{start.year:04d}-{start.month:02d}-{start.day:02d} 00:00:00", f"{next_day.year:04d}-{next_day.month:02d}-{next_day.day:02d} 00:00:00"
+        return (
+            f"{start.year:04d}-{start.month:02d}-{start.day:02d} 00:00:00",
+            f"{next_day.year:04d}-{next_day.month:02d}-{next_day.day:02d} 00:00:00",
+        )
     return None
 
 
@@ -73,11 +76,7 @@ def normalize_time_filter_leaf(node: Dict[str, Any], dim_config: Dict[str, Any])
         return [node]
 
     start_value, end_value = date_range
-    base = {
-        key: value
-        for key, value in node.items()
-        if key not in {"operator", "value", "value_type", "valueType"}
-    }
+    base = {key: value for key, value in node.items() if key not in {"operator", "value", "value_type", "valueType"}}
     return [
         {**base, "operator": ">=", "value": start_value},
         {**base, "operator": "<", "value": end_value},

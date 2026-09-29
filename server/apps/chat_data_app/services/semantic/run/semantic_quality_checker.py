@@ -57,11 +57,23 @@ RULES: Dict[str, Tuple[str, str, str]] = {
     "PROV_DIMENSION_MISSING_TABLE": ("error", "provenance", "维度缺少归属表 table"),
     "PROV_DIMENSION_MISSING_COLUMN": ("warning", "provenance", "维度缺少物理字段 column"),
     # 可执行性 executability
-    "EXE_DERIVED_NO_CONSTRAINT": ("info", "executability", "派生指标未设置时间窗 period 或过滤 filters，口径可能与基础指标重复"),
+    "EXE_DERIVED_NO_CONSTRAINT": (
+        "info",
+        "executability",
+        "派生指标未设置时间窗 period 或过滤 filters，口径可能与基础指标重复",
+    ),
     "EXE_COMPOSITE_UNRESOLVED": ("warning", "executability", "复合指标 formula 存在无法对应到已知指标的片段"),
     # 覆盖度 coverage
-    "COV_NO_METRICS": ("warning", "coverage", "配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标"),
-    "COV_NO_DIMENSIONS": ("warning", "coverage", "配置只有指标没有维度，聚合只能看总量，分组/过滤/明细分析受限，建议补充常用分析维度"),
+    "COV_NO_METRICS": (
+        "warning",
+        "coverage",
+        "配置只有维度没有指标，聚合类问题只能退化 SQL 直查（无统一口径沉淀），建议补充常用聚合指标",
+    ),
+    "COV_NO_DIMENSIONS": (
+        "warning",
+        "coverage",
+        "配置只有指标没有维度，聚合只能看总量，分组/过滤/明细分析受限，建议补充常用分析维度",
+    ),
     "COV_DUPLICATE_DIMENSION_COLUMN": ("warning", "coverage", "同一物理列被建模为多个维度"),
     "COV_UNMODELED_COLUMNS": ("info", "coverage", "已建模表存在未纳入任何维度/指标的物理列"),
     # 一致性 consistency
@@ -72,7 +84,11 @@ RULES: Dict[str, Tuple[str, str, str]] = {
     "CON_RELATIONSHIP_SELF": ("info", "consistency", "表关系左右为同一张表"),
     "CON_RELATIONSHIP_TABLE_UNREFERENCED": ("warning", "consistency", "关系引用的表没有任何维度或指标建模"),
     "CON_RELATIONSHIP_CYCLE": ("warning", "consistency", "表关系存在循环依赖"),
-    "CON_RELATIONSHIP_KEY_UNCOVERED": ("warning", "consistency", "关系 one 端 join 列未覆盖该表声明的 primary/unique key"),
+    "CON_RELATIONSHIP_KEY_UNCOVERED": (
+        "warning",
+        "consistency",
+        "关系 one 端 join 列未覆盖该表声明的 primary/unique key",
+    ),
     # 一致性（跨模型层：比较域为数据源组内多个模型之间，只由 check_cross_model_metrics
     # 产出，单模型 check_config 永不触发；评分也不参与单模型报告扣分）
     "CON_CROSS_MODEL_NAME_CONFLICT": ("error", "consistency", "同名指标在多个模型中表达式不同（口径冲突）"),
@@ -237,12 +253,17 @@ class SemanticQualityChecker:
             raw.append(("STR_COMPOSITE_INVALID", error))
         if physical_columns is not None:
             error = validate_semantic_relationships(
-                table_columns_map, metrics, dimensions, relationships,
+                table_columns_map,
+                metrics,
+                dimensions,
+                relationships,
             )
             if error:
                 raw.append(("STR_RELATIONSHIP_INVALID", error))
 
-    def _check_provenance(self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], raw: List[Tuple[str, str]]) -> None:
+    def _check_provenance(
+        self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], raw: List[Tuple[str, str]]
+    ) -> None:
         for metric in metrics:
             if metric.get("metric_kind"):
                 continue  # 派生/复合指标不落物理表，table 为空是正常形态
@@ -450,9 +471,7 @@ class SemanticQualityChecker:
             name = str(table.get("table") or table.get("table_name") or "").strip()
             if not name:
                 continue
-            keys = SemanticQualityChecker._normalize_table_keys(
-                SemanticQualityChecker._collect_table_raw_keys(table)
-            )
+            keys = SemanticQualityChecker._normalize_table_keys(SemanticQualityChecker._collect_table_raw_keys(table))
             if keys:
                 declared[name.casefold()] = keys
         return declared
@@ -579,7 +598,9 @@ class SemanticQualityChecker:
         return []
 
     @staticmethod
-    def _dfs(node: str, start: str, parent: Optional[str], edges: Dict[str, Set[str]], visited: Set[str], path: List[str]) -> bool:
+    def _dfs(
+        node: str, start: str, parent: Optional[str], edges: Dict[str, Set[str]], visited: Set[str], path: List[str]
+    ) -> bool:
         for neighbor in sorted(edges.get(node, set())):
             if neighbor == parent:
                 continue
@@ -619,7 +640,12 @@ class SemanticQualityChecker:
             grouped.setdefault(code, []).append(target)
         findings: List[QualityFinding] = []
         # 按 category -> severity 稳定排序，报告可读性优先；structure 是阻断级门槛排最前
-        category_order = {name: index for index, name in enumerate(("structure", "provenance", "executability", "coverage", "consistency", "documentation"))}
+        category_order = {
+            name: index
+            for index, name in enumerate(
+                ("structure", "provenance", "executability", "coverage", "consistency", "documentation")
+            )
+        }
         severity_order = {"error": 0, "warning": 1, "info": 2}
         for code, targets in grouped.items():
             severity, category, label = RULES[code]
@@ -630,18 +656,22 @@ class SemanticQualityChecker:
                 message = f"{'；'.join(examples)}{suffix}"
             else:
                 message = f"{label}: {', '.join(examples)}{suffix}" if targets and targets != ["-"] else label
-            findings.append(QualityFinding(code=code, severity=severity, category=category, message=message, targets=targets))
-        findings.sort(key=lambda item: (category_order.get(item.category, 99), severity_order.get(item.severity, 99), item.code))
+            findings.append(
+                QualityFinding(code=code, severity=severity, category=category, message=message, targets=targets)
+            )
+        findings.sort(
+            key=lambda item: (category_order.get(item.category, 99), severity_order.get(item.severity, 99), item.code)
+        )
         return findings
 
-    def _stats(self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], relationships: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _stats(
+        self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], relationships: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         atomic = sum(1 for metric in metrics if not metric.get("metric_kind"))
         derived = sum(1 for metric in metrics if metric.get("metric_kind") == "derived")
         composite = sum(1 for metric in metrics if metric.get("metric_kind") == "composite")
         described_metrics = sum(1 for metric in metrics if str(metric.get("description") or "").strip())
-        described_dimensions = sum(
-            1 for dimension in dimensions if str(dimension.get("description") or "").strip()
-        )
+        described_dimensions = sum(1 for dimension in dimensions if str(dimension.get("description") or "").strip())
         return {
             "metric_count": len(metrics),
             "atomic_metric_count": atomic,

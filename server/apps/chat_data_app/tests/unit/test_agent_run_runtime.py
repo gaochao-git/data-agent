@@ -80,6 +80,7 @@ async def test_done_is_published_after_successful_generator_finalization(monkeyp
         event_service=Events(),
         event_bus=Events.bus,
     )
+
     def submit_next_run(**kwargs):
         assert kwargs == {
             "run_id": "run-2",
@@ -589,6 +590,7 @@ async def test_claim_owner_failure_propagates_original_error_when_finish_also_fa
     monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
     # get_logger 默认 propagate=False，caplog 收不到记录；测试期临时放开
     from apps.chat_data_app.agent.run import agent_run_runtime as runtime_module
+
     monkeypatch.setattr(runtime_module.logger, "propagate", True)
 
     # _execute 对普通异常记 ERROR 后吞掉；断言顶层日志携带的异常是原始
@@ -708,11 +710,13 @@ def test_set_stream_generator_is_used_by_stream_factory():
 
     def fake_stream_generator(request):
         # 流式执行入参已收敛为 ChatDataStreamRequest（单一对象）
-        captured.update({
-            "thread_id": request.thread_id,
-            "run_id": request.run_id,
-            "owner_token": request.owner_token,
-        })
+        captured.update(
+            {
+                "thread_id": request.thread_id,
+                "run_id": request.run_id,
+                "owner_token": request.owner_token,
+            }
+        )
 
         async def stream():
             yield "event: done\ndata: [DONE]\n\n"
@@ -731,6 +735,7 @@ def test_set_stream_generator_is_used_by_stream_factory():
     assert captured["owner_token"] == "1:owner"
     assert captured["thread_id"] == "conv-1"
     stream.aclose()
+
 
 @pytest.mark.asyncio
 async def test_cancel_local_cancels_in_process_task_with_cancel_reason():

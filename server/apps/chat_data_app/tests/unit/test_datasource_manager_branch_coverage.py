@@ -37,6 +37,7 @@ class _FakeDao:
             self.calls.append(name)
             value = self.returns.get(name)
             return value(*args, **kwargs) if callable(value) else value
+
         return _call
 
 
@@ -47,6 +48,7 @@ def _manager(**dao_returns) -> DataSourceManager:
 
 
 # ---------------------------------------------------------------- 纯函数
+
 
 def test_normalize_member_source_config_requires_database():
     """org/org_code 齐全但缺 database → 报错（156->157）。"""
@@ -71,8 +73,7 @@ def _table() -> dict:
 def test_validate_index_item_rejects_non_dict():
     """索引项不是对象 → 报错（899->900）。"""
     with pytest.raises(ValueError, match="索引项必须是对象"):
-        _validate_and_normalize_index_item(
-            "junk", _table(), {"id", "amount"}, set(), set(), False)
+        _validate_and_normalize_index_item("junk", _table(), {"id", "amount"}, set(), set(), False)
 
 
 def test_validate_index_item_rejects_duplicate_name():
@@ -81,15 +82,26 @@ def test_validate_index_item_rejects_duplicate_name():
     table = _table()
     first, _ = _validate_and_normalize_index_item(
         {"index_type": "secondary", "index_name": "idx_amount", "columns": ["amount"]},
-        table, {"id", "amount"}, set(), seen, False)
+        table,
+        {"id", "amount"},
+        set(),
+        seen,
+        False,
+    )
     assert first["index_name"] == "idx_amount"
     with pytest.raises(ValueError, match="索引名称重复"):
         _validate_and_normalize_index_item(
             {"index_type": "secondary", "index_name": "idx_amount", "columns": ["amount"]},
-            table, {"id", "amount"}, set(), seen, False)
+            table,
+            {"id", "amount"},
+            set(),
+            seen,
+            False,
+        )
 
 
 # ---------------------------------------------------------------- async 出口
+
 
 @pytest.mark.asyncio
 async def test_get_datasource_meta_or_raise_rejects_missing():
@@ -171,12 +183,14 @@ async def test_get_authorized_datasources_skips_http_lookup_when_all_direct(monk
         return []
 
     async def _fake_all(include_tables=True):
-        return [{
-            "id": "ds_a",
-            "source_type": "mysql",
-            "query_executor_type": "direct",
-            "member_sources": [{"org_code": "ORG_A", "query_executor_type": "direct"}],
-        }]
+        return [
+            {
+                "id": "ds_a",
+                "source_type": "mysql",
+                "query_executor_type": "direct",
+                "member_sources": [{"org_code": "ORG_A", "query_executor_type": "direct"}],
+            }
+        ]
 
     monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", _fake_allowed)
     manager = _manager()

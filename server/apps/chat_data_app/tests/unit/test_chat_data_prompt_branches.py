@@ -100,19 +100,13 @@ def test_memory_block_only_in_main_agent_prompt():
 def test_system_prompt_uses_provided_skills_xml_or_empty_fallback():
     custom_xml = '<available_skills>\n  <skill name="demo" />\n</available_skills>'
 
-    assert custom_xml in chat_data.build_unified_system_prompt(
-        AgentRuntimeOptions(), available_skills_xml=custom_xml
-    )
-    assert chat_data.EMPTY_AVAILABLE_SKILLS_XML in chat_data.build_unified_system_prompt(
-        AgentRuntimeOptions()
-    )
+    assert custom_xml in chat_data.build_unified_system_prompt(AgentRuntimeOptions(), available_skills_xml=custom_xml)
+    assert chat_data.EMPTY_AVAILABLE_SKILLS_XML in chat_data.build_unified_system_prompt(AgentRuntimeOptions())
 
 
 def test_system_prompt_environment_block_ignores_workspace_root():
     """环境块是纯静态目录树（含 semantic 快照与 /mnt/skills），workspace_root 入参不参与拼装。"""
-    with_root = chat_data.build_unified_system_prompt(
-        AgentRuntimeOptions(), workspace_root="/mnt/user-data/workspace"
-    )
+    with_root = chat_data.build_unified_system_prompt(AgentRuntimeOptions(), workspace_root="/mnt/user-data/workspace")
 
     assert "## 环境" in with_root
     assert "├── workspace/   中间文件写入该工作区" in with_root

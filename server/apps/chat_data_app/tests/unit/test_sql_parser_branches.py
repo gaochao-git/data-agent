@@ -33,11 +33,18 @@ def test_strip_comments_for_validation_respects_mysql_dash_comment_rules():
     assert "drop table orders" not in sql_parser._strip_comments_for_validation(hive_sql, "hive")
     assert sql_parser._strip_comments_for_validation("select 1 # comment", "mysql").strip() == "select 1"
     assert sql_parser._strip_comments_for_validation("select 1 # not-comment", "hive") == "select 1 # not-comment"
-    assert sql_parser._strip_comments_for_validation("select 'a\\'--b', \"#c\", `/*d*/`", "mysql") == "select 'a\\'--b', \"#c\", `/*d*/`"
+    assert (
+        sql_parser._strip_comments_for_validation("select 'a\\'--b', \"#c\", `/*d*/`", "mysql")
+        == "select 'a\\'--b', \"#c\", `/*d*/`"
+    )
     assert sql_parser._strip_comments_for_validation("select 'it''s -- ok'", "mysql") == "select 'it''s -- ok'"
-    assert sql_parser._strip_comments_for_validation("select 1 -- comment\nfrom dual", "mysql") == "select 1 \nfrom dual"
+    assert (
+        sql_parser._strip_comments_for_validation("select 1 -- comment\nfrom dual", "mysql") == "select 1 \nfrom dual"
+    )
     assert sql_parser._strip_comments_for_validation("select 1 # comment\nfrom dual", "mysql") == "select 1 \nfrom dual"
-    assert sql_parser._strip_comments_for_validation("select 1 /* comment */ from dual", "mysql") == "select 1   from dual"
+    assert (
+        sql_parser._strip_comments_for_validation("select 1 /* comment */ from dual", "mysql") == "select 1   from dual"
+    )
     assert sql_parser._strip_comments_for_validation("select 1 /* unclosed", "mysql") == "select 1  "
 
 
@@ -49,9 +56,7 @@ def test_validation_dash_comment_helper_branches():
 
 
 def test_split_sql_statements_handles_quoted_semicolons_and_escaped_quotes():
-    statements = sql_parser._split_sql_statements(
-        "select ';' as semi, 'it''s; ok' as txt; select `semi;col` from t;"
-    )
+    statements = sql_parser._split_sql_statements("select ';' as semi, 'it''s; ok' as txt; select `semi;col` from t;")
 
     assert len(statements) == 2
     assert statements[0].startswith("select ';' as semi")
@@ -68,7 +73,9 @@ def test_split_sql_statements_handles_quoted_semicolons_and_escaped_quotes():
         ("select /* comment */ 1", "mysql", True, "SELECT 1", ""),
     ],
 )
-def test_prepare_sql_for_execution_error_and_command_branches(sql, source_type, expected_success, expected_sql, expected_error):
+def test_prepare_sql_for_execution_error_and_command_branches(
+    sql, source_type, expected_success, expected_sql, expected_error
+):
     result = sql_parser.prepare_sql_for_execution(sql, source_type)
 
     assert result.success is expected_success
@@ -79,7 +86,9 @@ def test_prepare_sql_for_execution_error_and_command_branches(sql, source_type, 
 
 
 def test_prepare_sql_for_execution_parse_exception_and_empty_normalized(monkeypatch):
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     failed = sql_parser.prepare_sql_for_execution("select 1", "mysql")
     assert failed.success is False
     assert failed.error == "parse boom"
@@ -108,7 +117,9 @@ def test_validate_single_sql_statement_error_and_non_query_branches(monkeypatch)
     assert command.success is True
     assert command.sql == "show tables"
 
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     failed = sql_parser.validate_single_sql_statement("select 1", "mysql")
     assert failed.success is False
     assert failed.error == "parse boom"
@@ -136,7 +147,9 @@ def test_validate_raw_single_sql_statement_branches(monkeypatch):
     assert sql_parser.validate_raw_single_sql_statement(" ; ; ").error == "SQL 为空"
     assert "一次只能执行一条 SQL" in sql_parser.validate_raw_single_sql_statement("select 1; select 2").error
 
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     failed = sql_parser.validate_raw_single_sql_statement("select 1")
     assert failed.success is False
     assert failed.error == "parse boom"
@@ -158,7 +171,9 @@ def test_extract_top_level_limit_count_branches(monkeypatch):
     assert sql_parser.extract_top_level_limit_count("select * from orders limit 12") == 12
     assert sql_parser.extract_top_level_limit_count("select * from orders limit 'x'") is None
 
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     assert sql_parser.extract_top_level_limit_count("select * from orders limit 1") is None
 
     monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: [object(), object()])
@@ -185,7 +200,9 @@ def test_extract_physical_tables_branches(monkeypatch):
     assert result.success is True
     assert result.tables == {"orders", "users"}
 
-    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom")))
+    monkeypatch.setattr(
+        sql_parser, "_parse_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("parse boom"))
+    )
     failed = sql_parser.extract_physical_tables("select * from orders")
     assert failed.success is False
     assert failed.error == "parse boom"

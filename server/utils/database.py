@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 
 # ============ 配置 ============
 
+
 def _get_env(name: str) -> str:
     """读取业务库配置。"""
     value = os.getenv(name)
@@ -51,10 +52,12 @@ DB_POOL_RECYCLE_SECONDS = 1800
 def _get_mysql_password() -> str:
     """获取 MySQL 密码（SM4 解密）"""
     from utils.crypto import decrypt_password
+
     return decrypt_password(_get_env("FXCJG_DB_PASSWORD"))
 
 
 # ============ 引擎创建 ============
+
 
 def get_database_url() -> URL:
     """获取数据库连接 URL"""
@@ -226,6 +229,7 @@ async def init_database():
     """
     await select_available_database_endpoint()
     get_engine()
+
 
 async def close_database():
     """关闭数据库连接"""

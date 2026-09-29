@@ -76,7 +76,9 @@ def test_add_panel_api_contract(client, auth_headers, fake_dashboard_service, mo
     assert fake_dashboard_service.added_panel["datasource_id"] == "ds_a"
 
 
-def test_get_evaluation_cases_preserves_limit_offset_contract(client, auth_headers, fake_datasource_manager, monkeypatch):
+def test_get_evaluation_cases_preserves_limit_offset_contract(
+    client, auth_headers, fake_datasource_manager, monkeypatch
+):
     async def fake_load_scene_case_set(datasource_id, config_id):
         return {
             "business_domain": "订单分析",
@@ -105,7 +107,9 @@ def test_get_evaluation_cases_preserves_limit_offset_contract(client, auth_heade
     monkeypatch.setattr(evaluation_routes, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(evaluation_routes, "_load_scene_case_set", fake_load_scene_case_set)
 
-    response = client.get("/api/chatdata/datasources/ds_a/semantic-configs/cfg_a/evaluation-cases", headers=auth_headers)
+    response = client.get(
+        "/api/chatdata/datasources/ds_a/semantic-configs/cfg_a/evaluation-cases", headers=auth_headers
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -126,16 +130,20 @@ def test_save_evaluation_cases_api_contract(client, auth_headers, fake_datasourc
         compiled["gold_sql"] = "select sum(amount) from orders"
         return compiled
 
-    async def fake_save_scene_case_set(datasource_id, config_id, case_set_name, business_domain, cases, operator_id=None, operator_name=None):
-        saved.update({
-            "datasource_id": datasource_id,
-            "config_id": config_id,
-            "case_set_name": case_set_name,
-            "business_domain": business_domain,
-            "cases": cases,
-            "operator_id": operator_id,
-            "operator_name": operator_name,
-        })
+    async def fake_save_scene_case_set(
+        datasource_id, config_id, case_set_name, business_domain, cases, operator_id=None, operator_name=None
+    ):
+        saved.update(
+            {
+                "datasource_id": datasource_id,
+                "config_id": config_id,
+                "case_set_name": case_set_name,
+                "business_domain": business_domain,
+                "cases": cases,
+                "operator_id": operator_id,
+                "operator_name": operator_name,
+            }
+        )
         return "case_set_a"
 
     monkeypatch.setattr(evaluation_routes, "get_datasource_manager", lambda: fake_datasource_manager)

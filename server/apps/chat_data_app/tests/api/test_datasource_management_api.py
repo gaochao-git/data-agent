@@ -17,7 +17,9 @@ def test_admin_list_datasources_uses_unfiltered_list(client, patch_datasource_ma
             self.all_include_tables = include_tables
             return [{"id": "ds_admin", "group_name": "后台数据源", "ds_tables": []}]
 
-        async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+        async def get_authorized_datasources_async(
+            self, include_tables: bool = True, user_id: str = "", username: str = ""
+        ):
             self.authorized_called = True
             return []
 
@@ -51,7 +53,9 @@ def test_update_datasource_meta_api_contract(client, fake_datasource_manager, pa
     assert payload["data"]["description"] == "新的描述"
 
 
-def test_update_datasource_mapped_modules_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
+def test_update_datasource_mapped_modules_api_contract(
+    client, fake_datasource_manager, patch_datasource_manager, auth_headers
+):
     patch_datasource_manager(fake_datasource_manager)
 
     response = client.patch(
@@ -67,7 +71,9 @@ def test_update_datasource_mapped_modules_api_contract(client, fake_datasource_m
     assert payload["data"]["mapped_modules"] == ["智能问数", "可视化查询"]
 
 
-def test_table_groups_read_and_save_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
+def test_table_groups_read_and_save_api_contract(
+    client, fake_datasource_manager, patch_datasource_manager, auth_headers
+):
     patch_datasource_manager(fake_datasource_manager)
 
     list_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups", headers=auth_headers)
@@ -109,18 +115,35 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
     class FakeLlm:
         async def ainvoke(self, messages):
             assert "1 表示有效" in messages[0].content
-            return SimpleNamespace(content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"synonyms":["订单状态"],"storage_format":"","unit":""}}')
+            return SimpleNamespace(
+                content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"synonyms":["订单状态"],"storage_format":"","unit":""}}'
+            )
 
     patch_datasource_manager(fake_datasource_manager)
     monkeypatch.setattr(column_dict_generate, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
 
-    public_get_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
-    admin_get_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
-    public_table_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers)
-    admin_table_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers)
+    public_get_response = client.get(
+        "/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers
+    )
+    admin_get_response = client.get(
+        "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers
+    )
+    public_table_response = client.get(
+        "/api/chatdata/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers
+    )
+    admin_table_response = client.get(
+        "/api/chatdata/admin/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers
+    )
     save_response = client.put(
         "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict",
-        json={"dict": {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}},
+        json={
+            "dict": {
+                "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
+                "synonyms": ["状态"],
+                "storage_format": "",
+                "unit": "",
+            }
+        },
         headers=auth_headers,
     )
     generate_response = client.post(
@@ -138,10 +161,16 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
     assert admin_table_response.status_code == 200
     assert admin_table_response.json()["data"]["dicts"]["status"]["enum_values"] == [{"value": "1", "label": "有效"}]
     assert save_response.status_code == 200
-    assert save_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}]
+    assert save_response.json()["data"]["dict"]["enum_values"] == [
+        {"value": "1", "label": "有效"},
+        {"value": "0", "label": "无效"},
+    ]
     assert fake_datasource_manager.replaced_column_dict_operator == "user_a"
     assert generate_response.status_code == 200
-    assert generate_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}]
+    assert generate_response.json()["data"]["dict"]["enum_values"] == [
+        {"value": "1", "label": "有效"},
+        {"value": "0", "label": "无效"},
+    ]
     assert generate_response.json()["data"]["dict"]["synonyms"] == []
 
 
@@ -165,7 +194,9 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
     assert generate_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
-def test_public_column_dict_read_enforces_datasource_permission(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
+def test_public_column_dict_read_enforces_datasource_permission(
+    client, fake_datasource_manager, patch_datasource_manager, auth_headers
+):
     patch_datasource_manager(fake_datasource_manager)
 
     async def deny_access(*_args, **_kwargs):
@@ -188,7 +219,9 @@ def test_public_column_dict_read_enforces_datasource_permission(client, fake_dat
     assert table_response.json()["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
 
 
-def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
+def test_set_and_clear_default_datasource_api_contract(
+    client, fake_datasource_manager, patch_datasource_manager, auth_headers
+):
     patch_datasource_manager(fake_datasource_manager)
 
     set_response = client.post("/api/chatdata/admin/datasources/ds_a/set-default", headers=auth_headers)

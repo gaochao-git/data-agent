@@ -27,23 +27,20 @@ CURRENT_SKILLS = (DATA_ANALYZING_SKILL, OFFICE_SKILL, SKILL_CREATOR_SKILL)
 
 def _skill_text(name: str) -> str:
     """技能目录下全部 md 文本（skill 入口 + references）。"""
-    return "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((SYSTEM_SKILLS_ROOT / name).rglob("*.md"))
-    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in sorted((SYSTEM_SKILLS_ROOT / name).rglob("*.md")))
 
 
 def _skill_doc(name: str, *relative_paths: str) -> str:
     """技能目录下指定文档的文本。"""
     return "\n".join(
-        (SYSTEM_SKILLS_ROOT / name / relative_path).read_text(encoding="utf-8")
-        for relative_path in relative_paths
+        (SYSTEM_SKILLS_ROOT / name / relative_path).read_text(encoding="utf-8") for relative_path in relative_paths
     )
 
 
 # ---------------------------------------------------------------------------
 # 合并结构本身
 # ---------------------------------------------------------------------------
+
 
 def test_builtin_skill_names_are_pinned():
     """技能名是对外契约（提示词 / 工具描述 / 用户手册都引用它），改名必须显式改这里。"""
@@ -163,6 +160,7 @@ def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
 # 各能力文档的内容契约
 # ---------------------------------------------------------------------------
 
+
 def test_quality_check_capability_requires_tool_self_check():
     """质量治理能力必须以 data_analyzing_tool 的 check_yaml 为执行臂，禁止纯口算质量报告。"""
     quality_check = _skill_doc(DATA_ANALYZING_SKILL, "references/governance/quality-check.md")
@@ -174,9 +172,7 @@ def test_quality_check_capability_requires_tool_self_check():
 
 
 def test_query_capability_contains_complete_query_contract():
-    query = _skill_doc(
-        DATA_ANALYZING_SKILL, "references/analysis/query.md", "references/analysis/dialect.md"
-    )
+    query = _skill_doc(DATA_ANALYZING_SKILL, "references/analysis/query.md", "references/analysis/dialect.md")
 
     # AI coding 式目录路线：dir_list -> file_grep -> file_read，不引导 semantic_search
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in query
@@ -265,9 +261,7 @@ def _builtin_skill_files() -> set[str]:
     files: set[str] = set()
     for name in CURRENT_SKILLS:
         root = SYSTEM_SKILLS_ROOT / name
-        files.update(
-            path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
-        )
+        files.update(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
     return files
 
 

@@ -36,12 +36,12 @@ def build_context_compression_summary_prompt(
     transcript = format_context_compression_messages(messages)
     existing_summary = str(previous_summary or "").strip()
     previous_summary_section = (
-        f"\n\n[已有摘要数据开始]\n{existing_summary}\n[已有摘要数据结束]"
-        if existing_summary else ""
+        f"\n\n[已有摘要数据开始]\n{existing_summary}\n[已有摘要数据结束]" if existing_summary else ""
     )
     todo_section = (
         f"\n\n[待办任务实时状态数据开始]\n{str(todo_snapshot).strip()}\n[待办任务实时状态数据结束]"
-        if str(todo_snapshot or "").strip() else ""
+        if str(todo_snapshot or "").strip()
+        else ""
     )
     return (
         f"{CONTEXT_COMPRESSION_SUMMARY_PROMPT}{previous_summary_section}{todo_section}"

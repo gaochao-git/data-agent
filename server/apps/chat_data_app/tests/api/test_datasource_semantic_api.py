@@ -40,10 +40,14 @@ def test_get_datasource_schema_requires_auth(client, fake_datasource_manager, pa
     assert response.json()["status"] == "error"
 
 
-def test_get_datasource_schema_denies_unauthorized_datasource(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_get_datasource_schema_denies_unauthorized_datasource(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
-    response = client.get("/api/chatdata/datasources/ds_unknown/schema", params={"tables": "orders"}, headers=auth_headers)
+    response = client.get(
+        "/api/chatdata/datasources/ds_unknown/schema", params={"tables": "orders"}, headers=auth_headers
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -81,7 +85,9 @@ def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_dataso
     assert payload["data"]["configs"][0]["can_manage"] is True
 
 
-def test_list_admin_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_list_admin_semantic_configs_api_contract(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-configs", headers=auth_headers)
@@ -93,19 +99,17 @@ def test_list_admin_semantic_configs_api_contract(client, auth_headers, fake_dat
     assert payload["data"]["configs"][0]["can_manage"] is True
 
 
-def test_create_semantic_config_sets_private_scope_and_creator(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_create_semantic_config_sets_private_scope_and_creator(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
     body = {
         "name": "个人订单分析",
         "description": "个人指标集",
         "scope_type": "public",
         "enabled": True,
-        "metrics": [
-            {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
-        ],
-        "dimensions": [
-            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
-        ],
+        "metrics": [{"name": "销售额", "expression": "SUM(amount)", "table": "orders"}],
+        "dimensions": [{"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}],
         "relationships": [],
     }
 
@@ -122,18 +126,16 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
     assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
-def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_admin_create_semantic_config_sets_public_scope(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
     body = {
         "name": "公共订单分析",
         "description": "公共指标集",
         "enabled": True,
-        "metrics": [
-            {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
-        ],
-        "dimensions": [
-            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
-        ],
+        "metrics": [{"name": "销售额", "expression": "SUM(amount)", "table": "orders"}],
+        "dimensions": [{"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}],
         "relationships": [],
     }
 
@@ -150,7 +152,9 @@ def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fa
     assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
-def test_admin_generate_basic_semantic_configs_uses_public_scope(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_admin_generate_basic_semantic_configs_uses_public_scope(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     response = client.post(
@@ -166,7 +170,9 @@ def test_admin_generate_basic_semantic_configs_uses_public_scope(client, auth_he
     assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
-def test_admin_generate_basic_semantic_configs_hides_internal_error(client, auth_headers, fake_datasource_manager, patch_datasource_manager, monkeypatch):
+def test_admin_generate_basic_semantic_configs_hides_internal_error(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager, monkeypatch
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     async def raise_internal_error(*_args, **_kwargs):
@@ -193,7 +199,9 @@ def test_generate_basic_semantic_configs_has_no_user_route(client, auth_headers)
     assert response.status_code == 405
 
 
-def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_update_semantic_config_allows_private_owner(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
@@ -209,7 +217,9 @@ def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_
     assert semantic_service.updated_kwargs["update_by"] == "user_a"
 
 
-def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_update_semantic_config_denies_public_in_normal_endpoint(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
@@ -224,7 +234,9 @@ def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_he
     assert payload["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
 
 
-def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_admin_update_semantic_config_allows_public(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
@@ -240,7 +252,9 @@ def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_d
     assert payload["data"]["can_manage"] is True
 
 
-def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_delete_semantic_config_allows_private_owner_only(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     denied_public = client.delete(
@@ -261,7 +275,9 @@ def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, 
     assert semantic_service.deleted_config_id == "cfg_a"
 
 
-def test_admin_semantic_quality_check_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_admin_semantic_quality_check_api_contract(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-configs/quality-check", headers=auth_headers)
@@ -287,10 +303,14 @@ def test_admin_semantic_quality_check_api_contract(client, auth_headers, fake_da
     assert "DOC_NO_BUSINESS_NOTES" in codes
 
 
-def test_admin_semantic_quality_check_unknown_datasource(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+def test_admin_semantic_quality_check_unknown_datasource(
+    client, auth_headers, fake_datasource_manager, patch_datasource_manager
+):
     patch_datasource_manager(fake_datasource_manager)
 
-    response = client.get("/api/chatdata/admin/datasources/ds_unknown/semantic-configs/quality-check", headers=auth_headers)
+    response = client.get(
+        "/api/chatdata/admin/datasources/ds_unknown/semantic-configs/quality-check", headers=auth_headers
+    )
 
     assert response.status_code == 200
     payload = response.json()

@@ -1,6 +1,5 @@
 """Model-facing sandbox file operations (read/list/create/delete/move/copy/write)."""
 
-
 from __future__ import annotations
 
 import shlex
@@ -65,9 +64,7 @@ async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, f
         if _is_tool_results_sandbox_path(lexical_target):
             return {}
         try:
-            target = await _resolve_sandbox_real_path(
-                session=session, file_path=file_path, outputs_only=True
-            )
+            target = await _resolve_sandbox_real_path(session=session, file_path=file_path, outputs_only=True)
         except ValueError:
             return {}
         try:
@@ -114,10 +111,12 @@ async def sandbox_render_office_html(
                     "html": "",
                     "truncated": True,
                 }
-            html = (await _read_sandbox_file_bytes(
-                sandbox=session.sandbox,
-                path=preview_path,
-            )).decode("utf-8", errors="replace")
+            html = (
+                await _read_sandbox_file_bytes(
+                    sandbox=session.sandbox,
+                    path=preview_path,
+                )
+            ).decode("utf-8", errors="replace")
         finally:
             deleter = getattr(getattr(session.sandbox, "files", None), "delete_files", None)
             if callable(deleter):
@@ -218,7 +217,7 @@ def _apply_file_read_line_budgets(
         [len(line) for line in selected_source_lines],
         max_chars,
     )
-    selected_lines = selected_source_lines[:len(budgets)]
+    selected_lines = selected_source_lines[: len(budgets)]
     lines = [line[:budget] for line, budget in zip(selected_lines, budgets, strict=True)]
     truncated_lines = [
         {
@@ -260,7 +259,7 @@ async def sandbox_read_text_file(
         )
         source_lines = _split_file_page_lines(page_text)
         has_more_lines = len(source_lines) > source_limit - 1
-        selected_source_lines = source_lines[:source_limit - 1]
+        selected_source_lines = source_lines[: source_limit - 1]
         if not selected_source_lines:
             return {
                 "exists": True,
@@ -272,7 +271,9 @@ async def sandbox_read_text_file(
                 "offset_out_of_range": int(getattr(entry, "size", 0) or 0) > 0,
             }
         lines, truncated_lines, budget_trimmed = _apply_file_read_line_budgets(
-            selected_source_lines, max_chars, source_offset,
+            selected_source_lines,
+            max_chars,
+            source_offset,
         )
         has_more_lines = has_more_lines or budget_trimmed
         result = {
@@ -312,17 +313,16 @@ async def _build_sandbox_list_entry(
     entry_type = _sandbox_entry_type(entry)
     if not entry_path.startswith(target_prefix) or entry_type == "symlink":
         return None
-    is_dir = await _sandbox_path_kind(
-        session=session,
-        path=entry_path,
-        entry=entry,
-    ) == "dir"
-    modified_at = getattr(entry, "modified_at", None)
-    mtime = (
-        modified_at.strftime("%Y-%m-%d %H:%M")
-        if hasattr(modified_at, "strftime")
-        else str(modified_at or "")
+    is_dir = (
+        await _sandbox_path_kind(
+            session=session,
+            path=entry_path,
+            entry=entry,
+        )
+        == "dir"
     )
+    modified_at = getattr(entry, "modified_at", None)
+    mtime = modified_at.strftime("%Y-%m-%d %H:%M") if hasattr(modified_at, "strftime") else str(modified_at or "")
     visible_path = sandbox_path_to_visible(entry_path)
     return {
         "type": "dir" if is_dir else "file",
@@ -350,9 +350,7 @@ async def sandbox_list_dir(
         if not callable(lister):
             raise ValueError("当前 OpenSandbox SDK 不支持 files.list_directory")
         DirectoryListEntry = _import_opensandbox_directory_list_entry()
-        raw_entries = await lister(
-            DirectoryListEntry(path=target, depth=max(1, int(max_depth)))
-        )
+        raw_entries = await lister(DirectoryListEntry(path=target, depth=max(1, int(max_depth))))
         target_prefix = f"{target.rstrip('/')}/"
         entries: list[dict[str, Any]] = []
         for entry in raw_entries:
@@ -425,7 +423,9 @@ async def sandbox_delete_path(
             raise ValueError("当前 OpenSandbox SDK 不支持对应的删除 Files API")
         await deleter([target])
         await sync_sandbox_working_trees(session)
-        logger.info("OpenSandbox file_delete 完成: sandbox_id=%s path=%s type=%s", session.sandbox_id, target, path_type)
+        logger.info(
+            "OpenSandbox file_delete 完成: sandbox_id=%s path=%s type=%s", session.sandbox_id, target, path_type
+        )
         return {"path": sandbox_path_to_visible(target), "type": path_type}
 
 
@@ -544,10 +544,7 @@ async def sandbox_search_files(
         target_prefix = f"{target.rstrip('/')}/"
         for entry in sorted(entries, key=lambda item: str(getattr(item, "path", "") or "")):
             entry_path = str(getattr(entry, "path", "") or "")
-            if (
-                not entry_path
-                or not entry_path.startswith(target_prefix)
-            ):
+            if not entry_path or not entry_path.startswith(target_prefix):
                 continue
             results.append({"path": sandbox_path_to_visible(entry_path), "type": "file"})
             if len(results) >= max(1, int(max_results)):
@@ -562,7 +559,9 @@ async def sandbox_search_files(
         return results
 
 
-async def sandbox_write_text_file(*, session_ref: SandboxExecutionSessionRef, file_path: str, content: str, mode: str) -> dict[str, Any]:
+async def sandbox_write_text_file(
+    *, session_ref: SandboxExecutionSessionRef, file_path: str, content: str, mode: str
+) -> dict[str, Any]:
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
@@ -600,10 +599,7 @@ async def sandbox_write_internal_text_files(
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
-        targets = [
-            (_resolve_sandbox_target_for_batch(session, path), str(content or ""))
-            for path, content in entries
-        ]
+        targets = [(_resolve_sandbox_target_for_batch(session, path), str(content or "")) for path, content in entries]
         parents = [str(PurePosixPath(target).parent) for target, _ in targets]
         semantic_parents = [path for path in parents if _is_managed_semantic_model_sandbox_path(path)]
         writable_parents = [path for path in parents if not _is_managed_semantic_model_sandbox_path(path)]
@@ -621,28 +617,33 @@ async def sandbox_write_internal_text_files(
         writer = getattr(getattr(session.sandbox, "files", None), "write_files", None)
         if not callable(writer):
             raise ValueError("当前 OpenSandbox SDK 不支持 files.write_files")
-        await writer([
-            WriteEntry(
-                path=target,
-                data=content.encode("utf-8"),
-                mode=(
-                    _SANDBOX_READONLY_FILE_MODE
-                    if _is_managed_semantic_model_sandbox_path(target)
-                    else _SANDBOX_WRITABLE_FILE_MODE
-                ),
-            )
-            for target, content in targets
-        ])
+        await writer(
+            [
+                WriteEntry(
+                    path=target,
+                    data=content.encode("utf-8"),
+                    mode=(
+                        _SANDBOX_READONLY_FILE_MODE
+                        if _is_managed_semantic_model_sandbox_path(target)
+                        else _SANDBOX_WRITABLE_FILE_MODE
+                    ),
+                )
+                for target, content in targets
+            ]
+        )
         await _persist_sandbox_paths(
             session=session,
             changed_paths=[target for target, _ in targets],
         )
-        results = [{
+        results = [
+            {
                 "operation": "write",
                 "file_path": sandbox_path_to_visible(target),
                 "mode": "overwrite",
                 "bytes": len(content.encode("utf-8")),
-            } for target, content in targets]
+            }
+            for target, content in targets
+        ]
         logger.info(
             "OpenSandbox Files API 批量上传完成: sandbox_id=%s files=%s bytes=%s",
             session.sandbox_id,
@@ -711,10 +712,12 @@ async def sandbox_replace_text_file(
         await _recover_pending_persistence(session)
         target = await _resolve_sandbox_real_path(session=session, file_path=file_path, writable=True)
         try:
-            content = (await _read_sandbox_file_bytes(
-                sandbox=session.sandbox,
-                path=target,
-            )).decode("utf-8")
+            content = (
+                await _read_sandbox_file_bytes(
+                    sandbox=session.sandbox,
+                    path=target,
+                )
+            ).decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"暂不支持修改二进制文件: {file_path}") from exc
         match_count = content.count(old_content)

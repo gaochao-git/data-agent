@@ -61,14 +61,13 @@ def _iter_text_line_fragments(file_obj: Any):
             trailing_cr = True
         position = 0
         for match in _TEXT_LINE_SEPARATOR_RE.finditer(chunk):
-            part = chunk[position:match.start()]
+            part = chunk[position : match.start()]
             yield part[:-1] if part.endswith("\r") else part, True
             position = match.end()
         if position < len(chunk):
             yield chunk[position:], False
     if trailing_cr:
         yield "\r", False
-
 
 
 def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict[str, Any]:
@@ -80,10 +79,12 @@ def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict
     def finish_line() -> bool:
         nonlocal line_index, pending_chars
         if offset <= line_index < offset + limit:
-            selected_lines.append({
-                "line_number": line_index + 1,
-                "original_chars": pending_chars,
-            })
+            selected_lines.append(
+                {
+                    "line_number": line_index + 1,
+                    "original_chars": pending_chars,
+                }
+            )
         elif line_index >= offset + limit:
             return True
         line_index += 1
@@ -140,10 +141,7 @@ def _count_local_text_lines(target: Path) -> int:
 
 
 def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], budgets: list[int]) -> list[str]:
-    selected_by_index = {
-        item["line_number"] - 1: (position, item)
-        for position, item in enumerate(selected_lines)
-    }
+    selected_by_index = {item["line_number"] - 1: (position, item) for position, item in enumerate(selected_lines)}
     captured_parts = [[] for _ in selected_lines]
     captured_chars = [0 for _ in selected_lines]
     current_line_index = 0
@@ -214,7 +212,7 @@ def _read_text_page_from_path(
         [item["original_chars"] for item in selected_lines],
         max_chars,
     )
-    selected_lines = selected_lines[:len(budgets)]
+    selected_lines = selected_lines[: len(budgets)]
     if not selected_lines:
         return {
             "exists": True,
@@ -301,8 +299,7 @@ def _write_local_text_file(
         allow_managed_semantic_model_write=allow_managed_semantic_model_write,
     )
     if allow_managed_semantic_model_write and (
-        not is_managed_semantic_model_workspace_path(workspace_root, target)
-        or target.suffix.lower() != ".yaml"
+        not is_managed_semantic_model_workspace_path(workspace_root, target) or target.suffix.lower() != ".yaml"
     ):
         raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -484,8 +481,13 @@ def _visit_local_dir(
         entries.append(entry)
         if is_dir and depth + 1 < max_depth:
             _visit_local_dir(
-                child, entry["path"].rstrip("/"), depth + 1,
-                entries=entries, root=root, is_skill=is_skill, max_depth=max_depth,
+                child,
+                entry["path"].rstrip("/"),
+                depth + 1,
+                entries=entries,
+                root=root,
+                is_skill=is_skill,
+                max_depth=max_depth,
             )
 
 
@@ -504,8 +506,13 @@ def _list_local_workspace_dir(
     entries: list[dict[str, Any]] = []
     root = Path(runtime.workspace_root).resolve()
     _visit_local_dir(
-        target, visible_root, 0,
-        entries=entries, root=root, is_skill=is_skill, max_depth=max_depth,
+        target,
+        visible_root,
+        0,
+        entries=entries,
+        root=root,
+        is_skill=is_skill,
+        max_depth=max_depth,
     )
     return entries
 
@@ -711,9 +718,7 @@ def _check_rg_available() -> bool:
     return _rg_available
 
 
-def _resolve_grep_target(
-    runtime: ConversationWorkspaceRuntime, path: str
-) -> tuple[Path, str, bool]:
+def _resolve_grep_target(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str, bool]:
     """解析 grep 目标：skills 虚拟根走技能快照解析，其余走工作区路径解析。
 
     返回 (物理目标, 可见根路径, 是否技能目录)。
@@ -729,7 +734,9 @@ def _resolve_grep_target(
 def _run_local_rg(args: list[str]) -> str:
     """执行本地 rg 并返回解码后的 stdout；缺失/执行失败抛带安装提示的错误。"""
     if not _check_rg_available():
-        raise RuntimeError("file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)")
+        raise RuntimeError(
+            "file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)"
+        )
     proc = subprocess.run(args, capture_output=True, timeout=30)
     if proc.returncode > 1:
         raise RuntimeError(f"rg 执行失败 (exit={proc.returncode}): {proc.stderr.decode('utf-8', errors='replace')}")
@@ -785,14 +792,22 @@ def _grep_local_workspace_text(
     if target.is_symlink() or not target.exists():
         raise FileNotFoundError(f"路径不存在: {path}")
     args = build_rg_args(
-        str(target), patterns, glob=glob, use_regex=use_regex,
-        ignore_case=ignore_case, context_lines=context_lines, output_mode=output_mode,
+        str(target),
+        patterns,
+        glob=glob,
+        use_regex=use_regex,
+        ignore_case=ignore_case,
+        context_lines=context_lines,
+        output_mode=output_mode,
     )
     stdout = _run_local_rg(args)
 
     if output_mode in ("files_with_matches", "count"):
         entries, has_more = parse_rg_files_or_counts(
-            stdout, str(target), max_results=max_results, mode=output_mode,
+            stdout,
+            str(target),
+            max_results=max_results,
+            mode=output_mode,
         )
         visible_entries = [
             {
@@ -804,7 +819,10 @@ def _grep_local_workspace_text(
         return {"entries": visible_entries, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
 
     raw_matches, has_more = parse_rg_output(
-        stdout, str(target), max_results=max_results, max_chars=max_chars,
+        stdout,
+        str(target),
+        max_results=max_results,
+        max_chars=max_chars,
         context_lines=context_lines if output_mode == "content" else 0,
     )
     matches = [_build_local_grep_match(m, is_skill, target, visible_root, runtime) for m in raw_matches]
@@ -895,9 +913,7 @@ class LocalWorkspaceBackend:
         file_path: str,
         content: str,
     ) -> dict[str, Any]:
-        return await asyncio.to_thread(
-            _write_local_tool_result, runtime.workspace_root, file_path, content
-        )
+        return await asyncio.to_thread(_write_local_tool_result, runtime.workspace_root, file_path, content)
 
     async def replace_text_file(
         self,
@@ -946,9 +962,7 @@ class LocalWorkspaceBackend:
     ) -> list[dict[str, Any]]:
         if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             await runtime._ensure_snapshot_async()
-        return await asyncio.to_thread(
-            _list_local_workspace_dir, runtime, path, max_depth
-        )
+        return await asyncio.to_thread(_list_local_workspace_dir, runtime, path, max_depth)
 
     async def create_dir(
         self,
@@ -1073,9 +1087,7 @@ class LocalWorkspaceBackend:
                 else:
                     resolve_workspace_path(runtime.workspace_root, token)
             except ValueError as exc:
-                raise ValueError(
-                    "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token
-                ) from exc
+                raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
 
     async def run_bash(
         self,
@@ -1174,9 +1186,7 @@ class LocalWorkspaceBackend:
             workspace_root=runtime.workspace_root,
             runtime_skills_dir=runtime.runtime_skills_dir,
         )
-        translated_args = translate_command_args(
-            command_spec, visible_cwd, path_mapping.translate
-        )
+        translated_args = translate_command_args(command_spec, visible_cwd, path_mapping.translate)
 
         process = await asyncio.create_subprocess_exec(
             officecli_bin,

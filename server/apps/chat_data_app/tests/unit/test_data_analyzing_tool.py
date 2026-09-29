@@ -65,10 +65,13 @@ def _semantic_query_state(
 # DataAnalyzingInput：按 action 的入口校验
 # ---------------------------------------------------------------------------
 
+
 def test_input_requires_matching_payload_per_action():
     with pytest.raises(ValidationError, match=r"action=validate_dsl 的 action_payload 校验失败：dsl: Field required"):
         DataAnalyzingInput.model_validate({"action": "validate_dsl", "action_payload": {"semantic_config_id": "cfg_a"}})
-    with pytest.raises(ValidationError, match=r"action=validate_dashboard 的 action_payload 校验失败：dsl: Field required"):
+    with pytest.raises(
+        ValidationError, match=r"action=validate_dashboard 的 action_payload 校验失败：dsl: Field required"
+    ):
         DataAnalyzingInput.model_validate({"action": "validate_dashboard", "action_payload": {}})
     with pytest.raises(ValidationError, match=r"action=check_yaml 的 action_payload 校验失败：file_path"):
         DataAnalyzingInput.model_validate({"action": "check_yaml", "action_payload": {}})
@@ -76,65 +79,85 @@ def test_input_requires_matching_payload_per_action():
 
 def test_input_execute_query_requires_exactly_one_of_dsl_sql():
     with pytest.raises(ValidationError, match="必须且只能传入 dsl 或 sql 其中一个"):
-        DataAnalyzingInput.model_validate({
-            "action": "execute_query",
-            "action_payload": {"semantic_config_id": "cfg_a", "member_datasource_ids": ["m1"]},
-        })
+        DataAnalyzingInput.model_validate(
+            {
+                "action": "execute_query",
+                "action_payload": {"semantic_config_id": "cfg_a", "member_datasource_ids": ["m1"]},
+            }
+        )
     with pytest.raises(ValidationError, match="必须且只能传入 dsl 或 sql 其中一个"):
-        DataAnalyzingInput.model_validate({
-            "action": "execute_query",
-            "action_payload": {
-                "dsl": {"metrics": ["订单数"]},
-                "sql": "select 1",
-                "semantic_config_id": "cfg_a",
-                "member_datasource_ids": ["m1"],
-            },
-        })
+        DataAnalyzingInput.model_validate(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "dsl": {"metrics": ["订单数"]},
+                    "sql": "select 1",
+                    "semantic_config_id": "cfg_a",
+                    "member_datasource_ids": ["m1"],
+                },
+            }
+        )
 
 
 def test_input_execute_query_reuses_semantic_query_input_rules():
-    ok = DataAnalyzingInput.model_validate({
-        "action": "execute_query",
-        "action_payload": {
-            "dsl": {"metrics": ["订单数"]},
-            "semantic_config_id": "cfg_a",
-            "member_datasource_ids": ["m1"],
-        },
-    })
+    ok = DataAnalyzingInput.model_validate(
+        {
+            "action": "execute_query",
+            "action_payload": {
+                "dsl": {"metrics": ["订单数"]},
+                "semantic_config_id": "cfg_a",
+                "member_datasource_ids": ["m1"],
+            },
+        }
+    )
     assert ok.action_payload["dsl"] == {"metrics": ["订单数"]}
 
     with pytest.raises(ValidationError):
-        DataAnalyzingInput.model_validate({
-            "action": "execute_query",
-            "action_payload": {"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
-        })
+        DataAnalyzingInput.model_validate(
+            {
+                "action": "execute_query",
+                "action_payload": {"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
+            }
+        )
     with pytest.raises(ValidationError):
-        DataAnalyzingInput.model_validate({
-            "action": "execute_query",
-            "action_payload": {"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a", "member_datasource_ids": []},
-        })
+        DataAnalyzingInput.model_validate(
+            {
+                "action": "execute_query",
+                "action_payload": {
+                    "dsl": {"metrics": ["订单数"]},
+                    "semantic_config_id": "cfg_a",
+                    "member_datasource_ids": [],
+                },
+            }
+        )
 
 
 def test_input_normalizes_dsl_json_string_and_allows_dashboard_list():
-    normalized = DataAnalyzingInput.model_validate({
-        "action": "validate_dsl",
-        "action_payload": {"dsl": '{"metrics": ["订单数"]}', "semantic_config_id": "cfg_a"},
-    })
+    normalized = DataAnalyzingInput.model_validate(
+        {
+            "action": "validate_dsl",
+            "action_payload": {"dsl": '{"metrics": ["订单数"]}', "semantic_config_id": "cfg_a"},
+        }
+    )
     # action_payload 原始 dict 不被原地改写；归一化发生在 payload 模型（handler 亦复用同一模型）
     parsed = DATA_ANALYZING_ACTION_PAYLOAD_MODELS["validate_dsl"].model_validate(normalized.action_payload)
     assert parsed.dsl == {"metrics": ["订单数"]}
 
-    listed = DataAnalyzingInput.model_validate({
-        "action": "validate_dashboard",
-        "action_payload": {"dsl": [{"semantic_config_id": "cfg_a"}]},
-    })
+    listed = DataAnalyzingInput.model_validate(
+        {
+            "action": "validate_dashboard",
+            "action_payload": {"dsl": [{"semantic_config_id": "cfg_a"}]},
+        }
+    )
     assert isinstance(listed.action_payload["dsl"], list)
 
     with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
-        DataAnalyzingInput.model_validate({
-            "action": "validate_dsl",
-            "action_payload": {"dsl": "not-json", "semantic_config_id": "cfg_a"},
-        })
+        DataAnalyzingInput.model_validate(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"dsl": "not-json", "semantic_config_id": "cfg_a"},
+            }
+        )
 
 
 def test_input_rejects_unknown_action():
@@ -160,6 +183,7 @@ def test_tool_description_points_at_data_analyzing_skill():
 # execute_query（原 semantic_query_tool 用例平移）
 # ---------------------------------------------------------------------------
 
+
 def test_execute_query_returns_query_result_or_error(monkeypatch):
     from langchain_core.messages import HumanMessage
 
@@ -177,7 +201,16 @@ def test_execute_query_returns_query_result_or_error(monkeypatch):
         assert user_id == "user_a"
         return {"id": "cfg_a", "metrics": [], "dimensions": []}
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
+    async def fake_execute_sql_real(
+        sql,
+        datasource_id,
+        member_datasource_ids,
+        user_id,
+        semantic_config_id,
+        query_text,
+        conversation_id,
+        operator_name=None,
+    ):
         assert sql == "select 1"
         assert datasource_id == "ds_a"
         assert member_datasource_ids == ["m1"]
@@ -204,35 +237,48 @@ def test_execute_query_returns_query_result_or_error(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    success = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["订单数"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["m1"],
-        ),
-        "state": state,
-    }))
+    success = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
-    json_string_success = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl='{"metrics": ["订单数"]}',
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["m1"],
-        ),
-        "state": state,
-    }))
+    json_string_success = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl='{"metrics": ["订单数"]}',
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real_failed)
-    failed = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["订单数"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["m1"],
-        ),
-        "state": state,
-    }))
+    failed = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
     success_payload = _internal_query_payload(success)
     json_string_success_payload = _internal_query_payload(json_string_success)
@@ -277,16 +323,21 @@ def test_execute_query_allows_model_selected_member_ids(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    result = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["订单数"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=[" org_b ", "org_b", "", "org_c"],
-        ),
-        "state": state,
-    }))
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=[" org_b ", "org_b", "", "org_c"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
     assert _internal_query_payload(result)["success"] is True
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
@@ -321,16 +372,21 @@ def test_execute_query_allows_member_ids_from_available_scope(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    result = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["订单数"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["org_b"],
-        ),
-        "state": state,
-    }))
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["org_b"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
     assert _internal_query_payload(result)["success"] is True
     assert captured["member_datasource_ids"] == ["org_b"]
@@ -362,14 +418,17 @@ def test_execute_query_does_not_default_to_state_member_ids(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="member_datasource_ids"):
-        asyncio.run(tool.coroutine(
-            action="execute_query",
-            action_payload={"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a"},
-            state=state,
-        ))
+        asyncio.run(
+            tool.coroutine(
+                action="execute_query",
+                action_payload={"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a"},
+                state=state,
+            )
+        )
 
 
 def test_execute_query_rejects_member_ids_outside_available_scope(monkeypatch):
@@ -398,17 +457,22 @@ def test_execute_query_rejects_member_ids_outside_available_scope(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="本次查询包含不可用的执行对象 org_c"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["订单数"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["org_b", "org_c"],
-            ),
-            "state": state,
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["订单数"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["org_b", "org_c"],
+                    ),
+                    "state": state,
+                }
+            )
+        )
 
 
 def test_execute_query_rejects_member_ids_outside_available_member_scope(monkeypatch):
@@ -437,17 +501,22 @@ def test_execute_query_rejects_member_ids_outside_available_member_scope(monkeyp
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="本次查询包含不可用的执行对象 org_c"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["订单数"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["org_c"],
-            ),
-            "state": state,
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["订单数"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["org_c"],
+                    ),
+                    "state": state,
+                }
+            )
+        )
 
 
 def test_execute_query_rejects_member_ids_conflicting_with_matched_scope(monkeypatch):
@@ -477,17 +546,22 @@ def test_execute_query_rejects_member_ids_conflicting_with_matched_scope(monkeyp
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="与用户问题中指定的机构不一致") as exc_info:
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["订单数"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["org_a"],
-            ),
-            "state": state,
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["订单数"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["org_a"],
+                    ),
+                    "state": state,
+                }
+            )
+        )
     assert "org_b" in str(exc_info.value)
 
 
@@ -517,14 +591,17 @@ def test_execute_query_requires_member_ids(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="member_datasource_ids"):
-        asyncio.run(tool.coroutine(
-            action="execute_query",
-            action_payload={"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a"},
-            state=state,
-        ))
+        asyncio.run(
+            tool.coroutine(
+                action="execute_query",
+                action_payload={"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a"},
+                state=state,
+            )
+        )
 
 
 def test_execute_query_rejects_empty_available_member_scope(monkeypatch):
@@ -553,17 +630,22 @@ def test_execute_query_rejects_empty_available_member_scope(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="本次请求没有可用执行对象"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["订单数"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["org_a"],
-            ),
-            "state": state,
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["订单数"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["org_a"],
+                    ),
+                    "state": state,
+                }
+            )
+        )
 
 
 def test_execute_query_rejects_sql_inside_dsl(monkeypatch):
@@ -596,27 +678,36 @@ def test_execute_query_rejects_sql_inside_dsl(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    result = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["订单数"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["m1"],
-        ),
-        "state": state,
-    }))
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": state,
+            }
+        )
+    )
     assert '"sql": "select latest"' in result
 
     with pytest.raises(ValueError, match="sql 必须放在顶层 sql 参数中"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"sql": "select 1"},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["m1"],
-            ),
-            "state": state,
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"sql": "select 1"},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["m1"],
+                    ),
+                    "state": state,
+                }
+            )
+        )
 
 
 def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
@@ -634,17 +725,28 @@ def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
 
     captured = {}
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
-        captured.update({
-            "sql": sql,
-            "datasource_id": datasource_id,
-            "member_datasource_ids": member_datasource_ids,
-            "user_id": user_id,
-            "semantic_config_id": semantic_config_id,
-            "query_text": query_text,
-            "conversation_id": conversation_id,
-            "operator_name": operator_name,
-        })
+    async def fake_execute_sql_real(
+        sql,
+        datasource_id,
+        member_datasource_ids,
+        user_id,
+        semantic_config_id,
+        query_text,
+        conversation_id,
+        operator_name=None,
+    ):
+        captured.update(
+            {
+                "sql": sql,
+                "datasource_id": datasource_id,
+                "member_datasource_ids": member_datasource_ids,
+                "user_id": user_id,
+                "semantic_config_id": semantic_config_id,
+                "query_text": query_text,
+                "conversation_id": conversation_id,
+                "operator_name": operator_name,
+            }
+        )
         return {"success": True, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
     state = _semantic_query_state(
@@ -660,16 +762,21 @@ def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FailGenerator)
 
-    result = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            sql="with t as (select 1 as v) select * from t",
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["org_a"],
-        ),
-        "state": state,
-    }))
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    sql="with t as (select 1 as v) select * from t",
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["org_a"],
+                ),
+                "state": state,
+            }
+        )
+    )
     payload = _internal_query_payload(result)
 
     assert captured == {
@@ -692,11 +799,13 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
     tool = data_analyzing.create_data_analyzing_tool()
 
     with pytest.raises(ValueError, match="semantic_config_id"):
-        asyncio.run(tool.coroutine(
-            action="execute_query",
-            action_payload={"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
-            state={},
-        ))
+        asyncio.run(
+            tool.coroutine(
+                action="execute_query",
+                action_payload={"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
+                state={},
+            )
+        )
 
     async def fake_load_config(*_args, **_kwargs):
         return {"id": "cfg_a", "metrics": [], "dimensions": []}
@@ -713,32 +822,41 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
 
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     with pytest.raises(ValueError, match="指标不存在"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["bad"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["m1"],
-            ),
-            "state": _semantic_query_state(
-                available_member_datasource_ids=["m1"],
-                semantic_config_id="cfg_a",
-            ),
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["bad"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["m1"],
+                    ),
+                    "state": _semantic_query_state(
+                        available_member_datasource_ids=["m1"],
+                        semantic_config_id="cfg_a",
+                    ),
+                }
+            )
+        )
     with pytest.raises(ValueError, match="DSL2SQL 未生成 SQL"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["empty"]},
-                semantic_config_id="cfg_a",
-                member_datasource_ids=["m1"],
-            ),
-            "state": _semantic_query_state(
-                available_member_datasource_ids=["m1"],
-                semantic_config_id="cfg_a",
-            ),
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["empty"]},
+                        semantic_config_id="cfg_a",
+                        member_datasource_ids=["m1"],
+                    ),
+                    "state": _semantic_query_state(
+                        available_member_datasource_ids=["m1"],
+                        semantic_config_id="cfg_a",
+                    ),
+                }
+            )
+        )
 
 
 def test_execute_query_reports_missing_runtime_config(monkeypatch):
@@ -749,14 +867,18 @@ def test_execute_query_reports_missing_runtime_config(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
 
     with pytest.raises(ValueError, match="未找到可用指标集 cfg_missing"):
-        asyncio.run(tool.ainvoke({
-            **_execute_payload(
-                dsl={"metrics": ["订单数"]},
-                semantic_config_id="cfg_missing",
-                member_datasource_ids=["m1"],
-            ),
-            "state": _semantic_query_state(semantic_config_id="cfg_missing"),
-        }))
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    **_execute_payload(
+                        dsl={"metrics": ["订单数"]},
+                        semantic_config_id="cfg_missing",
+                        member_datasource_ids=["m1"],
+                    ),
+                    "state": _semantic_query_state(semantic_config_id="cfg_missing"),
+                }
+            )
+        )
 
 
 def test_execute_query_returns_large_internal_result_for_middleware(monkeypatch):
@@ -795,16 +917,21 @@ def test_execute_query_returns_large_internal_result_for_middleware(monkeypatch)
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
+
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
-    result = asyncio.run(tool.ainvoke({
-        **_execute_payload(
-            dsl={"metrics": ["内容"]},
-            semantic_config_id="cfg_a",
-            member_datasource_ids=["m1"],
-        ),
-        "state": state,
-    }))
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["内容"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": state,
+            }
+        )
+    )
 
     payload = _internal_query_payload(result)
     assert payload["sql"] == "select content from big_table"
@@ -815,20 +942,24 @@ def test_resolve_semantic_query_config_loads_explicit_config_id(monkeypatch):
     captured = {}
 
     async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
-        captured.update({
-            "datasource_id": datasource_id,
-            "semantic_config_id": semantic_config_id,
-            "user_id": user_id,
-        })
+        captured.update(
+            {
+                "datasource_id": datasource_id,
+                "semantic_config_id": semantic_config_id,
+                "user_id": user_id,
+            }
+        )
         return {"id": semantic_config_id, "metrics": [], "dimensions": []}
 
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
 
-    config = asyncio.run(data_analyzing._resolve_semantic_query_config(
-        {"user_id": "user_a"},
-        datasource_id="ds_a",
-        semantic_config_id="cfg_a",
-    ))
+    config = asyncio.run(
+        data_analyzing._resolve_semantic_query_config(
+            {"user_id": "user_a"},
+            datasource_id="ds_a",
+            semantic_config_id="cfg_a",
+        )
+    )
 
     assert config["id"] == "cfg_a"
     assert captured == {
@@ -842,9 +973,11 @@ def test_resolve_semantic_query_config_loads_explicit_config_id(monkeypatch):
 # validate_dsl / validate_dashboard（原 dsl2sql_tool 用例平移）
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_validate_dsl_rejects_compare(monkeypatch):
     """compare 拒绝策略由 validate_dsl 执行（adapter 不再收 compare 形参）。"""
+
     async def fake_load_semantic_model(*args, **kwargs):
         return {"source_type": "mysql", "metrics": [], "dimensions": [], "relationships": []}
 
@@ -856,17 +989,19 @@ async def test_validate_dsl_rejects_compare(monkeypatch):
     )
 
     tool = data_analyzing.create_data_analyzing_tool(datasource_id="ds-1", user_id="u-1")
-    raw = await tool.ainvoke({
-        "action": "validate_dsl",
-        "action_payload": {
-            "dsl": {
-                "metrics": ["订单数"],
-                "dimensions": [{"name": "下单时间", "time_grain": "month"}],
-                "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
+    raw = await tool.ainvoke(
+        {
+            "action": "validate_dsl",
+            "action_payload": {
+                "dsl": {
+                    "metrics": ["订单数"],
+                    "dimensions": [{"name": "下单时间", "time_grain": "month"}],
+                    "compare": {"type": "yoy", "mode": "trend", "strategy": "calc"},
+                },
+                "semantic_config_id": "sc-1",
             },
-            "semantic_config_id": "sc-1",
-        },
-    })
+        }
+    )
     payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
     assert payload["success"] is False
     assert "不再支持 compare" in payload["error"]
@@ -876,20 +1011,24 @@ async def test_validate_dsl_rejects_compare(monkeypatch):
 async def test_validate_dsl_requires_bound_datasource():
     tool = data_analyzing.create_data_analyzing_tool(datasource_id="")
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await tool.ainvoke({
-            "action": "validate_dsl",
-            "action_payload": {"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "sc-1"},
-        })
+        await tool.ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "sc-1"},
+            }
+        )
 
 
 @pytest.mark.asyncio
 async def test_validate_dashboard_requires_bound_datasource():
     tool = data_analyzing.create_data_analyzing_tool(datasource_id="")
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await tool.ainvoke({
-            "action": "validate_dashboard",
-            "action_payload": {"dsl": {"dashboard_name": "d", "cards": []}},
-        })
+        await tool.ainvoke(
+            {
+                "action": "validate_dashboard",
+                "action_payload": {"dsl": {"dashboard_name": "d", "cards": []}},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -988,7 +1127,7 @@ class _FakeWorkspaceRuntime:
         content = target.read_text(encoding="utf-8")
         lines = content.splitlines()
         effective_limit = self.page_size or limit
-        page_lines = lines[offset:offset + effective_limit]
+        page_lines = lines[offset : offset + effective_limit]
         has_more = offset + effective_limit < len(lines)
         truncated_lines = []
         if len(content) > max_chars:
@@ -1020,7 +1159,8 @@ def _invoke_check_yaml(
     manager = FakeManager()
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(
-        data_analyzing, "get_semantic_config_service",
+        data_analyzing,
+        "get_semantic_config_service",
         lambda: FakeSemanticService(existing_configs),
     )
     with tempfile.TemporaryDirectory() as tmp:
@@ -1029,10 +1169,12 @@ def _invoke_check_yaml(
         (workspace_dir / file_name).write_text(yaml_text, encoding="utf-8")
         runtime = _FakeWorkspaceRuntime(Path(tmp), page_size=runtime_page_size)
         raw = asyncio.run(
-            data_analyzing.create_data_analyzing_tool(datasource_id, workspace_runtime=runtime).ainvoke({
-                "action": "check_yaml",
-                "action_payload": {"file_path": f"/mnt/user-data/workspace/{file_name}"},
-            })
+            data_analyzing.create_data_analyzing_tool(datasource_id, workspace_runtime=runtime).ainvoke(
+                {
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": f"/mnt/user-data/workspace/{file_name}"},
+                }
+            )
         )
     return json.loads(raw.replace(RESULT_PREFIX, "", 1))
 
@@ -1040,10 +1182,12 @@ def _invoke_check_yaml(
 def test_check_yaml_requires_bound_datasource():
     with pytest.raises(ValueError, match="未绑定数据源"):
         asyncio.run(
-            data_analyzing.create_data_analyzing_tool("").ainvoke({
-                "action": "check_yaml",
-                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
-            })
+            data_analyzing.create_data_analyzing_tool("").ainvoke(
+                {
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
+                }
+            )
         )
 
 
@@ -1053,10 +1197,12 @@ def test_check_yaml_missing_file_raises(monkeypatch):
         monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
         with pytest.raises(ValueError, match="文件不存在"):
             asyncio.run(
-                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
-                    "action": "check_yaml",
-                    "action_payload": {"file_path": "/mnt/user-data/workspace/missing.yaml"},
-                })
+                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke(
+                    {
+                        "action": "check_yaml",
+                        "action_payload": {"file_path": "/mnt/user-data/workspace/missing.yaml"},
+                    }
+                )
             )
 
 
@@ -1069,10 +1215,12 @@ def test_check_yaml_missing_datasource_raises(monkeypatch, tmp_path):
     runtime = _FakeWorkspaceRuntime(tmp_path)
     with pytest.raises(ValueError, match="数据源不存在"):
         asyncio.run(
-            data_analyzing.create_data_analyzing_tool("ds_x", workspace_runtime=runtime).ainvoke({
-                "action": "check_yaml",
-                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
-            })
+            data_analyzing.create_data_analyzing_tool("ds_x", workspace_runtime=runtime).ainvoke(
+                {
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
+                }
+            )
         )
 
 
@@ -1080,10 +1228,12 @@ def test_check_yaml_without_workspace_runtime_raises():
     """工作区运行时缺失时直接报错，不允许退化为要求模型复述 YAML 全文。"""
     with pytest.raises(ValueError, match="工作区不可用"):
         asyncio.run(
-            data_analyzing.create_data_analyzing_tool("ds_a").ainvoke({
-                "action": "check_yaml",
-                "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
-            })
+            data_analyzing.create_data_analyzing_tool("ds_a").ainvoke(
+                {
+                    "action": "check_yaml",
+                    "action_payload": {"file_path": "/mnt/user-data/workspace/model.yaml"},
+                }
+            )
         )
 
 
@@ -1091,7 +1241,10 @@ def test_check_yaml_reads_full_file_across_pages(monkeypatch):
     """read_text_file 是分页契约：页大小小于文件行数时必须翻页拉全，不能丢行。"""
     monkeypatch.setattr(filesystem, "_FULL_READ_PAGE_LINES", 2)
     result = _invoke_check_yaml(
-        monkeypatch, _good_yaml(), existing_configs=[], file_name="paged.yaml",
+        monkeypatch,
+        _good_yaml(),
+        existing_configs=[],
+        file_name="paged.yaml",
         runtime_page_size=2,
     )
     assert result["success"] is True
@@ -1108,10 +1261,12 @@ def test_check_yaml_empty_file_raises(monkeypatch):
         monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: FakeManager())
         with pytest.raises(ValueError, match="文件为空"):
             asyncio.run(
-                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke({
-                    "action": "check_yaml",
-                    "action_payload": {"file_path": "/mnt/user-data/workspace/empty.yaml"},
-                })
+                data_analyzing.create_data_analyzing_tool("ds_a", workspace_runtime=runtime).ainvoke(
+                    {
+                        "action": "check_yaml",
+                        "action_payload": {"file_path": "/mnt/user-data/workspace/empty.yaml"},
+                    }
+                )
             )
 
 
@@ -1155,9 +1310,13 @@ def test_check_yaml_blocks_unknown_physical_column(monkeypatch):
 
 def test_check_yaml_marks_replaceable_same_name_conflict(monkeypatch):
     """与导入预览同口径：公共同名标注 existing_config（可替换），清单不再出现「模型名冲突」。"""
-    payload = _invoke_check_yaml(monkeypatch, _good_yaml(), existing_configs=[
-        {"id": "sc_1", "name": "订单模型", "scope_type": "public", "enabled": True},
-    ])
+    payload = _invoke_check_yaml(
+        monkeypatch,
+        _good_yaml(),
+        existing_configs=[
+            {"id": "sc_1", "name": "订单模型", "scope_type": "public", "enabled": True},
+        ],
+    )
     assert payload["success"] is True
     model = payload["models"][0]
     assert model["importable"] is True
@@ -1168,9 +1327,13 @@ def test_check_yaml_marks_replaceable_same_name_conflict(monkeypatch):
 
 def test_check_yaml_marks_locked_same_name_conflict(monkeypatch):
     """他人私有同名：conflict_locked=True，清单保留「模型名冲突」警告行（导入会被强制忽略）。"""
-    payload = _invoke_check_yaml(monkeypatch, _good_yaml(), existing_configs=[
-        {"id": "sc_2", "name": "订单模型", "scope_type": "private", "create_by": "someone_else", "enabled": True},
-    ])
+    payload = _invoke_check_yaml(
+        monkeypatch,
+        _good_yaml(),
+        existing_configs=[
+            {"id": "sc_2", "name": "订单模型", "scope_type": "private", "create_by": "someone_else", "enabled": True},
+        ],
+    )
     model = payload["models"][0]
     assert model["importable"] is True
     assert model["existing_config"] is None
@@ -1205,7 +1368,13 @@ _TARGETS_FIXTURE = [
         "org_code": "ORG_A",
         "source_type": "hive",
         "query_executor_type": "http",
-        "source_config": {"host": "10.0.0.1", "port": 10000, "database": "db_a", "org_code": "ORG_A", "org_name": "机构A"},
+        "source_config": {
+            "host": "10.0.0.1",
+            "port": 10000,
+            "database": "db_a",
+            "org_code": "ORG_A",
+            "org_name": "机构A",
+        },
     },
     {
         "member_datasource_id": "m2",
@@ -1245,11 +1414,13 @@ def _invoke_list_targets(monkeypatch, *, tool_kwargs=None, state=None, meta=_DAT
     manager = _FakeTargetsManager(_TARGETS_FIXTURE, meta=meta)
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
     raw = asyncio.run(
-        data_analyzing.create_data_analyzing_tool(**(tool_kwargs or {})).ainvoke({
-            "action": "list_execution_targets",
-            "action_payload": {},
-            "state": state if state is not None else _semantic_query_state(),
-        })
+        data_analyzing.create_data_analyzing_tool(**(tool_kwargs or {})).ainvoke(
+            {
+                "action": "list_execution_targets",
+                "action_payload": {},
+                "state": state if state is not None else _semantic_query_state(),
+            }
+        )
     )
     return json.loads(raw.replace(RESULT_PREFIX, "", 1)), manager
 
@@ -1321,11 +1492,13 @@ def test_list_execution_targets_falls_back_to_bound_context(monkeypatch):
 def test_list_execution_targets_requires_datasource():
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
         asyncio.run(
-            data_analyzing.create_data_analyzing_tool("").ainvoke({
-                "action": "list_execution_targets",
-                "action_payload": {},
-                "state": {},
-            })
+            data_analyzing.create_data_analyzing_tool("").ainvoke(
+                {
+                    "action": "list_execution_targets",
+                    "action_payload": {},
+                    "state": {},
+                }
+            )
         )
 
 

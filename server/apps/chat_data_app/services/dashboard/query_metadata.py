@@ -2,6 +2,7 @@
 SQL查询元数据生成服务
 使用LLM自动生成查询的标题、描述、分类
 """
+
 import json
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
@@ -43,7 +44,7 @@ async def generate_query_metadata(sql_text: str) -> dict:
     try:
         llm = get_chat_data_llm(streaming=False)
 
-        prompt = f'''分析以下SQL查询，生成简洁的中文标题、描述和分类。
+        prompt = f"""分析以下SQL查询，生成简洁的中文标题、描述和分类。
 
 SQL:
 ```sql
@@ -66,7 +67,7 @@ SQL:
    - 其他
 
 返回JSON格式（不要包含markdown代码块标记）：
-{{"title": "...", "description": "...", "category": "..."}}'''
+{{"title": "...", "description": "...", "category": "..."}}"""
 
         try:
             response = await llm.ainvoke(prompt)
@@ -79,14 +80,14 @@ SQL:
         content = response.content.strip()
 
         # 移除可能的markdown代码块标记
-        if content.startswith('```'):
-            lines = content.split('\n')
-            content = '\n'.join(lines[1:-1]) if len(lines) > 2 else content
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1]) if len(lines) > 2 else content
 
         metadata = json.loads(content)
 
         # 验证必需字段
-        if not all(k in metadata for k in ['title', 'description', 'category']):
+        if not all(k in metadata for k in ["title", "description", "category"]):
             raise ValueError("Missing required fields")
 
         return metadata
@@ -94,11 +95,7 @@ SQL:
     except Exception as e:
         logger.error(f"生成查询元数据失败: {str(e)}")
         # 返回默认值
-        return {
-            "title": "SQL查询",
-            "description": "数据查询",
-            "category": "其他"
-        }
+        return {"title": "SQL查询", "description": "数据查询", "category": "其他"}
 
 
 def assign_card_style(category: str) -> dict:

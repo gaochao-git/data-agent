@@ -13,7 +13,9 @@ from apps.chat_data_app.services import conversation_service as conversation_mod
 from utils.models import Base, UserThread
 
 
-async def seed_conversation(conversation_id: str, *, title: str = None, user_id: str = "u1", agent_id: str = "agent_a") -> None:
+async def seed_conversation(
+    conversation_id: str, *, title: str = None, user_id: str = "u1", agent_id: str = "agent_a"
+) -> None:
     """造数工具：走生产 create_thread 链路创建会话记录。"""
     await conversation_module.conversation_dao.create_thread(
         user_id=user_id or "system",
@@ -76,8 +78,18 @@ def test_conversation_formatting_helpers():
         "is_favorited": True,
         "run_status": None,
     }
-    assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))["datasource_id"] == ""
-    assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "create_time": None, "update_time": None, "is_favorited": None}))["is_favorited"] is False
+    assert (
+        conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))[
+            "datasource_id"
+        ]
+        == ""
+    )
+    assert (
+        conversation_module._format_thread(
+            SimpleNamespace(**{**thread.__dict__, "create_time": None, "update_time": None, "is_favorited": None})
+        )["is_favorited"]
+        is False
+    )
     assert conversation_module._clean_title("《销售额分析!!!》", fallback="fallback") == "销售额分析"
     assert conversation_module._clean_title("!!", fallback="fallback-title") == "fallback-title"
 
@@ -168,7 +180,12 @@ async def test_grouped_conversations_return_every_group_first_page_without_count
         await conversation_module.list_grouped("agent_a", "u1", 1, group_key="datasource:ds_a", page=2)
     with pytest.raises(ValueError, match="无效的会话分页游标"):
         await conversation_module.list_grouped(
-            "agent_a", "u1", 1, group_key="datasource:ds_a", page=2, cursor="invalid",
+            "agent_a",
+            "u1",
+            1,
+            group_key="datasource:ds_a",
+            page=2,
+            cursor="invalid",
         )
 
 
@@ -180,7 +197,9 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     listed_without_user = await conversation_module.list("agent_a", user_id=None, limit=10, offset=0)
     assert {item["id"] for item in listed_without_user} >= {"conv_existing", "conv_system"}
 
-    listed_by_agents_without_user = await conversation_module.list_by_agent_ids(["agent_a"], user_id=None, limit=10, offset=-10)
+    listed_by_agents_without_user = await conversation_module.list_by_agent_ids(
+        ["agent_a"], user_id=None, limit=10, offset=-10
+    )
     assert {item["id"] for item in listed_by_agents_without_user} >= {"conv_existing", "conv_system"}
 
     original_list = conversation_module.list
@@ -231,10 +250,12 @@ async def test_conversation_get_detail_reads_event_store_without_checkpoint(conv
     token_usage = {
         "used": 12,
         "total": 100,
-        "breakdown": [{
-            "key": "system_prompt",
-            "content": "[系统提示词已隐藏]",
-        }],
+        "breakdown": [
+            {
+                "key": "system_prompt",
+                "content": "[系统提示词已隐藏]",
+            }
+        ],
     }
     await conversation_module.conversation_event_service.persist_turn(
         conversation_id="conv_detail",
@@ -379,7 +400,15 @@ async def test_dao_group_first_pages_without_window_functions():
     # 置顶组在前（组内新在前）；其余各组按组内最新会话时间倒序交错：
     # unclassified(none_new t8) > ds_b(b_new t7) > ds_a(a_new t6，a_old 被截断) > ds_c(c_padded t1)
     assert [row.thread_id for row in result] == [
-        "pin_new", "pin_old", "none_new", "b_new", "a_new", "b_old", "a_mid", "none_old", "c_padded",
+        "pin_new",
+        "pin_old",
+        "none_new",
+        "b_new",
+        "a_new",
+        "b_old",
+        "a_mid",
+        "none_old",
+        "c_padded",
     ]
 
     await engine.dispose()

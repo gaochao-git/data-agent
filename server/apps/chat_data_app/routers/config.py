@@ -22,4 +22,6 @@ async def get_chat_data_config():
         return business_response(data=await get_chat_data_runtime_config(), msg="获取成功")
     except Exception as e:
         logger.error("获取智能问数运行时配置失败: %s", e, exc_info=True)
-        return business_response(msg="获取运行时配置失败，请稍后重试", code=ErrorCode.CHATDATA_CONFIG_RUNTIME_FAILED, status="error")
+        return business_response(
+            msg="获取运行时配置失败，请稍后重试", code=ErrorCode.CHATDATA_CONFIG_RUNTIME_FAILED, status="error"
+        )

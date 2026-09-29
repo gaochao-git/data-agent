@@ -32,7 +32,11 @@ class _FakeDatasourceManager:
             raise self.authorize_error
         target_map = {
             "m_hz": {"member_datasource_id": "m_hz", "member_name": "杭州分公司", "org_code": "ORG_HZ"},
-            "m_hz_west": {"member_datasource_id": "m_hz_west", "member_name": "杭州西湖分公司", "org_code": "ORG_HZ_WEST"},
+            "m_hz_west": {
+                "member_datasource_id": "m_hz_west",
+                "member_name": "杭州西湖分公司",
+                "org_code": "ORG_HZ_WEST",
+            },
             "m_nb": {"member_datasource_id": "m_nb", "member_name": "宁波分公司", "org_code": "ORG_NB"},
         }
         return [target_map[item] for item in member_datasource_ids if item in target_map]
@@ -53,12 +57,14 @@ async def test_prepare_context_only_loads_selected_authorized_members(monkeypatc
         user_query="查询杭州西湖分公司和宁波分公司的订单",
     )
 
-    assert manager.authorize_calls == [(
-        {"id": "ds_1", "query_context": "按机构分库查询", "ds_tables": []},
-        ["m_hz", "m_nb"],
-        "u_1",
-        "测试用户",
-    )]
+    assert manager.authorize_calls == [
+        (
+            {"id": "ds_1", "query_context": "按机构分库查询", "ds_tables": []},
+            ["m_hz", "m_nb"],
+            "u_1",
+            "测试用户",
+        )
+    ]
     assert context.semantic_config is None
     assert context.available_member_datasource_ids == ["m_hz", "m_nb"]
     assert context.matched_member_datasource_ids == ["m_nb"]

@@ -6,12 +6,8 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-OFFICECLI_BANNED_SUBCOMMANDS = frozenset(
-    {"plugins", "watch", "unwatch", "open", "close", "mcp", "install", "skills"}
-)
-OFFICECLI_READONLY_SUBCOMMANDS = frozenset(
-    {"view", "get", "query", "validate", "dump", "raw"}
-)
+OFFICECLI_BANNED_SUBCOMMANDS = frozenset({"plugins", "watch", "unwatch", "open", "close", "mcp", "install", "skills"})
+OFFICECLI_READONLY_SUBCOMMANDS = frozenset({"view", "get", "query", "validate", "dump", "raw"})
 _SOURCE_PROPERTIES = frozenset({"src", "path", "fallback", "image", "preview", "background"})
 
 
@@ -70,7 +66,24 @@ def _embedded_property_indices(args: list[str]) -> set[int]:
     return indices
 
 
-_FILE_PATH_SUBCOMMANDS = {"view", "get", "query", "validate", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}
+_FILE_PATH_SUBCOMMANDS = {
+    "view",
+    "get",
+    "query",
+    "validate",
+    "set",
+    "add",
+    "remove",
+    "move",
+    "swap",
+    "raw",
+    "raw-set",
+    "add-part",
+    "save",
+    "refresh",
+    "create",
+    "batch",
+}
 
 
 def _file_path_command_file_indices(subcommand: str, args: list[str]) -> set[int] | None:
@@ -82,8 +95,8 @@ def _file_path_command_file_indices(subcommand: str, args: list[str]) -> set[int
     if _looks_like_selector(args[1]):
         raise ValueError(
             f"officecli {subcommand} 缺少文件路径：第二个参数 {args[1]} 是文档选择器。"
-            "正确格式为 [子命令, 文件路径, 选择器]，例如 [\"get\","
-            " \"/mnt/user-data/workspace/报告.docx\", \"/body/p[1]\"]。"
+            '正确格式为 [子命令, 文件路径, 选择器]，例如 ["get",'
+            ' "/mnt/user-data/workspace/报告.docx", "/body/p[1]"]。'
         )
     return {1}
 
@@ -122,7 +135,20 @@ def _officecli_option_indices(args: list[str]) -> set[int]:
 
 def _officecli_write_indices(subcommand: str, args: list[str]) -> set[int]:
     write_indices = set()
-    if subcommand in {"create", "set", "add", "remove", "move", "swap", "raw-set", "add-part", "save", "refresh", "batch", "import"}:
+    if subcommand in {
+        "create",
+        "set",
+        "add",
+        "remove",
+        "move",
+        "swap",
+        "raw-set",
+        "add-part",
+        "save",
+        "refresh",
+        "batch",
+        "import",
+    }:
         write_indices.add(1)
     if subcommand == "merge":
         write_indices.add(2)
@@ -161,7 +187,10 @@ def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
     write_indices = _officecli_write_indices(subcommand, args)
     base_mutates = subcommand not in OFFICECLI_READONLY_SUBCOMMANDS and subcommand != "help"
     return OfficeCliCommand(
-        tuple(args), subcommand, frozenset(all_indices), frozenset(write_indices),
+        tuple(args),
+        subcommand,
+        frozenset(all_indices),
+        frozenset(write_indices),
         base_mutates or bool(write_indices),
     )
 

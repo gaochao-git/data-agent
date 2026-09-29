@@ -121,12 +121,7 @@ def render_memory_document(items: Sequence[MemoryItem]) -> str:
 
 def escape_memory_for_prompt(text: str) -> str:
     """转义注入提示词的条目文本，防止伪造提示词结构。"""
-    return (
-        str(text or "")
-        .replace("<", "＜")
-        .replace(">", "＞")
-        .replace("`", "ˋ")
-    )
+    return str(text or "").replace("<", "＜").replace(">", "＞").replace("`", "ˋ")
 
 
 def select_items_within_budget(

@@ -22,9 +22,13 @@ from utils.error_codes import ErrorCode
 def _structure_error(datasource, metrics=None, dimensions=None, relationships=None):
     """结构硬门槛薄壳测试辅助：datasource 形态转 table_columns_map 后走统一入口。"""
     return first_structure_error(
-        metrics or [], dimensions or [], relationships or [],
+        metrics or [],
+        dimensions or [],
+        relationships or [],
         table_columns_map=build_table_columns_map(datasource),
     )
+
+
 from apps.chat_data_app.schema import (
     SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
@@ -68,14 +72,19 @@ def test_first_structure_error_checks_dimensions_and_metrics():
         ]
     }
 
-    assert _structure_error(
-        datasource,
-        metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
-    ) is None
+    assert (
+        _structure_error(
+            datasource,
+            metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+            dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
+        )
+        is None
+    )
     assert "所属表不存在" in _structure_error(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
     assert "字段不存在" in _structure_error(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
-    assert "必须引用表" in _structure_error(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
+    assert "必须引用表" in _structure_error(
+        datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], []
+    )
     assert "字段显示名称重复" in _structure_error(
         datasource,
         metrics=[{"name": "数量", "table": "orders", "expression": "SUM(amount)"}],
@@ -105,13 +114,15 @@ def test_first_structure_error_checks_operators_and_relationships():
         {"name": "订单状态", "table": "orders", "column": "status", "allowed_operators": ["=", "IN"]},
         {"name": "用户等级", "table": "users", "table_alias": "u", "column": "level"},
     ]
-    valid_relationship = [{
-        "left_table": "orders",
-        "right_table": "users",
-        "right_alias": "u",
-        "left_column": "user_id",
-        "right_column": "id",
-    }]
+    valid_relationship = [
+        {
+            "left_table": "orders",
+            "right_table": "users",
+            "right_alias": "u",
+            "left_column": "user_id",
+            "right_column": "id",
+        }
+    ]
 
     assert _structure_error(datasource, [], dimensions, valid_relationship) is None
     assert "不支持的过滤操作符" in _structure_error(
@@ -130,13 +141,15 @@ def test_first_structure_error_checks_operators_and_relationships():
         datasource,
         [],
         dimensions,
-        [{
-            "left_table": "orders",
-            "right_table": "users",
-            "right_alias": "u",
-            "left_column": "",
-            "right_column": "",
-        }],
+        [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "right_alias": "u",
+                "left_column": "",
+                "right_column": "",
+            }
+        ],
     )
     assert "缺少关联路径" in _structure_error(datasource, [], dimensions, [])
 
@@ -151,45 +164,73 @@ def test_validate_semantic_logical_types_requires_enum_column_dict():
             return None
 
     manager = Manager()
-    assert asyncio.run(semantic_config_service.validate_semantic_logical_types(
-        manager,
-        "ds_a",
-        [{"name": "状态", "table": "orders", "column": "status", "logical_type": "enum"}],
-    )) is None
-    assert "请先维护字段字典枚举值" in asyncio.run(semantic_config_service.validate_semantic_logical_types(
-        manager,
-        "ds_a",
-        [{"name": "空枚举", "table": "orders", "column": "empty_enum", "logical_type": "enum"}],
-    ))
-    assert asyncio.run(semantic_config_service.validate_semantic_logical_types(
-        manager,
-        "ds_a",
-        [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
-    )) is None
+    assert (
+        asyncio.run(
+            semantic_config_service.validate_semantic_logical_types(
+                manager,
+                "ds_a",
+                [{"name": "状态", "table": "orders", "column": "status", "logical_type": "enum"}],
+            )
+        )
+        is None
+    )
+    assert "请先维护字段字典枚举值" in asyncio.run(
+        semantic_config_service.validate_semantic_logical_types(
+            manager,
+            "ds_a",
+            [{"name": "空枚举", "table": "orders", "column": "empty_enum", "logical_type": "enum"}],
+        )
+    )
+    assert (
+        asyncio.run(
+            semantic_config_service.validate_semantic_logical_types(
+                manager,
+                "ds_a",
+                [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
+            )
+        )
+        is None
+    )
 
 
 def test_history_message_and_feedback_helpers():
     assert semantic_history_learning_service._history_message_text("  hello  ") == "hello"
-    assert semantic_history_learning_service._history_message_text([{"text": "问题"}, {"content": "回答"}, "补充"]) == "问题\n回答\n补充"
+    assert (
+        semantic_history_learning_service._history_message_text([{"text": "问题"}, {"content": "回答"}, "补充"])
+        == "问题\n回答\n补充"
+    )
     assert semantic_history_learning_service._history_message_text([{"text": ""}, {"content": None}]) == ""
     assert semantic_history_learning_service._history_message_text(None) == ""
     assert semantic_history_learning_service._is_negative_feedback_text("这个结果不对") is True
     assert semantic_history_learning_service._is_negative_feedback_text("") is False
     assert semantic_history_learning_service._is_negative_feedback_text("好的") is False
-    assert semantic_history_learning_service._is_history_tool_error_message('{"success": false, "error": "表不存在"}') is True
-    assert semantic_history_learning_service._is_history_tool_error_message('{"success": true, "error": "仍然有错误"}') is True
+    assert (
+        semantic_history_learning_service._is_history_tool_error_message('{"success": false, "error": "表不存在"}')
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_history_tool_error_message('{"success": true, "error": "仍然有错误"}')
+        is True
+    )
     assert semantic_history_learning_service._is_history_tool_error_message("") is False
-    assert semantic_history_learning_service._is_history_tool_error_message("[execute_sql]\n{\"success\": true}") is False
+    assert semantic_history_learning_service._is_history_tool_error_message('[execute_sql]\n{"success": true}') is False
     assert semantic_history_learning_service._is_history_tool_error_message("Traceback exception") is True
 
 
 def test_compact_history_conversation_messages_keeps_useful_context():
-    compact = semantic_history_learning_service._compact_history_conversation_messages([
-        {"role": "user", "content": "查询销售额", "timestamp": "t1"},
-        {"role": "assistant", "content": "已查询", "timestamp": "t2"},
-        {"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "字段不存在"}', "timestamp": "t3"},
-        {"role": "user", "content": "不对，少了退款订单", "timestamp": "t4"},
-    ])
+    compact = semantic_history_learning_service._compact_history_conversation_messages(
+        [
+            {"role": "user", "content": "查询销售额", "timestamp": "t1"},
+            {"role": "assistant", "content": "已查询", "timestamp": "t2"},
+            {
+                "role": "tool",
+                "tool_name": "execute_sql",
+                "content": '{"success": false, "error": "字段不存在"}',
+                "timestamp": "t3",
+            },
+            {"role": "user", "content": "不对，少了退款订单", "timestamp": "t4"},
+        ]
+    )
 
     assert compact["user_turns"][0]["content"] == "查询销售额"
     assert compact["assistant_turns"][0]["content"] == "已查询"
@@ -204,45 +245,86 @@ def test_history_belongs_to_config_for_agent_builder_and_sql(monkeypatch):
         "relationships": [{"left_table": "orders", "right_table": "products"}],
     }
 
-    assert semantic_config._history_belongs_to_config("agent", {"semantic_config_id": "cfg_a"}, "", "cfg_a", config, "mysql")[:2] == (True, "matched_config_id")
-    assert semantic_config._history_belongs_to_config("builder", {"semantic_config_id": "other"}, "", "cfg_a", config, "mysql")[:2] == (False, "config_id_mismatch")
+    assert semantic_config._history_belongs_to_config(
+        "agent", {"semantic_config_id": "cfg_a"}, "", "cfg_a", config, "mysql"
+    )[:2] == (True, "matched_config_id")
+    assert semantic_config._history_belongs_to_config(
+        "builder", {"semantic_config_id": "other"}, "", "cfg_a", config, "mysql"
+    )[:2] == (False, "config_id_mismatch")
 
-    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"orders"}, error=""))
-    assert semantic_config._history_belongs_to_config("sql", {}, "select * from orders", "cfg_a", config, "mysql")[:2] == (True, "matched_table_scope")
-    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"users"}, error=""))
-    assert semantic_config._history_belongs_to_config("sql", {}, "select * from users", "cfg_a", config, "mysql")[:2] == (False, "table_scope_mismatch")
-    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=False, tables=set(), error="syntax"))
-    assert semantic_config._history_belongs_to_config("sql", {}, "bad sql", "cfg_a", config, "mysql") == (False, "sql_parse_failed", [], "syntax")
-    assert semantic_config._history_belongs_to_config("agent", {}, "", "cfg_a", config, "mysql")[:2] == (False, "config_id_mismatch")
-    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg_a", {"metrics": [], "dimensions": [], "relationships": []}, "mysql")[:2] == (False, "empty_scope")
-    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables=set(), error=""))
-    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg_a", config, "mysql")[:2] == (False, "empty_history_tables")
+    monkeypatch.setattr(
+        semantic_config,
+        "extract_physical_tables",
+        lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"orders"}, error=""),
+    )
+    assert semantic_config._history_belongs_to_config("sql", {}, "select * from orders", "cfg_a", config, "mysql")[
+        :2
+    ] == (True, "matched_table_scope")
+    monkeypatch.setattr(
+        semantic_config,
+        "extract_physical_tables",
+        lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"users"}, error=""),
+    )
+    assert semantic_config._history_belongs_to_config("sql", {}, "select * from users", "cfg_a", config, "mysql")[
+        :2
+    ] == (False, "table_scope_mismatch")
+    monkeypatch.setattr(
+        semantic_config,
+        "extract_physical_tables",
+        lambda sql, source_type="mysql": SimpleNamespace(success=False, tables=set(), error="syntax"),
+    )
+    assert semantic_config._history_belongs_to_config("sql", {}, "bad sql", "cfg_a", config, "mysql") == (
+        False,
+        "sql_parse_failed",
+        [],
+        "syntax",
+    )
+    assert semantic_config._history_belongs_to_config("agent", {}, "", "cfg_a", config, "mysql")[:2] == (
+        False,
+        "config_id_mismatch",
+    )
+    assert semantic_config._history_belongs_to_config(
+        "sql", {}, "select 1", "cfg_a", {"metrics": [], "dimensions": [], "relationships": []}, "mysql"
+    )[:2] == (False, "empty_scope")
+    monkeypatch.setattr(
+        semantic_config,
+        "extract_physical_tables",
+        lambda sql, source_type="mysql": SimpleNamespace(success=True, tables=set(), error=""),
+    )
+    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg_a", config, "mysql")[:2] == (
+        False,
+        "empty_history_tables",
+    )
 
 
 def test_history_learning_compact_sample_and_normalize_item_branches():
     long_text = "x" * ErrorCode.SUCCESS
-    compact_agent = semantic_history_learning_service._compact_history_sample_for_llm({
-        "execution_id": "exec_1",
-        "source": "agent",
-        "status": "failed",
-        "query_text": long_text,
-        "sql": long_text,
-        "error_message": long_text,
-        "executed_at": "2026-06-02",
-        "conversation_context": {"user_turns": [{"content": "查销售额"}]},
-    })
-    compact_builder = semantic_history_learning_service._compact_history_sample_for_llm({
-        "execution_id": "exec_2",
-        "source": "builder",
-        "semantic_builder_config": {
-            "mainTable": "orders",
-            "joins": [{"id": i} for i in range(12)],
-            "dimensions": [{"id": i} for i in range(25)],
-            "metrics": [{"id": i} for i in range(25)],
-            "filters": [{"id": i} for i in range(25)],
-            "order_by": [{"id": i} for i in range(12)],
-        },
-    })
+    compact_agent = semantic_history_learning_service._compact_history_sample_for_llm(
+        {
+            "execution_id": "exec_1",
+            "source": "agent",
+            "status": "failed",
+            "query_text": long_text,
+            "sql": long_text,
+            "error_message": long_text,
+            "executed_at": "2026-06-02",
+            "conversation_context": {"user_turns": [{"content": "查销售额"}]},
+        }
+    )
+    compact_builder = semantic_history_learning_service._compact_history_sample_for_llm(
+        {
+            "execution_id": "exec_2",
+            "source": "builder",
+            "semantic_builder_config": {
+                "mainTable": "orders",
+                "joins": [{"id": i} for i in range(12)],
+                "dimensions": [{"id": i} for i in range(25)],
+                "metrics": [{"id": i} for i in range(25)],
+                "filters": [{"id": i} for i in range(25)],
+                "order_by": [{"id": i} for i in range(12)],
+            },
+        }
+    )
 
     samples = [{"execution_id": "exec_1", "source": "sql"}]
     sample_map = semantic_history_learning_service._sample_map_by_execution_id(samples)
@@ -256,46 +338,105 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
     assert len(compact_builder["builder_config"]["dimensions"]) == 20
     assert len(compact_builder["builder_config"]["aggregations"]) == 20
     assert len(compact_builder["builder_config"]["orderBy"]) == 10
-    assert semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "name": "",
-        "reason": "缺名称",
-    }, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "title": "",
-        "content": "内容",
-        "reason": "缺标题",
-    }, "issues", sample_map, datasource) is None
-    default_text_dimension = semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "name": "渠道",
-        "table": "orders",
-        "field_name": "amount",
-        "reason": "历史过滤",
-    }, "dimensions", sample_map, datasource)
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource)
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "bad"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": "bad"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1},
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"},
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "name": "",
+                "reason": "缺名称",
+            },
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "title": "",
+                "content": "内容",
+                "reason": "缺标题",
+            },
+            "issues",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    default_text_dimension = semantic_history_learning_service._normalize_history_suggestion_item(
+        {
+            "source": "sql",
+            "confidence": "high",
+            "sample_execution_ids": ["exec_1"],
+            "support_count": 1,
+            "name": "渠道",
+            "table": "orders",
+            "field_name": "amount",
+            "reason": "历史过滤",
+        },
+        "dimensions",
+        sample_map,
+        datasource,
+    )
     assert default_text_dimension["logical_type"] == "text"
 
 
 def test_history_learning_context_and_indexes():
     datasource = {
         "ds_tables": [
-            {"table_name": "orders", "description": "订单", "columns": [{"name": "amount", "mysql_type": "decimal", "description": "金额"}]},
+            {
+                "table_name": "orders",
+                "description": "订单",
+                "columns": [{"name": "amount", "mysql_type": "decimal", "description": "金额"}],
+            },
             {"table_name": "users", "columns": [{"name": "id"}]},
         ]
     }
@@ -308,18 +449,45 @@ def test_history_learning_context_and_indexes():
     table_context = semantic_history_learning_service._build_history_learning_table_context(datasource, config)
     indexes = semantic_history_learning_service._build_existing_semantic_indexes(config)
 
-    assert table_context == [{"table_name": "orders", "description": "订单", "columns": [{"name": "amount", "type": "decimal", "description": "金额"}]}]
+    assert table_context == [
+        {
+            "table_name": "orders",
+            "description": "订单",
+            "columns": [{"name": "amount", "type": "decimal", "description": "金额"}],
+        }
+    ]
     assert "销售额" in indexes["metric_names"]
     assert "orders.sum(amount)" in indexes["metric_expressions"]
     assert "orders.city" in indexes["dimension_columns"]
     assert semantic_history_learning_service._normalize_semantic_text(" `City` ") == "city"
     assert semantic_history_learning_service._normalize_semantic_expression(" SUM( `Amount` ) ") == "sum(`amount`)"
-    assert semantic_history_learning_service._extract_expression_columns("SUM(orders.amount) + COUNT(DISTINCT `order_id`) + CASE WHEN status = 'x' THEN 1 END") == {"amount", "order_id", "status"}
-    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "新字段"}, "unknown", indexes) is False
+    assert semantic_history_learning_service._extract_expression_columns(
+        "SUM(orders.amount) + COUNT(DISTINCT `order_id`) + CASE WHEN status = 'x' THEN 1 END"
+    ) == {"amount", "order_id", "status"}
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes)
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion(
+            {"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes
+        )
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes)
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion(
+            {"table": "orders", "column": "city"}, "dimensions", indexes
+        )
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion({"name": "新字段"}, "unknown", indexes)
+        is False
+    )
 
 
 def test_normalize_history_learning_result_filters_invalid_existing_and_flags_review():
@@ -336,15 +504,63 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
     raw = {
         "suggestions": {
             "metrics": [
-                {"name": "销售额", "table": "orders", "expression": "SUM(amount)", "reason": "已存在", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
-                {"name": "客单价", "table": "orders", "expression": "AVG(price)", "reason": "历史多次查询", "source": "sql", "confidence": "medium", "sample_execution_ids": ["exec_1"], "support_count": 2},
+                {
+                    "name": "销售额",
+                    "table": "orders",
+                    "expression": "SUM(amount)",
+                    "reason": "已存在",
+                    "source": "sql",
+                    "confidence": "high",
+                    "sample_execution_ids": ["exec_1"],
+                    "support_count": 1,
+                },
+                {
+                    "name": "客单价",
+                    "table": "orders",
+                    "expression": "AVG(price)",
+                    "reason": "历史多次查询",
+                    "source": "sql",
+                    "confidence": "medium",
+                    "sample_execution_ids": ["exec_1"],
+                    "support_count": 2,
+                },
             ],
             "dimensions": [
-                {"name": "新城市", "table": "orders", "field_name": "city", "column": "city", "type": "bad", "reason": "类型无效", "source": "builder", "confidence": "high", "sample_execution_ids": ["exec_2"], "support_count": 1},
-                {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "logical_type": "text", "reason": "历史过滤", "source": "builder", "confidence": "high", "sample_execution_ids": ["exec_2"], "support_count": 1},
+                {
+                    "name": "新城市",
+                    "table": "orders",
+                    "field_name": "city",
+                    "column": "city",
+                    "type": "bad",
+                    "reason": "类型无效",
+                    "source": "builder",
+                    "confidence": "high",
+                    "sample_execution_ids": ["exec_2"],
+                    "support_count": 1,
+                },
+                {
+                    "name": "渠道",
+                    "table": "orders",
+                    "field_name": "channel",
+                    "column": "channel",
+                    "logical_type": "text",
+                    "reason": "历史过滤",
+                    "source": "builder",
+                    "confidence": "high",
+                    "sample_execution_ids": ["exec_2"],
+                    "support_count": 1,
+                },
             ],
             "issues": [
-                {"title": "缺少枚举", "content": "订单状态需要枚举", "reason": "用户反馈", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
+                {
+                    "title": "缺少枚举",
+                    "content": "订单状态需要枚举",
+                    "reason": "用户反馈",
+                    "source": "sql",
+                    "confidence": "high",
+                    "sample_execution_ids": ["exec_1"],
+                    "support_count": 1,
+                },
             ],
         }
     }
@@ -362,18 +578,28 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
 def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
 
-    missing_ds = _response_payload(asyncio.run(semantic_config.update_semantic_config(
-        "missing",
-        "cfg_a",
-        SemanticConfigUpdateRequest(name="x"),
-        object(),
-    )))
-    invalid_update = _response_payload(asyncio.run(semantic_config.update_semantic_config(
-        "ds_a",
-        "cfg_a",
-        SemanticConfigUpdateRequest(metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}]),
-        object(),
-    )))
+    missing_ds = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config(
+                "missing",
+                "cfg_a",
+                SemanticConfigUpdateRequest(name="x"),
+                object(),
+            )
+        )
+    )
+    invalid_update = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config(
+                "ds_a",
+                "cfg_a",
+                SemanticConfigUpdateRequest(
+                    metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}]
+                ),
+                object(),
+            )
+        )
+    )
 
     original_update = manager.update_async
 
@@ -381,13 +607,19 @@ def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
         return None
 
     manager.update_async = update_missing_after_validate
-    vanished_update = _response_payload(asyncio.run(semantic_config.update_semantic_config(
-        "ds_a",
-        "cfg_a",
-        SemanticConfigUpdateRequest(name="x"),
-        object(),
-    )))
-    vanished_toggle = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
+    vanished_update = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config(
+                "ds_a",
+                "cfg_a",
+                SemanticConfigUpdateRequest(name="x"),
+                object(),
+            )
+        )
+    )
+    vanished_toggle = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object()))
+    )
 
     manager.update_async = original_update
 
@@ -461,7 +693,8 @@ class _FakeSemanticManager:
         if not user_id:
             return configs
         return [
-            config for config in configs
+            config
+            for config in configs
             if config.get("scope_type") == "public"
             or (config.get("scope_type") == "private" and config.get("create_by") == user_id)
         ]
@@ -533,20 +766,34 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[],
     )
-    create_response = _response_payload(asyncio.run(semantic_config.create_semantic_config("ds_a", create_payload, object())))
-    admin_create_response = _response_payload(asyncio.run(semantic_config.create_admin_semantic_config("ds_a", create_payload, object())))
+    create_response = _response_payload(
+        asyncio.run(semantic_config.create_semantic_config("ds_a", create_payload, object()))
+    )
+    admin_create_response = _response_payload(
+        asyncio.run(semantic_config.create_admin_semantic_config("ds_a", create_payload, object()))
+    )
     update_payload = SemanticConfigUpdateRequest(
         name="订单分析V2",
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[],
     )
-    update_response = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", update_payload, object())))
-    admin_update_response = _response_payload(asyncio.run(semantic_config.update_admin_semantic_config("ds_a", "cfg_public", update_payload, object())))
-    toggle_response = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", False, object())))
-    admin_toggle_response = _response_payload(asyncio.run(semantic_config.toggle_admin_semantic_config("ds_a", "cfg_public", False, object())))
+    update_response = _response_payload(
+        asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", update_payload, object()))
+    )
+    admin_update_response = _response_payload(
+        asyncio.run(semantic_config.update_admin_semantic_config("ds_a", "cfg_public", update_payload, object()))
+    )
+    toggle_response = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", False, object()))
+    )
+    admin_toggle_response = _response_payload(
+        asyncio.run(semantic_config.toggle_admin_semantic_config("ds_a", "cfg_public", False, object()))
+    )
     delete_response = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
-    admin_delete_response = _response_payload(asyncio.run(semantic_config.delete_admin_semantic_config("ds_a", "cfg_public", object())))
+    admin_delete_response = _response_payload(
+        asyncio.run(semantic_config.delete_admin_semantic_config("ds_a", "cfg_public", object()))
+    )
 
     assert [item["id"] for item in list_payload["data"]["configs"]] == ["cfg_public", "cfg_a"]
     assert [item["can_manage"] for item in list_payload["data"]["configs"]] == [False, True]
@@ -572,27 +819,43 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
 
 def test_semantic_config_route_error_mappings(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch, user_id="other_user")
-    other_user_update = _response_payload(asyncio.run(semantic_config.update_semantic_config(
-        "ds_a",
-        "cfg_a",
-        SemanticConfigUpdateRequest(name="其他管理员可维护"),
-        object(),
-    )))
-    other_user_delete = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
-    other_user_toggle = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
+    other_user_update = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config(
+                "ds_a",
+                "cfg_a",
+                SemanticConfigUpdateRequest(name="其他管理员可维护"),
+                object(),
+            )
+        )
+    )
+    other_user_delete = _response_payload(
+        asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object()))
+    )
+    other_user_toggle = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object()))
+    )
 
     _patch_semantic_route_user_and_manager(monkeypatch, manager=manager, user_id="user_a")
-    invalid_create = _response_payload(asyncio.run(semantic_config.create_semantic_config(
-        "ds_a",
-        SemanticConfigCreateRequest(
-            name="坏指标集",
-            metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}],
-            dimensions=[],
-            relationships=[],
-        ),
-        object(),
-    )))
-    missing_update = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "missing", SemanticConfigUpdateRequest(name="x"), object())))
+    invalid_create = _response_payload(
+        asyncio.run(
+            semantic_config.create_semantic_config(
+                "ds_a",
+                SemanticConfigCreateRequest(
+                    name="坏指标集",
+                    metrics=[{"name": "坏指标", "table": "orders", "expression": "SUM(missing_col)"}],
+                    dimensions=[],
+                    relationships=[],
+                ),
+                object(),
+            )
+        )
+    )
+    missing_update = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config("ds_a", "missing", SemanticConfigUpdateRequest(name="x"), object())
+        )
+    )
 
     assert other_user_update["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
     assert other_user_delete["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
@@ -619,7 +882,10 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
             ),
             SimpleNamespace(
                 query_type="agent",
-                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "销售额不对", "conversation_id": "conv_a"}, ensure_ascii=False),
+                request_payload=json.dumps(
+                    {"semantic_config_id": "cfg_a", "query_text": "销售额不对", "conversation_id": "conv_a"},
+                    ensure_ascii=False,
+                ),
                 error_message="",
             ),
         ),
@@ -636,7 +902,14 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
             ),
             SimpleNamespace(
                 query_type="builder",
-                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "按城市看销售额", "semantic_builder_config": {"dimensions": ["城市"]}}, ensure_ascii=False),
+                request_payload=json.dumps(
+                    {
+                        "semantic_config_id": "cfg_a",
+                        "query_text": "按城市看销售额",
+                        "semantic_builder_config": {"dimensions": ["城市"]},
+                    },
+                    ensure_ascii=False,
+                ),
                 error_message="",
             ),
         ),
@@ -687,14 +960,24 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
     _patch_history_learning_service_session(monkeypatch, lambda: FakeSession())
     monkeypatch.setattr(semantic_config, "_load_history_conversation_context", fake_load_history_context)
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_generate_suggestions)
-    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"orders"}, error=""))
+    monkeypatch.setattr(
+        semantic_config,
+        "extract_physical_tables",
+        lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"orders"}, error=""),
+    )
 
-    response = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=3, sources=["agent", "builder", "sql"], include_failed=True),
-        object(),
-    )))
+    response = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(
+                    days=7, limit=3, sources=["agent", "builder", "sql"], include_failed=True
+                ),
+                object(),
+            )
+        )
+    )
 
     assert response["status"] == "success"
     assert response["data"]["matched_count"] == 3
@@ -709,30 +992,46 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
 def test_history_learning_route_validates_sources_and_missing_objects(monkeypatch):
     _patch_semantic_route_user_and_manager(monkeypatch)
 
-    empty_sources = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=3, sources=[], include_failed=True),
-        object(),
-    )))
-    unsupported_sources = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SimpleNamespace(days=7, limit=3, sources=["agent", "bad"], include_failed=True),
-        object(),
-    )))
-    missing_datasource = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "missing",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=3, sources=["agent"], include_failed=True),
-        object(),
-    )))
-    missing_config = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "missing",
-        SemanticHistoryLearningRequest(days=7, limit=3, sources=["agent"], include_failed=True),
-        object(),
-    )))
+    empty_sources = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=3, sources=[], include_failed=True),
+                object(),
+            )
+        )
+    )
+    unsupported_sources = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SimpleNamespace(days=7, limit=3, sources=["agent", "bad"], include_failed=True),
+                object(),
+            )
+        )
+    )
+    missing_datasource = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "missing",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=3, sources=["agent"], include_failed=True),
+                object(),
+            )
+        )
+    )
+    missing_config = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "missing",
+                SemanticHistoryLearningRequest(days=7, limit=3, sources=["agent"], include_failed=True),
+                object(),
+            )
+        )
+    )
 
     assert empty_sources["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
     assert unsupported_sources["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
@@ -762,9 +1061,15 @@ def test_semantic_helper_edge_cases():
     assert semantic_history_learning_service._parse_json_object("[1]") == {}
     assert semantic_history_learning_service._extract_history_task_semantic_id({"semantic_config_id": " cfg "}) == "cfg"
     assert semantic_history_learning_service._extract_history_task_query_text({"query_text": " 问题 "}) == "问题"
-    assert semantic_history_learning_service._extract_history_task_conversation_id({"conversation_id": " conv "}) == "conv"
-    assert semantic_history_learning_service._semantic_scope_tables({"metrics": [{}], "dimensions": [{"table": ""}], "relationships": [{"left_table": "a", "right_table": "b"}]}) == {"a", "b"}
-    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg", {"metrics": [], "dimensions": []}, "mysql")[:2] == (False, "empty_scope")
+    assert (
+        semantic_history_learning_service._extract_history_task_conversation_id({"conversation_id": " conv "}) == "conv"
+    )
+    assert semantic_history_learning_service._semantic_scope_tables(
+        {"metrics": [{}], "dimensions": [{"table": ""}], "relationships": [{"left_table": "a", "right_table": "b"}]}
+    ) == {"a", "b"}
+    assert semantic_config._history_belongs_to_config(
+        "sql", {}, "select 1", "cfg", {"metrics": [], "dimensions": []}, "mysql"
+    )[:2] == (False, "empty_scope")
 
 
 def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
@@ -778,9 +1083,14 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
         async def get_configs_async(self, datasource_id, user_id=""):
             captured["datasource_id"] = datasource_id
             captured["user_id"] = user_id
-            return [{"id": "public", "scope_type": "public"}, {"id": "mine", "scope_type": "private", "create_by": "user_a"}]
+            return [
+                {"id": "public", "scope_type": "public"},
+                {"id": "mine", "scope_type": "private", "create_by": "user_a"},
+            ]
 
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(
+        semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三")
+    )
     manager = FakeManager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
@@ -824,7 +1134,10 @@ def test_history_context_loader_branches(monkeypatch):
     assert asyncio.run(semantic_config._load_history_conversation_context("nonlist", "user_a")) is None
     assert asyncio.run(semantic_config._load_history_conversation_context("empty", "user_a")) is None
     assert asyncio.run(semantic_config._load_history_conversation_context("boom", "user_a")) is None
-    assert asyncio.run(semantic_config._load_history_conversation_context("chat", "user_a"))["user_turns"][0]["content"] == "查询销售额"
+    assert (
+        asyncio.run(semantic_config._load_history_conversation_context("chat", "user_a"))["user_turns"][0]["content"]
+        == "查询销售额"
+    )
     assert all(call[-1] == "user_a" for call in calls)
 
 
@@ -840,28 +1153,151 @@ def test_history_suggestion_normalization_invalid_and_duplicate_cases():
     }
 
     assert semantic_history_learning_service._extract_expression_columns("") == set()
-    assert semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + order_time") == {"amount", "order_time"}
-    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
-    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "field_name": "city_alias"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + order_time") == {
+        "amount",
+        "order_time",
+    }
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes)
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion(
+            {"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes
+        )
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes)
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion(
+            {"table": "orders", "column": "city"}, "dimensions", indexes
+        )
+        is True
+    )
+    assert (
+        semantic_history_learning_service._is_existing_history_suggestion(
+            {"table": "orders", "field_name": "city_alias"}, "dimensions", indexes
+        )
+        is True
+    )
     assert semantic_history_learning_service._is_existing_history_suggestion({}, "issues", indexes) is False
-    assert semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "api"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "exec_1"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "", "reason": ""}, "metrics", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "新维度", "reason": "历史过滤", "type": "bad"}, "dimensions", sample_map, datasource) is None
-    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "title": "", "content": "", "reason": ""}, "issues", sample_map, datasource) is None
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource)
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "api"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": "exec_1"}, "metrics", sample_map, datasource
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1},
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"},
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "name": "",
+                "reason": "",
+            },
+            "metrics",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "name": "新维度",
+                "reason": "历史过滤",
+                "type": "bad",
+            },
+            "dimensions",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "title": "",
+                "content": "",
+                "reason": "",
+            },
+            "issues",
+            sample_map,
+            datasource,
+        )
+        is None
+    )
 
     result = semantic_history_learning_service._normalize_history_learning_result(
         {
             "metrics": [
-                {"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "客单价", "table": "orders", "expression": "AVG(amount)", "reason": "历史查询"},
-                {"source": "sql", "confidence": "medium", "sample_execution_ids": ["exec_1"], "support_count": 2, "name": "客单价", "table": "orders", "expression": "AVG(amount)", "reason": "重复"},
+                {
+                    "source": "sql",
+                    "confidence": "high",
+                    "sample_execution_ids": ["exec_1"],
+                    "support_count": 1,
+                    "name": "客单价",
+                    "table": "orders",
+                    "expression": "AVG(amount)",
+                    "reason": "历史查询",
+                },
+                {
+                    "source": "sql",
+                    "confidence": "medium",
+                    "sample_execution_ids": ["exec_1"],
+                    "support_count": 2,
+                    "name": "客单价",
+                    "table": "orders",
+                    "expression": "AVG(amount)",
+                    "reason": "重复",
+                },
             ],
             "dimensions": "bad",
             "issues": [],
@@ -880,7 +1316,11 @@ def test_generate_history_learning_suggestions_by_llm(monkeypatch):
     config = {"metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}], "dimensions": []}
     samples = [{"execution_id": "exec_1", "source": "sql", "sql": "select avg(amount) from orders"}]
 
-    assert asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, [])) == {"metrics": [], "dimensions": [], "issues": []}
+    assert asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, [])) == {
+        "metrics": [],
+        "dimensions": [],
+        "issues": [],
+    }
 
     captured = {}
 
@@ -897,26 +1337,37 @@ def test_generate_history_learning_suggestions_by_llm(monkeypatch):
     with pytest.raises(ValueError):
         asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples))
 
-    monkeypatch.setattr(semantic_config, "get_chat_data_llm", lambda **_kwargs: FakeLlm(json.dumps({
-        "suggestions": {
-            "metrics": [
+    monkeypatch.setattr(
+        semantic_config,
+        "get_chat_data_llm",
+        lambda **_kwargs: FakeLlm(
+            json.dumps(
                 {
-                    "source": "sql",
-                    "confidence": "high",
-                    "sample_execution_ids": ["exec_1"],
-                    "support_count": 1,
-                    "name": "客单价",
-                    "table": "orders",
-                    "expression": "AVG(amount)",
-                    "reason": "历史查询",
-                }
-            ],
-            "dimensions": [],
-            "issues": [],
-        }
-    }, ensure_ascii=False)))
+                    "suggestions": {
+                        "metrics": [
+                            {
+                                "source": "sql",
+                                "confidence": "high",
+                                "sample_execution_ids": ["exec_1"],
+                                "support_count": 1,
+                                "name": "客单价",
+                                "table": "orders",
+                                "expression": "AVG(amount)",
+                                "reason": "历史查询",
+                            }
+                        ],
+                        "dimensions": [],
+                        "issues": [],
+                    }
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
 
-    suggestions = asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples))
+    suggestions = asyncio.run(
+        semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples)
+    )
     assert getattr(captured["messages"][0], "type", "") == "human"
     assert suggestions["metrics"][0]["name"] == "客单价"
 
@@ -936,24 +1387,38 @@ def test_semantic_config_route_failure_branches(monkeypatch):
 
     manager = _patch_semantic_route_user_and_manager(monkeypatch, FailingCreateManager())
 
-    missing_create_ds = _response_payload(asyncio.run(semantic_config.create_semantic_config(
-        "missing",
-        SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
-        object(),
-    )))
-    create_failed = _response_payload(asyncio.run(semantic_config.create_semantic_config(
-        "ds_a",
-        SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
-        object(),
-    )))
-    update_failed = _response_payload(asyncio.run(semantic_config.update_semantic_config(
-        "ds_a",
-        "cfg_a",
-        SemanticConfigUpdateRequest(name="x"),
-        object(),
-    )))
+    missing_create_ds = _response_payload(
+        asyncio.run(
+            semantic_config.create_semantic_config(
+                "missing",
+                SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
+                object(),
+            )
+        )
+    )
+    create_failed = _response_payload(
+        asyncio.run(
+            semantic_config.create_semantic_config(
+                "ds_a",
+                SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
+                object(),
+            )
+        )
+    )
+    update_failed = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config(
+                "ds_a",
+                "cfg_a",
+                SemanticConfigUpdateRequest(name="x"),
+                object(),
+            )
+        )
+    )
     delete_failed = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
-    toggle_failed = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
+    toggle_failed = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object()))
+    )
 
     assert missing_create_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert create_failed["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
@@ -974,12 +1439,20 @@ def test_semantic_route_exception_branches(monkeypatch):
     _patch_semantic_route_user_and_manager(monkeypatch, RaisingManager())
 
     list_error = _response_payload(asyncio.run(semantic_config.list_semantic_configs("ds_a", object())))
-    create_error = _response_payload(asyncio.run(semantic_config.create_semantic_config(
-        "ds_a",
-        SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
-        object(),
-    )))
-    update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
+    create_error = _response_payload(
+        asyncio.run(
+            semantic_config.create_semantic_config(
+                "ds_a",
+                SemanticConfigCreateRequest(name="x", metrics=[], dimensions=[], relationships=[]),
+                object(),
+            )
+        )
+    )
+    update_error = _response_payload(
+        asyncio.run(
+            semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())
+        )
+    )
     assert list_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert create_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert update_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
@@ -993,7 +1466,9 @@ def test_semantic_route_exception_branches(monkeypatch):
 
     _patch_semantic_route_user_and_manager(monkeypatch, RaisingMutationManager())
     delete_error = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
-    toggle_error = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
+    toggle_error = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object()))
+    )
     assert delete_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert toggle_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
@@ -1003,24 +1478,79 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
     execution_time = datetime(2026, 6, 2, 10, 0, 0)
     rows = [
         (
-            SimpleNamespace(execution_id="exec_unknown", task_id="task_unknown", sql_status="succeeded", sql_text="select 1", error_message="", finished_time=execution_time, started_time=None, create_time=execution_time),
+            SimpleNamespace(
+                execution_id="exec_unknown",
+                task_id="task_unknown",
+                sql_status="succeeded",
+                sql_text="select 1",
+                error_message="",
+                finished_time=execution_time,
+                started_time=None,
+                create_time=execution_time,
+            ),
             SimpleNamespace(query_type="unknown", request_payload="{}", error_message=""),
         ),
         (
-            SimpleNamespace(execution_id="exec_builder_skip", task_id="task_builder_skip", sql_status="succeeded", sql_text="select sum(amount) from orders", error_message="", finished_time=execution_time, started_time=None, create_time=execution_time),
-            SimpleNamespace(query_type="builder", request_payload=json.dumps({"semantic_config_id": "cfg_a"}), error_message=""),
+            SimpleNamespace(
+                execution_id="exec_builder_skip",
+                task_id="task_builder_skip",
+                sql_status="succeeded",
+                sql_text="select sum(amount) from orders",
+                error_message="",
+                finished_time=execution_time,
+                started_time=None,
+                create_time=execution_time,
+            ),
+            SimpleNamespace(
+                query_type="builder", request_payload=json.dumps({"semantic_config_id": "cfg_a"}), error_message=""
+            ),
         ),
         (
-            SimpleNamespace(execution_id="exec_parse", task_id="task_parse", sql_status="succeeded", sql_text="bad sql", error_message="", finished_time=execution_time, started_time=None, create_time=execution_time),
+            SimpleNamespace(
+                execution_id="exec_parse",
+                task_id="task_parse",
+                sql_status="succeeded",
+                sql_text="bad sql",
+                error_message="",
+                finished_time=execution_time,
+                started_time=None,
+                create_time=execution_time,
+            ),
             SimpleNamespace(query_type="sql", request_payload="{}", error_message=""),
         ),
         (
-            SimpleNamespace(execution_id="exec_agent_no_conv", task_id="task_agent_no_conv", sql_status="succeeded", sql_text="select sum(amount) from orders", error_message="", finished_time=None, started_time=execution_time, create_time=execution_time),
-            SimpleNamespace(query_type="agent", request_payload=json.dumps({"semantic_config_id": "cfg_a"}), error_message="task error"),
+            SimpleNamespace(
+                execution_id="exec_agent_no_conv",
+                task_id="task_agent_no_conv",
+                sql_status="succeeded",
+                sql_text="select sum(amount) from orders",
+                error_message="",
+                finished_time=None,
+                started_time=execution_time,
+                create_time=execution_time,
+            ),
+            SimpleNamespace(
+                query_type="agent",
+                request_payload=json.dumps({"semantic_config_id": "cfg_a"}),
+                error_message="task error",
+            ),
         ),
         (
-            SimpleNamespace(execution_id="exec_agent_empty_context", task_id="task_agent_empty_context", sql_status="succeeded", sql_text="select sum(amount) from orders", error_message="", finished_time=None, started_time=None, create_time=None),
-            SimpleNamespace(query_type="agent", request_payload=json.dumps({"semantic_config_id": "cfg_a", "conversation_id": "conv_missing"}), error_message=""),
+            SimpleNamespace(
+                execution_id="exec_agent_empty_context",
+                task_id="task_agent_empty_context",
+                sql_status="succeeded",
+                sql_text="select sum(amount) from orders",
+                error_message="",
+                finished_time=None,
+                started_time=None,
+                create_time=None,
+            ),
+            SimpleNamespace(
+                query_type="agent",
+                request_payload=json.dumps({"semantic_config_id": "cfg_a", "conversation_id": "conv_missing"}),
+                error_message="",
+            ),
         ),
     ]
 
@@ -1048,16 +1578,24 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
         return SimpleNamespace(success=True, tables={"orders"}, error="")
 
     _patch_history_learning_service_session(monkeypatch, lambda: FakeSession())
-    monkeypatch.setattr(semantic_config, "_load_history_conversation_context", lambda _conversation_id, _user_id: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(
+        semantic_config,
+        "_load_history_conversation_context",
+        lambda _conversation_id, _user_id: asyncio.sleep(0, result=None),
+    )
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_generate_suggestions)
     monkeypatch.setattr(semantic_config, "extract_physical_tables", fake_extract_tables)
 
-    response = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=10, sources=["agent", "sql"], include_failed=False),
-        object(),
-    )))
+    response = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=10, sources=["agent", "sql"], include_failed=False),
+                object(),
+            )
+        )
+    )
 
     assert response["status"] == "success"
     assert response["data"]["matched_count"] == 0
@@ -1066,14 +1604,20 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
     assert response["data"]["skipped"]["missing_conversation_context"] == 2
     assert response["data"]["source_stats"]["builder"]["skipped"] == 1
 
-    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: (_ for _ in ()).throw(semantic_config.AuthenticationError("未登录")))
+    monkeypatch.setattr(
+        semantic_config,
+        "_get_current_user",
+        lambda _request: (_ for _ in ()).throw(semantic_config.AuthenticationError("未登录")),
+    )
     with pytest.raises(HTTPException) as auth_error:
-        asyncio.run(semantic_config.learn_semantic_config_from_history(
-            "ds_a",
-            "cfg_a",
-            SemanticHistoryLearningRequest(days=7, limit=1, sources=["agent"], include_failed=True),
-            object(),
-        ))
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=1, sources=["agent"], include_failed=True),
+                object(),
+            )
+        )
 
     assert manager.datasource["id"] == "ds_a"
     assert auth_error.value.status_code == 401
@@ -1088,21 +1632,30 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
     assert semantic_history_learning_service._is_history_tool_error_message('["not dict"]') is False
     assert semantic_history_learning_service._is_history_tool_error_message("[tool]\nnot json but 错误") is True
 
-    compact = semantic_history_learning_service._compact_history_conversation_messages([
-        {"role": "user", "content": [{"text": ""}, {"content": "  "}], "timestamp": "skip"},
-        {"role": "assistant", "content": "带工具调用的回复", "tool_calls": [{"id": "tc"}], "timestamp": "skip"},
-        {"role": "assistant", "content": "正常回复", "timestamp": "t1"},
-        {"role": "tool", "tool_name": "execute_sql", "content": '{"success": true}', "timestamp": "t2"},
-        {"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "失败"}', "timestamp": "t3"},
-    ])
+    compact = semantic_history_learning_service._compact_history_conversation_messages(
+        [
+            {"role": "user", "content": [{"text": ""}, {"content": "  "}], "timestamp": "skip"},
+            {"role": "assistant", "content": "带工具调用的回复", "tool_calls": [{"id": "tc"}], "timestamp": "skip"},
+            {"role": "assistant", "content": "正常回复", "timestamp": "t1"},
+            {"role": "tool", "tool_name": "execute_sql", "content": '{"success": true}', "timestamp": "t2"},
+            {
+                "role": "tool",
+                "tool_name": "execute_sql",
+                "content": '{"success": false, "error": "失败"}',
+                "timestamp": "t3",
+            },
+        ]
+    )
     assert compact["assistant_turns"] == [{"content": "正常回复", "timestamp": "t1"}]
     assert compact["tool_errors"][0]["content"] == '{"success": false, "error": "失败"}'
 
-    assert semantic_history_learning_service._semantic_scope_tables({
-        "metrics": [{"table": ""}],
-        "dimensions": [{"table": "orders"}],
-        "relationships": [{"left_table": "", "right_table": "users"}],
-    }) == {"orders", "users"}
+    assert semantic_history_learning_service._semantic_scope_tables(
+        {
+            "metrics": [{"table": ""}],
+            "dimensions": [{"table": "orders"}],
+            "relationships": [{"left_table": "", "right_table": "users"}],
+        }
+    ) == {"orders", "users"}
 
     async def fake_get_agent_id(conversation_id, user_id):
         assert user_id == "user_a"
@@ -1143,12 +1696,50 @@ def test_history_learning_normalization_duplicate_and_review_branches():
     samples = [{"execution_id": "exec_1", "source": "sql"}, {"execution_id": "exec_2", "source": "agent"}]
     raw = {
         "metrics": [
-            {"name": "新指标", "table": "missing_table", "expression": "SUM(amount)", "reason": "缺表", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
-            {"name": "新指标", "table": "missing_table", "expression": "SUM(amount)", "reason": "重复", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
-            {"name": "缺字段指标", "table": "orders", "expression": "SUM(pay_amount)", "reason": "缺字段", "source": "agent", "confidence": "medium", "sample_execution_ids": ["exec_2"], "support_count": 2},
+            {
+                "name": "新指标",
+                "table": "missing_table",
+                "expression": "SUM(amount)",
+                "reason": "缺表",
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+            },
+            {
+                "name": "新指标",
+                "table": "missing_table",
+                "expression": "SUM(amount)",
+                "reason": "重复",
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+            },
+            {
+                "name": "缺字段指标",
+                "table": "orders",
+                "expression": "SUM(pay_amount)",
+                "reason": "缺字段",
+                "source": "agent",
+                "confidence": "medium",
+                "sample_execution_ids": ["exec_2"],
+                "support_count": 2,
+            },
         ],
         "dimensions": [
-            {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "logical_type": "text", "reason": "缺字段", "source": "sql", "confidence": "low", "sample_execution_ids": ["exec_1"], "support_count": 1},
+            {
+                "name": "渠道",
+                "table": "orders",
+                "field_name": "channel",
+                "column": "channel",
+                "logical_type": "text",
+                "reason": "缺字段",
+                "source": "sql",
+                "confidence": "low",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+            },
         ],
         "issues": "bad",
     }
@@ -1182,13 +1773,29 @@ def test_generate_history_learning_suggestions_llm_branches(monkeypatch):
     monkeypatch.setattr(
         semantic_config,
         "get_chat_data_llm",
-        lambda **_kwargs: FakeLlm(json.dumps({
-            "suggestions": {
-                "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "reason": "常查", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1}],
-                "dimensions": [],
-                "issues": [],
-            }
-        }, ensure_ascii=False)),
+        lambda **_kwargs: FakeLlm(
+            json.dumps(
+                {
+                    "suggestions": {
+                        "metrics": [
+                            {
+                                "name": "销售额",
+                                "table": "orders",
+                                "expression": "SUM(amount)",
+                                "reason": "常查",
+                                "source": "sql",
+                                "confidence": "high",
+                                "sample_execution_ids": ["exec_1"],
+                                "support_count": 1,
+                            }
+                        ],
+                        "dimensions": [],
+                        "issues": [],
+                    }
+                },
+                ensure_ascii=False,
+            )
+        ),
     )
     success = asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples))
     assert success["metrics"][0]["name"] == "销售额"
@@ -1199,14 +1806,26 @@ def test_generate_history_learning_suggestions_llm_branches(monkeypatch):
 
 
 def test_semantic_config_remaining_helper_branch_edges():
-    assert semantic_history_learning_service._history_message_text(["a", 123, {"text": "b"}, {"content": "c"}, {"text": ""}]) == "a\nb\nc"
+    assert (
+        semantic_history_learning_service._history_message_text(
+            ["a", 123, {"text": "b"}, {"content": "c"}, {"text": ""}]
+        )
+        == "a\nb\nc"
+    )
 
     many_messages = []
     for i in range(8):
         many_messages.append({"role": "user", "content": f"用户{i}", "timestamp": str(i)})
     for i in range(5):
         many_messages.append({"role": "assistant", "content": f"助手{i}", "timestamp": str(i)})
-        many_messages.append({"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "失败"}', "timestamp": str(i)})
+        many_messages.append(
+            {
+                "role": "tool",
+                "tool_name": "execute_sql",
+                "content": '{"success": false, "error": "失败"}',
+                "timestamp": str(i),
+            }
+        )
     compact = semantic_history_learning_service._compact_history_conversation_messages(many_messages)
     assert [item["content"] for item in compact["user_turns"]] == [f"用户{i}" for i in range(2, 8)]
     assert [item["content"] for item in compact["assistant_turns"]] == ["助手2", "助手3", "助手4"]
@@ -1224,45 +1843,71 @@ def test_semantic_config_remaining_helper_branch_edges():
     assert table_context[0]["columns"] == [{"name": "id", "type": "bigint", "description": ""}]
 
     assert semantic_history_learning_service._extract_expression_columns("SUM() + orders. + `amount`") == {"amount"}
-    indexes = semantic_history_learning_service._build_existing_semantic_indexes({
-        "metrics": ["bad", {"name": "", "table": "orders", "expression": ""}],
-        "dimensions": ["bad", {"name": "", "table": "orders", "field_name": "city", "column": ""}],
-    })
+    indexes = semantic_history_learning_service._build_existing_semantic_indexes(
+        {
+            "metrics": ["bad", {"name": "", "table": "orders", "expression": ""}],
+            "dimensions": ["bad", {"name": "", "table": "orders", "field_name": "city", "column": ""}],
+        }
+    )
     assert indexes["dimension_fields"] == {"orders.city"}
 
     datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}]}
     sample_map = {"exec_1": {"execution_id": "exec_1", "source": "sql"}}
-    assert semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "name": "指标",
-        "table": "missing",
-        "expression": "SUM(amount)",
-        "reason": "缺表",
-    }, "metrics", sample_map, datasource)["needs_review"] is True
-    assert semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "name": "维度",
-        "table": "orders",
-        "field_name": "missing",
-        "column": "missing",
-        "logical_type": "text",
-        "reason": "缺字段",
-    }, "dimensions", sample_map, datasource)["needs_review"] is True
-    assert semantic_history_learning_service._normalize_history_suggestion_item({
-        "source": "sql",
-        "confidence": "high",
-        "sample_execution_ids": ["exec_1"],
-        "support_count": 1,
-        "title": "问题",
-        "content": "说明",
-        "reason": "历史反馈",
-    }, "issues", sample_map, datasource)["title"] == "问题"
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "name": "指标",
+                "table": "missing",
+                "expression": "SUM(amount)",
+                "reason": "缺表",
+            },
+            "metrics",
+            sample_map,
+            datasource,
+        )["needs_review"]
+        is True
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "name": "维度",
+                "table": "orders",
+                "field_name": "missing",
+                "column": "missing",
+                "logical_type": "text",
+                "reason": "缺字段",
+            },
+            "dimensions",
+            sample_map,
+            datasource,
+        )["needs_review"]
+        is True
+    )
+    assert (
+        semantic_history_learning_service._normalize_history_suggestion_item(
+            {
+                "source": "sql",
+                "confidence": "high",
+                "sample_execution_ids": ["exec_1"],
+                "support_count": 1,
+                "title": "问题",
+                "content": "说明",
+                "reason": "历史反馈",
+            },
+            "issues",
+            sample_map,
+            datasource,
+        )["title"]
+        == "问题"
+    )
 
 
 def test_semantic_config_route_optional_update_and_missing_current_branches(monkeypatch):
@@ -1273,16 +1918,18 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
         enabled=False,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
-        relationships=[{
-            "left_table": "orders",
-            "left_alias": "orders",
-            "right_table": "orders",
-            "right_alias": "orders_2",
-            "left_column": "order_id",
-            "right_column": "order_id",
-            "relationship_type": "one_to_one",
-            "join_type": "inner",
-        }],
+        relationships=[
+            {
+                "left_table": "orders",
+                "left_alias": "orders",
+                "right_table": "orders",
+                "right_alias": "orders_2",
+                "left_column": "order_id",
+                "right_column": "order_id",
+                "relationship_type": "one_to_one",
+                "join_type": "inner",
+            }
+        ],
     )
     updated = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", payload, object())))
 
@@ -1298,7 +1945,9 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
 
     _patch_semantic_route_user_and_manager(monkeypatch, MissingConfigManager())
     delete_missing = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "missing", object())))
-    toggle_missing = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "missing", True, object())))
+    toggle_missing = _response_payload(
+        asyncio.run(semantic_config.toggle_semantic_config("ds_a", "missing", True, object()))
+    )
     assert delete_missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert toggle_missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
@@ -1320,7 +1969,10 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
             ),
             SimpleNamespace(
                 query_type="agent",
-                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "销售额", "conversation_id": "conv_a"}, ensure_ascii=False),
+                request_payload=json.dumps(
+                    {"semantic_config_id": "cfg_a", "query_text": "销售额", "conversation_id": "conv_a"},
+                    ensure_ascii=False,
+                ),
                 error_message="",
             ),
         ),
@@ -1337,7 +1989,10 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
             ),
             SimpleNamespace(
                 query_type="agent",
-                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "销售额2", "conversation_id": "conv_a"}, ensure_ascii=False),
+                request_payload=json.dumps(
+                    {"semantic_config_id": "cfg_a", "query_text": "销售额2", "conversation_id": "conv_a"},
+                    ensure_ascii=False,
+                ),
                 error_message="",
             ),
         ),
@@ -1371,12 +2026,16 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
     monkeypatch.setattr(semantic_config, "_load_history_conversation_context", fake_load_context)
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_suggestions)
 
-    success = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=5, sources=["agent"], include_failed=True),
-        object(),
-    )))
+    success = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=5, sources=["agent"], include_failed=True),
+                object(),
+            )
+        )
+    )
     assert success["data"]["matched_count"] == 2
     assert calls == [("conv_a", "user_a")]
 
@@ -1385,36 +2044,48 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
             raise RuntimeError("db failed")
 
     _patch_history_learning_service_session(monkeypatch, lambda: RaisingSession())
-    failed = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=1, sources=["sql"], include_failed=True),
-        object(),
-    )))
+    failed = _response_payload(
+        asyncio.run(
+            semantic_config.learn_semantic_config_from_history(
+                "ds_a",
+                "cfg_a",
+                SemanticHistoryLearningRequest(days=7, limit=1, sources=["sql"], include_failed=True),
+                object(),
+            )
+        )
+    )
     assert failed["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
 def test_semantic_config_remaining_history_helper_edges():
-    compact = semantic_history_learning_service._compact_history_conversation_messages([
-        {"role": "tool", "content": '{"success": true}', "timestamp": "t1"},
-    ])
+    compact = semantic_history_learning_service._compact_history_conversation_messages(
+        [
+            {"role": "tool", "content": '{"success": true}', "timestamp": "t1"},
+        ]
+    )
     assert compact == {"user_turns": [], "assistant_turns": [], "negative_feedback": [], "tool_errors": []}
 
-    assert semantic_history_learning_service._semantic_scope_tables({
-        "metrics": [{"table": "orders"}],
-        "dimensions": [{"table": ""}],
-        "relationships": [{"left_table": "orders", "right_table": ""}],
-    }) == {"orders"}
+    assert semantic_history_learning_service._semantic_scope_tables(
+        {
+            "metrics": [{"table": "orders"}],
+            "dimensions": [{"table": ""}],
+            "relationships": [{"left_table": "orders", "right_table": ""}],
+        }
+    ) == {"orders"}
 
-    assert "amount" in semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + t.price + 'literal_text'")
+    assert "amount" in semantic_history_learning_service._extract_expression_columns(
+        "SUM(`amount`) + t.price + 'literal_text'"
+    )
 
-    indexes = semantic_history_learning_service._build_existing_semantic_indexes({
-        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        "dimensions": [
-            {"name": "城市", "table": "orders", "column": ""},
-            {"name": "状态", "table": "orders", "field_name": "status"},
-        ],
-    })
+    indexes = semantic_history_learning_service._build_existing_semantic_indexes(
+        {
+            "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+            "dimensions": [
+                {"name": "城市", "table": "orders", "column": ""},
+                {"name": "状态", "table": "orders", "field_name": "status"},
+            ],
+        }
+    )
     assert "orders.status" in indexes["dimension_columns"]
     assert "orders.status" in indexes["dimension_fields"]
     assert "城市" in indexes["dimension_names"]
@@ -1447,44 +2118,67 @@ def test_semantic_config_batch_toggle_message_helper():
 
     assert semantic_config._build_batch_toggle_message(result, True) == "已启用 2 个指标集，1 个无权限，1 个不存在"
     assert semantic_config._build_batch_toggle_message(result, False) == "已禁用 2 个指标集，1 个无权限，1 个不存在"
-    assert semantic_config._build_batch_toggle_message(
-        {"updated_ids": ["a"], "skipped_ids": [], "not_found_ids": []},
-        True,
-    ) == "已启用 1 个指标集"
+    assert (
+        semantic_config._build_batch_toggle_message(
+            {"updated_ids": ["a"], "skipped_ids": [], "not_found_ids": []},
+            True,
+        )
+        == "已启用 1 个指标集"
+    )
 
 
 def test_semantic_config_batch_toggle_routes(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
 
-    ok_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=["cfg_a", "cfg_public", "missing"], enabled=False),
-        object(),
-    )))
-    admin_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_admin_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
-        object(),
-    )))
+    ok_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=["cfg_a", "cfg_public", "missing"], enabled=False),
+                object(),
+            )
+        )
+    )
+    admin_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_admin_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
+                object(),
+            )
+        )
+    )
     admin_kwargs = dict(manager.batch_toggle_kwargs)
-    empty_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=[], enabled=True),
-        object(),
-    )))
-    blank_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=["  ", "cfg_a", "cfg_a"], enabled=True),
-        object(),
-    )))
-    overflow_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(
-            config_ids=[f"cfg_{index}" for index in range(semantic_config.SEMANTIC_BATCH_TOGGLE_MAX_IDS + 1)],
-            enabled=True,
-        ),
-        object(),
-    )))
+    empty_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=[], enabled=True),
+                object(),
+            )
+        )
+    )
+    blank_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=["  ", "cfg_a", "cfg_a"], enabled=True),
+                object(),
+            )
+        )
+    )
+    overflow_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(
+                    config_ids=[f"cfg_{index}" for index in range(semantic_config.SEMANTIC_BATCH_TOGGLE_MAX_IDS + 1)],
+                    enabled=True,
+                ),
+                object(),
+            )
+        )
+    )
 
     assert ok_payload["data"]["updated_ids"] == ["cfg_a", "cfg_public"]
     assert ok_payload["data"]["not_found_ids"] == ["missing"]
@@ -1497,20 +2191,33 @@ def test_semantic_config_batch_toggle_routes(monkeypatch):
     assert blank_payload["data"]["updated_ids"] == ["cfg_a"]
     assert overflow_payload["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
 
-    manager.batch_toggle_result = {"updated_ids": [], "skipped_ids": ["cfg_public"], "not_found_ids": [], "updated_count": 0}
-    none_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
-        object(),
-    )))
+    manager.batch_toggle_result = {
+        "updated_ids": [],
+        "skipped_ids": ["cfg_public"],
+        "not_found_ids": [],
+        "updated_count": 0,
+    }
+    none_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=["cfg_public"], enabled=True),
+                object(),
+            )
+        )
+    )
     assert none_payload["msg"] == "已启用 0 个指标集，1 个无权限"
 
     manager.batch_toggle_error = RuntimeError("batch failed")
-    error_payload = _response_payload(asyncio.run(semantic_config.batch_toggle_semantic_configs(
-        "ds_a",
-        SemanticConfigBatchToggleRequest(config_ids=["cfg_a"], enabled=True),
-        object(),
-    )))
+    error_payload = _response_payload(
+        asyncio.run(
+            semantic_config.batch_toggle_semantic_configs(
+                "ds_a",
+                SemanticConfigBatchToggleRequest(config_ids=["cfg_a"], enabled=True),
+                object(),
+            )
+        )
+    )
     assert error_payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
@@ -1525,8 +2232,14 @@ def test_semantic_config_validate_route(monkeypatch):
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[],
     )
-    ok = _response_payload(asyncio.run(semantic_config.validate_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
-    admin_ok = _response_payload(asyncio.run(semantic_config.validate_admin_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")))
+    ok = _response_payload(
+        asyncio.run(semantic_config.validate_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a"))
+    )
+    admin_ok = _response_payload(
+        asyncio.run(
+            semantic_config.validate_admin_semantic_config("ds_a", payload, object(), exclude_config_id="cfg_a")
+        )
+    )
     missing_ds = _response_payload(asyncio.run(semantic_config.validate_semantic_config("missing", payload, object())))
     bad = SemanticConfigCreateRequest(
         name="坏模型",

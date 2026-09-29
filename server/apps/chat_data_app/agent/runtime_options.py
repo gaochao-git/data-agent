@@ -88,9 +88,7 @@ def resolve_agent_runtime_options(
             explore_subagent_enabled=_coerce_bool(
                 override.get("explore_subagent_enabled"), base.explore_subagent_enabled
             ),
-            plan_subagent_enabled=_coerce_bool(
-                override.get("plan_subagent_enabled"), base.plan_subagent_enabled
-            ),
+            plan_subagent_enabled=_coerce_bool(override.get("plan_subagent_enabled"), base.plan_subagent_enabled),
             general_purpose_subagent_enabled=_coerce_bool(
                 override.get("general_purpose_subagent_enabled"), base.general_purpose_subagent_enabled
             ),
@@ -107,12 +105,8 @@ async def get_subagent_hot_defaults() -> dict:
     from ..services.setting_service import get_runtime_setting
 
     return {
-        "explore_subagent_enabled": bool(
-            await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")
-        ),
-        "plan_subagent_enabled": bool(
-            await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")
-        ),
+        "explore_subagent_enabled": bool(await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")),
+        "plan_subagent_enabled": bool(await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")),
         "general_purpose_subagent_enabled": bool(
             await get_runtime_setting("CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED")
         ),

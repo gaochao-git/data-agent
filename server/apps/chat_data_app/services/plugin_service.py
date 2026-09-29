@@ -18,8 +18,6 @@ from utils.models import ChatDataPlugin
 from ..agent.mcp.manager import reset_mcp_tool_manager
 from ..agent.plugins.installer import (
     install_plugin_from_zip_bytes,
-)
-from ..agent.plugins.installer import (
     uninstall_plugin as uninstall_plugin_files,
 )
 from ..agent.plugins.loader import (
@@ -72,7 +70,7 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
         item["create_time"] = _format_db_time(row.create_time) if row is not None else ""
     # 磁盘扫描本身按目录名排序（稳定），此处仅做分页切片
     ordered = sorted(items, key=lambda item: item["name"])
-    return {"plugins": ordered[offset:offset + limit], "total": len(ordered)}
+    return {"plugins": ordered[offset : offset + limit], "total": len(ordered)}
 
 
 async def install_plugin(
@@ -167,7 +165,10 @@ async def set_plugin_enabled(
     )
     if not updated:
         updated = await _reconcile_orphan(
-            name, enabled=enabled, operator_id=operator_id, operator_name=operator_name,
+            name,
+            enabled=enabled,
+            operator_id=operator_id,
+            operator_name=operator_name,
         )
     if updated:
         await refresh_plugin_state()

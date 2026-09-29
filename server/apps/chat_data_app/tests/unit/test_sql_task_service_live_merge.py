@@ -1,11 +1,12 @@
 """SQL 任务轮询链路回归测试：单远端异常隔离 + 本地终态仲裁。"""
+
 import os
 import sys
 from types import SimpleNamespace
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.services.sql_run.task_service import QueryTaskService
 
@@ -85,12 +86,16 @@ async def test_degraded_remote_result_normalizes_local_only_status():
     assert degraded["error"] == "停止执行失败"
 
     for raw_status, expected in (("pending", "pending"), ("running", "running"), ("cancelled", "cancelled")):
-        assert QueryTaskService._degraded_remote_result(RuntimeError("boom"), {"sql_status": raw_status})["status"] == expected
+        assert (
+            QueryTaskService._degraded_remote_result(RuntimeError("boom"), {"sql_status": raw_status})["status"]
+            == expected
+        )
 
 
 @pytest.mark.asyncio
 async def test_degraded_remote_result_of_cancelled_member_keeps_kill_failed():
     """取消语义不受降级归一影响：本地 kill_failed 成员仍按取消分支输出 kill_failed。"""
+
     async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
         raise RuntimeError("远端接口 502")
 
@@ -111,6 +116,7 @@ async def test_degraded_remote_result_of_cancelled_member_keeps_kill_failed():
 @pytest.mark.asyncio
 async def test_live_merge_local_failed_member_not_resurrected():
     """本地已判 failed 的成员，远端返回 succeeded 也不能把状态覆盖回成功。"""
+
     async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
         return _succeeded_remote_result()
 
@@ -133,6 +139,7 @@ async def test_live_merge_local_failed_member_not_resurrected():
 @pytest.mark.asyncio
 async def test_batch_remote_member_result_local_failed_not_resurrected():
     """sql_batch 路径同样以本地 failed 终态仲裁。"""
+
     async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
         return _succeeded_remote_result()
 
@@ -151,6 +158,7 @@ async def test_batch_remote_member_result_local_failed_not_resurrected():
 @pytest.mark.asyncio
 async def test_live_merge_remote_status_wins_when_local_not_terminal():
     """本地非终态（如 running）时仍以远端实时状态为准，行为不回退。"""
+
     async def fake_fetch(remote_task_id, source_type="", user_id=None, username=None):
         return _succeeded_remote_result()
 

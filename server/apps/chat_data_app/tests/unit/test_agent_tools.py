@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -47,12 +47,16 @@ def test_current_time_tool_returns_detail_only_when_requested():
 
 
 def test_calculator_tool_calculates_decimal_expression_and_rounds():
-    result = asyncio.run(calculator_tool.ainvoke({
-        "calculations": [
-            {"name": "分转元", "expression": "123456789 / 100", "decimal_places": 2},
-            {"name": "占比", "expression": "25 / 200 * 100", "decimal_places": 1},
-        ],
-    }))
+    result = asyncio.run(
+        calculator_tool.ainvoke(
+            {
+                "calculations": [
+                    {"name": "分转元", "expression": "123456789 / 100", "decimal_places": 2},
+                    {"name": "占比", "expression": "25 / 200 * 100", "decimal_places": 1},
+                ],
+            }
+        )
+    )
 
     payload = json.loads(result)
     assert payload == {
@@ -65,12 +69,16 @@ def test_calculator_tool_calculates_decimal_expression_and_rounds():
 
 
 def test_calculator_tool_rejects_unsafe_expression():
-    result = asyncio.run(calculator_tool.ainvoke({
-        "calculations": [
-            {"name": "危险表达式", "expression": "__import__('os').system('echo bad')"},
-            {"name": "正常表达式", "expression": "10 + 1"},
-        ],
-    }))
+    result = asyncio.run(
+        calculator_tool.ainvoke(
+            {
+                "calculations": [
+                    {"name": "危险表达式", "expression": "__import__('os').system('echo bad')"},
+                    {"name": "正常表达式", "expression": "10 + 1"},
+                ],
+            }
+        )
+    )
 
     payload = json.loads(result)
     assert payload == {
@@ -88,13 +96,17 @@ def test_calculator_tool_rejects_unsafe_expression():
 
 
 def test_calculator_tool_covers_empty_division_and_unary_branches():
-    result = asyncio.run(calculator_tool.ainvoke({
-        "calculations": [
-            {"expression": "   "},
-            {"name": "除零", "expression": "1 / 0"},
-            {"name": "一元运算", "expression": "-1 + +2", "decimal_places": 0},
-        ],
-    }))
+    result = asyncio.run(
+        calculator_tool.ainvoke(
+            {
+                "calculations": [
+                    {"expression": "   "},
+                    {"name": "除零", "expression": "1 / 0"},
+                    {"name": "一元运算", "expression": "-1 + +2", "decimal_places": 0},
+                ],
+            }
+        )
+    )
 
     payload = json.loads(result)
 
@@ -141,7 +153,9 @@ class _FakeDatasourceManager:
         return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
 
-async def _fake_execute_sql_on_target(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+async def _fake_execute_sql_on_target(
+    sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None
+) -> dict:
     member_id = target_datasource.get("member_datasource_id")
     return {
         "success": True,
@@ -171,7 +185,9 @@ def _fake_runtime_execute_sql_for_member(handler):
         member_name = execution_target.get("member_name")
         try:
             try:
-                base_result = await handler(sql, execution_target, user_id=user_id, operator_name=username, execution_id=execution_id)
+                base_result = await handler(
+                    sql, execution_target, user_id=user_id, operator_name=username, execution_id=execution_id
+                )
             except TypeError:
                 base_result = await handler(sql, execution_target, user_id=user_id, operator_name=username)
         except Exception as exc:
@@ -200,16 +216,26 @@ def _fake_runtime_execute_sql_for_member(handler):
 def test_execute_sql_real_returns_multi_member_results(monkeypatch):
     fake_manager = _FakeDatasourceManager()
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: fake_manager)
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}))
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        query_runtime,
+        "create_task_for_execute_request",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}),
+    )
+    monkeypatch.setattr(
+        query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
     monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
-    monkeypatch.setattr(query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target))
+    monkeypatch.setattr(
+        query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target)
+    )
 
-    result = asyncio.run(agent_tools._execute_sql_real(
-        sql="select 1",
-        datasource_id="ds_group",
-        member_datasource_ids=["member_a", "member_b"],
-    ))
+    result = asyncio.run(
+        agent_tools._execute_sql_real(
+            sql="select 1",
+            datasource_id="ds_group",
+            member_datasource_ids=["member_a", "member_b"],
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert result["sql"] == "select 1"
@@ -219,7 +245,9 @@ def test_execute_sql_real_returns_multi_member_results(monkeypatch):
     assert result["results"][1]["data"][0]["member_id"] == "member_b"
 
 
-async def _fake_execute_sql_on_target_with_failure(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+async def _fake_execute_sql_on_target_with_failure(
+    sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None
+) -> dict:
     member_id = target_datasource.get("member_datasource_id")
     if member_id == "member_a":
         return {
@@ -241,16 +269,28 @@ async def _fake_execute_sql_on_target_with_failure(sql: str, target_datasource: 
 def test_execute_sql_real_uses_first_successful_member_as_primary(monkeypatch):
     fake_manager = _FakeDatasourceManager()
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: fake_manager)
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}))
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        query_runtime,
+        "create_task_for_execute_request",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}),
+    )
+    monkeypatch.setattr(
+        query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
     monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
-    monkeypatch.setattr(query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_failure))
+    monkeypatch.setattr(
+        query_runtime,
+        "execute_sql_for_member",
+        _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_failure),
+    )
 
-    result = asyncio.run(agent_tools._execute_sql_real(
-        sql="select 1",
-        datasource_id="ds_group",
-        member_datasource_ids=["member_a", "member_b"],
-    ))
+    result = asyncio.run(
+        agent_tools._execute_sql_real(
+            sql="select 1",
+            datasource_id="ds_group",
+            member_datasource_ids=["member_a", "member_b"],
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert result["results"][1]["member_name"] == "宁波库"
@@ -258,7 +298,9 @@ def test_execute_sql_real_uses_first_successful_member_as_primary(monkeypatch):
     assert result["results"][1]["data"][0]["member_id"] == "member_b"
 
 
-async def _fake_execute_sql_on_target_with_delay(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+async def _fake_execute_sql_on_target_with_delay(
+    sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None
+) -> dict:
     await asyncio.sleep(0.2)
     member_id = target_datasource.get("member_datasource_id")
     return {
@@ -273,17 +315,29 @@ async def _fake_execute_sql_on_target_with_delay(sql: str, target_datasource: di
 def test_execute_sql_real_runs_members_concurrently(monkeypatch):
     fake_manager = _FakeDatasourceManager()
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: fake_manager)
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}))
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        query_runtime,
+        "create_task_for_execute_request",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}),
+    )
+    monkeypatch.setattr(
+        query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
     monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
-    monkeypatch.setattr(query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_delay))
+    monkeypatch.setattr(
+        query_runtime,
+        "execute_sql_for_member",
+        _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_delay),
+    )
 
     start = time.perf_counter()
-    result = asyncio.run(agent_tools._execute_sql_real(
-        sql="select 1",
-        datasource_id="ds_group",
-        member_datasource_ids=["member_a", "member_b"],
-    ))
+    result = asyncio.run(
+        agent_tools._execute_sql_real(
+            sql="select 1",
+            datasource_id="ds_group",
+            member_datasource_ids=["member_a", "member_b"],
+        )
+    )
     elapsed = time.perf_counter() - start
 
     assert result["status"] == "succeeded"
@@ -293,7 +347,9 @@ def test_execute_sql_real_runs_members_concurrently(monkeypatch):
     assert elapsed < 0.35
 
 
-async def _fake_execute_sql_on_target_with_exception(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+async def _fake_execute_sql_on_target_with_exception(
+    sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None
+) -> dict:
     member_id = target_datasource.get("member_datasource_id")
     if member_id == "member_a":
         raise RuntimeError("boom")
@@ -309,16 +365,28 @@ async def _fake_execute_sql_on_target_with_exception(sql: str, target_datasource
 def test_execute_sql_real_keeps_other_members_when_one_member_raises(monkeypatch):
     fake_manager = _FakeDatasourceManager()
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: fake_manager)
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}))
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(
+        query_runtime,
+        "create_task_for_execute_request",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"task_id": "task_1"}),
+    )
+    monkeypatch.setattr(
+        query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: asyncio.sleep(0, result={})
+    )
     monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
-    monkeypatch.setattr(query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_exception))
+    monkeypatch.setattr(
+        query_runtime,
+        "execute_sql_for_member",
+        _fake_runtime_execute_sql_for_member(_fake_execute_sql_on_target_with_exception),
+    )
 
-    result = asyncio.run(agent_tools._execute_sql_real(
-        sql="select 1",
-        datasource_id="ds_group",
-        member_datasource_ids=["member_a", "member_b"],
-    ))
+    result = asyncio.run(
+        agent_tools._execute_sql_real(
+            sql="select 1",
+            datasource_id="ds_group",
+            member_datasource_ids=["member_a", "member_b"],
+        )
+    )
 
     assert result["status"] == "succeeded"
     assert result["results"][1]["member_name"] == "宁波库"
@@ -360,7 +428,9 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
         updates.append({"task_id": task_id, **kwargs})
         return {"task_id": task_id}
 
-    async def fake_execute_sql_for_member_success(sql, target_datasource, user_id=None, operator_name=None, execution_id=None):
+    async def fake_execute_sql_for_member_success(
+        sql, target_datasource, user_id=None, operator_name=None, execution_id=None
+    ):
         return {
             "success": True,
             "sql": sql,
@@ -370,7 +440,9 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
             "member_datasource_id": target_datasource["member_datasource_id"],
         }
 
-    async def fake_execute_sql_for_member_error(sql, target_datasource, user_id=None, operator_name=None, execution_id=None):
+    async def fake_execute_sql_for_member_error(
+        sql, target_datasource, user_id=None, operator_name=None, execution_id=None
+    ):
         raise ValueError("不支持的数据源类型")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: FakeManager())
@@ -378,8 +450,14 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_query_executions_for_task)
     monkeypatch.setattr(query_runtime, "get_execution_id_by_member", fake_get_execution_id_by_member)
     monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
-    monkeypatch.setattr(query_runtime, "execute_sql_for_member", _fake_runtime_execute_sql_for_member(fake_execute_sql_for_member_success))
-    success = asyncio.run(agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"], user_id="user_a", operator_name="测试用户"))
+    monkeypatch.setattr(
+        query_runtime,
+        "execute_sql_for_member",
+        _fake_runtime_execute_sql_for_member(fake_execute_sql_for_member_success),
+    )
+    success = asyncio.run(
+        agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"], user_id="user_a", operator_name="测试用户")
+    )
 
     async def fake_runtime_execute_error(**_kwargs):
         raise ValueError("不支持的数据源类型")
@@ -401,10 +479,12 @@ def test_semantic_query_input_rejects_invalid_json_dsl_string():
         "member_datasource_ids": ["m1"],
     }
 
-    assert SemanticQueryInput.model_validate({
-        **base_payload,
-        "dsl": '{"metrics": ["订单数"]}',
-    }).dsl == {"metrics": ["订单数"]}
+    assert SemanticQueryInput.model_validate(
+        {
+            **base_payload,
+            "dsl": '{"metrics": ["订单数"]}',
+        }
+    ).dsl == {"metrics": ["订单数"]}
 
     with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
         SemanticQueryInput.model_validate({**base_payload, "dsl": "not-json"})

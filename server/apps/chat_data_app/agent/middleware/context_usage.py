@@ -80,11 +80,13 @@ def create_context_usage_middleware(
 
         started_at_ms = _now_epoch_ms()
         try:
-            response = await handler(_override_request(
-                request,
-                system_message=SystemMessage(content=effective_system_prompt),
-                messages=edited_messages,
-            ))
+            response = await handler(
+                _override_request(
+                    request,
+                    system_message=SystemMessage(content=effective_system_prompt),
+                    messages=edited_messages,
+                )
+            )
         except Exception as exc:
             logger.warning(
                 "[agent] 模型调用失败: index=%s model=%s started_at_ms=%s duration_ms=%s error=%s",
@@ -223,11 +225,7 @@ def compact_token_usage_for_state(usage: dict[str, Any] | None) -> dict[str, Any
     compact = {key: usage[key] for key in _STATE_USAGE_FIELDS if key in usage}
     compression = usage.get("context_compression")
     if isinstance(compression, dict):
-        compact_compression = {
-            key: compression[key]
-            for key in _STATE_COMPRESSION_FIELDS
-            if key in compression
-        }
+        compact_compression = {key: compression[key] for key in _STATE_COMPRESSION_FIELDS if key in compression}
         if compact_compression:
             compact["context_compression"] = compact_compression
     return compact or None
@@ -240,22 +238,26 @@ def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], mo
     input_tokens = system_tokens + message_tokens + REQUEST_OVERHEAD_TOKENS
     budget = get_model_context_budget(model_id)
     payload = build_context_usage_payload(budget, input_tokens)
-    payload.update({
-        "input_tokens": input_tokens,
-        "output_tokens": 0,
-        "total_tokens": input_tokens,
-        "estimated": True,
-        "breakdown": build_prompt_breakdown(
-            system_tokens=system_tokens,
-            messages=messages,
-            message_tokens=message_tokens,
-            measured_input_tokens=input_tokens,
-        ),
-    })
+    payload.update(
+        {
+            "input_tokens": input_tokens,
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+            "estimated": True,
+            "breakdown": build_prompt_breakdown(
+                system_tokens=system_tokens,
+                messages=messages,
+                message_tokens=message_tokens,
+                measured_input_tokens=input_tokens,
+            ),
+        }
+    )
     return payload
 
 
-async def invoke_with_context_usage(*, agent: Any, state: dict[str, Any], system_prompt: str, model_id: str | None) -> tuple[Any, dict[str, Any]]:
+async def invoke_with_context_usage(
+    *, agent: Any, state: dict[str, Any], system_prompt: str, model_id: str | None
+) -> tuple[Any, dict[str, Any]]:
     """执行主 agent，并返回结果和本次上下文占用。"""
     result = await agent.ainvoke(state)
     transcript_messages = _extract_result_messages(result)
@@ -269,7 +271,14 @@ async def invoke_with_context_usage(*, agent: Any, state: dict[str, Any], system
     )
 
 
-def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int, tools: list[Any] | None = None, tools_tokens: int, overhead_tokens: int) -> list[dict[str, Any]]:
+def build_request_breakdown(
+    *,
+    messages: list[BaseMessage],
+    message_tokens: int,
+    tools: list[Any] | None = None,
+    tools_tokens: int,
+    overhead_tokens: int,
+) -> list[dict[str, Any]]:
     """构造当前模型请求上下文拆分。"""
     system_messages = [message for message in messages if isinstance(message, SystemMessage)]
     non_system_messages = [message for message in messages if not isinstance(message, SystemMessage)]
@@ -277,44 +286,52 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
     non_system_tokens = max(int(message_tokens or 0) - system_tokens, 0)
     items: list[dict[str, Any]] = []
     if system_messages:
-        items.append({
-            "key": "system_prompt",
-            "label": "系统提示词与数据上下文",
-            "tokens": system_tokens,
-            "estimated_tokens": system_tokens,
-            "estimated": True,
-            "description": "按当前项目估算公式统计 system message。",
-            "children": build_message_breakdown(system_messages),
-        })
+        items.append(
+            {
+                "key": "system_prompt",
+                "label": "系统提示词与数据上下文",
+                "tokens": system_tokens,
+                "estimated_tokens": system_tokens,
+                "estimated": True,
+                "description": "按当前项目估算公式统计 system message。",
+                "children": build_message_breakdown(system_messages),
+            }
+        )
     if tools_tokens:
-        items.append({
-            "key": "tool_schema",
-            "label": "工具定义",
-            "tokens": tools_tokens,
-            "estimated_tokens": tools_tokens,
-            "estimated": True,
-            "description": "按当前项目估算公式统计本次请求传给模型的工具 schema。",
-            "children": build_tools_breakdown(tools or []),
-        })
+        items.append(
+            {
+                "key": "tool_schema",
+                "label": "工具定义",
+                "tokens": tools_tokens,
+                "estimated_tokens": tools_tokens,
+                "estimated": True,
+                "description": "按当前项目估算公式统计本次请求传给模型的工具 schema。",
+                "children": build_tools_breakdown(tools or []),
+            }
+        )
     if non_system_messages:
-        items.append({
-            "key": "messages",
-            "label": "会话消息与工具上下文",
-            "tokens": non_system_tokens,
-            "estimated_tokens": non_system_tokens,
-            "estimated": True,
-            "description": "按当前项目估算公式统计 history、当前输入、AI tool_calls 和工具结果。",
-            "children": build_message_breakdown(non_system_messages, start_index=len(system_messages)),
-        })
+        items.append(
+            {
+                "key": "messages",
+                "label": "会话消息与工具上下文",
+                "tokens": non_system_tokens,
+                "estimated_tokens": non_system_tokens,
+                "estimated": True,
+                "description": "按当前项目估算公式统计 history、当前输入、AI tool_calls 和工具结果。",
+                "children": build_message_breakdown(non_system_messages, start_index=len(system_messages)),
+            }
+        )
     if overhead_tokens:
-        items.append({
-            "key": "request_overhead",
-            "label": "请求协议开销",
-            "tokens": max(int(overhead_tokens), 0),
-            "estimated_tokens": max(int(overhead_tokens), 0),
-            "estimated": True,
-            "description": "模型协议固定开销，已计入本次模型输入。",
-        })
+        items.append(
+            {
+                "key": "request_overhead",
+                "label": "请求协议开销",
+                "tokens": max(int(overhead_tokens), 0),
+                "estimated_tokens": max(int(overhead_tokens), 0),
+                "estimated": True,
+                "description": "模型协议固定开销，已计入本次模型输入。",
+            }
+        )
     return items
 
 
@@ -335,21 +352,25 @@ def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
             name = str(function.get("name") or payload.get("name") or "")
-        items.append({
-            "key": f"tool_schema_{index}",
-            "label": f"工具定义 · {name or index + 1}",
-            "role": "tool_schema",
-            "message_index": index,
-            "tokens": estimate_tokens(content),
-            "estimated_tokens": estimate_tokens(content),
-            "estimated": True,
-            "content": content,
-            "description": content[:120],
-        })
+        items.append(
+            {
+                "key": f"tool_schema_{index}",
+                "label": f"工具定义 · {name or index + 1}",
+                "role": "tool_schema",
+                "message_index": index,
+                "tokens": estimate_tokens(content),
+                "estimated_tokens": estimate_tokens(content),
+                "estimated": True,
+                "content": content,
+                "description": content[:120],
+            }
+        )
     return items
 
 
-def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], message_tokens: int, measured_input_tokens: int) -> list[dict[str, Any]]:
+def build_prompt_breakdown(
+    *, system_tokens: int, messages: list[BaseMessage], message_tokens: int, measured_input_tokens: int
+) -> list[dict[str, Any]]:
     """构造无 request middleware 时的上下文占用拆分。"""
     items = [
         {
@@ -370,16 +391,20 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
             "children": build_message_breakdown(messages, scale=1.0),
         },
     ]
-    overhead_tokens = max(int(measured_input_tokens or 0) - max(int(system_tokens or 0), 0) - max(int(message_tokens or 0), 0), 0)
+    overhead_tokens = max(
+        int(measured_input_tokens or 0) - max(int(system_tokens or 0), 0) - max(int(message_tokens or 0), 0), 0
+    )
     if overhead_tokens:
-        items.append({
-            "key": "request_overhead",
-            "label": "请求协议开销",
-            "tokens": overhead_tokens,
-            "estimated_tokens": overhead_tokens,
-            "estimated": True,
-            "description": "模型协议固定开销，已计入本次模型输入。",
-        })
+        items.append(
+            {
+                "key": "request_overhead",
+                "label": "请求协议开销",
+                "tokens": overhead_tokens,
+                "estimated_tokens": overhead_tokens,
+                "estimated": True,
+                "description": "模型协议固定开销，已计入本次模型输入。",
+            }
+        )
     return items
 
 
@@ -469,27 +494,33 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
     cumulative_input_tokens = sum(int(call.get("input_tokens") or 0) for call in calls)
     output_tokens = sum(int(call.get("output_tokens") or 0) for call in calls)
     total_tokens = cumulative_input_tokens + output_tokens
-    context_budget = budget if isinstance(budget, ContextBudget) else ContextBudget(
-        context_window=max(int(budget), 1),
-        max_output_tokens=0,
-        compression_trigger_ratio=1.0,
-        hard_input_limit_tokens=max(int(budget), 1),
-        compression_trigger_tokens=max(int(budget), 1),
-        compression_target_tokens=max(int(budget), 1),
+    context_budget = (
+        budget
+        if isinstance(budget, ContextBudget)
+        else ContextBudget(
+            context_window=max(int(budget), 1),
+            max_output_tokens=0,
+            compression_trigger_ratio=1.0,
+            hard_input_limit_tokens=max(int(budget), 1),
+            compression_trigger_tokens=max(int(budget), 1),
+            compression_target_tokens=max(int(budget), 1),
+        )
     )
     payload = build_context_usage_payload(context_budget, current_input_tokens)
-    payload.update({
-        "input_tokens": current_input_tokens,
-        "current_input_tokens": current_input_tokens,
-        "max_input_tokens": max_input_tokens,
-        "cumulative_input_tokens": cumulative_input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "estimated": True,
-        "llm_calls": calls,
-        "context_compression": current_call.get("context_compression"),
-        "breakdown": list(current_call.get("breakdown") or []),
-    })
+    payload.update(
+        {
+            "input_tokens": current_input_tokens,
+            "current_input_tokens": current_input_tokens,
+            "max_input_tokens": max_input_tokens,
+            "cumulative_input_tokens": cumulative_input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated": True,
+            "llm_calls": calls,
+            "context_compression": current_call.get("context_compression"),
+            "breakdown": list(current_call.get("breakdown") or []),
+        }
+    )
     _add_cached_input_usage(payload, calls, current_call)
     return payload
 
@@ -505,7 +536,9 @@ def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
         agent._chat_data_context_usage_middleware = middleware
     except Exception as exc:
         # 挂载失败仅意味着该 agent 缺少上下文用量统计,不应阻断 agent 装配,故记录后返回。
-        logger.warning("上下文用量中间件挂载到 agent 失败,token 用量统计将缺失: agent=%s error=%s", type(agent).__name__, exc)
+        logger.warning(
+            "上下文用量中间件挂载到 agent 失败,token 用量统计将缺失: agent=%s error=%s", type(agent).__name__, exc
+        )
         return
 
 
@@ -538,28 +571,31 @@ def _build_agent_context_usage(
     tool_tokens = count_tools_tokens(tools)
     input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
     token_usage = build_context_usage_payload(budget, input_tokens)
-    token_usage.update({
-        "input_tokens": input_tokens,
-        "current_input_tokens": input_tokens,
-        "message_tokens": message_tokens,
-        "tool_schema_tokens": tool_tokens,
-        "overhead_tokens": REQUEST_OVERHEAD_TOKENS,
-        "message_count": len(llm_messages),
-        "output_tokens": 0,
-        "total_tokens": input_tokens,
-        "estimated": True,
-        "context_compression": context_compression or _empty_context_compression_report(
-            budget=budget,
-            static_input_tokens=request_budget.static_input_tokens,
-        ),
-        "breakdown": build_request_breakdown(
-            messages=llm_messages,
-            message_tokens=message_tokens,
-            tools=tools,
-            tools_tokens=tool_tokens,
-            overhead_tokens=REQUEST_OVERHEAD_TOKENS,
-        ),
-    })
+    token_usage.update(
+        {
+            "input_tokens": input_tokens,
+            "current_input_tokens": input_tokens,
+            "message_tokens": message_tokens,
+            "tool_schema_tokens": tool_tokens,
+            "overhead_tokens": REQUEST_OVERHEAD_TOKENS,
+            "message_count": len(llm_messages),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+            "estimated": True,
+            "context_compression": context_compression
+            or _empty_context_compression_report(
+                budget=budget,
+                static_input_tokens=request_budget.static_input_tokens,
+            ),
+            "breakdown": build_request_breakdown(
+                messages=llm_messages,
+                message_tokens=message_tokens,
+                tools=tools,
+                tools_tokens=tool_tokens,
+                overhead_tokens=REQUEST_OVERHEAD_TOKENS,
+            ),
+        }
+    )
     return effective_system_prompt, request_messages, token_usage
 
 
@@ -673,7 +709,7 @@ def _format_todo_status(todos: list[dict[str, Any]]) -> str | None:
     )
     todo_block = "\n".join(lines)
     return (
-        "<todo_status source=\"state\" fresh=\"true\">\n"
+        '<todo_status source="state" fresh="true">\n'
         f"{todo_block}\n"
         "历史 write_todos 工具结果中的旧快照均已失效，任务状态一律以本块为准。\n"
         f"{reminder}\n"
@@ -739,17 +775,14 @@ def _add_cached_input_usage(
             _optional_non_negative_int(current_call.get("actual_input_tokens")),
         )
     calls_with_reported_input = [
-        call for call in cache_calls
-        if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
+        call for call in cache_calls if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
     ]
     cumulative_cached_tokens = sum(
-        _optional_non_negative_int(call.get("cached_input_tokens")) or 0
-        for call in calls_with_reported_input
+        _optional_non_negative_int(call.get("cached_input_tokens")) or 0 for call in calls_with_reported_input
     )
     payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
     reported_input_tokens = [
-        _optional_non_negative_int(call.get("actual_input_tokens"))
-        for call in calls_with_reported_input
+        _optional_non_negative_int(call.get("actual_input_tokens")) for call in calls_with_reported_input
     ]
     _add_cache_hit_rate(
         payload,
@@ -840,7 +873,11 @@ def _usage_from_response_metadata(message: AIMessage) -> tuple[int, int, int] | 
         return None
     safe_input_tokens = input_tokens or 0
     safe_output_tokens = output_tokens or 0
-    return safe_input_tokens, safe_output_tokens, total_tokens if total_tokens is not None else safe_input_tokens + safe_output_tokens
+    return (
+        safe_input_tokens,
+        safe_output_tokens,
+        total_tokens if total_tokens is not None else safe_input_tokens + safe_output_tokens,
+    )
 
 
 def _response_metadata_usage(message: AIMessage) -> dict[str, Any] | None:

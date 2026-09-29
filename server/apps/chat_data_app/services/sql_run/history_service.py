@@ -129,7 +129,9 @@ class QueryHistoryService:
     @staticmethod
     def task_user_id(task_data: Dict[str, Any]) -> str:
         payload = _safe_json_loads(task_data.get("request_payload"), {}) or {}
-        return str((payload or {}).get("user_id") or task_data.get("create_by") or task_data.get("update_by") or "").strip()
+        return str(
+            (payload or {}).get("user_id") or task_data.get("create_by") or task_data.get("update_by") or ""
+        ).strip()
 
     @staticmethod
     def _history_operator_name(
@@ -167,19 +169,21 @@ class QueryHistoryService:
         payload = item.to_dict()
         payload.pop("result_payload", None)
         display_time = cls._history_display_time(payload)
-        payload.update({
-            "query_type": query_type,
-            "task_status": task_status,
-            "sql_status": display_sql_status,
-            "title": "SQL查询",
-            "last_used": display_time,
-            "executed_at": display_time,
-            "source": cls.get_history_source(query_type),
-            "success_flag": 1 if display_sql_status == "succeeded" else 0,
-            "operator_name": operator_name,
-            "has_result": bool(item.result_payload or item.remote_task_id),
-            "panel_execution_plan": panel_execution_plan if isinstance(panel_execution_plan, dict) else None,
-        })
+        payload.update(
+            {
+                "query_type": query_type,
+                "task_status": task_status,
+                "sql_status": display_sql_status,
+                "title": "SQL查询",
+                "last_used": display_time,
+                "executed_at": display_time,
+                "source": cls.get_history_source(query_type),
+                "success_flag": 1 if display_sql_status == "succeeded" else 0,
+                "operator_name": operator_name,
+                "has_result": bool(item.result_payload or item.remote_task_id),
+                "panel_execution_plan": panel_execution_plan if isinstance(panel_execution_plan, dict) else None,
+            }
+        )
         return payload
 
     async def list_user_history(
@@ -271,7 +275,9 @@ class QueryHistoryService:
         )
 
     @staticmethod
-    def _remote_execution_time_ms(execution: ChatDataQueryExecution, remote_result: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    def _remote_execution_time_ms(
+        execution: ChatDataQueryExecution, remote_result: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
         remote_time = (remote_result or {}).get("execution_time_ms")
         return query_runtime.resolve_execution_time_ms(
             remote_time if remote_time is not None else getattr(execution, "execution_time_ms", None),
@@ -409,7 +415,12 @@ class QueryHistoryService:
                 username=operator_name or None,
             )
         except Exception as exc:
-            logger.warning("获取远端历史查询结果失败: execution_id=%s remote_task_id=%s error=%s", execution.execution_id, remote_task_id, exc)
+            logger.warning(
+                "获取远端历史查询结果失败: execution_id=%s remote_task_id=%s error=%s",
+                execution.execution_id,
+                remote_task_id,
+                exc,
+            )
             return self._remote_unavailable_payload(execution)
         status = str((remote_result or {}).get("status") or "").strip().lower()
         if status != "succeeded":
@@ -434,7 +445,9 @@ class QueryHistoryService:
         )
         result_payload = payload.get("result_payload")
         if self.is_http_query_execution(execution):
-            result_payload = await self.build_remote_history_result_payload(execution, task, fetch_remote_result=fetch_remote_result)
+            result_payload = await self.build_remote_history_result_payload(
+                execution, task, fetch_remote_result=fetch_remote_result
+            )
         result_payload = self.normalize_history_result_payload(result_payload, execution, execution_time_ms)
         return {
             "execution_id": execution.execution_id,
@@ -545,15 +558,17 @@ class QueryHistoryService:
         if not rows:
             return {"total": 0, "cancelled": 0, "failed": 0, "executions": []}
 
-        execution_results = await asyncio.gather(*[
-            self.cancel_query_execution_for_batch(
-                execution,
-                cancel_execution=cancel_execution,
-                update_execution=update_execution,
-                operator_name=self.execution_cancel_operator_name(execution, task, operator_name),
-            )
-            for execution, task in rows
-        ])
+        execution_results = await asyncio.gather(
+            *[
+                self.cancel_query_execution_for_batch(
+                    execution,
+                    cancel_execution=cancel_execution,
+                    update_execution=update_execution,
+                    operator_name=self.execution_cancel_operator_name(execution, task, operator_name),
+                )
+                for execution, task in rows
+            ]
+        )
         task_by_id = {
             str(task.task_id or "").strip(): task
             for _execution, task in rows

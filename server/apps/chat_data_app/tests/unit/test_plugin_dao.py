@@ -51,8 +51,13 @@ def plugin_db(monkeypatch):
 
 async def _install(dao: PluginDao, name: str = "ops") -> None:
     await dao.upsert_installed(
-        plugin_name=name, version="1.0.0", display_name=name, description="d",
-        manifest_text="{}", operator_id="u", operator_name="张三",
+        plugin_name=name,
+        version="1.0.0",
+        display_name=name,
+        description="d",
+        manifest_text="{}",
+        operator_id="u",
+        operator_name="张三",
     )
 
 

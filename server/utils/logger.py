@@ -153,7 +153,9 @@ def build_log_user(user_id: str | None = None, username: str | None = None) -> s
     return normalized_user_id or normalized_username
 
 
-def set_log_context(request_id: str | None = None, user_id: str | None = None, username: str | None = None, user: str | None = None) -> None:
+def set_log_context(
+    request_id: str | None = None, user_id: str | None = None, username: str | None = None, user: str | None = None
+) -> None:
     """设置当前请求日志上下文。"""
     if request_id:
         request_id_ctx.set(str(request_id))
@@ -219,18 +221,20 @@ class PipeLogFormatter(logging.Formatter):
             message = f"{message}\n{self.formatException(record.exc_info)}"
         message = _append_message_parts(message, user, _collect_record_extra_fields(record))
 
-        return "|".join([
-            log_time,
-            record.levelname,
-            str(record.thread),
-            str(trace_id),
-            str(idc),
-            str(ip),
-            record.filename,
-            record.module,
-            str(record.lineno),
-            message,
-        ])
+        return "|".join(
+            [
+                log_time,
+                record.levelname,
+                str(record.thread),
+                str(trace_id),
+                str(idc),
+                str(ip),
+                record.filename,
+                record.module,
+                str(record.lineno),
+                message,
+            ]
+        )
 
 
 class AccessLogFormatter(logging.Formatter):
@@ -336,10 +340,10 @@ class LoggerManager:
         log_file = os.path.join(resolved_dir, log_file_name)
         file_handler = TimedRotatingFileHandler(
             log_file,
-            when='midnight',
+            when="midnight",
             interval=1,
             backupCount=backup_count,
-            encoding='utf-8',
+            encoding="utf-8",
             utc=False,
         )
         file_handler.suffix = "%Y-%m-%d"
@@ -356,7 +360,7 @@ class LoggerManager:
         若环境变量中的日志路径配置发生变化，则重新创建 handler。
         """
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_log_file(), int(backup_count))
+        handler_key = (resolved_dir, str(log_file_name or "").strip() or get_current_log_file(), int(backup_count))
         if cls._file_handler is not None and cls._file_handler_key == handler_key:
             return cls._file_handler
         if cls._file_handler is not None:
@@ -368,7 +372,9 @@ class LoggerManager:
         return cls._file_handler
 
     @classmethod
-    def _build_access_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+    def _build_access_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler:
         """按当前配置创建访问日志文件 handler。"""
         handler = cls._build_file_handler(log_dir, log_file_name, backup_count)
         handler.setFormatter(cls._get_access_formatter())
@@ -378,7 +384,11 @@ class LoggerManager:
     def _get_access_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
         """获取全局唯一的访问日志文件 handler。"""
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_access_log_file(), int(backup_count))
+        handler_key = (
+            resolved_dir,
+            str(log_file_name or "").strip() or get_current_access_log_file(),
+            int(backup_count),
+        )
         if cls._access_file_handler is not None and cls._access_file_handler_key == handler_key:
             return cls._access_file_handler
         if cls._access_file_handler is not None:
@@ -400,7 +410,11 @@ class LoggerManager:
     def _get_alarm_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
         """获取全局唯一的告警日志文件 handler。"""
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_alarm_log_file(), int(backup_count))
+        handler_key = (
+            resolved_dir,
+            str(log_file_name or "").strip() or get_current_alarm_log_file(),
+            int(backup_count),
+        )
         if cls._alarm_file_handler is not None and cls._alarm_file_handler_key == handler_key:
             return cls._alarm_file_handler
         if cls._alarm_file_handler is not None:
@@ -435,7 +449,7 @@ class LoggerManager:
         log_file_name: str = "",
         backup_count: int = 30,
         console_output: bool = True,
-        file_output: bool = True
+        file_output: bool = True,
     ) -> logging.Logger:
         """
         获取或创建 logger
@@ -591,16 +605,16 @@ def get_alarm_logger(name: str = "alarm", log_level: Optional[str] = None) -> lo
 
 
 __all__ = [
-    'get_logger',
-    'get_access_logger',
-    'get_alarm_logger',
-    'get_current_log_dir',
-    'get_current_log_file',
-    'get_current_access_log_file',
-    'get_current_alarm_log_file',
-    'get_current_log_app_name',
-    'get_current_log_idc',
-    'resolve_log_path',
-    'set_log_context',
-    'clear_log_context',
+    "get_logger",
+    "get_access_logger",
+    "get_alarm_logger",
+    "get_current_log_dir",
+    "get_current_log_file",
+    "get_current_access_log_file",
+    "get_current_alarm_log_file",
+    "get_current_log_app_name",
+    "get_current_log_idc",
+    "resolve_log_path",
+    "set_log_context",
+    "clear_log_context",
 ]

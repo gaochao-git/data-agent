@@ -89,9 +89,7 @@ async def read_text_file_full(
     collected = 0
     offset = 0
     for _ in range(_FULL_READ_MAX_PAGES):
-        page_text, next_offset = await _fetch_full_read_page(
-            workspace_runtime, raw_path, offset, max_chars
-        )
+        page_text, next_offset = await _fetch_full_read_page(workspace_runtime, raw_path, offset, max_chars)
         if page_text:
             chunks.append(page_text)
             collected += len(page_text) + 1
@@ -101,9 +99,7 @@ async def read_text_file_full(
             break
         offset = int(next_offset)
     else:
-        raise ValueError(
-            f"文件超过 {_FULL_READ_MAX_PAGES * _FULL_READ_PAGE_LINES} 行上限，无法整体读取: {file_path}"
-        )
+        raise ValueError(f"文件超过 {_FULL_READ_MAX_PAGES * _FULL_READ_PAGE_LINES} 行上限，无法整体读取: {file_path}")
     text = "\n".join(chunks)
     if not text.strip():
         raise ValueError(f"文件为空: {file_path}")
@@ -189,9 +185,7 @@ def _format_file_read_result(
     total_lines = result.get("total_lines")
     start_line = int(result.get("start_line") or offset + 1)
     end_line = int(result.get("end_line") or offset + len(lines))
-    truncated_lines = [
-        item for item in result.get("truncated_lines") or [] if isinstance(item, dict)
-    ]
+    truncated_lines = [item for item in result.get("truncated_lines") or [] if isinstance(item, dict)]
     truncated_text = ",".join(str(item.get("line_number")) for item in truncated_lines)
     next_offset = result.get("next_offset")
     next_offset_text = f"\nnext_offset={next_offset}" if next_offset is not None else ""
@@ -334,7 +328,9 @@ async def _file_grep_impl(
         raise ValueError("pattern 不能为空")
     normalized_glob = _validate_relative_glob(glob, field_name="glob")
     _validate_grep_options(
-        max_results=max_results, output_mode=output_mode, context_lines=context_lines,
+        max_results=max_results,
+        output_mode=output_mode,
+        context_lines=context_lines,
     )
     result = await workspace_runtime.grep_text(
         path=str(path or "/mnt/user-data/workspace").strip(),
@@ -391,38 +387,49 @@ async def _file_diff_impl(
     text_a = await read_text_file_full(workspace_runtime, file_a)
     text_b = await read_text_file_full(workspace_runtime, file_b)
     if text_a == text_b:
-        return tool_result_payload("file_diff", {
-            "file_a": str(file_a),
-            "file_b": str(file_b),
-            "status": "identical",
-            "added_lines": 0,
-            "removed_lines": 0,
-            "message": "两个文件内容完全一致",
-        })
+        return tool_result_payload(
+            "file_diff",
+            {
+                "file_a": str(file_a),
+                "file_b": str(file_b),
+                "status": "identical",
+                "added_lines": 0,
+                "removed_lines": 0,
+                "message": "两个文件内容完全一致",
+            },
+        )
     lines_a = text_a.splitlines()
     lines_b = text_b.splitlines()
 
     def _compute_diff() -> tuple[list[str], int, int]:
         # 纯 CPU 且对「高度相似的大文件」最坏近 O(n·m)，必须放线程池——
         # 直接跑在事件循环里会阻塞整个 worker 的所有会话。
-        diff_lines = list(difflib.unified_diff(
-            lines_a, lines_b,
-            fromfile=str(file_a), tofile=str(file_b), lineterm="",
-        ))
+        diff_lines = list(
+            difflib.unified_diff(
+                lines_a,
+                lines_b,
+                fromfile=str(file_a),
+                tofile=str(file_b),
+                lineterm="",
+            )
+        )
         # 首个 @@ 之前是文件头（---/+++）；正文行也可能以 +/-/---/+++ 开头，
         # 因此进入 hunk 后不再按前缀排除，与前端 splitFileDiffLines 口径一致。
         added, removed = _count_diff_lines(diff_lines)
         return diff_lines, added, removed
 
     diff_lines, added, removed = await asyncio.to_thread(_compute_diff)
-    return tool_result_payload("file_diff", {
-        "file_a": str(file_a),
-        "file_b": str(file_b),
-        "status": "changed",
-        "added_lines": added,
-        "removed_lines": removed,
-        "diff": "\n".join(diff_lines),
-    })
+    return tool_result_payload(
+        "file_diff",
+        {
+            "file_a": str(file_a),
+            "file_b": str(file_b),
+            "status": "changed",
+            "added_lines": added,
+            "removed_lines": removed,
+            "diff": "\n".join(diff_lines),
+        },
+    )
 
 
 async def _dir_list_impl(
@@ -439,10 +446,7 @@ async def _dir_list_impl(
         return f"[dir_list]\npath={raw}\nis_dir=true\ncount=0\n(空目录)"
     lines = ["[dir_list]", f"path={raw}", "is_dir=true", f"count={len(entries)}", ""]
     for item in entries:
-        lines.append(
-            f"type={item['type']}  path={item['path']}  "
-            f"size={item['size']}  mtime={item['mtime']}"
-        )
+        lines.append(f"type={item['type']}  path={item['path']}  size={item['size']}  mtime={item['mtime']}")
     return "\n".join(lines)
 
 
@@ -491,9 +495,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             limit: 本次最多读取的源行数，默认 200、最大 500。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        return await _file_read_impl(
-            workspace_runtime, file_path=file_path, offset=offset, limit=limit
-        )
+        return await _file_read_impl(workspace_runtime, file_path=file_path, offset=offset, limit=limit)
 
     @tool("file_edit", parse_docstring=True)
     async def file_edit(
@@ -552,9 +554,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             destination_path: 目标路径，不得已存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        return await _file_move_impl(
-            workspace_runtime, source_path=source_path, destination_path=destination_path
-        )
+        return await _file_move_impl(workspace_runtime, source_path=source_path, destination_path=destination_path)
 
     @tool("file_copy", parse_docstring=True)
     async def file_copy(source_path: str, destination_path: str, intent: str = "") -> str:
@@ -565,9 +565,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             destination_path: 目标文件路径，不得已存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        return await _file_copy_impl(
-            workspace_runtime, source_path=source_path, destination_path=destination_path
-        )
+        return await _file_copy_impl(workspace_runtime, source_path=source_path, destination_path=destination_path)
 
     @tool("file_delete", parse_docstring=True)
     async def file_delete(file_path: str, intent: str = "") -> str:
@@ -594,9 +592,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             max_results: 最多返回的匹配项数，范围 1-500。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        return await _file_glob_impl(
-            workspace_runtime, pattern=pattern, path=path, max_results=max_results
-        )
+        return await _file_glob_impl(workspace_runtime, pattern=pattern, path=path, max_results=max_results)
 
     @tool("file_grep", parse_docstring=True)
     async def file_grep(
@@ -628,8 +624,15 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _file_grep_impl(
-            workspace_runtime, pattern=pattern, path=path, glob=glob, max_results=max_results,
-            use_regex=use_regex, ignore_case=ignore_case, context_lines=context_lines, output_mode=output_mode,
+            workspace_runtime,
+            pattern=pattern,
+            path=path,
+            glob=glob,
+            max_results=max_results,
+            use_regex=use_regex,
+            ignore_case=ignore_case,
+            context_lines=context_lines,
+            output_mode=output_mode,
         )
 
     @tool("file_diff", parse_docstring=True)

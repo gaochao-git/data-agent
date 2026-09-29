@@ -38,17 +38,19 @@ def conversation_event_service():
 
     async def create_thread(conversation_id: str, user_id: str):
         async with get_test_session() as session:
-            session.add(UserThread(
-                user_id=user_id,
-                thread_id=conversation_id,
-                agent_id="chat_data",
-                delete_flag=0,
-                create_time=datetime.now(),
-                create_by=user_id,
-                create_by_name=user_id,
-                update_by=user_id,
-                update_by_name=user_id,
-            ))
+            session.add(
+                UserThread(
+                    user_id=user_id,
+                    thread_id=conversation_id,
+                    agent_id="chat_data",
+                    delete_flag=0,
+                    create_time=datetime.now(),
+                    create_by=user_id,
+                    create_by_name=user_id,
+                    update_by=user_id,
+                    update_by_name=user_id,
+                )
+            )
 
     service = ConversationEventService(ConversationEventDao(session_context=lambda: get_test_session()))
     yield service, create_thread, get_test_session
@@ -63,7 +65,9 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
     first_user = HumanMessage(content="查询订单", id="turn-1", additional_kwargs={"timestamp": "2026-07-24 10:00:00"})
     first_turn_messages = [
         first_user,
-        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "tool-1", "name": "data_analyzing_tool", "args": {}}]),
+        AIMessage(
+            content="", id="assistant-1", tool_calls=[{"id": "tool-1", "name": "data_analyzing_tool", "args": {}}]
+        ),
         ToolMessage(content="订单查询结果", id="tool-result-1", tool_call_id="tool-1", name="data_analyzing_tool"),
         AIMessage(content="订单已查询完成", id="assistant-2"),
     ]
@@ -154,9 +158,7 @@ async def test_persist_user_message_touches_thread_update_time_but_turn_does_not
 
     async def read_thread():
         async with get_session() as session:
-            row = (await session.scalars(
-                select(UserThread).where(UserThread.thread_id == "conv-touch")
-            )).one()
+            row = (await session.scalars(select(UserThread).where(UserThread.thread_id == "conv-touch"))).one()
             return row.update_time, row.update_by
 
     initial_time, _ = await read_thread()
@@ -231,12 +233,16 @@ async def test_token_usage_is_single_upserted_row_per_conversation(conversation_
 
     dao = service._dao
     async with dao._session_context() as session:
-        rows = list((await session.scalars(
-            select(ChatDataConversationEvent).where(
-                ChatDataConversationEvent.conversation_id == "conv-usage",
-                ChatDataConversationEvent.event_type == "token_usage",
-            )
-        )).all())
+        rows = list(
+            (
+                await session.scalars(
+                    select(ChatDataConversationEvent).where(
+                        ChatDataConversationEvent.conversation_id == "conv-usage",
+                        ChatDataConversationEvent.event_type == "token_usage",
+                    )
+                )
+            ).all()
+        )
     assert len(rows) == 1
     assert rows[0].event_key == "token_usage:latest"
     assert rows[0].turn_id == "turn-3"
@@ -258,7 +264,9 @@ async def test_event_history_is_scoped_to_conversation_owner(conversation_event_
         message=message,
     )
 
-    assert (await service.load_history(conversation_id="conv-owner", user_id="user-1"))["messages"][0]["content"] == "只属于用户一"
+    assert (await service.load_history(conversation_id="conv-owner", user_id="user-1"))["messages"][0][
+        "content"
+    ] == "只属于用户一"
     assert (await service.load_history(conversation_id="conv-owner", user_id="user-2"))["history_events"] == []
 
 
@@ -275,7 +283,9 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
     )
     messages = [
         user_message,
-        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "call-1", "name": "data_analyzing_tool", "args": {}}]),
+        AIMessage(
+            content="", id="assistant-1", tool_calls=[{"id": "call-1", "name": "data_analyzing_tool", "args": {}}]
+        ),
         tool_message,
         AIMessage(content="已完成", id="assistant-2"),
     ]
@@ -361,23 +371,25 @@ async def test_repeated_turn_snapshot_updates_existing_message(conversation_even
 async def _create_run(get_session, conversation_id: str, run_id: str, owner_token: str) -> None:
     async with get_session() as session:
         now = datetime.now()
-        session.add(ChatDataAgentInbox(
-            conversation_id=conversation_id,
-            user_id="user-1",
-            run_id=run_id,
-            owner_token=owner_token,
-            message_id=run_id,
-            record_type="run",
-            record_content=json.dumps({"turn_id": "turn-checkpoint"}, ensure_ascii=False),
-            record_status="active",
-            delete_flag=0,
-            create_time=now,
-            update_time=now,
-            create_by="user-1",
-            create_by_name="用户一",
-            update_by="user-1",
-            update_by_name="用户一",
-        ))
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id=conversation_id,
+                user_id="user-1",
+                run_id=run_id,
+                owner_token=owner_token,
+                message_id=run_id,
+                record_type="run",
+                record_content=json.dumps({"turn_id": "turn-checkpoint"}, ensure_ascii=False),
+                record_status="active",
+                delete_flag=0,
+                create_time=now,
+                update_time=now,
+                create_by="user-1",
+                create_by_name="用户一",
+                update_by="user-1",
+                update_by_name="用户一",
+            )
+        )
 
 
 async def _update_run_content(get_session, run_id: str, content: dict, *, status: str = "active") -> None:
@@ -453,17 +465,20 @@ async def test_checkpoint_is_not_written_without_redis_cursor(conversation_event
     await _create_run(get_session, "conv-no-cursor", "run-no-cursor", "owner-1")
     user = HumanMessage(content="只写历史", id="turn-no-cursor")
 
-    assert await service.persist_turn_with_checkpoint(
-        conversation_id="conv-no-cursor",
-        user_id="user-1",
-        operator_name="用户一",
-        turn_id="turn-no-cursor",
-        messages=[user, AIMessage(content="历史已写", id="assistant-no-cursor")],
-        reasoning_segments=[],
-        run_id="run-no-cursor",
-        owner_token="owner-1",
-        stream_id=None,
-    ) is None
+    assert (
+        await service.persist_turn_with_checkpoint(
+            conversation_id="conv-no-cursor",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-no-cursor",
+            messages=[user, AIMessage(content="历史已写", id="assistant-no-cursor")],
+            reasoning_segments=[],
+            run_id="run-no-cursor",
+            owner_token="owner-1",
+            stream_id=None,
+        )
+        is None
+    )
     async with get_session() as session:
         run = await session.scalar(select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == "run-no-cursor"))
     assert "history_checkpoint" not in json.loads(run.record_content)
@@ -476,17 +491,20 @@ async def test_checkpoint_requires_published_redis_cursor_and_worker_owner(conve
     await _create_run(get_session, "conv-invalid-cursor", "run-invalid-cursor", "owner-1")
     user = HumanMessage(content="非法游标", id="turn-invalid-cursor")
 
-    assert await service.persist_turn_with_checkpoint(
-        conversation_id="conv-invalid-cursor",
-        user_id="user-1",
-        operator_name="用户一",
-        turn_id="turn-invalid-cursor",
-        messages=[user, AIMessage(content="历史仍可保存", id="assistant-invalid-cursor")],
-        reasoning_segments=[],
-        run_id="run-invalid-cursor",
-        owner_token="owner-1",
-        stream_id="0-0",
-    ) is None
+    assert (
+        await service.persist_turn_with_checkpoint(
+            conversation_id="conv-invalid-cursor",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-invalid-cursor",
+            messages=[user, AIMessage(content="历史仍可保存", id="assistant-invalid-cursor")],
+            reasoning_segments=[],
+            run_id="run-invalid-cursor",
+            owner_token="owner-1",
+            stream_id="0-0",
+        )
+        is None
+    )
 
     async with get_session() as session:
         rows = list((await session.scalars(select(ChatDataConversationEvent))).all())
@@ -513,15 +531,19 @@ async def test_history_recovery_returns_only_valid_checkpoint_for_active_run(con
     service, create_thread, get_session = conversation_event_service
     await create_thread("conv-recovery", "user-1")
     await _create_run(get_session, "conv-recovery", "run-recovery", "owner-1")
-    await _update_run_content(get_session, "run-recovery", {
-        "turn_id": "turn-recovery",
-        "history_checkpoint": {
-            "run_id": "run-recovery",
+    await _update_run_content(
+        get_session,
+        "run-recovery",
+        {
             "turn_id": "turn-recovery",
-            "history_sequence_no": 2,
-            "stream_id": "1787629922140-7",
+            "history_checkpoint": {
+                "run_id": "run-recovery",
+                "turn_id": "turn-recovery",
+                "history_sequence_no": 2,
+                "stream_id": "1787629922140-7",
+            },
         },
-    })
+    )
 
     history = await service.load_history_with_recovery(
         conversation_id="conv-recovery",
@@ -531,13 +553,18 @@ async def test_history_recovery_returns_only_valid_checkpoint_for_active_run(con
     assert history["active_run"]["run_id"] == "run-recovery"
     assert history["active_run"]["history_checkpoint"]["stream_id"] == "1787629922140-7"
 
-    await _update_run_content(get_session, "run-recovery", {
-        "turn_id": "turn-recovery",
-        "history_checkpoint": {
-            "run_id": "another-run",
-            "stream_id": "not-a-stream-id",
+    await _update_run_content(
+        get_session,
+        "run-recovery",
+        {
+            "turn_id": "turn-recovery",
+            "history_checkpoint": {
+                "run_id": "another-run",
+                "stream_id": "not-a-stream-id",
+            },
         },
-    }, status="finished")
+        status="finished",
+    )
     finished_history = await service.load_history_with_recovery(
         conversation_id="conv-recovery",
         user_id="user-1",
@@ -550,14 +577,18 @@ async def test_history_recovery_hides_malformed_checkpoint_on_active_run(convers
     service, create_thread, get_session = conversation_event_service
     await create_thread("conv-malformed-recovery", "user-1")
     await _create_run(get_session, "conv-malformed-recovery", "run-malformed-recovery", "owner-1")
-    await _update_run_content(get_session, "run-malformed-recovery", {
-        "turn_id": "turn-malformed-recovery",
-        "history_checkpoint": {
-            "run_id": "run-malformed-recovery",
-            "history_sequence_no": 3,
-            "stream_id": "not-a-redis-id",
+    await _update_run_content(
+        get_session,
+        "run-malformed-recovery",
+        {
+            "turn_id": "turn-malformed-recovery",
+            "history_checkpoint": {
+                "run_id": "run-malformed-recovery",
+                "history_sequence_no": 3,
+                "stream_id": "not-a-redis-id",
+            },
         },
-    })
+    )
 
     history = await service.load_history_with_recovery(
         conversation_id="conv-malformed-recovery",
@@ -706,11 +737,13 @@ def test_serialized_messages_carry_execution_timing_only_when_stamped():
         _serialize_tool_message,
     )
 
-    stamped_ai = _serialize_ai_message(AIMessage(
-        content="分析完成",
-        id="msg-ai-1",
-        additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
-    ))
+    stamped_ai = _serialize_ai_message(
+        AIMessage(
+            content="分析完成",
+            id="msg-ai-1",
+            additional_kwargs={"started_at_ms": 1000, "ended_at_ms": 3500},
+        )
+    )
     assert stamped_ai["started_at_ms"] == 1000
     assert stamped_ai["ended_at_ms"] == 3500
 
@@ -718,21 +751,25 @@ def test_serialized_messages_carry_execution_timing_only_when_stamped():
     assert "started_at_ms" not in plain_ai
     assert "ended_at_ms" not in plain_ai
 
-    stamped_tool = _serialize_tool_message(ToolMessage(
-        content="工具结果",
-        id="msg-tool-1",
-        tool_call_id="call-1",
-        additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
-    ))
+    stamped_tool = _serialize_tool_message(
+        ToolMessage(
+            content="工具结果",
+            id="msg-tool-1",
+            tool_call_id="call-1",
+            additional_kwargs={"started_at_ms": 4000, "ended_at_ms": 4200},
+        )
+    )
     assert stamped_tool["started_at_ms"] == 4000
     assert stamped_tool["ended_at_ms"] == 4200
 
-    invalid_tool = _serialize_tool_message(ToolMessage(
-        content="非法时间戳",
-        id="msg-tool-2",
-        tool_call_id="call-2",
-        additional_kwargs={"started_at_ms": "bad", "ended_at_ms": None},
-    ))
+    invalid_tool = _serialize_tool_message(
+        ToolMessage(
+            content="非法时间戳",
+            id="msg-tool-2",
+            tool_call_id="call-2",
+            additional_kwargs={"started_at_ms": "bad", "ended_at_ms": None},
+        )
+    )
     assert "started_at_ms" not in invalid_tool
     assert "ended_at_ms" not in invalid_tool
 
@@ -743,23 +780,27 @@ def test_human_message_payload_strips_blocks_and_carries_vision_attachments():
         _serialize_human_message,
     )
 
-    blocked = _serialize_human_message(HumanMessage(
-        id="turn-img",
-        content=[
-            {"type": "text", "text": "看这张图"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}},
-        ],
-        additional_kwargs={"vision_attachments": ["/mnt/user-data/uploads/a.png"]},
-    ))
+    blocked = _serialize_human_message(
+        HumanMessage(
+            id="turn-img",
+            content=[
+                {"type": "text", "text": "看这张图"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}},
+            ],
+            additional_kwargs={"vision_attachments": ["/mnt/user-data/uploads/a.png"]},
+        )
+    )
     assert blocked["content"] == "看这张图\n[图片内容已省略，共 2 张]"
     assert blocked["vision_attachments"] == ["/mnt/user-data/uploads/a.png"]
     # payload 全文不出现 base64
     assert "base64" not in str(blocked)
 
-    pure_image = _serialize_human_message(HumanMessage(
-        content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,CCCC"}}],
-    ))
+    pure_image = _serialize_human_message(
+        HumanMessage(
+            content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,CCCC"}}],
+        )
+    )
     assert pure_image["content"] == "[图片内容已省略，共 1 张]"
 
     plain = _serialize_human_message(HumanMessage(content="普通文本消息"))
@@ -774,26 +815,45 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
     )
 
     trail = [
-        {"kind": "message", "id": "m1", "content": "开始计算", "truncated": False,
-         "thinking": "需要精确计算", "thinkingTruncated": False},
-        {"kind": "tool", "id": "inner-1", "tool_name": "calculator_tool",
-         "args": {"expression": "1 + 1"}, "result": "2", "status": "completed"},
+        {
+            "kind": "message",
+            "id": "m1",
+            "content": "开始计算",
+            "truncated": False,
+            "thinking": "需要精确计算",
+            "thinkingTruncated": False,
+        },
+        {
+            "kind": "tool",
+            "id": "inner-1",
+            "tool_name": "calculator_tool",
+            "args": {"expression": "1 + 1"},
+            "result": "2",
+            "status": "completed",
+        },
     ]
-    payload = _serialize_tool_message(ToolMessage(
-        content="1 + 1 = 2",
-        tool_call_id="call-task-1",
-        name="task",
-        additional_kwargs={"subagent_trail": trail},
-    ))
+    payload = _serialize_tool_message(
+        ToolMessage(
+            content="1 + 1 = 2",
+            tool_call_id="call-task-1",
+            name="task",
+            additional_kwargs={"subagent_trail": trail},
+        )
+    )
     assert payload["subagent_trail"] == trail
     assert payload["tool_name"] == "task"
 
     # 无快照（普通工具 / 空快照）不出现该字段
     plain = _serialize_tool_message(ToolMessage(content="结果", tool_call_id="call-2", name="calculator_tool"))
     assert "subagent_trail" not in plain
-    empty = _serialize_tool_message(ToolMessage(
-        content="结论", tool_call_id="call-3", name="task", additional_kwargs={"subagent_trail": []},
-    ))
+    empty = _serialize_tool_message(
+        ToolMessage(
+            content="结论",
+            tool_call_id="call-3",
+            name="task",
+            additional_kwargs={"subagent_trail": []},
+        )
+    )
     assert "subagent_trail" not in empty
 
 
@@ -804,21 +864,27 @@ def test_tool_message_payload_carries_subagent_context_usage():
     )
 
     usage = {"used_tokens": 4321, "threshold_tokens": 70000, "percent": 6}
-    payload = _serialize_tool_message(ToolMessage(
-        content="盘点结论",
-        tool_call_id="call-task-1",
-        name="task",
-        additional_kwargs={"subagent_context_usage": usage},
-    ))
+    payload = _serialize_tool_message(
+        ToolMessage(
+            content="盘点结论",
+            tool_call_id="call-task-1",
+            name="task",
+            additional_kwargs={"subagent_context_usage": usage},
+        )
+    )
     assert payload["subagent_context_usage"] == usage
 
     # 无快照 / 非法形态不出现该字段
     plain = _serialize_tool_message(ToolMessage(content="结果", tool_call_id="call-2", name="calculator_tool"))
     assert "subagent_context_usage" not in plain
-    invalid = _serialize_tool_message(ToolMessage(
-        content="结论", tool_call_id="call-3", name="task",
-        additional_kwargs={"subagent_context_usage": "not-a-dict"},
-    ))
+    invalid = _serialize_tool_message(
+        ToolMessage(
+            content="结论",
+            tool_call_id="call-3",
+            name="task",
+            additional_kwargs={"subagent_context_usage": "not-a-dict"},
+        )
+    )
     assert "subagent_context_usage" not in invalid
 
 
@@ -841,7 +907,9 @@ async def _persist_qa_turn(
         message=user,
     )
     replies = [AIMessage(content=answer, id=f"assistant-{turn_id}")]
-    replies.extend(AIMessage(content=text, id=f"assistant-{turn_id}-{index}") for index, text in enumerate(extra_answers, start=1))
+    replies.extend(
+        AIMessage(content=text, id=f"assistant-{turn_id}-{index}") for index, text in enumerate(extra_answers, start=1)
+    )
     await service.persist_turn(
         conversation_id=conversation_id,
         user_id=user_id,
@@ -866,35 +934,42 @@ async def test_history_window_pages_backwards_until_exhausted(conversation_event
         )
 
     first_page = await service.load_history_with_recovery(
-        conversation_id="conv-page", user_id="user-1", limit=2,
+        conversation_id="conv-page",
+        user_id="user-1",
+        limit=2,
     )
     assert first_page["has_more"] is True
     assert [event["payload"]["content"] for event in first_page["history_events"]] == ["问题3", "回答3"]
     assert first_page["earliest_sequence_no"] == first_page["history_events"][0]["sequence_no"]
 
     second_page = await service.load_history_with_recovery(
-        conversation_id="conv-page", user_id="user-1", limit=2,
+        conversation_id="conv-page",
+        user_id="user-1",
+        limit=2,
         before_sequence=first_page["earliest_sequence_no"],
     )
     assert second_page["has_more"] is True
     assert [event["payload"]["content"] for event in second_page["history_events"]] == ["问题2", "回答2"]
 
     last_page = await service.load_history_with_recovery(
-        conversation_id="conv-page", user_id="user-1", limit=2,
+        conversation_id="conv-page",
+        user_id="user-1",
+        limit=2,
         before_sequence=second_page["earliest_sequence_no"],
     )
     assert last_page["has_more"] is False
     assert [event["payload"]["content"] for event in last_page["history_events"]] == ["问题1", "回答1"]
 
-    merged = (
-        last_page["history_events"] + second_page["history_events"] + first_page["history_events"]
-    )
+    merged = last_page["history_events"] + second_page["history_events"] + first_page["history_events"]
     assert [event["event_type"] for event in merged] == ["user_message", "assistant_message"] * 3
     assert [event["sequence_no"] for event in merged] == sorted(event["sequence_no"] for event in merged)
 
     # 游标落在最早事件之前（例如用户在翻页途中被清空历史）：空页且判定为没有更早
     empty_page = await service.load_history_with_recovery(
-        conversation_id="conv-page", user_id="user-1", limit=2, before_sequence=1,
+        conversation_id="conv-page",
+        user_id="user-1",
+        limit=2,
+        before_sequence=1,
     )
     assert empty_page["history_events"] == []
     assert empty_page["has_more"] is False
@@ -917,15 +992,22 @@ async def test_history_window_extends_leading_turn_boundary(conversation_event_s
 
     # 尾部 3 条正好从 turn-2 的回答开始，属于切断轮次的情形
     page = await service.load_history_with_recovery(
-        conversation_id="conv-boundary", user_id="user-1", limit=3,
+        conversation_id="conv-boundary",
+        user_id="user-1",
+        limit=3,
     )
     assert [event["payload"]["content"] for event in page["history_events"]] == [
-        "问题2", "回答2", "问题3", "回答3",
+        "问题2",
+        "回答2",
+        "问题3",
+        "回答3",
     ]
     assert page["has_more"] is True
 
     older = await service.load_history_with_recovery(
-        conversation_id="conv-boundary", user_id="user-1", limit=3,
+        conversation_id="conv-boundary",
+        user_id="user-1",
+        limit=3,
         before_sequence=page["earliest_sequence_no"],
     )
     assert [event["payload"]["content"] for event in older["history_events"]] == ["问题1", "回答1"]
@@ -947,10 +1029,16 @@ async def test_history_window_finishes_single_turn_longer_than_limit(conversatio
     )
 
     page = await service.load_history_with_recovery(
-        conversation_id="conv-long-turn", user_id="user-1", limit=2,
+        conversation_id="conv-long-turn",
+        user_id="user-1",
+        limit=2,
     )
     assert [event["payload"]["content"] for event in page["history_events"]] == [
-        "长轮次问题", "回答1", "回答2", "回答3", "回答4",
+        "长轮次问题",
+        "回答1",
+        "回答2",
+        "回答3",
+        "回答4",
     ]
     assert page["has_more"] is False
 
@@ -960,11 +1048,17 @@ async def test_history_window_returns_full_history_when_shorter_than_limit(conve
     service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-short", "user-1")
     await _persist_qa_turn(
-        service, conversation_id="conv-short", turn_id="turn-1", question="唯一问题", answer="唯一回答",
+        service,
+        conversation_id="conv-short",
+        turn_id="turn-1",
+        question="唯一问题",
+        answer="唯一回答",
     )
 
     page = await service.load_history_with_recovery(
-        conversation_id="conv-short", user_id="user-1", limit=50,
+        conversation_id="conv-short",
+        user_id="user-1",
+        limit=50,
     )
     assert [event["payload"]["content"] for event in page["history_events"]] == ["唯一问题", "唯一回答"]
     assert page["has_more"] is False
@@ -987,10 +1081,18 @@ async def test_history_window_stays_contiguous_across_interleaved_turns(conversa
     service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-interleaved", "user-1")
     await _persist_qa_turn(
-        service, conversation_id="conv-interleaved", turn_id="turn-a", question="问题A", answer="回答A",
+        service,
+        conversation_id="conv-interleaved",
+        turn_id="turn-a",
+        question="问题A",
+        answer="回答A",
     )
     await _persist_qa_turn(
-        service, conversation_id="conv-interleaved", turn_id="turn-b", question="问题B", answer="回答B",
+        service,
+        conversation_id="conv-interleaved",
+        turn_id="turn-b",
+        question="问题B",
+        answer="回答B",
     )
     # turn-x 的提问先落库，对应的 run 还没结束
     await service.persist_user_message(
@@ -1000,7 +1102,11 @@ async def test_history_window_stays_contiguous_across_interleaved_turns(conversa
         message=HumanMessage(content="问题X", id="turn-x"),
     )
     await _persist_qa_turn(
-        service, conversation_id="conv-interleaved", turn_id="turn-c", question="问题C", answer="回答C",
+        service,
+        conversation_id="conv-interleaved",
+        turn_id="turn-c",
+        question="问题C",
+        answer="回答C",
     )
     # turn-x 的回答等 run 收尾才追加，序号落在 turn-c 之后
     await _persist_qa_turn(
@@ -1020,7 +1126,10 @@ async def test_history_window_stays_contiguous_across_interleaved_turns(conversa
     cursor = None
     for _ in range(10):
         page = await service.load_history_with_recovery(
-            conversation_id="conv-interleaved", user_id="user-1", limit=2, before_sequence=cursor,
+            conversation_id="conv-interleaved",
+            user_id="user-1",
+            limit=2,
+            before_sequence=cursor,
         )
         pages.append(page)
         if not page["has_more"]:
@@ -1040,7 +1149,15 @@ async def test_history_window_stays_contiguous_across_interleaved_turns(conversa
     merged = [event for page in reversed(pages) for event in page["history_events"]]
     assert [event["sequence_no"] for event in merged] == expected_sequences
     assert [event["payload"]["content"] for event in merged] == [
-        "问题A", "回答A", "问题B", "回答B", "问题X", "问题C", "回答C", "回答X1", "回答X2",
+        "问题A",
+        "回答A",
+        "问题B",
+        "回答B",
+        "问题X",
+        "问题C",
+        "回答C",
+        "回答X1",
+        "回答X2",
     ]
 
 
@@ -1055,7 +1172,11 @@ async def test_history_window_closure_keeps_answer_with_its_question(conversatio
     service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-orphan", "user-1")
     await _persist_qa_turn(
-        service, conversation_id="conv-orphan", turn_id="turn-a", question="问题A", answer="回答A",
+        service,
+        conversation_id="conv-orphan",
+        turn_id="turn-a",
+        question="问题A",
+        answer="回答A",
     )
     # turn-x 的提问先落库，对应的 run 还没结束
     await service.persist_user_message(
@@ -1065,7 +1186,11 @@ async def test_history_window_closure_keeps_answer_with_its_question(conversatio
         message=HumanMessage(content="问题X", id="turn-x"),
     )
     await _persist_qa_turn(
-        service, conversation_id="conv-orphan", turn_id="turn-b", question="问题B", answer="回答B",
+        service,
+        conversation_id="conv-orphan",
+        turn_id="turn-b",
+        question="问题B",
+        answer="回答B",
     )
     # turn-x 的回答等 run 收尾才追加，序号落在 turn-b 之后
     await _persist_qa_turn(
@@ -1079,16 +1204,24 @@ async def test_history_window_closure_keeps_answer_with_its_question(conversatio
 
     # 尾部 3 条从 turn-b 的回答开始；仅按 turn-b 提问收窗会把 turn-x 的回答孤立在首屏
     page = await service.load_history_with_recovery(
-        conversation_id="conv-orphan", user_id="user-1", limit=3,
+        conversation_id="conv-orphan",
+        user_id="user-1",
+        limit=3,
     )
     assert [event["payload"]["content"] for event in page["history_events"]] == [
-        "问题X", "问题B", "回答B", "回答X1", "回答X2",
+        "问题X",
+        "问题B",
+        "回答B",
+        "回答X1",
+        "回答X2",
     ]
     assert page["history_events"][0]["event_type"] == "user_message"
     assert page["has_more"] is True
 
     older = await service.load_history_with_recovery(
-        conversation_id="conv-orphan", user_id="user-1", limit=3,
+        conversation_id="conv-orphan",
+        user_id="user-1",
+        limit=3,
         before_sequence=page["earliest_sequence_no"],
     )
     assert [event["payload"]["content"] for event in older["history_events"]] == ["问题A", "回答A"]

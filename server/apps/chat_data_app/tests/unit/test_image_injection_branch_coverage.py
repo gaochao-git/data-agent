@@ -1,11 +1,12 @@
 """image_injection 辅助函数的分支覆盖补测。"""
+
 import base64
 import os
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.agent.middleware import image_injection as ii
 

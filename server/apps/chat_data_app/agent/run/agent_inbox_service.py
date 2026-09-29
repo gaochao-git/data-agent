@@ -178,23 +178,27 @@ class AgentInboxService:
             if active_run:
                 raise AgentRunConflictError("当前会话已有运行中的任务")
             run_id = uuid4().hex
-            session.add(ChatDataAgentInbox(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                run_id=run_id,
-                message_id=run_id,
-                record_type="run",
-                record_content=json.dumps({"runtime_context": runtime_context or {}, "turn_id": run_id}, ensure_ascii=False),
-                record_status=RUN_STATUS_PENDING,
-                lease_expire_time=None,
-                delete_flag=0,
-                create_time=now,
-                update_time=now,
-                create_by=user_id,
-                create_by_name=operator_name,
-                update_by=user_id,
-                update_by_name=operator_name,
-            ))
+            session.add(
+                ChatDataAgentInbox(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    message_id=run_id,
+                    record_type="run",
+                    record_content=json.dumps(
+                        {"runtime_context": runtime_context or {}, "turn_id": run_id}, ensure_ascii=False
+                    ),
+                    record_status=RUN_STATUS_PENDING,
+                    lease_expire_time=None,
+                    delete_flag=0,
+                    create_time=now,
+                    update_time=now,
+                    create_by=user_id,
+                    create_by_name=operator_name,
+                    update_by=user_id,
+                    update_by_name=operator_name,
+                )
+            )
             if selected_message_id:
                 selected = await self._dao.get_message_by_id(
                     session,
@@ -264,9 +268,7 @@ class AgentInboxService:
                 "resume_answer": pending_answer if isinstance(pending_answer, dict) else None,
                 "resume_started": content.get("resume_started") is True,
                 "resume_turn_id": (
-                    str(resume_question.get("turn_id") or "")
-                    if isinstance(resume_question, dict)
-                    else None
+                    str(resume_question.get("turn_id") or "") if isinstance(resume_question, dict) else None
                 ),
             }
 
@@ -527,26 +529,28 @@ class AgentInboxService:
             if run is None or run.record_status not in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE}:
                 raise AgentRunNotActiveError("当前会话没有运行中的任务")
             message_id = uuid4().hex
-            session.add(ChatDataAgentInbox(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                run_id=run.run_id,
-                message_id=message_id,
-                record_type="message",
-                queue_type=queue_type,
-                record_content=normalized_content,
-                # 随行元数据（@ 引用 / 附件 file_id）以 JSON 引用形式落列，
-                # 消费时才由 agent_stream 采纳点校验解析——存引用、晚解析。
-                record_meta=json.dumps(meta, ensure_ascii=False) if meta else None,
-                record_status="pending",
-                delete_flag=0,
-                create_time=now,
-                update_time=now,
-                create_by=user_id,
-                create_by_name=operator_name,
-                update_by=user_id,
-                update_by_name=operator_name,
-            ))
+            session.add(
+                ChatDataAgentInbox(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    run_id=run.run_id,
+                    message_id=message_id,
+                    record_type="message",
+                    queue_type=queue_type,
+                    record_content=normalized_content,
+                    # 随行元数据（@ 引用 / 附件 file_id）以 JSON 引用形式落列，
+                    # 消费时才由 agent_stream 采纳点校验解析——存引用、晚解析。
+                    record_meta=json.dumps(meta, ensure_ascii=False) if meta else None,
+                    record_status="pending",
+                    delete_flag=0,
+                    create_time=now,
+                    update_time=now,
+                    create_by=user_id,
+                    create_by_name=operator_name,
+                    update_by=user_id,
+                    update_by_name=operator_name,
+                )
+            )
             return message_id
 
     async def claim_pending_messages(
@@ -689,27 +693,32 @@ class AgentInboxService:
                 )
                 claimed_rows = await self._claim_step_and_turn(session, next_run_id, now)
                 next_turn_id = str(claimed_rows[-1].message_id) if claimed_rows else next_run_id
-                session.add(ChatDataAgentInbox(
-                    conversation_id=run.conversation_id,
-                    user_id=run.user_id,
-                    run_id=next_run_id,
-                    message_id=next_run_id,
-                    record_type="run",
-                    record_content=json.dumps({
-                        "runtime_context": runtime_context,
-                        "run_kind": "continuation",
-                        "turn_id": next_turn_id,
-                    }, ensure_ascii=False),
-                    record_status=RUN_STATUS_PENDING,
-                    lease_expire_time=None,
-                    delete_flag=0,
-                    create_time=now,
-                    update_time=now,
-                    create_by=user_id,
-                    create_by_name=operator_name,
-                    update_by=user_id,
-                    update_by_name=operator_name,
-                ))
+                session.add(
+                    ChatDataAgentInbox(
+                        conversation_id=run.conversation_id,
+                        user_id=run.user_id,
+                        run_id=next_run_id,
+                        message_id=next_run_id,
+                        record_type="run",
+                        record_content=json.dumps(
+                            {
+                                "runtime_context": runtime_context,
+                                "run_kind": "continuation",
+                                "turn_id": next_turn_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        record_status=RUN_STATUS_PENDING,
+                        lease_expire_time=None,
+                        delete_flag=0,
+                        create_time=now,
+                        update_time=now,
+                        create_by=user_id,
+                        create_by_name=operator_name,
+                        update_by=user_id,
+                        update_by_name=operator_name,
+                    )
+                )
             if next_run_id:
                 content["next_run_id"] = next_run_id
             else:
@@ -851,7 +860,9 @@ class AgentInboxService:
                 "next_run_id": self._next_run_id(latest_content),
                 "turn_id": str(latest_content.get("turn_id") or "") or None,
                 "is_continuation": latest_content.get("run_kind") == "continuation",
-                "history_checkpoint": self._history_checkpoint(latest_content, latest_run.run_id if latest_run else None),
+                "history_checkpoint": self._history_checkpoint(
+                    latest_content, latest_run.run_id if latest_run else None
+                ),
                 "messages": [
                     {
                         "message_id": row.message_id,

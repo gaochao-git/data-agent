@@ -24,9 +24,18 @@ async def get_image_size_limit() -> tuple[int, int]:
     size_mb = await get_runtime_setting("CHAT_DATA_MAX_IMAGE_SIZE_MB")
     return size_mb, size_mb * 1024 * 1024
 
-SUPPORTED_DOCUMENT_EXTENSIONS = frozenset({
-    ".txt", ".md", ".sql", ".pdf", ".docx", ".xlsx", ".pptx",
-})
+
+SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".sql",
+        ".pdf",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+    }
+)
 
 
 class EmptyExtractionError(ValueError):

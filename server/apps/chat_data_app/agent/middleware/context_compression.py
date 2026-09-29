@@ -72,7 +72,9 @@ async def compress_messages_for_state(
     original_messages, legacy_summary = extract_legacy_context_summary(messages)
     effective_previous_summary = merge_context_summaries(previous_summary, legacy_summary)
     static_tokens = max(int(static_input_tokens), 0)
-    before_tokens = static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
+    before_tokens = (
+        static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
+    )
     threshold_tokens = max(int(compression_trigger_tokens), 1)
     report = _build_report(
         cfg,
@@ -101,7 +103,9 @@ async def compress_messages_for_state(
         summary_text=effective_previous_summary,
         target_tokens=target_tokens,
     )
-    working_tokens = static_tokens + count_messages_tokens(working_messages) + _summary_tokens(effective_previous_summary)
+    working_tokens = (
+        static_tokens + count_messages_tokens(working_messages) + _summary_tokens(effective_previous_summary)
+    )
     report["referenced_tool_results"] = referenced_count
     if working_tokens <= target_tokens:
         logger.info(
@@ -210,7 +214,13 @@ async def compress_messages_for_state(
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
 
-    compressed_messages, summary_text, compressed_count, after_tokens, compression_passes = await _run_compression_passes(
+    (
+        compressed_messages,
+        summary_text,
+        compressed_count,
+        after_tokens,
+        compression_passes,
+    ) = await _run_compression_passes(
         compressed_messages,
         summary_text,
         compressed_count,
@@ -467,7 +477,9 @@ def create_context_compression_middleware(
             todos=_read_middleware_todos(state),
         )
         if report["estimated_tokens_after"] > budget.hard_input_limit_tokens:
-            raise ContextInputLimitExceededError("模型固定输入超过上下文硬上限，请检查系统提示词、工具描述和输出预留配置。")
+            raise ContextInputLimitExceededError(
+                "模型固定输入超过上下文硬上限，请检查系统提示词、工具描述和输出预留配置。"
+            )
         compression_event = _build_context_compression_event(messages, report)
         if compression_event:
             _emit_context_compression_event(
@@ -592,10 +604,12 @@ def _build_referenced_tool_message(message: ToolMessage) -> ToolMessage:
         return message
     metadata = dict(getattr(message, "additional_kwargs", None) or {})
     metadata["context_compression_referenced"] = True
-    return message.model_copy(update={
-        "content": referenced_content,
-        "additional_kwargs": metadata,
-    })
+    return message.model_copy(
+        update={
+            "content": referenced_content,
+            "additional_kwargs": metadata,
+        }
+    )
 
 
 async def _summarize_for_compression(
@@ -661,14 +675,16 @@ def _finalize_compression_report(
     compressed_messages: int,
     summary_text: str | None,
 ) -> None:
-    report.update({
-        "triggered": True,
-        "estimated_tokens_after": after_tokens,
-        "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
-        "compressed_messages": compressed_messages,
-        "summary_chars": len(str(summary_text or "")),
-        "target_reached": after_tokens <= _non_negative_int(report.get("compression_target_tokens")),
-    })
+    report.update(
+        {
+            "triggered": True,
+            "estimated_tokens_after": after_tokens,
+            "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
+            "compressed_messages": compressed_messages,
+            "summary_chars": len(str(summary_text or "")),
+            "target_reached": after_tokens <= _non_negative_int(report.get("compression_target_tokens")),
+        }
+    )
 
 
 def _enforce_hard_input_limit(
@@ -718,18 +734,20 @@ def _enforce_hard_input_limit(
         report["hard_limit_user_message_truncated"] = truncated
         current_tokens = _runtime_input_tokens(working, working_summary, static_input_tokens)
 
-    report.update({
-        "triggered": True,
-        "hard_limit_enforced": True,
-        "hard_limit_dropped_messages": max(original_count - len(working), 0),
-        "estimated_tokens_after": current_tokens,
-        "estimated_cleared_tokens": max(before_tokens - current_tokens, 0),
-        "compressed_messages": max(
-            _non_negative_int(report.get("compressed_messages")),
-            max(original_count - len(working), 0),
-        ),
-        "target_reached": current_tokens <= _non_negative_int(report.get("compression_target_tokens")),
-    })
+    report.update(
+        {
+            "triggered": True,
+            "hard_limit_enforced": True,
+            "hard_limit_dropped_messages": max(original_count - len(working), 0),
+            "estimated_tokens_after": current_tokens,
+            "estimated_cleared_tokens": max(before_tokens - current_tokens, 0),
+            "compressed_messages": max(
+                _non_negative_int(report.get("compressed_messages")),
+                max(original_count - len(working), 0),
+            ),
+            "target_reached": current_tokens <= _non_negative_int(report.get("compression_target_tokens")),
+        }
+    )
     return working, working_summary, report
 
 
@@ -753,7 +771,7 @@ def _drop_rounds_before_current_turn(
         candidate = working[start:]
         if _runtime_input_tokens(candidate, summary_text, static_input_tokens) <= guard_tokens:
             return candidate
-    return working[human_indexes[-1]:] if human_indexes else working
+    return working[human_indexes[-1] :] if human_indexes else working
 
 
 def _drop_current_turn_groups_to_limit(
@@ -768,7 +786,7 @@ def _drop_current_turn_groups_to_limit(
     if current_human_index >= len(working):
         return []
     current_human = working[current_human_index]
-    tail = working[current_human_index + 1:]
+    tail = working[current_human_index + 1 :]
     for boundary in _complete_boundaries(tail):
         candidate = [current_human, *tail[boundary:]]
         if _runtime_input_tokens(candidate, summary_text, static_input_tokens) <= guard_tokens:
@@ -783,7 +801,9 @@ def _truncate_current_human_to_limit(
     summary_text: str | None,
     static_input_tokens: int,
 ) -> tuple[list[BaseMessage], bool]:
-    human = next((message for message in reversed(messages) if isinstance(message, HumanMessage)), HumanMessage(content=""))
+    human = next(
+        (message for message in reversed(messages) if isinstance(message, HumanMessage)), HumanMessage(content="")
+    )
     message_limit = max(guard_tokens - static_input_tokens - _summary_tokens(summary_text), 1)
     if count_messages_tokens([human]) <= message_limit:
         return [human], False
@@ -821,13 +841,15 @@ def _build_context_compression_event(
             if turn_id:
                 break
     anchor_message_id = _message_id(messages[-1]) if messages else ""
-    event_fingerprint = "|".join([
-        turn_id,
-        anchor_message_id,
-        str(_non_negative_int(report.get("estimated_tokens_before"))),
-        str(_non_negative_int(report.get("estimated_tokens_after"))),
-        str(_non_negative_int(report.get("compressed_messages"))),
-    ])
+    event_fingerprint = "|".join(
+        [
+            turn_id,
+            anchor_message_id,
+            str(_non_negative_int(report.get("estimated_tokens_before"))),
+            str(_non_negative_int(report.get("estimated_tokens_after"))),
+            str(_non_negative_int(report.get("compressed_messages"))),
+        ]
+    )
     event_id = hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:20]
     return {
         "id": f"context-compression-{event_id}",
@@ -865,11 +887,13 @@ def _emit_context_compression_event(
 ) -> None:
     """在 LangGraph 流可用时立即推送分界事件，不影响压缩主流程。"""
     try:
-        get_stream_writer()({
-            "type": "context_compression",
-            "event": event,
-            "archived_turn_messages": list(archived_turn_messages or []),
-        })
+        get_stream_writer()(
+            {
+                "type": "context_compression",
+                "event": event,
+                "archived_turn_messages": list(archived_turn_messages or []),
+            }
+        )
     except Exception:
         logger.debug("当前执行上下文不支持推送 context_compression custom 事件", exc_info=True)
 
@@ -1002,9 +1026,7 @@ def _recent_completed_round_start(
     """保留不超过目标容量的最近完整轮次；工具调用与结果不会被拆开。"""
     message_keep_limit = max(int(compression_target_tokens) - max(int(static_input_tokens), 0), 0)
     completed_round_starts = [
-        index
-        for index, message in enumerate(messages[:completed_end])
-        if isinstance(message, HumanMessage)
+        index for index, message in enumerate(messages[:completed_end]) if isinstance(message, HumanMessage)
     ]
     for start in completed_round_starts[-RECENT_COMPLETED_ROUNDS_TO_KEEP:]:
         if count_messages_tokens(messages[start:]) <= message_keep_limit:
@@ -1094,9 +1116,12 @@ def _prepare_summary_input(
             continue
         prepared_messages[index] = compacted
         report["summary_tool_results_compacted"] += 1
-        if _count_summary_input_tokens(
-            prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
-        ) <= input_limit:
+        if (
+            _count_summary_input_tokens(
+                prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
+            )
+            <= input_limit
+        ):
             report["summary_input_tokens_after"] = _count_summary_input_tokens(
                 prepared_messages,
                 previous_summary=previous_summary,
@@ -1115,18 +1140,23 @@ def _prepare_summary_input(
         dropped_rounds += 1
         marker = _build_summary_omission_marker(dropped_messages, dropped_rounds)
         prepared_messages = [marker, *remaining_messages]
-        if _count_summary_input_tokens(
-            prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
-        ) <= input_limit:
-            report.update({
-                "summary_input_tokens_after": _count_summary_input_tokens(
-                    prepared_messages,
-                    previous_summary=previous_summary,
-                    todo_snapshot=todo_snapshot,
-                ),
-                "summary_input_pruned_messages": dropped_messages,
-                "summary_input_pruned_rounds": dropped_rounds,
-            })
+        if (
+            _count_summary_input_tokens(
+                prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
+            )
+            <= input_limit
+        ):
+            report.update(
+                {
+                    "summary_input_tokens_after": _count_summary_input_tokens(
+                        prepared_messages,
+                        previous_summary=previous_summary,
+                        todo_snapshot=todo_snapshot,
+                    ),
+                    "summary_input_pruned_messages": dropped_messages,
+                    "summary_input_pruned_rounds": dropped_rounds,
+                }
+            )
             return prepared_messages, report
         prepared_messages = remaining_messages
 
@@ -1135,11 +1165,13 @@ def _prepare_summary_input(
     after_tokens = _count_summary_input_tokens(
         prepared_messages, previous_summary=previous_summary, todo_snapshot=todo_snapshot
     )
-    report.update({
-        "summary_input_tokens_after": after_tokens,
-        "summary_input_pruned_messages": dropped_messages,
-        "summary_input_pruned_rounds": dropped_rounds,
-    })
+    report.update(
+        {
+            "summary_input_tokens_after": after_tokens,
+            "summary_input_pruned_messages": dropped_messages,
+            "summary_input_pruned_rounds": dropped_rounds,
+        }
+    )
     if after_tokens > input_limit:
         report["summary_input_unusable"] = True
         return [], report
@@ -1160,9 +1192,7 @@ def _count_summary_input_tokens(
     return count_messages_tokens([HumanMessage(content=prompt)]) + REQUEST_OVERHEAD_TOKENS
 
 
-_STALE_TODO_TOOL_RESULT_PLACEHOLDER = (
-    "[todo 列表已由实时 state 快照另行提供，此处省略历史快照以避免新旧状态矛盾]"
-)
+_STALE_TODO_TOOL_RESULT_PLACEHOLDER = "[todo 列表已由实时 state 快照另行提供，此处省略历史快照以避免新旧状态矛盾]"
 
 
 def neutralize_stale_todo_tool_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -1201,10 +1231,12 @@ def _compact_tool_result_for_summary(message: ToolMessage) -> ToolMessage:
         return message
     metadata = dict(getattr(message, "additional_kwargs", None) or {})
     metadata["context_compression_summary_compacted"] = True
-    return message.model_copy(update={
-        "content": compact_content,
-        "additional_kwargs": metadata,
-    })
+    return message.model_copy(
+        update={
+            "content": compact_content,
+            "additional_kwargs": metadata,
+        }
+    )
 
 
 def _fit_text_to_token_limit(text: str, *, prefix: str, token_limit: int) -> str:

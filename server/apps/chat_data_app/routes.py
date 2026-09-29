@@ -26,6 +26,7 @@ from .routers.uploaded_files import router as uploaded_files_router
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"
 
+
 # 创建路由器
 async def require_service_token(service_token: str | None = Depends(service_token_header)) -> None:
     """统一保护 ChatData service 接口，避免路由遗漏 service token 校验。"""

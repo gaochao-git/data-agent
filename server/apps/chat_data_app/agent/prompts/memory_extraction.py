@@ -37,7 +37,4 @@ def build_memory_extraction_prompt(messages: list[BaseMessage]) -> str:
     transcript = format_context_compression_messages(messages)
     if len(transcript) > EXTRACTION_TRANSCRIPT_MAX_CHARS:
         transcript = transcript[-EXTRACTION_TRANSCRIPT_MAX_CHARS:]
-    return (
-        f"{MEMORY_EXTRACTION_PROMPT}\n\n"
-        f"[对话数据开始]\n{transcript}\n[对话数据结束]"
-    )
+    return f"{MEMORY_EXTRACTION_PROMPT}\n\n[对话数据开始]\n{transcript}\n[对话数据结束]"

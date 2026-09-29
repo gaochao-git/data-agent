@@ -16,12 +16,8 @@ def test_policy_accepts_only_canonical_forms_and_classifies_special_paths():
     assert query_result.is_query_result is True
     assert uploads.kind == "uploads"
     assert skill.is_skill is True
-    assert WORKSPACE_PATH_POLICY.to_sandbox_path(workspace) == (
-        "/mnt/user-data/workspace/semantic/order.yaml"
-    )
-    assert WORKSPACE_PATH_POLICY.to_sandbox_path(skill) == (
-        "/mnt/skills/officecli/SKILL.md"
-    )
+    assert WORKSPACE_PATH_POLICY.to_sandbox_path(workspace) == ("/mnt/user-data/workspace/semantic/order.yaml")
+    assert WORKSPACE_PATH_POLICY.to_sandbox_path(skill) == ("/mnt/skills/officecli/SKILL.md")
 
 
 @pytest.mark.parametrize(

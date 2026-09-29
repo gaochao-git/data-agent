@@ -156,7 +156,9 @@ class MySQLSyncService:
         return await cursor.fetchall()
 
     @staticmethod
-    def _group_rows_into_tables(rows: List[Dict[str, Any]], table_names: Optional[List[str]]) -> Dict[str, Dict[str, Any]]:
+    def _group_rows_into_tables(
+        rows: List[Dict[str, Any]], table_names: Optional[List[str]]
+    ) -> Dict[str, Dict[str, Any]]:
         tables_by_name: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             table_name = row["TABLE_NAME"]
@@ -175,20 +177,24 @@ class MySQLSyncService:
             )
             if row["COLUMN_NAME"]:
                 column_key = row["COLUMN_KEY"]
-                table["columns"].append({
-                    "name": row["COLUMN_NAME"],
-                    "type": row["COLUMN_TYPE"],
-                    "mysql_type": row["COLUMN_TYPE"],
-                    "description": row["COLUMN_COMMENT"] or row["COLUMN_NAME"],
-                    "primary_key": column_key == "PRI",
-                    "unique_key": column_key == "UNI",
-                    "index_key": column_key == "MUL",
-                    "nullable": row["IS_NULLABLE"] == "YES",
-                })
+                table["columns"].append(
+                    {
+                        "name": row["COLUMN_NAME"],
+                        "type": row["COLUMN_TYPE"],
+                        "mysql_type": row["COLUMN_TYPE"],
+                        "description": row["COLUMN_COMMENT"] or row["COLUMN_NAME"],
+                        "primary_key": column_key == "PRI",
+                        "unique_key": column_key == "UNI",
+                        "index_key": column_key == "MUL",
+                        "nullable": row["IS_NULLABLE"] == "YES",
+                    }
+                )
         return tables_by_name
 
     @staticmethod
-    def _group_index_stats(stat_rows: List[Dict[str, Any]], table_names: Optional[List[str]]) -> Dict[str, List[Dict[str, Any]]]:
+    def _group_index_stats(
+        stat_rows: List[Dict[str, Any]], table_names: Optional[List[str]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
         stats_by_table: Dict[str, List[Dict[str, Any]]] = {}
         for sr in stat_rows:
             table_name = sr.get("TABLE_NAME")
@@ -196,12 +202,14 @@ class MySQLSyncService:
                 continue
             if table_names and table_name not in table_names:
                 continue
-            stats_by_table.setdefault(table_name, []).append({
-                "index_name": sr.get("INDEX_NAME"),
-                "non_unique": bool(sr.get("NON_UNIQUE")),
-                "seq": sr.get("SEQ_IN_INDEX") or 0,
-                "column_name": sr.get("COLUMN_NAME"),
-            })
+            stats_by_table.setdefault(table_name, []).append(
+                {
+                    "index_name": sr.get("INDEX_NAME"),
+                    "non_unique": bool(sr.get("NON_UNIQUE")),
+                    "seq": sr.get("SEQ_IN_INDEX") or 0,
+                    "column_name": sr.get("COLUMN_NAME"),
+                }
+            )
         return stats_by_table
 
     @staticmethod
@@ -234,7 +242,9 @@ class MySQLSyncService:
         return primary_keys, unique_indexes, indexes
 
     @staticmethod
-    def _apply_index_stats(tables_by_name: Dict[str, Dict[str, Any]], stats_by_table: Dict[str, List[Dict[str, Any]]]) -> None:
+    def _apply_index_stats(
+        tables_by_name: Dict[str, Dict[str, Any]], stats_by_table: Dict[str, List[Dict[str, Any]]]
+    ) -> None:
         for table_name, stats_list in stats_by_table.items():
             table = tables_by_name.get(table_name)
             if table is None:
@@ -246,7 +256,9 @@ class MySQLSyncService:
             table["indexes"] = indexes
 
     @staticmethod
-    def _select_requested_tables(tables_by_name: Dict[str, Dict[str, Any]], table_names: Optional[List[str]]) -> List[Dict[str, Any]]:
+    def _select_requested_tables(
+        tables_by_name: Dict[str, Dict[str, Any]], table_names: Optional[List[str]]
+    ) -> List[Dict[str, Any]]:
         if table_names:
             return [tables_by_name[name] for name in table_names if name in tables_by_name]
         return list(tables_by_name.values())
@@ -270,13 +282,15 @@ class HiveSyncService:
         self.password = password
 
     def _get_connection(self):
-        conn = hive.connect(**build_hive_connect_params(
-            host=self.host,
-            port=self.port,
-            database=self.database,
-            username=self.username,
-            password=self.password,
-        ))
+        conn = hive.connect(
+            **build_hive_connect_params(
+                host=self.host,
+                port=self.port,
+                database=self.database,
+                username=self.username,
+                password=self.password,
+            )
+        )
         apply_hive_socket_timeout(getattr(conn, "_transport", None), SOCKET_TIMEOUT_SECONDS)
         return conn
 
@@ -323,15 +337,17 @@ class HiveSyncService:
         seen_columns.add(col_name)
         if is_partition:
             partition_columns.add(col_name)
-        columns.append({
-            "name": col_name,
-            "type": col_type,
-            "hive_type": col_type,
-            "description": col_comment or col_name,
-            "primary_key": False,
-            "nullable": True,
-            "is_partition": is_partition,
-        })
+        columns.append(
+            {
+                "name": col_name,
+                "type": col_type,
+                "hive_type": col_type,
+                "description": col_comment or col_name,
+                "primary_key": False,
+                "nullable": True,
+                "is_partition": is_partition,
+            }
+        )
 
     @staticmethod
     def _resolve_hive_table_comment(col_name: str, col_type: str, col_comment: str, table_comment: str) -> str:
@@ -359,7 +375,9 @@ class HiveSyncService:
             if col_name.startswith("#"):
                 continue
             if section in {"columns", "partition"} and col_name not in seen_columns:
-                cls._append_hive_column(columns, partition_columns, seen_columns, section, col_name, col_type, col_comment)
+                cls._append_hive_column(
+                    columns, partition_columns, seen_columns, section, col_name, col_type, col_comment
+                )
             elif section == "details":
                 table_comment = cls._resolve_hive_table_comment(col_name, col_type, col_comment, table_comment)
         return {
@@ -529,14 +547,16 @@ def _normalize_schema_tables(
             _normalize_hive_column(table_name, column, column_index)
             for column_index, column in enumerate(columns, start=1)
         ]
-        validated_tables.append({
-            "table_name": table_name,
-            "description": description_map.get(table_name) or table.get("description") or table_name,
-            "columns": normalized_columns,
-            "primary_keys": [],
-            "unique_indexes": [],
-            "indexes": [],
-        })
+        validated_tables.append(
+            {
+                "table_name": table_name,
+                "description": description_map.get(table_name) or table.get("description") or table_name,
+                "columns": normalized_columns,
+                "primary_keys": [],
+                "unique_indexes": [],
+                "indexes": [],
+            }
+        )
     return validated_tables
 
 
@@ -574,10 +594,12 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
         table_name = str(table.get("table_name") or "").strip()
         if not table_name:
             raise RuntimeError(f"Hive 元数据表列表第 {table_index} 项缺少 table_name")
-        table_items.append({
-            "table_name": table_name,
-            "description": str(table.get("table_description") or "").strip(),
-        })
+        table_items.append(
+            {
+                "table_name": table_name,
+                "description": str(table.get("table_description") or "").strip(),
+            }
+        )
     return table_items
 
 

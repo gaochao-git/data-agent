@@ -8,6 +8,7 @@
 - 流式 intent：所有工具 args 出现 intent 即推送（长耗时工具执行前展示目的）、
   去重、行数与 intent 合并事件、intent-only 事件不携带行数字段
 """
+
 import json
 
 from apps.chat_data_app import agent_stream
@@ -80,7 +81,10 @@ def test_extract_field_returns_none_before_value_starts():
     assert agent_stream._extract_streaming_text_field('{"file_path": "a.html"', "content") == (None, False)
     assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content"', "content") == (None, False)
     assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content":', "content") == (None, False)
-    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content": 123', "content") == (None, False)
+    assert agent_stream._extract_streaming_text_field('{"file_path": "a.html", "content": 123', "content") == (
+        None,
+        False,
+    )
 
 
 def test_extract_field_key_substring_safety():
@@ -109,12 +113,15 @@ def _feed(state: agent_stream._ToolStreamState, chunks: list[dict]) -> list[str]
 def test_file_edit_streams_added_and_removed_lines():
     """file_edit：old_content 先到计 -M，new_content 后到计 +N（整段替换口径）。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"file_path": "a.html", "old_content": "l1\\nl2\\nl3"', "index": 0},
-        {"id": "", "name": "", "args": ', "new_content": "x\\n', "index": 0},
-        {"id": "", "name": "", "args": 'y"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"file_path": "a.html", "old_content": "l1\\nl2\\nl3"', "index": 0},
+            {"id": "", "name": "", "args": ', "new_content": "x\\n', "index": 0},
+            {"id": "", "name": "", "args": 'y"}', "index": 0},
+        ],
+    )
 
     assert progress_counts(events) == [(0, 3), (1, 3), (2, 3)]
     tool_started = [e for e in events if sse_event_name(e) == "tool_started"]
@@ -124,23 +131,29 @@ def test_file_edit_streams_added_and_removed_lines():
 def test_file_edit_dedupes_unchanged_counts():
     """计数未变化的 chunk 不重复推送（old_content 完成后、new_content 开始前）。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"old_content": "a\\nb"', "index": 0},
-        # 不含新内容的空白 chunk：计数仍为 (0, 2)，不应再推
-        {"id": "", "name": "", "args": '   ', "index": 0},
-        {"id": "", "name": "", "args": ', "new_content": "c"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"old_content": "a\\nb"', "index": 0},
+            # 不含新内容的空白 chunk：计数仍为 (0, 2)，不应再推
+            {"id": "", "name": "", "args": "   ", "index": 0},
+            {"id": "", "name": "", "args": ', "new_content": "c"}', "index": 0},
+        ],
+    )
 
     assert progress_counts(events) == [(0, 2), (1, 2)]
 
 
 def test_file_write_has_no_removed_lines():
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_write", "args": '{"file_path": "b.html"', "index": 0},
-        {"id": "", "name": "", "args": ' "content": "a\\nb\\nc"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_write", "args": '{"file_path": "b.html"', "index": 0},
+            {"id": "", "name": "", "args": ' "content": "a\\nb\\nc"}', "index": 0},
+        ],
+    )
 
     # content 开始生成前推 (0, 0)；removed_lines 恒为 0
     assert progress_counts(events) == [(0, 0), (3, 0)]
@@ -148,10 +161,13 @@ def test_file_write_has_no_removed_lines():
 
 def test_non_target_tool_emits_no_progress():
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb"}', "index": 0},
+        ],
+    )
 
     assert progress_counts(events) == []
 
@@ -159,10 +175,13 @@ def test_non_target_tool_emits_no_progress():
 def test_intent_streamed_for_any_tool():
     """所有工具的 intent 参数在 args 里出现即推送，非行数工具的事件不带行数字段。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"file_path": "b.html", "intent": "读取配置文件"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"file_path": "b.html", "intent": "读取配置文件"}', "index": 0},
+        ],
+    )
 
     progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
     assert progress_intents(events) == ["读取配置文件"]
@@ -173,15 +192,18 @@ def test_intent_streamed_for_any_tool():
 def test_intent_not_streamed_until_string_closed():
     """intent 字符串未闭合时不推送（逐字流式 provider 下避免前缀洪峰），闭合后推一次。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
-        # intent 逐字到达：每次前缀都不同，未闭合前不推
-        {"id": "", "name": "", "args": '{"intent": "读', "index": 0},
-        {"id": "", "name": "", "args": '取配', "index": 0},
-        {"id": "", "name": "", "args": '置文件', "index": 0},
-        # 闭合才推
-        {"id": "", "name": "", "args": '"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+            # intent 逐字到达：每次前缀都不同，未闭合前不推
+            {"id": "", "name": "", "args": '{"intent": "读', "index": 0},
+            {"id": "", "name": "", "args": "取配", "index": 0},
+            {"id": "", "name": "", "args": "置文件", "index": 0},
+            # 闭合才推
+            {"id": "", "name": "", "args": '"}', "index": 0},
+        ],
+    )
 
     assert progress_intents(events) == ["读取配置文件"]
 
@@ -189,13 +211,16 @@ def test_intent_not_streamed_until_string_closed():
 def test_intent_dedupes_unchanged_value():
     """intent 未变化时不重复推送。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_read", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"intent": "读取配置文件"', "index": 0},
-        # intent 已闭合且未变化的空白 chunk：不再推
-        {"id": "", "name": "", "args": '   ', "index": 0},
-        {"id": "", "name": "", "args": ', "file_path": "b.html"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_read", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"intent": "读取配置文件"', "index": 0},
+            # intent 已闭合且未变化的空白 chunk：不再推
+            {"id": "", "name": "", "args": "   ", "index": 0},
+            {"id": "", "name": "", "args": ', "file_path": "b.html"}', "index": 0},
+        ],
+    )
 
     assert progress_intents(events) == ["读取配置文件"]
 
@@ -203,10 +228,18 @@ def test_intent_dedupes_unchanged_value():
 def test_file_write_merges_counts_and_intent_in_one_event():
     """行数与 intent 同时首次出现时合并推一个事件，两者都携带。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_write", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb", "intent": "写入配置"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_write", "args": "", "index": 0},
+            {
+                "id": "",
+                "name": "",
+                "args": '{"file_path": "b.html", "content": "a\\nb", "intent": "写入配置"}',
+                "index": 0,
+            },
+        ],
+    )
 
     progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
     assert len(progress) == 1
@@ -218,11 +251,14 @@ def test_file_write_merges_counts_and_intent_in_one_event():
 def test_intent_only_event_after_counts_settled():
     """行数已推送后 intent 才到达：第二个事件只带 intent，行数字段缺省（前端保留已有值）。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_write", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb"', "index": 0},
-        {"id": "", "name": "", "args": ', "intent": "写入配置"}', "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_write", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"file_path": "b.html", "content": "a\\nb"', "index": 0},
+            {"id": "", "name": "", "args": ', "intent": "写入配置"}', "index": 0},
+        ],
+    )
 
     progress = [sse_event_payload(e) for e in events if sse_event_name(e) == "tool_progress"]
     assert len(progress) == 2
@@ -233,10 +269,13 @@ def test_intent_only_event_after_counts_settled():
 def test_progress_state_cleared_after_tool_result():
     """工具结果到达后，行数/intent 去重状态与 args buffer 一起清理。"""
     state = agent_stream._ToolStreamState()
-    _feed(state, [
-        {"id": "call-1", "name": "file_write", "args": "", "index": 0},
-        {"id": "", "name": "", "args": '{"content": "a", "intent": "写入"}', "index": 0},
-    ])
+    _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_write", "args": "", "index": 0},
+            {"id": "", "name": "", "args": '{"content": "a", "intent": "写入"}', "index": 0},
+        ],
+    )
     assert state.progress_line_counts == {"call-1": (1, 0)}
     assert state.progress_intents == {"call-1": "写入"}
 
@@ -254,13 +293,17 @@ def test_progress_state_cleared_after_tool_result():
 # stream_stats：参数流式累计字符数上报（实时生成速度的分子来源）
 # --------------------------------------------------------------------------- #
 
+
 def test_stream_stats_emitted_when_step_crossed():
     """参数累计字符跨过上报步长时发一次 stream_stats,携带累计值。"""
     state = agent_stream._ToolStreamState()
-    events = _feed(state, [
-        {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
-        {"id": "", "name": "", "args": "x" * 300, "index": 0},
-    ])
+    events = _feed(
+        state,
+        [
+            {"id": "call-1", "name": "file_edit", "args": "", "index": 0},
+            {"id": "", "name": "", "args": "x" * 300, "index": 0},
+        ],
+    )
     stats = [e for e in events if sse_event_name(e) == "stream_stats"]
     assert len(stats) == 1
     assert sse_event_payload(stats[0])["args_chars"] == 300

@@ -48,9 +48,7 @@ def _write_fake_officecli(tmp_path, log_path) -> str:
 
 def _local_runtime(tmp_path):
     paths = ensure_conversation_workspace("officecli-thread", "u-officecli")
-    return ConversationWorkspaceRuntime(
-        workspace_root=paths["root"], user_id="u-officecli", backend="local"
-    )
+    return ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="u-officecli", backend="local")
 
 
 @pytest.mark.asyncio
@@ -78,19 +76,30 @@ async def test_validate_args_strips_binary_name_and_keeps_subcommand():
 
 
 def test_officecli_schema_extracts_file_roles_without_selectors():
-    dump = parse_officecli_args([
-        "dump", "/mnt/user-data/uploads/source.docx", "/body", "--out",
-        "/mnt/user-data/workspace/dump.json",
-    ])
+    dump = parse_officecli_args(
+        [
+            "dump",
+            "/mnt/user-data/uploads/source.docx",
+            "/body",
+            "--out",
+            "/mnt/user-data/workspace/dump.json",
+        ]
+    )
     assert command_path_values(dump, "/mnt/user-data/workspace") == [
         (1, "/mnt/user-data/uploads/source.docx"),
         (4, "/mnt/user-data/workspace/dump.json"),
     ]
     assert 4 in dump.write_indices
 
-    merge = parse_officecli_args([
-        "merge", "template.docx", "out.docx", "--data", "/mnt/user-data/workspace/data.json",
-    ])
+    merge = parse_officecli_args(
+        [
+            "merge",
+            "template.docx",
+            "out.docx",
+            "--data",
+            "/mnt/user-data/workspace/data.json",
+        ]
+    )
     assert command_path_values(merge, "/mnt/user-data/workspace") == [
         (1, "/mnt/user-data/workspace/template.docx"),
         (2, "/mnt/user-data/workspace/out.docx"),
@@ -99,32 +108,44 @@ def test_officecli_schema_extracts_file_roles_without_selectors():
     assert 1 not in merge.write_indices
     assert 2 in merge.write_indices
 
-    picture = parse_officecli_args([
-        "add", "report.docx", "/body/p[1]", "--type", "picture", "--prop",
-        "src=/mnt/user-data/uploads/a.png",
-    ])
+    picture = parse_officecli_args(
+        [
+            "add",
+            "report.docx",
+            "/body/p[1]",
+            "--type",
+            "picture",
+            "--prop",
+            "src=/mnt/user-data/uploads/a.png",
+        ]
+    )
     assert any(path.endswith("/uploads/a.png") for _, path in command_path_values(picture, "/mnt/user-data/workspace"))
 
-    background = parse_officecli_args([
-        "add", "deck.pptx", "/", "--type", "slide", "--prop",
-        "background=image:/mnt/user-data/workspace/hero.jpg",
-    ])
-    assert any(path.endswith("/workspace/hero.jpg") for _, path in command_path_values(background, "/mnt/user-data/workspace"))
+    background = parse_officecli_args(
+        [
+            "add",
+            "deck.pptx",
+            "/",
+            "--type",
+            "slide",
+            "--prop",
+            "background=image:/mnt/user-data/workspace/hero.jpg",
+        ]
+    )
+    assert any(
+        path.endswith("/workspace/hero.jpg") for _, path in command_path_values(background, "/mnt/user-data/workspace")
+    )
 
 
 def test_officecli_schema_marks_refresh_mutating_and_selectors_non_files():
     refresh = parse_officecli_args(["refresh", "/mnt/user-data/workspace/report.docx"])
     assert refresh.mutates is True
     query = parse_officecli_args(["query", "/mnt/user-data/workspace/report.docx", "/slide[1]/shape[2]"])
-    assert command_path_values(query, "/mnt/user-data/workspace") == [
-        (1, "/mnt/user-data/workspace/report.docx")
-    ]
+    assert command_path_values(query, "/mnt/user-data/workspace") == [(1, "/mnt/user-data/workspace/report.docx")]
 
     validate = parse_officecli_args(["validate", "/mnt/user-data/uploads/report.docx"])
     assert validate.mutates is False
-    assert command_path_values(validate, "/mnt/user-data/workspace") == [
-        (1, "/mnt/user-data/uploads/report.docx")
-    ]
+    assert command_path_values(validate, "/mnt/user-data/workspace") == [(1, "/mnt/user-data/uploads/report.docx")]
 
 
 def test_officecli_schema_reports_missing_file_before_path_validation():
@@ -167,9 +188,7 @@ async def test_local_run_officecli_keeps_arg_boundaries_when_root_has_spaces(mon
     spaced_root = tmp_path / "chat data" / "user-data"
     (spaced_root / "workspace").mkdir(parents=True)
     (spaced_root / "workspace" / "my report.docx").write_bytes(b"")
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(spaced_root), user_id="u-officecli", backend="local"
-    )
+    runtime = ConversationWorkspaceRuntime(workspace_root=str(spaced_root), user_id="u-officecli", backend="local")
 
     result = await runtime.run_officecli(
         args=["get", "/mnt/user-data/workspace/my report.docx", "/body"],
@@ -208,9 +227,7 @@ async def test_local_run_officecli_times_out(monkeypatch, tmp_path):
     monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: str(slow_bin))
     runtime = _local_runtime(tmp_path)
 
-    result = await runtime.run_officecli(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=1
-    )
+    result = await runtime.run_officecli(args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=1)
     assert result["timed_out"] is True
     assert result["exit_code"] == 124
 
@@ -334,10 +351,12 @@ async def test_tool_wrapper_accepts_intent_metadata(monkeypatch, tmp_path):
     runtime = _local_runtime(tmp_path)
 
     tool = create_officecli_run_tool(runtime)
-    ok = await tool.ainvoke({
-        "command_args": ["--version"],
-        "intent": "确认工作区 OfficeCLI 可用",
-    })
+    ok = await tool.ainvoke(
+        {
+            "command_args": ["--version"],
+            "intent": "确认工作区 OfficeCLI 可用",
+        }
+    )
     assert "[officecli_run]" in ok
     assert "OFFICECLI_CALLED" in ok
 
@@ -478,8 +497,11 @@ async def test_save_stdout_to_writes_untruncated_stdout_to_workspace(monkeypatch
     runtime = _local_runtime(tmp_path)
 
     payload = await run_officecli_command(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_demo.txt",
+        args=["--version"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+        save_stdout_to="/mnt/user-data/workspace/diff_demo.txt",
     )
     assert payload["success"] is True
     assert payload["saved_stdout_to"]
@@ -494,8 +516,11 @@ async def test_save_stdout_to_rejects_relative_path(tmp_path):
     runtime = _local_runtime(tmp_path)
     with pytest.raises(ValueError, match="路径必须以"):
         await run_officecli_command(
-            args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-            workspace_runtime=runtime, save_stdout_to="diff_demo.txt",
+            args=["--version"],
+            cwd="/mnt/user-data/workspace",
+            timeout_seconds=30,
+            workspace_runtime=runtime,
+            save_stdout_to="diff_demo.txt",
         )
 
 
@@ -507,31 +532,40 @@ async def test_save_stdout_to_accepts_workspace_absolute_path(monkeypatch, tmp_p
     runtime = _local_runtime(tmp_path)
 
     payload = await run_officecli_command(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_abs.txt",
+        args=["--version"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+        save_stdout_to="/mnt/user-data/workspace/diff_abs.txt",
     )
     assert payload["success"] is True
     assert (Path(runtime.workspace_root) / "workspace" / "diff_abs.txt").exists()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad_path,expected", [
-    ("/mnt/user-data/outputs/x.txt", "只允许写入"),
-    ("/mnt/user-data/uploads/x.txt", "只允许写入"),
-    ("/mnt/skills/officecli/x.txt", "只允许写入"),
-    ("/etc/x.txt", "路径必须以"),
-    ("diff_demo.txt", "路径必须以"),
-    ("workspace/../outputs/x.txt", "路径必须以"),
-    ("/mnt/user-data/workspace/../outputs/x.txt", "越界"),
-    ("/mnt/user-data/workspace/semantic/model.yaml", "只读快照"),
-])
+@pytest.mark.parametrize(
+    "bad_path,expected",
+    [
+        ("/mnt/user-data/outputs/x.txt", "只允许写入"),
+        ("/mnt/user-data/uploads/x.txt", "只允许写入"),
+        ("/mnt/skills/officecli/x.txt", "只允许写入"),
+        ("/etc/x.txt", "路径必须以"),
+        ("diff_demo.txt", "路径必须以"),
+        ("workspace/../outputs/x.txt", "路径必须以"),
+        ("/mnt/user-data/workspace/../outputs/x.txt", "越界"),
+        ("/mnt/user-data/workspace/semantic/model.yaml", "只读快照"),
+    ],
+)
 async def test_save_stdout_to_rejects_non_workspace_paths(tmp_path, bad_path, expected):
     """路径校验复用 WORKSPACE_PATH_POLICY：相对形式/越界/semantic 快照等口径与全局一致。"""
     runtime = _local_runtime(tmp_path)
     with pytest.raises(ValueError, match=expected):
         await run_officecli_command(
-            args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-            workspace_runtime=runtime, save_stdout_to=bad_path,
+            args=["--version"],
+            cwd="/mnt/user-data/workspace",
+            timeout_seconds=30,
+            workspace_runtime=runtime,
+            save_stdout_to=bad_path,
         )
 
 
@@ -545,8 +579,11 @@ async def test_save_stdout_to_skipped_when_command_fails(monkeypatch, tmp_path):
     runtime = _local_runtime(tmp_path)
 
     payload = await run_officecli_command(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_fail.txt",
+        args=["--version"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+        save_stdout_to="/mnt/user-data/workspace/diff_fail.txt",
     )
     assert payload["success"] is False
     assert payload["saved_stdout_to"] == ""
@@ -567,8 +604,11 @@ async def test_save_stdout_to_write_failure_keeps_command_result(monkeypatch, tm
 
     monkeypatch.setattr(runtime, "write_text_file", _broken_write)
     payload = await run_officecli_command(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_dir",
+        args=["--version"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+        save_stdout_to="/mnt/user-data/workspace/diff_dir",
     )
     assert payload["success"] is True
     assert payload["saved_stdout_to"] == ""
@@ -587,8 +627,11 @@ async def test_save_stdout_to_writes_untruncated_stdout_over_limit(monkeypatch, 
     runtime = _local_runtime(tmp_path)
 
     payload = await run_officecli_command(
-        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30,
-        workspace_runtime=runtime, save_stdout_to="/mnt/user-data/workspace/diff_big.txt",
+        args=["--version"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+        save_stdout_to="/mnt/user-data/workspace/diff_big.txt",
     )
     assert payload["success"] is True
     assert payload["stdout_truncated"] is True

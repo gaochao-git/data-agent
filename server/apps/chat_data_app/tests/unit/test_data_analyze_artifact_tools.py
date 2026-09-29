@@ -57,8 +57,7 @@ def test_output_artifact_registry_preserves_suffix_specific_table_type():
 
 def test_output_artifact_registry_accepts_only_direct_output_skill():
     skill_bytes = (
-        b"---\nname: sales-analysis\ntitle: Sales Analysis\n"
-        b"description: Analyze sales.\n---\n# Sales Analysis\n"
+        b"---\nname: sales-analysis\ntitle: Sales Analysis\ndescription: Analyze sales.\n---\n# Sales Analysis\n"
     )
 
     local_artifact = parse_output_artifact(
@@ -73,14 +72,20 @@ def test_output_artifact_registry_accepts_only_direct_output_skill():
     assert local_artifact["artifact_type"] == "skill"
     assert sandbox_artifact["artifact_type"] == "skill"
     assert {**local_artifact, "file_path": sandbox_artifact["file_path"]} == sandbox_artifact
-    assert parse_output_artifact(
-        visible_path="/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
-        data=skill_bytes,
-    ) == {}
-    assert parse_output_artifact(
-        visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
-        data=skill_bytes.replace(b"name: sales-analysis", b"name: another-skill"),
-    ) == {}
+    assert (
+        parse_output_artifact(
+            visible_path="/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
+            data=skill_bytes,
+        )
+        == {}
+    )
+    assert (
+        parse_output_artifact(
+            visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
+            data=skill_bytes.replace(b"name: sales-analysis", b"name: another-skill"),
+        )
+        == {}
+    )
 
 
 def test_output_artifact_registry_accepts_office_presentation():
@@ -109,10 +114,13 @@ def test_output_artifact_registry_accepts_markdown_and_reserves_skill_file():
         "renderer": "markdown",
         "artifact_version": "v1",
     }
-    assert parse_output_artifact(
-        visible_path="/mnt/user-data/outputs/invalid-skill/SKILL.md",
-        data=b"# Not a skill\n",
-    ) == {}
+    assert (
+        parse_output_artifact(
+            visible_path="/mnt/user-data/outputs/invalid-skill/SKILL.md",
+            data=b"# Not a skill\n",
+        )
+        == {}
+    )
 
 
 def test_output_artifact_registry_accepts_self_contained_html():
@@ -128,10 +136,13 @@ def test_output_artifact_registry_accepts_self_contained_html():
         "artifact_version": "v1",
     }
     # htm 后缀同样注册为 html 类型
-    assert parse_output_artifact(
-        visible_path="/mnt/user-data/outputs/report.htm",
-        data=b"<html><body>x</body></html>",
-    )["artifact_type"] == "html"
+    assert (
+        parse_output_artifact(
+            visible_path="/mnt/user-data/outputs/report.htm",
+            data=b"<html><body>x</body></html>",
+        )["artifact_type"]
+        == "html"
+    )
 
 
 def test_output_artifact_registry_accepts_yaml_output():
@@ -147,10 +158,13 @@ def test_output_artifact_registry_accepts_yaml_output():
         "artifact_version": "v1",
     }
     # .yml 后缀同样注册为 yaml 类型
-    assert parse_output_artifact(
-        visible_path="/mnt/user-data/outputs/model.yml",
-        data=b"version: 1.0\n",
-    )["artifact_type"] == "yaml"
+    assert (
+        parse_output_artifact(
+            visible_path="/mnt/user-data/outputs/model.yml",
+            data=b"version: 1.0\n",
+        )["artifact_type"]
+        == "yaml"
+    )
 
 
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
@@ -283,18 +297,24 @@ def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(
 
 def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path):
     root = tmp_path
-    _write_json(root / "outputs" / "bad-chart.json", {
-        "version": "1.0",
-        "chart_type": "line",
-        "data": [],
-        "encoding": {"x": "month", "y": ["sales"]},
-    })
-    _write_json(root / "outputs" / "valid-chart.json", {
-        "version": "1.0",
-        "chart_type": "table",
-        "data": [],
-        "encoding": {"x": "", "y": []},
-    })
+    _write_json(
+        root / "outputs" / "bad-chart.json",
+        {
+            "version": "1.0",
+            "chart_type": "line",
+            "data": [],
+            "encoding": {"x": "month", "y": ["sales"]},
+        },
+    )
+    _write_json(
+        root / "outputs" / "valid-chart.json",
+        {
+            "version": "1.0",
+            "chart_type": "table",
+            "data": [],
+            "encoding": {"x": "", "y": []},
+        },
+    )
     (root / "outputs" / "bad-dashboard-json.json").write_text("{bad", encoding="utf-8")
     _write_json(root / "outputs" / "valid-dashboard.json", {"cards": []})
 
@@ -312,10 +332,13 @@ def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path)
 
 def test_dashboard_artifact_payload_reads_cards_from_outputs(tmp_path):
     root = tmp_path
-    _write_json(root / "outputs" / "dashboard.json", {
-        "dashboard_name": "订单看板",
-        "cards": [{"title": "销售额", "dsl": {"metrics": ["销售额"]}}],
-    })
+    _write_json(
+        root / "outputs" / "dashboard.json",
+        {
+            "dashboard_name": "订单看板",
+            "cards": [{"title": "销售额", "dsl": {"metrics": ["销售额"]}}],
+        },
+    )
     _write_json(root / "outputs" / "bad-dashboard.json", {"cards": "bad"})
     _write_json(root / "workspace" / "dashboard.json", {"cards": []})
 
@@ -346,12 +369,19 @@ async def test_data_analyzing_tool_handles_single_batch_compare_and_invalid_payl
     def fake_remove_mixed(dsl, semantic_config):
         return {**dsl, "normalized": True}, ["已移除明细字段"]
 
-    async def fake_validate(dashboard_spec, datasource_id, semantic_config_id, user_query=None, user_id="system", username=None):
+    async def fake_validate(
+        dashboard_spec, datasource_id, semantic_config_id, user_query=None, user_id="system", username=None
+    ):
         assert datasource_id == "ds_a"
         assert semantic_config_id == "sc_a"
         assert user_id == "user_a"
         assert username == "测试用户"
-        return {"valid": True, "valid_count": len(dashboard_spec["cards"]), "warnings": ["ok"], "panels": [{"title": "面板"}]}
+        return {
+            "valid": True,
+            "valid_count": len(dashboard_spec["cards"]),
+            "warnings": ["ok"],
+            "panels": [{"title": "面板"}],
+        }
 
     monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_get_config)
     monkeypatch.setattr(data_analyzing, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
@@ -360,53 +390,78 @@ async def test_data_analyzing_tool_handles_single_batch_compare_and_invalid_payl
 
     tool = data_analyzing.create_data_analyzing_tool("ds_a", user_id="user_a", operator_name="测试用户")
 
-    single = _strip_tool_payload(await tool.ainvoke({
-        "action": "validate_dsl",
-        "action_payload": {
-            "semantic_config_id": "sc_a",
-            "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
-        },
-    }))
+    single = _strip_tool_payload(
+        await tool.ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {
+                    "semantic_config_id": "sc_a",
+                    "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
+                },
+            }
+        )
+    )
     assert single["success"] is True
     assert single["mode"] == "single"
     assert single["dsl"]["normalized"] is True
     assert single["warnings"] == ["已移除明细字段"]
 
-    batch_from_cards = _strip_tool_payload(await tool.ainvoke({
-        "action": "validate_dashboard",
-        "action_payload": {"semantic_config_id": "sc_a", "dsl": {"cards": [{"title": "销售额"}]}},
-    }))
-    batch_from_list = _strip_tool_payload(await tool.ainvoke({
-        "action": "validate_dashboard",
-        "action_payload": {"semantic_config_id": "sc_a", "dsl": [{"title": "销售额"}, {"title": "订单数"}]},
-    }))
+    batch_from_cards = _strip_tool_payload(
+        await tool.ainvoke(
+            {
+                "action": "validate_dashboard",
+                "action_payload": {"semantic_config_id": "sc_a", "dsl": {"cards": [{"title": "销售额"}]}},
+            }
+        )
+    )
+    batch_from_list = _strip_tool_payload(
+        await tool.ainvoke(
+            {
+                "action": "validate_dashboard",
+                "action_payload": {"semantic_config_id": "sc_a", "dsl": [{"title": "销售额"}, {"title": "订单数"}]},
+            }
+        )
+    )
     assert batch_from_cards["mode"] == "batch"
     assert batch_from_cards["valid_count"] == 1
     assert batch_from_list["valid_count"] == 2
 
-    compare = _strip_tool_payload(await tool.ainvoke({
-        "action": "validate_dsl",
-        "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}}},
-    }))
+    compare = _strip_tool_payload(
+        await tool.ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {
+                    "semantic_config_id": "sc_a",
+                    "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}},
+                },
+            }
+        )
+    )
     assert compare["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare["error"]
 
     # 校验失败现在以 ValueError 抛出，由 ToolErrorMiddleware 统一转成错误 ToolMessage
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
-        await data_analyzing.create_data_analyzing_tool("").ainvoke({
-            "action": "validate_dsl",
-            "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
-        })
+        await data_analyzing.create_data_analyzing_tool("").ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
+            }
+        )
     with pytest.raises(ValueError, match="semantic_config_id"):
-        await data_analyzing.create_data_analyzing_tool("ds_a", None).ainvoke({
-            "action": "validate_dsl",
-            "action_payload": {"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}},
-        })
+        await data_analyzing.create_data_analyzing_tool("ds_a", None).ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}},
+            }
+        )
     with pytest.raises(ValueError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
-        await tool.ainvoke({
-            "action": "validate_dsl",
-            "action_payload": {"semantic_config_id": "sc_a", "dsl": "不是json"},
-        })
+        await tool.ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"semantic_config_id": "sc_a", "dsl": "不是json"},
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -418,7 +473,9 @@ async def test_data_analyzing_tool_propagates_dependency_errors(monkeypatch):
     monkeypatch.setattr(data_analyzing, "load_semantic_model", fake_get_config)
 
     with pytest.raises(RuntimeError, match="配置不存在"):
-        await data_analyzing.create_data_analyzing_tool("ds_a").ainvoke({
-            "action": "validate_dsl",
-            "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
-        })
+        await data_analyzing.create_data_analyzing_tool("ds_a").ainvoke(
+            {
+                "action": "validate_dsl",
+                "action_payload": {"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}},
+            }
+        )

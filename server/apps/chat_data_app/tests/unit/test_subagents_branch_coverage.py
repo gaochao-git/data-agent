@@ -1,4 +1,5 @@
 """subagents 中间件流式/轨迹辅助函数的分支覆盖补测。"""
+
 import os
 import sys
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.agent.middleware.subagents import (
     _build_trail_snapshot,
@@ -31,7 +32,7 @@ def test_extract_final_report_skips_non_ai_and_empty_text():
     """非 AIMessage 跳过（133->134），空文本回循环（136->132）。"""
     messages = [
         HumanMessage("问题"),
-        AIMessage(""),           # 空文本：回循环
+        AIMessage(""),  # 空文本：回循环
         AIMessage("中间结论"),
         "not-a-message",
     ]
@@ -120,12 +121,12 @@ async def test_run_subagent_with_events_guards_all_chunk_shapes():
     （520->522）、updates 非法形态（523->524）都不炸且被跳过。"""
     good_chunk = AIMessageChunk(content="hi", id="m1")
     chunks = [
-        None,                                   # 516->517
-        "garbage",                              # 516->517
-        ("messages", "not-a-tuple"),            # 520->522
+        None,  # 516->517
+        "garbage",  # 516->517
+        ("messages", "not-a-tuple"),  # 520->522
         ("messages", (good_chunk, {"meta": 1})),  # 正常增量
-        ("updates", "not-a-dict"),              # 523->524
-        ("other-mode", {"node": {}}),           # 523->524
+        ("updates", "not-a-dict"),  # 523->524
+        ("other-mode", {"node": {}}),  # 523->524
         ("updates", {"node": {"messages": [AIMessage(content="done", id="m2")]}}),
     ]
     collected = await _run_subagent_with_events(_FakeRunnable(chunks), {}, {}, None)

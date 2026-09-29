@@ -74,7 +74,9 @@ class DashboardService:
         logger.info(f"创建大屏成功: {dashboard_id} - {name}")
         return self._dashboard_to_dict(dashboard)
 
-    async def set_dashboard_public(self, dashboard_id: str, user_id: str, is_public: bool, operator_name: str = "") -> Optional[Dict[str, Any]]:
+    async def set_dashboard_public(
+        self, dashboard_id: str, user_id: str, is_public: bool, operator_name: str = ""
+    ) -> Optional[Dict[str, Any]]:
         """更新看板发布状态。"""
         dashboard = await self.dao.set_dashboard_public(
             dashboard_id=dashboard_id,
@@ -88,7 +90,9 @@ class DashboardService:
         logger.info("更新看板发布状态: %s is_public=%s", dashboard_id, dashboard.is_public)
         return self._dashboard_to_dict(dashboard)
 
-    async def get_dashboard(self, dashboard_id: str, user_id: str = None, include_public: bool = True) -> Optional[Dict[str, Any]]:
+    async def get_dashboard(
+        self, dashboard_id: str, user_id: str = None, include_public: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """获取大屏详情（含面板）"""
         dashboard, panels = await self.dao.get_dashboard_with_panels(
             dashboard_id=dashboard_id,
@@ -232,7 +236,9 @@ class DashboardService:
         logger.info(f"更新大屏布局: {dashboard_id}, {updated_count}/{len(layouts)} 个面板")
         return updated_count
 
-    async def delete_panel(self, dashboard_id: str, panel_id: str, user_id: str = None, operator_name: str = "") -> bool:
+    async def delete_panel(
+        self, dashboard_id: str, panel_id: str, user_id: str = None, operator_name: str = ""
+    ) -> bool:
         """删除面板（逻辑删除）"""
         deleted = await self.dao.delete_panel(
             dashboard_id=dashboard_id,
@@ -245,7 +251,9 @@ class DashboardService:
             logger.info(f"逻辑删除面板: {panel_id}")
         return deleted
 
-    async def get_panel(self, panel_id: str, dashboard_id: str = None, user_id: str = None, include_public: bool = True) -> Optional[Dict[str, Any]]:
+    async def get_panel(
+        self, panel_id: str, dashboard_id: str = None, user_id: str = None, include_public: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """获取单个面板"""
         panel = await self.dao.get_panel(
             panel_id=panel_id,
@@ -258,7 +266,9 @@ class DashboardService:
     # ============ 辅助方法 ============
 
     @staticmethod
-    def _dashboard_update_values(name: str = None, description: str = None, theme: str = None, background_id: str = None) -> Dict[str, Any]:
+    def _dashboard_update_values(
+        name: str = None, description: str = None, theme: str = None, background_id: str = None
+    ) -> Dict[str, Any]:
         values: Dict[str, Any] = {}
         if name is not None:
             values["dashboard_name"] = name
@@ -375,7 +385,7 @@ class DashboardService:
                 "x": panel.layout_x,
                 "y": panel.layout_y,
                 "w": panel.layout_w,
-                "h": panel.layout_h
+                "h": panel.layout_h,
             },
             "refresh_interval": panel.refresh_interval,
             "source_thread_id": panel.source_thread_id,

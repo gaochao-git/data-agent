@@ -138,7 +138,12 @@ def test_hive_sync_get_connection_applies_credentials_and_timeout(monkeypatch):
 
     def fake_build_params(**kwargs):
         captured["build_params"] = kwargs
-        return {"host": kwargs["host"], "port": kwargs["port"], "database": kwargs["database"], "username": kwargs["username"]}
+        return {
+            "host": kwargs["host"],
+            "port": kwargs["port"],
+            "database": kwargs["database"],
+            "username": kwargs["username"],
+        }
 
     def fake_connect(**kwargs):
         captured["connect_params"] = kwargs
@@ -272,10 +277,14 @@ def test_hive_sync_full_schema_empty_and_failed_tables():
 def test_hive_sync_async_methods_delegate_to_sync_methods():
     service = HiveSyncService("localhost")
     service._get_tables = lambda: ["orders"]
-    service._get_full_schema = lambda table_names=None, max_workers=10: [{"table_name": table_names[0], "max_workers": max_workers}]
+    service._get_full_schema = lambda table_names=None, max_workers=10: [
+        {"table_name": table_names[0], "max_workers": max_workers}
+    ]
 
     assert asyncio.run(service.get_tables_async()) == ["orders"]
-    assert asyncio.run(service.get_full_schema_async(["orders"], max_workers=3)) == [{"table_name": "orders", "max_workers": 3}]
+    assert asyncio.run(service.get_full_schema_async(["orders"], max_workers=3)) == [
+        {"table_name": "orders", "max_workers": 3}
+    ]
 
 
 @pytest.mark.asyncio
@@ -398,40 +407,67 @@ class AsyncMySQLConnection:
 @pytest.mark.asyncio
 async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
     table_conn = AsyncMySQLConnection([{"Tables_in_demo": "orders"}, {"Tables_in_demo": "users"}])
-    schema_conn = AsyncMySQLConnection([
-        {
-            "TABLE_NAME": "orders",
-            "TABLE_COMMENT": "订单表",
-            "COLUMN_NAME": "order_id",
-            "COLUMN_TYPE": "bigint",
-            "COLUMN_COMMENT": "订单ID",
-            "COLUMN_KEY": "PRI",
-            "IS_NULLABLE": "NO",
-        },
-        {
-            "TABLE_NAME": "orders",
-            "TABLE_COMMENT": "订单表",
-            "COLUMN_NAME": "amount",
-            "COLUMN_TYPE": "decimal(10,2)",
-            "COLUMN_COMMENT": "",
-            "COLUMN_KEY": "MUL",
-            "IS_NULLABLE": "YES",
-        },
-        {
-            "TABLE_NAME": "users",
-            "TABLE_COMMENT": "",
-            "COLUMN_NAME": "user_id",
-            "COLUMN_TYPE": "bigint",
-            "COLUMN_COMMENT": "用户ID",
-            "COLUMN_KEY": "UNI",
-            "IS_NULLABLE": "NO",
-        },
-    ], [
-        {"TABLE_NAME": "orders", "INDEX_NAME": "PRIMARY", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
-        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
-        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 2, "COLUMN_NAME": "amount"},
-        {"TABLE_NAME": "orders", "INDEX_NAME": "idx_amount", "NON_UNIQUE": 1, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "amount"},
-    ])
+    schema_conn = AsyncMySQLConnection(
+        [
+            {
+                "TABLE_NAME": "orders",
+                "TABLE_COMMENT": "订单表",
+                "COLUMN_NAME": "order_id",
+                "COLUMN_TYPE": "bigint",
+                "COLUMN_COMMENT": "订单ID",
+                "COLUMN_KEY": "PRI",
+                "IS_NULLABLE": "NO",
+            },
+            {
+                "TABLE_NAME": "orders",
+                "TABLE_COMMENT": "订单表",
+                "COLUMN_NAME": "amount",
+                "COLUMN_TYPE": "decimal(10,2)",
+                "COLUMN_COMMENT": "",
+                "COLUMN_KEY": "MUL",
+                "IS_NULLABLE": "YES",
+            },
+            {
+                "TABLE_NAME": "users",
+                "TABLE_COMMENT": "",
+                "COLUMN_NAME": "user_id",
+                "COLUMN_TYPE": "bigint",
+                "COLUMN_COMMENT": "用户ID",
+                "COLUMN_KEY": "UNI",
+                "IS_NULLABLE": "NO",
+            },
+        ],
+        [
+            {
+                "TABLE_NAME": "orders",
+                "INDEX_NAME": "PRIMARY",
+                "NON_UNIQUE": 0,
+                "SEQ_IN_INDEX": 1,
+                "COLUMN_NAME": "order_id",
+            },
+            {
+                "TABLE_NAME": "orders",
+                "INDEX_NAME": "uniq_order_amount",
+                "NON_UNIQUE": 0,
+                "SEQ_IN_INDEX": 1,
+                "COLUMN_NAME": "order_id",
+            },
+            {
+                "TABLE_NAME": "orders",
+                "INDEX_NAME": "uniq_order_amount",
+                "NON_UNIQUE": 0,
+                "SEQ_IN_INDEX": 2,
+                "COLUMN_NAME": "amount",
+            },
+            {
+                "TABLE_NAME": "orders",
+                "INDEX_NAME": "idx_amount",
+                "NON_UNIQUE": 1,
+                "SEQ_IN_INDEX": 1,
+                "COLUMN_NAME": "amount",
+            },
+        ],
+    )
     connections = [table_conn, schema_conn]
 
     async def fake_connect(**kwargs):
@@ -445,35 +481,37 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
     assert await service.get_tables_async() == ["orders", "users"]
     schema = await service.get_full_schema_async(["orders"])
 
-    assert schema == [{
-        "table_name": "orders",
-        "description": "订单表",
-        "columns": [
-            {
-                "name": "order_id",
-                "type": "bigint",
-                "mysql_type": "bigint",
-                "description": "订单ID",
-                "primary_key": True,
-                "unique_key": False,
-                "index_key": False,
-                "nullable": False,
-            },
-            {
-                "name": "amount",
-                "type": "decimal(10,2)",
-                "mysql_type": "decimal(10,2)",
-                "description": "amount",
-                "primary_key": False,
-                "unique_key": False,
-                "index_key": True,
-                "nullable": True,
-            },
-        ],
-        "primary_keys": [["order_id"]],
-        "unique_indexes": [{"name": "uniq_order_amount", "columns": ["order_id", "amount"]}],
-        "indexes": [{"name": "idx_amount", "columns": ["amount"]}],
-    }]
+    assert schema == [
+        {
+            "table_name": "orders",
+            "description": "订单表",
+            "columns": [
+                {
+                    "name": "order_id",
+                    "type": "bigint",
+                    "mysql_type": "bigint",
+                    "description": "订单ID",
+                    "primary_key": True,
+                    "unique_key": False,
+                    "index_key": False,
+                    "nullable": False,
+                },
+                {
+                    "name": "amount",
+                    "type": "decimal(10,2)",
+                    "mysql_type": "decimal(10,2)",
+                    "description": "amount",
+                    "primary_key": False,
+                    "unique_key": False,
+                    "index_key": True,
+                    "nullable": True,
+                },
+            ],
+            "primary_keys": [["order_id"]],
+            "unique_indexes": [{"name": "uniq_order_amount", "columns": ["order_id", "amount"]}],
+            "indexes": [{"name": "idx_amount", "columns": ["amount"]}],
+        }
+    ]
     assert table_conn.closed is True
     assert schema_conn.ensure_closed_called is True
 
@@ -488,7 +526,13 @@ async def test_query_metadata_generates_json_and_falls_back(monkeypatch):
             assert "select count(*) from orders" in prompt
             return SimpleNamespace(content=self.content)
 
-    monkeypatch.setattr(query_metadata, "get_chat_data_llm", lambda streaming=False: FakeLLM('```json\n{"title":"订单统计","description":"统计订单数量","category":"订单分析"}\n```'))
+    monkeypatch.setattr(
+        query_metadata,
+        "get_chat_data_llm",
+        lambda streaming=False: FakeLLM(
+            '```json\n{"title":"订单统计","description":"统计订单数量","category":"订单分析"}\n```'
+        ),
+    )
     metadata = await query_metadata.generate_query_metadata("select count(*) from orders")
     assert metadata == {"title": "订单统计", "description": "统计订单数量", "category": "订单分析"}
     assert query_metadata.assign_card_style("订单分析")["icon"] == "fa-shopping-cart"

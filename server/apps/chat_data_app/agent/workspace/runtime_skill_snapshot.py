@@ -67,10 +67,7 @@ def is_runtime_skill_snapshot_ready(snapshot_dir: Path) -> bool:
     """判断会话快照是否已冻结，兼容早期无完成标记的非空快照。"""
     root = Path(snapshot_dir)
     marker = root / SNAPSHOT_READY_MARKER
-    return root.is_dir() and (
-        (marker.is_file() and not marker.is_symlink())
-        or bool(list_snapshot_skill_names(root))
-    )
+    return root.is_dir() and ((marker.is_file() and not marker.is_symlink()) or bool(list_snapshot_skill_names(root)))
 
 
 def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
@@ -90,13 +87,15 @@ def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
         if not skill_md.is_file() or skill_md.is_symlink():
             continue
         metadata = parse_metadata(skill_md) or {}
-        entries.append({
-            "name": name,
-            "title": str(metadata.get("title") or name),
-            "description": str(metadata.get("description") or ""),
-            "domain": str(metadata.get("domain") or ""),
-            "category": str(metadata.get("category") or ""),
-        })
+        entries.append(
+            {
+                "name": name,
+                "title": str(metadata.get("title") or name),
+                "description": str(metadata.get("description") or ""),
+                "domain": str(metadata.get("domain") or ""),
+                "category": str(metadata.get("category") or ""),
+            }
+        )
     return entries
 
 
@@ -169,15 +168,9 @@ def _describe_fingerprint_changes(stored: dict[str, str] | None, current: dict[s
     if stored is None:
         return "升级无指纹的存量快照"
     stored_names, current_names = set(stored), set(current)
-    parts = [
-        f"{name}(新增)" for name in sorted(current_names - stored_names)
-    ]
+    parts = [f"{name}(新增)" for name in sorted(current_names - stored_names)]
     parts += [f"{name}(移除)" for name in sorted(stored_names - current_names)]
-    parts += [
-        f"{name}(内容变更)"
-        for name in sorted(stored_names & current_names)
-        if stored[name] != current[name]
-    ]
+    parts += [f"{name}(内容变更)" for name in sorted(stored_names & current_names) if stored[name] != current[name]]
     return "、".join(parts) if parts else "指纹不一致（无明细）"
 
 
@@ -270,6 +263,7 @@ async def build_runtime_skill_snapshot_async(
     tmp.mkdir(parents=True, exist_ok=True)
 
     try:
+
         def _populate() -> None:
             for name, source_dir in sources:
                 _copy_skill_dir(source_dir, tmp / name)

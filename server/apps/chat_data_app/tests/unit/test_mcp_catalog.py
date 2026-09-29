@@ -283,10 +283,12 @@ async def test_middleware_filters_tools_by_discovered_and_always_mounted():
 async def test_middleware_falls_back_to_history_discovery_when_state_empty():
     middleware = MCPToolDiscoveryMiddleware(search_active=True)
     history_message = ToolMessage(
-        content=json.dumps({
-            "count": 1,
-            "results": [{"name": "mcp_db_slow_query", "server_id": "db"}],
-        }),
+        content=json.dumps(
+            {
+                "count": 1,
+                "results": [{"name": "mcp_db_slow_query", "server_id": "db"}],
+            }
+        ),
         name=MCP_TOOL_SEARCH_TOOL_NAME,
         tool_call_id="call-1",
     )
@@ -325,13 +327,15 @@ async def test_middleware_no_override_when_all_tools_exposed():
 async def test_middleware_captures_discovered_names_from_search_result():
     middleware = MCPToolDiscoveryMiddleware(search_active=True)
     tool_message = ToolMessage(
-        content=json.dumps({
-            "count": 2,
-            "results": [
-                {"name": "mcp_ssh_system_overview", "server_id": "ssh"},
-                {"name": "mcp_fault_log_grep", "server_id": "fault"},
-            ],
-        }),
+        content=json.dumps(
+            {
+                "count": 2,
+                "results": [
+                    {"name": "mcp_ssh_system_overview", "server_id": "ssh"},
+                    {"name": "mcp_fault_log_grep", "server_id": "fault"},
+                ],
+            }
+        ),
         name=MCP_TOOL_SEARCH_TOOL_NAME,
         tool_call_id="call-1",
     )

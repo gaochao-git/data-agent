@@ -15,6 +15,7 @@
 路径规则仍由 ``utils/skill_paths.py`` 负责：会话运行域统一为
 ``/mnt/skills/<name>/...``，本模块只登记「有哪些内置技能、叫什么」。
 """
+
 from __future__ import annotations
 
 # 数据分析：查询与分析、看板生成、语义质量检查与治理的统一入口。

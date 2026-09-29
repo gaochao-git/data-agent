@@ -17,17 +17,21 @@ class _FakeDatasourceManager:
             "id": "ds_a",
             "group_id": "group_a",
             "source_type": "hive",
-            "ds_tables": [{
-                "table_name": "orders",
-                "columns": [{"name": "amount"}, {"name": "status"}],
-                "primary_keys": [["id"]],
-                "unique_indexes": [{"name": "uniq_order_no", "columns": ["order_no"]}],
-                "manual_indexes": [{
-                    "index_type": "unique",
-                    "index_name": "uniq_external_id",
-                    "columns": ["external_id"],
-                }],
-            }],
+            "ds_tables": [
+                {
+                    "table_name": "orders",
+                    "columns": [{"name": "amount"}, {"name": "status"}],
+                    "primary_keys": [["id"]],
+                    "unique_indexes": [{"name": "uniq_order_no", "columns": ["order_no"]}],
+                    "manual_indexes": [
+                        {
+                            "index_type": "unique",
+                            "index_name": "uniq_external_id",
+                            "columns": ["external_id"],
+                        }
+                    ],
+                }
+            ],
         }
         self.column_dicts = {}
         self.column_dict_error = None
@@ -153,13 +157,17 @@ def _build_service(configs=None):
 
 
 def test_query_enriches_model_context_and_applies_visibility():
-    public = _base_config(relationships=[{
-        "left_table": "orders",
-        "right_table": "items",
-        "left_column": "order_id",
-        "right_column": "order_id",
-        "relationship_type": "one_to_many",
-    }])
+    public = _base_config(
+        relationships=[
+            {
+                "left_table": "orders",
+                "right_table": "items",
+                "left_column": "order_id",
+                "right_column": "order_id",
+                "relationship_type": "one_to_many",
+            }
+        ]
+    )
     private = _base_config(id="sc_private", name="个人分析", scope_type="private", create_by="u1")
     hidden = _base_config(id="sc_hidden", name="他人分析", scope_type="private", create_by="u2")
     service, _, _ = _build_service([public, private, hidden])
@@ -184,25 +192,31 @@ def test_directory_uses_lightweight_group_lookup():
 
     directory = asyncio.run(service.get_directory_async("ds_a", "u1"))
 
-    assert directory == [{
-        "id": "sc_a",
-        "name": "订单分析",
-        "description": "",
-        "enabled": True,
-        "metrics_total": 1,
-        "dimensions_total": 1,
-    }]
+    assert directory == [
+        {
+            "id": "sc_a",
+            "name": "订单分析",
+            "description": "",
+            "enabled": True,
+            "metrics_total": 1,
+            "dimensions_total": 1,
+        }
+    ]
     assert asyncio.run(service.get_directory_async("missing", "u1")) == []
     assert datasource_manager.datasource["ds_tables"]
 
 
 def test_runtime_config_merges_column_dictionary_without_mutating_persisted_config():
-    persisted = _base_config(metrics=[{
-        "name": "销售额",
-        "table": "orders",
-        "expression": "SUM(amount)",
-        "metadata_supplement": "统计实付金额",
-    }])
+    persisted = _base_config(
+        metrics=[
+            {
+                "name": "销售额",
+                "table": "orders",
+                "expression": "SUM(amount)",
+                "metadata_supplement": "统计实付金额",
+            }
+        ]
+    )
     service, datasource_manager, dao = _build_service([persisted])
     datasource_manager.column_dicts = {
         ("orders", "status"): {
@@ -286,13 +300,21 @@ def test_runtime_bundle_short_circuits_without_configs():
 def test_column_dictionary_helper_branches():
     assert SemanticConfigService._extract_metric_source_column({"expression": "SUM(orders.amount)"}) == "amount"
     assert SemanticConfigService._extract_metric_source_column({"expression": "`orders.status`"}) == "status"
-    assert SemanticConfigService._extract_metric_source_column({"expression": "amount + tax", "field": "`orders.amount`"}) == "amount"
+    assert (
+        SemanticConfigService._extract_metric_source_column({"expression": "amount + tax", "field": "`orders.amount`"})
+        == "amount"
+    )
     assert SemanticConfigService._extract_metric_source_column({"expression": "amount + tax"}) == ""
-    assert SemanticConfigService._format_column_dict_supplement({
-        "enum_values": [],
-        "storage_format": "yyyyMMdd",
-        "unit": "万元",
-    }) == "存储格式：yyyyMMdd\n单位：万元"
+    assert (
+        SemanticConfigService._format_column_dict_supplement(
+            {
+                "enum_values": [],
+                "storage_format": "yyyyMMdd",
+                "unit": "万元",
+            }
+        )
+        == "存储格式：yyyyMMdd\n单位：万元"
+    )
     assert SemanticConfigService._merge_supplement("已有说明", "单位：元") == "已有说明\n单位：元"
     assert SemanticConfigService._merge_supplement("已有说明\n单位：元", "单位：元") == "已有说明\n单位：元"
 
@@ -320,14 +342,18 @@ def test_create_update_delete_lifecycle_and_name_scope_rules():
             name="新配置",
             scope_type="private",
             create_by="u1",
-            relationships=[{
-                "left_table": "orders",
-                "right_table": "items",
-                "left_column": "order_id",
-                "right_column": "order_id",
-            }],
+            relationships=[
+                {
+                    "left_table": "orders",
+                    "right_table": "items",
+                    "left_column": "order_id",
+                    "right_column": "order_id",
+                }
+            ],
         )
-        assert created["relationships"][0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
+        assert created["relationships"][0]["join_conditions"] == [
+            {"left_column": "order_id", "right_column": "order_id"}
+        ]
         assert await service.update_async("ds_a", "missing", name="x") is None
         with pytest.raises(ValueError, match="名称不能为空"):
             await service.update_async("ds_a", "sc_private", name="")
@@ -377,16 +403,20 @@ def test_generate_basic_single_table_configs_creates_enabled_models_and_is_idemp
         {"table_name": "empty_table", "columns": []},
     ]
 
-    first = asyncio.run(service.generate_basic_public_single_table_configs_async(
-        "ds_a",
-        create_by="u1",
-        create_by_name="用户1",
-    ))
-    second = asyncio.run(service.generate_basic_public_single_table_configs_async(
-        "ds_a",
-        create_by="u1",
-        create_by_name="用户1",
-    ))
+    first = asyncio.run(
+        service.generate_basic_public_single_table_configs_async(
+            "ds_a",
+            create_by="u1",
+            create_by_name="用户1",
+        )
+    )
+    second = asyncio.run(
+        service.generate_basic_public_single_table_configs_async(
+            "ds_a",
+            create_by="u1",
+            create_by_name="用户1",
+        )
+    )
 
     assert first["created"] == 2
     assert first["failed"] == 0
@@ -423,10 +453,12 @@ def test_generate_basic_single_table_configs_skips_existing_table_and_reports_fa
     ]
     dao.upsert_many_result = False
     dao.fail_names.add("users基础模型")
-    result = asyncio.run(service.generate_basic_public_single_table_configs_async(
-        "ds_a",
-        create_by="admin",
-    ))
+    result = asyncio.run(
+        service.generate_basic_public_single_table_configs_async(
+            "ds_a",
+            create_by="admin",
+        )
+    )
 
     assert result["created"] == 0
     assert result["skipped"] == 1
@@ -479,14 +511,16 @@ def test_batch_toggle_enabled_async_splits_updated_skipped_and_not_found():
     own = _base_config(id="sc_own", name="本人私有", scope_type="private", create_by="u1")
     service, _, dao = _build_service([public, own])
 
-    result = asyncio.run(service.batch_toggle_enabled_async(
-        "ds_a",
-        ["sc_own", "sc_public", "sc_missing", "sc_own", "  "],
-        False,
-        user_id="u1",
-        username="张三",
-        admin_manage=False,
-    ))
+    result = asyncio.run(
+        service.batch_toggle_enabled_async(
+            "ds_a",
+            ["sc_own", "sc_public", "sc_missing", "sc_own", "  "],
+            False,
+            user_id="u1",
+            username="张三",
+            admin_manage=False,
+        )
+    )
 
     assert result["updated_ids"] == ["sc_own"]
     assert result["skipped_ids"] == ["sc_public"]
@@ -504,14 +538,21 @@ def test_batch_toggle_enabled_async_treats_same_state_as_idempotent_success():
     全选批量操作会得到 rowcount=0：前端成功数与 updated_ids 对不上，后端还会刷
     一条误导性的行数不一致告警。
     """
-    service, _, dao = _build_service([
-        _base_config(id="sc_already", enabled=True),
-        _base_config(id="sc_off", enabled=False),
-    ])
+    service, _, dao = _build_service(
+        [
+            _base_config(id="sc_already", enabled=True),
+            _base_config(id="sc_off", enabled=False),
+        ]
+    )
 
-    result = asyncio.run(service.batch_toggle_enabled_async(
-        "ds_a", ["sc_already", "sc_off"], True, admin_manage=True,
-    ))
+    result = asyncio.run(
+        service.batch_toggle_enabled_async(
+            "ds_a",
+            ["sc_already", "sc_off"],
+            True,
+            admin_manage=True,
+        )
+    )
 
     assert result["updated_ids"] == ["sc_already", "sc_off"], "幂等项也要计入成功，保持请求顺序"
     assert result["updated_count"] == 2
@@ -523,14 +564,16 @@ def test_batch_toggle_enabled_async_admin_only_mutates_public_configs():
     own = _base_config(id="sc_own", name="本人私有", scope_type="private", create_by="u1")
     service, _, dao = _build_service([public, own])
 
-    result = asyncio.run(service.batch_toggle_enabled_async(
-        "ds_a",
-        ["sc_public", "sc_own"],
-        True,
-        user_id="u1",
-        username="张三",
-        admin_manage=True,
-    ))
+    result = asyncio.run(
+        service.batch_toggle_enabled_async(
+            "ds_a",
+            ["sc_public", "sc_own"],
+            True,
+            user_id="u1",
+            username="张三",
+            admin_manage=True,
+        )
+    )
 
     assert result["updated_ids"] == ["sc_public"]
     assert result["skipped_ids"] == ["sc_own"]
@@ -636,11 +679,14 @@ def test_cross_model_findings_for_imports_compares_within_batch_and_tolerates_se
 
 
 def test_cross_model_findings_for_imports_empty_imports_returns_empty():
-    assert asyncio.run(
-        semantic_config_service_module.cross_model_findings_for_imports(
-            [], "ds_a", semantic_service=_FakeCrossService([])
+    assert (
+        asyncio.run(
+            semantic_config_service_module.cross_model_findings_for_imports(
+                [], "ds_a", semantic_service=_FakeCrossService([])
+            )
         )
-    ) == {}
+        == {}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -659,18 +705,21 @@ def test_quality_findings_for_imports_merges_single_and_cross():
     )
     assert set(result) == {"模型A"}
     codes = {item["code"] for item in result["模型A"]}
-    assert "DOC_METRIC_NO_DESCRIPTION" in codes      # 单模型层（指标缺描述）
+    assert "DOC_METRIC_NO_DESCRIPTION" in codes  # 单模型层（指标缺描述）
     assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes  # 跨模型层（同名异式）
 
 
 def test_quality_findings_for_imports_skips_non_importable():
     """不可导入模型不产出 findings（checklist 由调用方基于 validation_error 生成）。"""
     imports = [_import_model("坏模型", "销售额", "SUM(orders.x)", importable=False)]
-    assert asyncio.run(
-        semantic_config_service_module.quality_findings_for_imports(
-            imports, "ds_a", semantic_service=_FakeCrossService([])
+    assert (
+        asyncio.run(
+            semantic_config_service_module.quality_findings_for_imports(
+                imports, "ds_a", semantic_service=_FakeCrossService([])
+            )
         )
-    ) == {}
+        == {}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -681,8 +730,14 @@ def test_quality_findings_for_imports_skips_non_importable():
 def _save_kwargs(**overrides):
     kwargs = {
         "name": "订单分析",
-        "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
-                     "description": "已支付订单金额合计"}],
+        "metrics": [
+            {
+                "name": "销售额",
+                "expression": "SUM(orders.amount)",
+                "table": "orders",
+                "description": "已支付订单金额合计",
+            }
+        ],
         "dimensions": [],
         "relationships": [],
     }
@@ -693,6 +748,7 @@ def _save_kwargs(**overrides):
 def test_quality_findings_for_save_merges_single_and_cross(monkeypatch):
     """单模型规则与跨模型口径同源合并：缺描述触发 DOC 规则，撞名触发跨模型 error。"""
     existing = [_public_config("销售主题", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}])]
+
     async def _fake_load(ds, ds_id):
         return None
 
@@ -704,20 +760,24 @@ def test_quality_findings_for_save_merges_single_and_cross(monkeypatch):
     )
     codes = {item["code"] for item in findings}
     assert "DOC_METRIC_NO_DESCRIPTION" not in codes  # 该指标有描述
-    assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes   # 与销售主题同名异式
+    assert "CON_CROSS_MODEL_NAME_CONFLICT" in codes  # 与销售主题同名异式
 
 
 def test_quality_findings_for_save_excludes_self_by_id(monkeypatch):
     """update 场景排除自身：库里的旧版本与自己同名同式不再误报。"""
-    existing = [{"id": "sc_self", "name": "订单分析",
-                 "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)"}]}]
+    existing = [
+        {"id": "sc_self", "name": "订单分析", "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)"}]}
+    ]
+
     async def _fake_load(ds, ds_id):
         return None
 
     monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
     findings = asyncio.run(
         semantic_config_service_module.quality_findings_for_save(
-            object(), "ds_a", semantic_service=_FakeCrossService(existing),
+            object(),
+            "ds_a",
+            semantic_service=_FakeCrossService(existing),
             exclude_config_id="sc_self",
             **_save_kwargs(),
         )
@@ -727,6 +787,7 @@ def test_quality_findings_for_save_excludes_self_by_id(monkeypatch):
 
 def test_quality_findings_for_save_degrades_on_physical_failure(monkeypatch):
     """物理列加载失败降级为空列表：质量提示不挡保存。"""
+
     async def _boom(ds, ds_id):
         raise RuntimeError("ds down")
 
@@ -758,8 +819,15 @@ def test_cross_model_comparison_pool_includes_own_private_only():
 
 def test_quality_findings_for_save_includes_own_private_conflict(monkeypatch):
     """保存个人模型时与自己另一个个人模型撞名也应提示（review 修正场景）。"""
-    existing = [{"id": "sc_own", "name": "我的另一模型", "scope_type": "private", "create_by": "u_1",
-                 "metrics": [{"name": "销售额", "expression": "SUM(orders.other)"}]}]
+    existing = [
+        {
+            "id": "sc_own",
+            "name": "我的另一模型",
+            "scope_type": "private",
+            "create_by": "u_1",
+            "metrics": [{"name": "销售额", "expression": "SUM(orders.other)"}],
+        }
+    ]
 
     async def _fake_load(ds, ds_id):
         return None
@@ -767,8 +835,11 @@ def test_quality_findings_for_save_includes_own_private_conflict(monkeypatch):
     monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
     findings = asyncio.run(
         semantic_config_service_module.quality_findings_for_save(
-            object(), "ds_a", semantic_service=_FakeCrossService(existing),
-            user_id="u_1", **_save_kwargs(),
+            object(),
+            "ds_a",
+            semantic_service=_FakeCrossService(existing),
+            user_id="u_1",
+            **_save_kwargs(),
         )
     )
     assert "CON_CROSS_MODEL_NAME_CONFLICT" in {item["code"] for item in findings}
@@ -783,7 +854,9 @@ def test_quality_findings_for_save_strips_self_name_suffix_only(monkeypatch):
     monkeypatch.setattr(semantic_config_service_module, "load_semantic_physical_columns", _fake_load)
     findings = asyncio.run(
         semantic_config_service_module.quality_findings_for_save(
-            object(), "ds_a", semantic_service=_FakeCrossService([]),
+            object(),
+            "ds_a",
+            semantic_service=_FakeCrossService([]),
             user_id="u_1",
             name="auth_group_permissions基础模型",
             metrics=[{"name": "集群数量1", "expression": "SUM(t.cnt)", "table": "t"}],

@@ -46,13 +46,15 @@ def _config_cache_key(config: dict[str, Any], source_type: str, salt: str = "") 
     """
     update_time = str((config or {}).get("update_time") or "").strip()
     if update_time:
-        payload = "|".join((
-            str((config or {}).get("group_id") or "").strip(),
-            _config_id(config),
-            update_time,
-            str(source_type or "").strip(),
-            salt,
-        ))
+        payload = "|".join(
+            (
+                str((config or {}).get("group_id") or "").strip(),
+                _config_id(config),
+                update_time,
+                str(source_type or "").strip(),
+                salt,
+            )
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     payload = json.dumps(
         {"source_type": str(source_type or "").strip(), "config": config, "salt": salt},
@@ -205,9 +207,7 @@ async def prematerialize_enabled_semantic_models(
     started = time.perf_counter()
     # 一次拿到「全量配置 + 字段字典」并透传给物化：否则物化会按 ID 逐个重载，
     # 每个模型都重新拉一遍数据源全量表结构，模型数上百时退化为 N+1 查库。
-    runtime_configs, column_dicts = await service.get_runtime_bundle_async(
-        normalized_datasource_id, str(user_id or "")
-    )
+    runtime_configs, column_dicts = await service.get_runtime_bundle_async(normalized_datasource_id, str(user_id or ""))
     loaded_ms = (time.perf_counter() - started) * 1000
     materialized = await materialize_runtime_semantic_models(
         workspace_runtime=workspace_runtime,
@@ -380,10 +380,13 @@ async def materialize_runtime_semantic_models(
         column_dicts = await service.get_column_dicts_async(str(datasource_id or ""))
 
     if configs is None:
-        loaded = await asyncio.gather(*(
-            _load_selected_semantic_config(datasource_id, config_id, user_id, column_dicts=column_dicts)
-            for config_id in normalized_ids
-        ), return_exceptions=True)
+        loaded = await asyncio.gather(
+            *(
+                _load_selected_semantic_config(datasource_id, config_id, user_id, column_dicts=column_dicts)
+                for config_id in normalized_ids
+            ),
+            return_exceptions=True,
+        )
     else:
         # 复用调用方已加载的全量配置：同一次请求里这些数据刚查过，再按 ID
         # 逐个回源等于把整份数据源表结构重复加载 N 遍。
@@ -393,7 +396,9 @@ async def materialize_runtime_semantic_models(
 
     rendered_at = time.perf_counter()
     entries, directory, cache_hits, render_failed_ids = await _render_selected_configs(
-        selected_configs, source_type, column_dicts,
+        selected_configs,
+        source_type,
+        column_dicts,
     )
     render_ms = (time.perf_counter() - rendered_at) * 1000
     failed_ids.extend(render_failed_ids)

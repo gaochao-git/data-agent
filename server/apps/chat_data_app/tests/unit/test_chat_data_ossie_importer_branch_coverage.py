@@ -37,7 +37,9 @@ def _ansi(expression: str) -> SimpleNamespace:
     return SimpleNamespace(dialects=[SimpleNamespace(dialect=SimpleNamespace(value="ANSI_SQL"), expression=expression)])
 
 
-def _field(name="f1", expression="`col`", extensions=None, datatype=None, description=None, dimension=None) -> SimpleNamespace:
+def _field(
+    name="f1", expression="`col`", extensions=None, datatype=None, description=None, dimension=None
+) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
         custom_extensions=extensions if extensions is not None else [_ext({"table": "orders", "column": "col"})],
@@ -72,6 +74,7 @@ def _import(model) -> OssieSemanticModelImport:
 
 # ---------------------------------------------------------------- _normalize_ossie_datatypes
 
+
 def test_normalize_datatypes_returns_early_when_models_not_list():
     data = {"semantic_model": "not-a-list"}
     _normalize_ossie_datatypes(data)  # 不抛错即走 156->157 早返回
@@ -100,6 +103,7 @@ def test_normalize_datatypes_skips_non_dict_item():
 
 # ---------------------------------------------------------------- _extension_data
 
+
 def test_extension_data_skips_other_vendor():
     other = SimpleNamespace(vendor_name="OTHER", data="{}")
     assert _extension_data([other], [], "label") == {}
@@ -113,7 +117,7 @@ def test_extension_data_warns_on_invalid_json():
 
 
 def test_extension_data_warns_on_non_object_payload():
-    bad = SimpleNamespace(vendor_name="CHAT_DATA", data='[1,2]')
+    bad = SimpleNamespace(vendor_name="CHAT_DATA", data="[1,2]")
     warnings: list = []
     assert _extension_data([bad], warnings, "指标 x") == {}
     assert warnings == ["指标 x 的 CHAT_DATA 扩展不是对象，已忽略"]
@@ -126,6 +130,7 @@ def test_ansi_sql_expression_returns_none_without_ansi_dialect():
 
 
 # ---------------------------------------------------------------- import_document / _convert_model
+
 
 def test_import_document_raises_on_empty_models():
     with pytest.raises(ValueError, match="不包含 semantic_model"):
@@ -144,6 +149,7 @@ def test_convert_model_error_on_duplicate_dataset_names():
 
 # ---------------------------------------------------------------- _convert_field
 
+
 def test_convert_field_error_when_name_missing():
     result = _import(_model(datasets=[_dataset(fields=[_field(name="")])]))
     assert "dataset 存在缺少名称的字段，已跳过" in result.errors
@@ -151,7 +157,9 @@ def test_convert_field_error_when_name_missing():
 
 def test_convert_field_error_when_no_ansi_expression():
     field = _field()
-    field.expression = SimpleNamespace(dialects=[SimpleNamespace(dialect=SimpleNamespace(value="MYSQL"), expression="1")])
+    field.expression = SimpleNamespace(
+        dialects=[SimpleNamespace(dialect=SimpleNamespace(value="MYSQL"), expression="1")]
+    )
     result = _import(_model(datasets=[_dataset(fields=[field])]))
     assert any("缺少 ANSI_SQL 方言表达式" in e for e in result.errors)
 
@@ -181,15 +189,26 @@ def test_convert_field_omits_logical_type_when_unresolvable():
 
 # ---------------------------------------------------------------- _convert_metric
 
+
 def test_convert_metric_error_when_name_missing():
-    result = _import(_model(metrics=[SimpleNamespace(
-        name="", custom_extensions=[], expression=_ansi("SUM(1)"), datatype=None, description=None)]))
+    result = _import(
+        _model(
+            metrics=[
+                SimpleNamespace(
+                    name="", custom_extensions=[], expression=_ansi("SUM(1)"), datatype=None, description=None
+                )
+            ]
+        )
+    )
     assert "semantic_model 存在缺少名称的指标，已跳过" in result.errors
 
 
 def test_convert_metric_error_when_expression_missing():
-    result = _import(_model(metrics=[SimpleNamespace(
-        name="m1", custom_extensions=[], expression=None, datatype=None, description=None)]))
+    result = _import(
+        _model(
+            metrics=[SimpleNamespace(name="m1", custom_extensions=[], expression=None, datatype=None, description=None)]
+        )
+    )
     assert any("缺少 ANSI_SQL 方言表达式" in e for e in result.errors)
 
 
@@ -198,7 +217,9 @@ def test_convert_derived_metric_without_period_filters_with_description():
     metric = SimpleNamespace(
         name="本月销售额",
         custom_extensions=[_ext({"metric_kind": "derived", "base_metric": "销售额"})],
-        expression=None, datatype=None, description="按月聚合",
+        expression=None,
+        datatype=None,
+        description="按月聚合",
     )
     result = _import(_model(metrics=[metric]))
     assert len(result.metrics) == 1
@@ -215,7 +236,9 @@ def test_convert_composite_metric_with_description():
     metric = SimpleNamespace(
         name="客单价",
         custom_extensions=[_ext({"metric_kind": "composite", "formula": "{a}/{b}"})],
-        expression=None, datatype=None, description="客单价口径",
+        expression=None,
+        datatype=None,
+        description="客单价口径",
     )
     result = _import(_model(metrics=[metric]))
     entry = result.metrics[0]
@@ -225,13 +248,18 @@ def test_convert_composite_metric_with_description():
 
 # ---------------------------------------------------------------- _convert_relationship
 
-def _relationship(from_dataset="orders", to="users", from_columns=None, to_columns=None, extensions=None) -> SimpleNamespace:
+
+def _relationship(
+    from_dataset="orders", to="users", from_columns=None, to_columns=None, extensions=None
+) -> SimpleNamespace:
     return SimpleNamespace(
         from_dataset=from_dataset,
         to=to,
         from_columns=from_columns if from_columns is not None else ["user_id"],
         to_columns=to_columns if to_columns is not None else ["id"],
-        custom_extensions=extensions if extensions is not None else [_ext({"relationship_type": "many_to_one", "join_type": "left"})],
+        custom_extensions=extensions
+        if extensions is not None
+        else [_ext({"relationship_type": "many_to_one", "join_type": "left"})],
     )
 
 
@@ -247,14 +275,20 @@ def test_convert_relationship_error_when_columns_mismatch():
 
 def test_convert_relationship_warns_on_unsupported_join_type():
     """join_type 无法识别且非空 → 按 left 兜底并告警（453->454）。"""
-    result = _import(_model(relationships=[_relationship(extensions=[_ext({"relationship_type": "many_to_one", "join_type": "full"})])]))
+    result = _import(
+        _model(
+            relationships=[_relationship(extensions=[_ext({"relationship_type": "many_to_one", "join_type": "full"})])]
+        )
+    )
     assert any("join_type 不支持" in w for w in result.warnings)
     assert result.relationships[0]["join_type"] == "left"
 
 
 def test_convert_relationship_warns_when_ext_tables_mismatch():
     """扩展左右表与 from/to 不一致 → 以扩展为准并告警（460->461）。"""
-    ext = _ext({"relationship_type": "many_to_one", "join_type": "left", "left_table": "customers", "right_table": "orders"})
+    ext = _ext(
+        {"relationship_type": "many_to_one", "join_type": "left", "left_table": "customers", "right_table": "orders"}
+    )
     result = _import(_model(relationships=[_relationship(extensions=[ext])]))
     assert any("以扩展为准" in w for w in result.warnings)
     assert result.relationships[0]["left_table"] == "customers"

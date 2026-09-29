@@ -193,7 +193,9 @@ def _is_aggregate_metric(metric: Dict[str, Any]) -> bool:
     return expression.startswith(("COUNT(", "SUM(", "AVG(", "MAX(", "MIN("))
 
 
-def _selected_semantic_metrics(metrics: List[Any], semantic_config: Dict[str, Any]) -> tuple[Dict[Any, Dict[str, Any]], List[Any]]:
+def _selected_semantic_metrics(
+    metrics: List[Any], semantic_config: Dict[str, Any]
+) -> tuple[Dict[Any, Dict[str, Any]], List[Any]]:
     """按名字索引语义指标定义，并筛出 DSL 选中的那些。"""
     metrics_map = {item.get("name"): item for item in semantic_config.get("metrics") or [] if item.get("name")}
     selected = [metrics_map.get(name) for name in metrics if name in metrics_map]
@@ -205,7 +207,9 @@ def _aggregate_metric_names(metrics: List[Any], metrics_map: Dict[Any, Dict[str,
     return [name for name in metrics if metrics_map.get(name) and _is_aggregate_metric(metrics_map[name])]
 
 
-def remove_mixed_raw_metrics_for_aggregate_dsl(dsl: Dict[str, Any], semantic_config: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
+def remove_mixed_raw_metrics_for_aggregate_dsl(
+    dsl: Dict[str, Any], semantic_config: Dict[str, Any]
+) -> tuple[Dict[str, Any], List[str]]:
     """聚合 DSL 中出现原始值和聚合指标混用时，优先保留聚合指标。"""
     payload = normalize_semantic_dsl_payload(dsl)
     metrics = payload.get("metrics") or []
@@ -220,7 +224,9 @@ def remove_mixed_raw_metrics_for_aggregate_dsl(dsl: Dict[str, Any], semantic_con
     return payload, [f"已移除聚合卡片中不能混用的原始值指标：{', '.join(removed)}"]
 
 
-async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config_id: Optional[str], user_id: Optional[str] = None) -> Dict[str, Any]:
+async def get_dashboard_spec_semantic_config(
+    datasource_id: str, semantic_config_id: Optional[str], user_id: Optional[str] = None
+) -> Dict[str, Any]:
     """读取看板 DSL 校验和 SQL 生成所需语义配置。"""
     try:
         return await load_semantic_model(
@@ -265,7 +271,9 @@ def build_panel_sql_from_dashboard_card(
     if dsl.get("compare") or card.get("compare"):
         raise ValueError("DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
     payload = _merge_card_dsl_payload(dsl, card)
-    payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl(payload, getattr(generator, "semantic_config", {}))
+    payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl(
+        payload, getattr(generator, "semantic_config", {})
+    )
     if warnings is not None:
         warnings.extend(normalize_warnings)
     result = compile_semantic_ai_dsl(
@@ -367,12 +375,10 @@ def validate_dashboard_spec_structure(
         errors.append("cards 必须是非空数组")
         return errors
     default_semantic_config_id = (
-        str(spec.get("semantic_config_id") or "").strip()
-        or str(default_semantic_config_id or "").strip()
+        str(spec.get("semantic_config_id") or "").strip() or str(default_semantic_config_id or "").strip()
     )
     has_card_semantic_config_id = any(
-        isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
-        for card in cards[:12]
+        isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip() for card in cards[:12]
     )
     if not default_semantic_config_id and not has_card_semantic_config_id:
         errors.append("semantic_config_id 必填：请在每张卡片中指定，或提供旧规格的顶层默认值")
@@ -386,17 +392,15 @@ def _resolve_panel_generator(
     sql_generator: Optional[SemanticAIQueryAdapter],
     semantic_config_id: str,
 ) -> SemanticAIQueryAdapter:
-    generator = (
-        generators.get(semantic_config_id)
-        if semantic_config_generators is not None
-        else sql_generator
-    )
+    generator = generators.get(semantic_config_id) if semantic_config_generators is not None else sql_generator
     if generator is None:
         raise ValueError("缺少 semantic_config_id 对应的语义模型")
     return generator
 
 
-def _failed_panel_plan(card: Dict[str, Any], index: int, default_semantic_config_id: Optional[str], error: str) -> Dict[str, Any]:
+def _failed_panel_plan(
+    card: Dict[str, Any], index: int, default_semantic_config_id: Optional[str], error: str
+) -> Dict[str, Any]:
     return {
         "index": index,
         "card": card,
@@ -427,21 +431,25 @@ def build_dashboard_panel_plans(
             continue
         try:
             semantic_config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
-            generator = _resolve_panel_generator(generators, semantic_config_generators, sql_generator, semantic_config_id)
+            generator = _resolve_panel_generator(
+                generators, semantic_config_generators, sql_generator, semantic_config_id
+            )
             card_warnings: List[str] = []
             sql = build_panel_sql_from_dashboard_card(card, generator, warnings=card_warnings, max_rows=max_rows)
             for warning in card_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
             if not sql:
                 raise ValueError("SQL 为空")
-            panel_plans.append({
-                "index": index,
-                "card": card,
-                "sql": sql,
-                "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
-                "semantic_config_id": semantic_config_id,
-                "error": "",
-            })
+            panel_plans.append(
+                {
+                    "index": index,
+                    "card": card,
+                    "sql": sql,
+                    "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
+                    "semantic_config_id": semantic_config_id,
+                    "error": "",
+                }
+            )
         except Exception as err:
             error = str(err) or "SQL 生成失败"
             warnings.append(f"卡片「{card.get('title') or index + 1}」创建失败：{error}")
@@ -449,7 +457,9 @@ def build_dashboard_panel_plans(
     return panel_plans, warnings
 
 
-async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, user_id: str = "system", username: Optional[str] = None) -> tuple[bool, str]:
+async def execute_dashboard_panel_sql_preflight(
+    datasource_id: str, sql: str, user_id: str = "system", username: Optional[str] = None
+) -> tuple[bool, str]:
     """写入看板前实际执行 SQL，避免不可执行面板进入看板。"""
     ds_manager = get_datasource_manager()
     execution_targets = await ds_manager.get_authorized_execution_datasources_async(
@@ -477,7 +487,9 @@ async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, us
             return True, ""
         return False, str(result.get("error") or "SQL 预执行失败")
     except Exception as err:
-        logger.error("看板面板 SQL 预执行异常: datasource_id=%s sql=%s error=%s", datasource_id, sql, err, exc_info=True)
+        logger.error(
+            "看板面板 SQL 预执行异常: datasource_id=%s sql=%s error=%s", datasource_id, sql, err, exc_info=True
+        )
         return False, str(err) or "SQL 预执行异常"
     finally:
         await executor.close()
@@ -498,7 +510,9 @@ async def filter_executable_dashboard_panel_plans(
         if plan.get("error"):
             marked_plans.append(plan)
             continue
-        ok, error = await execute_dashboard_panel_sql_preflight(datasource_id, str(plan.get("sql") or ""), user_id=user_id, username=username)
+        ok, error = await execute_dashboard_panel_sql_preflight(
+            datasource_id, str(plan.get("sql") or ""), user_id=user_id, username=username
+        )
         if ok:
             marked_plans.append(plan)
         else:
@@ -759,7 +773,10 @@ async def _create_dashboard_panels(
         panel_error = str((plan or {}).get("error") or "")
         try:
             panel = await _add_panel_from_card(
-                service, dashboard, card, plan,
+                service,
+                dashboard,
+                card,
+                plan,
                 chart_type=chart_type,
                 layout=layout,
                 panel_error=panel_error,
@@ -829,7 +846,10 @@ async def create_dashboard_from_spec_payload(
     )
 
     panels, warnings = await _create_dashboard_panels(
-        service, dashboard, spec, validation,
+        service,
+        dashboard,
+        spec,
+        validation,
         conversation_id=conversation_id,
         datasource_id=datasource_id,
         user_id=user_id,

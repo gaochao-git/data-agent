@@ -27,7 +27,9 @@ AGENT_RUN_EDGE_CEILING = 12
 # 2026-08：skill_service 迁出后 6；conversation_event_service 迁出后 5；
 # workspace 机制层迁入 agent/workspace 后，留守门面（conversation_workspace/双 backend）
 # 反向引用机制属"业务消费 harness"的合法方向，第三刀门面迁入后大幅塌缩。
-SERVICES_TO_AGENT_EDGE_CEILING = 12
+# 2026-09：插件架构（62fa391 合入 master）新增 plugin_service 对 agent.plugins/agent.mcp
+# 的 4 条管理面依赖，属有意设计，基线对齐为 13；棘轮继续只防增长。
+SERVICES_TO_AGENT_EDGE_CEILING = 13
 
 _IMPORT_LINE_RE = re.compile(r"^\s*(from|import)\s", re.MULTILINE)
 

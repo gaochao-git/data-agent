@@ -108,6 +108,7 @@ def create_tool_call_name_normalizer_middleware(tools: list[Any]):
     Args:
         tools: 装配期已知的工具列表，仅作为 ``request.tools`` 缺失时的兜底。
     """
+
     def _candidate_tools(request) -> list[Any]:
         """本轮模型真正可见的工具集。
 
@@ -127,10 +128,7 @@ def create_tool_call_name_normalizer_middleware(tools: list[Any]):
         result = list(getattr(response, "result", []) or [])
         if not result:
             return response
-        normalized_result = [
-            normalize_response_tool_call_names(message, candidate_tools)
-            for message in result
-        ]
+        normalized_result = [normalize_response_tool_call_names(message, candidate_tools) for message in result]
         response.result = normalized_result
         return response
 

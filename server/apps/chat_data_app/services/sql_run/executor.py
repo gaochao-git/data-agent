@@ -4,6 +4,7 @@ SQL 执行器模块
 支持 MySQL、Hive 的异步查询执行
 通过环境变量配置 SQL 安全限制和结果行数限制
 """
+
 import asyncio
 import inspect
 import os
@@ -108,7 +109,9 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
         "code": payload.get("code"),
         "msg": _first_not_none(payload.get("msg"), payload.get("message")),
         "status": _first_not_none(result.get("status"), payload.get("status")),
-        "task_id": _first_not_none(result.get("task_id"), result.get("taskId"), payload.get("task_id"), payload.get("taskId")),
+        "task_id": _first_not_none(
+            result.get("task_id"), result.get("taskId"), payload.get("task_id"), payload.get("taskId")
+        ),
         "cost": _first_not_none(result.get("cost"), payload.get("cost")),
         "startTime": _first_not_none(result.get("startTime"), payload.get("startTime")),
         "execution_time_ms": _first_not_none(result.get("execution_time_ms"), payload.get("execution_time_ms")),
@@ -167,7 +170,7 @@ def _serialize_value(value: Any) -> Any:
     if isinstance(value, date):
         return value.strftime("%Y-%m-%d")
     if isinstance(value, bytes):
-        return value.decode('utf-8', errors='replace')
+        return value.decode("utf-8", errors="replace")
     return value
 
 
@@ -491,7 +494,9 @@ def build_effective_sql(
 
 def _log_sql_execution_summary(source_type: str, database: str, execution_time_ms: int, row_count: int) -> None:
     """记录不含 SQL 明文的执行摘要。"""
-    logger.info("[%s] SQL 执行完成: database=%s elapsed_ms=%s rows=%s", source_type, database, execution_time_ms, row_count)
+    logger.info(
+        "[%s] SQL 执行完成: database=%s elapsed_ms=%s rows=%s", source_type, database, execution_time_ms, row_count
+    )
 
 
 def _emit_sql_execution_validation_alarm(
@@ -631,17 +636,18 @@ class MySQLExecutor(SQLExecutor):
         """获取连接池（懒加载）"""
         if self._pool is None:
             import aiomysql
+
             self._pool = await aiomysql.create_pool(
                 host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
                 db=self.database,
-                charset='utf8mb4',
+                charset="utf8mb4",
                 autocommit=True,
                 minsize=1,
                 maxsize=5,
-                connect_timeout=CONNECT_TIMEOUT_SECONDS
+                connect_timeout=CONNECT_TIMEOUT_SECONDS,
             )
         return self._pool
 
@@ -679,6 +685,7 @@ class MySQLExecutor(SQLExecutor):
         db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         import time
+
         resolved_timeout = await resolve_query_timeout("mysql", timeout)
         # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置
         max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
@@ -721,7 +728,13 @@ class MySQLExecutor(SQLExecutor):
                     await self._kill_timed_out_query(connection_id)
                     conn.close()
                     logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s），已发送 KILL 并废弃连接")
-                    return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+                    return {
+                        "status": "failed",
+                        "error": f"查询超时（{resolved_timeout}秒）",
+                        "columns": [],
+                        "data": [],
+                        "total_count": 0,
+                    }
                 execution_time_ms = int((time.time() - start_time) * 1000)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 data = [_serialize_row(dict(zip(columns, row, strict=False))) for row in rows]
@@ -736,17 +749,34 @@ class MySQLExecutor(SQLExecutor):
                 }
         except asyncio.TimeoutError:
             logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s）")
-            return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": f"查询超时（{resolved_timeout}秒）",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
         except ValueError as e:
             logger.warning("[MySQL] SQL 执行参数非法: %s", e)
             return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
         except Exception as e:
             _emit_query_database_connection_alarm(
-                "mysql", self.database, e, host=self.host, port=self.port,
-                datasource_id=datasource_id or "", user_id=user_id or "",
+                "mysql",
+                self.database,
+                e,
+                host=self.host,
+                port=self.port,
+                datasource_id=datasource_id or "",
+                user_id=user_id or "",
             )
             logger.error(f"[MySQL] 执行 SQL 失败: {e}")
-            return {"status": "failed", "error": _friendly_sql_error("MySQL", e), "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": _friendly_sql_error("MySQL", e),
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
 
     async def test_connection(self) -> bool:
         """测试 MySQL 连接"""
@@ -780,9 +810,15 @@ class MySQLExecutor(SQLExecutor):
         if not normalized_connection_id:
             return
         try:
-            kill_result = await asyncio.wait_for(self.kill_query(normalized_connection_id), timeout=MYSQL_KILL_TIMEOUT_SECONDS)
+            kill_result = await asyncio.wait_for(
+                self.kill_query(normalized_connection_id), timeout=MYSQL_KILL_TIMEOUT_SECONDS
+            )
             if kill_result.get("status") != "succeeded":
-                logger.warning("[MySQL] 超时查询 KILL 失败: connection_id=%s error=%s", normalized_connection_id, kill_result.get("error"))
+                logger.warning(
+                    "[MySQL] 超时查询 KILL 失败: connection_id=%s error=%s",
+                    normalized_connection_id,
+                    kill_result.get("error"),
+                )
         except Exception as exc:
             logger.warning("[MySQL] 超时查询 KILL 异常: connection_id=%s error=%s", normalized_connection_id, exc)
 
@@ -808,6 +844,7 @@ class HiveExecutor(SQLExecutor):
     def _get_connection(self):
         """获取 Hive 连接"""
         from pyhive import hive
+
         conn_params = build_hive_connect_params(
             host=self.host,
             port=self.port,
@@ -858,17 +895,24 @@ class HiveExecutor(SQLExecutor):
                     user_id or "",
                     max_rows,
                 ),
-                timeout=resolved_timeout
+                timeout=resolved_timeout,
             )
         except asyncio.TimeoutError:
             logger.error(f"[Hive] 执行 SQL 超时（{resolved_timeout}s）")
-            return {"status": "failed", "error": f"查询超时（{resolved_timeout}秒）", "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": f"查询超时（{resolved_timeout}秒）",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
 
     def _execute_sync(
         self, sql: str, limit: int, datasource_id: str = "", user_id: str = "", max_rows: Optional[int] = None
     ) -> Dict[str, Any]:
         """同步执行 SQL（在线程池中运行；max_rows 为异步侧解析的热值）"""
         import time
+
         conn = None
         try:
             conn = self._get_connection()
@@ -889,18 +933,29 @@ class HiveExecutor(SQLExecutor):
                 "columns": columns,
                 "data": data,
                 "total_count": len(data),
-                "execution_time_ms": execution_time_ms
+                "execution_time_ms": execution_time_ms,
             }
         except Exception as e:
             if isinstance(e, ValueError):
                 logger.warning("[Hive] SQL 执行参数非法: %s", e)
                 return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
             _emit_query_database_connection_alarm(
-                "hive", self.database, e, host=self.host, port=self.port,
-                datasource_id=datasource_id, user_id=user_id,
+                "hive",
+                self.database,
+                e,
+                host=self.host,
+                port=self.port,
+                datasource_id=datasource_id,
+                user_id=user_id,
             )
             logger.error(f"[Hive] 执行 SQL 失败: {e}")
-            return {"status": "failed", "error": _friendly_sql_error("Hive", e), "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": _friendly_sql_error("Hive", e),
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
         finally:
             if conn:
                 conn.close()
@@ -935,7 +990,9 @@ class HiveExecutor(SQLExecutor):
 class HiveHttpExecutor(SQLExecutor):
     """HTTP 执行器，提交远端异步任务并轮询结果。"""
 
-    def __init__(self, namespace: str, source_type: str = "hive", database: str = "", org_code: str = "", org_name: str = ""):
+    def __init__(
+        self, namespace: str, source_type: str = "hive", database: str = "", org_code: str = "", org_name: str = ""
+    ):
         self.namespace = str(namespace or "").strip()
         self.source_type = str(source_type or "hive").strip().lower() or "hive"
         self.database = str(database or "").strip()
@@ -950,7 +1007,15 @@ class HiveHttpExecutor(SQLExecutor):
             return template.format(task_id=task_id)
         return template
 
-    async def _request_json(self, method: str, url: str, *, json_payload: Optional[Dict[str, Any]] = None, task_id: str = "", params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        json_payload: Optional[Dict[str, Any]] = None,
+        task_id: str = "",
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         request_kwargs: Dict[str, Any] = {}
         if method.upper() == "GET":
             query_params = dict(params or {})
@@ -999,7 +1064,9 @@ class HiveHttpExecutor(SQLExecutor):
             )
             raise
 
-    def _build_submit_payload(self, sql: str, limit: int, user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
+    def _build_submit_payload(
+        self, sql: str, limit: int, user_id: Optional[str] = None, username: Optional[str] = None
+    ) -> Dict[str, Any]:
         payload = {
             "sql": sql,
             "database": self.database,
@@ -1042,11 +1109,13 @@ class HiveHttpExecutor(SQLExecutor):
         """在 HTTP 任务提交成功后通知上层记录远端任务映射。"""
         if remote_task_callback is None:
             return
-        callback_result = remote_task_callback({
-            "remote_task_id": remote_task_id,
-            "namespace": self.namespace,
-            "source_type": self.source_type,
-        })
+        callback_result = remote_task_callback(
+            {
+                "remote_task_id": remote_task_id,
+                "namespace": self.namespace,
+                "source_type": self.source_type,
+            }
+        )
         if inspect.isawaitable(callback_result):
             await callback_result
 
@@ -1065,7 +1134,9 @@ class HiveHttpExecutor(SQLExecutor):
         # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置
         max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
         # 前置检查保持在 try 之外：异常直接向上传播，不落入兜底 except 转成错误结果（与拆分前行为一致）
-        validation_error = self._http_validation_error(sql, datasource_id=datasource_id, user_id=user_id, max_rows=max_rows)
+        validation_error = self._http_validation_error(
+            sql, datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
+        )
         if validation_error:
             return validation_error
         if not self.namespace:
@@ -1117,7 +1188,9 @@ class HiveHttpExecutor(SQLExecutor):
     def _http_config_error() -> Optional[Dict[str, Any]]:
         """执行前置配置检查；缺配置返回错误结果，否则 None。"""
         if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
-            return _http_error_result("未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL")
+            return _http_error_result(
+                "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL"
+            )
         return None
 
     async def _submit_http_query(
@@ -1144,7 +1217,9 @@ class HiveHttpExecutor(SQLExecutor):
             return _http_error_result(_extract_remote_message(submit_payload, "HTTP 查询提交失败")), None
         task_id = _extract_task_id(submit_payload)
         if not task_id:
-            return _http_error_result(_extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID")), None
+            return _http_error_result(
+                _extract_remote_message(submit_payload, "Hive HTTP 提交成功但未返回任务 ID")
+            ), None
         await self._notify_remote_task_created(remote_task_callback, task_id)
         return None, task_id
 
@@ -1201,7 +1276,9 @@ class HiveHttpExecutor(SQLExecutor):
         pass
 
 
-async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
+async def fetch_http_query_task_result(
+    remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None
+) -> Dict[str, Any]:
     """按远端任务 ID 查询 HTTP 任务状态与结果。"""
     executor = HiveHttpExecutor(namespace="_remote_task_lookup_", source_type=source_type)
     status_params = add_http_user_params({}, user_id, username)
@@ -1240,7 +1317,9 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
     return _http_error_result(None, status=normalized_status)
 
 
-async def stop_http_query_task(remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
+async def stop_http_query_task(
+    remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None
+) -> Dict[str, Any]:
     """按远端任务 ID 调用 HTTP 停止接口。"""
     normalized_task_id = str(remote_task_id or "").strip()
     if not normalized_task_id:
@@ -1315,7 +1394,7 @@ def get_executor(datasource: dict) -> SQLExecutor:
             port=config.get("port", 3306),
             database=config.get("database"),
             user=config.get("user"),
-            password=config.get("password")
+            password=config.get("password"),
         )
     elif source_type == "hive":
         return HiveExecutor(

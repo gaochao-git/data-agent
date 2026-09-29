@@ -94,8 +94,20 @@ def _is_negative_feedback_text(text: str) -> bool:
     if not normalized:
         return False
     patterns = [
-        "不对", "不是", "错了", "错误", "不准确", "不应该", "没有", "漏了",
-        "少了", "查不到", "不符合", "不合理", "wrong", "incorrect",
+        "不对",
+        "不是",
+        "错了",
+        "错误",
+        "不准确",
+        "不应该",
+        "没有",
+        "漏了",
+        "少了",
+        "查不到",
+        "不符合",
+        "不合理",
+        "wrong",
+        "incorrect",
     ]
     return any(pattern in normalized for pattern in patterns)
 
@@ -134,11 +146,13 @@ def _collect_user_turn(
 
 def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_errors: List[Dict[str, str]]) -> None:
     """记录工具错误消息（截断至 600 字）。"""
-    tool_errors.append({
-        "tool_name": str((msg or {}).get("tool_name") or "").strip(),
-        "content": text[:600],
-        "timestamp": timestamp,
-    })
+    tool_errors.append(
+        {
+            "tool_name": str((msg or {}).get("tool_name") or "").strip(),
+            "content": text[:600],
+            "timestamp": timestamp,
+        }
+    )
 
 
 def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns: List[Dict[str, str]]) -> None:
@@ -265,11 +279,13 @@ def _history_learning_table_columns(table: Dict[str, Any]) -> List[Dict[str, Any
         col_name = str((col or {}).get("name") or "").strip()
         if not col_name:
             continue
-        columns.append({
-            "name": col_name,
-            "type": (col or {}).get("mysql_type") or (col or {}).get("hive_type") or (col or {}).get("type") or "",
-            "description": (col or {}).get("description") or "",
-        })
+        columns.append(
+            {
+                "name": col_name,
+                "type": (col or {}).get("mysql_type") or (col or {}).get("hive_type") or (col or {}).get("type") or "",
+                "description": (col or {}).get("description") or "",
+            }
+        )
     return columns
 
 
@@ -282,17 +298,21 @@ def _build_history_learning_table_context(datasource: Dict[str, Any], config: Di
         table_name = str(table.get("table_name") or "").strip()
         if scope_tables and table_name not in scope_tables:
             continue
-        items.append({
-            "table_name": table_name,
-            "description": table.get("description") or "",
-            "columns": _history_learning_table_columns(table)[:80],
-        })
+        items.append(
+            {
+                "table_name": table_name,
+                "description": table.get("description") or "",
+                "columns": _history_learning_table_columns(table)[:80],
+            }
+        )
     return items[:20]
 
 
 def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
     """压缩单条历史，控制 LLM 输入长度。"""
-    semantic_builder_config = sample.get("semantic_builder_config") if isinstance(sample.get("semantic_builder_config"), dict) else None
+    semantic_builder_config = (
+        sample.get("semantic_builder_config") if isinstance(sample.get("semantic_builder_config"), dict) else None
+    )
     builder_config = sample.get("builder_config") if isinstance(sample.get("builder_config"), dict) else None
     compact: Dict[str, Any] = {
         "execution_id": sample.get("execution_id"),
@@ -351,16 +371,45 @@ def _extract_expression_columns(expression: Any) -> Set[str]:
     if not text:
         return set()
     keywords = {
-        "case", "when", "then", "else", "end", "filter", "where", "distinct", "count", "sum", "avg", "max", "min",
-        "and", "or", "not", "null", "is", "in", "as", "on", "if", "cast", "char", "date", "date_format", "str_to_date",
-        "unix_timestamp", "from_unixtime", "year", "month", "day",
+        "case",
+        "when",
+        "then",
+        "else",
+        "end",
+        "filter",
+        "where",
+        "distinct",
+        "count",
+        "sum",
+        "avg",
+        "max",
+        "min",
+        "and",
+        "or",
+        "not",
+        "null",
+        "is",
+        "in",
+        "as",
+        "on",
+        "if",
+        "cast",
+        "char",
+        "date",
+        "date_format",
+        "str_to_date",
+        "unix_timestamp",
+        "from_unixtime",
+        "year",
+        "month",
+        "day",
     }
     columns: Set[str] = set()
     for match in re.finditer(r"`([^`]+)`|(?<!['\"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['\"])", text):
         token = str(match.group(1) or match.group(2) or "").strip()
         if not token:
             continue
-        if text[match.end():].lstrip().startswith("."):
+        if text[match.end() :].lstrip().startswith("."):
             continue
         token = token.split(".")[-1].strip("`")
         if token and token.lower() not in keywords:
@@ -435,7 +484,9 @@ def _is_existing_history_suggestion(item: Dict[str, Any], category: str, indexes
     return False
 
 
-def _normalize_history_base_fields(item: Dict[str, Any], sample_map: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _normalize_history_base_fields(
+    item: Dict[str, Any], sample_map: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
     source = str(item.get("source") or "").strip().lower()
     confidence = str(item.get("confidence") or "").strip().lower()
     sample_ids = item.get("sample_execution_ids")
@@ -459,13 +510,17 @@ def _normalize_history_base_fields(item: Dict[str, Any], sample_map: Dict[str, D
     }
 
 
-def _normalize_metric_or_dimension_suggestion(item: Dict[str, Any], category: str, normalized: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    normalized.update({
-        "name": str(item.get("name") or "").strip(),
-        "table": str(item.get("table") or "").strip(),
-        "field_name": str(item.get("field_name") or "").strip(),
-        "expression": str(item.get("expression") or "").strip(),
-    })
+def _normalize_metric_or_dimension_suggestion(
+    item: Dict[str, Any], category: str, normalized: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    normalized.update(
+        {
+            "name": str(item.get("name") or "").strip(),
+            "table": str(item.get("table") or "").strip(),
+            "field_name": str(item.get("field_name") or "").strip(),
+            "expression": str(item.get("expression") or "").strip(),
+        }
+    )
     if category == "dimensions":
         logical_type = str(item.get("logical_type") or "").strip().lower()
         if not logical_type and "type" not in item:
@@ -478,19 +533,18 @@ def _normalize_metric_or_dimension_suggestion(item: Dict[str, Any], category: st
 
 
 def _normalize_issue_suggestion(item: Dict[str, Any], normalized: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    normalized.update({
-        "title": str(item.get("title") or "").strip(),
-        "content": str(item.get("content") or "").strip(),
-    })
+    normalized.update(
+        {
+            "title": str(item.get("title") or "").strip(),
+            "content": str(item.get("content") or "").strip(),
+        }
+    )
     return normalized if normalized["title"] and normalized["content"] and normalized["reason"] else None
 
 
 def _empty_history_learning_skip_counts() -> Dict[str, Dict[str, int]]:
     """初始化历史学习建议过滤计数。"""
-    return {
-        category: {"invalid": 0, "existing": 0, "duplicate": 0}
-        for category in ("metrics", "dimensions", "issues")
-    }
+    return {category: {"invalid": 0, "existing": 0, "duplicate": 0} for category in ("metrics", "dimensions", "issues")}
 
 
 def _dimension_review_reasons(
@@ -517,7 +571,9 @@ def _metric_review_reasons(
     if not expression:
         reasons.append("缺少指标表达式，需要人工确认")
     expression_columns = _extract_expression_columns(normalized.get("expression"))
-    missing_columns = sorted(col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name])
+    missing_columns = sorted(
+        col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name]
+    )
     if table_name and missing_columns:
         reasons.append(f"表达式引用字段不在当前表结构中：{table_name}.{', '.join(missing_columns)}")
     return reasons
@@ -587,7 +643,11 @@ def _normalize_history_suggestion_category(
         if category in {"metrics", "dimensions"} and _is_existing_history_suggestion(item, category, existing_indexes):
             skip_counts[category]["existing"] += 1
             continue
-        key = str(item.get("name") or item.get("title") or "") + "::" + str(item.get("table") or item.get("content") or "")
+        key = (
+            str(item.get("name") or item.get("title") or "")
+            + "::"
+            + str(item.get("table") or item.get("content") or "")
+        )
         if key in seen:
             skip_counts[category]["duplicate"] += 1
             continue
@@ -612,7 +672,12 @@ def _normalize_history_learning_result(
     skip_counts = _empty_history_learning_skip_counts()
     for category in result:
         result[category], raw_counts[category] = _normalize_history_suggestion_category(
-            category, suggestions, sample_map, datasource, existing_indexes, skip_counts,
+            category,
+            suggestions,
+            sample_map,
+            datasource,
+            existing_indexes,
+            skip_counts,
         )
     logger.info(
         "history_learning normalize: raw_counts=%s normalized_counts=%s skip_counts=%s",
@@ -667,8 +732,12 @@ class SemanticHistoryLearningService:
         dao: Optional[SemanticHistoryLearningDao] = None,
         *,
         context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
-        suggestion_loader: Optional[Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]] = None,
-        history_matcher: Optional[Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]] = None,
+        suggestion_loader: Optional[
+            Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]
+        ] = None,
+        history_matcher: Optional[
+            Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]
+        ] = None,
     ):
         self.dao = dao or SemanticHistoryLearningDao()
         self.context_loader = context_loader or _load_history_conversation_context
@@ -694,10 +763,14 @@ class SemanticHistoryLearningService:
 
     @staticmethod
     def _source_stats() -> Dict[str, Dict[str, int]]:
-        return {source: {"scanned": 0, "matched": 0, "skipped": 0} for source in sorted(ALLOWED_HISTORY_LEARNING_SOURCES)}
+        return {
+            source: {"scanned": 0, "matched": 0, "skipped": 0} for source in sorted(ALLOWED_HISTORY_LEARNING_SOURCES)
+        }
 
     @staticmethod
-    def _build_sample(execution: Any, task: Any, task_payload: Dict[str, Any], query_type: str, history_tables: List[str]) -> Dict[str, Any]:
+    def _build_sample(
+        execution: Any, task: Any, task_payload: Dict[str, Any], query_type: str, history_tables: List[str]
+    ) -> Dict[str, Any]:
         executed_time = execution.finished_time or execution.started_time or execution.create_time
         sample = {
             "execution_id": execution.execution_id,
@@ -764,7 +837,9 @@ class SemanticHistoryLearningService:
                 str(datasource.get("source_type") or ""),
             )
             if not matched:
-                self._record_config_skip(query_type, skip_reason, skipped, source_stats, datasource_id, config_id, execution, skip_detail)
+                self._record_config_skip(
+                    query_type, skip_reason, skipped, source_stats, datasource_id, config_id, execution, skip_detail
+                )
                 continue
             sample = self._build_sample(execution, task, task_payload, query_type, history_tables)
             if query_type == "agent" and not await self._attach_agent_context(sample, user_id, context_cache):
@@ -885,8 +960,12 @@ class SemanticHistoryLearningService:
 def build_semantic_history_learning_service(
     *,
     context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
-    suggestion_loader: Optional[Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]] = None,
-    history_matcher: Optional[Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]] = None,
+    suggestion_loader: Optional[
+        Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]
+    ] = None,
+    history_matcher: Optional[
+        Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]
+    ] = None,
     session_context: Optional[Callable[[], Any]] = None,
 ) -> SemanticHistoryLearningService:
     """构建指标集历史学习服务。"""

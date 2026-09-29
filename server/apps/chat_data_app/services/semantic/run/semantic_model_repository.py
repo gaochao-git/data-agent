@@ -91,7 +91,9 @@ async def load_semantic_model(
         raise ValueError("未找到可用语义配置")
     if not selected.get("enabled", True):
         raise ValueError("语义配置未启用")
-    return await _finalize_semantic_model(selected, datasource, mode, normalized_config_id, normalized_datasource_id, ds_manager)
+    return await _finalize_semantic_model(
+        selected, datasource, mode, normalized_config_id, normalized_datasource_id, ds_manager
+    )
 
 
 async def _finalize_semantic_model(

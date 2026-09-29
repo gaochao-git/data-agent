@@ -128,12 +128,8 @@ class FakeDatasourceManager:
                         "enabled": True,
                         "scope_type": "private",
                         "create_by": "user_a",
-                        "metrics": [
-                            {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
-                        ],
-                        "dimensions": [
-                            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
-                        ],
+                        "metrics": [{"name": "销售额", "expression": "SUM(amount)", "table": "orders"}],
+                        "dimensions": [{"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}],
                         "relationships": [],
                     },
                     {
@@ -158,7 +154,9 @@ class FakeDatasourceManager:
             result.append(item)
         return result
 
-    async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+    async def get_authorized_datasources_async(
+        self, include_tables: bool = True, user_id: str = "", username: str = ""
+    ):
         return await self.get_all_datasources_async(include_tables=include_tables)
 
     async def can_access_datasource_async(self, datasource_id: str, user_id: str = "", username: str = ""):
@@ -232,7 +230,12 @@ class FakeDatasourceManager:
             if table.get("table_name") != table_name:
                 continue
             if any(column.get("name") == column_name for column in table.get("columns") or []):
-                return {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
+                return {
+                    "enum_values": [{"value": "1", "label": "有效"}],
+                    "synonyms": ["状态"],
+                    "storage_format": "",
+                    "unit": "",
+                }
         return None
 
     async def get_table_column_dicts_async(self, datasource_id: str, table_name: str):
@@ -249,7 +252,15 @@ class FakeDatasourceManager:
                 result[column.get("name") or ""] = column_dict
         return result
 
-    async def replace_column_dict_async(self, datasource_id: str, table_name: str, column_name: str, column_dict, operator: str = "", operator_name: str = ""):
+    async def replace_column_dict_async(
+        self,
+        datasource_id: str,
+        table_name: str,
+        column_name: str,
+        column_dict,
+        operator: str = "",
+        operator_name: str = "",
+    ):
         current_dict = await self.get_column_dict_async(datasource_id, table_name, column_name)
         if current_dict is None:
             return None
@@ -348,11 +359,13 @@ class FakeSemanticConfigService:
             "created": 1,
             "skipped": 0,
             "failed": 0,
-            "items": [{
-                "table": "orders",
-                "status": "created",
-                "semantic_config_id": "cfg_basic_orders",
-            }],
+            "items": [
+                {
+                    "table": "orders",
+                    "status": "created",
+                    "semantic_config_id": "cfg_basic_orders",
+                }
+            ],
         }
 
     async def update_async(self, datasource_id: str, config_id: str, **kwargs):
@@ -532,13 +545,33 @@ def _default_models_registry(monkeypatch, tmp_path):
         yield
         return
     path = tmp_path / "default_models.json"
-    path.write_text(_json.dumps([
-        {"id": "gpt-4o-mini", "temperature": 0.2, "context_window": 128000, "vlm": False,
-         "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
-        {"id": "stealth/ox-alpha", "temperature": 0.2, "context_window": 256000, "vlm": True,
-         "thinking": {"mode": "forced", "dialect": "openrouter",
-                      "efforts": ["low", "medium", "high"], "default_effort": "high"}},
-    ], ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        _json.dumps(
+            [
+                {
+                    "id": "gpt-4o-mini",
+                    "temperature": 0.2,
+                    "context_window": 128000,
+                    "vlm": False,
+                    "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False},
+                },
+                {
+                    "id": "stealth/ox-alpha",
+                    "temperature": 0.2,
+                    "context_window": 256000,
+                    "vlm": True,
+                    "thinking": {
+                        "mode": "forced",
+                        "dialect": "openrouter",
+                        "efforts": ["low", "medium", "high"],
+                        "default_effort": "high",
+                    },
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
     yield
 

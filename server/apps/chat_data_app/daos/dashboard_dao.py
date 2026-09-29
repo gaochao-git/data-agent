@@ -261,10 +261,14 @@ class DashboardDao:
         include_public: bool,
     ) -> Optional[ChatDataDashboardPanel]:
         async with self._session_context() as session:
-            query = select(ChatDataDashboardPanel).join(
-                ChatDataDashboard,
-                ChatDataDashboard.dashboard_id == ChatDataDashboardPanel.dashboard_id,
-            ).where(*self._panel_filters(panel_id, dashboard_id), ChatDataDashboard.delete_flag == 0)
+            query = (
+                select(ChatDataDashboardPanel)
+                .join(
+                    ChatDataDashboard,
+                    ChatDataDashboard.dashboard_id == ChatDataDashboardPanel.dashboard_id,
+                )
+                .where(*self._panel_filters(panel_id, dashboard_id), ChatDataDashboard.delete_flag == 0)
+            )
             if user_id:
                 access_filter = ChatDataDashboard.user_id == user_id
                 if include_public:
@@ -273,8 +277,12 @@ class DashboardDao:
             result = await session.execute(query)
             return result.scalar_one_or_none()
 
-    async def _get_owner_dashboard(self, session: Any, dashboard_id: str, user_id: Optional[str]) -> Optional[ChatDataDashboard]:
-        result = await session.execute(select(ChatDataDashboard).where(*self._dashboard_owner_filters(dashboard_id, user_id)))
+    async def _get_owner_dashboard(
+        self, session: Any, dashboard_id: str, user_id: Optional[str]
+    ) -> Optional[ChatDataDashboard]:
+        result = await session.execute(
+            select(ChatDataDashboard).where(*self._dashboard_owner_filters(dashboard_id, user_id))
+        )
         return result.scalar_one_or_none()
 
     async def list_dashboard_panels(self, session: Any, dashboard_id: str) -> List[ChatDataDashboardPanel]:
@@ -300,7 +308,9 @@ class DashboardDao:
         dashboard_id: str,
         layouts: List[Dict[str, Any]],
     ) -> Dict[str, ChatDataDashboardPanel]:
-        panel_ids = [layout.get("panel_id") or layout.get("i") for layout in layouts if layout.get("panel_id") or layout.get("i")]
+        panel_ids = [
+            layout.get("panel_id") or layout.get("i") for layout in layouts if layout.get("panel_id") or layout.get("i")
+        ]
         if not panel_ids:
             return {}
         result = await session.execute(
@@ -312,7 +322,9 @@ class DashboardDao:
         )
         return {panel.panel_id: panel for panel in result.scalars().all()}
 
-    async def _get_panel_for_update(self, session: Any, dashboard_id: str, panel_id: str) -> Optional[ChatDataDashboardPanel]:
+    async def _get_panel_for_update(
+        self, session: Any, dashboard_id: str, panel_id: str
+    ) -> Optional[ChatDataDashboardPanel]:
         result = await session.execute(
             select(ChatDataDashboardPanel).where(
                 ChatDataDashboardPanel.dashboard_id == dashboard_id,
@@ -410,7 +422,9 @@ class DashboardDao:
         }
 
     @staticmethod
-    def _touch_dashboard(dashboard: ChatDataDashboard, user_id: Optional[str], operator_name: str, now: datetime) -> None:
+    def _touch_dashboard(
+        dashboard: ChatDataDashboard, user_id: Optional[str], operator_name: str, now: datetime
+    ) -> None:
         dashboard.update_time = now
         if user_id:
             dashboard.update_by = user_id

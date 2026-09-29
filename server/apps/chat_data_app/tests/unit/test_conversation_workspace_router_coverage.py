@@ -102,7 +102,10 @@ def patch_user(monkeypatch):
 
 
 def test_normalize_and_internal_path_helpers():
-    assert cw_routes._normalize_workspace_file_path("/mnt/user-data/workspace/data_context.json") == "workspace/data_context.json"
+    assert (
+        cw_routes._normalize_workspace_file_path("/mnt/user-data/workspace/data_context.json")
+        == "workspace/data_context.json"
+    )
     assert cw_routes._is_internal_workspace_file("/mnt/user-data/workspace/data_context.json") is True
     assert cw_routes._is_internal_workspace_file("workspace/reports/a.csv") is False
     files = [
@@ -143,14 +146,20 @@ def test_list_workspace_files_access_denied_and_errors(fake_service, monkeypatch
 
 def test_read_workspace_file_branches(fake_service, monkeypatch):
     patch_user(monkeypatch)
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request()))
+    )
     assert payload["data"]["content"] == "hello"
 
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "workspace/data_context.json", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "workspace/data_context.json", fake_request()))
+    )
     assert payload["msg"] == "文件不存在"
 
     fake_service.access = False
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request()))
+    )
     assert payload["status"] == "error"
 
     fake_service.access = True
@@ -160,7 +169,9 @@ def test_read_workspace_file_branches(fake_service, monkeypatch):
         (RuntimeError("boom"), "error"),
     ]:
         fake_service.errors["read"] = exc
-        payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request())))
+        payload = response_payload(
+            asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request()))
+        )
         assert payload["status"] == expect_status
 
     fake_service.errors.clear()
@@ -182,40 +193,58 @@ def test_read_raw_file_returns_binary_response(fake_service, monkeypatch):
     assert "filename*=UTF-8''" in disposition
 
     fake_service.errors["raw"] = FileNotFoundError("missing")
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request()))
+    )
     assert payload["status"] == "error"
 
     fake_service.errors["raw"] = RuntimeError("boom")
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request()))
+    )
     assert payload["status"] == "error"
 
     fake_service.errors.clear()
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_raw_file_api(
-        "conv_1", "/mnt/user-data/workspace/data_context.json", fake_request()
-    )))
+    payload = response_payload(
+        asyncio.run(
+            cw_routes.read_conversation_workspace_raw_file_api(
+                "conv_1", "/mnt/user-data/workspace/data_context.json", fake_request()
+            )
+        )
+    )
     assert payload["msg"] == "文件不存在"
 
     fake_service.access = False
-    payload = response_payload(asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.read_conversation_workspace_raw_file_api("conv_1", "x.pdf", fake_request()))
+    )
     assert payload["status"] == "error"
 
 
 def test_office_preview_fallbacks(fake_service, monkeypatch):
     patch_user(monkeypatch)
-    payload = response_payload(asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request()))
+    )
     assert payload["data"]["available"] is True
 
     fake_service.errors["preview"] = FileNotFoundError("no officecli")
-    payload = response_payload(asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request()))
+    )
     assert payload["data"] == {"available": False, "reason": "preview_unavailable"}
 
     fake_service.errors["preview"] = RuntimeError("boom")
-    payload = response_payload(asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request()))
+    )
     assert payload["data"] == {"available": False, "reason": "preview_failed"}
 
     fake_service.errors.clear()
     fake_service.access = False
-    payload = response_payload(asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.render_conversation_workspace_office_preview_api("conv_1", "a.docx", fake_request()))
+    )
     assert payload["status"] == "error"
 
 
@@ -250,18 +279,24 @@ def test_import_skill_from_workspace_branches(fake_service, monkeypatch):
         imported.append((skill_dir, user_id, operator_name))
         return {"id": "skill_1"}
 
-    monkeypatch.setattr(cw_routes, "ensure_conversation_workspace", lambda conv, uid, *, created_date=None: {"root": "/tmp/ws"})
+    monkeypatch.setattr(
+        cw_routes, "ensure_conversation_workspace", lambda conv, uid, *, created_date=None: {"root": "/tmp/ws"}
+    )
     monkeypatch.setattr(cw_routes, "resolve_output_skill_directory", lambda root, path: f"{root}/{path}")
     monkeypatch.setattr(cw_routes.skill_service, "import_user_skill_from_directory_async", fake_import)
 
     body = SimpleNamespace(skill_dir_path="skills/report_skill")
-    payload = response_payload(asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request()))
+    )
     assert payload["data"]["id"] == "skill_1"
     assert imported[0][0] == "/tmp/ws/skills/report_skill"
     assert imported[0][2] == "张三"
 
     fake_service.access = False
-    payload = response_payload(asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request()))
+    )
     assert payload["status"] == "error"
 
     fake_service.access = True
@@ -270,14 +305,18 @@ def test_import_skill_from_workspace_branches(fake_service, monkeypatch):
         raise ValueError("技能目录不合法")
 
     monkeypatch.setattr(cw_routes.skill_service, "import_user_skill_from_directory_async", invalid_import)
-    payload = response_payload(asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request()))
+    )
     assert payload["status"] == "error"
 
     async def boom_import(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(cw_routes.skill_service, "import_user_skill_from_directory_async", boom_import)
-    payload = response_payload(asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.import_conversation_workspace_skill("conv_1", body, fake_request()))
+    )
     assert payload["status"] == "error"
 
 
@@ -294,29 +333,39 @@ def test_download_workspace_archive_branches(fake_service, monkeypatch):
     # 非法目录路径：校验已下沉到 service（normalize_archive_directory 抛 ValueError），
     # 路由只负责翻译成 BAD_REQUEST，不再重复一份目录白名单，避免两处口径漂移
     fake_service.errors["archive"] = ValueError("目录不支持打包: ../etc")
-    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "../etc", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "../etc", fake_request()))
+    )
     assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     del fake_service.errors["archive"]
 
     # 无权访问
     fake_service.access = False
-    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request()))
+    )
     assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
     fake_service.access = True
 
     # 目录为空（service FileNotFoundError）→ NOT_FOUND
     fake_service.errors["archive"] = FileNotFoundError("outputs 目录下没有可打包的文件")
-    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request()))
+    )
     assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert "没有可打包的文件" in payload["msg"]
 
     # 压缩包超限 → BAD_REQUEST + 明确文案
     fake_service.errors["archive"] = cw_routes.WorkspaceArchiveTooLargeError(50 * 1024 * 1024)
-    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request()))
+    )
     assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "已中止打包" in payload["msg"]
 
     # 未知异常 → 兜底错误
     fake_service.errors["archive"] = RuntimeError("boom")
-    payload = response_payload(asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request())))
+    payload = response_payload(
+        asyncio.run(cw_routes.download_conversation_workspace_archive("conv_1", "outputs", fake_request()))
+    )
     assert payload["status"] == "error"

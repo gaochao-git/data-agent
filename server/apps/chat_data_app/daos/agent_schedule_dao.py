@@ -85,10 +85,12 @@ class AgentScheduleDao:
 
     async def get_job_for_update(self, session: AsyncSession, job_id: str) -> ChatDataAgentSchedule | None:
         result = await session.execute(
-            select(ChatDataAgentSchedule).where(
+            select(ChatDataAgentSchedule)
+            .where(
                 ChatDataAgentSchedule.job_id == job_id,
                 ChatDataAgentSchedule.delete_flag == 0,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
         return result.scalar_one_or_none()
 
@@ -110,11 +112,13 @@ class AgentScheduleDao:
 
     async def conversation_exists(self, session: AsyncSession, conversation_id: str, user_id: str) -> bool:
         result = await session.execute(
-            select(UserThread.id).where(
+            select(UserThread.id)
+            .where(
                 UserThread.thread_id == conversation_id,
                 UserThread.user_id == user_id,
                 UserThread.delete_flag == 0,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 
@@ -139,11 +143,13 @@ class AgentScheduleDao:
         plan_time: datetime,
     ) -> ChatDataAgentScheduleRun | None:
         result = await session.execute(
-            select(ChatDataAgentScheduleRun).where(
+            select(ChatDataAgentScheduleRun)
+            .where(
                 ChatDataAgentScheduleRun.job_id == job_id,
                 ChatDataAgentScheduleRun.plan_time == plan_time,
                 ChatDataAgentScheduleRun.delete_flag == 0,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -209,9 +215,7 @@ class AgentScheduleDao:
             update(ChatDataAgentScheduleRun)
             .where(
                 ChatDataAgentScheduleRun.job_id == job_id,
-                ChatDataAgentScheduleRun.trigger_status.in_(
-                    (SCHEDULE_RUN_STATUS_PENDING, SCHEDULE_RUN_STATUS_CLAIMED)
-                ),
+                ChatDataAgentScheduleRun.trigger_status.in_((SCHEDULE_RUN_STATUS_PENDING, SCHEDULE_RUN_STATUS_CLAIMED)),
                 ChatDataAgentScheduleRun.delete_flag == 0,
             )
             .values(
@@ -311,9 +315,7 @@ class AgentScheduleDao:
         server_default 列在 MySQL 下 flush 后是过期态，回读会触发同步惰性加载
         并抛 MissingGreenlet，不能依赖 server_default 拿值。
         """
-        result = await session.execute(
-            select(ChatDataAgentScheduleControl).where(ChatDataAgentScheduleControl.id == 1)
-        )
+        result = await session.execute(select(ChatDataAgentScheduleControl).where(ChatDataAgentScheduleControl.id == 1))
         control = result.scalar_one_or_none()
         if control is None:
             now = await self.now(session)
@@ -331,9 +333,7 @@ class AgentScheduleDao:
     async def get_control_for_update(self, session: AsyncSession) -> ChatDataAgentScheduleControl:
         """带行锁读取全局控制记录，供暂停/恢复切换使用。"""
         result = await session.execute(
-            select(ChatDataAgentScheduleControl)
-            .where(ChatDataAgentScheduleControl.id == 1)
-            .with_for_update()
+            select(ChatDataAgentScheduleControl).where(ChatDataAgentScheduleControl.id == 1).with_for_update()
         )
         control = result.scalar_one_or_none()
         if control is None:
@@ -394,13 +394,12 @@ class AgentScheduleDao:
     ) -> int:
         """按条件过滤后的任务总数（与 list_jobs_with_stats 同一口径，供分页 total）。"""
         conditions = self._admin_list_conditions(
-            keyword, enabled_flag=enabled_flag, expired=expired, now=now,
+            keyword,
+            enabled_flag=enabled_flag,
+            expired=expired,
+            now=now,
         )
-        result = await session.execute(
-            select(func.count())
-            .select_from(ChatDataAgentSchedule)
-            .where(*conditions)
-        )
+        result = await session.execute(select(func.count()).select_from(ChatDataAgentSchedule).where(*conditions))
         return int(result.scalar() or 0)
 
     def _admin_list_conditions(
@@ -415,9 +414,7 @@ class AgentScheduleDao:
         conditions = [ChatDataAgentSchedule.delete_flag == 0]
         if keyword:
             like = f"%{keyword}%"
-            conditions.append(
-                ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like)
-            )
+            conditions.append(ChatDataAgentSchedule.job_title.like(like) | ChatDataAgentSchedule.user_id.like(like))
         if enabled_flag is not None:
             conditions.append(ChatDataAgentSchedule.enabled_flag == enabled_flag)
         if expired is not None:
@@ -427,10 +424,12 @@ class AgentScheduleDao:
                 conditions.append(ChatDataAgentSchedule.effective_end_time.is_not(None))
                 conditions.append(ChatDataAgentSchedule.effective_end_time < now)
             else:
-                conditions.append(or_(
-                    ChatDataAgentSchedule.effective_end_time.is_(None),
-                    ChatDataAgentSchedule.effective_end_time >= now,
-                ))
+                conditions.append(
+                    or_(
+                        ChatDataAgentSchedule.effective_end_time.is_(None),
+                        ChatDataAgentSchedule.effective_end_time >= now,
+                    )
+                )
         return conditions
 
     async def list_jobs_with_stats(
@@ -449,10 +448,18 @@ class AgentScheduleDao:
             select(
                 ChatDataAgentScheduleRun.job_id.label("job_id"),
                 func.count().label("total_count"),
-                func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SUCCEEDED, 1), else_=0)).label("succeeded_count"),
-                func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_FAILED, 1), else_=0)).label("failed_count"),
-                func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_CANCELLED, 1), else_=0)).label("cancelled_count"),
-                func.sum(case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SKIPPED, 1), else_=0)).label("skipped_count"),
+                func.sum(
+                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SUCCEEDED, 1), else_=0)
+                ).label("succeeded_count"),
+                func.sum(
+                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_FAILED, 1), else_=0)
+                ).label("failed_count"),
+                func.sum(
+                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_CANCELLED, 1), else_=0)
+                ).label("cancelled_count"),
+                func.sum(
+                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SKIPPED, 1), else_=0)
+                ).label("skipped_count"),
                 func.max(ChatDataAgentScheduleRun.plan_time).label("last_plan_time"),
             )
             .where(ChatDataAgentScheduleRun.delete_flag == 0)
@@ -460,7 +467,10 @@ class AgentScheduleDao:
             .subquery()
         )
         conditions = self._admin_list_conditions(
-            keyword, enabled_flag=enabled_flag, expired=expired, now=now,
+            keyword,
+            enabled_flag=enabled_flag,
+            expired=expired,
+            now=now,
         )
         result = await session.execute(
             select(
@@ -479,13 +489,18 @@ class AgentScheduleDao:
         )
         rows: list[tuple[ChatDataAgentSchedule, dict]] = []
         for job, total_count, succeeded_count, failed_count, skipped_count, last_plan_time in result.all():
-            rows.append((job, {
-                "total_count": int(total_count or 0),
-                "succeeded_count": int(succeeded_count or 0),
-                "failed_count": int(failed_count or 0),
-                "skipped_count": int(skipped_count or 0),
-                "last_plan_time": last_plan_time,
-            }))
+            rows.append(
+                (
+                    job,
+                    {
+                        "total_count": int(total_count or 0),
+                        "succeeded_count": int(succeeded_count or 0),
+                        "failed_count": int(failed_count or 0),
+                        "skipped_count": int(skipped_count or 0),
+                        "last_plan_time": last_plan_time,
+                    },
+                )
+            )
         return rows
 
     async def latest_runs_by_jobs(
@@ -501,20 +516,24 @@ class AgentScheduleDao:
         """
         if not job_ids:
             return {}
-        max_id_rows = (await session.execute(
-            select(ChatDataAgentScheduleRun.job_id, func.max(ChatDataAgentScheduleRun.id))
-            .where(
-                ChatDataAgentScheduleRun.job_id.in_(job_ids),
-                ChatDataAgentScheduleRun.delete_flag == 0,
+        max_id_rows = (
+            await session.execute(
+                select(ChatDataAgentScheduleRun.job_id, func.max(ChatDataAgentScheduleRun.id))
+                .where(
+                    ChatDataAgentScheduleRun.job_id.in_(job_ids),
+                    ChatDataAgentScheduleRun.delete_flag == 0,
+                )
+                .group_by(ChatDataAgentScheduleRun.job_id)
             )
-            .group_by(ChatDataAgentScheduleRun.job_id)
-        )).all()
+        ).all()
         latest_ids = [row[1] for row in max_id_rows]
         if not latest_ids:
             return {}
-        rows = (await session.execute(
-            select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id.in_(latest_ids))
-        )).scalars().all()
+        rows = (
+            (await session.execute(select(ChatDataAgentScheduleRun).where(ChatDataAgentScheduleRun.id.in_(latest_ids))))
+            .scalars()
+            .all()
+        )
         return {run.job_id: run for run in rows}
 
 

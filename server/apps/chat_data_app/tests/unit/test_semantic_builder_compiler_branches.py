@@ -85,7 +85,9 @@ def test_semantic_builder_compile_validation_branches():
     with pytest.raises(ValueError, match=r"dimensions\[1\] 必须是对象"):
         compiler.compile({"dimensions": [{"semanticName": "城市"}, "bad"]})
     with pytest.raises(ValueError, match=r"filters\[1\] 必须是对象"):
-        compiler.compile({"dimensions": [{"semanticName": "城市"}], "filters": [{"semanticName": "状态", "value": "paid"}, "bad"]})
+        compiler.compile(
+            {"dimensions": [{"semanticName": "城市"}], "filters": [{"semanticName": "状态", "value": "paid"}, "bad"]}
+        )
 
 
 def test_ai_and_bi_adapters_pass_the_configured_row_limit_to_sql_compiler(monkeypatch):
@@ -100,36 +102,63 @@ def test_ai_and_bi_adapters_pass_the_configured_row_limit_to_sql_compiler(monkey
         fake_compile,
     )
     config = build_semantic_config()
-    assert SemanticBIQueryAdapter(config, max_rows=218).compile({
-        "dimensions": [{"semanticName": "城市"}],
-    })["sql"] == "SELECT 1"
-    assert compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
-        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=218,
-    )["sql"] == "SELECT 1"
+    assert (
+        SemanticBIQueryAdapter(config, max_rows=218).compile(
+            {
+                "dimensions": [{"semanticName": "城市"}],
+            }
+        )["sql"]
+        == "SELECT 1"
+    )
+    assert (
+        compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
+            metrics=["销售额"],
+            dimensions=[],
+            filters=[],
+            having=[],
+            limit=218,
+        )["sql"]
+        == "SELECT 1"
+    )
     assert calls == [("mysql", 218), ("mysql", 218)]
 
 
 def test_ai_and_bi_adapters_compile_limits_above_the_core_default():
     config = build_semantic_config()
     ai_result = compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
-        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=218,
+        metrics=["销售额"],
+        dimensions=[],
+        filters=[],
+        having=[],
+        limit=218,
     )
-    bi_result = SemanticBIQueryAdapter(config, max_rows=218).compile({
-        "dimensions": [{"semanticName": "城市"}],
-        "limit": 218,
-    })
+    bi_result = SemanticBIQueryAdapter(config, max_rows=218).compile(
+        {
+            "dimensions": [{"semanticName": "城市"}],
+            "limit": 218,
+        }
+    )
 
     assert ai_result["success"] is True
     assert ai_result["sql"].endswith("LIMIT 218")
     assert bi_result["sql"].endswith("LIMIT 218")
-    assert compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
-        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=219,
-    )["success"] is False
+    assert (
+        compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
+            metrics=["销售额"],
+            dimensions=[],
+            filters=[],
+            having=[],
+            limit=219,
+        )["success"]
+        is False
+    )
     with pytest.raises(ValueError, match="LIMIT 不能超过 218"):
-        SemanticBIQueryAdapter(config, max_rows=218).compile({
-            "dimensions": [{"semanticName": "城市"}],
-            "limit": 219,
-        })
+        SemanticBIQueryAdapter(config, max_rows=218).compile(
+            {
+                "dimensions": [{"semanticName": "城市"}],
+                "limit": 219,
+            }
+        )
 
 
 def test_ai_and_bi_reject_disconnected_semantic_tables():
@@ -146,9 +175,11 @@ def test_ai_and_bi_reject_disconnected_semantic_tables():
     assert "缺少从主表" in ai_result["error"]
 
     with pytest.raises(ValueError, match="缺少从主表"):
-        SemanticBIQueryAdapter(config).compile({
-            "dimensions": [{"semanticName": "城市"}, {"semanticName": "用户等级"}],
-        })
+        SemanticBIQueryAdapter(config).compile(
+            {
+                "dimensions": [{"semanticName": "城市"}, {"semanticName": "用户等级"}],
+            }
+        )
 
 
 def test_semantic_builder_adapter_returns_config_without_compiling(monkeypatch):
@@ -158,10 +189,12 @@ def test_semantic_builder_adapter_returns_config_without_compiling(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("adapt must not compile SQL")),
     )
 
-    builder_config = compiler.adapt({
-        "dimensions": [{"semanticName": "城市"}],
-        "limit": 10,
-    })
+    builder_config = compiler.adapt(
+        {
+            "dimensions": [{"semanticName": "城市"}],
+            "limit": 10,
+        }
+    )
 
     assert builder_config["mainTable"] == "orders"
     assert builder_config["dimensions"][0]["column"] == "city"
@@ -172,15 +205,23 @@ def test_semantic_builder_resolves_dimensions_and_metrics_by_names_fields_and_ex
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
     assert compiler._resolve_dimension_config({"displayName": "城市"})["name"] == "城市"
-    assert compiler._resolve_dimension_config({"table": "orders", "column": "city", "expression": "orders.city"})["name"] == "城市"
+    assert (
+        compiler._resolve_dimension_config({"table": "orders", "column": "city", "expression": "orders.city"})["name"]
+        == "城市"
+    )
     with pytest.raises(ValueError, match="语义维度不存在"):
-        compiler._resolve_dimension_config({"table": "orders", "column": "city", "expression": "users.city", "alias": "冲突城市"})
+        compiler._resolve_dimension_config(
+            {"table": "orders", "column": "city", "expression": "users.city", "alias": "冲突城市"}
+        )
     with pytest.raises(ValueError, match="语义维度不存在"):
         compiler._resolve_dimension_config({"table": "orders", "column": "missing", "alias": "缺失字段"})
 
     assert compiler._resolve_metric_config({"displayName": "销售额"})["name"] == "销售额"
     assert compiler._resolve_metric_config({"expression": "SUM(orders.amount)"})["name"] == "销售额"
-    assert compiler._resolve_metric_config({"func": "COUNT_DISTINCT", "table": "users", "column": "user_id"})["name"] == "用户数"
+    assert (
+        compiler._resolve_metric_config({"func": "COUNT_DISTINCT", "table": "users", "column": "user_id"})["name"]
+        == "用户数"
+    )
     assert compiler._resolve_metric_config({"func": "SUM", "table": "orders", "column": "missing"}) is None
 
 
@@ -204,7 +245,9 @@ def test_semantic_builder_maps_dimension_as_raw_or_temporary_aggregate():
     assert raw["column"] == "city"
     assert raw["alias"] == "城市原始值"
 
-    temporary_aggregate = compiler._map_aggregation({"semanticName": "城市", "func": "COUNT_DISTINCT", "alias": "城市数"})
+    temporary_aggregate = compiler._map_aggregation(
+        {"semanticName": "城市", "func": "COUNT_DISTINCT", "alias": "城市数"}
+    )
     assert temporary_aggregate["func"] == "COUNT_DISTINCT"
     assert temporary_aggregate["column"] == "city"
     assert temporary_aggregate["alias"] == "城市数"
@@ -222,43 +265,47 @@ def test_semantic_builder_filter_mapping_branches():
         compiler._map_filter_node({"or": "bad"})
 
     with pytest.raises(ValueError, match=r"or\[1\] 必须是对象"):
-        compiler._map_filter_nodes([
-            {"or": [{"semanticName": "状态", "operator": "=", "value": "paid"}, "skip"]}
-        ])
+        compiler._map_filter_nodes([{"or": [{"semanticName": "状态", "operator": "=", "value": "paid"}, "skip"]}])
 
-    mapped_tree = compiler._map_filter_nodes([
-        {
-            "and": [
-                {"semanticName": "城市", "operator": "=", "value": "上海"},
-                {
-                    "or": [
-                        {"semanticName": "状态", "operator": "=", "value": "paid"},
-                    ]
-                },
-            ]
-        }
-    ])
+    mapped_tree = compiler._map_filter_nodes(
+        [
+            {
+                "and": [
+                    {"semanticName": "城市", "operator": "=", "value": "上海"},
+                    {
+                        "or": [
+                            {"semanticName": "状态", "operator": "=", "value": "paid"},
+                        ]
+                    },
+                ]
+            }
+        ]
+    )
     assert mapped_tree[0]["and"][0]["column"] == "city"
     assert mapped_tree[0]["and"][1]["or"][0]["column"] == "status"
 
-    field_ref = compiler._map_dimension_filter({
-        "semanticName": "城市",
-        "operator": "=",
-        "valueType": "field_ref",
-        "rightTable": "users",
-        "rightTableAlias": "u",
-        "rightColumn": "level",
-    })
+    field_ref = compiler._map_dimension_filter(
+        {
+            "semanticName": "城市",
+            "operator": "=",
+            "valueType": "field_ref",
+            "rightTable": "users",
+            "rightTableAlias": "u",
+            "rightColumn": "level",
+        }
+    )
     assert field_ref["rightTable"] == "users"
     assert field_ref["rightTableAlias"] == "u"
     assert field_ref["rightColumn"] == "level"
 
-    having = compiler._map_having_filter({
-        "semanticName": "销售额",
-        "aggFunc": "SUM",
-        "operator": ">",
-        "value": 100,
-    })
+    having = compiler._map_having_filter(
+        {
+            "semanticName": "销售额",
+            "aggFunc": "SUM",
+            "operator": ">",
+            "value": 100,
+        }
+    )
     assert having["aggFunc"] == "SUM"
     assert having["column"] == "amount"
 
@@ -277,20 +324,24 @@ def test_semantic_builder_rejects_incomplete_filter_values(filter_config, error)
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
     with pytest.raises(ValueError, match=error):
-        compiler.compile({
-            "dimensions": [{"semanticName": "状态"}],
-            "filters": [filter_config],
-        })
+        compiler.compile(
+            {
+                "dimensions": [{"semanticName": "状态"}],
+                "filters": [filter_config],
+            }
+        )
 
 
 @pytest.mark.parametrize("operator", ["EMPTY STRING", "IS NULL", "IS NOT NULL"])
 def test_semantic_builder_accepts_explicit_value_free_operators(operator):
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
-    result = compiler.compile({
-        "dimensions": [{"semanticName": "状态"}],
-        "filters": [{"semanticName": "状态", "operator": operator, "value": ""}],
-    })
+    result = compiler.compile(
+        {
+            "dimensions": [{"semanticName": "状态"}],
+            "filters": [{"semanticName": "状态", "operator": operator, "value": ""}],
+        }
+    )
 
     assert result["sql"]
 
@@ -300,33 +351,44 @@ def test_semantic_builder_enforces_dimension_allowed_operators():
     config["dimensions"][1]["allowed_operators"] = ["=", "IN"]
     compiler = SemanticBIQueryAdapter(config)
 
-    assert compiler._map_filter_nodes([
-        {"semanticName": "状态", "operator": "in", "value": ["paid"]},
-    ])[0]["operator"] == "IN"
+    assert (
+        compiler._map_filter_nodes(
+            [
+                {"semanticName": "状态", "operator": "in", "value": ["paid"]},
+            ]
+        )[0]["operator"]
+        == "IN"
+    )
     with pytest.raises(ValueError, match="不允许操作符 'LIKE'"):
-        compiler._map_filter_nodes([
-            {"semanticName": "状态", "operator": "LIKE", "value": "paid"},
-        ])
+        compiler._map_filter_nodes(
+            [
+                {"semanticName": "状态", "operator": "LIKE", "value": "paid"},
+            ]
+        )
 
 
 def test_semantic_builder_normalizes_time_dimension_equal_filter():
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
-    mapped = compiler._map_filter_nodes([
-        {"semanticName": "下单时间", "operator": "=", "value": "2024"},
-        {"semanticName": "状态", "operator": "=", "value": "paid"},
-    ])
+    mapped = compiler._map_filter_nodes(
+        [
+            {"semanticName": "下单时间", "operator": "=", "value": "2024"},
+            {"semanticName": "状态", "operator": "=", "value": "paid"},
+        ]
+    )
 
     assert [item["operator"] for item in mapped] == [">=", "<", "="]
     assert mapped[0]["value"] == "2024-01-01 00:00:00"
     assert mapped[1]["value"] == "2025-01-01 00:00:00"
     assert mapped[2]["column"] == "status"
 
-    sql = compiler.compile({
-        "dimensions": [{"semanticName": "状态"}],
-        "aggregations": [{"semanticName": "订单数"}],
-        "filters": [{"semanticName": "下单时间", "operator": "=", "value": "2024"}],
-    })["sql"]
+    sql = compiler.compile(
+        {
+            "dimensions": [{"semanticName": "状态"}],
+            "aggregations": [{"semanticName": "订单数"}],
+            "filters": [{"semanticName": "下单时间", "operator": "=", "value": "2024"}],
+        }
+    )["sql"]
 
     assert "`order_time` >= '2024-01-01 00:00:00'" in sql
     assert "`order_time` < '2025-01-01 00:00:00'" in sql
@@ -336,18 +398,26 @@ def test_semantic_builder_normalizes_time_dimension_equal_filter():
 def test_semantic_builder_normalizes_time_dimension_inside_filter_trees():
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
-    and_tree = compiler._map_filter_nodes([{
-        "and": [
-            {"semanticName": "状态", "operator": "=", "value": "paid"},
-            {"semanticName": "下单时间", "operator": "=", "value": "2024-06"},
+    and_tree = compiler._map_filter_nodes(
+        [
+            {
+                "and": [
+                    {"semanticName": "状态", "operator": "=", "value": "paid"},
+                    {"semanticName": "下单时间", "operator": "=", "value": "2024-06"},
+                ]
+            }
         ]
-    }])
-    or_tree = compiler._map_filter_nodes([{
-        "or": [
-            {"semanticName": "下单时间", "operator": "=", "value": "2024-06-01"},
-            {"semanticName": "状态", "operator": "=", "value": "paid"},
+    )
+    or_tree = compiler._map_filter_nodes(
+        [
+            {
+                "or": [
+                    {"semanticName": "下单时间", "operator": "=", "value": "2024-06-01"},
+                    {"semanticName": "状态", "operator": "=", "value": "paid"},
+                ]
+            }
         ]
-    }])
+    )
 
     assert [item["operator"] for item in and_tree[0]["and"]] == ["=", ">=", "<"]
     assert and_tree[0]["and"][1]["value"] == "2024-06-01 00:00:00"
@@ -375,13 +445,27 @@ def test_semantic_builder_order_and_selection_helpers():
     assert compiler._find_selected_aggregation({"expression": "SUM(orders.refund_amount)"}, aggregations) is None
     assert compiler._find_selected_aggregation({"displayName": "销售额"}, aggregations)["alias"] == "销售额"
     assert compiler._find_selected_aggregation({"displayName": "退款额"}, aggregations) is None
-    assert compiler._find_selected_aggregation({"aggFunc": "SUM", "table": "orders", "column": "amount"}, aggregations)["alias"] == "销售额"
-    assert compiler._find_selected_aggregation({"aggFunc": "COUNT", "table": "orders", "column": "amount"}, aggregations) is None
-    assert compiler._find_selected_aggregation({"table": "orders", "column": "amount"}, aggregations)["alias"] == "销售额"
+    assert (
+        compiler._find_selected_aggregation({"aggFunc": "SUM", "table": "orders", "column": "amount"}, aggregations)[
+            "alias"
+        ]
+        == "销售额"
+    )
+    assert (
+        compiler._find_selected_aggregation({"aggFunc": "COUNT", "table": "orders", "column": "amount"}, aggregations)
+        is None
+    )
+    assert (
+        compiler._find_selected_aggregation({"table": "orders", "column": "amount"}, aggregations)["alias"] == "销售额"
+    )
 
-    order_by_selected_agg = compiler._map_order_by({"aggId": "agg_sales", "aggFunc": "SUM", "direction": "DESC"}, aggregations, dimensions)
+    order_by_selected_agg = compiler._map_order_by(
+        {"aggId": "agg_sales", "aggFunc": "SUM", "direction": "DESC"}, aggregations, dimensions
+    )
     order_by_mapped_dim = compiler._map_order_by({"semanticName": "状态", "direction": "ASC"}, aggregations, dimensions)
-    order_by_mapped_agg = compiler._map_order_by({"semanticName": "订单数", "aggFunc": "COUNT_DISTINCT", "direction": "DESC"}, aggregations, dimensions)
+    order_by_mapped_agg = compiler._map_order_by(
+        {"semanticName": "订单数", "aggFunc": "COUNT_DISTINCT", "direction": "DESC"}, aggregations, dimensions
+    )
 
     assert order_by_selected_agg["aggId"] == "agg_sales"
     assert order_by_mapped_dim["column"] == "status"
@@ -390,14 +474,16 @@ def test_semantic_builder_order_and_selection_helpers():
 
 def test_semantic_builder_table_collection_and_main_table_resolution():
     compiler = SemanticBIQueryAdapter(build_semantic_config())
-    filters = compiler._map_filter_nodes([
-        {
-            "and": [
-                {"semanticName": "城市", "operator": "=", "value": "上海"},
-                {"semanticName": "用户等级", "operator": "=", "value": "vip"},
-            ]
-        }
-    ])
+    filters = compiler._map_filter_nodes(
+        [
+            {
+                "and": [
+                    {"semanticName": "城市", "operator": "=", "value": "上海"},
+                    {"semanticName": "用户等级", "operator": "=", "value": "vip"},
+                ]
+            }
+        ]
+    )
     dimensions = [compiler._map_dimension({"semanticName": "城市"})]
     aggregations = [compiler._map_aggregation({"semanticName": "用户数"})]
     order_by = [{"table": "", "tableAlias": "", "column": ""}]
@@ -405,9 +491,15 @@ def test_semantic_builder_table_collection_and_main_table_resolution():
     tables_needed = compiler._collect_tables_needed("orders", dimensions, aggregations, filters, order_by)
     assert tables_needed == {"orders", "u"}
     assert compiler._resolve_main_table([], [], filters, [])[0] == "orders"
-    assert compiler._resolve_main_table([], [], [], [compiler._map_order_by({"semanticName": "状态"}, [], [])]) == ("orders", "orders")
+    assert compiler._resolve_main_table([], [], [], [compiler._map_order_by({"semanticName": "状态"}, [], [])]) == (
+        "orders",
+        "orders",
+    )
     assert compiler._first_filter_table({"or": ["skip", {"table": "users", "tableAlias": "u"}]}) == ("users", "u")
-    assert compiler._first_filter_table({"or": [{"table": ""}, {"table": "users", "tableAlias": "u"}]}) == ("users", "u")
+    assert compiler._first_filter_table({"or": [{"table": ""}, {"table": "users", "tableAlias": "u"}]}) == (
+        "users",
+        "u",
+    )
     assert compiler._first_filter_table({"and": []}) == ("", "")
     with pytest.raises(ValueError, match="无法确定主表"):
         compiler._resolve_main_table([], [], [], [])
@@ -456,28 +548,30 @@ def test_semantic_builder_collect_and_main_table_remaining_edges():
 def test_semantic_builder_compile_full_path_with_aliases_and_field_ref():
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
-    result = compiler.compile({
-        "dimensions": [{"semanticName": "用户等级", "alias": "等级"}],
-        "aggregations": [{"semanticName": "销售额", "alias": "销售额"}],
-        "filters": [
-            {
-                "semanticName": "用户等级",
-                "operator": "=",
-                "valueType": "field_ref",
-                "rightTable": "orders",
-                "rightColumn": "status",
-            },
-            {
-                "semanticName": "销售额",
-                "aggFunc": "SUM",
-                "operator": ">",
-                "value": 100,
-            },
-        ],
-        "orderBy": [{"semanticName": "销售额", "aggFunc": "SUM", "direction": "DESC"}],
-        "limit": 20,
-        "offset": 5,
-    })
+    result = compiler.compile(
+        {
+            "dimensions": [{"semanticName": "用户等级", "alias": "等级"}],
+            "aggregations": [{"semanticName": "销售额", "alias": "销售额"}],
+            "filters": [
+                {
+                    "semanticName": "用户等级",
+                    "operator": "=",
+                    "valueType": "field_ref",
+                    "rightTable": "orders",
+                    "rightColumn": "status",
+                },
+                {
+                    "semanticName": "销售额",
+                    "aggFunc": "SUM",
+                    "operator": ">",
+                    "value": 100,
+                },
+            ],
+            "orderBy": [{"semanticName": "销售额", "aggFunc": "SUM", "direction": "DESC"}],
+            "limit": 20,
+            "offset": 5,
+        }
+    )
 
     sql = result["sql"]
     assert "FROM users u" in sql
@@ -555,7 +649,9 @@ async def test_compile_semantic_builder_sql_uses_runtime_config(monkeypatch):
         assert semantic_config_id == "cfg_runtime"
         return build_semantic_config()
 
-    monkeypatch.setattr(compiler_module, "load_runtime_semantic_config_strict", fake_load_runtime_semantic_config_strict)
+    monkeypatch.setattr(
+        compiler_module, "load_runtime_semantic_config_strict", fake_load_runtime_semantic_config_strict
+    )
 
     result = await compiler_module.compile_semantic_builder_sql(
         "ds_runtime",
@@ -587,7 +683,9 @@ async def test_load_runtime_semantic_config_strict_rejects_other_users_private_c
     monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: private_manager)
     monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: PrivateSemanticService())
 
-    owner_config = await compiler_module.load_runtime_semantic_config_strict("ds_private", "cfg_private", user_id="owner_user")
+    owner_config = await compiler_module.load_runtime_semantic_config_strict(
+        "ds_private", "cfg_private", user_id="owner_user"
+    )
     assert owner_config["id"] == "cfg_private"
     with pytest.raises(LookupError, match="语义配置不存在"):
         await compiler_module.load_runtime_semantic_config_strict("ds_private", "cfg_private", user_id="other_user")
@@ -619,7 +717,10 @@ def test_semantic_query_service_remaining_join_and_metric_branches(monkeypatch):
     def fail_compile(*_args, **_kwargs):
         raise RuntimeError("compile down")
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fail_compile)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fail_compile,
+    )
     failed = generator.generate_sql(metrics=["销售额"], dimensions=["城市"], filters=[], having=[])
     assert failed["success"] is False
     assert "SQL 转换失败" in failed["error"]

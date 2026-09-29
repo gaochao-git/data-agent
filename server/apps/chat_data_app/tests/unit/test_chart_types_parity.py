@@ -17,15 +17,22 @@ import pytest
 from apps.chat_data_app.chart_types import CHART_TYPE_ITEMS, get_chart_type_prompt_text
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-FRONTEND_CHART_TYPES_PATH = (
-    REPO_ROOT / "web-vue" / "src" / "views" / "chat-data" / "chartTypes.ts"
-)
+FRONTEND_CHART_TYPES_PATH = REPO_ROOT / "web-vue" / "src" / "views" / "chat-data" / "chartTypes.ts"
 # 图表类型清单的文档维护点是数据分析技能的看板主指南；SKILL.md 不重复罗列类型
 # （类型清单另有 chart_types.py 注册表与 get_chart_type_prompt_text 两处声明）。
 # 读的是 git 跟踪的种子技能目录（agent/skills），不是机器本地的运行时副本
 # CHAT_DATA_HOME/skills/system——后者不入库、会与种子漂移。
 SKILL_DOC_PATHS = [
-    REPO_ROOT / "server" / "apps" / "chat_data_app" / "agent" / "skills" / "data-analyzing" / "references" / "dashboard" / "guide.md",
+    REPO_ROOT
+    / "server"
+    / "apps"
+    / "chat_data_app"
+    / "agent"
+    / "skills"
+    / "data-analyzing"
+    / "references"
+    / "dashboard"
+    / "guide.md",
 ]
 
 BACKEND_KEYS = [item["key"] for item in CHART_TYPE_ITEMS]
@@ -48,6 +55,7 @@ def _parse_frontend_registry(text: str) -> list[dict]:
     assert block, "chartTypes.ts 缺少 CHART_TYPES 数组"
     items = []
     for entry in re.findall(r"\{([^{}]+)\}", block.group(1)):
+
         def field(name: str, entry: str = entry) -> str | bool:
             match = re.search(rf"{name}:\s*'([^']+)'|{name}:\s*(true|false)", entry)
             assert match, f"CHART_TYPES 项缺少字段 {name}: {entry}"
@@ -55,13 +63,15 @@ def _parse_frontend_registry(text: str) -> list[dict]:
                 return match.group(1)
             return match.group(2) == "true"
 
-        items.append({
-            "key": field("key"),
-            "label": field("label"),
-            "echarts": field("echarts"),
-            "supports_dual_axis": field("supportsDualAxis"),
-            "supports_series_type": field("supportsSeriesType"),
-        })
+        items.append(
+            {
+                "key": field("key"),
+                "label": field("label"),
+                "echarts": field("echarts"),
+                "supports_dual_axis": field("supportsDualAxis"),
+                "supports_series_type": field("supportsSeriesType"),
+            }
+        )
     return items
 
 

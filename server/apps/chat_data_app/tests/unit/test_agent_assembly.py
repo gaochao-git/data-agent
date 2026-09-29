@@ -142,10 +142,7 @@ def test_spec_mcp_server_ids_pass_through_to_load(monkeypatch):
             SimpleNamespace(server_id="db", name="b", qualified_name="mcp_db_b", description="d", input_schema={}),
         ]
         allowed = set(server_ids) if server_ids is not None else None
-        return [
-            info.qualified_name for info in infos
-            if allowed is None or info.server_id in allowed
-        ]
+        return [info.qualified_name for info in infos if allowed is None or info.server_id in allowed]
 
     monkeypatch.setattr(mcp_manager, "load_mcp_tools", fake_load)
     spec = AgentAssemblySpec(

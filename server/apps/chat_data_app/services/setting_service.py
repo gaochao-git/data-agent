@@ -493,27 +493,25 @@ async def upsert_setting(
     key = str(setting_key or "").strip()
     spec = SETTING_REGISTRY.get(key)
     if spec is None:
-        raise SettingValidationError(
-            f"变量 {key or '(空)'} 未注册，仅允许覆盖管理页列出的可动态修改变量"
-        )
+        raise SettingValidationError(f"变量 {key or '(空)'} 未注册，仅允许覆盖管理页列出的可动态修改变量")
     _validate_setting_value(key, setting_value)
     async with transaction_scope() as session:
         result = await session.execute(
-            select(ChatDataSetting)
-            .where(ChatDataSetting.setting_key == key)
-            .with_for_update()
+            select(ChatDataSetting).where(ChatDataSetting.setting_key == key).with_for_update()
         )
         row = result.scalar_one_or_none()
         if row is None:
-            session.add(ChatDataSetting(
-                setting_key=key,
-                setting_value=str(setting_value),
-                delete_flag=0,
-                create_by=str(user_id),
-                create_by_name=str(username),
-                update_by=str(user_id),
-                update_by_name=str(username),
-            ))
+            session.add(
+                ChatDataSetting(
+                    setting_key=key,
+                    setting_value=str(setting_value),
+                    delete_flag=0,
+                    create_by=str(user_id),
+                    create_by_name=str(username),
+                    update_by=str(user_id),
+                    update_by_name=str(username),
+                )
+            )
             action = "created"
         else:
             was_deleted = row.delete_flag == 1
@@ -531,9 +529,7 @@ async def delete_setting(setting_key: str, user_id: str, username: str) -> dict[
     key = str(setting_key or "").strip()
     async with transaction_scope() as session:
         result = await session.execute(
-            select(ChatDataSetting)
-            .where(ChatDataSetting.setting_key == key)
-            .with_for_update()
+            select(ChatDataSetting).where(ChatDataSetting.setting_key == key).with_for_update()
         )
         row = result.scalar_one_or_none()
         if row is None or row.delete_flag == 1:
@@ -616,9 +612,7 @@ def _matches_setting_keyword(item: dict[str, Any], needle: str) -> bool:
 async def list_settings(keyword: str | None = None) -> dict[str, Any]:
     """管理页列表 = 注册表全量（可动态修改类白名单），标注生效值与来源（table/env/default）。"""
     async with transaction_scope() as session:
-        result = await session.execute(
-            select(ChatDataSetting).where(ChatDataSetting.delete_flag == 0)
-        )
+        result = await session.execute(select(ChatDataSetting).where(ChatDataSetting.delete_flag == 0))
         rows = result.scalars().all()
     row_map = {row.setting_key: row for row in rows}
     items = [

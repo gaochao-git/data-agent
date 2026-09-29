@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -16,6 +16,7 @@ from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_con
 # ---------------------------------------------------------------------------
 # 测试辅助：把模型清单写入临时注册表文件
 # ---------------------------------------------------------------------------
+
 
 def _set_registry(monkeypatch, tmp_path, models: list[dict]) -> str:
     path = tmp_path / "models.json"
@@ -60,12 +61,14 @@ def _fake_get_llm(captured: dict):
     def fake(**kwargs):
         captured.update(kwargs)
         return object()
+
     return fake
 
 
 # ---------------------------------------------------------------------------
 # 注册表加载与校验（fail-fast）
 # ---------------------------------------------------------------------------
+
 
 def test_legacy_chat_data_model_variable_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("CHAT_DATA_MODEL", "qwen;0.2;128000;vlm-off")
@@ -114,13 +117,21 @@ def test_duplicate_model_id_rejected(monkeypatch, tmp_path):
         (_ox_alpha(thinking={"mode": "maybe"}), "mode"),
         (_ox_alpha(thinking={"mode": "forced", "dialect": "anthropic"}), "dialect"),
         (
-            _ox_alpha(thinking={"mode": "optional", "dialect": "chat_template", "default_on": True,
-                                "efforts": ["low"]}),
+            _ox_alpha(
+                thinking={"mode": "optional", "dialect": "chat_template", "default_on": True, "efforts": ["low"]}
+            ),
             "chat_template 方言",
         ),
         (
-            _ox_alpha(thinking={"mode": "optional", "dialect": "openrouter", "default_on": True,
-                                "efforts": ["low"], "default_effort": "high"}),
+            _ox_alpha(
+                thinking={
+                    "mode": "optional",
+                    "dialect": "openrouter",
+                    "default_on": True,
+                    "efforts": ["low"],
+                    "default_effort": "high",
+                }
+            ),
             "default_effort",
         ),
         (_ox_alpha(thinking={"mode": "none", "dialect": "openrouter"}), "mode=none"),
@@ -160,12 +171,17 @@ def test_registry_parses_thinking_capability(monkeypatch, tmp_path):
     configs = llm_config.get_chat_data_model_configs()
 
     assert configs[0]["thinking"] == ThinkingCapability(
-        mode="forced", dialect="openrouter",
-        efforts=("low", "medium", "high"), default_effort="high",
+        mode="forced",
+        dialect="openrouter",
+        efforts=("low", "medium", "high"),
+        default_effort="high",
     )
     assert configs[1]["thinking"] == ThinkingCapability(
-        mode="optional", dialect="reasoning_effort",
-        efforts=("low", "high"), default_on=False, default_effort="high",
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=("low", "high"),
+        default_on=False,
+        default_effort="high",
     )
     assert configs[2]["thinking"] == ThinkingCapability(mode="none")
     assert configs[0]["max_output_tokens"] is None
@@ -182,6 +198,7 @@ def test_unknown_model_id_raises_instead_of_fallback(monkeypatch, tmp_path):
 # 决策层：resolve_thinking 九宫格
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "capability,user_enabled,expected",
     [
@@ -190,19 +207,29 @@ def test_unknown_model_id_raises_instead_of_fallback(monkeypatch, tmp_path):
         (ThinkingCapability(mode="none"), False, ("omit", None)),
         (ThinkingCapability(mode="none"), None, ("omit", None)),
         # optional：跟随用户意图，未传按 default_on
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
-                            default_effort="medium"), True, ("on", "medium")),
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
-                            default_effort="medium"), False, ("off", None)),
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
-                            default_effort="medium"), None, ("on", "medium")),
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=False,
-                            default_effort="high"), None, ("off", None)),
+        (
+            ThinkingCapability(mode="optional", dialect="openrouter", default_on=True, default_effort="medium"),
+            True,
+            ("on", "medium"),
+        ),
+        (
+            ThinkingCapability(mode="optional", dialect="openrouter", default_on=True, default_effort="medium"),
+            False,
+            ("off", None),
+        ),
+        (
+            ThinkingCapability(mode="optional", dialect="openrouter", default_on=True, default_effort="medium"),
+            None,
+            ("on", "medium"),
+        ),
+        (
+            ThinkingCapability(mode="optional", dialect="openrouter", default_on=False, default_effort="high"),
+            None,
+            ("off", None),
+        ),
         # forced：忽略关闭请求，永不产生"关"形态
-        (ThinkingCapability(mode="forced", dialect="openrouter",
-                            default_effort="high"), False, ("on", "high")),
-        (ThinkingCapability(mode="forced", dialect="openrouter",
-                            default_effort="high"), True, ("on", "high")),
+        (ThinkingCapability(mode="forced", dialect="openrouter", default_effort="high"), False, ("on", "high")),
+        (ThinkingCapability(mode="forced", dialect="openrouter", default_effort="high"), True, ("on", "high")),
         (ThinkingCapability(mode="forced", dialect="openrouter"), None, ("on", None)),
     ],
 )
@@ -214,20 +241,38 @@ def test_resolve_thinking_matrix(capability, user_enabled, expected):
     "capability,user_enabled,user_effort,expected",
     [
         # 用户档位在 efforts 内：生效
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
-                            efforts=("low", "medium", "high"), default_effort="high"),
-         True, "low", ("on", "low")),
+        (
+            ThinkingCapability(
+                mode="optional",
+                dialect="openrouter",
+                default_on=True,
+                efforts=("low", "medium", "high"),
+                default_effort="high",
+            ),
+            True,
+            "low",
+            ("on", "low"),
+        ),
         # forced 也接受用户档位
-        (ThinkingCapability(mode="forced", dialect="openrouter",
-                            efforts=("low", "medium", "high"), default_effort="high"),
-         None, "medium", ("on", "medium")),
+        (
+            ThinkingCapability(
+                mode="forced", dialect="openrouter", efforts=("low", "medium", "high"), default_effort="high"
+            ),
+            None,
+            "medium",
+            ("on", "medium"),
+        ),
         # 非法档位回退 default_effort
-        (ThinkingCapability(mode="optional", dialect="openrouter", default_on=True,
-                            efforts=("low", "high"), default_effort="high"),
-         True, "ultra", ("on", "high")),
+        (
+            ThinkingCapability(
+                mode="optional", dialect="openrouter", default_on=True, efforts=("low", "high"), default_effort="high"
+            ),
+            True,
+            "ultra",
+            ("on", "high"),
+        ),
         # 模型未声明 efforts：用户档位被忽略
-        (ThinkingCapability(mode="forced", dialect="openrouter", default_effort=None),
-         None, "low", ("on", None)),
+        (ThinkingCapability(mode="forced", dialect="openrouter", default_effort=None), None, "low", ("on", None)),
     ],
 )
 def test_resolve_thinking_user_effort(capability, user_enabled, user_effort, expected):
@@ -237,6 +282,7 @@ def test_resolve_thinking_user_effort(capability, user_enabled, user_effort, exp
 # ---------------------------------------------------------------------------
 # 协议层：方言 × 决策 → extra_body 矩阵
 # ---------------------------------------------------------------------------
+
 
 def _extra_body(capability, user_enabled=None):
     return llm_config._get_chat_data_extra_body(capability, enable_thinking=user_enabled)
@@ -260,15 +306,15 @@ def test_extra_body_chat_template_dialect():
 
 
 def test_extra_body_reasoning_effort_dialect():
-    cap = ThinkingCapability(mode="optional", dialect="reasoning_effort",
-                             efforts=("low", "high"), default_on=False, default_effort="high")
+    cap = ThinkingCapability(
+        mode="optional", dialect="reasoning_effort", efforts=("low", "high"), default_on=False, default_effort="high"
+    )
     assert _extra_body(cap, True) == {"reasoning_effort": "high"}
     assert _extra_body(cap, False) == {"reasoning_effort": "none"}
 
 
 def test_extra_body_openrouter_dialect():
-    cap = ThinkingCapability(mode="optional", dialect="openrouter", default_on=False,
-                             default_effort="high")
+    cap = ThinkingCapability(mode="optional", dialect="openrouter", default_on=False, default_effort="high")
     assert _extra_body(cap, True) == {"reasoning": {"effort": "high"}}
     assert _extra_body(cap, False) == {"reasoning": {"enabled": False}}
 
@@ -288,17 +334,20 @@ def test_extra_body_optional_reasoning_effort_without_efforts_emits_nothing():
     历史教训：deepseek-v4-flash 曾缺档位声明，定时任务与手动聊天的
     「开启思考」被静默吞掉。
     """
-    cap = ThinkingCapability(mode="optional", dialect="reasoning_effort",
-                             default_on=False)
+    cap = ThinkingCapability(mode="optional", dialect="reasoning_effort", default_on=False)
     assert _extra_body(cap, True) == {}
     # 未显式开启时跟随 default_on=False 裁决为关，发关闭形态键（正常行为）
     assert _extra_body(cap, None) == {"reasoning_effort": "none"}
     assert _extra_body(cap, False) == {"reasoning_effort": "none"}
 
     # 声明了档位与默认档后，显式开启正确落到默认档
-    declared = ThinkingCapability(mode="optional", dialect="reasoning_effort",
-                                  efforts=("low", "medium", "high"), default_effort="low",
-                                  default_on=False)
+    declared = ThinkingCapability(
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=("low", "medium", "high"),
+        default_effort="low",
+        default_on=False,
+    )
     assert _extra_body(declared, True) == {"reasoning_effort": "low"}
 
 
@@ -309,8 +358,7 @@ def test_extra_body_forced_never_emits_disable_shape():
     assert body == {"reasoning": {"effort": "high"}}
     assert "enabled" not in body["reasoning"]
 
-    forced_effort = ThinkingCapability(mode="forced", dialect="reasoning_effort",
-                                       default_effort="medium")
+    forced_effort = ThinkingCapability(mode="forced", dialect="reasoning_effort", default_effort="medium")
     assert _extra_body(forced_effort, False) == {"reasoning_effort": "medium"}
 
     forced_ctk = ThinkingCapability(mode="forced", dialect="chat_template")
@@ -320,6 +368,7 @@ def test_extra_body_forced_never_emits_disable_shape():
 # ---------------------------------------------------------------------------
 # LLM 构造与对外接口
 # ---------------------------------------------------------------------------
+
 
 def test_get_chat_data_llm_dispatches_by_registry(monkeypatch, tmp_path):
     captured = {}
@@ -400,11 +449,16 @@ def test_get_chat_data_model_options_exposes_thinking(monkeypatch, tmp_path):
     first, second = result["models"]
     assert first["is_default"] is True
     assert first["thinking"] == {
-        "mode": "forced", "efforts": ["low", "medium", "high"],
-        "default_on": False, "default_effort": "high",
+        "mode": "forced",
+        "efforts": ["low", "medium", "high"],
+        "default_on": False,
+        "default_effort": "high",
     }
     assert second["thinking"] == {
-        "mode": "optional", "efforts": [], "default_on": False, "default_effort": None,
+        "mode": "optional",
+        "efforts": [],
+        "default_on": False,
+        "default_effort": None,
     }
 
 

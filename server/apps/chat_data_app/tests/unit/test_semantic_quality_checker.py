@@ -22,10 +22,18 @@ def _good_config() -> dict:
         "description": "订单经营分析",
         "business_notes": "用户下单后生成订单，支付成功后计入有效成交。",
         "metrics": [
-            {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
-             "description": "已支付订单金额合计"},
-            {"name": "订单数", "expression": "COUNT(DISTINCT orders.order_id)", "table": "orders",
-             "description": "去重订单数"},
+            {
+                "name": "销售额",
+                "expression": "SUM(orders.amount)",
+                "table": "orders",
+                "description": "已支付订单金额合计",
+            },
+            {
+                "name": "订单数",
+                "expression": "COUNT(DISTINCT orders.order_id)",
+                "table": "orders",
+                "description": "去重订单数",
+            },
             {
                 "name": "本月成交额",
                 "metric_kind": "derived",
@@ -42,12 +50,30 @@ def _good_config() -> dict:
             },
         ],
         "dimensions": [
-            {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime",
-             "expression": "`order_time`", "description": "订单下单时间"},
-            {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "enum",
-             "expression": "`status`", "description": "订单当前状态"},
-            {"name": "用户昵称", "column": "nickname", "table": "users", "logical_type": "text",
-             "expression": "`nickname`", "description": "用户昵称"},
+            {
+                "name": "下单时间",
+                "column": "order_time",
+                "table": "orders",
+                "logical_type": "datetime",
+                "expression": "`order_time`",
+                "description": "订单下单时间",
+            },
+            {
+                "name": "订单状态",
+                "column": "status",
+                "table": "orders",
+                "logical_type": "enum",
+                "expression": "`status`",
+                "description": "订单当前状态",
+            },
+            {
+                "name": "用户昵称",
+                "column": "nickname",
+                "table": "users",
+                "logical_type": "text",
+                "expression": "`nickname`",
+                "description": "用户昵称",
+            },
         ],
         "relationships": [
             {
@@ -197,8 +223,9 @@ def test_duplicate_dimension_column():
 
 def test_duplicate_metric_expression():
     config = _good_config()
-    config["metrics"].append({"name": "销售额副本", "expression": "SUM(orders.amount)", "table": "orders",
-                              "description": "重复口径"})
+    config["metrics"].append(
+        {"name": "销售额副本", "expression": "SUM(orders.amount)", "table": "orders", "description": "重复口径"}
+    )
     report = get_semantic_quality_checker().check_config(config)
     finding = _find(report, "CON_DUPLICATE_METRIC_EXPRESSION")
     assert finding is not None and "销售额副本" in finding.message
@@ -264,9 +291,13 @@ def test_relationship_key_uncovered():
     # 覆盖任一声明键（含超集）即通过：改为唯一索引声明 id + join 带上 id
     config2 = _good_config()
     config2["tables"] = [
-        {"table": "users", "unique_indexes": [{"columns": ["id"]}], "manual_indexes": [
-            {"index_type": "unique", "columns": ["id", "tenant_id"]},
-        ]},
+        {
+            "table": "users",
+            "unique_indexes": [{"columns": ["id"]}],
+            "manual_indexes": [
+                {"index_type": "unique", "columns": ["id", "tenant_id"]},
+            ],
+        },
     ]
     report2 = get_semantic_quality_checker().check_config(config2)
     assert _find(report2, "CON_RELATIONSHIP_KEY_UNCOVERED") is None
@@ -301,16 +332,24 @@ def test_relationship_key_coverage_skipped_cases():
 
 def test_relationship_self_duplicate_and_unreferenced_table():
     config = _good_config()
-    config["relationships"].append({
-        "left_table": "orders", "right_table": "orders",
-        "relationship_type": "one_to_one", "join_type": "left",
-        "join_conditions": [{"left_column": "order_id", "right_column": "order_id"}],
-    })
-    config["relationships"].append({
-        "left_table": "ref_dict", "right_table": "orders",
-        "relationship_type": "one_to_many", "join_type": "left",
-        "join_conditions": [{"left_column": "id", "right_column": "order_id"}],
-    })
+    config["relationships"].append(
+        {
+            "left_table": "orders",
+            "right_table": "orders",
+            "relationship_type": "one_to_one",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "order_id", "right_column": "order_id"}],
+        }
+    )
+    config["relationships"].append(
+        {
+            "left_table": "ref_dict",
+            "right_table": "orders",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "id", "right_column": "order_id"}],
+        }
+    )
     report = get_semantic_quality_checker().check_config(config)
     assert _find(report, "CON_RELATIONSHIP_SELF") is not None
     finding = _find(report, "CON_RELATIONSHIP_TABLE_UNREFERENCED")
@@ -319,18 +358,24 @@ def test_relationship_self_duplicate_and_unreferenced_table():
 
 def test_relationship_cycle_detected():
     config = _good_config()
-    config["relationships"].extend([
-        {
-            "left_table": "users", "right_table": "tags",
-            "relationship_type": "many_to_many", "join_type": "left",
-            "join_conditions": [{"left_column": "id", "right_column": "user_id"}],
-        },
-        {
-            "left_table": "tags", "right_table": "orders",
-            "relationship_type": "many_to_many", "join_type": "left",
-            "join_conditions": [{"left_column": "order_id", "right_column": "order_id"}],
-        },
-    ])
+    config["relationships"].extend(
+        [
+            {
+                "left_table": "users",
+                "right_table": "tags",
+                "relationship_type": "many_to_many",
+                "join_type": "left",
+                "join_conditions": [{"left_column": "id", "right_column": "user_id"}],
+            },
+            {
+                "left_table": "tags",
+                "right_table": "orders",
+                "relationship_type": "many_to_many",
+                "join_type": "left",
+                "join_conditions": [{"left_column": "order_id", "right_column": "order_id"}],
+            },
+        ]
+    )
     report = get_semantic_quality_checker().check_config(config)
     finding = _find(report, "CON_RELATIONSHIP_CYCLE")
     assert finding is not None
@@ -369,29 +414,69 @@ def test_awful_config_scores_low():
         {"name": "c1", "metric_kind": "composite"},  # 缺 formula
     ]
     config["relationships"] = [
-        {"left_table": "orders", "right_table": "orders", "relationship_type": "one_to_one",
-         "join_type": "left", "join_conditions": [{"left_column": "id", "right_column": "id"}]},
-        {"left_table": "dict1", "right_table": "orders", "relationship_type": "one_to_many",
-         "join_type": "left", "join_conditions": [{"left_column": "id", "right_column": "id"}]},
-        {"left_table": "dict1", "right_table": "orders", "relationship_type": "one_to_many",
-         "join_type": "left", "join_conditions": [{"left_column": "id", "right_column": "id"}]},
-        {"left_table": "orders", "right_table": "t1", "relationship_type": "one_to_many",
-         "join_type": "left", "join_conditions": [{"left_column": "id", "right_column": "oid"}]},
-        {"left_table": "t1", "right_table": "t2", "relationship_type": "one_to_many",
-         "join_type": "left", "join_conditions": [{"left_column": "oid", "right_column": "tid"}]},
-        {"left_table": "t2", "right_table": "orders", "relationship_type": "one_to_many",
-         "join_type": "left", "join_conditions": [{"left_column": "tid", "right_column": "id"}]},
+        {
+            "left_table": "orders",
+            "right_table": "orders",
+            "relationship_type": "one_to_one",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "id", "right_column": "id"}],
+        },
+        {
+            "left_table": "dict1",
+            "right_table": "orders",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "id", "right_column": "id"}],
+        },
+        {
+            "left_table": "dict1",
+            "right_table": "orders",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "id", "right_column": "id"}],
+        },
+        {
+            "left_table": "orders",
+            "right_table": "t1",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "id", "right_column": "oid"}],
+        },
+        {
+            "left_table": "t1",
+            "right_table": "t2",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "oid", "right_column": "tid"}],
+        },
+        {
+            "left_table": "t2",
+            "right_table": "orders",
+            "relationship_type": "one_to_many",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "tid", "right_column": "id"}],
+        },
     ]
     report = get_semantic_quality_checker().check_config(config, physical_columns=PHYSICAL_COLUMNS)
     codes = set(_codes(report))
     assert {
-        "STR_DIMENSION_INVALID", "STR_METRIC_INVALID", "STR_DERIVED_INVALID",
-        "STR_COMPOSITE_INVALID", "STR_RELATIONSHIP_INVALID",
-        "PROV_METRIC_MISSING_TABLE", "PROV_DIMENSION_MISSING_TABLE", "PROV_DIMENSION_MISSING_COLUMN",
+        "STR_DIMENSION_INVALID",
+        "STR_METRIC_INVALID",
+        "STR_DERIVED_INVALID",
+        "STR_COMPOSITE_INVALID",
+        "STR_RELATIONSHIP_INVALID",
+        "PROV_METRIC_MISSING_TABLE",
+        "PROV_DIMENSION_MISSING_TABLE",
+        "PROV_DIMENSION_MISSING_COLUMN",
         "COV_DUPLICATE_DIMENSION_COLUMN",
-        "CON_DUPLICATE_METRIC_EXPRESSION", "CON_RELATIONSHIP_DUPLICATE", "CON_RELATIONSHIP_SELF",
-        "CON_RELATIONSHIP_TABLE_UNREFERENCED", "CON_RELATIONSHIP_CYCLE",
-        "DOC_METRIC_NO_DESCRIPTION", "DOC_DIMENSION_NO_DESCRIPTION", "DOC_NO_BUSINESS_NOTES",
+        "CON_DUPLICATE_METRIC_EXPRESSION",
+        "CON_RELATIONSHIP_DUPLICATE",
+        "CON_RELATIONSHIP_SELF",
+        "CON_RELATIONSHIP_TABLE_UNREFERENCED",
+        "CON_RELATIONSHIP_CYCLE",
+        "DOC_METRIC_NO_DESCRIPTION",
+        "DOC_DIMENSION_NO_DESCRIPTION",
+        "DOC_NO_BUSINESS_NOTES",
     } <= codes
     assert report.score < 40
     assert report.grade == "差"
@@ -458,7 +543,13 @@ def test_cross_model_same_expression_different_names_not_flagged():
 def test_cross_model_focus_only_reports_involving_focus():
     configs = [
         _model("模型A", [{"name": "销售额", "expression": "SUM(orders.amount)"}]),
-        _model("模型B", [{"name": "销售额", "expression": "SUM(orders.pay_amount)"}, {"name": "订单量", "expression": "COUNT(orders.id)"}]),
+        _model(
+            "模型B",
+            [
+                {"name": "销售额", "expression": "SUM(orders.pay_amount)"},
+                {"name": "订单量", "expression": "COUNT(orders.id)"},
+            ],
+        ),
         _model("模型C", [{"name": "成交量", "expression": "count( orders.id )"}]),
     ]
     focus_a = check_cross_model_metrics(configs, focus_config_name="模型A")
@@ -471,16 +562,22 @@ def test_cross_model_focus_only_reports_involving_focus():
 
 def test_cross_model_skips_derived_composite_and_blank():
     configs = [
-        _model("模型A", [
-            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
-            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
-            {"name": "空表达式", "expression": "  "},
-            {"name": "", "expression": "SUM(x)"},
-        ]),
-        _model("模型B", [
-            {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
-            {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
-        ]),
+        _model(
+            "模型A",
+            [
+                {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+                {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+                {"name": "空表达式", "expression": "  "},
+                {"name": "", "expression": "SUM(x)"},
+            ],
+        ),
+        _model(
+            "模型B",
+            [
+                {"name": "本月销售额", "metric_kind": "derived", "base_metric": "销售额"},
+                {"name": "客单价", "metric_kind": "composite", "formula": "({销售额}/{订单数})"},
+            ],
+        ),
     ]
     assert check_cross_model_metrics(configs) == []
 
@@ -499,8 +596,14 @@ def test_cross_model_three_models_same_name_aggregates_participants():
 
 def test_single_model_check_never_emits_cross_model_codes():
     config = _good_config()
-    config["metrics"].append({"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders",
-                              "description": "与首条重复口径，触发模型内 CON_DUPLICATE_METRIC_EXPRESSION"})
+    config["metrics"].append(
+        {
+            "name": "销售额",
+            "expression": "SUM(orders.amount)",
+            "table": "orders",
+            "description": "与首条重复口径，触发模型内 CON_DUPLICATE_METRIC_EXPRESSION",
+        }
+    )
     report = get_semantic_quality_checker().check_config(config)
     codes = set(_codes(report))
     assert "CON_DUPLICATE_METRIC_EXPRESSION" in codes
@@ -525,9 +628,12 @@ def test_first_structure_error_returns_message_in_phase_order():
 
 
 def test_first_structure_error_none_for_clean_config():
-    assert first_structure_error(
-        [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "description": "口径"}],
-        [{"name": "城市", "table": "orders", "column": "amount"}],
-        [],
-        table_columns_map={"orders": {"amount"}},
-    ) is None
+    assert (
+        first_structure_error(
+            [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "description": "口径"}],
+            [{"name": "城市", "table": "orders", "column": "amount"}],
+            [],
+            table_columns_map={"orders": {"amount"}},
+        )
+        is None
+    )

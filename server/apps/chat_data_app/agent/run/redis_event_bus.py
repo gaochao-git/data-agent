@@ -151,17 +151,13 @@ class RedisEventBus:
     """
 
     def __init__(self) -> None:
-        self._sentinel_addrs = _parse_sentinel_addrs(
-            os.getenv("CHAT_DATA_REDIS_SENTINELS", "")
-        )
+        self._sentinel_addrs = _parse_sentinel_addrs(os.getenv("CHAT_DATA_REDIS_SENTINELS", ""))
         self._master_name = os.getenv("CHAT_DATA_REDIS_MASTER_NAME", "").strip()
         # 逻辑库编号：等价于旧 CHAT_DATA_REDIS_URL 的 /N 后缀，缺省 0 行为不变
         self._db = max(int(os.getenv("CHAT_DATA_REDIS_DB", "0")), 0)
         self._password = decrypt_env_value("CHAT_DATA_REDIS_PASSWORD") or None
         if str(os.getenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or "").strip():
-            self._sentinel_password = (
-                decrypt_env_value("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or None
-            )
+            self._sentinel_password = decrypt_env_value("CHAT_DATA_REDIS_SENTINEL_PASSWORD") or None
         else:
             self._sentinel_password = None
         self._sentinel: Sentinel | None = None
@@ -288,7 +284,9 @@ class RedisEventBus:
         if int(renewed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
-    async def read_run(self, run_id: str, cursor: str, *, block_ms: int = int(REDIS_READ_BLOCK_SECONDS * 1000), count: int = 100) -> list[dict[str, str]]:
+    async def read_run(
+        self, run_id: str, cursor: str, *, block_ms: int = int(REDIS_READ_BLOCK_SECONDS * 1000), count: int = 100
+    ) -> list[dict[str, str]]:
         result = await self.read_redis.xread(
             {self.run_stream_key(run_id): cursor},
             count=count,

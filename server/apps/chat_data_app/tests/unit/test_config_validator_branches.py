@@ -106,7 +106,9 @@ def test_unknown_expression_column_is_reported():
 
 def test_unknown_expression_columns_are_aggregated():
     """多个未知列在同一条错误消息里聚合列出并去重（带合法锚定列，避免被锚定校验先拦）。"""
-    metrics = [{"name": "双错", "table": "orders", "expression": "SUM(amount) + SUM(typo_a) + SUM(typo_b) + SUM(typo_a)"}]
+    metrics = [
+        {"name": "双错", "table": "orders", "expression": "SUM(amount) + SUM(typo_a) + SUM(typo_b) + SUM(typo_a)"}
+    ]
     error = cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS)
     assert error is not None and "typo_a" in error and "typo_b" in error
     assert error.index("typo_a") < error.index("typo_b")  # 保持首次出现顺序
@@ -121,11 +123,11 @@ def test_known_columns_case_insensitive_pass_full_check():
 def test_table_prefix_and_keywords_pass_full_check():
     """表前缀、SQL 关键字、字符串字面量内容、类型名不参与未知列判定。"""
     expressions = [
-        "SUM(amount) + SUM(orders.city)",                      # 表前缀
+        "SUM(amount) + SUM(orders.city)",  # 表前缀
         "SUM(CASE WHEN city = 'beijing' THEN amount ELSE 0 END)",  # 字面量 + 关键字
-        "COUNT(DISTINCT user_id)",                             # DISTINCT 关键字
-        "CAST(amount AS DECIMAL(10, 2))",                      # 类型名 + 数字
-        "`amount` + `city`",                                   # 反引号壳
+        "COUNT(DISTINCT user_id)",  # DISTINCT 关键字
+        "CAST(amount AS DECIMAL(10, 2))",  # 类型名 + 数字
+        "`amount` + `city`",  # 反引号壳
     ]
     metrics = [{"name": f"合法{i}", "table": "orders", "expression": expr} for i, expr in enumerate(expressions)]
     assert cv._validate_metrics_against_tables(metrics, TABLE_COLUMNS) is None
@@ -136,7 +138,9 @@ def test_find_unknown_expression_columns_direct():
     assert cv._find_unknown_expression_columns("", TABLE_COLUMNS["orders"]) == []
     assert cv._find_unknown_expression_columns("SUM(amount)", TABLE_COLUMNS["orders"]) == []
     # 字符串里的标识符样词被剥离，不算未知列
-    assert cv._find_unknown_expression_columns("SUM(CASE WHEN city='typo_word' THEN 1 END)", TABLE_COLUMNS["orders"]) == []
+    assert (
+        cv._find_unknown_expression_columns("SUM(CASE WHEN city='typo_word' THEN 1 END)", TABLE_COLUMNS["orders"]) == []
+    )
     unknown = cv._find_unknown_expression_columns("SUM(orders.typo_x)", TABLE_COLUMNS["orders"])
     assert unknown == ["typo_x"]
 
@@ -198,17 +202,13 @@ def test_relationship_conditions_falls_back_to_legacy_columns():
     # join_conditions 为空数组 / None 时都回落到 left_column / right_column
     for empty in ([], None):
         relationship = {"join_conditions": empty, "left_column": "user_id", "right_column": "id"}
-        assert cv._relationship_conditions(relationship) == [
-            {"left_column": "user_id", "right_column": "id"}
-        ]
+        assert cv._relationship_conditions(relationship) == [{"left_column": "user_id", "right_column": "id"}]
 
 
 def test_relationship_conditions_returns_empty_when_nothing_configured():
     assert cv._relationship_conditions({}) == []
     # 只配了一侧也算「无关联条件」
-    assert cv._relationship_conditions({"left_column": "user_id"}) == [
-        {"left_column": "user_id", "right_column": None}
-    ]
+    assert cv._relationship_conditions({"left_column": "user_id"}) == [{"left_column": "user_id", "right_column": None}]
 
 
 # ---------------------------------------------------------------------------
@@ -427,36 +427,38 @@ def test_multiple_relationships_report_failing_index():
 
 def test_first_structure_error_accepts_explicit_table_columns_map():
     """显式传 table_columns_map 时直接使用，不再构建。"""
-    assert first_structure_error(
-        metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
-        relationships=[],
-        table_columns_map=TABLE_COLUMNS,
-    ) is None
+    assert (
+        first_structure_error(
+            metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+            dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
+            relationships=[],
+            table_columns_map=TABLE_COLUMNS,
+        )
+        is None
+    )
 
 
 def test_first_structure_error_accepts_none_dimensions_and_metrics():
-    assert first_structure_error(
-        [], [], [], table_columns_map=build_table_columns_map(DATASOURCE)
-    ) is None
+    assert first_structure_error([], [], [], table_columns_map=build_table_columns_map(DATASOURCE)) is None
 
 
 def test_first_structure_error_builds_map_from_datasource():
     """datasource 形态由调用方经 build_table_columns_map 转换。"""
-    assert first_structure_error(
-        metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
-        relationships=[],
-        table_columns_map=build_table_columns_map(DATASOURCE),
-    ) is None
+    assert (
+        first_structure_error(
+            metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+            dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
+            relationships=[],
+            table_columns_map=build_table_columns_map(DATASOURCE),
+        )
+        is None
+    )
 
 
 def test_first_structure_error_rejects_non_list_allowed_operators():
     error = first_structure_error(
         metrics=[],
-        dimensions=[
-            {"name": "城市", "table": "orders", "column": "city", "allowed_operators": "=,IN"}
-        ],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "allowed_operators": "=,IN"}],
         relationships=[],
         table_columns_map=TABLE_COLUMNS,
     )

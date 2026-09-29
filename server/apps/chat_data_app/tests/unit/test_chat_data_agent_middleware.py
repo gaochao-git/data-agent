@@ -58,11 +58,13 @@ class FakeLLM:
 def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
     unknown_message = AIMessage(
         content="",
-        tool_calls=[{
-            "id": "call_bad",
-            "name": "unknown_toolunknown_tool",
-            "args": {},
-        }],
+        tool_calls=[
+            {
+                "id": "call_bad",
+                "name": "unknown_toolunknown_tool",
+                "args": {},
+            }
+        ],
     )
 
     normalized = normalize_response_tool_call_names(
@@ -74,11 +76,13 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
 
     repeated_message = AIMessage(
         content="",
-        tool_calls=[{
-            "id": "call_select",
-            "name": "file_readfile_readfile_read",
-            "args": {},
-        }],
+        tool_calls=[
+            {
+                "id": "call_select",
+                "name": "file_readfile_readfile_read",
+                "args": {},
+            }
+        ],
     )
     normalized = normalize_response_tool_call_names(
         repeated_message,
@@ -88,11 +92,13 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
 
     similar_message = AIMessage(
         content="",
-        tool_calls=[{
-            "id": "call_similar",
-            "name": "file_read_extra",
-            "args": {},
-        }],
+        tool_calls=[
+            {
+                "id": "call_similar",
+                "name": "file_read_extra",
+                "args": {},
+            }
+        ],
     )
     normalized = normalize_response_tool_call_names(
         similar_message,
@@ -150,13 +156,17 @@ def test_normalize_response_tool_call_names_coerces_string_args():
 async def test_context_compression_compresses_completed_old_rounds_and_logs_tokens(monkeypatch):
     logs = []
 
-    monkeypatch.setattr("apps.chat_data_app.agent.middleware.context_compression.logger.info", lambda *args, **kwargs: logs.append(args))
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.middleware.context_compression.logger.info", lambda *args, **kwargs: logs.append(args)
+    )
     messages = []
     for index in range(6):
-        messages.extend([
-            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
-            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
-        ])
+        messages.extend(
+            [
+                HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
+                AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
+            ]
+        )
     messages.append(HumanMessage(content="当前问题"))
 
     compressed, summary, report = await compress_messages_for_state(
@@ -183,10 +193,12 @@ async def test_context_compression_compresses_completed_old_rounds_and_logs_toke
 async def test_context_compression_update_replaces_persisted_messages():
     messages = []
     for index in range(6):
-        messages.extend([
-            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
-            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
-        ])
+        messages.extend(
+            [
+                HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
+                AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
+            ]
+        )
     messages.append(HumanMessage(content="当前问题"))
 
     updates, summary, report = await build_context_compression_update(
@@ -461,10 +473,13 @@ async def test_context_compression_uses_configured_summary_output_budget(monkeyp
     monkeypatch.setattr(
         context_compression,
         "get_model_context_budget",
-        lambda model_id, *, max_output_tokens: captured.update({
-            "budget_model_id": model_id,
-            "budget_max_output_tokens": max_output_tokens,
-        }) or SimpleNamespace(hard_input_limit_tokens=9_999),
+        lambda model_id, *, max_output_tokens: captured.update(
+            {
+                "budget_model_id": model_id,
+                "budget_max_output_tokens": max_output_tokens,
+            }
+        )
+        or SimpleNamespace(hard_input_limit_tokens=9_999),
     )
 
     class SummaryLLM:
@@ -477,7 +492,9 @@ async def test_context_compression_uses_configured_summary_output_budget(monkeyp
 
     monkeypatch.setattr(context_compression, "get_chat_data_llm", fake_get_chat_data_llm)
 
-    assert context_compression._get_summary_input_limit_tokens("summary-model") == context_compression.hard_input_guard_tokens(9_999)
+    assert context_compression._get_summary_input_limit_tokens(
+        "summary-model"
+    ) == context_compression.hard_input_guard_tokens(9_999)
     summary = await context_compression._summarize_messages_with_llm(
         [HumanMessage(content="待摘要历史")],
         model_id="summary-model",
@@ -493,10 +510,12 @@ async def test_context_compression_uses_configured_summary_output_budget(monkeyp
 async def test_context_compression_middleware_persists_and_streams_visible_event(monkeypatch):
     messages = []
     for index in range(4):
-        messages.extend([
-            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300, id=f"user-{index}"),
-            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300, id=f"assistant-{index}"),
-        ])
+        messages.extend(
+            [
+                HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300, id=f"user-{index}"),
+                AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300, id=f"assistant-{index}"),
+            ]
+        )
     messages.append(HumanMessage(content="当前问题", id="turn-current"))
     monkeypatch.setattr(
         context_compression.ContextRequestBudget,
@@ -510,7 +529,9 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
             compression_target_tokens=1,
         ),
     )
-    monkeypatch.setattr(context_compression, "get_context_compression_config", lambda: {"enabled": True, "trigger_ratio": 0.10})
+    monkeypatch.setattr(
+        context_compression, "get_context_compression_config", lambda: {"enabled": True, "trigger_ratio": 0.10}
+    )
     monkeypatch.setattr(context_compression, "_get_summary_input_limit_tokens", lambda _model_id: 800)
 
     async def summarize(*_args, **_kwargs):
@@ -524,13 +545,16 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
         system_prompt="智能问数系统提示词",
         state_schema=dict,
     )
-    update = await middleware.abefore_model({
-        "messages": messages,
-        "workspace": {
-            "workspace_root": "/data/chat/threads/u1/c1/user-data",
-            "workspace_backend": "sandbox",
+    update = await middleware.abefore_model(
+        {
+            "messages": messages,
+            "workspace": {
+                "workspace_root": "/data/chat/threads/u1/c1/user-data",
+                "workspace_backend": "sandbox",
+            },
         },
-    }, SimpleNamespace())
+        SimpleNamespace(),
+    )
 
     event = update["context_compression_events"][0]
     assert update["context_compression"]["triggered"] is True
@@ -557,14 +581,17 @@ def test_context_compression_event_excludes_summary_and_anchors_current_message(
         AIMessage(content="历史回答", id="assistant-old"),
         HumanMessage(content="当前问题", id="turn-current"),
     ]
-    event = context_compression._build_context_compression_event(messages, {
-        "triggered": True,
-        "estimated_tokens_before": 70_000,
-        "estimated_tokens_after": 21_000,
-        "estimated_cleared_tokens": 49_000,
-        "compressed_messages": 2,
-        "summary_chars": 999,
-    })
+    event = context_compression._build_context_compression_event(
+        messages,
+        {
+            "triggered": True,
+            "estimated_tokens_before": 70_000,
+            "estimated_tokens_after": 21_000,
+            "estimated_cleared_tokens": 49_000,
+            "compressed_messages": 2,
+            "summary_chars": 999,
+        },
+    )
 
     assert event is not None
     assert event["turn_id"] == "turn-current"
@@ -572,13 +599,16 @@ def test_context_compression_event_excludes_summary_and_anchors_current_message(
     assert event["estimated_cleared_tokens"] == 49_000
     assert "summary" not in event
 
-    retried_event = context_compression._build_context_compression_event(messages, {
-        "triggered": True,
-        "estimated_tokens_before": 70_000,
-        "estimated_tokens_after": 21_000,
-        "estimated_cleared_tokens": 49_000,
-        "compressed_messages": 2,
-    })
+    retried_event = context_compression._build_context_compression_event(
+        messages,
+        {
+            "triggered": True,
+            "estimated_tokens_before": 70_000,
+            "estimated_tokens_after": 21_000,
+            "estimated_cleared_tokens": 49_000,
+            "compressed_messages": 2,
+        },
+    )
     assert retried_event["id"] == event["id"]
 
 
@@ -911,10 +941,12 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
     from apps.chat_data_app.agent.middleware import context_usage
 
     messages = []
-    messages.append(SystemMessage(
-        content="[历史对话摘要]\n1. 用户: 历史问题",
-        additional_kwargs={"context_compression": True, "compressed_message_count": 10},
-    ))
+    messages.append(
+        SystemMessage(
+            content="[历史对话摘要]\n1. 用户: 历史问题",
+            additional_kwargs={"context_compression": True, "compressed_message_count": 10},
+        )
+    )
     messages.append(HumanMessage(content="当前问题"))
     monkeypatch.setattr(
         context_usage.ContextRequestBudget,
@@ -963,16 +995,20 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
     middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="file_read")])
 
     async def handler(_request):
-        return ModelResponse(result=[
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "id": "call_select",
-                    "name": "file_readfile_read",
-                    "args": {"query": "查询入金金额"},
-                }],
-            )
-        ])
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_select",
+                            "name": "file_readfile_read",
+                            "args": {"query": "查询入金金额"},
+                        }
+                    ],
+                )
+            ]
+        )
 
     response = await middleware.awrap_model_call(SimpleNamespace(), handler)
 
@@ -987,16 +1023,20 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
     middleware = context_usage.create_request_context_usage_middleware(tools=[tool])
 
     async def handler(_request):
-        return ModelResponse(result=[
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "id": "call_select",
-                    "name": "file_readfile_read",
-                    "args": {"query": "查询入金金额"},
-                }],
-            )
-        ])
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_select",
+                            "name": "file_readfile_read",
+                            "args": {"query": "查询入金金额"},
+                        }
+                    ],
+                )
+            ]
+        )
 
     request = ModelRequest(
         model=FakeChatModel(),
@@ -1065,9 +1105,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         checkpointer="ckpt",
         identity_context=data_agent.IdentityContext(user_id="u1"),
         datasource_context=data_agent.DatasourceContext(datasource_id="ds_a"),
-        model_invocation=data_agent.ModelInvocationConfig(
-            system_prompt="智能问数系统提示词", model_id="m1"
-        ),
+        model_invocation=data_agent.ModelInvocationConfig(system_prompt="智能问数系统提示词", model_id="m1"),
     )
 
     assert agent.name == "agent"
@@ -1111,7 +1149,12 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert captured["middleware"][8].name == "ToolCallNameNormalizerMiddleware"
     assert captured["middleware"][9].name == "ToolResultMiddleware"
     assert captured["middleware"][10].name == "ToolErrorMiddleware"
-    assert data_agent.create_data_agent(AgentRuntimeOptions(), model_invocation=data_agent.ModelInvocationConfig(model_id="m1")).name == "agent"
+    assert (
+        data_agent.create_data_agent(
+            AgentRuntimeOptions(), model_invocation=data_agent.ModelInvocationConfig(model_id="m1")
+        ).name
+        == "agent"
+    )
     assert "智能问数与数据分析助手" in captured["system_prompt"]
 
 
@@ -1152,10 +1195,17 @@ def test_message_integrity_keeps_complete_tool_groups_and_removes_orphans():
     repaired, report = message_integrity.repair_tool_call_messages(messages)
 
     assert [getattr(message, "id", None) for message in repaired[:4]] == [
-        "turn-1", "assistant-1", repaired[2].id, repaired[3].id,
+        "turn-1",
+        "assistant-1",
+        repaired[2].id,
+        repaired[3].id,
     ]
     assert [getattr(message, "content", None) for message in repaired] == [
-        "继续分析", "", "结果A", "结果B", "最终回答",
+        "继续分析",
+        "",
+        "结果A",
+        "结果B",
+        "最终回答",
     ]
     assert report["removed_call_ids"] == ()
     assert report["removed_message_count"] == 1
@@ -1214,4 +1264,3 @@ async def test_tool_call_history_repair_middleware_replaces_state_messages(monke
     assert update["messages"][0].id == REMOVE_ALL_MESSAGES
     assert update["messages"][1:] == [messages[0]]
     assert warnings
-

@@ -157,51 +157,69 @@ def test_build_member_source_text_line_requires_org_name_and_code():
 
 def test_build_member_source_text_line_http_requires_database():
     """HTTP 执行方式必须显式给出库名（233->234 真分支）。"""
-    assert helpers._build_member_source_text_line(
-        {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http"}
-    ) is None
-    assert helpers._build_member_source_text_line(
-        {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http", "database": "  "}
-    ) is None
+    assert (
+        helpers._build_member_source_text_line(
+            {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http"}
+        )
+        is None
+    )
+    assert (
+        helpers._build_member_source_text_line(
+            {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http", "database": "  "}
+        )
+        is None
+    )
 
 
 def test_build_member_source_text_line_http_uses_database():
-    assert helpers._build_member_source_text_line(
-        {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http", "database": "risk_db"}
-    ) == "财付通|ORG1|http|risk_db"
+    assert (
+        helpers._build_member_source_text_line(
+            {"org_name": "财付通", "org_code": "ORG1", "query_executor_type": "http", "database": "risk_db"}
+        )
+        == "财付通|ORG1|http|risk_db"
+    )
 
 
 def test_build_member_source_text_line_direct_uses_source_line():
     """直连方式走 host:port:database（242->244 假分支）。"""
-    assert helpers._build_member_source_text_line(
-        {
-            "org_name": "财付通",
-            "org_code": "ORG1",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "database": "fxcjg",
-        }
-    ) == "财付通|ORG1|direct|127.0.0.1:3306:fxcjg"
+    assert (
+        helpers._build_member_source_text_line(
+            {
+                "org_name": "财付通",
+                "org_code": "ORG1",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "fxcjg",
+            }
+        )
+        == "财付通|ORG1|direct|127.0.0.1:3306:fxcjg"
+    )
 
 
 def test_build_member_source_text_line_direct_returns_none_without_source_line():
     """直连但连不上 host:port:database 时返回 None（242->243 真分支）。"""
-    assert helpers._build_member_source_text_line(
-        {"org_name": "财付通", "org_code": "ORG1", "host": "127.0.0.1", "port": 3306}
-    ) is None
+    assert (
+        helpers._build_member_source_text_line(
+            {"org_name": "财付通", "org_code": "ORG1", "host": "127.0.0.1", "port": 3306}
+        )
+        is None
+    )
 
 
 def test_build_member_source_text_line_falls_back_to_direct_for_unknown_executor():
-    assert helpers._build_member_source_text_line(
-        {
-            "org_name": "财付通",
-            "org_code": "ORG1",
-            "query_executor_type": "unknown",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "database": "fxcjg",
-        }
-    ) == "财付通|ORG1|unknown|127.0.0.1:3306:fxcjg"
+    assert (
+        helpers._build_member_source_text_line(
+            {
+                "org_name": "财付通",
+                "org_code": "ORG1",
+                "query_executor_type": "unknown",
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "fxcjg",
+            }
+        )
+        == "财付通|ORG1|unknown|127.0.0.1:3306:fxcjg"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,10 +290,12 @@ def test_parse_member_source_entry_rejects_malformed_lines():
 
 
 def test_parse_member_source_entries_puts_template_first():
-    text = "\n".join([
-        "支付宝|ORG2|direct|10.0.0.2:3306:alipay",
-        "财付通|ORG1|direct|10.0.0.1:3306:tenpay",
-    ])
+    text = "\n".join(
+        [
+            "支付宝|ORG2|direct|10.0.0.2:3306:alipay",
+            "财付通|ORG1|direct|10.0.0.1:3306:tenpay",
+        ]
+    )
 
     entries = helpers._parse_member_source_entries(text, "10.0.0.1:3306:tenpay", None, "direct")
 
@@ -283,12 +303,14 @@ def test_parse_member_source_entries_puts_template_first():
 
 
 def test_parse_member_source_entries_dedupes_by_org_code():
-    text = "\n".join([
-        "财付通|ORG1|direct|10.0.0.1:3306:tenpay",
-        "财付通新|ORG1|direct|10.0.0.9:3306:tenpay",  # 同 org_code → 丢弃
-        "无效行|",
-        "支付宝|ORG2|http|alipay_db",
-    ])
+    text = "\n".join(
+        [
+            "财付通|ORG1|direct|10.0.0.1:3306:tenpay",
+            "财付通新|ORG1|direct|10.0.0.9:3306:tenpay",  # 同 org_code → 丢弃
+            "无效行|",
+            "支付宝|ORG2|http|alipay_db",
+        ]
+    )
 
     ids = helpers._parse_member_sources_text(text, None, None, "direct")
 

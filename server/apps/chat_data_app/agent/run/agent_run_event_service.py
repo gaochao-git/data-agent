@@ -159,7 +159,9 @@ class AgentRunEventService:
             try:
                 event = await self._bus.latest_run_event(run_id)
             except Exception:
-                logger.warning("等待问题 Run 终止事件时 Redis 不可用，检查 inbox 终止记录: run_id=%s", run_id, exc_info=True)
+                logger.warning(
+                    "等待问题 Run 终止事件时 Redis 不可用，检查 inbox 终止记录: run_id=%s", run_id, exc_info=True
+                )
                 event = None
             if event and event.get("event_type") == "done":
                 return True
@@ -255,7 +257,11 @@ class AgentRunEventService:
             await self._wait_between_polls(run_id, stream_exists)
             snapshot, loaded = await self._load_snapshot_with_retry(run_id)
             stop, terminal_detected_at, fallback = await self._terminal_grace_action(
-                run_id, cursor, snapshot, loaded, terminal_detected_at,
+                run_id,
+                cursor,
+                snapshot,
+                loaded,
+                terminal_detected_at,
                 redis_unavailable=redis_unavailable,
             )
             for terminal_event in self._terminal_events(stop, fallback):
@@ -304,18 +310,10 @@ class AgentRunEventService:
                 terminal_detected_at = now
             if redis_unavailable:
                 await asyncio.sleep(TERMINAL_UNAVAILABLE_GRACE_SECONDS)
-                fallback = (
-                    self._terminal_fallback_event(run_id, cursor, snapshot)
-                    if snapshot is not None
-                    else None
-                )
+                fallback = self._terminal_fallback_event(run_id, cursor, snapshot) if snapshot is not None else None
                 return True, terminal_detected_at, fallback
             if now - terminal_detected_at >= TERMINAL_PERSISTENCE_GRACE_SECONDS:
-                fallback = (
-                    self._terminal_fallback_event(run_id, cursor, snapshot)
-                    if snapshot is not None
-                    else None
-                )
+                fallback = self._terminal_fallback_event(run_id, cursor, snapshot) if snapshot is not None else None
                 return True, terminal_detected_at, fallback
             await asyncio.sleep(0.2)
             return False, terminal_detected_at, None

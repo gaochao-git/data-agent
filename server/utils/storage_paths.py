@@ -1,4 +1,5 @@
 """Shared filesystem paths derived from CHAT_DATA_HOME settings."""
+
 from __future__ import annotations
 
 import os
@@ -13,10 +14,7 @@ def _resolve_chat_data_home() -> Path:
     # 作为 chat 应用唯一的数据根，local / sandbox 模式共用同一份显式根。未设置直接 fail-fast。
     value = os.getenv("CHAT_DATA_HOME")
     if not value:
-        raise RuntimeError(
-            "CHAT_DATA_HOME is required: chat 会话数据根目录必须显式指定，"
-            "禁止回退到其它变量推导"
-        )
+        raise RuntimeError("CHAT_DATA_HOME is required: chat 会话数据根目录必须显式指定，禁止回退到其它变量推导")
     path = Path(value).expanduser()
     if not path.is_absolute():
         raise RuntimeError("CHAT_DATA_HOME 必须是绝对路径")

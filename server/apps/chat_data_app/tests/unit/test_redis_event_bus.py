@@ -17,17 +17,23 @@ class _FakeRedis:
         assert count == 100
         assert block == 6000
         return [
-            ("chatdata:run:run-1:events", [
-                ("1740000000000-0", {
-                    "run_id": "run-1",
-                    "conversation_id": "conv-1",
-                    "user_id": "user-1",
-                    "event_id": "event-1",
-                    "event_type": "message",
-                    "sequence_no": "1",
-                    "payload": "event: message\\ndata: {}\\n\\n",
-                }),
-            ]),
+            (
+                "chatdata:run:run-1:events",
+                [
+                    (
+                        "1740000000000-0",
+                        {
+                            "run_id": "run-1",
+                            "conversation_id": "conv-1",
+                            "user_id": "user-1",
+                            "event_id": "event-1",
+                            "event_type": "message",
+                            "sequence_no": "1",
+                            "payload": "event: message\\ndata: {}\\n\\n",
+                        },
+                    ),
+                ],
+            ),
         ]
 
 
@@ -123,15 +129,18 @@ async def test_newer_owner_generation_fences_old_publisher():
             owner_token="1:old",
         )
 
-    assert await bus.publish(
-        run_id="run-1",
-        conversation_id="conv-1",
-        user_id="user-1",
-        event_id="event-2",
-        event_type="message",
-        payload="event: message\ndata: {}\n\n",
-        owner_token="2:new",
-    ) == "1740000000000-0"
+    assert (
+        await bus.publish(
+            run_id="run-1",
+            conversation_id="conv-1",
+            user_id="user-1",
+            event_id="event-2",
+            event_type="message",
+            payload="event: message\ndata: {}\n\n",
+            owner_token="2:new",
+        )
+        == "1740000000000-0"
+    )
 
 
 @pytest.mark.asyncio
@@ -155,6 +164,7 @@ async def test_renew_run_owner_requires_exact_owner_token():
 # 哨兵模式连接
 # ---------------------------------------------------------------------------
 
+
 def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
     monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "10.0.0.1:26379, 10.0.0.2:26379")
@@ -162,9 +172,7 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_REDIS_PASSWORD", encrypt_password("secret"))
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
 
@@ -186,6 +194,7 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     assert master_kwargs["retry"]._retries == 1
     # failover 窗口旧连接收到 READONLY 错误必须可重试自愈
     from redis.exceptions import ReadOnlyError
+
     assert ReadOnlyError in master_kwargs["retry"]._supported_errors
 
 
@@ -196,9 +205,7 @@ def test_sentinel_mode_read_client_uses_relaxed_blocking_profile(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_REDIS_MASTER_NAME", "chatdata-master")
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         _ = bus.redis
         _ = bus.read_redis
@@ -228,9 +235,7 @@ def test_sentinel_mode_supports_distinct_encrypted_sentinel_password(monkeypatch
     monkeypatch.setenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", encrypt_password("sentinel-pwd"))
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
 
@@ -248,9 +253,7 @@ def test_sentinel_mode_without_sentinel_password_skips_sentinel_auth(monkeypatch
     monkeypatch.delenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", raising=False)
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
 
@@ -267,9 +270,7 @@ def test_sentinel_mode_supports_no_password(monkeypatch):
     monkeypatch.delenv("CHAT_DATA_REDIS_SENTINEL_PASSWORD", raising=False)
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
 
@@ -284,9 +285,7 @@ def test_sentinel_mode_selects_db(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_REDIS_DB", "3")
 
     bus = RedisEventBus()
-    with patch(
-        "apps.chat_data_app.agent.run.redis_event_bus.Sentinel"
-    ) as sentinel_cls:
+    with patch("apps.chat_data_app.agent.run.redis_event_bus.Sentinel") as sentinel_cls:
         sentinel_cls.return_value.master_for.return_value = object()
         assert bus.redis is not None
 

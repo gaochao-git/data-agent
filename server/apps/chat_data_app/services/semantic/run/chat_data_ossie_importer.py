@@ -62,16 +62,32 @@ _OSIE_DATATYPE_TO_DATA_TYPE = {
 # AI 生成/外部导出的 YAML 常用 SQL 类型名而非 OSI 枚举名（如 FLOAT、BIGINT、varchar），
 # 解析前做确定性归一：能映射的改写为 OSI 枚举名，映射不到的原样保留交给 schema 校验报错。
 _OSSIE_DATATYPE_ALIASES = {
-    "string": "String", "str": "String", "varchar": "String", "char": "String", "text": "String",
-    "integer": "Integer", "int": "Integer", "bigint": "Integer", "smallint": "Integer", "tinyint": "Integer",
-    "decimal": "Decimal", "numeric": "Decimal",
-    "float": "Float", "double": "Float", "real": "Float",
-    "boolean": "Boolean", "bool": "Boolean",
+    "string": "String",
+    "str": "String",
+    "varchar": "String",
+    "char": "String",
+    "text": "String",
+    "integer": "Integer",
+    "int": "Integer",
+    "bigint": "Integer",
+    "smallint": "Integer",
+    "tinyint": "Integer",
+    "decimal": "Decimal",
+    "numeric": "Decimal",
+    "float": "Float",
+    "double": "Float",
+    "real": "Float",
+    "boolean": "Boolean",
+    "bool": "Boolean",
     "date": "Date",
     "time": "Time",
-    "datetime": "DateTime", "timestamp": "DateTime",
-    "datetimetz": "DateTimeTz", "timestamptz": "DateTimeTz",
-    "opaque": "Opaque", "unknown": "Opaque", "other": "Opaque",
+    "datetime": "DateTime",
+    "timestamp": "DateTime",
+    "datetimetz": "DateTimeTz",
+    "timestamptz": "DateTimeTz",
+    "opaque": "Opaque",
+    "unknown": "Opaque",
+    "other": "Opaque",
 }
 
 
@@ -124,16 +140,18 @@ class OssieSemanticModelImport:
 
     def to_preview_payload(self) -> Dict[str, Any]:
         payload = self.to_config_payload()
-        payload.update({
-            "source_config_id": self.source_config_id,
-            "errors": list(self.errors),
-            "warnings": list(self.warnings),
-            "importable": self.importable,
-            "existing_config": dict(self.existing_config) if self.existing_config else None,
-            "conflict_locked": bool(self.conflict_locked),
-            # 仅填空字典闭环：模型携带的原始字典条目（是否真的填充由预览端对照现有字典计算）
-            "column_dicts": [dict(entry) for entry in self.column_dicts],
-        })
+        payload.update(
+            {
+                "source_config_id": self.source_config_id,
+                "errors": list(self.errors),
+                "warnings": list(self.warnings),
+                "importable": self.importable,
+                "existing_config": dict(self.existing_config) if self.existing_config else None,
+                "conflict_locked": bool(self.conflict_locked),
+                # 仅填空字典闭环：模型携带的原始字典条目（是否真的填充由预览端对照现有字典计算）
+                "column_dicts": [dict(entry) for entry in self.column_dicts],
+            }
+        )
         return payload
 
 
@@ -147,9 +165,7 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
         logger.warning("Ossie YAML 解析失败（原始异常）: %s", exc)
         mark = getattr(exc, "problem_mark", None)
         if mark is not None:
-            raise ValueError(
-                f"Ossie 文档 YAML 语法错误（第 {mark.line + 1} 行第 {mark.column + 1} 列）"
-            ) from exc
+            raise ValueError(f"Ossie 文档 YAML 语法错误（第 {mark.line + 1} 行第 {mark.column + 1} 列）") from exc
         raise ValueError("Ossie 文档不是合法的 YAML") from exc
     if not isinstance(data, dict):
         raise ValueError("Ossie 文档必须是 YAML 映射（顶层为 version / semantic_model）")
@@ -299,7 +315,9 @@ def extract_metric_source_column(metric: Dict[str, Any]) -> str:
     推断共用同一实现，保证导出标注与导入回填定位同一物理列。
     """
     expression = str(metric.get("expression") or "").strip()
-    match = re.match(r"^(?:COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(?:DISTINCT\s+)?`?([^`(),\s]+)`?\s*\)$", expression, re.IGNORECASE)
+    match = re.match(
+        r"^(?:COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(?:DISTINCT\s+)?`?([^`(),\s]+)`?\s*\)$", expression, re.IGNORECASE
+    )
     if match:
         return match.group(1).split(".")[-1].strip("`")
     match = re.match(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$", expression)
@@ -321,10 +339,7 @@ def plan_column_dict_fills(
     plan: List[Dict[str, Any]] = []
     for entry in item.column_dicts:
         existing = existing_column_dicts.get((entry["table"], entry["column"])) or {}
-        fields = [
-            key for key in _COLUMN_DICT_FIELD_KEYS
-            if entry["dict"].get(key) and not existing.get(key)
-        ]
+        fields = [key for key in _COLUMN_DICT_FIELD_KEYS if entry["dict"].get(key) and not existing.get(key)]
         if fields:
             plan.append({"table": entry["table"], "column": entry["column"], "fields": fields})
     return plan
@@ -492,7 +507,9 @@ class OssieToChatDataImporter:
             result.errors.append(f"{label} 缺少 ANSI_SQL 方言表达式，无法导入")
             return
 
-        table, attribution = _resolve_table(extension.get("table"), dataset_names, result.errors, result.warnings, label)
+        table, attribution = _resolve_table(
+            extension.get("table"), dataset_names, result.errors, result.warnings, label
+        )
         result.bump(f"attribution_{attribution}")
         if table is None:
             return
@@ -537,7 +554,9 @@ class OssieToChatDataImporter:
         if _PLAIN_IDENTIFIER_PATTERN.match(candidate):
             result.warnings.append(f"{label} 缺少 CHAT_DATA 扩展的 column，按表达式推断物理字段: {candidate}")
             return candidate
-        result.errors.append(f"{label} 缺少 CHAT_DATA 扩展的 column，且表达式不是单一物理字段（{expression}），无法确定")
+        result.errors.append(
+            f"{label} 缺少 CHAT_DATA 扩展的 column，且表达式不是单一物理字段（{expression}），无法确定"
+        )
         return None
 
     @staticmethod
@@ -578,14 +597,19 @@ class OssieToChatDataImporter:
         if not expression:
             result.errors.append(f"{label} 缺少 ANSI_SQL 方言表达式，无法导入")
             return
-        table, attribution = _resolve_table(extension.get("table"), dataset_names, result.errors, result.warnings, label)
+        table, attribution = _resolve_table(
+            extension.get("table"), dataset_names, result.errors, result.warnings, label
+        )
         result.bump(f"attribution_{attribution}")
         if table is None:
             return
         entry: Dict[str, Any] = {"name": name, "expression": expression, "table": table}
         self._apply_common_metric_fields(entry, extension, ossie_metric)
         self._record_column_dict(
-            result, extension, table, self._metric_source_column(extension, expression),
+            result,
+            extension,
+            table,
+            self._metric_source_column(extension, expression),
         )
         result.metrics.append(entry)
 
@@ -716,9 +740,7 @@ class OssieToChatDataImporter:
             extension, from_table, to_table, relationship_type, label, result
         )
         # 导出方向还原：one_to_many 导出时反转过方向（from=右表/to=左表）
-        left_columns, right_columns = self._relation_columns(
-            relationship_type, has_ext, from_columns, to_columns
-        )
+        left_columns, right_columns = self._relation_columns(relationship_type, has_ext, from_columns, to_columns)
 
         join_conditions = [
             {"left_column": left_column, "right_column": right_column}
@@ -782,14 +804,12 @@ class OssieToChatDataImporter:
         if not (ext_left and ext_right):
             # 无扩展（外部文件）：按 from→to 方向导入，from 侧为多端
             result.warnings.append(
-                f"{label} 缺少 CHAT_DATA 扩展的左右表方向，按 from→to 导入"
-                f"（基数默认 {relationship_type}），请人工确认"
+                f"{label} 缺少 CHAT_DATA 扩展的左右表方向，按 from→to 导入（基数默认 {relationship_type}），请人工确认"
             )
             return from_table, to_table, False
         if {ext_left, ext_right} != {from_table, to_table}:
             result.warnings.append(
-                f"{label} 的扩展表 ({ext_left}/{ext_right}) 与 from/to "
-                f"({from_table}/{to_table}) 不一致，以扩展为准"
+                f"{label} 的扩展表 ({ext_left}/{ext_right}) 与 from/to ({from_table}/{to_table}) 不一致，以扩展为准"
             )
         return ext_left, ext_right, True
 
@@ -839,18 +859,22 @@ def build_model_checklist(
 
 def _append_schema_rows(checklist: List[Dict[str, str]]) -> None:
     """① OSSI schema 校验：走到这里即解析成功（失败在更早的 parse 阶段整体报错）。"""
-    checklist.append({
-        "group": "schema",
-        "name": "文档结构合法性",
-        "status": "pass",
-        "message": "OSSI 官方 schema 校验通过（version、semantic_model 结构、表达式方言）",
-    })
-    checklist.append({
-        "group": "schema",
-        "name": "datatype 枚举合法性",
-        "status": "pass",
-        "message": "全部字段类型为 OSI 合法枚举（SQL 常见别名已自动归一）",
-    })
+    checklist.append(
+        {
+            "group": "schema",
+            "name": "文档结构合法性",
+            "status": "pass",
+            "message": "OSSI 官方 schema 校验通过（version、semantic_model 结构、表达式方言）",
+        }
+    )
+    checklist.append(
+        {
+            "group": "schema",
+            "name": "datatype 枚举合法性",
+            "status": "pass",
+            "message": "全部字段类型为 OSI 合法枚举（SQL 常见别名已自动归一）",
+        }
+    )
 
 
 def _append_mapping_rows(checklist: List[Dict[str, str]], item: OssieSemanticModelImport) -> None:
@@ -859,58 +883,72 @@ def _append_mapping_rows(checklist: List[Dict[str, str]], item: OssieSemanticMod
     inferred = item.stats.get("attribution_inferred", 0)
     attribution_failed = item.stats.get("attribution_failed", 0)
     if attribution_failed:
-        checklist.append({
-            "group": "mapping",
-            "name": "表归属确定",
-            "status": "fail",
-            "message": f"{attribution_failed} 个对象无法确定归属表（扩展声明 {declared} · 推断 {inferred} · 失败 {attribution_failed}）",
-        })
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "表归属确定",
+                "status": "fail",
+                "message": f"{attribution_failed} 个对象无法确定归属表（扩展声明 {declared} · 推断 {inferred} · 失败 {attribution_failed}）",
+            }
+        )
     elif inferred:
-        checklist.append({
-            "group": "mapping",
-            "name": "表归属确定",
-            "status": "warn",
-            "message": f"{inferred} 个对象未声明归属表，按唯一 dataset 推断（扩展声明 {declared}）",
-        })
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "表归属确定",
+                "status": "warn",
+                "message": f"{inferred} 个对象未声明归属表，按唯一 dataset 推断（扩展声明 {declared}）",
+            }
+        )
     else:
-        checklist.append({
-            "group": "mapping",
-            "name": "表归属确定",
-            "status": "pass",
-            "message": f"{declared} 个对象均由 CHAT_DATA 扩展显式声明归属表",
-        })
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "表归属确定",
+                "status": "pass",
+                "message": f"{declared} 个对象均由 CHAT_DATA 扩展显式声明归属表",
+            }
+        )
 
     derived_count = sum(1 for metric in item.metrics if metric.get("metric_kind") == "derived")
     composite_count = sum(1 for metric in item.metrics if metric.get("metric_kind") == "composite")
     kind_failed = item.stats.get("kind_failed", 0)
     if kind_failed:
-        checklist.append({
-            "group": "mapping",
-            "name": "派生 / 复合指标还原",
-            "status": "fail",
-            "message": f"{kind_failed} 个派生/复合指标缺少 base_metric 或 formula，无法还原口径",
-        })
-    else:
-        kind_message = "模型内无派生/复合指标" if derived_count + composite_count == 0 else (
-            f"派生 {derived_count} 个、复合 {composite_count} 个，成员引用全部解析"
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "派生 / 复合指标还原",
+                "status": "fail",
+                "message": f"{kind_failed} 个派生/复合指标缺少 base_metric 或 formula，无法还原口径",
+            }
         )
-        checklist.append({
-            "group": "mapping",
-            "name": "派生 / 复合指标还原",
-            "status": "pass",
-            "message": kind_message,
-        })
+    else:
+        kind_message = (
+            "模型内无派生/复合指标"
+            if derived_count + composite_count == 0
+            else (f"派生 {derived_count} 个、复合 {composite_count} 个，成员引用全部解析")
+        )
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "派生 / 复合指标还原",
+                "status": "pass",
+                "message": kind_message,
+            }
+        )
 
     # 同名配置不再作为检查项：覆盖已有模型再导入是正常工作流，「替换/忽略」动作
     # 由前端模型行徽章与文件行冲突入口表达。仅保留无操作权限（如他人私有配置）的
     # 同名场景——导入会被强制跳过、用户预期落空，这才是需要警示的异常。
     if item.conflict_locked:
-        checklist.append({
-            "group": "mapping",
-            "name": "模型名冲突",
-            "status": "warn",
-            "message": "已存在同名配置但无操作权限，导入时将忽略该模型",
-        })
+        checklist.append(
+            {
+                "group": "mapping",
+                "name": "模型名冲突",
+                "status": "warn",
+                "message": "已存在同名配置但无操作权限，导入时将忽略该模型",
+            }
+        )
 
 
 def _append_physical_row(
@@ -924,36 +962,44 @@ def _append_physical_row(
     只有 stats 记录了 physical_checked 才真正执行过（结构映射失败的模型不会送检）。
     """
     if not inventory_available:
-        checklist.append({
-            "group": "physical",
-            "name": "物理字段校验",
-            "status": "skip",
-            "message": "数据源表结构缓存不可用，物理存在性检查已跳过（不阻断导入预览）",
-        })
+        checklist.append(
+            {
+                "group": "physical",
+                "name": "物理字段校验",
+                "status": "skip",
+                "message": "数据源表结构缓存不可用，物理存在性检查已跳过（不阻断导入预览）",
+            }
+        )
     elif not item.stats.get("physical_checked"):
-        checklist.append({
-            "group": "physical",
-            "name": "物理字段校验",
-            "status": "skip",
-            "message": "存在结构映射错误，物理校验未执行",
-        })
+        checklist.append(
+            {
+                "group": "physical",
+                "name": "物理字段校验",
+                "status": "skip",
+                "message": "存在结构映射错误，物理校验未执行",
+            }
+        )
     elif validation_error:
-        checklist.append({
-            "group": "physical",
-            "name": "物理字段校验",
-            "status": "fail",
-            "message": validation_error,
-        })
+        checklist.append(
+            {
+                "group": "physical",
+                "name": "物理字段校验",
+                "status": "fail",
+                "message": validation_error,
+            }
+        )
     else:
         metric_count = len(item.metrics)
         dimension_count = len(item.dimensions)
         relationship_count = len(item.relationships)
-        checklist.append({
-            "group": "physical",
-            "name": "物理字段校验",
-            "status": "pass",
-            "message": f"指标 {metric_count} · 维度 {dimension_count} · 关系 {relationship_count} 全部命中数据源物理元数据",
-        })
+        checklist.append(
+            {
+                "group": "physical",
+                "name": "物理字段校验",
+                "status": "pass",
+                "message": f"指标 {metric_count} · 维度 {dimension_count} · 关系 {relationship_count} 全部命中数据源物理元数据",
+            }
+        )
 
 
 def _quality_severity_counts(quality_findings: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -972,24 +1018,28 @@ def _append_quality_row(
 ) -> None:
     """④ 质量规则核对：只报触发项与计数，不输出评分。"""
     if quality_findings is None:
-        checklist.append({
-            "group": "quality",
-            "name": "质量规则核对",
-            "status": "skip",
-            "message": "仅对可导入模型执行质量检查，本模型未执行",
-        })
+        checklist.append(
+            {
+                "group": "quality",
+                "name": "质量规则核对",
+                "status": "skip",
+                "message": "仅对可导入模型执行质量检查，本模型未执行",
+            }
+        )
         return
     counts = _quality_severity_counts(quality_findings)
     error_count = counts["error"]
     warning_count = counts["warning"]
     info_count = counts["info"]
     if not (error_count or warning_count or info_count):
-        checklist.append({
-            "group": "quality",
-            "name": "质量规则核对",
-            "status": "pass",
-            "message": f"{len(_QUALITY_RULES)} 条质量规则全部未触发",
-        })
+        checklist.append(
+            {
+                "group": "quality",
+                "name": "质量规则核对",
+                "status": "pass",
+                "message": f"{len(_QUALITY_RULES)} 条质量规则全部未触发",
+            }
+        )
         return
     parts = []
     if error_count:
@@ -998,12 +1048,14 @@ def _append_quality_row(
         parts.append(f"{warning_count} 条警告")
     if info_count:
         parts.append(f"{info_count} 条建议")
-    checklist.append({
-        "group": "quality",
-        "name": "质量规则核对",
-        "status": "fail" if error_count else ("warn" if warning_count else "pass"),
-        "message": f"{' · '.join(parts)}，明细见下方列表",
-    })
+    checklist.append(
+        {
+            "group": "quality",
+            "name": "质量规则核对",
+            "status": "fail" if error_count else ("warn" if warning_count else "pass"),
+            "message": f"{' · '.join(parts)}，明细见下方列表",
+        }
+    )
 
 
 _DICT_ROW_FILL_DETAIL_LIMIT = 5
@@ -1021,23 +1073,27 @@ def _append_dict_row(
     if not item.column_dicts:
         return
     if dict_fill_plan is None:
-        checklist.append({
-            "group": "dict",
-            "name": "数据字典填充",
-            "status": "skip",
-            "message": (
-                f"携带 {len(item.column_dicts)} 个字段的字典信息，"
-                "导入时按「仅填空」更新（本次未对照现有字典评估填充项）"
-            ),
-        })
+        checklist.append(
+            {
+                "group": "dict",
+                "name": "数据字典填充",
+                "status": "skip",
+                "message": (
+                    f"携带 {len(item.column_dicts)} 个字段的字典信息，"
+                    "导入时按「仅填空」更新（本次未对照现有字典评估填充项）"
+                ),
+            }
+        )
         return
     if not dict_fill_plan:
-        checklist.append({
-            "group": "dict",
-            "name": "数据字典填充",
-            "status": "pass",
-            "message": "携带的字典信息对应的空缺项均已被现有值覆盖，无需填充",
-        })
+        checklist.append(
+            {
+                "group": "dict",
+                "name": "数据字典填充",
+                "status": "pass",
+                "message": "携带的字典信息对应的空缺项均已被现有值覆盖，无需填充",
+            }
+        )
         return
     details = "、".join(
         f"{entry['table']}.{entry['column']}"
@@ -1046,12 +1102,14 @@ def _append_dict_row(
     )
     if len(dict_fill_plan) > _DICT_ROW_FILL_DETAIL_LIMIT:
         details += f" 等 {len(dict_fill_plan)} 项"
-    checklist.append({
-        "group": "dict",
-        "name": "数据字典填充",
-        "status": "pass",
-        "message": f"导入时将填充字典空缺项，仅填空不覆盖已有值：{details}",
-    })
+    checklist.append(
+        {
+            "group": "dict",
+            "name": "数据字典填充",
+            "status": "pass",
+            "message": f"导入时将填充字典空缺项，仅填空不覆盖已有值：{details}",
+        }
+    )
 
 
 __all__ = [

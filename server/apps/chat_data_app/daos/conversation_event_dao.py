@@ -159,17 +159,19 @@ class ConversationEventDao:
             # 用户提问视为会话活跃：在同一事务内刷新会话行 update_time（行已被 FOR UPDATE 锁住），
             # 使侧栏「最近更新」排序与后端分组游标跟随真实活跃时间演进。
             await session.execute(
-                sa_update(UserThread)
-                .where(UserThread.id == thread_id)
-                .values(update_time=now, update_by=user_id or "")
+                sa_update(UserThread).where(UserThread.id == thread_id).values(update_time=now, update_by=user_id or "")
             )
 
-        existing_rows = list((await session.scalars(
-            select(ChatDataConversationEvent).where(
-                ChatDataConversationEvent.conversation_id == conversation_id,
-                ChatDataConversationEvent.event_key.in_(event_keys),
-            )
-        )).all())
+        existing_rows = list(
+            (
+                await session.scalars(
+                    select(ChatDataConversationEvent).where(
+                        ChatDataConversationEvent.conversation_id == conversation_id,
+                        ChatDataConversationEvent.event_key.in_(event_keys),
+                    )
+                )
+            ).all()
+        )
         existing_by_key = {row.event_key: row for row in existing_rows}
         pending = [event for event in candidates if str(event["event_key"]).strip() not in existing_by_key]
         self._update_existing_event_rows(
@@ -270,8 +272,9 @@ class ConversationEventDao:
             return list(result.scalars().all()), False
 
         tail_result = await session.execute(
-            stmt.order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc())
-            .limit(limit)
+            stmt.order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc()).limit(
+                limit
+            )
         )
         tail = list(reversed(list(tail_result.scalars().all())))
         if not tail:

@@ -5,12 +5,27 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: 过滤操作符唯一白名单：WHERE/HAVING、AI/BI 各链路统一在编译层收口。
 #: operator 字段来自请求侧，不允许携带任意 SQL 片段进入拼接。
-FILTER_OPERATOR_WHITELIST = frozenset({
-    "=", "!=", "<>", ">", "<", ">=", "<=",
-    "IN", "NOT IN", "BETWEEN",
-    "LIKE", "NOT LIKE", "STARTS WITH", "ENDS WITH",
-    "IS NULL", "IS NOT NULL", "EMPTY STRING",
-})
+FILTER_OPERATOR_WHITELIST = frozenset(
+    {
+        "=",
+        "!=",
+        "<>",
+        ">",
+        "<",
+        ">=",
+        "<=",
+        "IN",
+        "NOT IN",
+        "BETWEEN",
+        "LIKE",
+        "NOT LIKE",
+        "STARTS WITH",
+        "ENDS WITH",
+        "IS NULL",
+        "IS NOT NULL",
+        "EMPTY STRING",
+    }
+)
 
 #: 自由 SQL 表达式黑名单：注释、分号与写操作关键字。
 #: WHERE/HAVING 的 rightExpression、维度/指标左侧 expression 都必须过这道检查；
@@ -72,7 +87,11 @@ def _has_balanced_parentheses(expression: str) -> bool:
     in_single = in_double = escaped = False
     for char in expression:
         in_single, in_double, escaped, balance = _scan_parenthesis_char(
-            char, escaped, in_single, in_double, balance,
+            char,
+            escaped,
+            in_single,
+            in_double,
+            balance,
         )
         if balance < 0:
             return False
@@ -129,10 +148,14 @@ def _sql_list_literal(values: Any, value_type: Any, safe_functions: set[str]) ->
         return f"({_sql_literal(values, value_type, safe_functions)})"
     if not values:
         return "(NULL)"
-    return "(" + ", ".join(
-        _sql_literal(value, _value_type_for_index(value_type, index), safe_functions)
-        for index, value in enumerate(values)
-    ) + ")"
+    return (
+        "("
+        + ", ".join(
+            _sql_literal(value, _value_type_for_index(value_type, index), safe_functions)
+            for index, value in enumerate(values)
+        )
+        + ")"
+    )
 
 
 def _effective_table_ref(item: Dict[str, Any], fallback: str = "") -> str:
@@ -152,9 +175,7 @@ def _operator_clause(
 ) -> str:
     operator = str(leaf.get("operator", "=")).upper()
     if operator not in FILTER_OPERATOR_WHITELIST:
-        raise ValueError(
-            f"不支持的筛选操作符 '{operator}'。可选值：{', '.join(sorted(FILTER_OPERATOR_WHITELIST))}"
-        )
+        raise ValueError(f"不支持的筛选操作符 '{operator}'。可选值：{', '.join(sorted(FILTER_OPERATOR_WHITELIST))}")
     # rightExpression 是请求侧自由文本，渲染前统一过黑名单；
     # field_ref 分支的 right_expression 由列名引用构造，不受此影响。
     raw_right_expression = str(leaf.get("rightExpression") or "").strip()
@@ -252,7 +273,16 @@ def _match_aggregation(
     """优先按 aggId 匹配聚合定义，否则按表/列/聚合函数兜底匹配。"""
     matched = agg_by_id.get(str(leaf.get("aggId"))) if leaf.get("aggId") else None
     if not matched and not str(leaf.get("expression") or "").strip():
-        matched = next((item for item in aggregations if _effective_table_ref(item, fallback=main_table) == table and item.get("column") == column and str(item.get("func") or "").upper() == agg_func), None)
+        matched = next(
+            (
+                item
+                for item in aggregations
+                if _effective_table_ref(item, fallback=main_table) == table
+                and item.get("column") == column
+                and str(item.get("func") or "").upper() == agg_func
+            ),
+            None,
+        )
     return matched
 
 
@@ -369,7 +399,9 @@ def build_having_leaf_clause(leaf: Dict[str, Any], **kwargs: Any) -> str:
             str(leaf.get("rightColumn")).strip(),
             kwargs["is_multi_table"],
         )
-    return _operator_clause(expression, leaf, right_expression=right_expression, safe_functions=kwargs["safe_functions"])
+    return _operator_clause(
+        expression, leaf, right_expression=right_expression, safe_functions=kwargs["safe_functions"]
+    )
 
 
 def build_having_operand_expr(operand: Dict[str, Any], **kwargs: Any) -> str:
@@ -400,7 +432,11 @@ def build_having_operand_expr(operand: Dict[str, Any], **kwargs: Any) -> str:
 def build_filter_tree_clause(node: Dict[str, Any], *, for_having: bool, is_root: bool = False, **kwargs: Any) -> str:
     key = "and" if "and" in node else "or" if "or" in node else ""
     if key:
-        children = [build_filter_tree_clause(child, for_having=for_having, is_root=False, **kwargs) for child in node.get(key) or [] if isinstance(child, dict)]
+        children = [
+            build_filter_tree_clause(child, for_having=for_having, is_root=False, **kwargs)
+            for child in node.get(key) or []
+            if isinstance(child, dict)
+        ]
         children = [child for child in children if child]
         if not children:
             return ""

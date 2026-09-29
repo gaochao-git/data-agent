@@ -29,10 +29,7 @@ def test_build_file_attachment_text_prefers_virtual_path():
         {"file_name": "no-path.txt"},
     ]
     out = mc.build_file_attachment_text(items)
-    assert out == (
-        "\n[attachment] /mnt/user-data/uploads/a.xlsx"
-        "\n[attachment] /mnt/user-data/outputs/a.md"
-    )
+    assert out == ("\n[attachment] /mnt/user-data/uploads/a.xlsx\n[attachment] /mnt/user-data/outputs/a.md")
 
 
 def test_is_image_attachment_type_and_size_rules():
@@ -56,9 +53,7 @@ def test_is_image_attachment_size_not_a_number():
 
 
 def test_select_vision_attachments_respects_cap():
-    items = [
-        _image(path=f"/mnt/user-data/uploads/{i}.png") for i in range(mc.MAX_IMAGES_PER_MESSAGE + 2)
-    ]
+    items = [_image(path=f"/mnt/user-data/uploads/{i}.png") for i in range(mc.MAX_IMAGES_PER_MESSAGE + 2)]
     out = mc.select_vision_attachments(items, max_image_size=_LIMIT)
     assert len(out) == mc.MAX_IMAGES_PER_MESSAGE
 

@@ -39,7 +39,9 @@ async def get_agent_schedule_overview(request: Request):
         raise
     except Exception as e:
         logger.error("获取定时任务概览失败: %s", e, exc_info=True)
-        return business_response(msg="获取定时任务概览失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取定时任务概览失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error"
+        )
 
 
 @router.put("/admin/agent-schedules/pause")
@@ -58,7 +60,9 @@ async def set_agent_schedule_paused(payload: AgentSchedulePauseRequest, request:
         raise
     except Exception as e:
         logger.error("切换定时任务全局暂停失败: %s", e, exc_info=True)
-        return business_response(msg="切换全局暂停失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error")
+        return business_response(
+            msg="切换全局暂停失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error"
+        )
 
 
 @router.get("/admin/agent-schedules")
@@ -85,7 +89,9 @@ async def list_agent_schedules_admin(
         raise
     except Exception as e:
         logger.error("获取全量定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="获取定时任务列表失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error")
+        return business_response(
+            msg="获取定时任务列表失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_LIST_FAILED, status="error"
+        )
 
 
 @router.put("/admin/agent-schedules/{job_id}/enabled")
@@ -108,7 +114,9 @@ async def set_agent_schedule_enabled_admin(job_id: str, payload: AgentScheduleEn
         raise
     except Exception as e:
         logger.error("后台启停定时任务失败: %s", e, exc_info=True)
-        return business_response(msg="启停定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error")
+        return business_response(
+            msg="启停定时任务失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_UPDATE_FAILED, status="error"
+        )
 
 
 @router.get("/admin/agent-schedules/{job_id}/runs")
@@ -128,7 +136,9 @@ async def list_agent_schedule_runs_admin(job_id: str, request: Request, limit: i
         raise
     except Exception as e:
         logger.error("获取定时任务执行历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取执行历史失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED, status="error")
+        return business_response(
+            msg="获取执行历史失败，请稍后重试", code=ErrorCode.CHATDATA_SCHEDULE_HISTORY_FAILED, status="error"
+        )
 
 
 def _require_user(request: Request) -> Any:

@@ -219,11 +219,13 @@ class QueryTaskService:
         }
         if task_type == "sql":
             response_data = await self.merge_live_remote_sql_result(response_data, executions)
-            task_response.update({
-                "status": response_data["status"],
-                "progress_text": response_data["progress_text"],
-                "error_message": response_data["error_message"],
-            })
+            task_response.update(
+                {
+                    "status": response_data["status"],
+                    "progress_text": response_data["progress_text"],
+                    "error_message": response_data["error_message"],
+                }
+            )
             result_payload = response_data["result_payload"]
             task_response["results"] = self.build_sql_task_results(result_payload, executions)
         elif task_type == "sql_batch":
@@ -234,12 +236,14 @@ class QueryTaskService:
                 fallback_progress_text=response_data["progress_text"],
                 fallback_error_message=response_data["error_message"],
             )
-            task_response.update({
-                "status": batch_status,
-                "progress_text": progress_text,
-                "error_message": error_message,
-                "statement_results": statement_results,
-            })
+            task_response.update(
+                {
+                    "status": batch_status,
+                    "progress_text": progress_text,
+                    "error_message": error_message,
+                    "statement_results": statement_results,
+                }
+            )
         else:
             task_response["executions"] = self.build_query_task_execution_views(executions)
             task_response["result"] = result_payload
@@ -326,9 +330,7 @@ class QueryTaskService:
             "finished_time",
         )
         source = execution if isinstance(execution, dict) else execution.to_dict()
-        view: Dict[str, Any] = {
-            field: source.get(field) for field in result_fields if field in source
-        }
+        view: Dict[str, Any] = {field: source.get(field) for field in result_fields if field in source}
         if source.get("sql_status"):
             view["status"] = source.get("sql_status")
         execution_sql = source.get("query") or source.get("sql_text")
@@ -352,10 +354,7 @@ class QueryTaskService:
     @classmethod
     def build_sql_task_execution_result_views(cls, executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """将执行记录转换为可并入成员结果的轻量字段。"""
-        return [
-            QueryTaskService._build_execution_result_view(execution)
-            for execution in (executions or [])
-        ]
+        return [QueryTaskService._build_execution_result_view(execution) for execution in (executions or [])]
 
     @staticmethod
     def fill_sql_task_execution_payload_defaults(view: Dict[str, Any], execution_payload: Dict[str, Any]) -> None:
@@ -462,8 +461,7 @@ class QueryTaskService:
             raise QueryTaskPermissionDeniedError("无权停止该查询任务")
         resolved_operator = QueryHistoryService.task_operator_name(task_data) or operator_name
         cancellable_executions = [
-            item for item in executions
-            if str(item.sql_status or "").strip().lower() in {"pending", "running"}
+            item for item in executions if str(item.sql_status or "").strip().lower() in {"pending", "running"}
         ]
         task_status = str(task_data.get("status") or "").strip().lower()
         if task_status in QUERY_TASK_FINAL_STATUSES and not cancellable_executions:
@@ -510,8 +508,7 @@ class QueryTaskService:
         if not execution or str(execution.user_id or "").strip() != str(user_id or "").strip():
             raise QueryTaskNotFoundError(f"执行记录不存在: {execution_id}")
         resolved_operator = (
-            str(execution.create_by_name or execution.update_by_name or "").strip()
-            or str(operator_name or "").strip()
+            str(execution.create_by_name or execution.update_by_name or "").strip() or str(operator_name or "").strip()
         )
         result = await self.cancel_query_execution(execution, operator_name=resolved_operator)
         return QueryTaskServiceResponse(
@@ -559,7 +556,8 @@ class QueryTaskService:
     def _cancelled_remote_result(execution: Dict[str, Any], execution_status: str) -> Dict[str, Any]:
         return {
             "status": execution_status,
-            "error": execution.get("error_message") or ("已人工取消" if execution_status == "cancelled" else "停止执行失败"),
+            "error": execution.get("error_message")
+            or ("已人工取消" if execution_status == "cancelled" else "停止执行失败"),
             "columns": [],
             "data": [],
             "total_count": 0,
@@ -599,19 +597,20 @@ class QueryTaskService:
         existing = list(statement.get("results") or [])
         member_id = str(member_result["member_datasource_id"] or "").strip()
         statement["results"] = [
-            item for item in existing
-            if str((item or {}).get("member_datasource_id") or "").strip() != member_id
+            item for item in existing if str((item or {}).get("member_datasource_id") or "").strip() != member_id
         ] + [member_result]
         aggregated = build_query_result_payload(
             sql=str(statement.get("sql") or ""),
             member_results=statement["results"],
             fallback_error=statement.get("error"),
         )
-        statement.update({
-            "status": aggregated["status"],
-            "error": aggregated["error"],
-            "results": aggregated["results"],
-        })
+        statement.update(
+            {
+                "status": aggregated["status"],
+                "error": aggregated["error"],
+                "results": aggregated["results"],
+            }
+        )
 
     async def _apply_remote_task_result(
         self,
@@ -641,7 +640,8 @@ class QueryTaskService:
             # 单个远端状态接口抖动只降级该成员，不影响批次内其它语句
             logger.warning(
                 "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
-                remote_task.get("remote_task_id"), exc,
+                remote_task.get("remote_task_id"),
+                exc,
             )
             remote_result = self._degraded_remote_result(exc, execution)
         execution_status = str((execution or {}).get("sql_status") or "").strip().lower()
@@ -709,19 +709,20 @@ class QueryTaskService:
                     statement["error"] = statement.get("error") or "已人工取消"
                 continue
             next_member_results = [
-                QueryTaskService._cancel_pending_member_result(member_result)
-                for member_result in member_results
+                QueryTaskService._cancel_pending_member_result(member_result) for member_result in member_results
             ]
             aggregated = build_query_result_payload(
                 sql=str(statement.get("sql") or ""),
                 member_results=next_member_results,
                 fallback_error=statement.get("error"),
             )
-            statement.update({
-                "status": aggregated["status"],
-                "error": aggregated["error"],
-                "results": aggregated["results"],
-            })
+            statement.update(
+                {
+                    "status": aggregated["status"],
+                    "error": aggregated["error"],
+                    "results": aggregated["results"],
+                }
+            )
         return statements
 
     @staticmethod
@@ -826,15 +827,18 @@ class QueryTaskService:
         remote_username = str((request_payload or {}).get("operator_name") or "").strip()
         # return_exceptions：单个远端状态接口抖动不能炸掉整个任务查询，
         # 异常成员降级为本地执行状态（见 _degraded_remote_result）
-        fetched_results = await asyncio.gather(*[
-            self.fetch_http_query_task_result(
-                str(remote_task.get("remote_task_id") or ""),
-                str(remote_task.get("source_type") or "hive"),
-                user_id=remote_user_id,
-                username=remote_username,
-            )
-            for remote_task in remote_tasks
-        ], return_exceptions=True)
+        fetched_results = await asyncio.gather(
+            *[
+                self.fetch_http_query_task_result(
+                    str(remote_task.get("remote_task_id") or ""),
+                    str(remote_task.get("source_type") or "hive"),
+                    user_id=remote_user_id,
+                    username=remote_username,
+                )
+                for remote_task in remote_tasks
+            ],
+            return_exceptions=True,
+        )
         local_execution_map = self.build_execution_map_by_member(executions)
         cancelled_execution_map = self.build_cancelled_execution_map(executions)
         remote_results: List[Dict[str, Any]] = []
@@ -842,10 +846,13 @@ class QueryTaskService:
             if isinstance(fetched, Exception):
                 logger.warning(
                     "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
-                    remote_task.get("remote_task_id"), fetched,
+                    remote_task.get("remote_task_id"),
+                    fetched,
                 )
                 member_datasource_id = str(remote_task.get("member_datasource_id") or "").strip()
-                remote_results.append(self._degraded_remote_result(fetched, local_execution_map.get(member_datasource_id)))
+                remote_results.append(
+                    self._degraded_remote_result(fetched, local_execution_map.get(member_datasource_id))
+                )
             else:
                 remote_results.append(fetched)
         return [
@@ -914,7 +921,8 @@ class QueryTaskService:
             "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
             "started_time": remote_result.get("started_time") or local_cancelled_execution.get("started_time"),
             "finished_time": remote_result.get("finished_time") or local_cancelled_execution.get("finished_time"),
-            "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
+            "error": local_cancelled_execution.get("error_message")
+            or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
         }
 
     def _executed_member_fields(
@@ -967,14 +975,17 @@ class QueryTaskService:
     ) -> List[Dict[str, Any]]:
         """合并本地直连结果和 HTTP 远端结果。"""
         local_result_payload = response_data.get("result_payload")
-        local_results = list(local_result_payload.get("results") or []) if isinstance(local_result_payload, dict) else []
+        local_results = (
+            list(local_result_payload.get("results") or []) if isinstance(local_result_payload, dict) else []
+        )
         remote_member_ids = {
             str(item.get("member_datasource_id") or "").strip()
             for item in remote_tasks
             if str(item.get("member_datasource_id") or "").strip()
         }
         direct_results = [
-            item for item in local_results
+            item
+            for item in local_results
             if str((item or {}).get("member_datasource_id") or "").strip() not in remote_member_ids
         ]
         return direct_results + remote_results
@@ -1000,9 +1011,7 @@ class QueryTaskService:
         if task_status == "running" or any(query_result_succeeded(item) for item in merged_results):
             return None
         error_messages = [
-            str(item.get("error") or "").strip()
-            for item in merged_results
-            if str(item.get("error") or "").strip()
+            str(item.get("error") or "").strip() for item in merged_results if str(item.get("error") or "").strip()
         ]
         return "；".join(error_messages) if error_messages else "所有执行对象均执行失败"
 
@@ -1060,7 +1069,9 @@ class QueryTaskService:
         return bool(owner_ids) and normalized_user_id in owner_ids
 
     @staticmethod
-    def can_cancel_query_task(task_data: Dict[str, Any], executions: List[ChatDataQueryExecution], user_id: str) -> bool:
+    def can_cancel_query_task(
+        task_data: Dict[str, Any], executions: List[ChatDataQueryExecution], user_id: str
+    ) -> bool:
         """判断当前用户是否可停止查询任务；owner 信息缺失时 fail-close 拒绝。"""
         owner_ids = {str(item.user_id or "").strip() for item in executions if str(item.user_id or "").strip()}
         task_user_id = QueryHistoryService.task_user_id(task_data)
@@ -1110,22 +1121,27 @@ class QueryTaskService:
         operator_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """并发停止多条 SQL 执行记录。"""
-        async def cancel_one(execution: ChatDataQueryExecution, *, operator_name: Optional[str] = None) -> Dict[str, Any]:
+
+        async def cancel_one(
+            execution: ChatDataQueryExecution, *, operator_name: Optional[str] = None
+        ) -> Dict[str, Any]:
             return await self.cancel_query_execution(
                 execution,
                 cleanup_without_target=cleanup_without_target,
                 operator_name=operator_name,
             )
 
-        return await asyncio.gather(*[
-            self.query_history_service.cancel_query_execution_for_batch(
-                item,
-                cancel_execution=cancel_one,
-                update_execution=self.update_query_execution,
-                operator_name=operator_name,
-            )
-            for item in executions
-        ])
+        return await asyncio.gather(
+            *[
+                self.query_history_service.cancel_query_execution_for_batch(
+                    item,
+                    cancel_execution=cancel_one,
+                    update_execution=self.update_query_execution,
+                    operator_name=operator_name,
+                )
+                for item in executions
+            ]
+        )
 
     async def cancel_query_execution(
         self,
@@ -1205,7 +1221,9 @@ class QueryTaskService:
         try:
             target = await self.resolve_execution_target(execution)
         except Exception as err:
-            logger.error("解析 MySQL 停止数据源失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True)
+            logger.error(
+                "解析 MySQL 停止数据源失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True
+            )
             return {"status": "failed", "error": "解析执行数据源失败"}
         return await self.kill_mysql_query(target or {}, execution.db_connection_id)
 
@@ -1267,12 +1285,14 @@ class QueryTaskService:
 
     def configure_dashboard_runtime(self) -> None:
         """向看板运行时注入查询任务依赖。"""
-        dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
-            get_datasource_manager=self.datasource_manager_factory,
-            execute_sql_for_member=lambda **kwargs: self.execute_sql_for_member(**kwargs),
-            create_task_record=lambda **kwargs: self.create_task_record(**kwargs),
-            update_query_task=lambda *args, **kwargs: self.update_query_task(*args, **kwargs),
-            is_query_task_cancelled=lambda task_id: query_runtime.is_query_task_cancelled(task_id),
-            schedule_query_task=lambda task_id: self.schedule_query_task(task_id),
-            query_task_poll_interval_ms=self.query_task_poll_interval_ms,
-        ))
+        dashboard_runtime.configure_dashboard_runtime(
+            dashboard_runtime.DashboardRuntime(
+                get_datasource_manager=self.datasource_manager_factory,
+                execute_sql_for_member=lambda **kwargs: self.execute_sql_for_member(**kwargs),
+                create_task_record=lambda **kwargs: self.create_task_record(**kwargs),
+                update_query_task=lambda *args, **kwargs: self.update_query_task(*args, **kwargs),
+                is_query_task_cancelled=lambda task_id: query_runtime.is_query_task_cancelled(task_id),
+                schedule_query_task=lambda task_id: self.schedule_query_task(task_id),
+                query_task_poll_interval_ms=self.query_task_poll_interval_ms,
+            )
+        )

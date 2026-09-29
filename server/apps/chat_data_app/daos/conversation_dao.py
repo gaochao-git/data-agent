@@ -73,7 +73,11 @@ class ConversationDao:
             query = select(UserThread).where(UserThread.agent_id == agent_id, UserThread.delete_flag == 0)
             if user_id:
                 query = query.where(UserThread.user_id == user_id)
-            query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
+            query = (
+                query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc())
+                .offset(max(offset, 0))
+                .limit(limit)
+            )
             result = await session.execute(query)
             return list(result.scalars().all())
 
@@ -89,7 +93,11 @@ class ConversationDao:
             query = select(UserThread).where(UserThread.agent_id.in_(agent_ids), UserThread.delete_flag == 0)
             if user_id:
                 query = query.where(UserThread.user_id == user_id)
-            query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
+            query = (
+                query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc())
+                .offset(max(offset, 0))
+                .limit(limit)
+            )
             result = await session.execute(query)
             return list(result.scalars().all())
 
@@ -118,8 +126,7 @@ class ConversationDao:
             conditions.append(ChatDataAgentInbox.user_id == user_id)
         async with self._session_context() as session:
             result = await session.execute(
-                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.record_status)
-                .where(*conditions)
+                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.record_status).where(*conditions)
             )
             statuses: dict[str, str] = {}
             priority = {"cancelling": 4, "waiting_user": 3, "active": 2, "pending": 1}
@@ -202,10 +209,12 @@ class ConversationDao:
             else:
                 conditions.append(normalized_datasource == datasource_id)
         if cursor_update_time is not None and cursor_id is not None:
-            conditions.append(or_(
-                UserThread.update_time < cursor_update_time,
-                and_(UserThread.update_time == cursor_update_time, UserThread.id < cursor_id),
-            ))
+            conditions.append(
+                or_(
+                    UserThread.update_time < cursor_update_time,
+                    and_(UserThread.update_time == cursor_update_time, UserThread.id < cursor_id),
+                )
+            )
         async with self._session_context() as session:
             result = await session.execute(
                 select(UserThread)
@@ -240,25 +249,21 @@ class ConversationDao:
             update_conditions = [UserThread.thread_id == conversation_id]
             if user_id:
                 update_conditions.append(UserThread.user_id == user_id)
-            await session.execute(
-                sa_update(UserThread)
-                .where(*update_conditions)
-                .values(is_favorited=new_favorited)
-            )
+            await session.execute(sa_update(UserThread).where(*update_conditions).values(is_favorited=new_favorited))
             return bool(new_favorited)
 
     async def get_agent_id(self, *, conversation_id: str, user_id: Optional[str]) -> Optional[str]:
         async with self._session_context() as session:
-            result = await session.execute(select(UserThread.agent_id).where(*self._thread_conditions(conversation_id, user_id)))
+            result = await session.execute(
+                select(UserThread.agent_id).where(*self._thread_conditions(conversation_id, user_id))
+            )
             return result.scalar_one_or_none()
 
     async def get_datasource_id(self, *, conversation_id: str, user_id: str) -> Optional[str]:
         """读取会话绑定的数据源组。"""
         async with self._session_context() as session:
             result = await session.execute(
-                select(UserThread.datasource_id).where(
-                    *self._thread_conditions(conversation_id, user_id)
-                )
+                select(UserThread.datasource_id).where(*self._thread_conditions(conversation_id, user_id))
             )
             datasource_id = result.scalar_one_or_none()
             return str(datasource_id or "").strip() or None
@@ -312,9 +317,7 @@ class ConversationDao:
         """在行锁内读取绑定，未绑定时写入请求值。"""
         async with self._session_context() as session:
             result = await session.execute(
-                select(UserThread)
-                .where(*self._thread_conditions(conversation_id, user_id))
-                .with_for_update()
+                select(UserThread).where(*self._thread_conditions(conversation_id, user_id)).with_for_update()
             )
             thread = result.scalar_one_or_none()
             if thread is None:

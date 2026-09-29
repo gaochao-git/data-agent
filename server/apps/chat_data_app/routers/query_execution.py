@@ -30,6 +30,7 @@ from . import JSON_API_RESPONSES
 
 router = APIRouter(tags=["ChatData 查询执行"], responses=JSON_API_RESPONSES)
 
+
 def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
     return current_user if current_user is not None else _get_current_user(request)
 
@@ -41,8 +42,6 @@ def _current_user_identity(request: Request | None) -> tuple[str, str]:
     user_id = str(getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system")
     username = str(getattr(current_user, "username", None) or user_id)
     return user_id, username
-
-
 
 
 @router.post("/query-tasks")
@@ -70,7 +69,9 @@ async def create_query_task(
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("创建异步查询任务失败: %s", e, exc_info=True)
-        return business_response(msg="创建异步查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="创建异步查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 @router.get("/query-tasks/{task_id}")
@@ -82,7 +83,9 @@ async def get_query_task(
     """查询异步任务状态与结果。"""
     try:
         current_user = _resolve_current_user(request, None)
-        data = await (task_service or get_query_task_service()).get_query_task_for_user(task_id, user_id=str(current_user.user_id))
+        data = await (task_service or get_query_task_service()).get_query_task_for_user(
+            task_id, user_id=str(current_user.user_id)
+        )
         return business_response(data=data, msg="查询成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
@@ -92,7 +95,9 @@ async def get_query_task(
         raise
     except Exception as e:
         logger.error("查询异步任务失败: %s", e, exc_info=True)
-        return business_response(msg="查询异步任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="查询异步任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 @router.post("/query-tasks/{task_id}/cancel")
@@ -120,7 +125,9 @@ async def cancel_query_task(
         raise
     except Exception as e:
         logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
-        return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )
 
 
 @router.post("/compile-semantic-builder-sql")
@@ -137,7 +144,9 @@ async def compile_semantic_builder_sql_endpoint(
             semantic_builder_config=body.semantic_builder_config,
             user_id=str(current_user.user_id),
         )
-        return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
+        return business_response(
+            data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功"
+        )
     except AuthenticationError as err:
         raise HTTPException(status_code=err.status_code, detail=err.message) from err
     except HTTPException:
@@ -148,4 +157,6 @@ async def compile_semantic_builder_sql_endpoint(
         return business_response(msg=str(err), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as err:
         logger.error("Semantic Builder DSL 编译失败: %s", err, exc_info=True)
-        return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(
+            msg="Semantic Builder DSL 编译失败，请检查配置", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error"
+        )

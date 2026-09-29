@@ -27,12 +27,14 @@ def get_current_time_payload(
     offset = value.strftime("%z")
     if len(offset) == 5:
         offset = f"{offset[:3]}:{offset[3:]}"
-    payload.update({
-        "timezone": "Asia/Shanghai",
-        "utc_offset": offset,
-        "weekday": _WEEKDAYS[value.weekday()],
-        "timestamp": int(value.timestamp()),
-    })
+    payload.update(
+        {
+            "timezone": "Asia/Shanghai",
+            "utc_offset": offset,
+            "weekday": _WEEKDAYS[value.weekday()],
+            "timestamp": int(value.timestamp()),
+        }
+    )
     return payload
 
 

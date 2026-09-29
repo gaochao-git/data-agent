@@ -27,20 +27,75 @@ from .select_compiler import compile_select_fields
 
 AGG_EXPR_PATTERN = re.compile(r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$", re.IGNORECASE)
 SQL_SAFE_FUNCTIONS = {
-    "current_date", "current_timestamp", "now", "curdate", "curtime",
-    "date_sub", "date_add", "datediff", "date_format", "date",
-    "year", "month", "day", "hour", "minute", "second",
-    "quarter", "week", "dayofweek", "dayofyear", "dayofmonth",
-    "to_date", "from_unixtime", "unix_timestamp", "add_months",
-    "concat", "substring", "substr", "length", "char_length",
-    "upper", "lower", "trim", "ltrim", "rtrim",
-    "replace", "reverse", "left", "right",
-    "instr", "locate", "lpad", "rpad", "repeat",
-    "abs", "round", "ceil", "ceiling", "floor", "mod",
-    "pow", "power", "sqrt", "rand",
-    "count", "sum", "avg", "max", "min",
-    "if", "ifnull", "nullif", "coalesce", "nvl",
-    "case", "when", "then", "else", "end",
+    "current_date",
+    "current_timestamp",
+    "now",
+    "curdate",
+    "curtime",
+    "date_sub",
+    "date_add",
+    "datediff",
+    "date_format",
+    "date",
+    "year",
+    "month",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "quarter",
+    "week",
+    "dayofweek",
+    "dayofyear",
+    "dayofmonth",
+    "to_date",
+    "from_unixtime",
+    "unix_timestamp",
+    "add_months",
+    "concat",
+    "substring",
+    "substr",
+    "length",
+    "char_length",
+    "upper",
+    "lower",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "replace",
+    "reverse",
+    "left",
+    "right",
+    "instr",
+    "locate",
+    "lpad",
+    "rpad",
+    "repeat",
+    "abs",
+    "round",
+    "ceil",
+    "ceiling",
+    "floor",
+    "mod",
+    "pow",
+    "power",
+    "sqrt",
+    "rand",
+    "count",
+    "sum",
+    "avg",
+    "max",
+    "min",
+    "if",
+    "ifnull",
+    "nullif",
+    "coalesce",
+    "nvl",
+    "case",
+    "when",
+    "then",
+    "else",
+    "end",
 }
 
 
@@ -169,7 +224,9 @@ def _having_operand_has_real_aggregation(operand: Any) -> bool:
             return True
         return _is_aggregate_expression(operand.get("expression"))
     if operand_type == "binary":
-        return _having_operand_has_real_aggregation(operand.get("left")) or _having_operand_has_real_aggregation(operand.get("right"))
+        return _having_operand_has_real_aggregation(operand.get("left")) or _having_operand_has_real_aggregation(
+            operand.get("right")
+        )
     return False
 
 
@@ -184,7 +241,9 @@ def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
     return _is_aggregate_expression(item.get("expression"))
 
 
-def _normalize_raw_expression(expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None) -> str:
+def _normalize_raw_expression(
+    expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None
+) -> str:
     expr = (expression or "").strip()
     if not expr:
         return _get_column_expr(table, column, is_multi_table)
@@ -213,7 +272,9 @@ def _is_aggregate_expression(expression: Optional[str]) -> bool:
     return bool(expr) and bool(AGG_EXPR_PATTERN.match(expr))
 
 
-def _normalize_aggregate_expression(expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None) -> str:
+def _normalize_aggregate_expression(
+    expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None
+) -> str:
     expr = (expression or "").strip()
     if not expr:
         return expr
@@ -403,7 +464,11 @@ def _find_agg_block(
     matched = agg_by_id.get(str(agg_id)) if agg_id else None
     if not matched and not (expression or "").strip():
         for a in aggregations:
-            if _effective_table_ref(a, fallback=main_alias) == table and a.get("column") == column and (a.get("func") or "").upper() == agg_func:
+            if (
+                _effective_table_ref(a, fallback=main_alias) == table
+                and a.get("column") == column
+                and (a.get("func") or "").upper() == agg_func
+            ):
                 matched = a
                 break
     return matched
@@ -634,7 +699,9 @@ def _compile_query_plan_sql(
 
     has_real_aggregation = _has_real_aggregation(aggregations, having_filters, order_by)
     if dimensions and has_real_aggregation:
-        group_fields = [group_expr_map[(_effective_table_ref(d, fallback=main_alias), d.get("column", ""))] for d in dimensions]
+        group_fields = [
+            group_expr_map[(_effective_table_ref(d, fallback=main_alias), d.get("column", ""))] for d in dimensions
+        ]
         parts.append(f"GROUP BY {', '.join(group_fields)}")
 
     _append_filter_clause(
@@ -664,6 +731,7 @@ def _compile_query_plan_sql(
 
     _append_limit_offset(parts, sql_dialect, limit, offset)
     return "\n".join(parts)
+
 
 def compile_query_plan_sql(
     query_plan: Dict[str, Any],

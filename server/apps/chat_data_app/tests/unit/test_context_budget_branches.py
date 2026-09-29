@@ -91,8 +91,7 @@ def test_content_blocks_tokens_counts_image_block_with_fixed_estimate():
 
     assert cb._content_blocks_tokens([image_block]) == cb.IMAGE_TOKEN_ESTIMATE
     assert cb._content_blocks_tokens([image_block, text_block]) == (
-        cb.IMAGE_TOKEN_ESTIMATE
-        + cb.estimate_tokens(json.dumps(text_block, ensure_ascii=False, default=str))
+        cb.IMAGE_TOKEN_ESTIMATE + cb.estimate_tokens(json.dumps(text_block, ensure_ascii=False, default=str))
     )
 
 
@@ -110,9 +109,7 @@ def test_message_tokens_serializes_unexpected_content_type():
     content = {"key": "值", "nested": {"a": 1}}
     message = SimpleNamespace(content=content, tool_calls=None, additional_kwargs={})
 
-    assert cb._message_tokens(message) == 4 + cb.estimate_tokens(
-        json.dumps(content, ensure_ascii=False, default=str)
-    )
+    assert cb._message_tokens(message) == 4 + cb.estimate_tokens(json.dumps(content, ensure_ascii=False, default=str))
 
 
 def test_message_tokens_falls_back_to_additional_kwargs_tool_calls():
@@ -274,7 +271,7 @@ def test_strip_breakdown_content_preserves_tool_schema_and_recurses(_system_prom
                 "role": "human",
                 "content": "用户正文",
                 "children": [
-                    {"role": "tool_schema", "content": "{\"name\": \"search\"}"},
+                    {"role": "tool_schema", "content": '{"name": "search"}'},
                     {"role": "assistant", "content": "模型正文"},
                     "junk",
                 ],
@@ -286,7 +283,7 @@ def test_strip_breakdown_content_preserves_tool_schema_and_recurses(_system_prom
     children = sanitized["breakdown"][0]["children"]
 
     assert "content" not in sanitized["breakdown"][0]
-    assert children[0]["content"] == "{\"name\": \"search\"}"
+    assert children[0]["content"] == '{"name": "search"}'
     assert "content" not in children[1]
     assert children[2] == "junk"
 
@@ -324,7 +321,7 @@ def test_system_items_lose_content_after_full_sanitize_pipeline(_system_prompt_h
     usage = {
         "breakdown": [
             {"key": "system_prompt", "content": "机密提示词"},
-            {"role": "tool_schema", "content": "{\"name\": \"search\"}"},
+            {"role": "tool_schema", "content": '{"name": "search"}'},
         ]
     }
 
@@ -335,7 +332,7 @@ def test_system_items_lose_content_after_full_sanitize_pipeline(_system_prompt_h
     assert system_item["description"] == cb.SYSTEM_PROMPT_PLACEHOLDER
     assert system_item["redacted"] is True
     # 工具 schema 是唯一保留正文的明细行
-    assert schema_item["content"] == "{\"name\": \"search\"}"
+    assert schema_item["content"] == '{"name": "search"}'
 
 
 def test_sanitize_context_usage_passthrough_and_llm_calls_removal(_system_prompt_hidden):

@@ -1,10 +1,11 @@
 """officecli_adapter 参数解析纯函数的分支覆盖补测。"""
+
 import os
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
     _embedded_property_indices,
@@ -92,9 +93,7 @@ def test_parse_args_help_and_unknown_subcommand():
 
 def test_command_path_values_skips_remote_and_json():
     """远程 URL 与 JSON 值不参与路径解析（174->175）。"""
-    command = parse_officecli_args(
-        ["get", "https://example.com/a.docx", "/sheet/p[1]", "--save", "/tmp/out.docx"]
-    )
+    command = parse_officecli_args(["get", "https://example.com/a.docx", "/sheet/p[1]", "--save", "/tmp/out.docx"])
     values = command_path_values(command, "/mnt/user-data/workspace")
     # https 文件被跳过，只剩 --save 的输出路径（--save 在下标 3，值在下标 4）
     assert [(index, path) for index, path in values] == [(4, "/tmp/out.docx")]
@@ -127,12 +126,8 @@ def test_translate_command_args_rewrites_embedded_and_inline_options():
     """translate_command_args 覆盖 image: 前缀（194->195）与 --prop 内嵌重写（199->200）。"""
     from apps.chat_data_app.agent.workspace.officecli_adapter import translate_command_args
 
-    command = parse_officecli_args(
-        ["set", "/tmp/a.docx", "--prop", "src=image:/tmp/pic.png", "--out=/tmp/out.docx"]
-    )
-    translated = translate_command_args(
-        command, "/mnt/user-data/workspace", lambda p: p.replace("/tmp", "/mnt/ws")
-    )
+    command = parse_officecli_args(["set", "/tmp/a.docx", "--prop", "src=image:/tmp/pic.png", "--out=/tmp/out.docx"])
+    translated = translate_command_args(command, "/mnt/user-data/workspace", lambda p: p.replace("/tmp", "/mnt/ws"))
     assert list(translated) == [
         "set",
         "/mnt/ws/a.docx",
