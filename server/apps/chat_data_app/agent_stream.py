@@ -33,6 +33,7 @@ from .agent import (
     IdentityContext,
     ModelInvocationConfig,
     resolve_agent_runtime_options,
+    get_subagent_hot_defaults,
     build_unified_system_prompt,
     get_checkpointer,
 )
@@ -1658,12 +1659,7 @@ async def _run_chat_data_agent_stream(
         runtime_options = resolve_agent_runtime_options(
             user_id=user_id,
             override=(options or {}).get("runtime_options"),
-            explore_subagent_enabled=bool(
-                await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")
-            ),
-            plan_subagent_enabled=bool(
-                await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")
-            ),
+            **await get_subagent_hot_defaults(),
         )
         workspace_paths, workspace_runtime, semantic_materialize_note = (
             await _prepare_agent_workspace_runtime(

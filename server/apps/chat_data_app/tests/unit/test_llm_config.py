@@ -441,6 +441,7 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
         "bash_enabled": True,
         "explore_subagent_enabled": False,
         "plan_subagent_enabled": False,
+        "general_purpose_subagent_enabled": False,
     }
     assert result["user_overridable"] is True
     assert result["context_window"] == 256000

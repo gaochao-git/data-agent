@@ -367,6 +367,18 @@ export interface Message {
   toolCallId?: string
   toolName?: string
   contextCompression?: ChatDataContextCompressionEvent
+  /** 助手气泡生成统计（输出 tokens / 纯模型生成时长 / 速度），message_end 时由 usage 现算，历史消息暂无 */
+  generationStats?: MessageGenerationStats
+}
+
+// 助手气泡生成统计：分母 ≈ 整轮墙钟时间 − 工具执行时间（纯模型生成时间）
+export interface MessageGenerationStats {
+  /** 输出 token 总数（后端按模型返回的 usage 累加，非估算） */
+  outputTokens: number
+  /** 估算的纯模型生成时长（毫秒） */
+  durationMs: number
+  /** 生成速度（tokens/s） */
+  tokensPerSecond: number
 }
 
 // 用户消息附件（文件卡片展示用）

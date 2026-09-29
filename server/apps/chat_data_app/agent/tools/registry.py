@@ -181,6 +181,12 @@ PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({
     "parse_document",
 })
 
+# general-purpose 在基础排除集之上额外排除 bash_run：业内通行的通用执行角色
+# （对齐 deepagents/Claude Code 的 general-purpose），保留文件写工具与查询工具
+# （产出交付物、执行汇总需要），bash_run 沿用 data-explore/plan 的保守口径不开放
+# （任意执行面只在主智能体按 bash_enabled 开关注册）。
+GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({"bash_run"})
+
 __all__ = [
     "ToolBuildContext",
     "ToolSpec",
@@ -189,4 +195,5 @@ __all__ = [
     "SUBAGENT_BASE_EXCLUDED_TOOL_NAMES",
     "DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES",
     "PLAN_EXTRA_EXCLUDED_TOOL_NAMES",
+    "GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES",
 ]

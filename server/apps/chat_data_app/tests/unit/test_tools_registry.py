@@ -21,6 +21,7 @@ from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions  # noqa
 from apps.chat_data_app.agent.tools.registry import (  # noqa: E402
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+    GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
     provided_tool_names,
@@ -77,6 +78,7 @@ def test_exclusion_sets_reference_registered_tools_only():
         ("SUBAGENT_BASE", SUBAGENT_BASE_EXCLUDED_TOOL_NAMES),
         ("DATA_EXPLORE", DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES),
         ("PLAN", PLAN_EXTRA_EXCLUDED_TOOL_NAMES),
+        ("GENERAL_PURPOSE", GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES),
     ):
         unknown = excluded - registered
         assert not unknown, f"{label} 排除集引用了未注册工具: {sorted(unknown)}"

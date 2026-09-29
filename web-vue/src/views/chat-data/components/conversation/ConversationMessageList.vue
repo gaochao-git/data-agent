@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
-import { formatDateTimeValue, renderMarkdown } from '../../utils'
+import { formatDateTimeValue, formatGenerationSpeed, formatGenerationStatsDetail, renderMarkdown } from '../../utils'
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import ToolCallList from '../ToolCallList.vue'
@@ -20,6 +20,8 @@ interface Props {
   conversationId?: string | null
   /** 本轮 Run 仍活跃（流式进行中 / 链式接续 / 等待用户 / 恢复订阅）时抑制底部 footer */
   runActive?: boolean
+  /** 生成中的实时速率（tokens/s，前端估算）；null 表示暂不展示 */
+  liveGenerationSpeed?: number | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -34,6 +36,7 @@ const props = withDefaults(defineProps<Props>(), {
     toolCall.renderType === 'queryResult' && Boolean(toolCall.renderId)
   ),
   runActive: false,
+  liveGenerationSpeed: null,
 })
 
 const emit = defineEmits<{
@@ -429,6 +432,17 @@ const handleCopyAssistantMessage = async (message: Message) => {
                 <i class="fa-regular fa-copy text-[11px]"></i>
                 <span>复制</span>
               </button>
+              <el-tooltip
+                v-if="message.generationStats"
+                :content="formatGenerationStatsDetail(message.generationStats)"
+                placement="top"
+                effect="light"
+              >
+                <span class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400">
+                  <i class="fa-solid fa-bolt text-[10px]"></i>
+                  {{ formatGenerationSpeed(message.generationStats) }}
+                </span>
+              </el-tooltip>
             </AssistantMessageFooter>
           </div>
 
@@ -437,6 +451,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse"></span>
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:120ms]"></span>
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
+            <span v-if="liveGenerationSpeed" class="whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
           </div>
         </template>
       </div>

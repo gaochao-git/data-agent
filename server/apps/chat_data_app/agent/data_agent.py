@@ -30,11 +30,13 @@ from .middleware.steering import create_steering_middleware
 from .prompts.chat_data import (
     DATA_EXPLORE_SUBAGENT_PROMPT,
     PLAN_SUBAGENT_PROMPT,
+    GENERAL_PURPOSE_SUBAGENT_PROMPT,
     build_unified_system_prompt,
 )
 from .tools.registry import (
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+    GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
     ToolBuildContext,
@@ -119,7 +121,8 @@ def assemble_tools(
 
 
 # 子智能体工具可见性策略（SUBAGENT_BASE_EXCLUDED_TOOL_NAMES /
-# DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES / PLAN_EXTRA_EXCLUDED_TOOL_NAMES）
+# DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES / PLAN_EXTRA_EXCLUDED_TOOL_NAMES /
+# GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES）
 # 单一事实源在 tools/registry.py，本模块按名字导入以保持既有引用路径不变。
 
 DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
@@ -135,6 +138,16 @@ PLAN_SUBAGENT_DESCRIPTION = (
     "报告类任务按办公技能 report-workflow 产出需求说明、样式清单与大纲。"
     "只规划不执行，计划写入会话工作区，只回传计划路径与步骤清单。"
     "适合多步骤报告、跨数据源综合分析等先规划后执行的任务。"
+    "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
+    "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
+)
+
+GENERAL_PURPOSE_SUBAGENT_NAME = "general-purpose"
+GENERAL_PURPOSE_SUBAGENT_DESCRIPTION = (
+    "通用执行：受委派在隔离上下文完成多步执行任务——按计划/要求生成报告、Excel、"
+    "Word、HTML 等交付物，批量文件加工，执行语义查询并汇总落盘。"
+    "可写 workspace/outputs，回传结论摘要与产物路径清单，产物展示由主智能体完成。"
+    "适合中间过程大体量、只需要结论与交付物的执行环节。"
     "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
@@ -192,6 +205,20 @@ def build_subagent_middleware(
             tools=_filter_subagent_tools(
                 tools,
                 SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+            ),
+            model=model,
+            model_id=model_id,
+            available_skills_xml=available_skills_xml or "",
+            memory_block=memory_block or "",
+        ))
+    if runtime_options.general_purpose_subagent_enabled:
+        specs.append(SubagentSpec(
+            name=GENERAL_PURPOSE_SUBAGENT_NAME,
+            description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
+            system_prompt=GENERAL_PURPOSE_SUBAGENT_PROMPT,
+            tools=_filter_subagent_tools(
+                tools,
+                SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
             ),
             model=model,
             model_id=model_id,

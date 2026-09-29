@@ -28,7 +28,7 @@ import SkillCommandMenu from './SkillCommandMenu.vue'
 import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
-import { parseDateTimeValue, formatLocalDateTime } from '../../utils'
+import { computeGenerationStats, computeLiveGenerationSpeed, parseDateTimeValue, formatLocalDateTime } from '../../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
@@ -469,6 +469,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopSteerRestorePolling()
+  stopLiveGenerationSpeed()
   // 卸载时中止主 SSE 流:useSqlGenerator 对 AbortError 静默返回,不会误报错误
   stopGeneration()
 })
@@ -1507,6 +1508,32 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
   }
 }
 
+// 生成速度统计（输出 tokens / 估算纯模型生成时长 / tok/s）：message_end 收口时现算现挂，
+// 历史消息与本轮未收口的气泡没有该数据，footer 不展示。
+const attachGenerationStats = (messageId: string, usage: ChatDataTokenUsage | null | undefined, runStartedAtMs: number) => {
+  const message = messages.value.find(item => item.id === messageId && item.role === 'assistant')
+    ?? (activeAssistantMessageId.value
+      ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
+      : null)
+  if (message?.role === 'assistant') {
+    message.generationStats = computeGenerationStats(usage, { runStartedAtMs, runEndedAtMs: Date.now() }) ?? undefined
+  }
+}
+
+// ---- 生成中的实时速率（500ms 节拍）----
+// 分子 = 流出正文的 token 粗估（CJK 1 字/token，其余 4 字符/token），分母 = 墙钟 − 工具执行时间；
+// message_end 收口后由 attachGenerationStats 的精确值接管，ticker 停走。
+const liveGenerationSpeed = ref<number | null>(null)
+let liveSpeedTimerId: ReturnType<typeof setInterval> | null = null
+
+const stopLiveGenerationSpeed = () => {
+  if (liveSpeedTimerId !== null) {
+    clearInterval(liveSpeedTimerId)
+    liveSpeedTimerId = null
+  }
+  liveGenerationSpeed.value = null
+}
+
 const removeEmptyActiveAssistant = () => {
   const activeId = activeAssistantMessageId.value
   if (!activeId) return
@@ -1908,6 +1935,29 @@ const submitAnalysisQuery = async (
     clearMentionFiles()
   }
   isGenerating.value = true
+  // 本轮发起时刻（客户端时钟）：生成速度分母的起点，与 onMessageEnd 的客户端时刻同源，无跨机时钟偏差
+  const runStartedAtMs = Date.now()
+  liveGenerationSpeed.value = null
+  liveSpeedTimerId = setInterval(() => {
+    const active = activeAssistantMessageId.value
+      ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
+      : null
+    // 工具调用参数也是模型输出的大头（file_edit 等结构化参数），与工具时长同窗过滤，不计历史轮次
+    const toolArgsText = [...toolCallsMap.value.values()]
+      .filter(tool => (
+        (tool.status === 'generating' && tool.started_at_ms == null)
+        || (tool.started_at_ms != null && tool.started_at_ms >= runStartedAtMs - 2000)
+      ))
+      .map(tool => JSON.stringify(tool.args || {}))
+      .join('')
+    liveGenerationSpeed.value = computeLiveGenerationSpeed({
+      streamedText: `${active?.content || ''}${toolArgsText}`,
+      thinkingText: (active?.thinkingSegments || []).map(segment => segment.content).join(''),
+      toolSpansMs: [...toolCallsMap.value.values()],
+      runStartedAtMs,
+      nowMs: Date.now(),
+    })
+  }, 500)
   activeToolCallId.value = null
   let startedRunId: string | null = null
   let completedNextRunId: string | null = null
@@ -1989,6 +2039,7 @@ const submitAnalysisQuery = async (
         skillNames: options.skillNames?.length ? options.skillNames : null,
         onMessageEnd: (payload) => {
           if (payload.usage) tokenUsage.value = payload.usage
+          attachGenerationStats(assistantMessageId, payload.usage, runStartedAtMs)
           updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
         },
         onTokenUsage: (usage) => {
@@ -2085,6 +2136,7 @@ const submitAnalysisQuery = async (
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
+    stopLiveGenerationSpeed()
     // 流结束（含异常中断）后清掉未完成的"上下文压缩中"占位
     removeCompressionPlaceholders()
 
@@ -2464,6 +2516,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
           :run-active="isGenerating || hasActiveRun"
+          :live-generation-speed="liveGenerationSpeed"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"
         >
