@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-
 import os
 import uuid
 from datetime import datetime
@@ -28,6 +27,7 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # 多模态图片附件限制：作为 content blocks 直接进入模型消息的准入条件
 from apps.chat_data_app.agent.workspace.uploaded_file_parser import IMAGE_EXTENSIONS  # noqa: F401
+
 MAX_IMAGES_PER_MESSAGE = 4
 
 # 允许上传的文件类型白名单（唯一来源；与前端 AnalysisConversation.vue 的 ACCEPTED_FILE_TYPES

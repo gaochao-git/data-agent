@@ -22,11 +22,10 @@ from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import
     composite_metric_verbalization,
     derived_metric_filter_leaves,
     derived_metric_verbalization,
-    resolve_derived_metric,
     resolve_composite_metric,
+    resolve_derived_metric,
     substitute_composite_formula,
 )
-
 
 # ---------------------------------------------------------------- 周期
 

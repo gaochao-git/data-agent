@@ -7,10 +7,10 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from apps.chat_data_app.services import conversation_service as conversation_module
-from utils.models import Base, UserThread
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
+from apps.chat_data_app.services import conversation_service as conversation_module
+from utils.models import Base, UserThread
 
 
 async def seed_conversation(conversation_id: str, *, title: str = None, user_id: str = "u1", agent_id: str = "agent_a") -> None:

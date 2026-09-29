@@ -1,6 +1,6 @@
+import json
 import os
 import sys
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -13,21 +13,28 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from apps.chat_data_app.agent import data_agent
-from apps.chat_data_app.agent.agent_runtime import normalize_response_tool_call_names
-from apps.chat_data_app.agent.middleware import context_compression, context_usage
-from apps.chat_data_app.agent.middleware import message_integrity, tool_call_history_repair
-from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
-from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
-from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
-from apps.chat_data_app.agent.tool_results import build_tool_result_recovery, merge_tool_result_recovery_artifact
-from apps.chat_data_app.agent import agent_runtime
 from langchain.agents.middleware import ToolErrorMiddleware
+
+from apps.chat_data_app.agent import agent_runtime, data_agent
+from apps.chat_data_app.agent.agent_runtime import normalize_response_tool_call_names
 from apps.chat_data_app.agent.context.context_budget import (
     ContextBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,
 )
+from apps.chat_data_app.agent.middleware import (
+    context_compression,
+    context_usage,
+    message_integrity,
+    tool_call_history_repair,
+)
+from apps.chat_data_app.agent.middleware.context_compression import (
+    build_context_compression_update,
+    compress_messages_for_state,
+)
+from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
+from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
+from apps.chat_data_app.agent.tool_results import build_tool_result_recovery, merge_tool_result_recovery_artifact
 
 
 class FakeChatModel:

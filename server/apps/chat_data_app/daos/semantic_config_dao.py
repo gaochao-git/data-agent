@@ -10,6 +10,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from utils.logger import get_logger
 from utils.models import SemanticConfig
+
 from .dao_session import session_scope
 from .datasource_dao_helpers import _batch_items, _format_time, _load_json
 

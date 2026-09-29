@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from utils.logger import get_logger
 from apps.chat_data_app.services.setting_service import get_runtime_setting
-from .agent_inbox_service import AgentRunLeaseLostError, AgentInboxService, agent_inbox_service
+from utils.logger import get_logger
+
+from .agent_inbox_service import AgentInboxService, AgentRunLeaseLostError, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
 from .chat_data_stream_request import ChatDataStreamRequest
 from .redis_event_bus import RedisEventBus
@@ -253,8 +254,8 @@ class AgentRunRuntime:
             )
 
     async def _list_runnable_runs(self, limit: int) -> list[str]:
-        from utils.database import get_session
         from apps.chat_data_app.daos.agent_inbox_dao import agent_inbox_dao
+        from utils.database import get_session
 
         async with get_session() as session:
             rows = await agent_inbox_dao.list_runnable_runs(session, datetime.now(), limit)

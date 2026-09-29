@@ -8,11 +8,12 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from utils.database import get_session
-from utils.models import ChatDataDashboard, ChatDataDashboardPanel
 from utils.logger import get_logger
+from utils.models import ChatDataDashboard, ChatDataDashboardPanel
+
 from ...daos.dashboard_dao import DashboardDao
 
 logger = get_logger(__name__)

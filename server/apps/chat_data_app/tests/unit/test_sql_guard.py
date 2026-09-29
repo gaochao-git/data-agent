@@ -20,7 +20,6 @@ from apps.chat_data_app.services.sql_run.sql_guard import (
     validate_sql,
 )
 
-
 # ============ 管线规则：单语句与命令类型 ============
 
 def test_clean_select_and_metadata_commands_pass():

@@ -4,7 +4,7 @@
 提供语义查询参数的格式化功能。
 """
 
-from typing import Any, List, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def _format_expression_operand(operand: Any) -> str:

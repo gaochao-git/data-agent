@@ -14,17 +14,17 @@ from utils.logger import get_logger
 from ...runtime_config import DEFAULT_ROW_LIMIT
 from ..core.filter_normalization import normalize_time_filter_leaf
 from ..core.input_validator import InputValidator
-from ..core.semantic_sql.filter_compiler import ensure_safe_sql_expression
 from ..core.query_plan import (
     SemanticQueryPlanContext,
     is_composite_metric,
     semantic_table_alias,
 )
 from ..core.semantic_sql.compiler import SemanticSQLCompiler
+from ..core.semantic_sql.filter_compiler import ensure_safe_sql_expression
 from .semantic_query_plan_builder import (
     assemble_dimension_filter_node,
-    builder_node_alias,
     build_metric_base_configs,
+    builder_node_alias,
     check_mixed_derived_periods,
     collect_filter_node_tables,
     metric_func_column,

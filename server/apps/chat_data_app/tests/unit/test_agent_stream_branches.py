@@ -2,7 +2,14 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, HumanMessageChunk, ToolMessage, ToolMessageChunk
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+)
 
 from apps.chat_data_app import agent_run_support, agent_stream
 from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest

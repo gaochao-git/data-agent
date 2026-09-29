@@ -17,16 +17,18 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from ossie import OSIDataType, OSIDocument, OSISemanticModel
 from pydantic import ValidationError
 
+from utils.logger import get_logger
+
 from ..core.common import LOGICAL_TYPE_VALUES, normalize_relationship_type
 from .semantic_quality_checker import RULES as _QUALITY_RULES
-from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -8,13 +8,14 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
+
+from ..services.llm_config import get_chat_data_llm
 from .middleware.tool_call_normalizer import (
     create_tool_call_name_normalizer_middleware,
     normalize_response_tool_call_names,  # noqa: F401  向后兼容 re-export，原定义已下沉至 middleware
 )
 from .middleware.tool_call_rate_alert import create_tool_call_rate_alert_middleware
 from .middleware.tool_timing import create_tool_timing_middleware
-from ..services.llm_config import get_chat_data_llm
 
 logger = get_logger(__name__)
 

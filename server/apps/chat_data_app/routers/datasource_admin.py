@@ -12,7 +12,6 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from ..schema import (
-    DbConnectionRequest,
     DatasourceColumnDictGenerateRequest,
     DatasourceColumnDictUpdateRequest,
     DatasourceGroupCreateRequest,
@@ -22,10 +21,10 @@ from ..schema import (
     DatasourceTableGroupsUpdateRequest,
     DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
+    DbConnectionRequest,
 )
 from ..services.datasource.manager import get_datasource_manager, get_datasource_sync_timeout_seconds
 from ..services.semantic.run.semantic_config_service import get_semantic_config_service
-from .dependencies import _get_current_user
 from .datasource_helpers import (
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
@@ -34,6 +33,7 @@ from .datasource_helpers import (
     _merge_health_status,
     _normalize_source_item,
 )
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 from . import JSON_API_RESPONSES
@@ -475,7 +475,11 @@ async def get_admin_datasource_table_column_dicts(datasource_id: str, table_name
 # 供既有测试按原模块属性名引用。
 from ..services.datasource.column_dict_generate import (  # noqa: E402
     find_datasource_column as _find_datasource_column,
+)
+from ..services.datasource.column_dict_generate import (
     generate_column_dict_candidates,
+)
+from ..services.datasource.column_dict_generate import (
     # 本模块未直接使用，但测试按 routers.datasource_admin._parse_... 打桩，属有意重导出
     parse_column_dict_generate_response as _parse_column_dict_generate_response,  # noqa: F401
 )

@@ -4,20 +4,19 @@
 """
 
 import inspect
-from typing import Callable, Literal, Optional, Dict, Any, List
+from typing import Any, Callable, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status as http_status
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from auth import AuthenticationError, get_forwarded_user
 from utils.error_codes import ErrorCode
-from utils.response import business_response
 from utils.logger import get_logger
-from auth import get_forwarded_user, AuthenticationError
+from utils.response import business_response
 
-from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
-from ..agent_run_support import materialize_conversation_semantic_models
-from ..services import conversation_service as conversation
+from .. import AGENT_ID
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
@@ -30,7 +29,9 @@ from ..agent.run.agent_inbox_service import (
 from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
 from ..agent.run.completion_options import parse_file_selections
-from .. import AGENT_ID
+from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..agent_run_support import materialize_conversation_semantic_models
+from ..services import conversation_service as conversation
 
 logger = get_logger(__name__)
 

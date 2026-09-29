@@ -11,10 +11,10 @@ from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
 
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
-from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 
 logger = get_logger(__name__)
 

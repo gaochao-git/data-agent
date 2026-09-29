@@ -13,17 +13,16 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.core.query_plan import is_derived_metric
-from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import (
     derive_period_date_range,
     derived_metric_filter_leaves,
     derived_metric_verbalization,
     resolve_derived_metric,
 )
-
 
 NOW = datetime(2026, 9, 5, 14, 30, 45)
 
@@ -583,6 +582,7 @@ def _schema_metric(**overrides):
 
 def test_schema_rejects_atomic_with_formula():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     with pytest.raises(ValueError, match="不能配置 formula"):
@@ -591,6 +591,7 @@ def test_schema_rejects_atomic_with_formula():
 
 def test_schema_rejects_atomic_base_metric_without_compare():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     with pytest.raises(ValueError, match="不允许配置 base_metric"):
@@ -604,6 +605,7 @@ def test_schema_allows_legacy_compare_metric_with_base_metric():
 
 def test_schema_rejects_derived_missing_base_metric():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     with pytest.raises(ValueError, match="缺少 base_metric"):
@@ -612,6 +614,7 @@ def test_schema_rejects_derived_missing_base_metric():
 
 def test_schema_rejects_composite_with_base_metric():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     with pytest.raises(ValueError, match="不能配置 base_metric"):
@@ -623,6 +626,7 @@ def test_schema_rejects_composite_with_base_metric():
 
 def test_schema_rejects_atomic_with_period_filters():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     with pytest.raises(ValueError, match="不能配置 period/filters"):
@@ -634,6 +638,7 @@ def test_schema_rejects_atomic_with_period_filters():
 
 def test_schema_normalizes_filter_operator_and_rejects_unknown():
     import pytest
+
     from apps.chat_data_app.schema import SemanticMetric
 
     metric = _schema_metric(

@@ -8,6 +8,13 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+import apps.chat_data_app.services.sql_run.parser as sql_parser
+from apps.chat_data_app.services.semantic.core.formatter import (
+    format_error_message,
+    format_params_for_display,
+    format_sql_for_display,
+)
+from apps.chat_data_app.services.semantic.core.input_validator import InputValidator
 from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import (
     DialectRegistry,
     HiveDialect,
@@ -15,14 +22,11 @@ from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import (
     SQLDialect,
     get_dialect,
 )
-from apps.chat_data_app.services.semantic.core.formatter import (
-    format_error_message,
-    format_params_for_display,
-    format_sql_for_display,
-)
-from apps.chat_data_app.services.semantic.core.input_validator import InputValidator
-from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
+from apps.chat_data_app.services.semantic.run.semantic_query_service import (
+    SemanticCompileOptions,
+    compile_semantic_ai_dsl,
+)
 from apps.chat_data_app.services.sql_run.parser import (
     _is_query_sql,
     _parse_sql,
@@ -32,7 +36,6 @@ from apps.chat_data_app.services.sql_run.parser import (
     extract_top_level_limit_count,
     prepare_sql_for_execution,
 )
-import apps.chat_data_app.services.sql_run.parser as sql_parser
 
 
 def test_formatter_outputs_display_text_and_truncates_sql():

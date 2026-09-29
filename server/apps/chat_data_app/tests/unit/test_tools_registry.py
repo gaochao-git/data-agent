@@ -20,8 +20,8 @@ from apps.chat_data_app.agent.data_agent import (  # noqa: E402
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions  # noqa: E402
 from apps.chat_data_app.agent.tools.registry import (  # noqa: E402
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
-    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
+    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
     provided_tool_names,

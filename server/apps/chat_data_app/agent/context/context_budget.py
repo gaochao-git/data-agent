@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import copy
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
-
-from utils.logger import get_logger
 
 from apps.chat_data_app.services.llm_config import (
     get_chat_data_model_configs,
@@ -25,6 +23,7 @@ from apps.chat_data_app.services.runtime_config import (
     is_context_usage_system_prompt_visible,
     read_compression_trigger_ratio_env,
 )
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

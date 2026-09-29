@@ -14,24 +14,25 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel
 from utils.logger import get_logger
+from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel
+
+# _ORM_SESSION 在本模块未被直接使用，但测试按 datasource_dao._ORM_SESSION 打桩，属有意重导出
+from .dao_session import _ORM_SESSION, session_scope, transaction_scope  # noqa: F401
 from .datasource_dao_helpers import (
     _batch_items,
     _column_dict_is_empty,
     _format_time,
     _load_json,
     _merge_table_indexes_for_sync,
-    _normalize_table_indexes_payload,
     _normalize_column_dict,
+    _normalize_table_indexes_payload,
     _parse_member_source_entries,
     _parse_member_source_entry,
     _parse_member_sources_text,
     _parse_source_line,
     _unique_non_empty_texts,
 )
-# _ORM_SESSION 在本模块未被直接使用，但测试按 datasource_dao._ORM_SESSION 打桩，属有意重导出
-from .dao_session import _ORM_SESSION, session_scope, transaction_scope  # noqa: F401
 from .semantic_config_dao import SemanticConfigDao
 
 logger = get_logger(__name__)

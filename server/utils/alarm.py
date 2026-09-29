@@ -9,7 +9,6 @@ from langchain_core.exceptions import ModelConnectionError, ModelTimeoutError
 
 from utils.logger import get_alarm_logger, get_logger
 
-
 logger = get_logger(__name__)
 
 MAX_ALARM_MESSAGE_LENGTH = 500

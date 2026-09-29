@@ -10,17 +10,19 @@ from apps.chat_data_app.agent.tools.officecli_run import (
     create_officecli_run_tool,
     run_officecli_command,
 )
-from apps.chat_data_app.services.agent_run import conversation_workspace as cw  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
 from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
 from apps.chat_data_app.agent.workspace import (
     workspace_sandbox_backend as sandbox_backend_module,
+)
+from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
+from apps.chat_data_app.services.agent_run import (
+    conversation_workspace as cw,  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
 )
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
     ensure_conversation_workspace,
 )
-from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
 
 
 def _write_fake_officecli(tmp_path, log_path) -> str:

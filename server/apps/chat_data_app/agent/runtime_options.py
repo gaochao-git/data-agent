@@ -39,9 +39,9 @@ def get_chat_data_default_runtime_options() -> AgentRuntimeOptions:
     from ..services.runtime_config import (
         CHAT_DATA_DEFAULT_BASH_ENABLED,
         CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
-        CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
-        CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
         CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED,
+        CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
+        CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
     )
 
     return AgentRuntimeOptions(

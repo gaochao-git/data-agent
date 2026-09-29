@@ -4,12 +4,12 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.workspace.artifact_registry import parse_chart_spec_payload_value
 from apps.chat_data_app.chart_types import (
     CHART_TYPES,
     is_supported_chart_type_input,
     normalize_chart_type,
 )
-from apps.chat_data_app.agent.workspace.artifact_registry import parse_chart_spec_payload_value
 
 
 def test_chart_types_use_canonical_values_only():

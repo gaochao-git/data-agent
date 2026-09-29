@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from utils.logger import get_logger
 from utils.models import ChatDataSetting
+
 from ..daos.dao_session import transaction_scope
 
 logger = get_logger(__name__)

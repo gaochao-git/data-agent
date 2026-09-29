@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Request
 
 from auth import AuthenticationError
-
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..schema import (
     SemanticConfigBatchToggleRequest,
     SemanticConfigCreateRequest,
@@ -20,30 +20,41 @@ from ..schema import (
 )
 from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic.run.semantic_history_learning_service import (
-    SemanticHistoryLearningService,
-    _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
-    _history_belongs_to_config as _service_history_belongs_to_config,
-    _load_history_conversation_context,
-    build_semantic_history_learning_service,
-)
-from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist
-from ..services.semantic.run.semantic_quality_checker import check_cross_model_metrics, get_semantic_quality_checker, grade_for_score
+from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist, plan_column_dict_fills
 from ..services.semantic.run.semantic_config_service import (
     OssieImportWriteError as _OssieImportWriteError,
+)
+from ..services.semantic.run.semantic_config_service import (
     can_mutate_semantic_config,
     dedupe_semantic_config_ids,
     get_semantic_config_service,
     is_private_semantic_config_owner,
     is_public_semantic_config,
-    load_semantic_physical_columns as _load_physical_columns,
     persist_ossie_imports_in_transaction,
     prepare_ossie_import_models,
     quality_findings_for_imports,
     quality_findings_for_save,
     validate_semantic_config_for_save,
 )
-from ..services.semantic.run.chat_data_ossie_importer import plan_column_dict_fills
+from ..services.semantic.run.semantic_config_service import (
+    load_semantic_physical_columns as _load_physical_columns,
+)
+from ..services.semantic.run.semantic_history_learning_service import (
+    SemanticHistoryLearningService,
+    _load_history_conversation_context,
+    build_semantic_history_learning_service,
+)
+from ..services.semantic.run.semantic_history_learning_service import (
+    _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
+)
+from ..services.semantic.run.semantic_history_learning_service import (
+    _history_belongs_to_config as _service_history_belongs_to_config,
+)
+from ..services.semantic.run.semantic_quality_checker import (
+    check_cross_model_metrics,
+    get_semantic_quality_checker,
+    grade_for_score,
+)
 from ..services.sql_run.parser import extract_physical_tables
 from .dependencies import _get_current_user
 

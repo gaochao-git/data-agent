@@ -9,14 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..schema import QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest
-from ..services.sql_run.providers import get_query_favorite_service
 from ..services.sql_run.favorite_service import (
     QueryFavoriteNotFoundError,
     QueryFavoriteOperationNotAllowedError,
     QueryFavoriteService,
     QueryFavoriteValidationError,
 )
+from ..services.sql_run.providers import get_query_favorite_service
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

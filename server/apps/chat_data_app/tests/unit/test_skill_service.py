@@ -1,7 +1,7 @@
+import asyncio
 import json
 import os
 import sys
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -12,10 +12,10 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.plugins import loader as plugins_loader_module
 from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
 from apps.chat_data_app.agent.skills.skill_service import SkillService, skill_service
-from apps.chat_data_app.agent.plugins import loader as plugins_loader_module
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 

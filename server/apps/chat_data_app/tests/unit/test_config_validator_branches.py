@@ -20,7 +20,6 @@ from apps.chat_data_app.services.semantic.core import config_validator as cv
 from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 
-
 # ---------------------------------------------------------------------------
 # 表结构：直接喂给 validate_semantic_relationships
 # ---------------------------------------------------------------------------

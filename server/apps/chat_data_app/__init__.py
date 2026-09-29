@@ -15,13 +15,13 @@ def _init_app() -> None:
     """初始化路由与对话注册。"""
     global router
     try:
-        from .routes import router as app_router
         from .agent import get_data_agent_graph
         from .agent_stream import sql_completion_handler
         from .routers.conversations import (
             register_agent,
             register_completion_handler,
         )
+        from .routes import router as app_router
     except Exception:
         traceback.print_exc()
         raise

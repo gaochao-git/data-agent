@@ -11,13 +11,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.services.agent_schedule import schedule_service as service_module
 from apps.chat_data_app.services.agent_schedule.schedule_service import (
-    ScheduleFieldsUpdate,
-    UpdateOperator,
     AgentScheduleConversationInvalidError,
     AgentScheduleLimitExceededError,
     AgentScheduleNotFoundError,
     AgentScheduleService,
     AgentScheduleValidationError,
+    ScheduleFieldsUpdate,
+    UpdateOperator,
 )
 from utils.models import Base, ChatDataAgentInbox, ChatDataAgentSchedule, ChatDataAgentScheduleRun, UserThread
 

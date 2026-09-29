@@ -23,6 +23,11 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
 
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
+    build_runtime_skill_snapshot_async,
+    is_runtime_skill_snapshot_ready,
+    runtime_skills_snapshot_dir_from_workspace,
+)
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, conversation_thread_dir
@@ -35,11 +40,6 @@ from .workspace_special_services import (
     workspace_artifact_service,
     workspace_office_preview_service,
     workspace_tool_result_service,
-)
-from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
-    build_runtime_skill_snapshot_async,
-    is_runtime_skill_snapshot_ready,
-    runtime_skills_snapshot_dir_from_workspace,
 )
 
 logger = get_logger(__name__)

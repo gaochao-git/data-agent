@@ -7,7 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-
 SERVER_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "api" / "openapi.json"
 

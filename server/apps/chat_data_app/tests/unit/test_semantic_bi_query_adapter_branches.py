@@ -23,7 +23,6 @@ from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     load_runtime_semantic_config_strict,
 )
 
-
 SEMANTIC_CONFIG = {
     "source_type": "mysql",
     "dimensions": [

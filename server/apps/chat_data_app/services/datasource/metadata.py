@@ -14,19 +14,20 @@ from pyhive import hive
 
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
+
+from ..runtime_config import read_positive_int_env
+from ..setting_service import get_runtime_setting
 from .credentials import (
+    HIVE_SOCKET_TIMEOUT_SECONDS,
     add_http_user_params,
     apply_hive_socket_timeout,
     build_hive_connect_params,
     build_http_auth_headers,
     get_http_auth_token,
-    HIVE_SOCKET_TIMEOUT_SECONDS,
     open_http_client,
     resolve_hive_credentials,
     resolve_mysql_credentials,
 )
-from ..runtime_config import read_positive_int_env
-from ..setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 

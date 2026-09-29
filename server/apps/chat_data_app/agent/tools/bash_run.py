@@ -6,8 +6,8 @@ from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import truncate_output
-from .common import tool_result_payload
 
+from .common import tool_result_payload
 
 DEFAULT_TIMEOUT_SECONDS = 20
 MAX_TIMEOUT_SECONDS = 120

@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.daos.uploaded_file_dao import UploadedFileDao
 from apps.chat_data_app.routers import uploaded_files as uploaded_files_routes
 from apps.chat_data_app.services.agent_run import uploaded_file_service as ufs
+from utils.error_codes import ErrorCode
 
 
 def response_payload(response):

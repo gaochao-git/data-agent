@@ -19,6 +19,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
 import auth  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
@@ -26,15 +29,13 @@ from apps.chat_data_app.routers import datasource_public as datasource_public_ro
 from apps.chat_data_app.routers import evaluation as evaluation_routes  # noqa: E402
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes  # noqa: E402
 from apps.chat_data_app.services.dashboard import spec_service as dashboard_spec_service  # noqa: E402
-from apps.chat_data_app.services.sql_run import providers as query_providers  # noqa: E402
 from apps.chat_data_app.services.semantic.run import (  # noqa: E402
     semantic_model_repository,
     semantic_query_service,
 )
+from apps.chat_data_app.services.sql_run import providers as query_providers  # noqa: E402
 from utils.crypto import decrypt_env_value  # noqa: E402
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler  # noqa: E402
-from fastapi.exceptions import RequestValidationError  # noqa: E402
-from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 SERVICE_AUTH_TOKEN_PLAIN = decrypt_env_value("SERVICE_AUTH_TOKEN")
 auth.SERVICE_AUTH_TOKEN = SERVICE_AUTH_TOKEN_PLAIN
@@ -549,9 +550,9 @@ def _no_db_workspace_date(monkeypatch):
     与单元测试 conftest 同口径：仅覆盖 agent_run_support / 路由 / 上传服务三个导入方，
     会话归属等已有各自的 fake/monkeypatch 通道。
     """
+    import apps.chat_data_app.agent_run_support as agent_run_support_module
     from apps.chat_data_app.routers import conversation_workspace as cw_routes
     from apps.chat_data_app.services.agent_run import uploaded_file_service
-    import apps.chat_data_app.agent_run_support as agent_run_support_module
 
     async def _stub_date(conversation_id, *, user_id):
         return None

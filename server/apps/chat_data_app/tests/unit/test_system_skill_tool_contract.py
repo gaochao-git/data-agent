@@ -11,7 +11,6 @@ from pathlib import Path
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL, OFFICE_SKILL, SKILL_CREATOR_SKILL
 
-
 SYSTEM_SKILLS_ROOT = Path(__file__).resolve().parents[2] / "agent" / "skills"
 
 # 合并前的三个技能名：不得再出现在任何技能文档里（残留即指向不存在的技能）

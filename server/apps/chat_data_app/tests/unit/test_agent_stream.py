@@ -1,13 +1,13 @@
+import json
 import os
 import sys
-import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
-from contextlib import asynccontextmanager
 
-import pytest
 import httpx
 import openai
+import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -15,33 +15,33 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking, parse_file_selections
+from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
 from apps.chat_data_app.agent_run_support import (
     _prepare_conversation_workspace_sync,
     prepare_conversation_workspace,
 )
 from apps.chat_data_app.agent_stream import (
+    AgentRunStreamFailedError,
+    _append_reasoning_segment,
     _coerce_tool_args,
     _extract_reasoning_content,
+    _file_selection_mention_suffix,
+    _finish_running_tool,
     _format_reasoning_for_display,
     _format_sse,
     _format_thinking_event,
     _format_tool_event,
-    _is_tool_result_error,
-    _validate_workspace_file_selections,
-    _file_selection_mention_suffix,
-    _append_reasoning_segment,
-    _parse_tool_args_buffer,
     _generate_chat_data_stream,
-    _finish_running_tool,
+    _is_tool_result_error,
     _model_failure_user_message,
+    _parse_tool_args_buffer,
     _register_running_tool,
     _resolve_active_tool_call_id,
+    _validate_workspace_file_selections,
     sql_completion_handler,
-    AgentRunStreamFailedError,
 )
-from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
-from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
@@ -1447,13 +1447,15 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
 
 # ---- 图片附件准入（vision_attachments 路径标记，base64 由 middleware 请求层装载） ----
 
+from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
+from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
 from apps.chat_data_app.services.agent_run.message_compose import (
     is_image_attachment as _is_image_attachment,
+)
+from apps.chat_data_app.services.agent_run.message_compose import (
     select_vision_attachments as _select_vision_attachments,
 )
 from apps.chat_data_app.services.agent_run.uploaded_file_service import MAX_IMAGES_PER_MESSAGE
-from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
-from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 
 # 图片大小上限（字节）：与注册表默认值（CHAT_DATA_MAX_IMAGE_SIZE_MB=5）一致，显式传参。
 _VISION_LIMIT = 5 * 1024 * 1024

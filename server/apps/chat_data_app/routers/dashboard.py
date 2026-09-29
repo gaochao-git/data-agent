@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..chart_types import get_chart_type_label
 from ..schema import (
     DashboardCreateRequest,
@@ -23,9 +24,9 @@ from ..schema import (
     PanelUpdateRequest,
 )
 from ..services.dashboard import runtime as dashboard_runtime
-from ..services.dashboard.spec_service import create_dashboard_from_spec_payload
-from ..services.dashboard.service import PanelWritePayload, get_dashboard_service
 from ..services.dashboard.query_metadata import generate_query_metadata
+from ..services.dashboard.service import PanelWritePayload, get_dashboard_service
+from ..services.dashboard.spec_service import create_dashboard_from_spec_payload
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

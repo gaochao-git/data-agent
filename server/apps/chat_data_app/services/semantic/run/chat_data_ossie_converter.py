@@ -12,15 +12,14 @@ from typing import Any
 import yaml
 
 from ..core.common import normalize_logical_type, normalize_relationship_type
-from ..core.query_plan import is_derived_metric as _is_derived_metric
 from ..core.query_plan import is_composite_metric as _is_composite_metric
+from ..core.query_plan import is_derived_metric as _is_derived_metric
 from ..core.query_plan import parse_formula_refs
 from .semantic_query_plan_builder import (
     derived_metric_verbalization,
     resolve_composite_metric,
     substitute_composite_formula,
 )
-
 
 _DATATYPE_MAP = {
     "string": "String",
@@ -270,11 +269,11 @@ def _load_ossie_types() -> tuple[Any, ...]:
             OSICustomExtension,
             OSIDataset,
             OSIDataType,
+            OSIDialectExpression,
             OSIDimension,
             OSIDocument,
-            OSIField,
             OSIExpression,
-            OSIDialectExpression,
+            OSIField,
             OSIMetric,
             OSIRelationship,
             OSISemanticModel,

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Iterable, Optional
 
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.database import get_session as default_get_session

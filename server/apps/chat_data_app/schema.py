@@ -5,6 +5,7 @@ ChatData API 数据模型定义
 import json
 from datetime import datetime
 from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
+
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL

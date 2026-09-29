@@ -7,25 +7,10 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT
-
+from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
 from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     _absolute_command_path_tokens,
-)
-from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
-from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
-    SandboxExecutionSessionRef,
-    run_command_in_sandbox,
-)
-from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
-    sandbox_path_to_visible,
-    sandbox_visible_path,
-    sandbox_workspace_dir,
-)
-from apps.chat_data_app.agent.workspace.workspace_session import (
-    OPENSANDBOX_BACKEND,
-    get_workspace_execution_session,
 )
 from apps.chat_data_app.agent.workspace.workspace_ops import (
     sandbox_artifact_payload,
@@ -43,8 +28,22 @@ from apps.chat_data_app.agent.workspace.workspace_ops import (
     sandbox_write_text_file,
     sandbox_write_tool_result,
 )
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
+    SandboxExecutionSessionRef,
+    run_command_in_sandbox,
+)
+from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
+    sandbox_path_to_visible,
+    sandbox_visible_path,
+    sandbox_workspace_dir,
+)
 from apps.chat_data_app.agent.workspace.workspace_search import sandbox_grep_text
+from apps.chat_data_app.agent.workspace.workspace_session import (
+    OPENSANDBOX_BACKEND,
+    get_workspace_execution_session,
+)
 from apps.chat_data_app.agent.workspace.workspace_sync import sync_sandbox_working_trees
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 
 
 @dataclass

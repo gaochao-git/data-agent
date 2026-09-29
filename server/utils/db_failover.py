@@ -27,8 +27,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import threading
+from dataclasses import dataclass
 
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 

@@ -236,7 +236,7 @@ async def test_task_tool_survives_missing_stream_writer(monkeypatch):
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
-            yield "updates", {"model": {"messages": [AIMessage(content="结论")]}} 
+            yield "updates", {"model": {"messages": [AIMessage(content="结论")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ..schema import ApiResponse
 
-
 JSON_API_RESPONSES = {200: {"model": ApiResponse}}
 SSE_RESPONSES = {
     200: {

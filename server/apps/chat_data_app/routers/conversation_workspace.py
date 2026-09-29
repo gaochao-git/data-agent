@@ -5,32 +5,40 @@ from __future__ import annotations
 import os
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request, status as http_status
+from fastapi import APIRouter, HTTPException, Request
+from fastapi import status as http_status
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
+from ..agent.skills.skill_service import skill_service
 from ..schema import SkillImportFromWorkspaceRequest
 from ..services.agent_run.conversation_workspace import (
     WorkspaceArchiveTooLargeError,
     WorkspaceFileDeleteConflictError,
     archive_conversation_workspace_directory,
     can_access_conversation_workspace,
-    delete_conversation_workspace_file as delete_workspace_file_for_conversation,
     ensure_conversation_workspace,
     get_conversation_created_date,
-    list_conversation_workspace_files as list_workspace_files_for_conversation,
     read_conversation_query_result,
-    read_conversation_workspace_file as read_workspace_file_for_conversation,
     read_conversation_workspace_raw_file,
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
 )
-from ..agent.skills.skill_service import skill_service
-from .dependencies import _get_current_user
+from ..services.agent_run.conversation_workspace import (
+    delete_conversation_workspace_file as delete_workspace_file_for_conversation,
+)
+from ..services.agent_run.conversation_workspace import (
+    list_conversation_workspace_files as list_workspace_files_for_conversation,
+)
+from ..services.agent_run.conversation_workspace import (
+    read_conversation_workspace_file as read_workspace_file_for_conversation,
+)
 from . import BINARY_RESPONSES, JSON_API_RESPONSES
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ChatData 会话工作区文件"], responses=JSON_API_RESPONSES)

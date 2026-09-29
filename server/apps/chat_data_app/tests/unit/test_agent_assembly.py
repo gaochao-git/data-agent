@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 import pytest  # noqa: E402
 
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
-    AgentAssemblySpec,
     CHAT_DATA_AGENT_SPEC,
+    AgentAssemblySpec,
     DatasourceContext,
     IdentityContext,
     assemble_tools,

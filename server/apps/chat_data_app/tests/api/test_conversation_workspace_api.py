@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import conversation_workspace as workspace_routes
+from utils.error_codes import ErrorCode
 
 
 def _install_accessible_workspace(monkeypatch):

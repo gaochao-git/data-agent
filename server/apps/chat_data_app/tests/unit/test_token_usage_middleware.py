@@ -11,13 +11,19 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from langchain_core.messages import BaseMessage
+
 from apps.chat_data_app.agent.middleware.context_usage import (
     SYSTEM_PROMPT_PLACEHOLDER,
+    _extract_result_messages,
+    _get_agent_context_usage,
+    _merge_response_usage,
+    _request_model_name,
     bind_context_usage_middleware,
-    build_request_breakdown,
-    build_usage_from_llm_calls,
     build_message_breakdown,
     build_prompt_breakdown,
+    build_request_breakdown,
+    build_usage_from_llm_calls,
     compact_token_usage_for_state,
     count_messages_tokens,
     count_tools_tokens,
@@ -26,13 +32,7 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     estimate_text_tokens,
     estimate_tokens,
     invoke_with_context_usage,
-    _extract_result_messages,
-    _get_agent_context_usage,
-    _merge_response_usage,
-    _request_model_name,
 )
-
-from langchain_core.messages import BaseMessage
 
 
 def _build_request_messages(request):
@@ -46,9 +46,11 @@ def _build_request_messages(request):
         if isinstance(message, BaseMessage)
     )
     return messages
+from langchain_core.messages import AIMessage, ToolMessage
+
 from apps.chat_data_app.agent.context.context_budget import (
-    ContextInputLimitExceededError,
     ContextBudget,
+    ContextInputLimitExceededError,
     ContextRequestBudget,
     build_context_usage_payload,
     get_model_context_budget,
@@ -57,7 +59,6 @@ from apps.chat_data_app.agent.context.context_budget import (
     validate_context_budget_startup_config,
 )
 from apps.chat_data_app.services.runtime_config import get_context_window
-from langchain_core.messages import AIMessage, ToolMessage
 
 
 def test_estimate_tokens_uses_project_formula():

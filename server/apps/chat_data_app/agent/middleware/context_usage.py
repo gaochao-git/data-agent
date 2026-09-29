@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
 import weakref
+from typing import Any
 
 from langchain.agents.middleware import wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
@@ -14,16 +14,18 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
+from apps.chat_data_app.services.runtime_config import get_context_compression_config
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
+
 from ..context.context_budget import (
-    ContextBudget,
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
     SYSTEM_PROMPT_PLACEHOLDER,
+    ContextBudget,
     ContextRequestBudget,
-    build_runtime_context_summary_message,
     build_context_usage_payload,
+    build_runtime_context_summary_message,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
@@ -34,7 +36,6 @@ from ..context.context_budget import (
     merge_context_summaries,
     sanitize_context_usage_for_response,
 )
-from apps.chat_data_app.services.runtime_config import get_context_compression_config
 from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
 
 logger = get_logger(__name__)

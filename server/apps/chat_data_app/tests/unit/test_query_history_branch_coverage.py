@@ -6,11 +6,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from auth import AuthenticationError
 from fastapi import HTTPException
 
 from apps.chat_data_app.routers import query_history as qh
 from apps.chat_data_app.services.sql_run.task_service import QueryTaskNotFoundError
+from auth import AuthenticationError
 
 
 def _payload(resp):

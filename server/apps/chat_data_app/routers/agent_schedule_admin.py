@@ -13,14 +13,15 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..schema import AgentScheduleEnabledRequest, AgentSchedulePauseRequest
 from ..services.agent_schedule.schedule_service import (
     AgentScheduleNotFoundError,
     AgentScheduleValidationError,
     agent_schedule_service,
 )
-from .dependencies import _get_current_user
 from . import JSON_API_RESPONSES
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 

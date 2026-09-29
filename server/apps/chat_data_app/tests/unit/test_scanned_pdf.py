@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import fitz
 import pytest
-from types import SimpleNamespace
 
 from apps.chat_data_app.agent.workspace import scanned_pdf
 from apps.chat_data_app.agent.workspace.scanned_pdf import (

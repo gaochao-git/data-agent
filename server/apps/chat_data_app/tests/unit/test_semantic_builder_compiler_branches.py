@@ -9,8 +9,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
-from apps.chat_data_app.services.semantic.run import semantic_query_service as compiler_module
 from apps.chat_data_app.services.semantic.run import semantic_query_service as ai_compiler_module
+from apps.chat_data_app.services.semantic.run import semantic_query_service as compiler_module
 from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     SemanticBIQueryAdapter,
     _as_list,

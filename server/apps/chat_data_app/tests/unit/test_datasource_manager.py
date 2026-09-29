@@ -1,9 +1,9 @@
-import os
-import sys
 import asyncio
 import copy
-import httpx
+import os
+import sys
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -15,18 +15,18 @@ from apps.chat_data_app.services.datasource import credentials as datasource_cre
 from apps.chat_data_app.services.datasource import manager as datasource_manager_module
 from apps.chat_data_app.services.datasource import permission as execution_permission
 from apps.chat_data_app.services.datasource.manager import (
+    DataSourceManager,
     DatasourceWriteAudit,
     _build_member_source_identity,
     _build_member_source_text_line,
     _build_meta_source_config,
     _build_source_line,
     _get_template_member_source_config,
+    _merge_member_source_lines,
     _normalize_member_source_config,
     _normalize_query_executor_type,
     _read_positive_int_env,
-    _merge_member_source_lines,
     _validate_member_source_configs,
-    DataSourceManager,
 )
 from apps.chat_data_app.services.datasource.metadata import MetadataAdapterNotFoundError
 

@@ -8,7 +8,6 @@ import json
 
 import pytest
 
-
 _DEFAULT_MODELS = [
     {"id": "gpt-4o-mini", "temperature": 0.2, "context_window": 128000, "vlm": False,
      "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False}},
@@ -59,9 +58,9 @@ def _no_db_workspace_date(monkeypatch):
     ``conversation_workspace`` 内部直调（如 async wrapper 委托测试）与
     日期解析本身的专项测试不受影响，由各用例自行控制。
     """
+    import apps.chat_data_app.agent_run_support as agent_run_support_module
     from apps.chat_data_app.routers import conversation_workspace as cw_routes
     from apps.chat_data_app.services.agent_run import uploaded_file_service
-    import apps.chat_data_app.agent_run_support as agent_run_support_module
 
     async def _stub_date(conversation_id, *, user_id):
         return None

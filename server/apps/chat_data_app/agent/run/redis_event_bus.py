@@ -16,7 +16,6 @@ from redis.retry import Retry
 
 from utils.crypto import decrypt_env_value
 
-
 RUN_STREAM_PREFIX = "chatdata:run:"
 RUN_STREAM_SUFFIX = ":events"
 STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "3600")), 60)

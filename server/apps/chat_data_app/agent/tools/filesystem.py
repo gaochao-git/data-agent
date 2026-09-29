@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.services.runtime_config import FILE_READ_MAX_CHARS
+
 from .common import (
     DEFAULT_READ_LIMIT,
     MAX_GLOB_RESULTS,
@@ -20,7 +21,6 @@ from .common import (
     json_dumps,
     tool_result_payload,
 )
-
 
 _DEFAULT_GLOB_RESULTS = 100
 _DEFAULT_GREP_RESULTS = 100

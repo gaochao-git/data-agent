@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from apps.chat_data_app.routers import conversations as conversation_router
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
-from apps.chat_data_app.routers import conversations as conversation_router
 
 
 def payload(response):

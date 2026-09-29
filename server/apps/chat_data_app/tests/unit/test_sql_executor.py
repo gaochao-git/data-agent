@@ -4,6 +4,7 @@ import sys
 from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -11,10 +12,10 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+import apps.chat_data_app.services.sql_run.parser as sql_parser  # noqa: F401  # 测试按模块属性引用 parser，属有意重导出
 from apps.chat_data_app.services.datasource import credentials as datasource_credentials
 from apps.chat_data_app.services.sql_run import executor as sql_executor
 from apps.chat_data_app.services.sql_run import sql_guard
-import apps.chat_data_app.services.sql_run.parser as sql_parser  # noqa: F401  # 测试按模块属性引用 parser，属有意重导出
 from apps.chat_data_app.services.sql_run.parser import prepare_sql_for_execution, validate_single_sql_statement
 from utils import alarm as alarm_module
 

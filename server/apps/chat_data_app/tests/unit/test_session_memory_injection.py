@@ -15,11 +15,11 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from apps.chat_data_app.agent import data_agent
-from apps.chat_data_app.agent.middleware import context_compression, subagents as subagents_module
+from apps.chat_data_app.agent.middleware import context_compression
+from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import SubagentSpec
 from apps.chat_data_app.agent.prompts import chat_data
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-
 
 # ---------------------------------------------------------------------------
 # 主图 system prompt 注入

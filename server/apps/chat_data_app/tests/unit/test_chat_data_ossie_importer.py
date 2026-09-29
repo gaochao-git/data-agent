@@ -12,8 +12,6 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from utils.error_codes import ErrorCode
-
 from ossie import OSIDataType
 
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
@@ -25,6 +23,7 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     parse_ossie_document,
     plan_column_dict_fills,
 )
+from utils.error_codes import ErrorCode
 
 
 def _full_config() -> dict:

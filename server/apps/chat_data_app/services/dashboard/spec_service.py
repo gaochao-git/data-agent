@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import inspect
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 
 from ...chart_types import get_chart_type_label, is_supported_chart_type_input, normalize_chart_type
-from .service import PanelWritePayload, get_dashboard_service
 from ..datasource.manager import get_datasource_manager
-from ..semantic.run.semantic_model_repository import load_semantic_model
 from ..semantic.core.query_plan import is_composite_metric, is_derived_metric
 from ..semantic.run.semantic_config_service import get_semantic_config_service
-from ..semantic.run.semantic_query_service import compile_semantic_ai_dsl
-from ..semantic.run.semantic_query_service import SemanticAIQueryAdapter, SemanticCompileOptions
+from ..semantic.run.semantic_model_repository import load_semantic_model
+from ..semantic.run.semantic_query_service import (
+    SemanticAIQueryAdapter,
+    SemanticCompileOptions,
+    compile_semantic_ai_dsl,
+)
 from ..setting_service import get_runtime_setting
 from ..sql_run.executor import get_executor, resolve_query_timeout
+from .service import PanelWritePayload, get_dashboard_service
 
 logger = get_logger(__name__)
 

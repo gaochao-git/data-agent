@@ -13,7 +13,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from apps.chat_data_app.agent.middleware import context_compression
 
-
 # ---------------------------------------------------------------------------
 # 摘要 LLM 调用
 # ---------------------------------------------------------------------------

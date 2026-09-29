@@ -4,20 +4,26 @@ import re
 from contextvars import ContextVar
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
-from .dialect import get_dialect
 from . import filter_compiler
-from .join_compiler import _build_from_ref, build_join_clauses  # noqa: F401  历史兼容 re-export，测试从本模块访问
-from .row_limit import normalize_row_limit
-from .select_compiler import compile_select_fields
+from .dialect import get_dialect
 from .filter_compiler import (
     _effective_table_ref,
     _physical_table_ref,
     _rewrite_expression_table_qualifier,
-    build_filter_tree_clause as compile_filter_tree_clause,
-    build_having_leaf_clause as compile_having_leaf_clause,
-    build_where_leaf_clause as compile_where_leaf_clause,
     ensure_safe_sql_expression,
 )
+from .filter_compiler import (
+    build_filter_tree_clause as compile_filter_tree_clause,
+)
+from .filter_compiler import (
+    build_having_leaf_clause as compile_having_leaf_clause,
+)
+from .filter_compiler import (
+    build_where_leaf_clause as compile_where_leaf_clause,
+)
+from .join_compiler import _build_from_ref, build_join_clauses  # noqa: F401  历史兼容 re-export，测试从本模块访问
+from .row_limit import normalize_row_limit
+from .select_compiler import compile_select_fields
 
 AGG_EXPR_PATTERN = re.compile(r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$", re.IGNORECASE)
 SQL_SAFE_FUNCTIONS = {

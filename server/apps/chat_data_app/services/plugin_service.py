@@ -14,9 +14,12 @@ from typing import Any, Dict
 
 from utils.logger import get_logger
 from utils.models import ChatDataPlugin
+
 from ..agent.mcp.manager import reset_mcp_tool_manager
 from ..agent.plugins.installer import (
     install_plugin_from_zip_bytes,
+)
+from ..agent.plugins.installer import (
     uninstall_plugin as uninstall_plugin_files,
 )
 from ..agent.plugins.loader import (

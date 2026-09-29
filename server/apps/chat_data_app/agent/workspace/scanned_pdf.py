@@ -16,11 +16,10 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from langchain_core.messages import HumanMessage
 
-from utils.logger import get_logger
-
 from apps.chat_data_app.agent.workspace.uploaded_file_parser import get_image_size_limit
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

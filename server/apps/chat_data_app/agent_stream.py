@@ -1,17 +1,16 @@
 """ChatData completion handler."""
 
-import json
 import asyncio
+import json
 import re
 import time
-
-import openai
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+import openai
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import (
@@ -21,57 +20,48 @@ from langchain_core.messages import (
     ToolMessage,
     ToolMessageChunk,
 )
+
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
-from .services import conversation_service as conversation
-from .agent.plugins.loader import refresh_plugin_state
+
 from .agent import (
-    create_data_agent,
     AgentRunControls,
     DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
-    resolve_agent_runtime_options,
-    get_subagent_hot_defaults,
     build_unified_system_prompt,
+    create_data_agent,
     get_checkpointer,
+    get_subagent_hot_defaults,
+    resolve_agent_runtime_options,
 )
 from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
+from .agent.mcp.manager import get_mcp_tool_display_name
+from .agent.middleware.steering import SteeringMessageTracker
+from .agent.plugins.loader import refresh_plugin_state
+from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
+from .agent.run.agent_run_event_service import agent_run_event_service
+from .agent.run.agent_run_runtime import agent_run_runtime
+from .agent.run.chat_data_stream_request import ChatDataStreamRequest
+from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
+from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.conversation_runtime import (
     TurnLifecycleHooks,
     TurnPersistenceHooks,
     stream_agent_turn,
 )
-from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
-from .agent.run.conversation_event_service import conversation_event_service
-from .agent.run.agent_run_event_service import agent_run_event_service
-from .agent.run.agent_run_runtime import agent_run_runtime
-from .agent.run.chat_data_stream_request import ChatDataStreamRequest
-from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
-from .agent.middleware.steering import SteeringMessageTracker
-from .agent.mcp.manager import get_mcp_tool_display_name
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
 from .agent.workspace.uploaded_file_parser import get_image_size_limit
 from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
-from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
-from .services.setting_service import get_runtime_setting
-from .services.memory.conversation_memory_service import (
-    after_agent_turn_with_memory,
-    render_session_memory_block,
-)
-from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
-from .services.agent_run.message_compose import (
-    build_file_attachment_text,
-    select_vision_attachments,
-)
+
 # 运行准备与历史持久化层（源模块：agent_run_support），以下均为 handlers 内部直接使用的符号。
 from .agent_run_support import (
     USER_INPUT_OFFLOAD_THRESHOLD,
     _AgentRunPreparationError,
     _AgentRunStreamCallbacks,
-    _LatestModelSnapshotWriter,
     _get_timestamp,
+    _LatestModelSnapshotWriter,
     _load_runtime_skills_xml,
     _mark_agent_resume_checkpointed,
     _merge_message_snapshots,
@@ -88,6 +78,19 @@ from .agent_run_support import (
     _resolve_file_attachments,
     _write_agent_model_snapshot,
 )
+from .services import conversation_service as conversation
+from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
+from .services.agent_run.message_compose import (
+    build_file_attachment_text,
+    select_vision_attachments,
+)
+from .services.memory.conversation_memory_service import (
+    after_agent_turn_with_memory,
+    render_session_memory_block,
+)
+from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.setting_service import get_runtime_setting
+
 # 工具参数流式进度与 SSE 格式化（源模块：tool_stream_progress，agent_stream 行数红线拆出）。
 # re-export 保持既有模块属性引用（含测试）不变。
 from .tool_stream_progress import (

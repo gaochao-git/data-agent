@@ -1,21 +1,17 @@
 """ChatData 技能管理服务。"""
 
+import asyncio
 import mimetypes
 import os
 import re
 import shutil
-import asyncio
-import uuid
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.exc import IntegrityError
 
-from utils.logger import get_logger
-from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
-from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
-from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
 from apps.chat_data_app.daos.skill_dao import SkillDao
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     WORKSPACE_RAW_PREVIEW_MAX_BYTES,
@@ -26,6 +22,11 @@ from apps.chat_data_app.services.agent_run.uploaded_file_service import (
     UPLOAD_CHUNK_SIZE,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting, get_upload_size_limit
+from utils.logger import get_logger
+from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
+
+from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
+from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)

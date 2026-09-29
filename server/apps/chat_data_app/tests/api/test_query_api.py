@@ -1,5 +1,6 @@
+from apps.chat_data_app.services.sql_run import providers as query_providers
+from apps.chat_data_app.services.sql_run import runtime as query_runtime
 from utils.error_codes import ErrorCode
-from apps.chat_data_app.services.sql_run import providers as query_providers, runtime as query_runtime
 
 
 def _add_semantic_join_fixture(fake_datasource_manager):

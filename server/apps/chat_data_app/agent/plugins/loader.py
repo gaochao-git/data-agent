@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from apps.chat_data_app.daos.plugin_dao import PluginDao
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
-from apps.chat_data_app.daos.plugin_dao import PluginDao
 
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,

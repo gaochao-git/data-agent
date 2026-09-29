@@ -17,8 +17,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from auth import AuthenticationError
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes
 from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import evaluation as evaluation_routes
@@ -34,6 +32,8 @@ from apps.chat_data_app.schema import (
     SkillFileUpsertRequest,
     SkillUpdateRequest,
 )
+from auth import AuthenticationError
+from utils.error_codes import ErrorCode
 
 # 直接 await 路由函数时传入的假 Request，只用于占位。
 REQUEST = SimpleNamespace()

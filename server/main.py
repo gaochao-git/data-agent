@@ -1,7 +1,8 @@
 import os
-from pathlib import Path
-import uvicorn
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,15 +15,15 @@ _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
 print(f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}")
 
-from middleware.api_logging import APIAccessLogMiddleware
-from utils.logger import get_logger
-from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
-from utils.sqlite_compat import apply_sqlite_compat  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app.agent.context.context_budget import validate_context_budget_startup_config  # noqa: E402
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime  # noqa: E402
 from apps.chat_data_app.agent.run.agent_schedule_runtime import agent_schedule_runtime  # noqa: E402
+from middleware.api_logging import APIAccessLogMiddleware
 from utils.checkpoint import setup_checkpointer  # noqa: E402
+from utils.logger import get_logger
+from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
+from utils.sqlite_compat import apply_sqlite_compat  # noqa: E402
 
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
 # 用 pysqlite3 替换 sqlite3，解决 deterministic=True 在旧编译 Python 上报错的问题

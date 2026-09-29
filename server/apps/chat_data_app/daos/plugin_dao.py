@@ -10,8 +10,8 @@ from typing import Callable, List, Optional, Set
 
 from sqlalchemy import select, update
 
-from utils.models import ChatDataPlugin
 from utils.database import get_session as default_get_session
+from utils.models import ChatDataPlugin
 
 
 class PluginDao:

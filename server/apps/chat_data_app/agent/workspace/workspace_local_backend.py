@@ -16,10 +16,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
-
 from apps.chat_data_app.agent.workspace.artifact_registry import parse_output_artifact
+from apps.chat_data_app.agent.workspace.officecli_adapter import (
+    command_path_values,
+    parse_officecli_args,
+    translate_command_args,
+)
 from apps.chat_data_app.agent.workspace.runtime import (
     ConversationWorkspaceRuntime,
     WorkspacePathMapping,
@@ -31,17 +33,14 @@ from apps.chat_data_app.agent.workspace.runtime import (
     resolve_workspace_path,
     to_visible_path,
 )
-from apps.chat_data_app.agent.workspace.officecli_adapter import (
-    command_path_values,
-    parse_officecli_args,
-    translate_command_args,
-)
 from apps.chat_data_app.agent.workspace.workspace_search import (
     build_rg_args,
     parse_rg_files_or_counts,
     parse_rg_output,
 )
 from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
+from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
 
 logger = get_logger(__name__)
 

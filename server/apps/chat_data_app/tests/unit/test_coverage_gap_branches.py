@@ -10,7 +10,6 @@ from apps.chat_data_app.agent.middleware import tool_call_normalizer as tcn
 from apps.chat_data_app.agent.run import redis_event_bus as reb
 from apps.chat_data_app.services.semantic.core import filter_normalization as fn
 
-
 # ============ filter_normalization ============
 
 def test_split_text_between_filter_keeps_node_without_two_sides():

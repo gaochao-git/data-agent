@@ -9,10 +9,10 @@ from utils.database import get_session
 from ...daos.query_favorite_dao import QueryFavoriteDao
 from ...daos.query_history_dao import QueryHistoryDao
 from ..datasource.manager import get_datasource_manager
+from .executor import fetch_http_query_task_result, kill_mysql_query, stop_http_query_task
 from .favorite_service import QueryFavoriteService
 from .history_service import QueryHistoryService
 from .task_service import QueryTaskService
-from .executor import fetch_http_query_task_result, kill_mysql_query, stop_http_query_task
 
 query_history_service = QueryHistoryService(QueryHistoryDao(session_context=lambda: get_session()))
 query_task_service = QueryTaskService(

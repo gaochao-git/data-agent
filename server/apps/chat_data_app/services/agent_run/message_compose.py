@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from utils.logger import get_logger
+
 from .uploaded_file_service import (
     IMAGE_EXTENSIONS,
     MAX_IMAGES_PER_MESSAGE,

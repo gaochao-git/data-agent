@@ -25,15 +25,16 @@ from utils.common_util import load_runtime_env  # noqa: E402
 load_runtime_env(SERVER_DIR)
 
 from sqlalchemy import select  # noqa: E402
-from utils.database import get_session  # noqa: E402
-from utils.logger import get_logger  # noqa: E402
-from utils.models import ChatDataPlugin  # noqa: E402
+
 from apps.chat_data_app.agent.plugins.loader import plugins_root  # noqa: E402
 from apps.chat_data_app.agent.plugins.manifest import (  # noqa: E402
     PluginManifest,
     PluginManifestError,
     load_plugin_manifest,
 )
+from utils.database import get_session  # noqa: E402
+from utils.logger import get_logger  # noqa: E402
+from utils.models import ChatDataPlugin  # noqa: E402
 
 logger = get_logger(__name__)
 

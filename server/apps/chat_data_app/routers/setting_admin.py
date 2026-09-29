@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..schema import ChatDataSettingUpsertRequest
 from ..services.setting_service import (
     SettingNotFoundError,
@@ -21,8 +22,8 @@ from ..services.setting_service import (
     reset_all_settings,
     upsert_setting,
 )
-from .dependencies import _get_current_user
 from . import JSON_API_RESPONSES
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 

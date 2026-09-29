@@ -3,9 +3,11 @@ SQL查询元数据生成服务
 使用LLM自动生成查询的标题、描述、分类
 """
 import json
-from ..llm_config import get_chat_data_llm
+
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
+
+from ..llm_config import get_chat_data_llm
 
 logger = get_logger(__name__)
 

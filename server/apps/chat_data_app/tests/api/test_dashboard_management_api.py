@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.schema import (
     DashboardCreateRequest,
@@ -17,6 +16,7 @@ from apps.chat_data_app.schema import (
     PanelUpdateRequest,
 )
 from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
+from utils.error_codes import ErrorCode
 
 
 @pytest.fixture(autouse=True)

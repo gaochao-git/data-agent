@@ -1,7 +1,7 @@
 import asyncio
-from datetime import timedelta
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,11 +14,23 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.tools import bash_run
-from apps.chat_data_app.services.agent_run.conversation_workspace import (
-    ConversationWorkspaceRuntime,
-    SandboxWorkspaceBackend,
-    WorkspacePathMapping,
-    _absolute_command_path_tokens,
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_api as we_api,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_paths as we_paths,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_session as we_session,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sync as we_sync,
 )
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSession,
@@ -27,13 +39,11 @@ from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
 from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
     sandbox_visible_path,
 )
-from apps.chat_data_app.agent.workspace import (
-    workspace_ops as we_ops,
-    workspace_sandbox_api as we_api,
-    workspace_sandbox_paths as we_paths,
-    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
-    workspace_session as we_session,
-    workspace_sync as we_sync,
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    SandboxWorkspaceBackend,
+    WorkspacePathMapping,
+    _absolute_command_path_tokens,
 )
 
 

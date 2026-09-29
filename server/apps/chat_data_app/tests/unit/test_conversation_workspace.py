@@ -1,9 +1,9 @@
+import importlib
+import json
 import os
 import sys
-import uuid
-import json
-import importlib
 import tempfile
+import uuid
 import zipfile
 from datetime import datetime
 from types import SimpleNamespace
@@ -18,23 +18,38 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_module
-from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
-from apps.chat_data_app.agent.workspace import (
-    workspace_local_backend as workspace_local_backend_module,
-    workspace_sandbox_backend as workspace_sandbox_backend_module,
-)
-from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
+from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
+from apps.chat_data_app.agent.workspace import (
+    workspace_local_backend as workspace_local_backend_module,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,  # noqa: F401  # 测试按模块属性引用 workspace_ops，属有意重导出
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_api as we_api,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_api，属有意重导出
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_backend as workspace_sandbox_backend_module,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_paths as we_paths,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_paths，属有意重导出
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
+)
 from apps.chat_data_app.agent.workspace.workspace_ops import _artifact_payload_from_bytes
-from apps.chat_data_app.services.semantic.run import semantic_query_service
-
+from apps.chat_data_app.agent.workspace.workspace_special_services import (
+    WorkspaceOfficePreviewService,
+    stabilize_office_preview_html,
+)
+from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_module
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
-    create_workspace_backend,
     _render_local_office_html,
+    create_workspace_backend,
     ensure_conversation_workspace,
     list_workspace_files,
     read_workspace_text_file,
@@ -42,16 +57,8 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     to_visible_path,
     workspace_runtime_from_state,
 )
-from apps.chat_data_app.agent.workspace.workspace_special_services import (
-    WorkspaceOfficePreviewService,
-    stabilize_office_preview_html,
-)
-from apps.chat_data_app.agent.workspace import (
-    workspace_ops as we_ops,  # noqa: F401  # 测试按模块属性引用 workspace_ops，属有意重导出
-    workspace_sandbox_api as we_api,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_api，属有意重导出
-    workspace_sandbox_paths as we_paths,  # noqa: F401  # 测试按模块属性引用 workspace_sandbox_paths，属有意重导出
-    workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
-    )
+from apps.chat_data_app.services.semantic.run import semantic_query_service
+from utils import tool_result_store
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
@@ -1981,6 +1988,7 @@ async def test_workspace_office_preview_service_stabilizes_and_rechecks_size():
 def test_resolve_skill_snapshot_path_security_rules(tmp_path):
     """本地/沙箱共用的技能路径解析:隐藏名、穿越、前缀越界、symlink 全部拒绝。"""
     import pytest
+
     from utils.skill_paths import resolve_skill_snapshot_path
 
     skill_dir = tmp_path / "demo"

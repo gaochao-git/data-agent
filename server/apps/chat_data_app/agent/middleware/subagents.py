@@ -23,17 +23,7 @@ from itertools import count
 from typing import Annotated, Any, Callable
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentState, AgentMiddleware, ToolErrorMiddleware
-from .context_compression import create_context_compression_middleware
-from .tool_execution_fence import create_tool_execution_fence_middleware
-from ..agent_state import merge_context_compression_events
-from ..context.context_budget import (
-    build_runtime_context_summary_message,
-    count_messages_tokens,
-    count_tools_tokens,
-    estimate_text_tokens,
-    get_model_context_budget,
-)
+from langchain.agents.middleware import AgentMiddleware, AgentState, ToolErrorMiddleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -51,9 +41,20 @@ from apps.chat_data_app.services.runtime_config import (
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
-from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
-from .tool_result import create_tool_result_middleware
+
 from ..agent_runtime import on_tool_error
+from ..agent_state import merge_context_compression_events
+from ..context.context_budget import (
+    build_runtime_context_summary_message,
+    count_messages_tokens,
+    count_tools_tokens,
+    estimate_text_tokens,
+    get_model_context_budget,
+)
+from .context_compression import create_context_compression_middleware
+from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
+from .tool_execution_fence import create_tool_execution_fence_middleware
+from .tool_result import create_tool_result_middleware
 
 logger = get_logger(__name__)
 

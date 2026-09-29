@@ -9,11 +9,11 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from ..services.datasource.manager import get_datasource_manager
-from .dependencies import _get_current_user
 from .datasource_helpers import (
     _get_datasource_column_dict_response,
     _get_datasource_table_column_dicts_response,
 )
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 from . import JSON_API_RESPONSES

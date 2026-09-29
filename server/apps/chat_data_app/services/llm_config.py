@@ -19,7 +19,6 @@ from langchain_core.language_models import BaseChatModel
 from utils.crypto import decrypt_password
 from utils.llm import get_llm
 
-
 DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS = 20000
 
 # ---- 思考能力词表 ----

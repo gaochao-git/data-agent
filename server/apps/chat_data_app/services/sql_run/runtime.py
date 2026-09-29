@@ -14,27 +14,27 @@ import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
-from utils.database import get_session
-from utils.models import ChatDataQueryExecution, ChatDataQueryTask
-from utils.logger import get_logger
 from utils.alarm import emit_dangerous_sql_alarm
+from utils.database import get_session
+from utils.logger import get_logger
+from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 
 from ...daos.query_execution_dao import QueryExecutionDao
 from ...daos.query_task_dao import QueryTaskDao
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
-from . import cache as query_cache
 from ..datasource.manager import get_datasource_manager
 from ..semantic.run.semantic_query_service import compile_semantic_builder_sql
 from ..setting_service import get_runtime_setting
+from . import cache as query_cache
 from .concurrency import run_with_sql_user_datasource_limit
 from .executor import build_effective_sql, fetch_http_query_task_result, get_executor
-from .sql_guard import run_sql_guard
 from .result import (
     QUERY_SUCCEEDED_STATUS,
     build_query_result_payload,
     query_result_status,
     query_result_succeeded,
 )
+from .sql_guard import run_sql_guard
 
 logger = get_logger(__name__)
 

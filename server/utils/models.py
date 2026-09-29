@@ -2,11 +2,11 @@
 SQLAlchemy 数据模型定义
 """
 
-from datetime import datetime
 import json
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Integer, String, DateTime, SmallInteger, Text, Index, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Index, Integer, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func

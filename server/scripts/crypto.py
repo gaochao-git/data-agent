@@ -12,7 +12,13 @@ from dotenv import dotenv_values
 SERVER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_DIR))
 
-from utils.common_util import ACTIVE_ENV_KEY, ENV_KEY, get_local_ip, load_deploy_env_hosts, resolve_deploy_env  # noqa: E402
+from utils.common_util import (  # noqa: E402
+    ACTIVE_ENV_KEY,
+    ENV_KEY,
+    get_local_ip,
+    load_deploy_env_hosts,
+    resolve_deploy_env,
+)
 from utils.crypto import decrypt_password, encrypt_password  # noqa: E402
 
 

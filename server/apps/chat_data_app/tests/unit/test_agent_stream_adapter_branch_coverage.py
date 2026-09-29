@@ -20,8 +20,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app import agent_run_support, agent_stream
-from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
 from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
+from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
 
 
 def _adapter(**kwargs):

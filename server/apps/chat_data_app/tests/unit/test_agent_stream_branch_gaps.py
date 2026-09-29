@@ -20,7 +20,6 @@ from apps.chat_data_app import agent_run_support, agent_stream
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
 from apps.chat_data_app.agent.run.completion_options import normalize_thinking_effort
 
-
 # --------------------------------------------------------------------------- #
 # _normalize_thinking_effort（291-296）
 # --------------------------------------------------------------------------- #

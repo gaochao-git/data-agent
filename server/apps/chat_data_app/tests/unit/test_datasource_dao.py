@@ -12,12 +12,11 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
 from apps.chat_data_app.daos.datasource_dao import (
     _ORM_SESSION,
     DataSourceDao,
 )
-from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
-from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
 from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_member_identity,
     _build_member_source_text_line,
@@ -26,14 +25,15 @@ from apps.chat_data_app.daos.datasource_dao_helpers import (
     _load_json,
     _merge_table_indexes_for_sync,
     _normalize_column_dict,
-    _normalize_table_indexes_payload,
     _normalize_query_executor_type_for_parse,
-    _parse_member_source_entry,
+    _normalize_table_indexes_payload,
     _parse_member_source_entries,
+    _parse_member_source_entry,
     _parse_member_sources_text,  # noqa: F401  # 测试按模块属性引用 _parse_member_sources_text，属有意重导出
     _parse_source_line,
     _unique_non_empty_texts,
 )
+from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
 
 
 def _group_model(group_id: str = "group_a", group_name: str = "订单组", is_default: int = 0):

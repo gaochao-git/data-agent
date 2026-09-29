@@ -1,12 +1,12 @@
 import asyncio
 from types import SimpleNamespace
 
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from apps.chat_data_app.services.sql_run.result import (
     build_query_result_payload,
     query_result_status,
     query_result_succeeded,
 )
-from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from apps.chat_data_app.services.sql_run.task_service import QueryTaskService
 
 

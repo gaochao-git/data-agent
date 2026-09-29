@@ -15,8 +15,8 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
 from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.middleware import tool_result
-from apps.chat_data_app.services.agent_run import conversation_workspace
 from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
+from apps.chat_data_app.services.agent_run import conversation_workspace
 
 
 def _request(

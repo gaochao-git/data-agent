@@ -14,7 +14,6 @@ from langchain_core.messages import (
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 
 from apps.chat_data_app.agent.middleware.subagents import (
-    _StreamCapState,
     _build_trail_snapshot,
     _chunk_reasoning_text,
     _chunk_text_delta,
@@ -24,6 +23,7 @@ from apps.chat_data_app.agent.middleware.subagents import (
     _iter_subagent_stream_events,
     _plain_text,
     _run_subagent_with_events,
+    _StreamCapState,
 )
 
 

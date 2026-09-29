@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -11,6 +10,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
+
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 
 logger = get_logger(__name__)

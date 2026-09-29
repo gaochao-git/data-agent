@@ -8,11 +8,11 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticAIQueryAdapter
-from apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler import compile_query_plan_sql
-from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import get_dialect
 import apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler as compiler
 from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
+from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import get_dialect
+from apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler import compile_query_plan_sql
+from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticAIQueryAdapter
 
 
 def test_builder_sql_compiler_helper_branches():

@@ -4,10 +4,10 @@
 验证用户输入参数的合法性（在 DSL 生成之前）。
 """
 
-from typing import List, Dict, Tuple, Optional, Any
 import logging
 import re
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from .filter_normalization import split_text_between_filter, time_equal_value_to_range
 
@@ -31,6 +31,7 @@ FREE_EXPRESSION_VALUE_TYPE = 'expression'
 # 自由表达式黑名单统一收敛在编译层 filter_compiler，这里按原名字再导出，
 # 保证 AI 链路与 BI 链路（semantic_bi_query_adapter）始终同一份口径。
 from .semantic_sql.filter_compiler import UNSAFE_EXPRESSION_PATTERN  # noqa: E402
+
 LOGICAL_TYPES = {'text', 'number', 'date', 'datetime', 'enum'}
 DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 DATETIME_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')

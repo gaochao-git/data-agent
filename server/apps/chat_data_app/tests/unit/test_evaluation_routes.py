@@ -15,11 +15,15 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
-from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
+from apps.chat_data_app.schema import (
+    AccuracyEvaluationCasesUpsertRequest,
+    AccuracyEvaluationDraftCaseRequest,
+    AccuracyEvaluationRunRequest,
+)
 from apps.chat_data_app.services import evaluation_service as evaluation_llm_service
 from apps.chat_data_app.services.evaluation_service import build_evaluation_service
+from utils.error_codes import ErrorCode
 from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
 

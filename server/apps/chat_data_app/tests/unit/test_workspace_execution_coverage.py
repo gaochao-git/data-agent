@@ -6,10 +6,10 @@
 """
 
 import asyncio
-from datetime import datetime
 import fnmatch
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,17 +21,27 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.workspace import (
+    workspace_ops as we_ops,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_api as we_api,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sandbox_paths as we_paths,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_search as we_search,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_session as we_session,
+)
+from apps.chat_data_app.agent.workspace import (
+    workspace_sync as we_sync,
+)
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
-)
-from apps.chat_data_app.agent.workspace import (
-    workspace_ops as we_ops,
-    workspace_sandbox_api as we_api,
-    workspace_sandbox_paths as we_paths,
-    workspace_search as we_search,
-    workspace_session as we_session,
-    workspace_sync as we_sync,
 )
 
 
@@ -366,7 +376,7 @@ def test_raise_sandbox_create_error_mapping():
     timeout_error = httpx.ConnectTimeout("boom")
     with pytest.raises(ValueError, match="不可达"):
         we_session._raise_sandbox_create_error(timeout_error)
-    wrapped = RuntimeError("wrapped") 
+    wrapped = RuntimeError("wrapped")
     wrapped.__cause__ = httpx.ReadTimeout("slow")
     with pytest.raises(ValueError, match="超时"):
         we_session._raise_sandbox_create_error(wrapped)

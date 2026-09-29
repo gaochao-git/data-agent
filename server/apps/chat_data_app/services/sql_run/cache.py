@@ -12,8 +12,8 @@ from utils.database import get_session
 from utils.logger import get_logger
 
 from ...daos.sql_result_cache_dao import SqlResultCacheDao
-from .result import query_result_status, query_result_succeeded
 from ..setting_service import get_runtime_setting
+from .result import query_result_status, query_result_succeeded
 
 logger = get_logger(__name__)
 

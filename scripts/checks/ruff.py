@@ -6,9 +6,13 @@
     python scripts/checks/ruff.py --target server/apps/chat_data_app
     python scripts/checks/ruff.py --statistics       # 按规则聚合，便于评估存量
 
-口径：规则集与豁免见仓库根 ruff.toml（只开 F/B/SIM 三类 bug 级规则；
-风格类 E501/UP/I 等存量数千条且纯风格，暂不纳入）。ruff 用 ``python -m ruff``
+口径：规则集与豁免见仓库根 ruff.toml（F/B/SIM bug 级三类 + I/W 导入排序与空白符，
+2026-09 扩容；风格类 E501/UP/E402 仍不纳入——E501 存量 2200+ 且字符串/注释不可自动修，
+E402 会误伤文档允许的循环依赖惰性导入）。ruff 用 ``python -m ruff``
 调用——不依赖 PATH，与 verify 里其它步骤共用同一个 fxcjg 解释器，避免版本漂移。
+
+subprocess 固定 cwd=REPO_ROOT：ruff.toml 的 src 按调用方 cwd 解析，不钉死则 I/W 的
+首方包分类随执行目录漂移（手工对拍同理，务必在仓库根执行）。
 
 存量为零即通过，因此**不设 baseline**：lint 告警与复杂度债务不同，前者几乎总能
 就地改掉或就地论证为误报（加 noqa 并写明理由），留 baseline 等于放任积累。

@@ -8,21 +8,21 @@
 import base64
 import binascii
 import json
+import re
 import uuid
 from datetime import datetime
-import re
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
+from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
+from apps.chat_data_app.daos.conversation_dao import ConversationDao
+from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import UserThread
-from apps.chat_data_app.daos.conversation_dao import ConversationDao
-from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
-from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
-from apps.chat_data_app.services.llm_config import get_chat_data_llm
 
 logger = get_logger(__name__)
 # 实例建在本模块：单测通过 monkeypatch 本模块 get_session 打桩，

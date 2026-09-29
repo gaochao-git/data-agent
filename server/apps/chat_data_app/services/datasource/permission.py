@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from .credentials import add_http_user_params, open_http_client
-from .direct_org_codes import get_direct_org_codes
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
+
 from ..runtime_config import read_positive_int_env
+from .credentials import add_http_user_params, open_http_client
+from .direct_org_codes import get_direct_org_codes
 
 logger = get_logger(__name__)
 HTTP_PERMISSION_URL = str(os.getenv("CHAT_DATA_HTTP_PERMISSION_URL") or "").strip()

@@ -10,18 +10,18 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.services.dashboard.spec_service import _is_aggregate_metric
 from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.core.query_plan import is_composite_metric, parse_formula_refs
-from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.semantic_ai_query_adapter import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic.run.semantic_bi_query_adapter import SemanticBIQueryAdapter
+from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
 from apps.chat_data_app.services.semantic.run.semantic_query_plan_builder import (
     composite_metric_verbalization,
     resolve_composite_metric,
     substitute_composite_formula,
 )
-from apps.chat_data_app.services.dashboard.spec_service import _is_aggregate_metric
 
 
 def build_composite_config() -> dict:

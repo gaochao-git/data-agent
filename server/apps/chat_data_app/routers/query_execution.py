@@ -4,23 +4,25 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status as http_status  # noqa: F401  # 测试按模块属性引用 status，属有意重导出
+from fastapi import APIRouter, Depends, HTTPException, Request  # noqa: F401  # 有意重导出，测试按模块属性引用
+from fastapi import status as http_status  # noqa: F401  # 有意重导出，测试按模块属性引用 http_status
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
     QueryTaskCreateRequest,
 )
+from ..services.semantic.run.semantic_query_service import compile_semantic_builder_sql
+from ..services.sql_run.providers import get_query_task_service
 from ..services.sql_run.task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,
     QueryTaskService,
 )
-from ..services.sql_run.providers import get_query_task_service
-from ..services.semantic.run.semantic_query_service import compile_semantic_builder_sql
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

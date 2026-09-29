@@ -8,13 +8,17 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 
-from apps.chat_data_app.agent.tools import data_analyzing
 from apps.chat_data_app import agent_run_support
-from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
-from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
-from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
-from apps.chat_data_app.routers import conversations as conversation_router
 from apps.chat_data_app.agent.run.agent_inbox_service import ClaimedAgentMessages
+from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
+from apps.chat_data_app.agent.tools import data_analyzing
+from apps.chat_data_app.routers import conversations as conversation_router
+from apps.chat_data_app.services.semantic.run import (
+    semantic_conversation_context,
+    semantic_model_repository,
+    semantic_query_service,
+)
+from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 
 
 @pytest.fixture(autouse=True)

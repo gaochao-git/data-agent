@@ -15,10 +15,10 @@ from utils.database import get_session
 from utils.logger import get_logger
 
 from ...daos.query_execution_dao import QueryExecutionDao
-from .service import get_dashboard_service
-from ..sql_run.result import build_query_result_payload, query_result_succeeded
 from ..setting_service import get_runtime_setting
 from ..sql_run.executor import resolve_query_timeout
+from ..sql_run.result import build_query_result_payload, query_result_succeeded
+from .service import get_dashboard_service
 
 logger = get_logger(__name__)
 # 面板批量执行并发上限：运行期经后台配置变量表读取（CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY），

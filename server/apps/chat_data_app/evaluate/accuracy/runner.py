@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import json
-from pathlib import Path
 import re
 import sys
 import time
-from typing import Any
 import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 try:
     from .scorers import score_dsl

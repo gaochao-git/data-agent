@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-
 AsyncHook = Callable[[], Awaitable[None]]
 AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]

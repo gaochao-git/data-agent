@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat_data_app.agent.workspace import runtime_skill_snapshot as snapshot_module
 from apps.chat_data_app.agent.skills import skill_service as skill_service_module
+from apps.chat_data_app.agent.workspace import runtime_skill_snapshot as snapshot_module
 from utils import storage_paths as storage_paths_module
 
 

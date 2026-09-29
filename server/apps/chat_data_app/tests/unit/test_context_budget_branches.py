@@ -21,7 +21,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from apps.chat_data_app.agent.context import context_budget as cb
 
-
 # ---------------------------------------------------------------------------
 # extract_legacy_context_summary（108->110 无前缀 / 110->112 空摘要）
 # ---------------------------------------------------------------------------

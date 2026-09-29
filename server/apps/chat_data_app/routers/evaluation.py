@@ -9,14 +9,22 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-from fastapi import APIRouter, HTTPException, Request, status as http_status
+from fastapi import APIRouter, HTTPException, Request
+from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 
 from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
 from utils.response import business_response
-from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
-from ..services.datasource.manager import get_datasource_manager  # noqa: F401  # 测试按模块属性引用 get_datasource_manager，属有意重导出
+
+from ..schema import (
+    AccuracyEvaluationCasesUpsertRequest,
+    AccuracyEvaluationDraftCaseRequest,
+    AccuracyEvaluationRunRequest,
+)
+from ..services.datasource.manager import (
+    get_datasource_manager,  # noqa: F401  # 测试按模块属性引用 get_datasource_manager，属有意重导出
+)
 from ..services.evaluation_service import (
     EvaluationService,
     accuracy_bp,
@@ -32,9 +40,9 @@ from ..services.evaluation_service import (
     scene_case_set_id,
     validate_eval_case_ids,
 )
-from .dependencies import _get_current_user
-from ..services.semantic.run.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
 from ..services.semantic.core.common import is_time_logical_dimension
+from ..services.semantic.run.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 from . import JSON_API_RESPONSES, SSE_RESPONSES
@@ -397,6 +405,8 @@ def _build_seed_case_candidates(config_id: str, config: Dict[str, Any], business
 from ..services.evaluation_service import (  # noqa: E402
     # 两个下划线别名在本模块未直接使用，但测试按 routers.evaluation._xxx 打桩，属有意重导出
     generate_draft_case_by_llm as _generate_draft_case_by_llm,  # noqa: F401
+)
+from ..services.evaluation_service import (
     looks_like_sql as _looks_like_sql,  # noqa: F401
 )
 

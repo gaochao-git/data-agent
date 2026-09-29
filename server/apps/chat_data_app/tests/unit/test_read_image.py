@@ -16,9 +16,8 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
 from apps.chat_data_app.agent.middleware import image_injection
 from apps.chat_data_app.agent.tools import read_image as read_image_module
-from apps.chat_data_app.services.agent_run import conversation_workspace
 from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
-
+from apps.chat_data_app.services.agent_run import conversation_workspace
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 

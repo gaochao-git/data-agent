@@ -4,25 +4,31 @@ SQL 执行器模块
 支持 MySQL、Hive 的异步查询执行
 通过环境变量配置 SQL 安全限制和结果行数限制
 """
-from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, Tuple, Optional, Callable
-from decimal import Decimal
-from datetime import date, datetime, timedelta
 import asyncio
 import inspect
 import os
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from utils.logger import get_logger
-from utils.alarm import DB_FAIL_DATASOURCE, emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
+from utils.alarm import (
+    DB_FAIL_DATASOURCE,
+    emit_dangerous_sql_alarm,
+    emit_database_connection_alarm,
+    emit_external_api_alarm,
+)
 from utils.db_failover import is_mysql_connection_error
+from utils.logger import get_logger
+
 from ..datasource.credentials import (
+    HIVE_SOCKET_TIMEOUT_SECONDS,
     add_http_user_params,
     apply_hive_socket_timeout,
     build_hive_connect_params,
     build_http_auth_headers,
     get_http_auth_token,
-    HIVE_SOCKET_TIMEOUT_SECONDS,
     open_http_client,
     resolve_execution_source_config,
 )

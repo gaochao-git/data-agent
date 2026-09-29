@@ -4,9 +4,9 @@ SQL 方言适配
 支持不同数据库的 SQL 语法差异。
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Dict
 import logging
+from abc import ABC, abstractmethod
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

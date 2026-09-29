@@ -10,7 +10,7 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 from .common import is_time_logical_dimension
-from .input_validator import FILTER_OPERATORS, _NO_VALUE_FILTER_OPERATORS
+from .input_validator import _NO_VALUE_FILTER_OPERATORS, FILTER_OPERATORS
 from .query_plan import (
     DERIVED_PERIOD_KINDS,
     FORMULA_OPERATOR_PATTERN,

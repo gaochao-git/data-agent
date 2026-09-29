@@ -12,8 +12,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.services.dashboard import service as dashboard_service_module
-from apps.chat_data_app.services.dashboard.service import DashboardService
-from apps.chat_data_app.services.dashboard.service import PanelWritePayload
+from apps.chat_data_app.services.dashboard.service import DashboardService, PanelWritePayload
 from utils.models import Base
 
 

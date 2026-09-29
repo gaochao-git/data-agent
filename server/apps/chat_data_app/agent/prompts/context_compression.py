@@ -6,7 +6,6 @@ import json
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-
 CONTEXT_COMPRESSION_SUMMARY_PROMPT = """你负责将较早对话压缩为 ChatData 智能问数的运行摘要。该摘要会替代原始历史，供后续模型继续执行。
 
 严格规则：

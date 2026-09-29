@@ -18,9 +18,9 @@ from .catalog import (
     warn_long_mcp_descriptions,
 )
 from .config import (
+    MCP_SERVERS_ENV,
     MCPServerConfig,
     MCPServerConfigError,
-    MCP_SERVERS_ENV,
     load_mcp_server_configs,
     parse_mcp_server_config,
 )

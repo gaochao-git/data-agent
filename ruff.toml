@@ -3,8 +3,10 @@
 # 门禁脚本：scripts/checks/ruff.py；本地统一入口：scripts/verify（步骤名 ruff）。
 # 说明：server/ 下没有 pyproject.toml，故用 ruff 官方支持的独立配置文件 ruff.toml。
 #
-# 规则取舍：只开「bug 级」三类，风格/现代化类（E501 行长、UP006/UP045 注解现代化、
-# I001 import 排序等）存量数千条且纯风格，一次性改等于全库大重构，暂不纳入门禁。
+# 规则取舍：bug 级三类 + I/W（2026-09 扩容：import 排序 246 处、空白符 3 处，存量已一次清零）。
+# 风格/现代化类仍不纳入：E501 行长（存量 2200+，字符串/注释不可自动修，另行用 ruff format 治理）、
+# UP006/UP045 注解现代化、E402（会误伤文档允许的循环依赖惰性导入）。
+# 注意：src 按调用方 cwd 解析，手工对拍必须在仓库根执行（门禁脚本已钉死 cwd=REPO_ROOT）。
 
 line-length = 120
 target-version = "py312"
@@ -14,7 +16,9 @@ src = ["server"]
 # F   = pyflakes：未使用 import/变量、重定义等真实错误
 # B   = flake8-bugbear：常见坑——可变默认入参、异常链丢失、zip 无 strict 等
 # SIM = flake8-simplify：冗余分支与啰嗦写法
-select = ["F", "B", "SIM"]
+# I   = isort：import 排序（2026-09 扩容）
+# W   = pycodestyle 警告：行尾空白、文件末行换行（2026-09 扩容）
+select = ["F", "B", "SIM", "I", "W"]
 
 [lint.per-file-ignores]
 # FastAPI 依赖注入的惯用写法就是 `file: UploadFile = File(...)`，此处调函数是必须的，

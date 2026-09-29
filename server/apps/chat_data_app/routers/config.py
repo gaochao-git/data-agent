@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..services.runtime_config import get_chat_data_runtime_config
 from . import JSON_API_RESPONSES
 

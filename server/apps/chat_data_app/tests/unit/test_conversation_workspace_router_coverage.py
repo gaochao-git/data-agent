@@ -8,8 +8,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import Response
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import conversation_workspace as cw_routes
+from utils.error_codes import ErrorCode
 
 
 def response_payload(response):

@@ -13,10 +13,10 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
 from apps.chat_data_app.services.semantic.run.semantic_quality_checker import first_structure_error
+from utils.error_codes import ErrorCode
 
 
 def _structure_error(datasource, metrics=None, dimensions=None, relationships=None):
@@ -31,9 +31,10 @@ from apps.chat_data_app.schema import (
     SemanticConfigUpdateRequest,
     SemanticHistoryLearningRequest,
 )
-from apps.chat_data_app.services.semantic.run import semantic_config_service
-from apps.chat_data_app.services.semantic.run import semantic_history_learning_service
-from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import build_semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run import semantic_config_service, semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import (
+    build_semantic_history_learning_service,
+)
 
 
 def _patch_history_learning_service_session(monkeypatch, session_factory):

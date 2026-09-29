@@ -1,25 +1,27 @@
 """ChatData API 路由聚合入口。"""
 
 from fastapi import APIRouter, Depends, HTTPException
+
 from auth import AuthenticationError, service_token_header, validate_service_token
 from utils.logger import get_logger
+
+from .routers.agent_schedule_admin import router as agent_schedule_admin_router
+from .routers.agent_schedules import router as agent_schedules_router
 from .routers.config import router as config_router
+from .routers.conversation_workspace import router as conversation_workspace_router
 from .routers.conversations import router as conversations_router
+from .routers.dashboard import router as dashboard_router
 from .routers.datasource_admin import router as datasource_admin_router
 from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
-from .routers.conversation_workspace import router as conversation_workspace_router
-from .routers.skills import router as skills_router
-from .routers.dashboard import router as dashboard_router
-from .routers.semantic_config import router as semantic_config_router
-from .routers.uploaded_files import router as uploaded_files_router
+from .routers.plugins import router as plugins_router
+from .routers.query_execution import router as query_execution_router
 from .routers.query_favorites import router as query_favorites_router
 from .routers.query_history import router as query_history_router
-from .routers.query_execution import router as query_execution_router
-from .routers.agent_schedules import router as agent_schedules_router
-from .routers.agent_schedule_admin import router as agent_schedule_admin_router
-from .routers.plugins import router as plugins_router
+from .routers.semantic_config import router as semantic_config_router
 from .routers.setting_admin import router as setting_admin_router
+from .routers.skills import router as skills_router
+from .routers.uploaded_files import router as uploaded_files_router
 
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"

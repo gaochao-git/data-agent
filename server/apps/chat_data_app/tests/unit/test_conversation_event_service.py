@@ -4,14 +4,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import pytest
-from sqlalchemy import select
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
-from apps.chat_data_app.agent.run.conversation_event_service import ConversationEventService
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
+from apps.chat_data_app.agent.run.conversation_event_service import ConversationEventService
+from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from utils.models import Base, ChatDataAgentInbox, ChatDataConversationEvent, UserThread
 
 

@@ -6,9 +6,8 @@ from utils.builtin_skills import (
     builtin_skill_file,
 )
 
-from .security_prompt import SECURITY_PROMPT
 from ..runtime_options import AgentRuntimeOptions
-
+from .security_prompt import SECURITY_PROMPT
 
 # ---------------------------------------------------------------------------
 # 数据上下文格式化（问数与分析两套输入形态统一为一段文本）

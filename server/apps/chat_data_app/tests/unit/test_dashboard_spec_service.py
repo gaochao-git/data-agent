@@ -24,14 +24,14 @@ from apps.chat_data_app.services.dashboard.spec_service import (
     _normalize_filter_node,
     _shorten_dashboard_panel_error,
     _truncate_text,
-    build_panel_sql_from_dashboard_card,
     build_dashboard_panel_plans,
+    build_panel_sql_from_dashboard_card,
     create_dashboard_from_spec_payload,
     execute_dashboard_panel_sql_preflight,
     filter_executable_dashboard_panel_plans,
     get_dashboard_spec_semantic_config,
-    normalize_dashboard_card_layout,
     normalize_dashboard_card_chart_config,
+    normalize_dashboard_card_layout,
     normalize_dashboard_spec_dimensions,
     normalize_dashboard_spec_filters,
     normalize_dashboard_spec_having,
@@ -41,8 +41,8 @@ from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     resolve_dashboard_card_semantic_config_id,
     validate_dashboard_card_structure,
-    validate_dashboard_spec_structure,
     validate_dashboard_spec_payload,
+    validate_dashboard_spec_structure,
 )
 
 

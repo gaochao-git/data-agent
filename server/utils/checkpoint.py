@@ -22,9 +22,10 @@ MySQL 配置：
 import os
 
 from utils.alarm import DB_FAIL_CHECKPOINT, emit_database_connection_alarm
-from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
+
+from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 logger = get_logger(__name__)
 

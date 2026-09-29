@@ -14,13 +14,13 @@ from utils.models import ChatDataQueryExecution
 from ...schema import QueryTaskCreateRequest
 from ..dashboard import runtime as dashboard_runtime
 from . import runtime as query_runtime
+from .history_service import QUERY_TASK_FINAL_STATUSES, QueryHistoryService
 from .result import (
     QUERY_RUNNING_STATUS,
     build_query_result_payload,
     query_result_status,
     query_result_succeeded,
 )
-from .history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 
 logger = get_logger(__name__)
 

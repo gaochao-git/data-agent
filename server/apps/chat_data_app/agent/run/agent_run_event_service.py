@@ -6,9 +6,10 @@ import asyncio
 import json
 import re
 
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from utils.database import get_session
 from utils.logger import get_logger
-from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+
 from .agent_inbox_service import (
     RUN_STATUS_CANCELLED,
     RUN_STATUS_FAILED,
@@ -18,7 +19,6 @@ from .agent_inbox_service import (
     load_run_content,
 )
 from .redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError, build_redis_event_bus
-
 
 _EVENT_NAME_RE = re.compile(r"(?:^|\n)event:\s*([^\n]+)")
 logger = get_logger(__name__)

@@ -13,7 +13,6 @@ from apps.chat_data_app.services import llm_config
 from apps.chat_data_app.services.llm_config import ThinkingCapability
 from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_config
 
-
 # ---------------------------------------------------------------------------
 # 测试辅助：把模型清单写入临时注册表文件
 # ---------------------------------------------------------------------------

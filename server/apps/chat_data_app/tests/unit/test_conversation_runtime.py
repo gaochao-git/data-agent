@@ -10,15 +10,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.run.conversation_runtime import (
-
     TurnLifecycleHooks,
-
     TurnPersistenceHooks,
-
     TurnResourceOptions,
-
     stream_agent_turn,
-
 )
 
 

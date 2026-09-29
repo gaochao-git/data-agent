@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-
 SLOT_KEYS = ("metrics", "dimensions", "filters", "having", "order_by", "limit", "offset")
 DATETIME_STORAGE_FORMAT = "%Y-%m-%d %H:%M:%S"
 

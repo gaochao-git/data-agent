@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-
-from pathlib import Path, PurePosixPath
 import shlex
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from utils.logger import get_logger
+
 from .artifact_registry import parse_output_artifact
 from .workspace_sandbox_api import (
     SandboxExecutionSession,

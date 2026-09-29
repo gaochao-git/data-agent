@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 
 from .common import ensure_dimension_logical_type
 
-
 AGGREGATE_EXPRESSION_PATTERN = re.compile(
     r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$",
     re.IGNORECASE,

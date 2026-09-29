@@ -11,16 +11,16 @@ from langchain_core.messages import HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session
-from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
+from utils.logger import get_logger
 
+from .... import AGENT_ID
 from ....agent.prompts.history_learning import build_history_learning_prompt
 from ....daos.semantic_history_learning_dao import SemanticHistoryLearningDao
-from .... import AGENT_ID
 from ... import conversation_service as conversation
-from ..core.common import LOGICAL_TYPE_VALUES, build_table_columns_map
 from ...llm_config import get_chat_data_llm
 from ...sql_run.parser import extract_physical_tables
+from ..core.common import LOGICAL_TYPE_VALUES, build_table_columns_map
 
 logger = get_logger(__name__)
 

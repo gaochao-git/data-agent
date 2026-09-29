@@ -10,6 +10,7 @@ from auth import AuthenticationError
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
 from ..services.sql_run.history_service import QueryHistoryService
 from ..services.sql_run.providers import (
     get_query_history_remote_result_fetcher,

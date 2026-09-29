@@ -9,9 +9,8 @@ from pathlib import Path
 from docx import Document as _load_docx_document
 from markitdown import MarkItDown
 
-from utils.logger import get_logger
-
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

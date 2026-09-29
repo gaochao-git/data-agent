@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.tools import tool
 
-
 _SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 

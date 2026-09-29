@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from ...datasource.manager import get_datasource_manager
-from ...sql_run.result import query_result_status
 from ...setting_service import get_runtime_setting
+from ...sql_run.result import query_result_status
+from .semantic_ai_query_adapter import SemanticAIQueryAdapter  # noqa: F401
 from .semantic_bi_query_adapter import (  # noqa: F401  历史兼容 re-export，存量调用方与测试从本模块导入
     FORBIDDEN_SEMANTIC_BUILDER_KEYS,
     SemanticBIQueryAdapter,
@@ -21,9 +22,8 @@ from .semantic_bi_query_adapter import (  # noqa: F401  历史兼容 re-export�
     _normalize_alias,
     _parse_aggregate_expression,
 )
-from .semantic_ai_query_adapter import SemanticAIQueryAdapter  # noqa: F401
-from .semantic_model_repository import load_semantic_model
 from .semantic_config_service import get_semantic_config_service
+from .semantic_model_repository import load_semantic_model
 from .semantic_query_plan_builder import normalize_text
 
 

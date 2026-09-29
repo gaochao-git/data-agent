@@ -16,37 +16,32 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import dashboard as dashboard_routes
-from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
-from apps.chat_data_app.services.datasource import column_dict_generate
 from apps.chat_data_app.routers import datasource_helpers as datasource_helper_routes
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes
-from apps.chat_data_app.routers import query_favorites as query_favorites_routes
+from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
+from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
-from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime, spec_service as dashboard_spec_service
-from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
-from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from apps.chat_data_app.routers.datasource_admin import (
+    _parse_column_dict_generate_response,
     clear_default_datasource,
     create_datasource_group,
     delete_datasource,
+    generate_datasource_column_dict,
     get_admin_datasource_column_dict,
     get_admin_datasource_table_column_dicts,
     get_admin_datasources,
-    generate_datasource_column_dict,
     get_datasource_table_groups,
     set_default_datasource,
+    sync_datasource_group_metadata,
     update_datasource_column_dict,
     update_datasource_group_config,
     update_datasource_meta,
     update_datasource_table_business_desc,
     update_datasource_table_groups,
     update_mapped_modules,
-    sync_datasource_group_metadata,
-    _parse_column_dict_generate_response,
 )
 from apps.chat_data_app.routers.datasource_public import (
     get_datasource_column_dict,
@@ -56,16 +51,16 @@ from apps.chat_data_app.routers.datasource_public import (
 from apps.chat_data_app.schema import (
     CompileSemanticBuilderSqlRequest,
     DashboardFromSpecRequest,
-    DbConnectionRequest,
+    DatasourceColumnDictGenerateRequest,
+    DatasourceColumnDictUpdateRequest,
     DatasourceGroupCreateRequest,
     DatasourceGroupMetadataSyncRequest,
     DatasourceGroupUpdateRequest,
-    DatasourceColumnDictGenerateRequest,
-    DatasourceColumnDictUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
     DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
+    DbConnectionRequest,
     ExecuteSqlRequest,
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
@@ -75,6 +70,14 @@ from apps.chat_data_app.schema import (
     QueryFavoriteUpdateRequest,
     QueryTaskCreateRequest,
 )
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
+from apps.chat_data_app.services.dashboard import spec_service as dashboard_spec_service
+from apps.chat_data_app.services.datasource import column_dict_generate
+from apps.chat_data_app.services.sql_run import cache as query_cache
+from apps.chat_data_app.services.sql_run import providers as query_providers
+from apps.chat_data_app.services.sql_run import runtime as query_runtime
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
+from utils.error_codes import ErrorCode
 
 
 @pytest.fixture(autouse=True)

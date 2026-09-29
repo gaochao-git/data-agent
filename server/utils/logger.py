@@ -12,13 +12,12 @@
 import contextlib
 import logging
 import os
-from logging.handlers import TimedRotatingFileHandler
 from contextvars import ContextVar
 from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from typing import Optional
 
 from utils.common_util import get_active_idc, get_local_ip
-
 
 DEFAULT_BACKUP_COUNT = 30  # 保留30天
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)

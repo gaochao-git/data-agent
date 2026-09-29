@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from apps.chat_data_app.agent.data_agent import assemble_tools
+from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     ensure_conversation_workspace,
 )
-from apps.chat_data_app.agent.data_agent import assemble_tools
-from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 
 
 def _build_tools(paths, *, snapshot_skills=None):

@@ -15,7 +15,8 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services.sql_run import cache as query_cache, runtime as query_runtime
+from apps.chat_data_app.services.sql_run import cache as query_cache
+from apps.chat_data_app.services.sql_run import runtime as query_runtime
 
 
 def test_query_runtime_cache_identity_and_flags(monkeypatch):

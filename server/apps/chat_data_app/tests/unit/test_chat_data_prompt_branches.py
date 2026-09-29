@@ -11,7 +11,6 @@ from __future__ import annotations
 from apps.chat_data_app.agent.prompts import chat_data
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 
-
 # ---------------------------------------------------------------------------
 # _format_conversation_context
 # ---------------------------------------------------------------------------

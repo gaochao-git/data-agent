@@ -10,8 +10,9 @@ from fastapi.responses import Response
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
-from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
+
 from ..agent.skills.skill_service import skill_service
+from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 from .dependencies import _current_user_names, _get_current_user
 
 logger = get_logger(__name__)

@@ -11,7 +11,6 @@ import pytest
 
 from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticAIQueryAdapter
 
-
 AI_CONFIG = {
     "source_type": "mysql",
     "dimensions": [

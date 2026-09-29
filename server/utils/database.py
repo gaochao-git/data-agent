@@ -10,13 +10,14 @@ from threading import RLock
 from typing import AsyncGenerator
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 from utils.alarm import DB_FAIL_CHATDATA, emit_database_connection_alarm
 from utils.logger import get_logger
+
+from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 logger = get_logger(__name__)
 

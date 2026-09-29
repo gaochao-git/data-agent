@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, time as datetime_time
+from datetime import datetime
+from datetime import time as datetime_time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
-from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
+from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 
+from ...daos.query_history_dao import QueryHistoryDao
 from . import runtime as query_runtime
 from .result import query_result_status
-from ...daos.query_history_dao import QueryHistoryDao
 
 logger = get_logger(__name__)
 

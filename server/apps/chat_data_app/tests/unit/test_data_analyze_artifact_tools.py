@@ -11,12 +11,12 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.tools import data_analyzing
-from apps.chat_data_app.services.semantic.run import semantic_query_service
 from apps.chat_data_app.agent.workspace.artifact_registry import (
     parse_chart_spec_payload_value,
     parse_output_artifact,
 )
 from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.services.semantic.run import semantic_query_service
 
 
 def _write_json(path, payload):

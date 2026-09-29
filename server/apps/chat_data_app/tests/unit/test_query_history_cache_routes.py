@@ -16,14 +16,21 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from utils.error_codes import ErrorCode
-from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
+from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_history as query_history_routes
-from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
+from apps.chat_data_app.schema import (
+    ExecuteSqlRequest,
+    QueryFavoriteCreateRequest,
+    QueryFavoriteUpdateRequest,
+    QueryTaskCreateRequest,
+)
 from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
-from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
+from apps.chat_data_app.services.sql_run import cache as query_cache
+from apps.chat_data_app.services.sql_run import providers as query_providers
+from apps.chat_data_app.services.sql_run import runtime as query_runtime
 from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
+from utils.error_codes import ErrorCode
 from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache
 
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from utils.database import get_session as default_get_session
 from utils.models import UploadedFile, UserThread

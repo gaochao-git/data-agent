@@ -6,7 +6,6 @@ from fastapi.security import APIKeyHeader
 
 from utils.crypto import decrypt_env_value
 
-
 SERVICE_AUTH_HEADER = "X-Service-Token"
 SERVICE_USER_ID_HEADER = "X-User-Id"
 SERVICE_USERNAME_HEADER = "X-Username"

@@ -27,8 +27,14 @@ from utils.alarm import (
     SQL_BLOCK_SELECT_INTO,
     SQL_BLOCK_TYPE_NOT_ALLOWED,
 )
+
 from ..runtime_config import DEFAULT_ROW_LIMIT  # noqa: F401  同步签名兜底；热值由调用方经 max_rows 传入
-from .parser import _parse_sql, _strip_comments_by_scan, extract_top_level_limit_count, validate_raw_single_sql_statement
+from .parser import (
+    _parse_sql,
+    _strip_comments_by_scan,
+    extract_top_level_limit_count,
+    validate_raw_single_sql_statement,
+)
 
 # 命令类型白名单：默认仅 SELECT，可按部署需要放开 SHOW/DESCRIBE 等只读命令。
 _ALLOWED_SQL_TYPES_RAW = os.getenv("CHATDATA_ALLOWED_SQL", "SELECT")

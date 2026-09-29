@@ -16,20 +16,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from utils.database import get_session
-from utils.logger import get_logger
-from utils.tool_result_store import ToolResultStore
-
-from ...daos.conversation_dao import ConversationDao
-from ...daos.agent_inbox_dao import AgentInboxDao
-from ... import AGENT_ID
 from apps.chat_data_app.agent.workspace.runtime import (  # noqa: F401
     OFFICE_PREVIEW_MAX_CHARS,
     WORKSPACE_DIR_NAMES,
+    ConversationWorkspaceRuntime,
+    WorkspacePathMapping,
     _absolute_command_path_tokens,
     _ensure_workspace_root_in_chat_data_home,
     _officecli_selector_token_indices,
+    _render_local_office_html,
     create_workspace_backend,
+    ensure_conversation_workspace,
     is_managed_semantic_model_workspace_path,
     is_system_result_workspace_path,
     resolve_output_skill_directory,
@@ -37,10 +34,6 @@ from apps.chat_data_app.agent.workspace.runtime import (  # noqa: F401
     resolve_workspace_path,
     to_visible_path,
     workspace_runtime_from_state,
-    ensure_conversation_workspace,
-    ConversationWorkspaceRuntime,
-    WorkspacePathMapping,
-    _render_local_office_html,
 )
 from apps.chat_data_app.agent.workspace.workspace_local_backend import (
     delete_local_workspace_file,
@@ -50,6 +43,13 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import (
     WORKSPACE_PATH_POLICY,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from utils.database import get_session
+from utils.logger import get_logger
+from utils.tool_result_store import ToolResultStore
+
+from ... import AGENT_ID
+from ...daos.agent_inbox_dao import AgentInboxDao
+from ...daos.conversation_dao import ConversationDao
 
 logger = get_logger(__name__)
 

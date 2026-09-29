@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: F401  # 测试按模块属性引用 datasource_admin，属有意重导出
+from apps.chat_data_app.routers import (
+    datasource_admin as datasource_admin_routes,  # noqa: F401  # 测试按模块属性引用 datasource_admin，属有意重导出
+)
 from apps.chat_data_app.services.datasource import column_dict_generate
 from utils.error_codes import ErrorCode
 

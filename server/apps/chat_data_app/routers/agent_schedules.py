@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
+
+from ..agent.run.agent_schedule_runtime import agent_schedule_runtime
 from ..schema import AgentScheduleCreateRequest, AgentScheduleUpdateRequest
 from ..services.agent_schedule.schedule_service import (
     AgentScheduleConversationInvalidError,
@@ -19,7 +21,6 @@ from ..services.agent_schedule.schedule_service import (
     UpdateOperator,
     agent_schedule_service,
 )
-from ..agent.run.agent_schedule_runtime import agent_schedule_runtime
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

@@ -1,5 +1,7 @@
+from apps.chat_data_app.routers import (
+    semantic_config as semantic_routes,  # noqa: F401  # 测试按模块属性引用 semantic_config，属有意重导出
+)
 from utils.error_codes import ErrorCode
-from apps.chat_data_app.routers import semantic_config as semantic_routes  # noqa: F401  # 测试按模块属性引用 semantic_config，属有意重导出
 
 
 def test_list_datasources_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
