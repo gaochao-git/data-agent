@@ -92,6 +92,16 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         effect=EFFECT_IMMEDIATE,
         description="图片读取/注入单张大小上限（MB），agent 视觉链路唯一口径",
     ),
+    "CHAT_DATA_MAX_SCAN_PDF_PAGES": SettingSpec(
+        key="CHAT_DATA_MAX_SCAN_PDF_PAGES",
+        value_type="int",
+        default=10,
+        category="upload_preview",
+        minimum=1,
+        maximum=200,
+        effect=EFFECT_IMMEDIATE,
+        description="扫描版 PDF 视觉转写的最大页数上限（parse_document 兜底链路）",
+    ),
     "CHAT_DATA_TEXT_PREVIEW_MAX_MB": SettingSpec(
         key="CHAT_DATA_TEXT_PREVIEW_MAX_MB",
         value_type="int",

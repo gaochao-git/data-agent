@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -169,3 +170,71 @@ async def test_parse_document_write_failure(tmp_path, monkeypatch):
     payload = _payload(result)
     assert payload["success"] is False
     assert "写入失败" in payload["error"]
+
+
+# --------------------------------------------------------------------------- #
+# 扫描版 PDF 兜底:文本层为空时走视觉转写
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_parse_document_pdf_falls_back_to_vision_transcribe(tmp_path, monkeypatch):
+    import fitz
+
+    runtime = _make_runtime(tmp_path)
+    document = fitz.open()
+    page = document.new_page()
+    page.draw_rect(page.rect, color=None, fill=(0.85, 0.85, 0.85))
+    document.save(str(Path(runtime.workspace_root) / "uploads" / "scan.pdf"))
+    document.close()
+
+    async def _empty_parse(path):
+        raise parse_document_module.EmptyExtractionError("文件未提取到可分析内容")
+
+    async def _fake_transcribe(path):
+        return "## 第 1 页\n\n扫描转写内容"
+
+    monkeypatch.setattr(
+        parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse
+    )
+    monkeypatch.setattr(
+        parse_document_module, "transcribe_scanned_pdf", _fake_transcribe
+    )
+    tool = create_parse_document_tool(runtime)[0]
+    result = await tool.ainvoke(
+        {
+            "source_path": "/mnt/user-data/uploads/scan.pdf",
+            "target_path": "/mnt/user-data/workspace/scan.md",
+        }
+    )
+    payload = _payload(result)
+    assert payload["success"] is True
+    assert payload["source"] == "vision_transcribe"
+    assert payload["char_count"] == len("## 第 1 页\n\n扫描转写内容")
+
+
+@pytest.mark.asyncio
+async def test_parse_document_non_pdf_empty_extraction_not_transcribed(tmp_path, monkeypatch):
+    runtime = _make_runtime(tmp_path)
+
+    async def _empty_parse(path):
+        raise parse_document_module.EmptyExtractionError("文件未提取到可分析内容")
+
+    async def _should_not_be_called(path):
+        raise AssertionError("非 PDF 不应触发视觉转写")
+
+    monkeypatch.setattr(
+        parse_document_module, "parse_uploaded_file_to_markdown", _empty_parse
+    )
+    monkeypatch.setattr(
+        parse_document_module, "transcribe_scanned_pdf", _should_not_be_called
+    )
+    tool = create_parse_document_tool(runtime)[0]
+    result = await tool.ainvoke(
+        {
+            "source_path": "/mnt/user-data/uploads/a.txt",
+            "target_path": "/mnt/user-data/workspace/out.md",
+        }
+    )
+    payload = _payload(result)
+    assert payload["success"] is False
+    assert "解析失败" in payload["error"]

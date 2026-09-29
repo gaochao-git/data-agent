@@ -30,6 +30,13 @@ SUPPORTED_DOCUMENT_EXTENSIONS = frozenset({
 })
 
 
+class EmptyExtractionError(ValueError):
+    """markitdown 未提取到任何内容（典型：扫描版 PDF 无文本层）。
+
+    是 ValueError 子类保持既有兼容；parse_document 据此对 PDF 走扫描版视觉转写兜底。
+    """
+
+
 async def parse_uploaded_file_to_markdown(source_path: Path) -> str:
     """Convert one already-authorized local upload without enabling plugins or network input."""
     return await asyncio.to_thread(_convert_local_upload, source_path)
@@ -52,7 +59,7 @@ def _convert_local_upload(source_path: Path) -> str:
 
     content = str(result.text_content or "").strip()
     if not content:
-        raise ValueError("文件未提取到可分析内容")
+        raise EmptyExtractionError("文件未提取到可分析内容")
     return content
 
 
