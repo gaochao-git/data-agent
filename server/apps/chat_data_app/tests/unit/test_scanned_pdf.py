@@ -70,6 +70,24 @@ def test_image_only_pdf_is_scanned(tmp_path):
     assert is_likely_scanned_pdf(load_pdf_page_texts(path)) is True
 
 
+def test_page_number_noise_does_not_hide_scanned_pdf(tmp_path):
+    """大页数扫描件每页一个页码:全文档总数口径会被撑过阈值误判「有文本层」,
+    页均口径(MinerU 同款)把页码噪声均摊,正确判为扫描版。"""
+    path = tmp_path / "scan.pdf"
+    document = fitz.open()
+    for index in range(50):
+        page = document.new_page()
+        page.insert_text((72, 72), f"Page {index + 1}")
+        page.draw_rect(page.rect, color=None, fill=(0.85, 0.85, 0.85))
+    document.save(str(path))
+    document.close()
+
+    texts = load_pdf_page_texts(path)
+    # 构造确认:总数口径下确实 ≥200(旧实现会误判),页均 ~7 字符
+    assert sum(len(text.strip()) for text in texts) >= 200
+    assert is_likely_scanned_pdf(texts) is True
+
+
 # --------------------------------------------------------------------------- #
 # 页码选择与渲染
 # --------------------------------------------------------------------------- #
@@ -153,6 +171,20 @@ async def test_transcribe_wraps_model_errors(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="视觉转写失败"):
         await transcribe_scanned_pdf(path, llm_factory=lambda: _BrokenLLM())
+
+
+@pytest.mark.asyncio
+async def test_transcribe_refuses_text_layer_pdf_with_clear_message(tmp_path, monkeypatch):
+    """有文本层的 PDF 到达转写入口(如 markitdown 解析异常)时,报「无法」而非「无需」。"""
+    path = tmp_path / "text.pdf"
+    _make_text_pdf(path)
+
+    async def _fake_setting(key):
+        return 10
+
+    monkeypatch.setattr(scanned_pdf, "get_runtime_setting", _fake_setting)
+    with pytest.raises(ValueError, match="无法视觉转写"):
+        await transcribe_scanned_pdf(path, llm_factory=lambda: _FakeVisionLLM("x"))
 
 
 # --------------------------------------------------------------------------- #

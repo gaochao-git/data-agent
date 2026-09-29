@@ -24,8 +24,10 @@ from apps.chat_data_app.services.setting_service import get_runtime_setting
 
 logger = get_logger(__name__)
 
-# 全文档可见文本低于该字符数即判定为扫描版（水印/页码级别的残留字符不构成文本层）。
-SCANNED_PDF_TEXT_THRESHOLD = 200
+# 页均可见字符低于该值判定为扫描版（对齐 MinerU 的页均口径，业内 OCRmyPDF/Marker 同为
+# 页级或页均判断）：页码、水印等残留字符被页数均摊，不会像全文档总数口径那样在大页数
+# 扫描件上（每页一个页码 → 总数被撑大）误判「有文本层」。
+SCANNED_PDF_AVG_CHARS_PER_PAGE = 30
 # 一次视觉请求携带的最大页数（控上下文体积）；总页数上限走运行时设置
 # CHAT_DATA_MAX_SCAN_PDF_PAGES（表覆盖 > env > 默认）。
 _TRANSCRIBE_BATCH_SIZE = 4
@@ -41,8 +43,11 @@ def load_pdf_page_texts(source_path: Path) -> list[str]:
 
 
 def is_likely_scanned_pdf(page_texts: list[str]) -> bool:
-    total_chars = sum(len(text.strip()) for text in page_texts)
-    return total_chars < SCANNED_PDF_TEXT_THRESHOLD
+    """页均可见字符 < 阈值即判定扫描版；空文档视为扫描版（由无页错误兜住）。"""
+    if not page_texts:
+        return True
+    avg_chars = sum(len(text.strip()) for text in page_texts) / len(page_texts)
+    return avg_chars < SCANNED_PDF_AVG_CHARS_PER_PAGE
 
 
 def select_page_numbers(total_pages: int, max_pages: int) -> list[int]:
@@ -108,7 +113,7 @@ async def transcribe_scanned_pdf(source_path: Path, *, llm_factory=None) -> str:
     with tempfile.TemporaryDirectory() as tmp_dir:
         page_texts = await loop.run_in_executor(None, load_pdf_page_texts, source_path)
         if not is_likely_scanned_pdf(page_texts):
-            raise ValueError("PDF 存在文本层,无需视觉转写")
+            raise ValueError("PDF 存在文本层，无法视觉转写")
         page_numbers = select_page_numbers(len(page_texts), max_pages)
         if not page_numbers:
             raise ValueError("PDF 无可渲染页面")
