@@ -162,3 +162,67 @@ def test_normalize_row_limit_uses_default_and_rejects_invalid_or_too_large(monke
         runtime_config.normalize_row_limit("10")
     with pytest.raises(ValueError, match="最多返回 100 条"):
         runtime_config.normalize_row_limit(101)
+
+
+def test_read_optional_positive_int_env_unset_invalid_and_valid(monkeypatch):
+    """「不配置」是合法语义的可选正整数：未设置/非法/非正数都按未设置处理（返回 None）。"""
+    monkeypatch.delenv("CHATDATA_TEST_OPT_INT", raising=False)
+    assert runtime_config.read_optional_positive_int_env("CHATDATA_TEST_OPT_INT") is None
+
+    monkeypatch.setenv("CHATDATA_TEST_OPT_INT", "bad")
+    assert runtime_config.read_optional_positive_int_env("CHATDATA_TEST_OPT_INT") is None
+
+    monkeypatch.setenv("CHATDATA_TEST_OPT_INT", "0")
+    assert runtime_config.read_optional_positive_int_env("CHATDATA_TEST_OPT_INT") is None
+
+    monkeypatch.setenv("CHATDATA_TEST_OPT_INT", "7")
+    assert runtime_config.read_optional_positive_int_env("CHATDATA_TEST_OPT_INT") == 7
+
+
+def test_read_optional_positive_ratio_env_validates_range(monkeypatch):
+    """可选比例 env：未设置返回 None；合法返回数值；超上限/非法数字 fail-fast 不静默回退。"""
+    monkeypatch.delenv("CHATDATA_TEST_RATIO_OPT", raising=False)
+    assert runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95) is None
+
+    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "0.05")
+    assert runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95) == 0.05
+
+    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "1.5")
+    with pytest.raises(RuntimeError, match="必须大于 0 且不超过 0.95"):
+        runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95)
+
+    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "bad")
+    with pytest.raises(RuntimeError, match="必须是 0 到 0.95 之间的数字"):
+        runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95)
+
+
+def test_module_level_backend_fallback_and_bash_local_warning(monkeypatch):
+    """模块级自检：非法 workspace_backend 回退 local；bash+local 高危组合触发告警。
+
+    两个分支都在 import 时执行，只能通过带 env 的模块 reload 覆盖。告警走项目
+    自定义日志器（handler 绑定全局流，caplog/capsys/capfd 均收不到），故在
+    Logger.warning 调用点拦截文本；结束时恢复 env 并再 reload 一次，避免污染
+    其他用例读到的模块常量。
+    """
+    import importlib
+    import logging
+
+    records: list[str] = []
+    original_warning = logging.Logger.warning
+
+    def _capture_warning(self, msg, *args, **kwargs):
+        records.append(msg % args if args else str(msg))
+        original_warning(self, msg, *args, **kwargs)
+
+    monkeypatch.setattr(logging.Logger, "warning", _capture_warning)
+    monkeypatch.setenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "kubernetes")
+    monkeypatch.setenv("CHAT_DATA_DEFAULT_BASH_ENABLED", "true")
+    reloaded = importlib.reload(runtime_config)
+    try:
+        assert reloaded.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local"
+        assert any("非法，回退 local" in message for message in records)
+        assert any("bash_enabled=true + workspace_backend=local" in message for message in records)
+    finally:
+        monkeypatch.delenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", raising=False)
+        monkeypatch.delenv("CHAT_DATA_DEFAULT_BASH_ENABLED", raising=False)
+        importlib.reload(runtime_config)

@@ -497,3 +497,50 @@ def test_load_mcp_tools_empty_without_config(monkeypatch):
 
     monkeypatch.setenv(MCP_SERVERS_ENV, "")
     assert mcp_manager.load_mcp_tools() == []
+
+
+# ============ 插件 MCP 配置合并 ============
+
+
+def test_load_mcp_server_configs_merges_plugin_entries(monkeypatch):
+    """插件声明的 MCP server 与环境配置合并：禁用/重复 id/非法条目各有归宿。
+
+    - 与环境重复的插件 id：env 优先，插件条目告警后忽略；
+    - 插件条目 enabled=false：跳过；
+    - sse 传输：废弃告警但仍生效（兼容旧 server）；
+    - 非法条目：忽略不阻断。
+
+    告警走项目自定义日志器（handler 绑定全局流，caplog/capsys/capfd 均收不到），
+    直接替换 config 模块的 logger 为内存记录器。
+    """
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.mcp import config as mcp_config
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
+
+    records: list[str] = []
+    monkeypatch.setattr(
+        mcp_config,
+        "logger",
+        SimpleNamespace(warning=lambda msg, *args: records.append(msg % args if args else str(msg))),
+    )
+    monkeypatch.setenv(
+        MCP_SERVERS_ENV,
+        json.dumps([{"id": "docs", "transport": "streamable_http", "url": "https://docs.example.com/mcp"}]),
+    )
+    plugin_entries = [
+        {"id": "docs", "transport": "streamable_http", "url": "https://dup.example.com/mcp"},
+        {"id": "off", "transport": "stdio", "command": "uvx", "args": ["mcp-off"], "enabled": False},
+        {"id": "search", "transport": "sse", "url": "https://search.example.com/sse"},
+        {"id": "bad id", "transport": "carrier-pigeon", "url": "https://x.example.com"},
+    ]
+    monkeypatch.setattr(plugin_loader, "enabled_plugin_mcp_servers", lambda: plugin_entries)
+
+    configs = load_mcp_server_configs()
+
+    assert [config.server_id for config in configs] == ["docs", "search"]
+    by_id = {config.server_id: config for config in configs}
+    assert by_id["docs"].url == "https://docs.example.com/mcp"
+    assert by_id["search"].transport == "sse"
+    assert any("sse 传输已废弃" in message for message in records)
+    assert any("与环境配置重复" in message for message in records)
