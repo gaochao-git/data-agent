@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import wrap_model_call
+from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -56,7 +57,9 @@ def create_context_usage_middleware(
     request_budget = context_request_budget or ContextRequestBudget(model_id)
 
     @wrap_model_call(name=name, state_schema=state_schema)
-    async def context_usage_middleware(request, handler):
+    async def context_usage_middleware(
+        request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         logger.info("Agent 处理用户请求")
         system_message = getattr(request, "system_message", None)
         system_prompt = str(getattr(system_message, "content", "") or "")
@@ -137,7 +140,7 @@ def create_request_context_usage_middleware(
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
-):
+) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建每次模型请求前的上下文计量与 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
@@ -620,7 +623,7 @@ def _empty_context_compression_report(*, budget: ContextBudget, static_input_tok
     }
 
 
-def _override_request(request: Any, **kwargs):
+def _override_request(request: Any, **kwargs: Any) -> ModelRequest:
     """兼容 LangChain ModelRequest 和单测中的轻量对象。"""
     if hasattr(request, "override"):
         return request.override(**kwargs)

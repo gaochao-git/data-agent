@@ -17,7 +17,7 @@ from sqlalchemy.pool import NullPool
 from utils.alarm import DB_FAIL_CHATDATA, emit_database_connection_alarm
 from utils.logger import get_logger
 
-from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
+from .db_failover import DatabaseEndpoint, DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 logger = get_logger(__name__)
 
@@ -105,7 +105,7 @@ async def _dispose_engine() -> None:
         await engine.dispose()
 
 
-async def _failover_database_endpoint(failed_endpoint, reason: Exception | None = None) -> None:
+async def _failover_database_endpoint(failed_endpoint: str, reason: Exception | None = None) -> None:
     """切换业务库节点；当前请求不重试，由下一次请求使用新节点。"""
     previous, current, advanced = _endpoint_selector.advance_if_current(failed_endpoint)
     if not advanced:
@@ -125,7 +125,7 @@ async def _failover_database_endpoint(failed_endpoint, reason: Exception | None 
     )
 
 
-async def _probe_database_endpoint(endpoint) -> bool:
+async def _probe_database_endpoint(endpoint: DatabaseEndpoint) -> bool:
     """探测单个业务库节点是否可用。"""
     password = _get_mysql_password()
     url = URL.create(
@@ -221,7 +221,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def init_database():
+async def init_database() -> None:
     """
     初始化业务数据库引擎
 
@@ -231,7 +231,7 @@ async def init_database():
     get_engine()
 
 
-async def close_database():
+async def close_database() -> None:
     """关闭数据库连接"""
     with _engine_state_lock:
         has_engine = _engine is not None

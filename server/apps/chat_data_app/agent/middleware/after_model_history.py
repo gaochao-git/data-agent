@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import after_model
+from langchain.agents.middleware import AgentState, Runtime, after_model
 
 from utils.logger import get_logger
 
@@ -16,7 +16,7 @@ def create_after_model_history_middleware(
     persist_snapshot: Callable[[dict[str, Any]], Awaitable[None]],
     *,
     state_schema: Any | None = None,
-):
+) -> Callable[[AgentState, Runtime], None]:
     """Persist a durable conversation snapshot after every model call.
 
     The callback is deliberately best-effort. History persistence must not
@@ -26,7 +26,7 @@ def create_after_model_history_middleware(
     """
 
     @after_model(name="AfterModelHistoryMiddleware", state_schema=state_schema)
-    async def persist_after_model(state, _runtime):
+    async def persist_after_model(state: AgentState, _runtime: Runtime) -> None:
         try:
             await persist_snapshot(dict(state or {}))
         except Exception:

@@ -62,7 +62,7 @@ def _safe_conversation_id(value: str) -> str:
 class ToolResultStore:
     """Read and write hidden tool result files beneath each conversation's outputs."""
 
-    def __init__(self, base_dir: str | Path | None = None):
+    def __init__(self, base_dir: str | Path | None = None) -> None:
         self.base_dir = Path(base_dir or CHAT_DATA_HOME).expanduser().resolve()
 
     def save_query_result(

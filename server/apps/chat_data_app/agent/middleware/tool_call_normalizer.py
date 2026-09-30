@@ -1,8 +1,9 @@
 """Tool call name/args normalization middleware."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import wrap_model_call
+from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
@@ -102,14 +103,16 @@ def _normalize_single_tool_call(tool_call: Any, available_tool_names: set[str]) 
     return tool_call, changed
 
 
-def create_tool_call_name_normalizer_middleware(tools: list[Any]):
+def create_tool_call_name_normalizer_middleware(
+    tools: list[Any],
+) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建模型工具调用名称归一化 middleware。
 
     Args:
         tools: 装配期已知的工具列表，仅作为 ``request.tools`` 缺失时的兜底。
     """
 
-    def _candidate_tools(request) -> list[Any]:
+    def _candidate_tools(request: ModelRequest) -> list[Any]:
         """本轮模型真正可见的工具集。
 
         必须取 ``request.tools``：``write_todos``、``task`` 等由 ``middleware.tools``
@@ -120,7 +123,9 @@ def create_tool_call_name_normalizer_middleware(tools: list[Any]):
         return list(getattr(request, "tools", None) or []) or tools
 
     @wrap_model_call(name="ToolCallNameNormalizerMiddleware")
-    async def normalize_tool_call_name_middleware(request, handler):
+    async def normalize_tool_call_name_middleware(
+        request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         candidate_tools = _candidate_tools(request)
         response = await handler(request)
         if isinstance(response, AIMessage):

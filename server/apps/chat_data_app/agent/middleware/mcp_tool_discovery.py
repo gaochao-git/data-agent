@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelCallResult, ModelRequest, ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
@@ -73,19 +74,23 @@ def _discovered_from_history(messages: Any) -> list[str]:
 class MCPToolDiscoveryMiddleware(AgentMiddleware):
     """检索模式下按"始终挂载 + 已发现"过滤每轮模型请求的 MCP 工具。"""
 
-    def __init__(self, *, search_active: bool, always_mounted_tools: frozenset[str] | set[str] = frozenset()):
+    def __init__(self, *, search_active: bool, always_mounted_tools: frozenset[str] | set[str] = frozenset()) -> None:
         self.search_active = bool(search_active)
         self.always_mounted_tools = frozenset(always_mounted_tools)
 
     # ---- model request 过滤 ----
 
-    def wrap_model_call(self, request, handler):
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
+    ) -> ModelCallResult:
         return handler(self._filter_request(request))
 
-    async def awrap_model_call(self, request, handler):
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         return await handler(self._filter_request(request))
 
-    def _filter_request(self, request):
+    def _filter_request(self, request: ModelRequest) -> ModelRequest:
         if not self.search_active:
             return request
         tools = list(getattr(request, "tools", None) or [])
@@ -108,12 +113,16 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
 
     # ---- 检索结果捕获 ----
 
-    def wrap_tool_call(self, request, handler):
+    def wrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage]
+    ) -> ToolMessage:
         if not self._is_search_request(request):
             return handler(request)
         return self._capture_discovery(handler(request))
 
-    async def awrap_tool_call(self, request, handler):
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
+    ) -> ToolMessage:
         if not self._is_search_request(request):
             return await handler(request)
         return self._capture_discovery(await handler(request))
@@ -122,7 +131,7 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
         tool_call = getattr(request, "tool_call", None)
         return isinstance(tool_call, dict) and str(tool_call.get("name") or "") == MCP_TOOL_SEARCH_TOOL_NAME
 
-    def _capture_discovery(self, result: Any):
+    def _capture_discovery(self, result: Any) -> Any:
         """把检索命中的工具名并入 state；解析失败原样返回不阻断链路。"""
         names = _names_from_tool_result(result)
         if not names:

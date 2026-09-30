@@ -4,6 +4,7 @@ SQLAlchemy 数据模型定义
 
 import json
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, Index, Integer, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
@@ -232,7 +233,7 @@ class SqlQueryHistory(Base):
         Index("idx_user_datasource", "user_id", "datasource_id"),
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         result = {
             "id": self.id,
@@ -284,7 +285,7 @@ class SqlQueryFavorite(Base):
         Index("idx_fav_semantic_config_id", "semantic_config_id"),
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         result = {
             "id": self.id,
@@ -343,7 +344,7 @@ class ChatDataQueryTask(Base):
         Index("idx_query_task_datasource_task_status", "datasource_id", "task_status"),
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         import json
 
@@ -425,7 +426,7 @@ class ChatDataQueryExecution(Base):
         Index("idx_execution_ds_status", "datasource_id", "sql_status"),
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         import json
 
@@ -896,7 +897,7 @@ class ChatDataAgentSchedule(Base):
         Index("idx_schedule_next_trigger", "enabled_flag", "delete_flag", "next_trigger_time"),
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为前端字典。"""
         return {
             "job_id": self.job_id,
@@ -1002,7 +1003,7 @@ class ChatDataAgentScheduleControl(Base):
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """转换为前端字典。"""
         return {
             "paused_flag": self.paused_flag,

@@ -20,12 +20,20 @@ MySQL 配置：
 """
 
 import os
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from types import TracebackType
+from typing import TYPE_CHECKING
 
 from utils.alarm import DB_FAIL_CHECKPOINT, emit_database_connection_alarm
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
 
-from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
+from .db_failover import DatabaseEndpoint, DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 logger = get_logger(__name__)
 
@@ -54,7 +62,7 @@ def _get_mysql_password() -> str:
 # ============ Checkpointer 工厂 ============
 
 
-def get_checkpointer():
+def get_checkpointer() -> AbstractAsyncContextManager:
     """
     获取异步 checkpointer 上下文管理器
 
@@ -83,12 +91,12 @@ class _SqliteCheckpointerContext:
     aiosqlite 连接对象没有 is_alive 方法
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self.conn = None
         self.checkpointer = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncSqliteSaver":
         import aiosqlite
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -98,13 +106,18 @@ class _SqliteCheckpointerContext:
         self.checkpointer = AsyncSqliteSaver(self.conn)
         return self.checkpointer
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self.conn:
             await self.conn.close()
         return False
 
 
-def _get_sqlite_checkpointer():
+def _get_sqlite_checkpointer() -> _SqliteCheckpointerContext:
     """获取 SQLite checkpointer"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     return _SqliteCheckpointerContext(DB_PATH)
@@ -113,12 +126,12 @@ def _get_sqlite_checkpointer():
 class _MySQLCheckpointerFailoverContext:
     """Wrap MySQL checkpointer contexts and retry connection-class failures."""
 
-    def __init__(self, context_factory):
+    def __init__(self, context_factory: Callable[[DatabaseEndpoint], AbstractAsyncContextManager]) -> None:
         self.context_factory = context_factory
         self.context = None
         self.endpoint = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AIOMySQLSaver":
         last_error = None
         for _ in range(len(_endpoint_selector.endpoints)):
             endpoint = _endpoint_selector.current()
@@ -137,7 +150,12 @@ class _MySQLCheckpointerFailoverContext:
             raise last_error
         raise RuntimeError("MySQL checkpointer 未配置可用节点")
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool:
         if self.context is None:
             return False
         try:
@@ -147,7 +165,7 @@ class _MySQLCheckpointerFailoverContext:
                 _advance_checkpointer_endpoint(self.endpoint, exc_val)
 
 
-def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:
+def _advance_checkpointer_endpoint(failed_endpoint: str, reason: Exception) -> None:
     if _endpoint_selector is None:
         raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
     previous, current, advanced = _endpoint_selector.advance_if_current(failed_endpoint)
@@ -167,12 +185,12 @@ def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:
     )
 
 
-def _get_mysql_checkpointer():
+def _get_mysql_checkpointer() -> _MySQLCheckpointerFailoverContext:
     """获取 MySQL checkpointer"""
     return _MySQLCheckpointerFailoverContext(_build_mysql_checkpointer_context_factory())
 
 
-def _build_mysql_checkpointer_context_factory():
+def _build_mysql_checkpointer_context_factory() -> Callable[[DatabaseEndpoint], AbstractAsyncContextManager]:
     """构造 MySQL checkpointer 上下文工厂。"""
     try:
         from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
@@ -183,14 +201,16 @@ def _build_mysql_checkpointer_context_factory():
     if _endpoint_selector is None:
         raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
 
-    def context_factory(endpoint):
+    def context_factory(endpoint: DatabaseEndpoint) -> AbstractAsyncContextManager:
         conn_string = f"mysql+aiomysql://{MYSQL_USER}:{password}@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
         return AIOMySQLSaver.from_conn_string(conn_string)
 
     return context_factory
 
 
-async def _probe_mysql_checkpointer_endpoint(endpoint, context_factory) -> bool:
+async def _probe_mysql_checkpointer_endpoint(
+    endpoint: DatabaseEndpoint, context_factory: Callable[[DatabaseEndpoint], AbstractAsyncContextManager]
+) -> bool:
     """探测单个 checkpoint 库节点是否可用。"""
     try:
         async with context_factory(endpoint):
@@ -225,7 +245,7 @@ async def select_available_checkpointer_endpoint() -> None:
 # ============ 初始化函数 ============
 
 
-async def setup_checkpointer():
+async def setup_checkpointer() -> None:
     """
     初始化 checkpointer 和业务表
 

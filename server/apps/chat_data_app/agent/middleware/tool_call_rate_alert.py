@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from langchain.agents.middleware import wrap_tool_call
+from langchain.agents.middleware import ToolCallRequest, wrap_tool_call
+from langchain_core.messages import ToolMessage
 
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.alarm import emit_tool_call_rate_alarm
@@ -144,7 +145,7 @@ def create_tool_call_rate_alert_middleware(
     *,
     threshold: int | None = None,
     window_seconds: int | None = None,
-):
+) -> Callable[[ToolCallRequest], Awaitable[ToolMessage]]:
     """创建会话级工具调用频率告警 middleware。
 
     默认阈值与窗口运行期经后台配置变量表读取（表覆盖 > env > 默认，TTL 缓存内
@@ -152,7 +153,9 @@ def create_tool_call_rate_alert_middleware(
     """
 
     @wrap_tool_call(name="ToolCallRateAlertMiddleware")
-    async def tool_call_rate_alert_middleware(request, handler):
+    async def tool_call_rate_alert_middleware(
+        request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
+    ) -> ToolMessage:
         resolved_threshold = (
             threshold
             if threshold is not None

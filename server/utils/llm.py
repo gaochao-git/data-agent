@@ -30,7 +30,7 @@ def _patch_langchain_openai_reasoning_fields() -> None:
     def patched_convert_delta_to_message_chunk(
         delta: Mapping[str, Any],
         default_class: type,
-    ):
+    ) -> Any:
         chunk = original(delta, default_class)
         reasoning_payload = {
             key: delta.get(key)

@@ -4,7 +4,9 @@
 """
 
 from http import HTTPStatus
+from typing import Any
 
+from fastapi import Response
 from fastapi import status as http_status
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -32,7 +34,7 @@ _INTERNAL_ERROR_MARKERS = (
 )
 
 
-def safe_user_error_message(msg) -> str:
+def safe_user_error_message(msg: Any) -> str:
     """隐藏内部异常细节，保留普通业务错误文案。"""
     text = str(msg or "")
     lowered = text.lower()
@@ -42,12 +44,12 @@ def safe_user_error_message(msg) -> str:
 
 
 def business_response(
-    data=None,
+    data: Any = None,
     msg: str = "操作成功",
     code: int = ErrorCode.SUCCESS,
     status: str = "success",
     http_status_code: int = http_status.HTTP_200_OK,
-):
+) -> JSONResponse:
     """
     统一业务响应 (FastAPI 版本)
 
@@ -91,7 +93,7 @@ def is_chatdata_request(request: Request) -> bool:
     return request.url.path.startswith("/api/chatdata")
 
 
-async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPException):
+async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
     """统一 ChatData HTTPException 响应格式，非 ChatData 路径走 FastAPI 默认处理。
 
     显式 raise 的 5xx 属于平台自身接口异常（未捕获异常由 APIAccessLogMiddleware
@@ -118,7 +120,7 @@ async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPEx
     )
 
 
-async def chatdata_validation_exception_handler(request: Request, exc: RequestValidationError):
+async def chatdata_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """统一 ChatData 参数校验失败响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
     if not is_chatdata_request(request):
         return await request_validation_exception_handler(request, exc)

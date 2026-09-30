@@ -614,7 +614,7 @@ def get_tables(db_type: str = None) -> list:
 
 
 # 向后兼容（根据环境变量自动选择）
-def _get_all_tables():
+def _get_all_tables() -> list[str]:
     _get_database_type()
     return MYSQL_TABLES
 

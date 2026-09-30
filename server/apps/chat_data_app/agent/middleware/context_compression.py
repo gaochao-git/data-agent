@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from langchain.agents.middleware import before_model
+from langchain.agents.middleware import AgentState, Runtime, before_model
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -454,7 +454,7 @@ def create_context_compression_middleware(
     request_tools = list(tools or [])
 
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
-    async def context_compression_middleware(state, _runtime):
+    async def context_compression_middleware(state: AgentState, _runtime: Runtime) -> dict[str, Any] | None:
         messages = _read_middleware_messages(state)
         _, legacy_summary = extract_legacy_context_summary(messages)
         previous_summary = _resolve_previous_summary(state, legacy_summary)

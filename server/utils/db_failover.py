@@ -99,7 +99,7 @@ def is_mysql_connection_error(err: Exception) -> bool:
 class DatabaseEndpointSelector:
     """线程安全的进程内顺序 failover 节点选择器。"""
 
-    def __init__(self, endpoints: list[DatabaseEndpoint]):
+    def __init__(self, endpoints: list[DatabaseEndpoint]) -> None:
         if not endpoints:
             raise ValueError("数据库节点配置不能为空")
         self._endpoints = list(endpoints)

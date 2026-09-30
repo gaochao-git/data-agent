@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import wrap_tool_call
+from langchain.agents.middleware import ToolCallRequest, wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from apps.chat_data_app.agent.workspace.runtime import workspace_runtime_from_state
@@ -27,11 +28,13 @@ logger = get_logger(__name__)
 _READ_PAGINATED_TOOLS = frozenset({"file_read"})
 
 
-def create_tool_result_middleware():
+def create_tool_result_middleware() -> Callable[[ToolCallRequest], Awaitable[ToolMessage]]:
     """Create the sole boundary that turns raw tool output into model output."""
 
     @wrap_tool_call(name="ToolResultMiddleware")
-    async def tool_result_middleware(request, handler):
+    async def tool_result_middleware(
+        request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
+    ) -> ToolMessage:
         result = await handler(request)
         if not isinstance(result, ToolMessage) or result.status == "error":
             return result

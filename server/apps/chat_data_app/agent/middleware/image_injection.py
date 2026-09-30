@@ -24,9 +24,10 @@ block），前端不可见。
 from __future__ import annotations
 
 import base64
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import wrap_model_call
+from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from apps.chat_data_app.agent.workspace.runtime import (
@@ -52,11 +53,13 @@ def create_image_injection_middleware(
     model_id: str | None = None,
     *,
     state_schema: Any | None = None,
-):
+) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建视觉注入 middleware（read_image 结果 + 用户上传图片附件）。"""
 
     @wrap_model_call(name="ImageInjectionMiddleware", state_schema=state_schema)
-    async def image_injection_middleware(request, handler):
+    async def image_injection_middleware(
+        request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         messages = list(getattr(request, "messages", None) or [])
         pending_requests = _collect_pending_image_requests(messages)
 
@@ -276,7 +279,7 @@ def _append_vlm_disabled_notes(
     return rewritten
 
 
-def _override_request(request: Any, **kwargs: Any):
+def _override_request(request: Any, **kwargs: Any) -> ModelRequest:
     """兼容 LangChain ModelRequest 和单测中的轻量对象。"""
     if hasattr(request, "override"):
         return request.override(**kwargs)
