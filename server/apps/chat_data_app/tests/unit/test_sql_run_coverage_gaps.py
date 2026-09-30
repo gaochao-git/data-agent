@@ -20,13 +20,13 @@ from apps.chat_data_app.services.sql_run.task_service import QueryTaskService
 
 
 def _make_service(**overrides):
-    defaults = dict(
-        query_history_service=SimpleNamespace(),
-        datasource_manager_factory=lambda: SimpleNamespace(),
-        fetch_http_query_task_result=lambda *_args, **_kwargs: {},
-        stop_http_query_task=lambda *_args, **_kwargs: {},
-        kill_mysql_query=lambda *_args, **_kwargs: {},
-    )
+    defaults = {
+        "query_history_service": SimpleNamespace(),
+        "datasource_manager_factory": lambda: SimpleNamespace(),
+        "fetch_http_query_task_result": lambda *_args, **_kwargs: {},
+        "stop_http_query_task": lambda *_args, **_kwargs: {},
+        "kill_mysql_query": lambda *_args, **_kwargs: {},
+    }
     defaults.update(overrides)
     return QueryTaskService(**defaults)
 

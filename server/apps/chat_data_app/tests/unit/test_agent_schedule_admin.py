@@ -49,23 +49,23 @@ def harness(monkeypatch):
     service = AgentScheduleService()
 
     async def seed_job(job_id="job-1", user_id="user-1", enabled_flag=1, **overrides):
-        fields = dict(
-            job_id=job_id,
-            user_id=user_id,
-            conversation_id="conv-1",
-            job_title=f"任务-{job_id}",
-            job_prompt="汇总昨日数据",
-            schedule_type="cron",
-            cron_expr="0 9 * * *",
-            enabled_flag=enabled_flag,
-            next_trigger_time=datetime.now() + timedelta(hours=1),
-            delete_flag=0,
-            create_time=datetime.now(),
-            create_by=user_id,
-            create_by_name="用户一",
-            update_by=user_id,
-            update_by_name="用户一",
-        )
+        fields = {
+            "job_id": job_id,
+            "user_id": user_id,
+            "conversation_id": "conv-1",
+            "job_title": f"任务-{job_id}",
+            "job_prompt": "汇总昨日数据",
+            "schedule_type": "cron",
+            "cron_expr": "0 9 * * *",
+            "enabled_flag": enabled_flag,
+            "next_trigger_time": datetime.now() + timedelta(hours=1),
+            "delete_flag": 0,
+            "create_time": datetime.now(),
+            "create_by": user_id,
+            "create_by_name": "用户一",
+            "update_by": user_id,
+            "update_by_name": "用户一",
+        }
         fields.update(overrides)
         async with get_test_session() as session:
             session.add(ChatDataAgentSchedule(**fields))

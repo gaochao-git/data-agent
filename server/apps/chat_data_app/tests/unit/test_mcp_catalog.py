@@ -44,19 +44,22 @@ def _info(server_id: str, name: str, description: str, schema: dict | None = Non
     )
 
 
-SSH_OVERVIEW = lambda: _info(
+def SSH_OVERVIEW():
+    return _info(
     "ssh",
     "system_overview",
     "查看系统整体运行状态：CPU、内存、磁盘使用率",
     {"type": "object", "properties": {"ip": {"type": "string", "description": "目标主机地址"}}},
 )
-LOG_GREP = lambda: _info(
+def LOG_GREP():
+    return _info(
     "fault",
     "log_grep",
     "在服务器日志文件中按关键词检索错误记录",
     {"type": "object", "properties": {"keyword": {"type": "string", "description": "检索关键词"}}},
 )
-DB_SLOW = lambda: _info("db", "slow_query", "列出数据库最近出现的慢查询语句")
+def DB_SLOW():
+    return _info("db", "slow_query", "列出数据库最近出现的慢查询语句")
 
 
 class FakeManager:

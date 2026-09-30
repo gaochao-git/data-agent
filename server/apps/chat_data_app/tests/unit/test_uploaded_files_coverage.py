@@ -149,17 +149,17 @@ class FakeDao:
 
 
 def make_row(**overrides):
-    base = dict(
-        file_id="f1",
-        thread_id="t1",
-        original_filename="报告.pdf",
-        file_type="pdf",
-        file_size=12,
-        storage_dir="报告.pdf",
-        parse_status="completed",
-        parse_filename=None,
-        create_time=datetime(2026, 8, 27, 10, 30),
-    )
+    base = {
+        "file_id": "f1",
+        "thread_id": "t1",
+        "original_filename": "报告.pdf",
+        "file_type": "pdf",
+        "file_size": 12,
+        "storage_dir": "报告.pdf",
+        "parse_status": "completed",
+        "parse_filename": None,
+        "create_time": datetime(2026, 8, 27, 10, 30),
+    }
     base.update(overrides)
     return SimpleNamespace(**base)
 

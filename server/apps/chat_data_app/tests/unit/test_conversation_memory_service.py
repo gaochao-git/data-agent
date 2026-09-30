@@ -154,7 +154,7 @@ def test_schedule_after_turn_guards(monkeypatch, tmp_path, memory_env):
         raise AssertionError("不应触发抽取")
 
     monkeypatch.setattr(svc, "extract_and_save_memory", unused)
-    common = dict(workspace_root=str(tmp_path), user_id="u", username="n", model_id="m")
+    common = {"workspace_root": str(tmp_path), "user_id": "u", "username": "n", "model_id": "m"}
 
     # 开关关闭不调度
     monkeypatch.setenv("CHAT_DATA_SESSION_MEMORY_ENABLED", "false")
@@ -177,7 +177,7 @@ async def test_schedule_after_turn_debounce_keeps_latest(monkeypatch, tmp_path, 
         captured.append(kwargs)
 
     monkeypatch.setattr(svc, "extract_and_save_memory", fake_extract)
-    common = dict(workspace_root=str(tmp_path), user_id="u", username="n", model_id="m")
+    common = {"workspace_root": str(tmp_path), "user_id": "u", "username": "n", "model_id": "m"}
 
     svc.schedule_memory_extraction_after_turn(conversation_id="c-debounce", messages=[HumanMessage("第一轮")], **common)
     svc.schedule_memory_extraction_after_turn(conversation_id="c-debounce", messages=[HumanMessage("第二轮")], **common)

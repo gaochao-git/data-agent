@@ -239,7 +239,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
     if session.uploads_manifest == current_manifest:
         return
 
-    local_files = {relative: path for relative, path in _iter_application_files(uploads_root)}
+    local_files = dict(_iter_application_files(uploads_root))
     await _create_sandbox_directories(
         sandbox=session.sandbox,
         paths=_sandbox_tree_directories(uploads_root, sandbox_uploads_dir()),

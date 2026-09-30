@@ -86,7 +86,7 @@ def harness(monkeypatch):
 
 
 def _create_kwargs(payload):
-    return {key: value for key, value in payload.items()}
+    return dict(payload.items())
 
 
 @pytest.mark.asyncio

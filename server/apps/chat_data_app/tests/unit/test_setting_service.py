@@ -60,15 +60,15 @@ def harness(monkeypatch):
                 raise
 
     async def seed_setting(**overrides):
-        fields = dict(
-            setting_key=TEST_KEY,
-            setting_value="on",
-            delete_flag=0,
-            create_by="creator-1",
-            create_by_name="初始创建人",
-            update_by="creator-1",
-            update_by_name="初始创建人",
-        )
+        fields = {
+            "setting_key": TEST_KEY,
+            "setting_value": "on",
+            "delete_flag": 0,
+            "create_by": "creator-1",
+            "create_by_name": "初始创建人",
+            "update_by": "creator-1",
+            "update_by_name": "初始创建人",
+        }
         fields.update(overrides)
         async with test_transaction_scope() as session:
             session.add(ChatDataSetting(**fields))

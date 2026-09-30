@@ -81,13 +81,13 @@ def deterministic_tokens(monkeypatch):
 
 
 def _base_kwargs(**overrides):
-    kwargs = dict(
-        static_input_tokens=0,
-        compression_trigger_tokens=1,
-        hard_input_limit_tokens=100_000,
-        compression_target_tokens=1,
-        config={"enabled": True},
-    )
+    kwargs = {
+        "static_input_tokens": 0,
+        "compression_trigger_tokens": 1,
+        "hard_input_limit_tokens": 100_000,
+        "compression_target_tokens": 1,
+        "config": {"enabled": True},
+    }
     kwargs.update(overrides)
     return kwargs
 

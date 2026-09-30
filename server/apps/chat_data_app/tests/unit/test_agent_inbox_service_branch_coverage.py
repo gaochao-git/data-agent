@@ -62,19 +62,19 @@ def _service(**returns) -> AgentInboxService:
 
 
 def _run(**overrides):
-    base = dict(
-        run_id="r1",
-        conversation_id="conv-1",
-        user_id="user-1",
-        record_status="active",
-        owner_token="tok-1",
-        lease_expire_time=None,
-        record_content=json.dumps({"owner_generation": 1}),
-        create_by_name="用户一",
-        update_by=None,
-        update_by_name=None,
-        update_time=None,
-    )
+    base = {
+        "run_id": "r1",
+        "conversation_id": "conv-1",
+        "user_id": "user-1",
+        "record_status": "active",
+        "owner_token": "tok-1",
+        "lease_expire_time": None,
+        "record_content": json.dumps({"owner_generation": 1}),
+        "create_by_name": "用户一",
+        "update_by": None,
+        "update_by_name": None,
+        "update_time": None,
+    }
     base.update(overrides)
     return SimpleNamespace(**base)
 

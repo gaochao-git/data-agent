@@ -94,7 +94,7 @@ def test_build_subagent_middleware_passes_memory_block_to_specs():
 
 
 def test_memory_compression_hook_none_without_conversation():
-    common = dict(workspace_root="/w", user_id=None, username=None, model_id=None)
+    common = {"workspace_root": "/w", "user_id": None, "username": None, "model_id": None}
     assert data_agent._build_memory_compression_hook(None, **common) is None
     assert data_agent._build_memory_compression_hook("  ", **common) is None
 

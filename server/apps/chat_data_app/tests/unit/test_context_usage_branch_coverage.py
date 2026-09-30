@@ -195,13 +195,13 @@ def test_build_agent_context_usage_appends_todo_status_and_counts_it(monkeypatch
             compression_target_tokens=20000,
         ),
     )
-    kwargs = dict(
-        system_prompt="系统提示词",
-        messages=[HumanMessage(content="你好")],
-        tools=[],
-        model_id=None,
-        request_budget=cu.ContextRequestBudget("tiny"),
-    )
+    kwargs = {
+        "system_prompt": "系统提示词",
+        "messages": [HumanMessage(content="你好")],
+        "tools": [],
+        "model_id": None,
+        "request_budget": cu.ContextRequestBudget("tiny"),
+    }
     base_prompt, _messages, base_usage = cu._build_agent_context_usage(**kwargs)
     todo_prompt, _messages, todo_usage = cu._build_agent_context_usage(
         **kwargs,
@@ -233,13 +233,13 @@ def test_build_agent_context_usage_neutralizes_stale_todo_tool_results(monkeypat
     ai = AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": []}, "id": "call-1"}])
     stale = ToolMessage("Updated todo list to [...]", tool_call_id="call-1", name="write_todos")
     human = HumanMessage(content="继续")
-    kwargs = dict(
-        system_prompt="系统提示词",
-        messages=[human, ai, stale],
-        tools=[],
-        model_id=None,
-        request_budget=cu.ContextRequestBudget("tiny"),
-    )
+    kwargs = {
+        "system_prompt": "系统提示词",
+        "messages": [human, ai, stale],
+        "tools": [],
+        "model_id": None,
+        "request_budget": cu.ContextRequestBudget("tiny"),
+    }
     _prompt, outbound, _usage = cu._build_agent_context_usage(**kwargs)
     assert outbound[0] is human and outbound[1] is ai
     assert outbound[2] is not stale
