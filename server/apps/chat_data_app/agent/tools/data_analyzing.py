@@ -13,8 +13,10 @@
   透出，系统提示词不再静态注入。
 
 入参契约在 ``schema.DataAnalyzingInput``：``action`` + ``action_payload``（结构随
-action 变化）+ ``intent``；每个 action 的 payload 在入口用对应 pydantic 模型校验
-（``DATA_ANALYZING_ACTION_PAYLOAD_MODELS``），错参在入参即报错，不进 handler。
+action 变化）+ ``intent``；每个 action 的 payload 在工具实现入口经
+``schema.validate_data_analyzing_payload`` 校验（共用 ``DATA_ANALYZING_ACTION_PAYLOAD_MODELS``
+映射表）。校验不能放进 args model_validator——langgraph 会把 model_validator 抛出的
+校验错误过滤成空白消息，模型与用户都看不到原因；在函数体内抛错则详情完整可见。
 新增 action 的步骤：schema.py 加 payload 模型并登记映射 -> 本文件加分派分支。
 """
 
@@ -63,8 +65,8 @@ from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.logger import get_logger
 
 from ...schema import (
-    DATA_ANALYZING_ACTION_PAYLOAD_MODELS,
     DataAnalyzingInput,
+    validate_data_analyzing_payload,
 )
 from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload, tool_result_payload
@@ -676,8 +678,9 @@ async def _run_data_analyzing_impl(
     workspace_runtime: ConversationWorkspaceRuntime | None,
 ) -> str:
     """按 action 分发到对应的 DSL 校验 / 查询执行 / YAML 自检实现。"""
-    payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS[action]
-    payload = payload_model.model_validate(action_payload)
+    # payload 校验必须在函数体内做（不能用 args_schema 的 model_validator）：
+    # langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型看不到原因
+    payload = validate_data_analyzing_payload(action, action_payload)
 
     if action == "validate_dsl":
         if not bound_datasource_id:

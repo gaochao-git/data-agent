@@ -21,7 +21,11 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.tools import data_analyzing, filesystem
-from apps.chat_data_app.schema import DATA_ANALYZING_ACTION_PAYLOAD_MODELS, DataAnalyzingInput
+from apps.chat_data_app.schema import (
+    DATA_ANALYZING_ACTION_PAYLOAD_MODELS,
+    DataAnalyzingInput,
+    validate_data_analyzing_payload,
+)
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 RESULT_PREFIX = "[data_analyzing_tool]\n"
@@ -62,73 +66,62 @@ def _semantic_query_state(
 
 
 # ---------------------------------------------------------------------------
-# DataAnalyzingInput：按 action 的入口校验
+# payload 跨字段校验：在工具实现入口（validate_data_analyzing_payload），不在 args model_validator
+# （langgraph 会把 model_validator 抛出的 loc=() 校验错误过滤成空白消息，模型看不到原因）
 # ---------------------------------------------------------------------------
 
 
-def test_input_requires_matching_payload_per_action():
-    with pytest.raises(ValidationError, match=r"action=validate_dsl 的 action_payload 校验失败：dsl: Field required"):
-        DataAnalyzingInput.model_validate({"action": "validate_dsl", "action_payload": {"semantic_config_id": "cfg_a"}})
-    with pytest.raises(
-        ValidationError, match=r"action=validate_dashboard 的 action_payload 校验失败：dsl: Field required"
-    ):
-        DataAnalyzingInput.model_validate({"action": "validate_dashboard", "action_payload": {}})
-    with pytest.raises(ValidationError, match=r"action=check_yaml 的 action_payload 校验失败：file_path"):
-        DataAnalyzingInput.model_validate({"action": "check_yaml", "action_payload": {}})
+def test_payload_requires_matching_model_per_action():
+    with pytest.raises(ValueError, match=r"action=validate_dsl 的 action_payload 校验失败：dsl: Field required"):
+        validate_data_analyzing_payload("validate_dsl", {"semantic_config_id": "cfg_a"})
+    with pytest.raises(ValueError, match=r"action=validate_dashboard 的 action_payload 校验失败：dsl: Field required"):
+        validate_data_analyzing_payload("validate_dashboard", {})
+    with pytest.raises(ValueError, match=r"action=check_yaml 的 action_payload 校验失败：file_path"):
+        validate_data_analyzing_payload("check_yaml", {})
 
 
-def test_input_execute_query_requires_exactly_one_of_dsl_sql():
-    with pytest.raises(ValidationError, match="必须且只能传入 dsl 或 sql 其中一个"):
-        DataAnalyzingInput.model_validate(
-            {
-                "action": "execute_query",
-                "action_payload": {"semantic_config_id": "cfg_a", "member_datasource_ids": ["m1"]},
-            }
+def test_payload_execute_query_requires_exactly_one_of_dsl_sql():
+    with pytest.raises(ValueError, match="必须且只能传入 dsl 或 sql 其中一个"):
+        validate_data_analyzing_payload(
+            "execute_query",
+            {"semantic_config_id": "cfg_a", "member_datasource_ids": ["m1"]},
         )
-    with pytest.raises(ValidationError, match="必须且只能传入 dsl 或 sql 其中一个"):
-        DataAnalyzingInput.model_validate(
+    with pytest.raises(ValueError, match="必须且只能传入 dsl 或 sql 其中一个"):
+        validate_data_analyzing_payload(
+            "execute_query",
             {
-                "action": "execute_query",
-                "action_payload": {
-                    "dsl": {"metrics": ["订单数"]},
-                    "sql": "select 1",
-                    "semantic_config_id": "cfg_a",
-                    "member_datasource_ids": ["m1"],
-                },
-            }
-        )
-
-
-def test_input_execute_query_reuses_semantic_query_input_rules():
-    ok = DataAnalyzingInput.model_validate(
-        {
-            "action": "execute_query",
-            "action_payload": {
                 "dsl": {"metrics": ["订单数"]},
+                "sql": "select 1",
                 "semantic_config_id": "cfg_a",
                 "member_datasource_ids": ["m1"],
             },
-        }
-    )
-    assert ok.action_payload["dsl"] == {"metrics": ["订单数"]}
-
-    with pytest.raises(ValidationError):
-        DataAnalyzingInput.model_validate(
-            {
-                "action": "execute_query",
-                "action_payload": {"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
-            }
         )
-    with pytest.raises(ValidationError):
-        DataAnalyzingInput.model_validate(
+
+
+def test_payload_execute_query_reuses_semantic_query_input_rules():
+    ok = validate_data_analyzing_payload(
+        "execute_query",
+        {
+            "dsl": {"metrics": ["订单数"]},
+            "semantic_config_id": "cfg_a",
+            "member_datasource_ids": ["m1"],
+        },
+    )
+    assert ok.dsl == {"metrics": ["订单数"]}
+
+    with pytest.raises(ValueError):
+        validate_data_analyzing_payload(
+            "execute_query",
+            {"dsl": {"metrics": ["订单数"]}, "member_datasource_ids": ["m1"]},
+        )
+    with pytest.raises(ValueError):
+        validate_data_analyzing_payload(
+            "execute_query",
             {
-                "action": "execute_query",
-                "action_payload": {
-                    "dsl": {"metrics": ["订单数"]},
-                    "semantic_config_id": "cfg_a",
-                    "member_datasource_ids": [],
-                },
-            }
+                "dsl": {"metrics": ["订单数"]},
+                "semantic_config_id": "cfg_a",
+                "member_datasource_ids": [],
+            },
         )
 
 
@@ -151,13 +144,8 @@ def test_input_normalizes_dsl_json_string_and_allows_dashboard_list():
     )
     assert isinstance(listed.action_payload["dsl"], list)
 
-    with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
-        DataAnalyzingInput.model_validate(
-            {
-                "action": "validate_dsl",
-                "action_payload": {"dsl": "not-json", "semantic_config_id": "cfg_a"},
-            }
-        )
+    with pytest.raises(ValueError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        validate_data_analyzing_payload("validate_dsl", {"dsl": "not-json", "semantic_config_id": "cfg_a"})
 
 
 def test_input_rejects_unknown_action():

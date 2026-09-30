@@ -946,7 +946,10 @@ class DataAnalyzingInput(BaseModel):
     ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
     ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
-    但每个 action 的 payload 在入口用 pydantic 模型校验，错参在入参即报错，不进 handler。
+    payload 的跨字段校验在工具实现入口经 ``validate_data_analyzing_payload`` 完成——
+    不能放进 model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的
+    校验错误（model_validator 抛错的 loc 恒为 ()），错误详情会被渲染成空白，
+    模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
     """
 
     action: Literal[
@@ -982,29 +985,35 @@ class DataAnalyzingInput(BaseModel):
         description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示",
     )
 
-    @model_validator(mode="after")
-    def check_action_payload(self) -> "DataAnalyzingInput":
-        payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS.get(self.action)
-        if payload_model is None:
-            raise ValueError(f"不支持的 action: {self.action}")
-        try:
-            payload_model.model_validate(self.action_payload)
-        except ValidationError as exc:
-            detail = "; ".join(
-                f"{'.'.join(str(part) for part in error.get('loc', ())) or 'action_payload'}: {error.get('msg', '')}"
-                for error in exc.errors()
-            )
-            hint = ""
-            if "member_datasource_ids" in detail:
-                hint = '；member_datasource_ids 必须传 ID 字符串数组，如 ["ORG_CODE1"]，不要传对象或裸字符串'
-            raise ValueError(f"action={self.action} 的 action_payload 校验失败：{detail}{hint}") from None
-        if self.action == "execute_query":
-            # SemanticQueryInput 只做字段级校验；dsl/sql 二选一在入口统一拦截
-            has_dsl = self.action_payload.get("dsl") is not None
-            has_sql = bool(str(self.action_payload.get("sql") or "").strip())
-            if has_dsl == has_sql:
-                raise ValueError("action=execute_query 必须且只能传入 dsl 或 sql 其中一个")
-        return self
+
+def validate_data_analyzing_payload(action: str, action_payload: dict[str, Any]) -> Any:
+    """按 action 校验 ``action_payload``，返回已验证的 payload 模型实例。
+
+    与 handler 内的解析共用 :data:`DATA_ANALYZING_ACTION_PAYLOAD_MODELS` 一张表，
+    保证入参校验与 handler 解析口径一致。必须在工具实现入口调用而不是放进
+    ``DataAnalyzingInput`` 的 model_validator——原因见该类 docstring。
+    """
+    payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS.get(action)
+    if payload_model is None:
+        raise ValueError(f"不支持的 action: {action}")
+    try:
+        payload = payload_model.model_validate(action_payload)
+    except ValidationError as exc:
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error.get('loc', ())) or 'action_payload'}: {error.get('msg', '')}"
+            for error in exc.errors()
+        )
+        hint = ""
+        if "member_datasource_ids" in detail:
+            hint = '；member_datasource_ids 必须传 ID 字符串数组，如 ["ORG_CODE1"]，不要传对象或裸字符串'
+        raise ValueError(f"action={action} 的 action_payload 校验失败：{detail}{hint}") from None
+    if action == "execute_query":
+        # SemanticQueryInput 只做字段级校验；dsl/sql 二选一在此统一拦截
+        has_dsl = payload.dsl is not None
+        has_sql = bool(str(payload.sql or "").strip())
+        if has_dsl == has_sql:
+            raise ValueError("action=execute_query 必须且只能传入 dsl 或 sql 其中一个")
+    return payload
 
 
 class CalculatorItem(BaseModel):
