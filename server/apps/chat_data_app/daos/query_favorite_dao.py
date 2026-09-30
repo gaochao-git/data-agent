@@ -14,7 +14,7 @@ from utils.models import SqlQueryFavorite
 class QueryFavoriteDao:
     """封装查询收藏相关 ORM 读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def list_favorites(

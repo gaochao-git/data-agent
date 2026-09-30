@@ -73,7 +73,7 @@ class _UnifiedEnginePlan:
 class SemanticAIQueryAdapter:
     """语义 DSL 输入适配器。"""
 
-    def __init__(self, semantic_config: dict, max_rows: int | None = None):
+    def __init__(self, semantic_config: dict, max_rows: int | None = None) -> None:
         """
         初始化语义 DSL 适配器
 

@@ -107,7 +107,7 @@ class WorkspaceFileDeleteConflictError(RuntimeError):
 class WorkspaceArchiveTooLargeError(RuntimeError):
     """目录打包下载的压缩包产物超过大小上限（限 zip 产物字节，非源文件大小）。"""
 
-    def __init__(self, max_bytes: int):
+    def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
         super().__init__(f"压缩包超过大小限制（{_format_size_limit(max_bytes)}），已中止打包")
 

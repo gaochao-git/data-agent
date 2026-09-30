@@ -15,7 +15,7 @@ from utils.models import ChatDataDashboard, ChatDataDashboardPanel
 class DashboardDao:
     """封装看板和面板配置表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     @staticmethod

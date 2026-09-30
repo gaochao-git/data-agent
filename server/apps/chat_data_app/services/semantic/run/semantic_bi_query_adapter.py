@@ -68,7 +68,7 @@ def _field_keys(table: str, table_alias: str, column: str) -> set[tuple[str, str
 class SemanticBIQueryAdapter:
     """可视化查询输入适配器。"""
 
-    def __init__(self, semantic_config: dict[str, Any], max_rows: int | None = None):
+    def __init__(self, semantic_config: dict[str, Any], max_rows: int | None = None) -> None:
         self.query_plan_context = SemanticQueryPlanContext(semantic_config)
         self.semantic_config = self.query_plan_context.semantic_config
         self.metrics_map = self.query_plan_context.metrics_map

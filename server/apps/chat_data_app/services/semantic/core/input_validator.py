@@ -64,7 +64,7 @@ class InputValidator:
         metrics_map: dict[str, dict],
         dimensions_map: dict[str, dict],
         max_limit: int = 100,
-    ):
+    ) -> None:
         """
         初始化验证器
 

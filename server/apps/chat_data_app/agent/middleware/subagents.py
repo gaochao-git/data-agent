@@ -828,7 +828,7 @@ def _subagent_tool_result_event(message: ToolMessage, parent_tool_call_id: str |
 class _SubagentStreamState:
     """子图直播的状态载体：去重、增量转发达标与匿名 id 兜底。"""
 
-    def __init__(self, parent_tool_call_id: str | None):
+    def __init__(self, parent_tool_call_id: str | None) -> None:
         self.parent_tool_call_id = parent_tool_call_id
         self.seen_ids: set[str] = set()
         self.text_caps: dict[str, _StreamCapState] = {}
@@ -1289,7 +1289,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredT
 class SubagentMiddleware(AgentMiddleware):
     """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
 
-    def __init__(self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls=None):
+    def __init__(self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls=None) -> None:
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)

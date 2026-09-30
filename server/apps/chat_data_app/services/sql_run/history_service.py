@@ -65,7 +65,7 @@ def _task_runtime_data(task: Any) -> dict[str, Any]:
 class QueryHistoryService:
     """查询历史列表、详情和批量停止编排。"""
 
-    def __init__(self, dao: QueryHistoryDao | None = None):
+    def __init__(self, dao: QueryHistoryDao | None = None) -> None:
         self.dao = dao or QueryHistoryDao()
 
     @staticmethod

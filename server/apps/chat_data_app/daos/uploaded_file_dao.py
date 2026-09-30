@@ -15,7 +15,7 @@ from utils.models import UploadedFile, UserThread
 class UploadedFileDao:
     """封装上传文件表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def thread_belongs_to_user(self, thread_id: str, *, user_id: str) -> bool:

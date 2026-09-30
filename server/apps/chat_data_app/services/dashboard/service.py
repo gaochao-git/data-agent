@@ -46,7 +46,7 @@ class PanelWritePayload:
 class DashboardService:
     """分析大屏服务（异步）"""
 
-    def __init__(self, dao: DashboardDao | None = None):
+    def __init__(self, dao: DashboardDao | None = None) -> None:
         self.dao = dao or DashboardDao(session_context=lambda: get_session())
 
     async def create_dashboard(

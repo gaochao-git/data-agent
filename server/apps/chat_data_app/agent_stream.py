@@ -478,7 +478,7 @@ def _finish_running_tool(
 class _ToolStreamState:
     """维护 LangGraph 流式工具调用状态，统一 running 和完成事件字段。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.tool_names: dict[str, str] = {}
         self.args_buffer: dict[str, str] = {}
         self.args_fallback: dict[str, dict[str, Any]] = {}
@@ -751,7 +751,7 @@ class _AgentSseStreamAdapter:
         debug_label: str | None = None,
         user_id: str | None = None,
         reasoning_turn_id: str | None = None,
-    ):
+    ) -> None:
         self.agent = agent
         self.initial_state = initial_state
         self.config = config

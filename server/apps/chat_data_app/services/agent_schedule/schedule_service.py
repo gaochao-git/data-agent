@@ -141,7 +141,7 @@ def _resolve_schedule_fields(
 class AgentScheduleService:
     """定时任务定义的管理入口；触发与派发由 agent_schedule_runtime 负责。"""
 
-    def __init__(self, dao=agent_schedule_dao):
+    def __init__(self, dao=agent_schedule_dao) -> None:
         self._dao = dao
 
     async def create_job(

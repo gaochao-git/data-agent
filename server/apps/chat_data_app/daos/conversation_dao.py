@@ -16,7 +16,7 @@ from utils.models import ChatDataAgentInbox, UserThread
 class ConversationDao:
     """封装 user_threads 表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     @staticmethod

@@ -20,7 +20,7 @@ class ConversationEventDao:
     # 轮次闭包迭代上限：每轮至少吞并一个更早轮次，真实数据 2 轮内收敛，这里只作防御性停止条件。
     _TURN_CLOSURE_MAX_ROUNDS = 16
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     @property

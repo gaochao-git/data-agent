@@ -31,7 +31,7 @@ def _dump_builder_config(builder_config: dict | None) -> str | None:
 class QueryFavoriteService:
     """查询收藏列表、创建、更新和删除编排。"""
 
-    def __init__(self, dao: QueryFavoriteDao | None = None):
+    def __init__(self, dao: QueryFavoriteDao | None = None) -> None:
         self.dao = dao or QueryFavoriteDao()
 
     async def list_favorites(

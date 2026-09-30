@@ -14,7 +14,7 @@ from utils.models import ChatDataQueryTask
 class QueryTaskDao:
     """封装 chat_data_query_task 表读写，含行锁状态流转。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def get_task(self, task_id: str) -> ChatDataQueryTask | None:

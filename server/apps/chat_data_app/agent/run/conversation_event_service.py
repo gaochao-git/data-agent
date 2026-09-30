@@ -57,7 +57,7 @@ class ConversationEventService:
         self,
         dao: ConversationEventDao | None = None,
         inbox_dao: AgentInboxDao = agent_inbox_dao,
-    ):
+    ) -> None:
         self._dao = dao or ConversationEventDao(session_context=lambda: get_session())
         self._inbox_dao = inbox_dao
 

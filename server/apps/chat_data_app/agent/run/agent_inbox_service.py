@@ -139,7 +139,7 @@ class AgentRunReapResult:
 
 
 class AgentInboxService:
-    def __init__(self, dao: AgentInboxDao = agent_inbox_dao):
+    def __init__(self, dao: AgentInboxDao = agent_inbox_dao) -> None:
         self._dao = dao
 
     async def start_run(

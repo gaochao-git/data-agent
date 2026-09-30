@@ -261,7 +261,7 @@ class _LatestModelSnapshotWriter:
         write_snapshot: Callable[[dict[str, Any]], Awaitable[None]],
         *,
         task_name: str,
-    ):
+    ) -> None:
         self._write_snapshot = write_snapshot
         self._task_name = task_name
         self._pending: dict[str, Any] | None = None
@@ -427,7 +427,7 @@ async def _persist_partial_agent_turn_history(
 class _AgentRunPreparationError(Exception):
     """Agent 流准备阶段致命失败；message 即下发前端的 error 文案。"""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
 

@@ -14,7 +14,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 class SemanticHistoryLearningDao:
     """封装指标集历史学习需要的查询历史读取。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def list_learning_history(

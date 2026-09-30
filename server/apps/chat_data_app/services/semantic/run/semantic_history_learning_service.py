@@ -741,7 +741,7 @@ class SemanticHistoryLearningService:
             [str, dict[str, Any], str, str, dict[str, Any], str], tuple[bool, str, list[str], str]
         ]
         | None = None,
-    ):
+    ) -> None:
         self.dao = dao or SemanticHistoryLearningDao()
         self.context_loader = context_loader or _load_history_conversation_context
         self.suggestion_loader = suggestion_loader or _generate_history_learning_suggestions_by_llm

@@ -438,7 +438,7 @@ def _resolve_new_skill_text_fields(
 class SkillService:
     """提供技能发现、详情和缓存刷新能力。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._dao: SkillDao | None = None
 
     @property

@@ -622,7 +622,7 @@ class SQLExecutor(ABC):
 class MySQLExecutor(SQLExecutor):
     """MySQL 执行器 - 使用 aiomysql 异步驱动"""
 
-    def __init__(self, host: str, port: int, database: str, user: str, password: str):
+    def __init__(self, host: str, port: int, database: str, user: str, password: str) -> None:
         self.host = host
         self.port = port
         self.database = database
@@ -832,7 +832,7 @@ class MySQLExecutor(SQLExecutor):
 class HiveExecutor(SQLExecutor):
     """Hive 执行器 - 使用 pyhive (同步库，通过 run_in_executor 包装为异步)"""
 
-    def __init__(self, host: str, port: int, database: str, username: str = None, password: str = None):
+    def __init__(self, host: str, port: int, database: str, username: str = None, password: str = None) -> None:
         self.host = host
         self.port = port
         self.database = database
@@ -991,7 +991,7 @@ class HiveHttpExecutor(SQLExecutor):
 
     def __init__(
         self, namespace: str, source_type: str = "hive", database: str = "", org_code: str = "", org_name: str = ""
-    ):
+    ) -> None:
         self.namespace = str(namespace or "").strip()
         self.source_type = str(source_type or "hive").strip().lower() or "hive"
         self.database = str(database or "").strip()

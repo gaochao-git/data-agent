@@ -375,7 +375,7 @@ class DataSourceManager:
     def __init__(
         self,
         metadata_adapter_registry: DataSourceMetadataAdapterRegistry | None = None,
-    ):
+    ) -> None:
         self.datasource_dao = DataSourceDao()
         self.metadata_adapter_registry = metadata_adapter_registry or get_metadata_adapter_registry()
         logger.info("数据源 DAO 已启用")

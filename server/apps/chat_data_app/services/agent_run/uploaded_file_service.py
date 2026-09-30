@@ -82,7 +82,7 @@ def _file_summary(row: Any) -> dict[str, Any]:
 class UploadedFileService:
     """上传文件保存、解析和查询编排。"""
 
-    def __init__(self, dao: UploadedFileDao | None = None):
+    def __init__(self, dao: UploadedFileDao | None = None) -> None:
         self.dao = dao or UploadedFileDao()
 
     async def upload_file(self, file: UploadFile, thread_id: str, user_id: str = "system") -> dict[str, Any]:

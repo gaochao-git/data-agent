@@ -14,7 +14,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 class QueryExecutionDao:
     """封装 chat_data_query_execution 表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def create_pending_executions(self, specs: Sequence[dict[str, str]]) -> list[str]:

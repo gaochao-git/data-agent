@@ -15,7 +15,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 class QueryHistoryDao:
     """封装查询历史相关 SQL/ORM 读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     @staticmethod

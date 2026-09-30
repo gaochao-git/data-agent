@@ -17,7 +17,7 @@ from utils.models import ChatDataPlugin
 class PluginDao:
     """封装 chat_data_plugin 表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def list_enabled_names(self) -> set[str]:

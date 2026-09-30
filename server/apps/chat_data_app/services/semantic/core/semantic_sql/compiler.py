@@ -11,7 +11,7 @@ from .dialect import get_dialect
 class SemanticSQLCompiler:
     """将标准化查询计划编译为指定方言的 SQL。"""
 
-    def __init__(self, *, dialect: str = "mysql", max_rows: int = 100):
+    def __init__(self, *, dialect: str = "mysql", max_rows: int = 100) -> None:
         self.dialect = str(dialect or "mysql").strip().lower() or "mysql"
         self.max_rows = max_rows
         self.dialect_adapter = get_dialect(self.dialect)

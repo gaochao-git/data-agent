@@ -20,7 +20,7 @@ class SelectCompilation:
 class _AliasAllocator:
     """分配不重复的 SELECT 别名，保持 Builder 字段兼容。"""
 
-    def __init__(self, to_sql_alias: Callable[[str, str], str]):
+    def __init__(self, to_sql_alias: Callable[[str, str], str]) -> None:
         self._to_sql_alias = to_sql_alias
         self._used: set[str] = set()
 

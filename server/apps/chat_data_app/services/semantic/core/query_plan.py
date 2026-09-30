@@ -74,7 +74,7 @@ def _relationship_alias(relationship: dict[str, Any], side: str) -> str:
 class SemanticQueryPlanContext:
     """两种输入适配器共享的只读语义模型索引和 JOIN 规划。"""
 
-    def __init__(self, semantic_config: dict[str, Any]):
+    def __init__(self, semantic_config: dict[str, Any]) -> None:
         normalized_config = dict(semantic_config or {})
         normalized_config["dimensions"] = [
             ensure_dimension_logical_type(item) for item in normalized_config.get("dimensions") or []

@@ -185,7 +185,7 @@ class MCPToolManager:
         cache_ttl_seconds: int | None = None,
         session_factory: Callable | None = None,
         config_loader: Callable[[], list[MCPServerConfig]] | None = None,
-    ):
+    ) -> None:
         self._tool_timeout = (
             tool_timeout_seconds
             if tool_timeout_seconds is not None
@@ -348,7 +348,7 @@ def get_mcp_tool_manager() -> MCPToolManager:
     return _manager
 
 
-def reset_mcp_tool_manager(**kwargs) -> MCPToolManager:
+def reset_mcp_tool_manager(**kwargs: Any) -> MCPToolManager:
     """重建单例（测试/配置变更场景）。"""
     global _manager
     _manager = MCPToolManager(**kwargs)

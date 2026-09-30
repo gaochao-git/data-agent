@@ -112,7 +112,7 @@ def _catalog_fingerprint(tools_info: list[MCPToolInfo]) -> str:
 class _BM25Index:
     """手写 Okapi BM25 倒排索引（小语料场景，纯 Python 实现足够）。"""
 
-    def __init__(self, docs: list[list[str]]):
+    def __init__(self, docs: list[list[str]]) -> None:
         self._doc_count = len(docs)
         self._doc_len = [len(doc) for doc in docs]
         self._avg_len = (sum(self._doc_len) / self._doc_count) if docs else 0.0
@@ -230,7 +230,7 @@ class MCPToolSearchService:
     manager 的 TTL 缓存与插件变更 reset 机制直接复用，本服务不新增缓存。
     """
 
-    def __init__(self, manager):
+    def __init__(self, manager) -> None:
         self._manager = manager
         self._catalog = MCPCatalog()
 

@@ -14,6 +14,7 @@
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from sqlglot import exp
 
@@ -67,7 +68,7 @@ class SqlGuardViolation:
     reason_code: str | None = None
 
 
-def _violation(rule: str, message: str, **kwargs) -> SqlGuardViolation:
+def _violation(rule: str, message: str, **kwargs: Any) -> SqlGuardViolation:
     return SqlGuardViolation(rule=rule, message=message, **kwargs)
 
 

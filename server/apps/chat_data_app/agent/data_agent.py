@@ -622,7 +622,7 @@ def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
-    **kwargs,
+    **kwargs: Any,
 ):
     """创建 ``chat_data`` Agent（规格见 ``CHAT_DATA_AGENT_SPEC``）。"""
     return create_agent_from_spec(
@@ -637,7 +637,7 @@ def get_data_agent_graph(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
-    **kwargs,
+    **kwargs: Any,
 ):
     """供会话读取和历史回放使用的单一 graph 入口。"""
     return create_data_agent(runtime_options, checkpointer=checkpointer, **kwargs)

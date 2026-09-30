@@ -323,7 +323,7 @@ def _sanitize_breakdown(items: Any) -> None:
 class ContextRequestBudget:
     """共享模型请求预算，统一管理固定输入和消息剩余容量。"""
 
-    def __init__(self, model_id: str | None, *, max_output_tokens: int | None = None):
+    def __init__(self, model_id: str | None, *, max_output_tokens: int | None = None) -> None:
         self._model_id = model_id
         self._max_output_tokens = max_output_tokens
         self._budget = get_model_context_budget(model_id, max_output_tokens=max_output_tokens)

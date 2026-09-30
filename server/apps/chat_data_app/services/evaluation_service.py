@@ -156,7 +156,7 @@ def _storage_cases(cases: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 class EvaluationService:
     """准确率评测测试集和运行记录编排服务。"""
 
-    def __init__(self, dao: EvaluationDao | None = None, session_context: Callable | None = None):
+    def __init__(self, dao: EvaluationDao | None = None, session_context: Callable | None = None) -> None:
         self.dao = dao or EvaluationDao()
         self._session_context = session_context or default_get_session
 

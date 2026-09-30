@@ -47,7 +47,7 @@ def _apply_cache_item_update(
 class SqlResultCacheDao:
     """封装 chat_data_sql_result_cache 表读写。"""
 
-    def __init__(self, session_context: Callable | None = None):
+    def __init__(self, session_context: Callable | None = None) -> None:
         self._session_context = session_context or default_get_session
 
     async def read_and_touch_cache(
