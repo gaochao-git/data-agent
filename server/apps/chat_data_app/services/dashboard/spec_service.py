@@ -267,7 +267,8 @@ def build_panel_sql_from_dashboard_card(
     与 SQL 生成共用同一份合并结果，避免两套合并逻辑产生口径分歧。
     max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
     """
-    dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
+    raw_dsl = card.get("dsl")
+    dsl: dict[str, Any] = raw_dsl if isinstance(raw_dsl, dict) else {}
     if dsl.get("compare") or card.get("compare"):
         raise ValueError("DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析")
     payload = _merge_card_dsl_payload(dsl, card)
@@ -473,16 +474,24 @@ async def execute_dashboard_panel_sql_preflight(
     execution_target = execution_targets[0]
     executor = get_executor(execution_target)
     try:
-        execute_kwargs = {
-            "sql": sql,
-            "limit": 1,
-            "timeout": min(await resolve_query_timeout(execution_target.get("source_type")), 30),
-            "user_id": user_id,
-            "datasource_id": datasource_id,
-        }
+        timeout = min(await resolve_query_timeout(execution_target.get("source_type")), 30)
         if "username" in inspect.signature(executor.execute).parameters:
-            execute_kwargs["username"] = username
-        result = await executor.execute(**execute_kwargs)
+            result = await executor.execute(
+                sql=sql,
+                limit=1,
+                timeout=timeout,
+                user_id=user_id,
+                datasource_id=datasource_id,
+                username=username,
+            )
+        else:
+            result = await executor.execute(
+                sql=sql,
+                limit=1,
+                timeout=timeout,
+                user_id=user_id,
+                datasource_id=datasource_id,
+            )
         if result.get("success"):
             return True, ""
         return False, str(result.get("error") or "SQL 预执行失败")
@@ -647,7 +656,8 @@ def _clamp_int(value: int, min_value: int, max_value: int) -> int:
 
 def normalize_dashboard_card_layout(card: dict[str, Any], index: int, chart_type: str) -> dict[str, int]:
     """规整 AI 看板规格中的卡片布局，未指定时保持原有两列默认布局。"""
-    layout = card.get("layout") if isinstance(card.get("layout"), dict) else {}
+    layout_raw = card.get("layout")
+    layout: dict[str, Any] = layout_raw if isinstance(layout_raw, dict) else {}
     default_h = 3 if chart_type == "kpi" else 4
     x = _coerce_int(layout.get("x", card.get("layout_x", (index % 2) * 6)), (index % 2) * 6)
     y = _coerce_int(layout.get("y", card.get("layout_y", (index // 2) * 4)), (index // 2) * 4)
@@ -673,7 +683,8 @@ def _normalize_dashboard_style_color(value: Any) -> str | None:
 
 def normalize_dashboard_card_chart_config(card: dict[str, Any]) -> dict[str, Any]:
     """提取模型可选择的前端图表样式配置。"""
-    chart_config = card.get("chart_config") if isinstance(card.get("chart_config"), dict) else {}
+    chart_config_raw = card.get("chart_config")
+    chart_config: dict[str, Any] = chart_config_raw if isinstance(chart_config_raw, dict) else {}
     result: dict[str, Any] = {
         "purpose": card.get("purpose") or "",
         "diagnosis": card.get("diagnosis") or "",

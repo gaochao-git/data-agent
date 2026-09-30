@@ -700,13 +700,15 @@ class _FakeDashboardService:
         }
         self.created_dashboard_id = "dash_created"
 
-    async def get_panel(self, panel_id: str, dashboard_id: str = "", user_id: str = None, include_public: bool = True):
+    async def get_panel(
+        self, panel_id: str, dashboard_id: str = "", user_id: str | None = None, include_public: bool = True
+    ):
         panel = self.panels.get(panel_id)
         if dashboard_id and panel and panel.get("dashboard_id") != dashboard_id:
             return None
         return copy.deepcopy(panel) if panel else None
 
-    async def get_dashboard(self, dashboard_id: str, user_id: str = None, include_public: bool = True):
+    async def get_dashboard(self, dashboard_id: str, user_id: str | None = None, include_public: bool = True):
         if dashboard_id == "dash_a":
             return {
                 "id": dashboard_id,
@@ -728,7 +730,7 @@ class _FakeDashboardService:
         name: str,
         user_id: str,
         description: str = "",
-        datasource_id: str = None,
+        datasource_id: str | None = None,
         theme: str = "light",
         operator_name: str = "",
     ):
@@ -749,7 +751,7 @@ class _FakeDashboardService:
         self,
         dashboard_id: str,
         payload,
-        user_id: str = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ):
         name = payload.name
@@ -792,7 +794,7 @@ class _FakeDashboardService:
         dashboard_id: str,
         panel_id: str,
         payload,
-        user_id: str = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ):
         name = payload.name
@@ -816,7 +818,7 @@ class _FakeDashboardService:
         return copy.deepcopy(panel)
 
     async def update_panels_layout(
-        self, dashboard_id: str, layouts: list[dict], user_id: str = None, operator_name: str = ""
+        self, dashboard_id: str, layouts: list[dict], user_id: str | None = None, operator_name: str = ""
     ):
         if dashboard_id not in {"dash_a", "dash_b", self.created_dashboard_id}:
             return None
@@ -835,14 +837,14 @@ class _FakeDashboardService:
             updated += 1
         return updated
 
-    async def delete_panel(self, dashboard_id: str, panel_id: str, user_id: str = None, operator_name: str = ""):
+    async def delete_panel(self, dashboard_id: str, panel_id: str, user_id: str | None = None, operator_name: str = ""):
         panel = self.panels.get(panel_id)
         if not panel or panel.get("dashboard_id") != dashboard_id:
             return False
         self.panels.pop(panel_id, None)
         return True
 
-    async def delete_dashboard(self, dashboard_id: str, user_id: str = None, operator_name: str = ""):
+    async def delete_dashboard(self, dashboard_id: str, user_id: str | None = None, operator_name: str = ""):
         self.dashboards.pop(dashboard_id, None)
         return True
 

@@ -13,7 +13,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, cast
 
 from utils.alarm import emit_dangerous_sql_alarm
 from utils.database import get_session
@@ -358,7 +358,7 @@ async def get_query_execution_status(execution_id: str) -> str:
 
 def _normalize_remote_task_entry(remote_task: dict[str, Any]) -> dict[str, Any] | None:
     """归一化远端任务映射，缺关键字段时返回 None。"""
-    normalized = {
+    normalized: dict[str, Any] = {
         "member_datasource_id": str((remote_task or {}).get("member_datasource_id") or "").strip(),
         "member_name": str((remote_task or {}).get("member_name") or "").strip(),
         "remote_task_id": str((remote_task or {}).get("remote_task_id") or "").strip(),
@@ -1106,13 +1106,13 @@ async def prepare_sql_batch_request_for_execution(
             request.model_copy(update={"sql": request.sql[0] if request.sql else ""}),
             datasource,
         )
-        return prepared.model_copy(update={"sql": [prepared.sql]})
+        return cast(QueryTaskCreateRequest, prepared).model_copy(update={"sql": [prepared.sql]})
     statements = list(request.sql)
     if len(statements) == 1:
         prepared = await prepare_sql_request_for_execution(
             request.model_copy(update={"sql": statements[0]}), datasource
         )
-        return prepared.model_copy(update={"sql": [prepared.sql]})
+        return cast(QueryTaskCreateRequest, prepared).model_copy(update={"sql": [prepared.sql]})
 
     for statement in statements:
         await prepare_sql_request_for_execution(request.model_copy(update={"sql": statement}), datasource)
@@ -1137,7 +1137,7 @@ async def create_task_for_execute_request(
         sql=[request.sql],
         limit=request.limit,
         timeout=request.timeout,
-        query_type=query_type or request.query_type or "sql",
+        query_type=cast(Literal["sql", "builder", "agent"], query_type or request.query_type or "sql"),
         builder_config=request.builder_config,
         semantic_builder_config=request.semantic_builder_config,
         skip_query_cache=request.skip_query_cache,
@@ -1612,7 +1612,7 @@ async def _run_agent_sql_execution(
         fallback_error="查询失败",
     )
     if task_info:
-        persistent_result_payload = final_result
+        persistent_result_payload: dict[str, Any] | None = final_result
         try:
             persistent_result_payload = await build_persistent_query_task_result_for_request(
                 execute_request, final_result, operator_name=operator_name
@@ -1656,7 +1656,7 @@ async def execute_agent_sql(
         query_type="agent",
     )
     try:
-        execute_request = await prepare_sql_request_for_execution(execute_request, datasource)
+        execute_request = cast(ExecuteSqlRequest, await prepare_sql_request_for_execution(execute_request, datasource))
     except ValueError as e:
         logger.error("智能体 SQL 预校验失败: %s", e)
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=str(e))

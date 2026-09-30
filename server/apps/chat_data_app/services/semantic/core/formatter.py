@@ -61,9 +61,9 @@ def format_params_for_display(
     dimensions: list[str],
     filters: list[dict],
     having: list[dict],
-    order_by: list[dict] = None,
-    limit: int = None,
-    offset: int = None,
+    order_by: list[dict] | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> str:
     """
     格式化语义参数为前端展示的文本块

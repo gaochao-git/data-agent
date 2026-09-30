@@ -129,7 +129,7 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     async def fake_list_all(configs, user_id, page_size):
         return {"conversations": [{"id": "all"}], "page_size": page_size, "agent_count": len(configs)}
 
-    monkeypatch.setattr(conversation_router.conversation, "list", fake_list)
+    monkeypatch.setattr(conversation_router.conversation, "list_conversations", fake_list)
     monkeypatch.setattr(conversation_router.conversation, "list_by_agent_ids", fake_list_by_agent_ids)
     monkeypatch.setattr(conversation_router.conversation, "list_all", fake_list_all)
     listed_one = payload(

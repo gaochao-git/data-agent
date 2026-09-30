@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from sqlalchemy import ColumnElement, Select, and_, func, or_, select, update
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
 
-def get_session() -> AsyncGenerator[AsyncSession, None]:
+def get_session() -> AbstractAsyncContextManager[AsyncSession]:
     """运行时获取业务库会话，避免无数据库环境导入技能模块失败。"""
     from utils.database import get_session as session_context
 

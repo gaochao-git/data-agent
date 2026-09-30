@@ -189,7 +189,7 @@ def _file_selection_mention_suffix(file_selections: list[str]) -> str:
 
 
 def _build_user_message(
-    content: str | list[dict[str, Any]],
+    content: str | list[str | dict[str, Any]],
     file_selections: list[str] | None = None,
     *,
     message_id: str | None = None,
@@ -205,7 +205,7 @@ def _build_user_message(
     if mention_suffix and isinstance(content, str):
         content = f"{content}{mention_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
-    additional_kwargs = {
+    additional_kwargs: dict[str, Any] = {
         "timestamp": _get_timestamp(),
         "reasoning_turn_id": reasoning_turn_id,
     }
@@ -366,7 +366,7 @@ def _format_tool_event(
         message: 提示信息
         timestamp: 时间戳（格式：YYYY-MM-DD HH:MM:SS）
     """
-    data = {
+    data: dict[str, Any] = {
         "type": "tool",
         "tool_name": tool_name,
         "tool_call_id": tool_call_id,
@@ -602,7 +602,7 @@ class _ToolStreamState:
         if intent:
             self.progress_intents[tool_call_id] = intent
         # 行数未变化的合并事件不携带行数字段，前端保留已有值
-        event_counts = counts if counts_changed else (None, None)
+        event_counts: tuple[int, int] | tuple[None, None] = counts if counts_changed else (None, None)
         return [
             _format_tool_progress_event(
                 tool_call_id,
@@ -806,7 +806,7 @@ class _AgentSseStreamAdapter:
         """登记下一次 graph 调用前必须先发送的 SSE 事件。"""
         self._queued_events.append(event)
 
-    async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
+    async def stream_events(self) -> AsyncIterator[dict[str, Any] | str]:
         """输出 token_usage、thinking、tool、message 事件。"""
         while self._queued_events:
             yield self._queued_events.pop(0)
@@ -831,7 +831,7 @@ class _AgentSseStreamAdapter:
             with suppress(asyncio.CancelledError):
                 await timeout_task
 
-    async def _iter_agent_stream_events(self, started_at: float) -> AsyncIterator[dict[str, Any]]:
+    async def _iter_agent_stream_events(self, started_at: float) -> AsyncIterator[dict[str, Any] | str]:
         """消费 agent.astream 原始事件流并转成 SSE 事件；客户端断开时提前结束。"""
         stream_started = False
         async for event in self.agent.astream(
@@ -865,7 +865,7 @@ class _AgentSseStreamAdapter:
 
     async def _iter_message_chunk_events(
         self, message_chunk: Any, metadata: Any, started_at: float
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any] | str]:
         """按可见性过滤并处理单个消息 chunk，产出 SSE 事件。"""
         if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
             return
@@ -1033,7 +1033,7 @@ class _AgentSseStreamAdapter:
 
     async def _handle_message_chunk(
         self, message_chunk: Any, metadata: dict[str, Any]
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any] | str]:
         flags = _MessageChunkFlags.of(message_chunk)
         if not flags.has_visible_payload and not (self.include_empty_tool_messages and flags.is_tool_message):
             return
@@ -1220,7 +1220,7 @@ def _cancel_agent_owner_task(owner_task: asyncio.Task | None, reason: str) -> No
 
 def _should_renew_heartbeat(heartbeat_status: str, owner_token: str | None) -> bool:
     """心跳为 active 且持有 owner token 时才续约。"""
-    return heartbeat_status == "active" and owner_token
+    return heartbeat_status == "active" and bool(owner_token)
 
 
 async def _heartbeat_agent_run(
@@ -1235,7 +1235,7 @@ async def _heartbeat_agent_run(
         await asyncio.sleep(5)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
-            if _should_renew_heartbeat(heartbeat_status, owner_token):
+            if _should_renew_heartbeat(heartbeat_status, owner_token) and owner_token is not None:
                 await agent_run_event_service.renew_owner(run_id, owner_token)
         except AgentRunLeaseLostError:
             _cancel_agent_owner_task(owner_task, "agent_run_lease_lost")
@@ -1450,7 +1450,7 @@ class TurnUserInput:
     user_query: str
     message_content: str
     file_selections: list[str]
-    vision_attachments: list[dict[str, Any]]
+    vision_attachments: list[str]
     skill_names: list[str]
     adopted_messages: list[HumanMessage] | None = None
 
@@ -1722,7 +1722,7 @@ async def _run_chat_data_agent_stream(
                     message_content=message_content,
                     file_selections=valid_file_selections,
                     vision_attachments=vision_attachments,
-                    skill_names=skill_names,
+                    skill_names=skill_names or [],
                     adopted_messages=adopted_messages,
                 ),
                 resume=TurnResumeContext(

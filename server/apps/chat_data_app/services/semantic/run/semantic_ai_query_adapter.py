@@ -54,8 +54,8 @@ class _UnifiedEnginePlan:
     validated_limit: int | None = None
     validated_offset: int | None = None
     requires_grouping_for_raw_fields: bool = False
-    main_table: str | None = None
-    main_table_alias: str | None = None
+    main_table: str = ""
+    main_table_alias: str = ""
     builder_dimensions: list[dict[str, Any]] = field(default_factory=list)
     builder_dimension_keys: set = field(default_factory=set)
     builder_aggregations: list[dict[str, Any]] = field(default_factory=list)
@@ -138,7 +138,9 @@ class SemanticAIQueryAdapter:
         return f"'{escaped}'"
 
     @staticmethod
-    def _rewrite_expression_table_qualifier(expression: str, table_alias: str, physical_table: str) -> str:
+    def _rewrite_expression_table_qualifier(
+        expression: str, table_alias: str | None, physical_table: str | None
+    ) -> str:
         expr = str(expression or "").strip()
         if not expr or not table_alias or not physical_table or table_alias == physical_table:
             return expr
@@ -302,7 +304,7 @@ class SemanticAIQueryAdapter:
         if parsed and parsed[1]:
             column = parsed[1]
         elif metric_cfg.get("column"):
-            column = metric_cfg.get("column")
+            column = str(metric_cfg["column"])
         return {
             "table": metric_table,
             "tableAlias": metric_table_alias,
@@ -445,7 +447,7 @@ class SemanticAIQueryAdapter:
 
     def _build_table_column_map(self) -> None:
         """构建表和字段的映射，用于存在性校验"""
-        self.tables_map = {}  # table_name -> {column_name: column_info}
+        self.tables_map: dict[str, dict[str, Any] | None] = {}  # table_name -> {column_name: column_info}
 
         # 从数据源的 tables 配置中获取表结构
         tables = self.semantic_config.get("tables", [])
@@ -488,9 +490,9 @@ class SemanticAIQueryAdapter:
         dimensions: list[str],
         filters: list[dict],
         having: list[dict],
-        order_by: list[dict] = None,
-        limit: int = None,
-        offset: int = None,
+        order_by: list[dict] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> dict[str, Any]:
         """
         生成 SQL（统一入口）
@@ -521,9 +523,9 @@ class SemanticAIQueryAdapter:
         dimensions: list[str],
         filters: list[dict],
         having: list[dict],
-        order_by: list[dict] = None,
-        limit: int = None,
-        offset: int = None,
+        order_by: list[dict] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> dict[str, Any]:
         """统一引擎流水线：校验 → 主表推断 → 维度/指标映射 → 过滤/排序映射 → 编译。"""
         plan = _UnifiedEnginePlan()
@@ -533,7 +535,7 @@ class SemanticAIQueryAdapter:
 
         # 不同周期的派生指标混用会因固定过滤交集而算错，提前拦截
         mixed_err = check_mixed_derived_periods(
-            [metric.get("name") for metric in plan.matched_metrics] + plan.having_metric_names,
+            [str(metric.get("name") or "") for metric in plan.matched_metrics] + plan.having_metric_names,
             self.metrics_map,
         )
         if mixed_err:
@@ -559,9 +561,9 @@ class SemanticAIQueryAdapter:
         dimensions: list[str],
         filters: list[dict],
         having: list[dict],
-        order_by: list[dict],
-        limit: int,
-        offset: int,
+        order_by: list[dict] | None,
+        limit: int | None,
+        offset: int | None,
     ) -> str | None:
         """串行校验各入参并填充校验结果；任一失败返回错误文案，全部通过返回 None。"""
         err = self._validate_and_fill_query_fields(plan, metrics, dimensions, filters, having, order_by, limit, offset)
@@ -577,9 +579,9 @@ class SemanticAIQueryAdapter:
         dimensions: list[str],
         filters: list[dict],
         having: list[dict],
-        order_by: list[dict],
-        limit: int,
-        offset: int,
+        order_by: list[dict] | None,
+        limit: int | None,
+        offset: int | None,
     ) -> str | None:
         """逐项校验指标/维度/过滤/HAVING/排序/limit/offset 并写入 plan。"""
         if metrics:
@@ -670,7 +672,7 @@ class SemanticAIQueryAdapter:
 
     def _build_builder_aggregations(self, plan: _UnifiedEnginePlan) -> None:
         for metric in plan.matched_metrics:
-            metric_name = metric.get("name")
+            metric_name = str(metric.get("name") or "")
             metric_expression = (metric.get("expression") or "").strip()
             metric_table = metric.get("table")
             metric_table_alias = self._table_alias(metric) or metric_table
@@ -783,7 +785,7 @@ class SemanticAIQueryAdapter:
                 plan.builder_having.append(having_node)
                 continue
 
-            metric_name = hv.get("metric")
+            metric_name = str(hv.get("metric") or "")
             having_node = self._metric_aggregation_node(metric_name, plan.main_table)
             having_node.update(
                 {
@@ -816,7 +818,7 @@ class SemanticAIQueryAdapter:
 
     def _append_order_by_entry(self, plan: _UnifiedEnginePlan, od: dict[str, Any]) -> None:
         """把单个 ORDER BY 条目按指标/维度口径映射为 builder 排序节点。"""
-        field_name = od.get("field")
+        field_name = str(od.get("field") or "")
         direction = od.get("direction", "DESC")
         if field_name in self.metrics_map:
             metric_cfg = self._metric_base_cfgs.get(field_name) or self.metrics_map.get(field_name, {})

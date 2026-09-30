@@ -54,7 +54,7 @@ class DashboardService:
         name: str,
         user_id: str,
         description: str = "",
-        datasource_id: str = None,
+        datasource_id: str | None = None,
         theme: str = "light",
         operator_name: str = "",
     ) -> dict[str, Any]:
@@ -91,7 +91,7 @@ class DashboardService:
         return self._dashboard_to_dict(dashboard)
 
     async def get_dashboard(
-        self, dashboard_id: str, user_id: str = None, include_public: bool = True
+        self, dashboard_id: str, user_id: str | None = None, include_public: bool = True
     ) -> dict[str, Any] | None:
         """获取大屏详情（含面板）"""
         dashboard, panels = await self.dao.get_dashboard_with_panels(
@@ -105,7 +105,7 @@ class DashboardService:
         dashboard_dict["panels"] = [self._panel_to_dict(panel) for panel in panels]
         return dashboard_dict
 
-    async def list_dashboards(self, user_id: str = None, scope: str = "mine") -> list[dict[str, Any]]:
+    async def list_dashboards(self, user_id: str | None = None, scope: str = "mine") -> list[dict[str, Any]]:
         """获取大屏列表"""
         dashboards = await self.dao.list_dashboards(user_id=user_id, scope=scope)
         return [self._dashboard_to_dict(dashboard) for dashboard in dashboards]
@@ -113,11 +113,11 @@ class DashboardService:
     async def update_dashboard(
         self,
         dashboard_id: str,
-        name: str = None,
-        description: str = None,
-        theme: str = None,
-        background_id: str = None,
-        user_id: str = None,
+        name: str | None = None,
+        description: str | None = None,
+        theme: str | None = None,
+        background_id: str | None = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ) -> dict[str, Any] | None:
         """更新大屏信息"""
@@ -133,7 +133,7 @@ class DashboardService:
         logger.info(f"更新大屏: {dashboard_id}")
         return self._dashboard_to_dict(dashboard)
 
-    async def delete_dashboard(self, dashboard_id: str, user_id: str = None, operator_name: str = "") -> bool:
+    async def delete_dashboard(self, dashboard_id: str, user_id: str | None = None, operator_name: str = "") -> bool:
         """删除大屏（逻辑删除，同时删除所有面板）"""
         deleted = await self.dao.delete_dashboard(
             dashboard_id=dashboard_id,
@@ -151,7 +151,7 @@ class DashboardService:
         self,
         dashboard_id: str,
         payload: PanelWritePayload,
-        user_id: str = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ) -> dict[str, Any] | None:
         """添加面板到大屏（面板属性经 ``PanelWritePayload`` 传入）。"""
@@ -188,7 +188,7 @@ class DashboardService:
         dashboard_id: str,
         panel_id: str,
         payload: PanelWritePayload,
-        user_id: str = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ) -> dict[str, Any] | None:
         """更新面板（只写入 payload 中显式提供的字段）。"""
@@ -220,7 +220,7 @@ class DashboardService:
         self,
         dashboard_id: str,
         layouts: list[dict[str, Any]],
-        user_id: str = None,
+        user_id: str | None = None,
         operator_name: str = "",
     ) -> int | None:
         """批量更新面板布局"""
@@ -237,7 +237,7 @@ class DashboardService:
         return updated_count
 
     async def delete_panel(
-        self, dashboard_id: str, panel_id: str, user_id: str = None, operator_name: str = ""
+        self, dashboard_id: str, panel_id: str, user_id: str | None = None, operator_name: str = ""
     ) -> bool:
         """删除面板（逻辑删除）"""
         deleted = await self.dao.delete_panel(
@@ -252,7 +252,7 @@ class DashboardService:
         return deleted
 
     async def get_panel(
-        self, panel_id: str, dashboard_id: str = None, user_id: str = None, include_public: bool = True
+        self, panel_id: str, dashboard_id: str | None = None, user_id: str | None = None, include_public: bool = True
     ) -> dict[str, Any] | None:
         """获取单个面板"""
         panel = await self.dao.get_panel(
@@ -267,7 +267,10 @@ class DashboardService:
 
     @staticmethod
     def _dashboard_update_values(
-        name: str = None, description: str = None, theme: str = None, background_id: str = None
+        name: str | None = None,
+        description: str | None = None,
+        theme: str | None = None,
+        background_id: str | None = None,
     ) -> dict[str, Any]:
         values: dict[str, Any] = {}
         if name is not None:
@@ -286,14 +289,14 @@ class DashboardService:
         name: str,
         sql: str,
         chart_type: str,
-        chart_config: dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
+        chart_config: dict | None = None,
+        layout_x: int | None = None,
+        layout_y: int | None = None,
         layout_w: int = 4,
         layout_h: int = 4,
-        refresh_interval: int = None,
-        source_thread_id: str = None,
-        datasource_id: str = None,
+        refresh_interval: int | None = None,
+        source_thread_id: str | None = None,
+        datasource_id: str | None = None,
         member_datasource_id: str = "",
     ) -> dict[str, Any]:
         return {
@@ -314,16 +317,16 @@ class DashboardService:
     @staticmethod
     def _panel_update_values(
         *,
-        name: str = None,
-        sql: str = None,
-        chart_type: str = None,
-        chart_config: dict = None,
-        layout_x: int = None,
-        layout_y: int = None,
-        layout_w: int = None,
-        layout_h: int = None,
-        refresh_interval: int = None,
-        member_datasource_id: str = None,
+        name: str | None = None,
+        sql: str | None = None,
+        chart_type: str | None = None,
+        chart_config: dict | None = None,
+        layout_x: int | None = None,
+        layout_y: int | None = None,
+        layout_w: int | None = None,
+        layout_h: int | None = None,
+        refresh_interval: int | None = None,
+        member_datasource_id: str | None = None,
     ) -> dict[str, Any]:
         values: dict[str, Any] = {}
         optional_fields = {

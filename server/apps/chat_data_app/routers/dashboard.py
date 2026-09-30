@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, overload
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -39,8 +39,21 @@ def _current_user(request: Request) -> Any:
     return _get_current_user(request)
 
 
-def _with_dashboard_permission(dashboard: dict[str, Any] | None, user_id: str) -> dict[str, Any] | None:
-    """补充当前用户对看板的管理权限。"""
+@overload
+def _with_dashboard_permission(dashboard: dict[str, Any], user_id: str) -> dict[str, Any]: ...
+
+
+@overload
+def _with_dashboard_permission(dashboard: None, user_id: str) -> None: ...
+
+
+def _with_dashboard_permission(
+    dashboard: dict[str, Any] | None, user_id: str
+) -> dict[str, Any] | None:
+    """补充当前用户对看板的管理权限。
+
+    输入非 None 时输出必非 None（overload 表达该契约，供列表推导等调用点收窄）。
+    """
     if not dashboard:
         return dashboard
     item = dict(dashboard)
@@ -151,7 +164,7 @@ async def create_dashboard(request: DashboardCreateRequest, http_request: Reques
         dashboard = await service.create_dashboard(
             name=request.name,
             user_id=user_id,
-            description=request.description,
+            description=str(request.description or ""),
             datasource_id=request.datasource_id,
             theme=request.theme,
             operator_name=operator_name,
@@ -203,7 +216,8 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
     try:
         current_user = _current_user(http_request)
         spec = request.dashboard_spec or {}
-        cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
+        raw_cards = spec.get("cards")
+        cards: list[Any] = raw_cards if isinstance(raw_cards, list) else []
         error_response = _dashboard_spec_error_response(request, spec, cards)
         if error_response:
             return error_response

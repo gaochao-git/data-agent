@@ -132,7 +132,7 @@ def _http_response_summary(payload: Any) -> dict[str, Any]:
     return {key: value for key, value in summary.items() if value is not None}
 
 
-async def resolve_query_timeout(source_type: str, timeout: int | None = None) -> int:
+async def resolve_query_timeout(source_type: str | None, timeout: int | None = None) -> int:
     """解析查询超时时间：显式传参优先（封顶 MAX_QUERY_TIMEOUT_SECONDS），
     否则按数据源类型读配置变量表热值（表 > env > 注册表默认 60/600 秒）。"""
     if timeout is not None:
@@ -214,8 +214,11 @@ def _extract_remote_code(payload: dict[str, Any]) -> int | None:
     """提取远端业务码。"""
     if not isinstance(payload, dict) or "code" not in payload:
         return None
+    code = payload.get("code")
+    if code is None:
+        return None
     try:
-        return int(payload.get("code"))
+        return int(code)
     except (TypeError, ValueError):
         return None
 
@@ -627,7 +630,7 @@ class SQLExecutor(ABC):
 class MySQLExecutor(SQLExecutor):
     """MySQL 执行器 - 使用 aiomysql 异步驱动"""
 
-    def __init__(self, host: str, port: int, database: str, user: str, password: str) -> None:
+    def __init__(self, host: str, port: int, database: str, user: str, password: str | None) -> None:
         self.host = host
         self.port = port
         self.database = database
@@ -837,7 +840,9 @@ class MySQLExecutor(SQLExecutor):
 class HiveExecutor(SQLExecutor):
     """Hive 执行器 - 使用 pyhive (同步库，通过 run_in_executor 包装为异步)"""
 
-    def __init__(self, host: str, port: int, database: str, username: str = None, password: str = None) -> None:
+    def __init__(
+        self, host: str, port: int, database: str, username: str | None = None, password: str | None = None
+    ) -> None:
         self.host = host
         self.port = port
         self.database = database
@@ -1154,6 +1159,8 @@ class HiveHttpExecutor(SQLExecutor):
             )
             if submit_error:
                 return submit_error
+            if task_id is None:
+                return _http_error_result("远端任务提交未返回任务 ID")
             return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
         except TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
@@ -1372,7 +1379,7 @@ def get_executor(datasource: dict) -> SQLExecutor:
     Raises:
         ValueError: 不支持的数据源类型
     """
-    source_type = datasource.get("source_type")
+    source_type = str(datasource.get("source_type") or "")
     query_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
     config = resolve_execution_source_config(
         source_type,
@@ -1394,10 +1401,10 @@ def get_executor(datasource: dict) -> SQLExecutor:
 
     if source_type == "mysql":
         return MySQLExecutor(
-            host=config.get("host"),
-            port=config.get("port", 3306),
-            database=config.get("database"),
-            user=config.get("user"),
+            host=str(config.get("host") or ""),
+            port=int(config.get("port") or 3306),
+            database=str(config.get("database") or ""),
+            user=str(config.get("user") or ""),
             password=config.get("password"),
         )
     elif source_type == "hive":

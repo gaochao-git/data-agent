@@ -109,6 +109,7 @@ async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monk
     with pytest.raises(RuntimeError, match="semantic context failed"):
         async for event in agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv-1",
                 user_query="查询订单",
             )
@@ -900,6 +901,7 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
     chunks, failure = await _collect_stream_until_failure(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查销售额",
                 datasource_id="ds",
@@ -924,6 +926,7 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
     chunks, failure = await _collect_stream_until_failure(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="hello",
             )
@@ -959,6 +962,7 @@ async def test_generate_chat_data_stream_disconnect_uses_clean_query_state(monke
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查订单",
                 datasource_id="ds_a",
@@ -1128,6 +1132,7 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查订单",
                 datasource_id="ds_a",
@@ -1171,6 +1176,7 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="",
                 datasource_id="ds_a",
@@ -1309,6 +1315,7 @@ async def test_generate_chat_data_stream_tool_chunk_missing_id_and_bad_json(monk
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1347,6 +1354,7 @@ async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_n
     chunks, failure = await _collect_stream_until_failure(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1392,6 +1400,7 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1434,6 +1443,7 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1486,6 +1496,7 @@ async def test_generate_chat_data_stream_thinking_with_content_and_untracked_too
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1522,6 +1533,7 @@ async def test_generate_chat_data_stream_message_end_without_token_usage(monkeyp
     chunks = await collect_stream(
         agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
                 datasource_id="ds_a",
@@ -1551,6 +1563,7 @@ async def test_lease_lost_cancellation_publishes_nothing(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         async for event in agent_stream._generate_chat_data_stream(
             ChatDataStreamRequest(
+                user_id="u_test",
                 thread_id="conv",
                 user_query="查",
             )

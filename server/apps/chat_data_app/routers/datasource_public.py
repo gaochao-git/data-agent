@@ -118,8 +118,11 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
 @router.get("/datasources/{datasource_id}/schema")
 async def get_schema(
     datasource_id: str,
-    tables: str = None,
-    request: Request = None,
+    tables: str | None = None,
+    # FastAPI 只把裸 Request 注解识别为注入对象（Optional[Request] 会被当普通参数做
+    # Pydantic 校验并直接启动失败），因此不能写成 Request | None；注入值运行时永不为 None。
+    # 因 tables 有默认值且不能重排参数位置，这里保留 = None 的非常规形态。
+    request: Request = None,  # type: ignore[assignment]
 ) -> JSONResponse:
     """获取数据源缓存表结构。实时物理元数据只允许管理接口主动拉取/同步。"""
     try:

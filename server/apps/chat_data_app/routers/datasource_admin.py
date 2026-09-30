@@ -784,7 +784,7 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request) -> 
             request.org_code,
         )
 
-        source_config = {
+        source_config: dict[str, Any] = {
             "database": request.database,
             "org_code": request.org_code,
             "org_name": request.org_name,

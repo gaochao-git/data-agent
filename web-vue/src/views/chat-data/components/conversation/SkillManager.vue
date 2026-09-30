@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import {
   copySkill,
   createSkill,
@@ -113,6 +114,11 @@ const canShowFileTree = computed(() => Boolean(selectedSkill.value?.source === '
 const selectedFileTitle = computed(() => selectedFileNode.value?.file_path || 'SKILL.md')
 const selectedFileContent = computed(() => selectedFileNode.value ? fileForm.content : displayedContent.value)
 const displayedContentHtml = computed(() => renderMarkdown(selectedFileContent.value || '暂无内容'))
+
+// markdown 预览里的 ```mermaid 代码块渲染为图表
+const skillMarkdownRef = ref<HTMLElement | null>(null)
+const { schedule: scheduleMermaid } = useMermaidRenderer(() => skillMarkdownRef.value)
+watch(displayedContentHtml, scheduleMermaid, { immediate: true })
 const canEditSelectedFile = computed(() => Boolean(canManageFiles.value && selectedFileNode.value && selectedFileEditing.value))
 
 // ---- 二进制 / Office 文件预览（与主对话工作区预览同一套类型判定与渲染方式）----
@@ -1137,6 +1143,7 @@ watch(() => props.initialSkillId, (skillId) => {
         </div>
         <div
           v-else-if="contentViewMode === 'markdown'"
+          ref="skillMarkdownRef"
           class="skill-markdown min-h-[420px] rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-700"
           v-html="displayedContentHtml"
         ></div>

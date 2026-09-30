@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
+import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
 import { formatDateTimeValue, formatGenerationSpeed, formatGenerationStatsDetail, renderMarkdown } from '../../utils'
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
@@ -46,6 +47,11 @@ const emit = defineEmits<{
 
 // 用户手动展开的思考分段（跨流式过程保持；未点开的分段一律默认收起）
 const expandedThinkingSegmentKeys = ref<Set<string>>(new Set())
+
+// 消息里的 ```mermaid 代码块渲染为图表：流式增量期间防抖，静默后跑一轮
+const messageListRef = ref<HTMLElement | null>(null)
+const { schedule: scheduleMermaid } = useMermaidRenderer(() => messageListRef.value)
+watch(() => props.messages, scheduleMermaid, { deep: true, immediate: true })
 
 const getThinkingSegmentKey = (messageId: string, thinkingSegmentId: string) => `${messageId}:${thinkingSegmentId}`
 
@@ -234,7 +240,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
 </script>
 
 <template>
-  <div class="chat-message-list mx-auto flex w-[90%] max-w-[774px] flex-col gap-5">
+  <div ref="messageListRef" class="chat-message-list mx-auto flex w-[90%] max-w-[774px] flex-col gap-5">
     <div
       v-for="(message, messageIndex) in messages"
       :key="message.id"

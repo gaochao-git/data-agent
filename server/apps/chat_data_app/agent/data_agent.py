@@ -75,11 +75,11 @@ class AgentRunControls:
     静默降级为无围栏、无 steering 的普通运行。
     """
 
-    run_id: str
-    owner_token: str
-    inbox_service: Any
-    admit_inbox_messages: Any
-    steering_tracker: Any
+    run_id: str | None = None
+    owner_token: str | None = None
+    inbox_service: Any = None
+    admit_inbox_messages: Any = None
+    steering_tracker: Any = None
 
     def is_complete(self) -> bool:
         return bool(
@@ -569,7 +569,7 @@ def create_agent_from_spec(
     )
     steering_middleware = None
     tool_execution_fence_middleware = None
-    if run_controls is not None and run_controls.is_complete():
+    if run_controls is not None and run_controls.run_id and run_controls.owner_token and run_controls.is_complete():
         tool_execution_fence_middleware = create_tool_execution_fence_middleware(
             run_id=run_controls.run_id,
             owner_token=run_controls.owner_token,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { renderMarkdown } from '../../utils'
 
 const props = defineProps({
@@ -10,10 +11,15 @@ const props = defineProps({
 })
 
 const renderedContent = computed(() => renderMarkdown(props.content))
+
+// 预览内容里的 ```mermaid 代码块渲染为图表
+const previewRef = ref<HTMLElement | null>(null)
+const { schedule: scheduleMermaid } = useMermaidRenderer(() => previewRef.value)
+watch(() => props.content, scheduleMermaid, { immediate: true })
 </script>
 
 <template>
-  <div class="markdown-file-preview" v-html="renderedContent"></div>
+  <div ref="previewRef" class="markdown-file-preview" v-html="renderedContent"></div>
 </template>
 
 <style scoped>

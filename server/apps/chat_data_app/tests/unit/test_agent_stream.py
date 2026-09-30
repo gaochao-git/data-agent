@@ -677,6 +677,7 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_auto_file_grep",
                     user_query="5+5等于多少",
                     datasource_id="ds_a",
@@ -726,6 +727,7 @@ def test_generate_chat_data_stream_injects_note_on_partial_prematerialize(monkey
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_partial_prematerialize",
                     user_query="查询订单数",
                     datasource_id="ds_a",
@@ -768,6 +770,7 @@ def test_generate_chat_data_stream_aborts_when_semantic_prematerialize_fails(mon
         _collect_async_iter_until_failure(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_prematerialize_failed",
                     user_query="查询订单数",
                     datasource_id="ds_a",
@@ -886,6 +889,7 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_select_tool_event",
                     user_query="按机构查询交易金额",
                     datasource_id="ds_a",
@@ -931,6 +935,7 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_file_selections",
                     user_query="分析这个文件",
                     datasource_id="ds_a",
@@ -964,6 +969,7 @@ def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_query_skill_names",
                     user_query="查询金额",
                     datasource_id="ds_a",
@@ -1016,6 +1022,7 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_multiple_file_grep_event",
                     user_query="查询金额",
                     datasource_id="ds_a",
@@ -1072,6 +1079,7 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_retrieval_tool_event",
                     user_query="查询订单金额和用户数",
                     datasource_id="ds_a",
@@ -1126,6 +1134,7 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_cross_config_retrieval",
                     user_query="按用户等级关联订单金额",
                     datasource_id="ds_a",
@@ -1157,6 +1166,7 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_selected_semantic_no_precheck",
                     user_query="查询明细",
                     datasource_id="ds_a",
@@ -1187,6 +1197,7 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_keep_semantic",
                     user_query="查询订单金额",
                     datasource_id="ds_a",
@@ -1217,6 +1228,7 @@ def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(m
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_selected_ambiguous_semantic",
                     user_query="商品数量是多少",
                     datasource_id="ds_a",
@@ -1246,6 +1258,7 @@ def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_no_preblock_semantic",
                     user_query="查询退款金额",
                     datasource_id="ds_a",
@@ -1297,6 +1310,7 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_multiple_semantic",
                     user_query="查询金额",
                     datasource_id="ds_a",
@@ -1350,6 +1364,7 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_cross_semantic_retrieval",
                     user_query="查询订单金额和商品库存",
                     datasource_id="ds_a",
@@ -1540,6 +1555,7 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
         _collect_async_iter_until_failure(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_error",
                     user_query="查订单数",
                     datasource_id="ds_a",
@@ -1574,6 +1590,7 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
         _collect_async_iter_until_failure(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_context_limit",
                     user_query="查订单数",
                     datasource_id="ds_a",
@@ -1601,6 +1618,7 @@ def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
         _collect_async_iter_until_failure(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_missing_semantic",
                     user_query="查订单",
                     datasource_id="ds_a",
@@ -1632,6 +1650,7 @@ def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypa
         _collect_async_iter(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_disconnect",
                     user_query="查订单",
                     datasource_id="ds_a",
@@ -1670,6 +1689,7 @@ def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_withou
         _collect_async_iter_until_failure(
             _generate_chat_data_stream(
                 ChatDataStreamRequest(
+                    user_id="u_test",
                     thread_id="conv_state_fail",
                     user_query="查订单",
                     datasource_id="ds_a",

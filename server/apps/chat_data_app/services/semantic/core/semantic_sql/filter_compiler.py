@@ -38,7 +38,7 @@ UNSAFE_EXPRESSION_PATTERN = re.compile(
 )
 
 
-def ensure_safe_sql_expression(expression: str, *, label: str = "表达式") -> str:
+def ensure_safe_sql_expression(expression: str | None, *, label: str = "表达式") -> str:
     """校验自由 SQL 表达式不含注释、分号或写操作关键字；不合法抛 ValueError。"""
     text = str(expression or "").strip()
     if not text:

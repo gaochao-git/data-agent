@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import ToolCallRequest, wrap_tool_call
+from langchain.agents.middleware import AgentMiddleware, ToolCallRequest, wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from apps.chat_data_app.agent.workspace.runtime import workspace_runtime_from_state
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 _READ_PAGINATED_TOOLS = frozenset({"file_read"})
 
 
-def create_tool_result_middleware() -> Callable[[ToolCallRequest], Awaitable[ToolMessage]]:
+def create_tool_result_middleware() -> AgentMiddleware:
     """Create the sole boundary that turns raw tool output into model output."""
 
     @wrap_tool_call(name="ToolResultMiddleware")
@@ -55,12 +55,12 @@ async def _finalize_tool_message(
     if tool_name in _READ_PAGINATED_TOOLS:
         recovery = _read_tool_recovery(tool_name, request, message.content)
         return _replace_tool_message(message, recovery=recovery) if recovery else message
-    content = _tool_message_text(message.content)
-    if content is None:
+    text = _tool_message_text(message.content)
+    if text is None:
         return message
-    if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
+    if len(text) <= TOOL_RESULT_OFFLOAD_SIZE:
         return message
-    externalized, recovery = await _externalize_generic_text(content, tool_name, request)
+    externalized, recovery = await _externalize_generic_text(text, tool_name, request)
     return _replace_tool_message(message, content=externalized, recovery=recovery)
 
 
@@ -71,7 +71,7 @@ async def _finalize_query_result(
     query_result = dict(internal["payload"])
     meta = dict(internal["meta"])
     status = query_result_status(query_result)
-    public_meta = {
+    public_meta: dict[str, Any] = {
         "query_mode": str(meta.get("query_mode") or ""),
     }
     public_meta = {key: value for key, value in public_meta.items() if value is not None and value != ""}

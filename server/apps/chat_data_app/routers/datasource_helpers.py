@@ -353,7 +353,7 @@ def _semantic_health_issue(
         "target": target,
     }
     if config:
-        issue["config_id"] = config.get("id") or config.get("semantic_config_id")
+        issue["config_id"] = config.get("id") or config.get("semantic_config_id") or ""
         issue["config_name"] = config.get("name") or ""
     return issue
 
@@ -551,8 +551,8 @@ def _build_datasource_semantic_health(datasource: dict, configs: list[dict]) -> 
     }
 
 
-def _merge_health_status(*statuses: str) -> str:
-    """合并多层健康状态。"""
+def _merge_health_status(*statuses: str | None) -> str:
+    """合并多层健康状态（None 按缺失处理）。"""
     if any(status == "invalid" for status in statuses):
         return "invalid"
     if any(status == "warning" for status in statuses):

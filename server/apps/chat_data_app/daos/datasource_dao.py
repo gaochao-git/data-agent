@@ -231,7 +231,7 @@ class DataSourceDao:
             return tables
         groups_by_table = await self.get_table_groups_by_table_names_async(group_id, table_names)
         for table in tables:
-            table["groups"] = groups_by_table.get(table.get("table_name"), [])
+            table["groups"] = groups_by_table.get(table.get("table_name") or "", [])
         return tables
 
     def _build_member_sources(self, row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -325,13 +325,13 @@ class DataSourceDao:
             rows = [self._group_model_to_row(row) for row in query_result.scalars().all()]
         tables_map: dict[str, list[dict[str, Any]]] = {}
         if include_tables:
-            group_ids = [row.get("group_id") for row in rows if row.get("group_id")]
+            group_ids = [str(row["group_id"]) for row in rows if row.get("group_id")]
             tables_map = await self._get_group_tables_map_async(group_ids)
         result = []
         for row in rows:
             datasource = self._map_group_row(row)
             group_id = datasource.get("group_id")
-            datasource["ds_tables"] = tables_map.get(group_id, []) if include_tables else []
+            datasource["ds_tables"] = tables_map.get(group_id or "", []) if include_tables else []
             datasource["member_datasource_ids"] = _parse_member_sources_text(
                 row.get("member_sources_text"),
                 row.get("template_source"),
@@ -365,7 +365,7 @@ class DataSourceDao:
         for group_id, tables in result.items():
             groups_by_table = groups_map.get(group_id, {})
             for table in tables:
-                table["groups"] = groups_by_table.get(table.get("table_name"), [])
+                table["groups"] = groups_by_table.get(table.get("table_name") or "", [])
         return result
 
     async def get_datasource_tables_by_group_id_async(self, group_id: str) -> list[dict[str, Any]]:
@@ -533,7 +533,7 @@ class DataSourceDao:
         update_by_name: str,
     ) -> list[dict[str, Any]]:
         """按 (table_group_name, table_name) 去重构建关系行。"""
-        relation_rows = []
+        relation_rows: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for group in groups or []:
             table_group_name = str((group or {}).get("table_group_name") or "").strip()
@@ -571,10 +571,8 @@ class DataSourceDao:
         if not row:
             return None
         datasource = self._map_group_row(row)
-        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource.get("group_id"))
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(
-            datasource.get("group_id")
-        )
+        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
+        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
@@ -597,10 +595,8 @@ class DataSourceDao:
         if not row:
             return None
         datasource = self._map_group_row(row)
-        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource.get("group_id"))
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(
-            datasource.get("group_id")
-        )
+        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
+        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
@@ -634,10 +630,8 @@ class DataSourceDao:
         if not row:
             return None
         datasource = self._map_group_row(row)
-        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource.get("group_id"))
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(
-            datasource.get("group_id")
-        )
+        datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
+        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 

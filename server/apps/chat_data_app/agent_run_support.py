@@ -243,14 +243,16 @@ async def _persist_agent_turn_history(
             "token_usage": sanitize_context_usage_for_response(usage) if is_last_turn else None,
         }
         if run_id and stream_event_id_provider is not None:
+            # persist_kwargs 为异构 dict 展开，mypy 无法把 dict[str, 联合类型] 对齐到
+            # 具名 kwargs 签名（键值在上方逐一构造、与签名一一对应）；此为 mypy 已知限制。
             await conversation_event_service.persist_turn_with_checkpoint(
-                **persist_kwargs,
+                **persist_kwargs,  # type: ignore[arg-type]
                 run_id=run_id,
                 owner_token=owner_token,
                 stream_id=_resolve_history_stream_id(snapshot_stream_id, stream_event_id_provider),
             )
         else:
-            await conversation_event_service.persist_turn(**persist_kwargs)
+            await conversation_event_service.persist_turn(**persist_kwargs)  # type: ignore[arg-type]
 
 
 class _LatestModelSnapshotWriter:
@@ -725,7 +727,7 @@ class _AgentRunStreamCallbacks:
     """
 
     thread_id: str
-    user_id: str | None
+    user_id: str
     username: str | None
     run_id: str | None
     owner_token: str | None
@@ -787,11 +789,14 @@ async def _persist_agent_model_snapshot(
     snapshot["__history_stream_id"] = (
         callbacks.stream_event_id_provider() if callbacks.stream_event_id_provider else None
     )
-    callbacks.model_snapshot_writer.submit(snapshot)
+    if callbacks.model_snapshot_writer is not None:
+        callbacks.model_snapshot_writer.submit(snapshot)
 
 
 async def _flush_agent_model_snapshots(callbacks: _AgentRunStreamCallbacks) -> None:
     """Wait until the newest submitted snapshot is durable."""
+    if callbacks.model_snapshot_writer is None:
+        return
     await callbacks.model_snapshot_writer.flush()
 
 
@@ -809,6 +814,8 @@ async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> No
 
 async def _persist_agent_turn_history_snapshot(callbacks: _AgentRunStreamCallbacks) -> None:
     await _flush_agent_model_snapshots(callbacks)
+    if callbacks.stream_adapter is None:
+        return
     await _persist_agent_turn_history(
         callbacks.stream_adapter,
         conversation_id=callbacks.thread_id,
@@ -840,6 +847,7 @@ async def _persist_agent_partial_history(callbacks: _AgentRunStreamCallbacks) ->
     if (
         callbacks.resume_answer is not None
         and callbacks.run_id
+        and callbacks.stream_adapter is not None
         and callbacks.stream_adapter.graph_started
         and callbacks.stream_adapter.state is not None
         and not callbacks.stream_adapter.pending_interrupt()
@@ -851,6 +859,7 @@ async def _mark_agent_resume_checkpointed(callbacks: _AgentRunStreamCallbacks) -
     if (
         callbacks.resume_answer is not None
         and callbacks.run_id
+        and callbacks.stream_adapter is not None
         and callbacks.stream_adapter.graph_started
         and not callbacks.stream_adapter.pending_interrupt()
     ):

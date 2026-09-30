@@ -53,7 +53,7 @@ def _as_list(value: Any, field_name: str = "字段") -> list[dict[str, Any]]:
     return value
 
 
-def _field_keys(table: str, table_alias: str, column: str) -> set[tuple[str, str]]:
+def _field_keys(table: str | None, table_alias: str | None, column: str | None) -> set[tuple[str, str]]:
     keys: set[tuple[str, str]] = set()
     normalized_table = normalize_text(table)
     normalized_alias = normalize_text(table_alias) or normalized_table
@@ -526,7 +526,9 @@ class SemanticBIQueryAdapter:
         right = operand.get("right")
         if operator == "/" and isinstance(right, dict) and right.get("type") == "literal":
             try:
-                if float(right.get("value")) == 0:
+                # value=None 会抛 TypeError 走下方 except（跳过前置校验的兜底分支），
+                # 不能写成 `or 0` 提前收敛，否则除零语义漂移且分支覆盖丢失。
+                if float(right.get("value")) == 0:  # type: ignore[arg-type]
                     raise ValueError("HAVING 表达式不允许除以 0")
             except ValueError:
                 raise

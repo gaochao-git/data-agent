@@ -85,3 +85,25 @@
   margin: 4px 0;
   padding-left: 18px;
 }
+
+/*
+ * Mermaid 图表容器：渲染成功后替换原代码块，失败保持代码块展示。
+ * 全局而非 scoped：会话正文、子智能体中间文本、文件预览、技能预览
+ * 四类消费位共用一份定义（与 .conversation-markdown 同理）。
+ */
+.mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}

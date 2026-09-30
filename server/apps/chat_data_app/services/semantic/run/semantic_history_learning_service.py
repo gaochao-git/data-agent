@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -748,7 +748,7 @@ class SemanticHistoryLearningService:
         self.history_matcher = history_matcher or _history_belongs_to_config
 
     @staticmethod
-    def normalize_sources(sources: list[str]) -> set[str]:
+    def normalize_sources(sources: Sequence[str]) -> set[str]:
         source_set = {str(item or "").strip().lower() for item in (sources or []) if str(item or "").strip()}
         if not source_set:
             raise ValueError("请至少选择一个学习来源")
@@ -907,7 +907,7 @@ class SemanticHistoryLearningService:
         config: dict[str, Any],
         days: int,
         limit: int,
-        sources: list[str],
+        sources: Sequence[str],
         include_failed: bool,
     ) -> dict[str, Any]:
         source_set = self.normalize_sources(sources)

@@ -149,7 +149,7 @@ _completion_handlers: dict[str, Callable] = {}
 
 def register_agent(
     agent_id: str,
-    get_graph: Callable = None,
+    get_graph: Callable | None = None,
 ) -> None:
     """
     注册 agent 配置
@@ -242,7 +242,7 @@ def _build_completion_handler_kwargs(
 ) -> dict[str, Any]:
     """按 handler 签名构造 completion 入参。"""
     sig = inspect.signature(handler)
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "conversation_id": conversation_id,
         "query": request.query,
         "options": options,
@@ -458,7 +458,7 @@ async def list_conversations(
                     status="error",
                 )
             rows = await conversation.list_by_agent_ids(requested_agent_ids, user_id, page_size + 1, offset)
-            result = _flat_conversation_page_result(rows, page, page_size)
+            result: dict[str, Any] | list[dict[str, Any]] = _flat_conversation_page_result(rows, page, page_size)
         elif agent_id:
             # 指定 agent_id，使用该智能体的数据库
             config = get_agent_config(agent_id)
@@ -466,7 +466,7 @@ async def list_conversations(
                 return business_response(
                     msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
                 )
-            rows = await conversation.list(agent_id, user_id, page_size + 1, offset)
+            rows = await conversation.list_conversations(agent_id, user_id, page_size + 1, offset)
             result = _flat_conversation_page_result(rows, page, page_size)
         else:
             # 不指定 agent_id，查询所有智能体的会话

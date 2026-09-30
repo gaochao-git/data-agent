@@ -195,10 +195,13 @@ class ConversationWorkspaceRuntime:
             self.backend = create_workspace_backend(self.backend)
         if not isinstance(self.backend, WorkspaceBackend):
             raise TypeError("backend 必须是 local、sandbox 或 WorkspaceBackend 实现")
+        # mypy 无法感知 __post_init__ 的归一化（字段声明为 union 以接受 backend 名称），
+        # 内部方法统一读这个已收窄的引用，避免 11 处 union-attr 误报。
+        self._resolved_backend: WorkspaceBackend = self.backend
 
     @property
     def backend_name(self) -> str:
-        return self.backend.name
+        return self._resolved_backend.name
 
     @property
     def runtime_skills_dir(self) -> Path:
@@ -252,12 +255,12 @@ class ConversationWorkspaceRuntime:
         limit: int,
         max_chars: int,
     ) -> dict[str, Any]:
-        return await self.backend.read_text_file(
+        return await self._resolved_backend.read_text_file(
             self, file_path=file_path, offset=offset, limit=limit, max_chars=max_chars
         )
 
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
-        return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
+        return await self._resolved_backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
     async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
         """Write system-owned semantic model files through the active backend."""
@@ -274,7 +277,7 @@ class ConversationWorkspaceRuntime:
         old_content: str,
         new_content: str,
     ) -> dict[str, Any]:
-        return await self.backend.replace_text_file(
+        return await self._resolved_backend.replace_text_file(
             self,
             file_path=file_path,
             old_content=old_content,
@@ -300,10 +303,10 @@ class ConversationWorkspaceRuntime:
         )
 
     async def list_dir(self, *, path: str, max_depth: int) -> list[dict[str, Any]]:
-        return await self.backend.list_dir(self, path=path, max_depth=max_depth)
+        return await self._resolved_backend.list_dir(self, path=path, max_depth=max_depth)
 
     async def create_dir(self, *, path: str) -> dict[str, Any]:
-        return await self.backend.create_dir(self, path=path)
+        return await self._resolved_backend.create_dir(self, path=path)
 
     async def delete_path(
         self,
@@ -312,7 +315,7 @@ class ConversationWorkspaceRuntime:
         recursive: bool,
         expected_type: Literal["file", "dir"],
     ) -> dict[str, Any]:
-        return await self.backend.delete_path(
+        return await self._resolved_backend.delete_path(
             self,
             path=path,
             recursive=recursive,
@@ -320,14 +323,14 @@ class ConversationWorkspaceRuntime:
         )
 
     async def move_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
-        return await self.backend.move_path(
+        return await self._resolved_backend.move_path(
             self,
             source_path=source_path,
             destination_path=destination_path,
         )
 
     async def copy_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
-        return await self.backend.copy_path(
+        return await self._resolved_backend.copy_path(
             self,
             source_path=source_path,
             destination_path=destination_path,
@@ -340,7 +343,7 @@ class ConversationWorkspaceRuntime:
         pattern: str,
         max_results: int,
     ) -> list[dict[str, Any]]:
-        return await self.backend.search_files(
+        return await self._resolved_backend.search_files(
             self,
             path=path,
             pattern=pattern,
@@ -360,7 +363,7 @@ class ConversationWorkspaceRuntime:
         context_lines: int = 0,
         output_mode: str = "content",
     ) -> dict[str, Any]:
-        return await self.backend.grep_text(
+        return await self._resolved_backend.grep_text(
             self,
             path=path,
             patterns=patterns,

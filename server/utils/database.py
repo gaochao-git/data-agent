@@ -105,7 +105,7 @@ async def _dispose_engine() -> None:
         await engine.dispose()
 
 
-async def _failover_database_endpoint(failed_endpoint: str, reason: Exception | None = None) -> None:
+async def _failover_database_endpoint(failed_endpoint: DatabaseEndpoint, reason: Exception | None = None) -> None:
     """切换业务库节点；当前请求不重试，由下一次请求使用新节点。"""
     previous, current, advanced = _endpoint_selector.advance_if_current(failed_endpoint)
     if not advanced:
@@ -173,8 +173,8 @@ async def select_available_database_endpoint() -> None:
 
 
 # 全局引擎和会话工厂
-_engine: AsyncEngine = None
-_session_factory: async_sessionmaker[AsyncSession] = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 _engine_state_lock = RLock()
 
 

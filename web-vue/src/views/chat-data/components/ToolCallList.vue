@@ -6,6 +6,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import ToolCallCard from './ToolCallCard.vue'
 import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from '../utils/toolDisplay'
+import { useMermaidRenderer } from '../composables/useMermaidRenderer'
 import { renderMarkdown } from '../utils'
 import type { ExecutionTargetOption, SubagentTrailItem, ToolCallInfo } from '../types'
 
@@ -109,6 +110,11 @@ const renderTrailMarkdown = (key: string, content: string): string => {
   markdownCache.set(key, { source: content, html })
   return html
 }
+
+// 子智能体中间文本里的 ```mermaid 代码块渲染为图表：流式增量期间防抖，静默后跑一轮
+const toolCallListRef = ref<HTMLElement | null>(null)
+const { schedule: scheduleMermaid } = useMermaidRenderer(() => toolCallListRef.value)
+watch(() => props.toolCalls, scheduleMermaid, { immediate: true })
 
 const buildTrailView = (item: SubagentTrailItem, isParentRunning: boolean): TrailView => {
   if (item.kind === 'message') {
@@ -297,7 +303,7 @@ watch(
 </script>
 
 <template>
-  <div v-if="toolCalls.length > 0" class="flex min-w-0 max-w-full flex-col gap-2">
+  <div v-if="toolCalls.length > 0" ref="toolCallListRef" class="flex min-w-0 max-w-full flex-col gap-2">
     <template v-for="tc in toolCalls" :key="tc.tool_call_id">
       <ToolCallCard
         :tool-call="tc"

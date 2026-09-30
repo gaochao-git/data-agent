@@ -1,13 +1,17 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from apps.chat_data_app.routers import skills as skills_routes
 from apps.chat_data_app.schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 from utils.error_codes import ErrorCode
+
+# 异常路径测试复用的空 Request（路由层捕获后返回对应错误码）
+_REQ = cast(Request, None)
 
 
 class FakeSkillService:
@@ -348,7 +352,7 @@ def test_skill_list_scopes_require_user(monkeypatch):
 @pytest.mark.parametrize(
     ("route_call", "expected_code"),
     [
-        (lambda: skills_routes.list_skills(None), ErrorCode.CHATDATA_SKILL_LIST_FAILED),
+        (lambda: skills_routes.list_skills(_REQ), ErrorCode.CHATDATA_SKILL_LIST_FAILED),
         (
             lambda: skills_routes.create_user_skill(
                 SkillCreateRequest(
@@ -359,7 +363,7 @@ def test_skill_list_scopes_require_user(monkeypatch):
                     visibility_type="private",
                     content="",
                 ),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_CREATE_FAILED,
         ),
@@ -369,21 +373,21 @@ def test_skill_list_scopes_require_user(monkeypatch):
                 SkillUpdateRequest(
                     skill_title="标题", skill_desc="", skill_category="custom", visibility_type="private", content=""
                 ),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_UPDATE_FAILED,
         ),
-        (lambda: skills_routes.delete_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_DELETE_FAILED),
-        (lambda: skills_routes.copy_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_COPY_FAILED),
-        (lambda: skills_routes.publish_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_PUBLISH_FAILED),
-        (lambda: skills_routes.list_skill_versions("skill_a", None), ErrorCode.CHATDATA_SKILL_VERSION_LIST_FAILED),
-        (lambda: skills_routes.get_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FAILED),
+        (lambda: skills_routes.delete_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_DELETE_FAILED),
+        (lambda: skills_routes.copy_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_COPY_FAILED),
+        (lambda: skills_routes.publish_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_PUBLISH_FAILED),
+        (lambda: skills_routes.list_skill_versions("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_VERSION_LIST_FAILED),
+        (lambda: skills_routes.get_skill_version("skill_a", 1, _REQ), ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FAILED),
         (
-            lambda: skills_routes.list_skill_version_files("skill_a", 1, None),
+            lambda: skills_routes.list_skill_version_files("skill_a", 1, _REQ),
             ErrorCode.CHATDATA_SKILL_VERSION_FILES_FAILED,
         ),
         (
-            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED,
         ),
         (
@@ -391,18 +395,18 @@ def test_skill_list_scopes_require_user(monkeypatch):
                 "skill_a",
                 1,
                 SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="# A"),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED,
         ),
         (
-            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_DELETE_FAILED,
         ),
-        (lambda: skills_routes.rollback_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_ROLLBACK_FAILED),
-        (lambda: skills_routes.favorite_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_FAVORITE_FAILED),
-        (lambda: skills_routes.unfavorite_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED),
-        (lambda: skills_routes.get_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_DETAIL_FAILED),
+        (lambda: skills_routes.rollback_skill_version("skill_a", 1, _REQ), ErrorCode.CHATDATA_SKILL_ROLLBACK_FAILED),
+        (lambda: skills_routes.favorite_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_FAVORITE_FAILED),
+        (lambda: skills_routes.unfavorite_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED),
+        (lambda: skills_routes.get_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_DETAIL_FAILED),
     ],
 )
 def test_skill_routes_generic_error_mapping(route_call, expected_code, monkeypatch):
@@ -426,21 +430,21 @@ def test_skill_routes_generic_error_mapping(route_call, expected_code, monkeypat
                 SkillUpdateRequest(
                     skill_title="标题", skill_desc="", skill_category="custom", visibility_type="private", content=""
                 ),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_UPDATE_INVALID,
         ),
-        (lambda: skills_routes.delete_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_DELETE_INVALID),
-        (lambda: skills_routes.copy_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_COPY_INVALID),
-        (lambda: skills_routes.publish_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_PUBLISH_INVALID),
-        (lambda: skills_routes.list_skill_versions("skill_a", None), ErrorCode.CHATDATA_SKILL_VERSION_LIST_INVALID),
-        (lambda: skills_routes.get_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_INVALID),
+        (lambda: skills_routes.delete_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_DELETE_INVALID),
+        (lambda: skills_routes.copy_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_COPY_INVALID),
+        (lambda: skills_routes.publish_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_PUBLISH_INVALID),
+        (lambda: skills_routes.list_skill_versions("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_VERSION_LIST_INVALID),
+        (lambda: skills_routes.get_skill_version("skill_a", 1, _REQ), ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_INVALID),
         (
-            lambda: skills_routes.list_skill_version_files("skill_a", 1, None),
+            lambda: skills_routes.list_skill_version_files("skill_a", 1, _REQ),
             ErrorCode.CHATDATA_SKILL_VERSION_FILES_INVALID,
         ),
         (
-            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID,
         ),
         (
@@ -448,16 +452,16 @@ def test_skill_routes_generic_error_mapping(route_call, expected_code, monkeypat
                 "skill_a",
                 1,
                 SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="# A"),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_FILE_SAVE_INVALID,
         ),
         (
-            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_DELETE_INVALID,
         ),
-        (lambda: skills_routes.rollback_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_ROLLBACK_INVALID),
-        (lambda: skills_routes.unfavorite_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID),
+        (lambda: skills_routes.rollback_skill_version("skill_a", 1, _REQ), ErrorCode.CHATDATA_SKILL_ROLLBACK_INVALID),
+        (lambda: skills_routes.unfavorite_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID),
     ],
 )
 def test_skill_routes_value_error_mapping(route_call, expected_code, monkeypatch):
@@ -476,20 +480,20 @@ def test_skill_routes_value_error_mapping(route_call, expected_code, monkeypatch
 @pytest.mark.parametrize(
     ("route_call", "expected_code"),
     [
-        (lambda: skills_routes.delete_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_DELETE_FORBIDDEN),
-        (lambda: skills_routes.copy_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_COPY_FORBIDDEN),
-        (lambda: skills_routes.publish_user_skill("skill_a", None), ErrorCode.CHATDATA_SKILL_PUBLISH_FORBIDDEN),
-        (lambda: skills_routes.list_skill_versions("skill_a", None), ErrorCode.CHATDATA_SKILL_VERSION_LIST_FORBIDDEN),
+        (lambda: skills_routes.delete_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_DELETE_FORBIDDEN),
+        (lambda: skills_routes.copy_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_COPY_FORBIDDEN),
+        (lambda: skills_routes.publish_user_skill("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_PUBLISH_FORBIDDEN),
+        (lambda: skills_routes.list_skill_versions("skill_a", _REQ), ErrorCode.CHATDATA_SKILL_VERSION_LIST_FORBIDDEN),
         (
-            lambda: skills_routes.get_skill_version("skill_a", 1, None),
+            lambda: skills_routes.get_skill_version("skill_a", 1, _REQ),
             ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FORBIDDEN,
         ),
         (
-            lambda: skills_routes.list_skill_version_files("skill_a", 1, None),
+            lambda: skills_routes.list_skill_version_files("skill_a", 1, _REQ),
             ErrorCode.CHATDATA_SKILL_VERSION_FILES_FORBIDDEN,
         ),
         (
-            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.read_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN,
         ),
         (
@@ -497,15 +501,15 @@ def test_skill_routes_value_error_mapping(route_call, expected_code, monkeypatch
                 "skill_a",
                 1,
                 SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="# A"),
-                None,
+                _REQ,
             ),
             ErrorCode.CHATDATA_SKILL_FILE_SAVE_FORBIDDEN,
         ),
         (
-            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", None),
+            lambda: skills_routes.delete_skill_version_file("skill_a", 1, "references", "a.md", _REQ),
             ErrorCode.CHATDATA_SKILL_FILE_DELETE_FORBIDDEN,
         ),
-        (lambda: skills_routes.rollback_skill_version("skill_a", 1, None), ErrorCode.CHATDATA_SKILL_ROLLBACK_FORBIDDEN),
+        (lambda: skills_routes.rollback_skill_version("skill_a", 1, _REQ), ErrorCode.CHATDATA_SKILL_ROLLBACK_FORBIDDEN),
     ],
 )
 def test_skill_routes_permission_error_mapping(route_call, expected_code, monkeypatch):

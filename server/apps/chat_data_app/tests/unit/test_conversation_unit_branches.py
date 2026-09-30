@@ -14,7 +14,7 @@ from utils.models import Base, UserThread
 
 
 async def seed_conversation(
-    conversation_id: str, *, title: str = None, user_id: str = "u1", agent_id: str = "agent_a"
+    conversation_id: str, *, title: str | None = None, user_id: str = "u1", agent_id: str = "agent_a"
 ) -> None:
     """造数工具：走生产 create_thread 链路创建会话记录。"""
     await conversation_module.conversation_dao.create_thread(
@@ -104,7 +104,7 @@ async def test_conversation_crud_and_list_branches(conversation_db):
         await conversation_module.get_or_create_conversation("agent_a", conv_id, user_id="u2")
     assert await conversation_module.get_or_create_conversation("agent_b", "conv_b", user_id="u1") == "conv_b"
 
-    listed = await conversation_module.list("agent_a", user_id="u1", limit=10, offset=-1)
+    listed = await conversation_module.list_conversations("agent_a", user_id="u1", limit=10, offset=-1)
     assert [item["id"] for item in listed] == [conv_id]
     assert await conversation_module.list_by_agent_ids([], user_id="u1") == []
     listed_many = await conversation_module.list_by_agent_ids(["agent_a", "agent_b"], user_id="u1")
@@ -194,7 +194,7 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     await seed_conversation("conv_existing", title="原始标题")
     await seed_conversation("conv_system", user_id="")
 
-    listed_without_user = await conversation_module.list("agent_a", user_id=None, limit=10, offset=0)
+    listed_without_user = await conversation_module.list_conversations("agent_a", user_id=None, limit=10, offset=0)
     assert {item["id"] for item in listed_without_user} >= {"conv_existing", "conv_system"}
 
     listed_by_agents_without_user = await conversation_module.list_by_agent_ids(
@@ -202,14 +202,14 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     )
     assert {item["id"] for item in listed_by_agents_without_user} >= {"conv_existing", "conv_system"}
 
-    original_list = conversation_module.list
+    original_list = conversation_module.list_conversations
 
     async def sometimes_fails(agent_id, user_id=None, limit=50, offset=0):
         if agent_id == "bad_agent":
             raise RuntimeError("list failed")
         return await original_list(agent_id, user_id, limit, offset)
 
-    monkeypatch.setattr(conversation_module, "list", sometimes_fails)
+    monkeypatch.setattr(conversation_module, "list_conversations", sometimes_fails)
     rows = await conversation_module.list_all({"bad_agent": {}, "agent_a": {}}, user_id=None, limit=10)
     assert any(item["id"] == "conv_existing" for item in rows)
 

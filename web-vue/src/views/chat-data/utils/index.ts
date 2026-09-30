@@ -13,6 +13,7 @@ export {
 export type { SidebarTabMemory } from './sidebarTab'
 export { cleanDisplayError, dedupeRepeatedErrorText, normalizeErrorKey, stripAnsiErrorText } from './errorText'
 export { normalizeMarkdownFences, renderMarkdown } from './markdown'
+export { renderMermaidBlocks } from './mermaid'
 export { parseStructuredContent } from './parseContent'
 export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export { getSkillCreatorLabel, getSkillCreatorShortLabel } from './skill'

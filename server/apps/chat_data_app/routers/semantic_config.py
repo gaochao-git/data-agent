@@ -335,12 +335,14 @@ async def _prepare_ossie_import(
     datasource_id: str,
     payload: SemanticOssieImportRequest,
     request: Request,
-) -> tuple[list[Any] | None, JSONResponse | None]:
+) -> tuple[list[Any], None] | tuple[None, JSONResponse]:
     """Ossie 导入公共前置：鉴权、数据源校验，校验核心委托 service 层共享实现。
 
     校验口径（解析 / 请求内重名 / 同名冲突标注 / 逐模型物理校验）统一在
     services.semantic_config_service.prepare_ossie_import_models，与 check_yaml
     工具共用同一套实现；本函数只做 HTTP 错误形态转换。
+
+    返回 tagged tuple：imports 仅在 error 为 None 时非空，调用方判空 error 即可同步收窄 imports。
     """
     current_user = _get_current_user(request)
     user_id = str(current_user.user_id)
@@ -378,9 +380,10 @@ async def preview_admin_ossie_semantic_import(
     可导入的模型同时附带质量检查报告（quality 字段），导入前即可看到优化空间。
     """
     try:
-        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
-        if error is not None:
-            return error
+        prepared = await _prepare_ossie_import(datasource_id, payload, request)
+        if prepared[1] is not None:
+            return prepared[1]
+        imports = prepared[0]
         user_id = str(_get_current_user(request).user_id)
         physical_columns = await _load_physical_columns(get_datasource_manager(), datasource_id)
         # 仅填空字典闭环：对照现有字典逐模型计算填充计划，作为 preview 确认面
@@ -407,7 +410,7 @@ async def preview_admin_ossie_semantic_import(
                 dict_fill_plan=dict_fill_plan,
             )
             models.append(model)
-        importable_count = sum(1 for item in imports if item.importable)
+        importable_count = len([item for item in imports if item.importable])
         return business_response(
             data={"models": models, "total": len(models), "importable": importable_count},
             msg="解析完成",
@@ -526,9 +529,10 @@ async def import_admin_ossie_semantic_configs(
                 code=ErrorCode.CHATDATA_VALIDATION_FAILED,
                 status="error",
             )
-        imports, error = await _prepare_ossie_import(datasource_id, payload, request)
-        if error is not None:
-            return error
+        prepared = await _prepare_ossie_import(datasource_id, payload, request)
+        if prepared[1] is not None:
+            return prepared[1]
+        imports = prepared[0]
         if any(not item.importable for item in imports):
             return business_response(
                 msg="存在无法导入的模型，请根据各模型的 errors 清单修复后重试",

@@ -32,8 +32,8 @@ class ChatDataStreamRequest:
 
     thread_id: str
     user_query: str
+    user_id: str
     datasource_id: str | None = None
-    user_id: str | None = None
     username: str | None = None
     member_datasource_ids: list[str] | None = None
     semantic_config_id: str | None = None

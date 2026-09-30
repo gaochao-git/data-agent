@@ -146,7 +146,9 @@ async def create(agent_id: str, user_id: str = "system", datasource_id: str | No
     return {"id": thread_id, "create_time": now.strftime("%Y-%m-%d %H:%M:%S")}
 
 
-async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+async def list_conversations(
+    agent_id: str, user_id: str | None = None, limit: int = 50, offset: int = 0
+) -> list[dict[str, Any]]:
     """
     获取历史会话列表
 
@@ -165,7 +167,7 @@ async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int 
 
 
 async def list_by_agent_ids(
-    agent_ids: builtins.list[str], user_id: str = None, limit: int = 50, offset: int = 0
+    agent_ids: builtins.list[str], user_id: str | None = None, limit: int = 50, offset: int = 0
 ) -> builtins.list[dict[str, Any]]:
     """获取多个智能体的历史会话列表"""
     if not agent_ids:
@@ -200,7 +202,7 @@ def _parse_group_key(group_key: str) -> tuple[str, str | None]:
 
 def _encode_group_cursor(thread: UserThread) -> str:
     payload = json.dumps(
-        {"update_time": thread.update_time.isoformat(), "id": thread.id},
+        {"update_time": thread.update_time.isoformat() if thread.update_time else "", "id": thread.id},
         separators=(",", ":"),
     ).encode("utf-8")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
@@ -290,7 +292,7 @@ async def list_grouped(
 
 
 async def list_all(
-    agent_configs: dict[str, dict[str, Any]], user_id: str = None, limit: int = 50
+    agent_configs: dict[str, dict[str, Any]], user_id: str | None = None, limit: int = 50
 ) -> builtins.list[dict[str, Any]]:
     """
     获取所有智能体的历史会话列表
@@ -307,7 +309,7 @@ async def list_all(
 
     for agent_id in agent_configs:
         try:
-            conversations = await list(agent_id, user_id, limit)
+            conversations = await list_conversations(agent_id, user_id, limit)
             all_conversations.extend(conversations)
         except Exception as e:
             logger.warning(f"获取 {agent_id} 会话列表失败: {e}")
@@ -445,7 +447,8 @@ async def _generate_and_update_title(
 
         chain = prompt | llm
         result = await chain.ainvoke({"query": query})
-        title = _clean_title(result.content, query)
+        # content 可能是分块列表（多模态/工具混合输出），标题场景只取纯文本形态
+        title = _clean_title(result.content if isinstance(result.content, str) else "", query)
     except Exception as e:
         emit_llm_connection_alarm_if_needed(
             e,
