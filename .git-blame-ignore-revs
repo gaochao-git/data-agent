@@ -3,3 +3,6 @@
 # 3519ed8: 全库 ruff format（Black 风格统一，321 文件，零语义变更）——
 # blame 历史请用 git blame --ignore-revs-file 或已配置的全局项跳过本提交。
 3519ed88523f9e6d67b3e39c5e9599e4a6988eef
+
+# b99fdbf: lint 门禁扩容 UP（pyupgrade 现代化，机械改写）
+b99fdbf313866dc4681869085133d9383ff01ee1
