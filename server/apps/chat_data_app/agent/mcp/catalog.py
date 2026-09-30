@@ -30,7 +30,7 @@ from pydantic import Field, create_model
 
 from utils.logger import get_logger
 
-from .manager import MCPToolInfo
+from .manager import MCPToolInfo, MCPToolManager
 
 logger = get_logger(__name__)
 
@@ -230,7 +230,7 @@ class MCPToolSearchService:
     manager 的 TTL 缓存与插件变更 reset 机制直接复用，本服务不新增缓存。
     """
 
-    def __init__(self, manager) -> None:
+    def __init__(self, manager: MCPToolManager) -> None:
         self._manager = manager
         self._catalog = MCPCatalog()
 

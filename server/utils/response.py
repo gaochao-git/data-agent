@@ -120,7 +120,7 @@ async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPEx
     )
 
 
-async def chatdata_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def chatdata_validation_exception_handler(request: Request, exc: RequestValidationError) -> Response:
     """统一 ChatData 参数校验失败响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
     if not is_chatdata_request(request):
         return await request_validation_exception_handler(request, exc)

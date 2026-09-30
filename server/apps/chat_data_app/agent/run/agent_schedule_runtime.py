@@ -222,7 +222,9 @@ class AgentScheduleRuntime:
             for job in jobs:
                 await self._plan_single_job(session, job, current, horizon)
 
-    async def _plan_single_job(self, session: AsyncSession, job, current: datetime, horizon: datetime) -> None:
+    async def _plan_single_job(
+        self, session: AsyncSession, job: ChatDataAgentSchedule, current: datetime, horizon: datetime
+    ) -> None:
         """推进单个任务的触发计划：为窗口内每个到期时间点补触发实例。
 
         窗口外（停机/failover 期间过期）的触发点直接快进跳过，只推进游标。

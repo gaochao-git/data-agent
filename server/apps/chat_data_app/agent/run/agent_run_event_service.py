@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from utils.database import get_session
@@ -174,7 +175,9 @@ class AgentRunEventService:
                 return False
             await asyncio.sleep(0.05)
 
-    async def _read_run_events(self, run_id: str, cursor: str, *, was_unavailable: bool):
+    async def _read_run_events(
+        self, run_id: str, cursor: str, *, was_unavailable: bool
+    ) -> tuple[list[dict[str, str]], bool, bool]:
         """读取 Redis Run 事件，返回 (events, stream_exists, redis_unavailable)。"""
         try:
             events = await self._bus.read_run(run_id, cursor)
@@ -229,8 +232,8 @@ class AgentRunEventService:
         *,
         run_id: str,
         last_event_id: str = "0-0",
-        is_disconnected=None,
-    ):
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    ) -> AsyncIterator[dict[str, str]]:
         """订阅 Redis Stream；断开后结束订阅，不影响后台 Run。
 
         Redis Stream 是唯一的可重放事件源。流已过期（超过 TTL）时不补偿
@@ -274,12 +277,12 @@ class AgentRunEventService:
         return last_event_id or "0-0"
 
     @staticmethod
-    async def _client_disconnected(is_disconnected) -> bool:
+    async def _client_disconnected(is_disconnected: Callable[[], Awaitable[bool]] | None) -> bool:
         """与原内联写法一致：未传回调时不短路触发额外逻辑。"""
         return bool(is_disconnected) and bool(await is_disconnected())
 
     @staticmethod
-    def _terminal_events(stop: bool, fallback: dict | None):
+    def _terminal_events(stop: bool, fallback: dict[str, str] | None) -> Iterator[dict[str, str]]:
         """终态兜底事件迭代器：非停止或无兜底事件时不产出。"""
         if stop and fallback is not None:
             yield fallback

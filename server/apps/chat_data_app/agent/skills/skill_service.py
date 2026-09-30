@@ -26,7 +26,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
 
 from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
-from . import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
+from . import SkillMetadata, activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
@@ -459,7 +459,11 @@ class SkillService:
             return None
 
     def _collect_skill_source_rows(
-        self, db_rows, system_metadata, user_id: str, user_names: dict[str, str] | None
+        self,
+        db_rows: list[dict[str, Any]] | None,
+        system_metadata: dict[str, SkillMetadata],
+        user_id: str,
+        user_names: dict[str, str] | None,
     ) -> list[dict[str, Any]]:
         """合并 DB 用户技能行、文件系统系统技能与插件技能为统一的展示行。"""
         source_rows = (

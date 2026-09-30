@@ -1,10 +1,16 @@
 """Shared runtime helpers for ChatData agents."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from langchain.agents.middleware import TodoListMiddleware, ToolErrorMiddleware, wrap_model_call
+from langchain.agents.middleware import (
+    ModelCallResult,
+    ModelRequest,
+    TodoListMiddleware,
+    ToolErrorMiddleware,
+    wrap_model_call,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
@@ -66,11 +72,13 @@ def create_streaming_chat_model(
     return llm_factory(**kwargs)
 
 
-def create_response_timestamp_middleware():
+def create_response_timestamp_middleware() -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建模型响应时间戳 middleware，确保 checkpoint 中助手消息有服务端时间。"""
 
     @wrap_model_call(name="ResponseTimestampMiddleware")
-    async def response_timestamp_middleware(request, handler):
+    async def response_timestamp_middleware(
+        request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         response = await handler(request)
         if isinstance(response, AIMessage):
             return timestamp_message(response)

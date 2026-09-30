@@ -20,8 +20,9 @@ import hashlib
 import json
 import shutil
 import stat
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
@@ -187,7 +188,11 @@ def _copy_skill_dir(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, symlinks=False, ignore=_ignore_symlinks)
 
 
-def _on_rm_error(func, path, exc_info):
+def _on_rm_error(
+    func: Callable[..., Any],
+    path: str,
+    exc_info: tuple[type[BaseException], BaseException, TracebackType] | None,
+) -> None:
     try:
         Path(path).chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
         if Path(path).is_dir():

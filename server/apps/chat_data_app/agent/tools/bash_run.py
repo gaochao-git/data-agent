@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import truncate_output
@@ -107,7 +107,7 @@ async def run_bash_command(
     }
 
 
-def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
+def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime) -> StructuredTool:
     @tool("bash_run", parse_docstring=True)
     async def bash_run(
         command: str,

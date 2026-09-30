@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
 
-def get_session():
+def get_session() -> AsyncGenerator[AsyncSession, None]:
     """运行时获取业务库会话，避免无数据库环境导入技能模块失败。"""
     from utils.database import get_session as session_context
 
@@ -20,12 +22,12 @@ class SkillDao:
     """封装用户技能元数据和收藏关系数据库读写。"""
 
     @staticmethod
-    def _user_skill_id_filter():
+    def _user_skill_id_filter() -> ColumnElement[bool]:
         return ChatDataSkillVersion.skill_id.in_(
             select(ChatDataSkill.skill_id).where(ChatDataSkill.skill_source == "user")
         )
 
-    def _skill_visible_filter(self, user_id: str):
+    def _skill_visible_filter(self, user_id: str) -> ColumnElement[bool]:
         return or_(
             ChatDataSkill.owner_user_id == (user_id or ""),
             and_(
@@ -35,7 +37,7 @@ class SkillDao:
             ),
         )
 
-    def _skill_base_filters(self, user_id: str, include_disabled: bool = True):
+    def _skill_base_filters(self, user_id: str, include_disabled: bool = True) -> list[ColumnElement[bool]]:
         filters = [
             ChatDataSkill.delete_flag == 0,
             ChatDataSkill.skill_source == "user",
@@ -90,7 +92,7 @@ class SkillDao:
             "update_by_name": row.update_by_name,
         }
 
-    def _skill_select(self, user_id: str, include_disabled: bool):
+    def _skill_select(self, user_id: str, include_disabled: bool) -> Select[tuple[Any, ...]]:
         draft_subquery = (
             select(func.max(ChatDataSkillVersion.skill_version_no))
             .where(

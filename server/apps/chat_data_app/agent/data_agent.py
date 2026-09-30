@@ -7,11 +7,14 @@
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents import create_agent
+from langchain_core.language_models import BaseChatModel
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph.state import CompiledStateGraph
 
 from utils.logger import get_logger
 
@@ -56,6 +59,9 @@ from .tools.registry import (
     ToolBuildContext,
 )
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
+
+if TYPE_CHECKING:
+    from .mcp.catalog import MCPToolSearchService
 
 logger = get_logger(__name__)
 
@@ -267,7 +273,7 @@ def build_subagent_middleware(
     runtime_options: AgentRuntimeOptions,
     tools: list,
     *,
-    model,
+    model: BaseChatModel,
     model_id: str | None = None,
     run_controls: "AgentRunControls | None" = None,
     available_skills_xml: str | None = None,
@@ -393,7 +399,7 @@ def _resolve_mcp_tool_search_service(
     spec: AgentAssemblySpec,
     tool_tokens: int,
     model_id: str | None,
-):
+) -> "MCPToolSearchService | None":
     """两级加载判定：off 关闭；forced 启用；auto 按工具 token 占模型窗口比例判断。
 
     返回 ``MCPToolSearchService``（检索模式）或 ``None``（全量挂载模式，
@@ -447,15 +453,15 @@ def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
     *,
-    checkpointer=None,
+    checkpointer: BaseCheckpointSaver | None = None,
     conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
-    persist_model_snapshot=None,
-):
+    persist_model_snapshot: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+) -> CompiledStateGraph:
     """按声明式规格装配一个 LangGraph agent。
 
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
@@ -621,9 +627,9 @@ def create_agent_from_spec(
 def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
-    checkpointer=None,
+    checkpointer: BaseCheckpointSaver | None = None,
     **kwargs: Any,
-):
+) -> CompiledStateGraph:
     """创建 ``chat_data`` Agent（规格见 ``CHAT_DATA_AGENT_SPEC``）。"""
     return create_agent_from_spec(
         CHAT_DATA_AGENT_SPEC,
@@ -636,8 +642,8 @@ def create_data_agent(
 def get_data_agent_graph(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
-    checkpointer=None,
+    checkpointer: BaseCheckpointSaver | None = None,
     **kwargs: Any,
-):
+) -> CompiledStateGraph:
     """供会话读取和历史回放使用的单一 graph 入口。"""
     return create_data_agent(runtime_options, checkpointer=checkpointer, **kwargs)

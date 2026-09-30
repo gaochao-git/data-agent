@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -31,7 +31,7 @@ from langchain_core.tools import StructuredTool
 from mcp import Client, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
-from pydantic import Field, create_model
+from pydantic import BaseModel, Field, create_model
 
 from utils.logger import get_logger
 
@@ -132,7 +132,7 @@ def _dedupe_qualified_names(tools: list[MCPToolInfo]) -> list[MCPToolInfo]:
     return out
 
 
-def _schema_to_args_model(qualified_name: str, schema: dict[str, Any]):
+def _schema_to_args_model(qualified_name: str, schema: dict[str, Any]) -> type[BaseModel]:
     """把 MCP 工具的 JSON Schema 转成 pydantic 模型作为 LangChain args_schema。"""
     properties = schema.get("properties") if isinstance(schema, dict) else None
     required = set(schema.get("required") or []) if isinstance(schema, dict) else set()
@@ -322,7 +322,7 @@ class MCPToolManager:
             return False
 
 
-def _run_coro_sync(coro):
+def _run_coro_sync(coro: Coroutine[Any, Any, Any]) -> Any:
     """在同步上下文执行协程：无事件循环直接 run；已在循环内则换线程新开循环。
 
     agent 装配是同步函数，调用点可能位于 FastAPI 事件循环内，不允许嵌套

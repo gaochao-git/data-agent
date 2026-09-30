@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import PurePosixPath
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from utils.logger import get_logger
@@ -59,7 +59,7 @@ def _presentation_artifact_payload(artifact: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntime):
+def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntime) -> StructuredTool:
     @tool("present_artifacts", parse_docstring=True)
     async def present_artifacts(files: list[str], intent: str = "") -> str:
         """

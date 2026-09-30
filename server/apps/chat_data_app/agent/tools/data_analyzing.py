@@ -24,9 +24,10 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt import InjectedState
 
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
@@ -496,7 +497,7 @@ async def _run_validate_dashboard(
 _CHECK_YAML_MAX_CHARS = 2_000_000
 
 
-async def _read_workspace_yaml_text(workspace_runtime, file_path: str) -> str:
+async def _read_workspace_yaml_text(workspace_runtime: ConversationWorkspaceRuntime | None, file_path: str) -> str:
     """从会话工作区拉取 YAML 全文；复用 filesystem.read_text_file_full，失败直接 raise，由 ToolErrorMiddleware 转 error。"""
     if workspace_runtime is None:
         raise ValueError("工作区不可用，无法读取 YAML 文件")
@@ -508,7 +509,7 @@ async def _run_check_yaml(
     file_path: str,
     datasource_id: str,
     user_id: str | None = None,
-    workspace_runtime=None,
+    workspace_runtime: ConversationWorkspaceRuntime | None = None,
 ) -> str:
     """与导入接口（ossie-import/preview）共用 prepare_ossie_import_models，保证校验口径一致。"""
     yaml_content = await _read_workspace_yaml_text(workspace_runtime, file_path)
@@ -672,7 +673,7 @@ async def _run_data_analyzing_impl(
     bound_datasource_id: str,
     bound_user_id: str,
     bound_operator_name: str | None,
-    workspace_runtime,
+    workspace_runtime: ConversationWorkspaceRuntime | None,
 ) -> str:
     """按 action 分发到对应的 DSL 校验 / 查询执行 / YAML 自检实现。"""
     payload_model = DATA_ANALYZING_ACTION_PAYLOAD_MODELS[action]
@@ -728,8 +729,8 @@ def create_data_analyzing_tool(
     datasource_id: str | None = None,
     user_id: str | None = None,
     operator_name: str | None = None,
-    workspace_runtime=None,
-):
+    workspace_runtime: ConversationWorkspaceRuntime | None = None,
+) -> StructuredTool:
     bound_datasource_id = str(datasource_id or "").strip()
     bound_user_id = str(user_id or "system").strip() or "system"
     bound_operator_name = str(operator_name or "").strip() or None

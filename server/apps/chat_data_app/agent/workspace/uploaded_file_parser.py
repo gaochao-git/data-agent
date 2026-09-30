@@ -8,7 +8,7 @@ from pathlib import Path
 
 from docx import Document as _load_docx_document
 from docx.document import Document
-from docx.table import _Cell
+from docx.table import Table, _Cell
 from markitdown import MarkItDown
 
 from apps.chat_data_app.services.setting_service import get_runtime_setting
@@ -112,7 +112,7 @@ def _resolve_markitdown_source(source_path: Path, suffix: str, tmp_dir: Path) ->
         return source_path
 
 
-def _table_has_merge(table) -> bool:
+def _table_has_merge(table: Table) -> bool:
     """python-docx 对合并坐标返回同一底层 tc，元素重复出现即存在合并。"""
     seen_tc_ids: set[int] = set()
     for row in table.rows:
@@ -124,7 +124,7 @@ def _table_has_merge(table) -> bool:
     return False
 
 
-def _rebuild_table_rectangular(document: Document, table) -> None:
+def _rebuild_table_rectangular(document: Document, table: Table) -> None:
     """将合并表重建为等尺寸普通表，合并内容按锚点重复填充。"""
     row_count = len(table.rows)
     col_count = len(table.columns)

@@ -793,7 +793,7 @@ def _move_selector_indices(tokens: list[str], verb_index: int) -> set[int]:
     return indices
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """向后兼容 re-export：后端实现已拆至独立模块，惰性解析避免 import 成环。"""
     if name == "LocalWorkspaceBackend":
         from apps.chat_data_app.agent.workspace.workspace_local_backend import LocalWorkspaceBackend

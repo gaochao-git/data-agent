@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 from uuid import uuid4
 
 from langchain_core.tools import tool
@@ -23,7 +23,7 @@ class UserQuestion(BaseModel):
     multi_select: bool = False
 
     @model_validator(mode="after")
-    def validate_options(self):
+    def validate_options(self) -> Self:
         labels = [option.label.strip() for option in self.options]
         if len(labels) != len(set(labels)):
             raise ValueError("同一问题的选项名称不能重复")

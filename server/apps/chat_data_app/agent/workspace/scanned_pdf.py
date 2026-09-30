@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import fitz  # PyMuPDF
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.agent.workspace.uploaded_file_parser import get_image_size_limit
@@ -94,7 +96,7 @@ def _page_range_header(start: int, end: int) -> str:
     return f"## 第 {start} 页" if start == end else f"## 第 {start}-{end} 页"
 
 
-async def transcribe_scanned_pdf(source_path: Path, *, llm_factory=None) -> str:
+async def transcribe_scanned_pdf(source_path: Path, *, llm_factory: Callable[..., BaseChatModel] | None = None) -> str:
     """渲染扫描页并调用视觉模型分批转写为 Markdown。
 
     llm_factory 仅供测试注入；生产走 get_chat_data_llm 新起一次独立模型调用——

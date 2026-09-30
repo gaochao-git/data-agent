@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
@@ -19,7 +19,7 @@ class QueryHistoryDao:
         self._session_context = session_context or default_get_session
 
     @staticmethod
-    def _executed_time_expr():
+    def _executed_time_expr() -> ColumnElement[Any]:
         return func.coalesce(
             ChatDataQueryExecution.finished_time,
             ChatDataQueryExecution.started_time,

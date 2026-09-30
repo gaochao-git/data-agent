@@ -18,13 +18,13 @@
 """
 
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from itertools import count
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, AgentState, ToolErrorMiddleware
+from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -343,7 +343,7 @@ def create_subagent_budget_alert_middleware(
     static_tokens = meta["static_tokens"]
     threshold = meta["threshold_tokens"]
 
-    def _with_budget_alert(request):
+    def _with_budget_alert(request: ModelRequest) -> ModelRequest:
         messages = list(getattr(request, "messages", None) or [])
         summary = _request_subagent_context_summary(request)
         if summary:
@@ -378,10 +378,14 @@ def create_subagent_budget_alert_middleware(
         return request.override(messages=[*messages, alert_message])
 
     class _SubagentBudgetAlertMiddleware(AgentMiddleware):
-        def wrap_model_call(self, request, handler):
+        def wrap_model_call(
+            self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
+        ) -> ModelCallResult:
             return handler(_with_budget_alert(request))
 
-        async def awrap_model_call(self, request, handler):
+        async def awrap_model_call(
+            self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+        ) -> ModelCallResult:
             return await handler(_with_budget_alert(request))
 
     return _SubagentBudgetAlertMiddleware()
@@ -472,7 +476,7 @@ def _safe_subagent_budget_meta(
         return None
 
 
-def _compile_subagent(spec: SubagentSpec, run_controls=None) -> Any:
+def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
     """把 spec 编译成独立 langgraph runnable。
 
     ``run_controls`` 完整时为子图挂上与主图相同的租约围栏：租约丢失/被接管后
@@ -1132,7 +1136,7 @@ def _append_ai_message_trail(
     tool_results: dict[str, dict[str, Any]],
     trail: list[dict[str, Any]],
     seen_ids: set[str],
-    anonymous_seq,
+    anonymous_seq: count,
 ) -> None:
     message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
     text = _plain_text(getattr(message, "content", ""))
@@ -1269,13 +1273,13 @@ async def _build_task_tool_impl(
     )
 
 
-def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredTool:
+def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
     """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。"""
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
-    async def atask(description: str, subagent_type: str, runtime: ToolRuntime):
+    async def atask(description: str, subagent_type: str, runtime: ToolRuntime) -> Command | str:
         return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
 
     return StructuredTool.from_function(
@@ -1289,7 +1293,9 @@ def build_task_tool(specs: list[SubagentSpec], run_controls=None) -> StructuredT
 class SubagentMiddleware(AgentMiddleware):
     """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
 
-    def __init__(self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls=None) -> None:
+    def __init__(
+        self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
+    ) -> None:
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
@@ -1299,14 +1305,18 @@ class SubagentMiddleware(AgentMiddleware):
             available_agents=agents_desc,
         )
 
-    def wrap_model_call(self, request, handler):
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
+    ) -> ModelCallResult:
         return handler(_append_system_prompt(request, self.system_prompt))
 
-    async def awrap_model_call(self, request, handler):
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
+    ) -> ModelCallResult:
         return await handler(_append_system_prompt(request, self.system_prompt))
 
 
-def _append_system_prompt(request, extra: str):
+def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
     """向请求的系统提示追加子智能体使用说明，保持 SystemMessage 类型。"""
     system_message = getattr(request, "system_message", None)
     if system_message is None:

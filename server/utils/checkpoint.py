@@ -111,7 +111,7 @@ class _SqliteCheckpointerContext:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> None:
+    ) -> bool:
         if self.conn:
             await self.conn.close()
         return False

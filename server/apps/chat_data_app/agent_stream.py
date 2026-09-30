@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -742,12 +743,12 @@ class _AgentSseStreamAdapter:
         initial_state: dict[str, Any],
         config: dict[str, Any],
         request: Request | None = None,
-        visible_message_filter=None,
+        visible_message_filter: Callable[[Any, dict[str, Any]], bool] | None = None,
         disconnect_log_message: str = "客户端已断开，停止流式输出: %s",
         disconnect_log_id: str = "",
         include_empty_tool_messages: bool = False,
-        on_first_message=None,
-        on_stream_started=None,
+        on_first_message: Callable[[], None] | None = None,
+        on_stream_started: Callable[[], Awaitable[None]] | None = None,
         debug_label: str | None = None,
         user_id: str | None = None,
         reasoning_turn_id: str | None = None,
@@ -784,7 +785,7 @@ class _AgentSseStreamAdapter:
         """登记下一次 graph 调用前必须先发送的 SSE 事件。"""
         self._queued_events.append(event)
 
-    async def stream_events(self):
+    async def stream_events(self) -> AsyncIterator[dict[str, Any]]:
         """输出 token_usage、thinking、tool、message 事件。"""
         while self._queued_events:
             yield self._queued_events.pop(0)
@@ -809,7 +810,7 @@ class _AgentSseStreamAdapter:
             with suppress(asyncio.CancelledError):
                 await timeout_task
 
-    async def _iter_agent_stream_events(self, started_at: float):
+    async def _iter_agent_stream_events(self, started_at: float) -> AsyncIterator[dict[str, Any]]:
         """消费 agent.astream 原始事件流并转成 SSE 事件；客户端断开时提前结束。"""
         stream_started = False
         async for event in self.agent.astream(
@@ -841,7 +842,9 @@ class _AgentSseStreamAdapter:
         if self.on_stream_started:
             await self.on_stream_started()
 
-    async def _iter_message_chunk_events(self, message_chunk: Any, metadata: Any, started_at: float):
+    async def _iter_message_chunk_events(
+        self, message_chunk: Any, metadata: Any, started_at: float
+    ) -> AsyncIterator[dict[str, Any]]:
         """按可见性过滤并处理单个消息 chunk，产出 SSE 事件。"""
         if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
             return
@@ -1007,7 +1010,9 @@ class _AgentSseStreamAdapter:
             ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
         )
 
-    async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]):
+    async def _handle_message_chunk(
+        self, message_chunk: Any, metadata: dict[str, Any]
+    ) -> AsyncIterator[dict[str, Any]]:
         flags = _MessageChunkFlags.of(message_chunk)
         if not flags.has_visible_payload and not (self.include_empty_tool_messages and flags.is_tool_message):
             return
@@ -1079,7 +1084,7 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
 
 async def _generate_chat_data_stream(
     req: ChatDataStreamRequest,
-):
+) -> AsyncIterator[dict[str, Any] | str]:
     """流式执行单一 ChatData Agent。"""
     # 入参对象在此拆成局部变量：函数体与拆分前保持一致，避免大范围表达式改写造成的
     # 语义漂移；签名的收窄已经让「一次执行的完整入参」成为可复用的一等公民。
@@ -1565,8 +1570,8 @@ async def _admit_adopted_messages(
 async def _run_chat_data_agent_stream(
     *,
     req: ChatDataStreamRequest,
-    log_phase,
-):
+    log_phase: Callable[[str], None],
+) -> AsyncIterator[dict[str, Any] | str]:
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
     # 与 _generate_chat_data_stream 同一口径：入参对象在此还原为局部变量，函数体保持不变。
     thread_id = req.thread_id
@@ -1897,7 +1902,7 @@ async def _stream_run_events(
     run_id: str,
     last_event_id: str = "0-0",
     request: Request | None = None,
-):
+) -> AsyncIterator[str]:
     """订阅后台 Run 的 Redis Stream 事件。"""
     async for event in agent_run_event_service.stream(
         run_id=run_id,
@@ -1922,7 +1927,7 @@ async def resume_chat_data_question_handler(
     """Queue a checkpoint resume and subscribe to its durable Run events."""
     _ = runtime_context, answer, turn_id
 
-    async def resumed_event_stream():
+    async def resumed_event_stream() -> AsyncIterator[str]:
         agent_run_runtime.submit(
             run_id=run_id,
             conversation_id=conversation_id,

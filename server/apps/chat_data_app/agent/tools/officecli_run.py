@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
+    OfficeCliCommand,
     command_path_values,
     parse_officecli_args,
 )
@@ -47,7 +48,7 @@ def _validate_args(args: list[str]) -> list[str]:
     return list(parse_officecli_args(args).args)
 
 
-def _guard_uploads_readonly(command, cwd: str | None) -> None:
+def _guard_uploads_readonly(command: OfficeCliCommand, cwd: str | None) -> None:
     """修改/写入类子命令不允许落在 uploads 只读区，否则抛 ValueError。
 
     读源允许；拦截后提示用 file_copy 复制到 workspace，避免 agent 直接改用户原始上传文件。
@@ -133,7 +134,7 @@ async def run_officecli_command(
     }
 
 
-def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
+def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime) -> StructuredTool:
     @tool("officecli_run", parse_docstring=True)
     async def officecli_run(
         command_args: list[str],

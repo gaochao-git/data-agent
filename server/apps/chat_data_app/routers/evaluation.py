@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -427,10 +427,9 @@ def _build_seed_case_candidates(config_id: str, config: dict[str, Any], business
 
 # 草稿生成的 LLM 编排已下沉 evaluation_service；此处保留兼容导出，
 # 供端点与既有测试按原模块属性名引用（monkeypatch 语义不变）。
-from ..services.evaluation_service import (  # noqa: E402  # noqa: E402
+from ..services.evaluation_service import (  # noqa: E402
     # 两个下划线别名在本模块未直接使用，但测试按 routers.evaluation._xxx 打桩，属有意重导出
-    # 两个下划线别名在本模块未直接使用，但测试按 routers.evaluation._xxx 打桩，属有意重导出
-    generate_draft_case_by_llm as _generate_draft_case_by_llm,  # noqa: F401  # noqa: F401
+    generate_draft_case_by_llm as _generate_draft_case_by_llm,  # noqa: F401
 )
 from ..services.evaluation_service import (
     looks_like_sql as _looks_like_sql,  # noqa: F401
@@ -633,7 +632,7 @@ async def _ensure_evaluation_semantic_permission(
     return config
 
 
-async def _accuracy_error_stream(message: str) -> Iterator[str]:
+async def _accuracy_error_stream(message: str) -> AsyncIterator[str]:
     yield f"data: {json.dumps({'event': 'error', 'message': message}, ensure_ascii=False)}\n\n"
 
 
