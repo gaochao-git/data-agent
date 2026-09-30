@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -81,7 +82,7 @@ def _normalize_template_source(body: DatasourceGroupCreateRequest | DatasourceGr
 
 
 @router.get("/admin/datasources")
-async def get_admin_datasources(request: Request, include_tables: bool = True):
+async def get_admin_datasources(request: Request, include_tables: bool = True) -> JSONResponse:
     """获取后台配置页数据源列表，不按执行机构权限过滤。"""
     try:
         _get_current_user(request)
@@ -98,7 +99,7 @@ async def get_admin_datasources(request: Request, include_tables: bool = True):
 
 
 @router.post("/admin/datasources/groups")
-async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request):
+async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request) -> JSONResponse:
     """创建数据源组。"""
     try:
         current_user = _get_current_user(request)
@@ -140,7 +141,7 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
 
 
 @router.patch("/admin/datasources/{datasource_id}")
-async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateRequest, request: Request):
+async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateRequest, request: Request) -> JSONResponse:
     """更新数据源元信息（名称、描述）。"""
     try:
         current_user = _get_current_user(request)
@@ -184,7 +185,9 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
 
 
 @router.put("/admin/datasources/{datasource_id}/group-config")
-async def update_datasource_group_config(datasource_id: str, body: DatasourceGroupUpdateRequest, request: Request):
+async def update_datasource_group_config(
+    datasource_id: str, body: DatasourceGroupUpdateRequest, request: Request
+) -> JSONResponse:
     """更新数据源组配置。"""
     try:
         current_user = _get_current_user(request)
@@ -239,7 +242,7 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
 @router.post("/admin/datasources/{datasource_id}/metadata-sync")
 async def sync_datasource_group_metadata(
     datasource_id: str, body: DatasourceGroupMetadataSyncRequest, request: Request
-):
+) -> JSONResponse:
     """按模板数据源同步数据源组表结构元数据。"""
     try:
         current_user = _get_current_user(request)
@@ -294,7 +297,7 @@ async def sync_datasource_group_metadata(
 
 
 @router.patch("/admin/datasources/{datasource_id}/mapped-modules")
-async def update_mapped_modules(datasource_id: str, body: dict, request: Request):
+async def update_mapped_modules(datasource_id: str, body: dict, request: Request) -> JSONResponse:
     """更新数据源的模块映射。"""
     try:
         current_user = _get_current_user(request)
@@ -323,7 +326,7 @@ async def update_mapped_modules(datasource_id: str, body: dict, request: Request
 
 
 @router.get("/admin/datasources/{datasource_id}/table-groups")
-async def get_datasource_table_groups(datasource_id: str, request: Request):
+async def get_datasource_table_groups(datasource_id: str, request: Request) -> JSONResponse:
     """获取数据源内表分组。"""
     try:
         _get_current_user(request)
@@ -345,7 +348,7 @@ async def get_datasource_table_groups(datasource_id: str, request: Request):
 
 
 @router.get("/admin/datasources/{datasource_id}/semantic-health")
-async def get_datasource_semantic_health(datasource_id: str, request: Request):
+async def get_datasource_semantic_health(datasource_id: str, request: Request) -> JSONResponse:
     """校验数据源物理表结构与指标集配置是否一致。"""
     try:
         current_user = _get_current_user(request)
@@ -392,7 +395,7 @@ async def get_datasource_semantic_health(datasource_id: str, request: Request):
 @router.put("/admin/datasources/{datasource_id}/table-groups")
 async def update_datasource_table_groups(
     datasource_id: str, body: DatasourceTableGroupsUpdateRequest, request: Request
-):
+) -> JSONResponse:
     """覆盖保存数据源内表分组。"""
     try:
         current_user = _get_current_user(request)
@@ -419,7 +422,7 @@ async def update_datasource_table_groups(
 @router.put("/admin/datasources/{datasource_id}/tables/{table_name}/business-desc")
 async def update_datasource_table_business_desc(
     datasource_id: str, table_name: str, body: DatasourceTableBusinessDescUpdateRequest, request: Request
-):
+) -> JSONResponse:
     """更新数据源内单张表的业务说明。"""
     try:
         current_user = _get_current_user(request)
@@ -450,7 +453,7 @@ async def update_datasource_table_business_desc(
 @router.put("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
 async def update_datasource_column_dict(
     datasource_id: str, table_name: str, column_name: str, body: DatasourceColumnDictUpdateRequest, request: Request
-):
+) -> JSONResponse:
     """覆盖保存数据源字段数据字典。"""
     try:
         current_user = _get_current_user(request)
@@ -495,7 +498,9 @@ async def update_datasource_column_dict(
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
-async def get_admin_datasource_column_dict(datasource_id: str, table_name: str, column_name: str, request: Request):
+async def get_admin_datasource_column_dict(
+    datasource_id: str, table_name: str, column_name: str, request: Request
+) -> JSONResponse:
     """获取后台数据源字段数据字典。"""
     try:
         _get_current_user(request)
@@ -520,7 +525,9 @@ async def get_admin_datasource_column_dict(datasource_id: str, table_name: str, 
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/column-dicts")
-async def get_admin_datasource_table_column_dicts(datasource_id: str, table_name: str, request: Request):
+async def get_admin_datasource_table_column_dicts(
+    datasource_id: str, table_name: str, request: Request
+) -> JSONResponse:
     """批量获取后台数据源单张表已维护字段数据字典。"""
     try:
         _get_current_user(request)
@@ -560,7 +567,7 @@ from ..services.datasource.column_dict_generate import (
 @router.post("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict/generate")
 async def generate_datasource_column_dict(
     datasource_id: str, table_name: str, column_name: str, body: DatasourceColumnDictGenerateRequest, request: Request
-):
+) -> JSONResponse:
     """根据文本生成字段数据字典候选值，不直接保存。"""
     try:
         _get_current_user(request)
@@ -606,7 +613,7 @@ async def generate_datasource_column_dict(
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
-async def get_datasource_table_indexes(datasource_id: str, table_name: str, request: Request):
+async def get_datasource_table_indexes(datasource_id: str, table_name: str, request: Request) -> JSONResponse:
     """获取数据源表的手动索引配置。"""
     try:
         _get_current_user(request)
@@ -640,7 +647,7 @@ async def get_datasource_table_indexes(datasource_id: str, table_name: str, requ
 @router.put("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
 async def update_datasource_table_indexes(
     datasource_id: str, table_name: str, body: DatasourceTableIndexesUpdateRequest, request: Request
-):
+) -> JSONResponse:
     """覆盖保存数据源表的手动索引配置。"""
     try:
         current_user = _get_current_user(request)
@@ -680,7 +687,7 @@ async def update_datasource_table_indexes(
 
 
 @router.post("/admin/datasources/{datasource_id}/set-default")
-async def set_default_datasource(datasource_id: str, request: Request):
+async def set_default_datasource(datasource_id: str, request: Request) -> JSONResponse:
     """设置默认数据源。"""
     try:
         current_user = _get_current_user(request)
@@ -703,7 +710,7 @@ async def set_default_datasource(datasource_id: str, request: Request):
 
 
 @router.delete("/admin/datasources/{datasource_id}/set-default")
-async def clear_default_datasource(datasource_id: str, request: Request):
+async def clear_default_datasource(datasource_id: str, request: Request) -> JSONResponse:
     """取消默认数据源。"""
     try:
         current_user = _get_current_user(request)
@@ -726,7 +733,7 @@ async def clear_default_datasource(datasource_id: str, request: Request):
 
 
 @router.delete("/admin/datasources/{datasource_id}")
-async def delete_datasource(datasource_id: str, request: Request):
+async def delete_datasource(datasource_id: str, request: Request) -> JSONResponse:
     """删除数据源组。"""
     try:
         current_user = _get_current_user(request)
@@ -754,7 +761,7 @@ async def delete_datasource(datasource_id: str, request: Request):
 
 
 @router.post("/admin/datasources/db-tables")
-async def get_db_tables(request: DbConnectionRequest, http_request: Request):
+async def get_db_tables(request: DbConnectionRequest, http_request: Request) -> JSONResponse:
     """获取数据库中的表列表（用于选择要同步的表）。"""
     port = request.port
     try:

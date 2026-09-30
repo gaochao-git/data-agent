@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -44,7 +45,7 @@ async def get_query_history(
     start_time: str | None = None,
     end_time: str | None = None,
     history_service: Annotated[QueryHistoryService | None, Depends(get_query_history_service)] = None,
-):
+) -> JSONResponse:
     """获取当前用户的查询历史。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -85,7 +86,7 @@ async def get_admin_query_history(
     start_time: str | None = None,
     end_time: str | None = None,
     history_service: Annotated[QueryHistoryService | None, Depends(get_query_history_service)] = None,
-):
+) -> JSONResponse:
     """获取后台全局 SQL 查询历史。"""
     try:
         _get_current_user(request)
@@ -119,7 +120,7 @@ async def cancel_my_running_query_history(
     request: Request,
     datasource_id: str | None = None,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """停止当前用户所有执行中的 SQL。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -143,7 +144,7 @@ async def cancel_query_history_execution(
     execution_id: str,
     request: Request,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """停止当前用户的一条 SQL 执行明细。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -171,7 +172,7 @@ async def cancel_admin_running_query_history(
     request: Request,
     datasource_id: str | None = None,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """停止全局所有执行中的 SQL。"""
     try:
         current_user = _get_current_user(request)
@@ -197,7 +198,7 @@ async def get_query_history_result(
     remote_result_fetcher: Annotated[
         RemoteResultFetcher | None, Depends(get_query_history_remote_result_fetcher)
     ] = None,
-):
+) -> JSONResponse:
     """按执行ID获取查询历史结果。"""
     try:
         current_user = _resolve_current_user(request, None)

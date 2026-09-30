@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
@@ -51,7 +52,7 @@ class PluginEnabledRequest(BaseModel):
 
 
 @router.get("/admin/plugins")
-async def list_plugins(request: Request, limit: int = 50, offset: int = 0):
+async def list_plugins(request: Request, limit: int = 50, offset: int = 0) -> JSONResponse:
     """已安装插件分页列表（含禁用项），启停与审计字段来自 DB。"""
     _ = request
     try:
@@ -68,7 +69,7 @@ async def list_plugins(request: Request, limit: int = 50, offset: int = 0):
 
 
 @router.post("/admin/plugins/install")
-async def install_plugin(file: UploadFile, request: Request):
+async def install_plugin(file: UploadFile, request: Request) -> JSONResponse:
     """上传插件 zip 安装（manifest 校验 + 安全解压 + 写 DB；同名插件需先卸载）。"""
     try:
         data = await file.read(_PLUGIN_UPLOAD_MAX_BYTES + 1)
@@ -100,7 +101,7 @@ async def install_plugin(file: UploadFile, request: Request):
 
 
 @router.put("/admin/plugins/{plugin_id}/enabled")
-async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, request: Request):
+async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, request: Request) -> JSONResponse:
     """启用/禁用插件（写 DB，立即影响新会话快照与新装配）。"""
     try:
         operator_id, operator_name = _resolve_operator(request)
@@ -128,7 +129,7 @@ async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, r
 
 
 @router.delete("/admin/plugins/{plugin_id}")
-async def remove_plugin(plugin_id: str, request: Request):
+async def remove_plugin(plugin_id: str, request: Request) -> JSONResponse:
     """卸载插件：删除磁盘目录并软删 DB 记录。"""
     try:
         operator_id, operator_name = _resolve_operator(request)

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -53,7 +53,7 @@ def _with_dashboards_permission(dashboards: list[dict[str, Any]], user_id: str) 
     return [_with_dashboard_permission(item, user_id) for item in dashboards]
 
 
-async def _dashboard_permission_error(service: Any, dashboard_id: str):
+async def _dashboard_permission_error(service: Any, dashboard_id: str) -> JSONResponse:
     """区分看板不存在与非本人无管理权限。"""
     existing_dashboard = await service.get_dashboard(dashboard_id, user_id=None, include_public=False)
     if existing_dashboard:
@@ -102,7 +102,7 @@ async def _resolve_panel_name(sql: str, chart_type: str, provided_name: str | No
 
 
 @router.get("/dashboards")
-async def list_dashboards(request: Request, scope: str = "mine"):
+async def list_dashboards(request: Request, scope: str = "mine") -> JSONResponse:
     """
     获取大屏列表
 
@@ -132,7 +132,7 @@ async def list_dashboards(request: Request, scope: str = "mine"):
 
 
 @router.post("/dashboards")
-async def create_dashboard(request: DashboardCreateRequest, http_request: Request):
+async def create_dashboard(request: DashboardCreateRequest, http_request: Request) -> JSONResponse:
     """
     创建新的分析大屏
 
@@ -172,7 +172,9 @@ def _spec_cards_have_semantic_config(cards: list[Any]) -> bool:
     return any(isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip() for card in cards)
 
 
-def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: dict[str, Any], cards: list[Any]):
+def _dashboard_spec_error_response(
+    request: DashboardFromSpecRequest, spec: dict[str, Any], cards: list[Any]
+) -> JSONResponse | None:
     """校验 AI 看板规格；非法时返回错误响应，合法时返回 None。"""
     datasource_id = str(request.datasource_id or "").strip()
     if not datasource_id:
@@ -196,7 +198,7 @@ def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: dict
 
 
 @router.post("/dashboards/from-spec")
-async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_request: Request):
+async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_request: Request) -> JSONResponse:
     """根据 AI 生成的看板规格创建大屏和面板。"""
     try:
         current_user = _current_user(http_request)
@@ -234,7 +236,7 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
 
 
 @router.post("/dashboards/{dashboard_id}/publish")
-async def publish_dashboard(dashboard_id: str, request: Request):
+async def publish_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
     """发布个人看板为公共看板。"""
     try:
         current_user = _current_user(request)
@@ -256,7 +258,7 @@ async def publish_dashboard(dashboard_id: str, request: Request):
 
 
 @router.post("/dashboards/{dashboard_id}/unpublish")
-async def unpublish_dashboard(dashboard_id: str, request: Request):
+async def unpublish_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
     """取消公共看板发布。"""
     try:
         current_user = _current_user(request)
@@ -278,7 +280,7 @@ async def unpublish_dashboard(dashboard_id: str, request: Request):
 
 
 @router.get("/dashboards/{dashboard_id}")
-async def get_dashboard(dashboard_id: str, request: Request):
+async def get_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
     """
     获取大屏详情（含所有面板）
 
@@ -309,7 +311,7 @@ async def get_dashboard(dashboard_id: str, request: Request):
 
 
 @router.put("/dashboards/{dashboard_id}")
-async def update_dashboard(dashboard_id: str, request: DashboardUpdateRequest, http_request: Request):
+async def update_dashboard(dashboard_id: str, request: DashboardUpdateRequest, http_request: Request) -> JSONResponse:
     """
     更新大屏信息
 
@@ -348,7 +350,7 @@ async def update_dashboard(dashboard_id: str, request: DashboardUpdateRequest, h
 
 
 @router.delete("/dashboards/{dashboard_id}")
-async def delete_dashboard(dashboard_id: str, request: Request):
+async def delete_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
     """
     删除大屏（同时删除所有面板）
 
@@ -381,7 +383,7 @@ async def delete_dashboard(dashboard_id: str, request: Request):
 
 
 @router.post("/dashboards/{dashboard_id}/panels")
-async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request: Request):
+async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request: Request) -> JSONResponse:
     """
     添加面板到大屏
 
@@ -432,7 +434,7 @@ async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request
 
 
 @router.post("/panel-name-generate")
-async def generate_panel_name(request: PanelNameGenerateRequest):
+async def generate_panel_name(request: PanelNameGenerateRequest) -> JSONResponse:
     """生成面板标题。"""
     try:
         panel_name = await _resolve_panel_name(
@@ -447,7 +449,9 @@ async def generate_panel_name(request: PanelNameGenerateRequest):
 
 
 @router.put("/dashboards/{dashboard_id}/panels/{panel_id}")
-async def update_panel(dashboard_id: str, panel_id: str, request: PanelUpdateRequest, http_request: Request):
+async def update_panel(
+    dashboard_id: str, panel_id: str, request: PanelUpdateRequest, http_request: Request
+) -> JSONResponse:
     """
     更新面板
 
@@ -495,7 +499,7 @@ async def update_panel(dashboard_id: str, panel_id: str, request: PanelUpdateReq
 
 
 @router.delete("/dashboards/{dashboard_id}/panels/{panel_id}")
-async def delete_panel(dashboard_id: str, panel_id: str, request: Request):
+async def delete_panel(dashboard_id: str, panel_id: str, request: Request) -> JSONResponse:
     """
     删除面板
 
@@ -527,7 +531,7 @@ async def delete_panel(dashboard_id: str, panel_id: str, request: Request):
 
 
 @router.put("/dashboards/{dashboard_id}/layout")
-async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_request: Request):
+async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_request: Request) -> JSONResponse:
     """
     批量更新面板布局
 
@@ -615,7 +619,7 @@ async def execute_panels_batch(
     dashboard_id: str,
     http_request: Request,
     request: PanelBatchExecuteRequest | list[str] | None = None,
-):
+) -> Response:
     """
     批量执行面板 SQL 并流式返回数据
 
@@ -717,7 +721,7 @@ async def create_dashboard_query_task(
     dashboard_id: str,
     http_request: Request,
     request: PanelBatchExecuteRequest | list[str] | None = None,
-):
+) -> JSONResponse:
     """创建看板批量异步执行任务。"""
     try:
         current_user = _current_user(http_request)

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -31,7 +32,7 @@ router = APIRouter(tags=["ChatData 运行配置（Admin）"], responses=JSON_API
 
 
 @router.get("/admin/settings")
-async def list_chat_data_settings(request: Request, keyword: str | None = None):
+async def list_chat_data_settings(request: Request, keyword: str | None = None) -> JSONResponse:
     """配置变量列表（= 注册表白名单全量），含生效值与来源徽标（table/env/default）。"""
     _ = request
     try:
@@ -47,7 +48,9 @@ async def list_chat_data_settings(request: Request, keyword: str | None = None):
 
 
 @router.put("/admin/settings/{setting_key}")
-async def upsert_chat_data_setting(setting_key: str, payload: ChatDataSettingUpsertRequest, request: Request):
+async def upsert_chat_data_setting(
+    setting_key: str, payload: ChatDataSettingUpsertRequest, request: Request
+) -> JSONResponse:
     """覆盖已注册变量（key 限注册白名单）；已重置的 key 自动复用原行恢复。"""
     try:
         current_user = _get_current_user(request)
@@ -70,7 +73,7 @@ async def upsert_chat_data_setting(setting_key: str, payload: ChatDataSettingUps
 
 
 @router.delete("/admin/settings")
-async def reset_all_chat_data_settings(request: Request):
+async def reset_all_chat_data_settings(request: Request) -> JSONResponse:
     """全部重置：软删所有覆盖行，所有变量回退 env / 代码默认。"""
     try:
         current_user = _get_current_user(request)
@@ -89,7 +92,7 @@ async def reset_all_chat_data_settings(request: Request):
 
 
 @router.delete("/admin/settings/{setting_key}")
-async def reset_chat_data_setting(setting_key: str, request: Request):
+async def reset_chat_data_setting(setting_key: str, request: Request) -> JSONResponse:
     """重置单个变量：软删覆盖行，该变量回退 env / 代码默认值。"""
     try:
         current_user = _get_current_user(request)

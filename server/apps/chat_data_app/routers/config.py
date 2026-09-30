@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -16,7 +17,7 @@ router = APIRouter(tags=["ChatData 配置与模型"], responses=JSON_API_RESPONS
 
 
 @router.get("/config")
-async def get_chat_data_config():
+async def get_chat_data_config() -> JSONResponse:
     """获取智能问数前端运行时配置。"""
     try:
         return business_response(data=await get_chat_data_runtime_config(), msg="获取成功")

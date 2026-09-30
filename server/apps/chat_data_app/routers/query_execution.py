@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request  # noqa: F401  # 有意重导出，测试按模块属性引用
 from fastapi import status as http_status  # noqa: F401  # 有意重导出，测试按模块属性引用 http_status
+from fastapi.responses import JSONResponse
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -49,7 +50,7 @@ async def create_query_task(
     request: Request,
     body: QueryTaskCreateRequest,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """创建异步查询任务并返回任务 ID。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -79,7 +80,7 @@ async def get_query_task(
     task_id: str,
     request: Request,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """查询异步任务状态与结果。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -105,7 +106,7 @@ async def cancel_query_task(
     task_id: str,
     request: Request,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
-):
+) -> JSONResponse:
     """停止异步查询任务及其 SQL 执行。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -134,7 +135,7 @@ async def cancel_query_task(
 async def compile_semantic_builder_sql_endpoint(
     request: Request,
     body: CompileSemanticBuilderSqlRequest,
-):
+) -> JSONResponse:
     """编译语义可视化 DSL 为 SQL（仅预览，不执行）。"""
     try:
         current_user = _resolve_current_user(request, None)

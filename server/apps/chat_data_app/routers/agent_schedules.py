@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -34,7 +35,7 @@ def _resolve_current_user(request: Request) -> Any:
 
 
 @router.get("/agent-schedules")
-async def list_agent_schedules(request: Request, limit: int = 50, offset: int = 0):
+async def list_agent_schedules(request: Request, limit: int = 50, offset: int = 0) -> JSONResponse:
     """获取当前用户的定时任务分页列表。"""
     try:
         current_user = _resolve_current_user(request)
@@ -54,7 +55,7 @@ async def list_agent_schedules(request: Request, limit: int = 50, offset: int = 
 
 
 @router.post("/agent-schedules")
-async def create_agent_schedule(payload: AgentScheduleCreateRequest, request: Request):
+async def create_agent_schedule(payload: AgentScheduleCreateRequest, request: Request) -> JSONResponse:
     """创建定时任务。"""
     try:
         current_user = _resolve_current_user(request)
@@ -89,7 +90,7 @@ async def create_agent_schedule(payload: AgentScheduleCreateRequest, request: Re
 
 
 @router.put("/agent-schedules/{job_id}")
-async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest, request: Request):
+async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest, request: Request) -> JSONResponse:
     """更新定时任务；调度字段变更后按服务端时钟重新计算下一次触发时间。"""
     try:
         current_user = _resolve_current_user(request)
@@ -133,7 +134,7 @@ async def update_agent_schedule(job_id: str, payload: AgentScheduleUpdateRequest
 
 
 @router.delete("/agent-schedules/{job_id}")
-async def delete_agent_schedule(job_id: str, request: Request):
+async def delete_agent_schedule(job_id: str, request: Request) -> JSONResponse:
     """删除定时任务（软删除，同时停止调度）。"""
     try:
         current_user = _resolve_current_user(request)
@@ -155,7 +156,7 @@ async def delete_agent_schedule(job_id: str, request: Request):
 
 
 @router.get("/agent-schedules/{job_id}/runs")
-async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 50, offset: int = 0):
+async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 50, offset: int = 0) -> JSONResponse:
     """获取定时任务的执行历史分页（含关联 Agent Run 状态）。"""
     try:
         current_user = _resolve_current_user(request)
@@ -178,7 +179,7 @@ async def list_agent_schedule_runs(job_id: str, request: Request, limit: int = 5
 
 
 @router.post("/agent-schedules/{job_id}/trigger-now")
-async def trigger_agent_schedule_now(job_id: str, request: Request):
+async def trigger_agent_schedule_now(job_id: str, request: Request) -> JSONResponse:
     """立即执行：创建手动触发实例并同步尝试派发；会话正忙时转后台队列自动重试。"""
     try:
         current_user = _resolve_current_user(request)

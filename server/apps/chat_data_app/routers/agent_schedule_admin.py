@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -29,7 +30,7 @@ router = APIRouter(tags=["ChatData 智能体定时任务（Admin）"], responses
 
 
 @router.get("/admin/agent-schedules/overview")
-async def get_agent_schedule_overview(request: Request):
+async def get_agent_schedule_overview(request: Request) -> JSONResponse:
     """全局概览：暂停状态、任务总数、执行统计。"""
     _ = request
     try:
@@ -45,7 +46,7 @@ async def get_agent_schedule_overview(request: Request):
 
 
 @router.put("/admin/agent-schedules/pause")
-async def set_agent_schedule_paused(payload: AgentSchedulePauseRequest, request: Request):
+async def set_agent_schedule_paused(payload: AgentSchedulePauseRequest, request: Request) -> JSONResponse:
     """停止/恢复任务调度（全局开关，不改用户任务的启停状态）。"""
     try:
         current_user = _require_user(request)
@@ -73,7 +74,7 @@ async def list_agent_schedules_admin(
     offset: int = 0,
     enabled: bool | None = None,
     expired: bool | None = None,
-):
+) -> JSONResponse:
     """全量任务分页列表（跨用户），附执行统计；支持启停/是否过期过滤。"""
     _ = request
     try:
@@ -95,7 +96,9 @@ async def list_agent_schedules_admin(
 
 
 @router.put("/admin/agent-schedules/{job_id}/enabled")
-async def set_agent_schedule_enabled_admin(job_id: str, payload: AgentScheduleEnabledRequest, request: Request):
+async def set_agent_schedule_enabled_admin(
+    job_id: str, payload: AgentScheduleEnabledRequest, request: Request
+) -> JSONResponse:
     """后台强制启停任意任务。"""
     try:
         current_user = _require_user(request)
@@ -120,7 +123,9 @@ async def set_agent_schedule_enabled_admin(job_id: str, payload: AgentScheduleEn
 
 
 @router.get("/admin/agent-schedules/{job_id}/runs")
-async def list_agent_schedule_runs_admin(job_id: str, request: Request, limit: int = 50, offset: int = 0):
+async def list_agent_schedule_runs_admin(
+    job_id: str, request: Request, limit: int = 50, offset: int = 0
+) -> JSONResponse:
     """查看任意任务的执行历史分页。"""
     _ = request
     try:

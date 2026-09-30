@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -22,7 +22,7 @@ router = APIRouter(tags=["ChatData 技能"], responses=JSON_API_RESPONSES)
 @router.get("/skills")
 async def list_skills(
     request: Request, search: str | None = None, category: str | None = None, scope: str | None = None
-):
+) -> JSONResponse:
     """获取可用专家技能列表。"""
     try:
         user = _get_current_user(request)
@@ -48,7 +48,7 @@ async def list_skills(
 
 
 @router.post("/skills")
-async def create_user_skill(payload: SkillCreateRequest, request: Request):
+async def create_user_skill(payload: SkillCreateRequest, request: Request) -> JSONResponse:
     """创建用户技能草稿。"""
     try:
         user = _get_current_user(request)
@@ -68,7 +68,7 @@ async def create_user_skill(payload: SkillCreateRequest, request: Request):
 
 
 @router.put("/skills/{skill_id}")
-async def update_user_skill(skill_id: str, payload: SkillUpdateRequest, request: Request):
+async def update_user_skill(skill_id: str, payload: SkillUpdateRequest, request: Request) -> JSONResponse:
     """更新用户技能元数据或正文。"""
     try:
         user = _get_current_user(request)
@@ -90,7 +90,7 @@ async def update_user_skill(skill_id: str, payload: SkillUpdateRequest, request:
 
 
 @router.delete("/skills/{skill_id}")
-async def delete_user_skill(skill_id: str, request: Request):
+async def delete_user_skill(skill_id: str, request: Request) -> JSONResponse:
     """删除用户自己的技能。"""
     try:
         user = _get_current_user(request)
@@ -110,7 +110,7 @@ async def delete_user_skill(skill_id: str, request: Request):
 
 
 @router.post("/skills/{skill_id}/copy")
-async def copy_user_skill(skill_id: str, request: Request):
+async def copy_user_skill(skill_id: str, request: Request) -> JSONResponse:
     """复制非系统技能为用户草稿。"""
     try:
         user = _get_current_user(request)
@@ -132,7 +132,7 @@ async def copy_user_skill(skill_id: str, request: Request):
 
 
 @router.post("/skills/{skill_id}/publish")
-async def publish_user_skill(skill_id: str, request: Request):
+async def publish_user_skill(skill_id: str, request: Request) -> JSONResponse:
     """发布用户技能最新草稿。"""
     try:
         user = _get_current_user(request)
@@ -154,7 +154,7 @@ async def publish_user_skill(skill_id: str, request: Request):
 
 
 @router.get("/skills/{skill_id}/versions")
-async def list_skill_versions(skill_id: str, request: Request):
+async def list_skill_versions(skill_id: str, request: Request) -> JSONResponse:
     """获取用户技能版本列表。"""
     try:
         user = _get_current_user(request)
@@ -174,7 +174,7 @@ async def list_skill_versions(skill_id: str, request: Request):
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}")
-async def get_skill_version(skill_id: str, version_no: int, request: Request):
+async def get_skill_version(skill_id: str, version_no: int, request: Request) -> JSONResponse:
     """获取用户技能指定版本详情。"""
     try:
         user = _get_current_user(request)
@@ -194,7 +194,7 @@ async def get_skill_version(skill_id: str, version_no: int, request: Request):
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files")
-async def list_skill_version_files(skill_id: str, version_no: int, request: Request):
+async def list_skill_version_files(skill_id: str, version_no: int, request: Request) -> JSONResponse:
     """列出用户技能版本固定目录文件。"""
     try:
         user = _get_current_user(request)
@@ -218,7 +218,9 @@ async def list_skill_version_files(skill_id: str, version_no: int, request: Requ
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files/content")
-async def read_skill_version_file(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+async def read_skill_version_file(
+    skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request
+) -> JSONResponse:
     """读取用户技能版本固定目录文件。"""
     try:
         user = _get_current_user(request)
@@ -240,7 +242,9 @@ async def read_skill_version_file(skill_id: str, version_no: int, dir_name: str,
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files/raw", responses=BINARY_RESPONSES)
-async def read_skill_version_file_raw(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+async def read_skill_version_file_raw(
+    skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request
+) -> Response:
     """读取技能版本文件的原始字节（图片/PDF 等二进制预览，前端以 blob 方式消费）。"""
     try:
         user = _get_current_user(request)
@@ -264,7 +268,9 @@ async def read_skill_version_file_raw(skill_id: str, version_no: int, dir_name: 
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files/office-preview")
-async def render_skill_office_preview(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+async def render_skill_office_preview(
+    skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request
+) -> JSONResponse:
     """渲染技能版本目录 Office 文件 HTML 预览（复用主对话工作区 OfficeCLI 引擎）。"""
     try:
         user = _get_current_user(request)
@@ -286,7 +292,9 @@ async def render_skill_office_preview(skill_id: str, version_no: int, dir_name: 
 
 
 @router.put("/skills/{skill_id}/versions/{version_no}/files")
-async def save_skill_version_file(skill_id: str, version_no: int, payload: SkillFileUpsertRequest, request: Request):
+async def save_skill_version_file(
+    skill_id: str, version_no: int, payload: SkillFileUpsertRequest, request: Request
+) -> JSONResponse:
     """保存用户技能版本固定目录文件。"""
     try:
         user = _get_current_user(request)
@@ -316,7 +324,7 @@ async def save_skill_version_file(skill_id: str, version_no: int, payload: Skill
 @router.post("/skills/{skill_id}/versions/{version_no}/files/upload")
 async def upload_skill_version_file(
     skill_id: str, version_no: int, request: Request, file: UploadFile = File(...), dir_name: str = Form(...)
-):
+) -> JSONResponse:
     """上传文件到用户技能草稿版本固定目录（references / assets）。"""
     try:
         user = _get_current_user(request)
@@ -345,7 +353,9 @@ async def upload_skill_version_file(
 
 
 @router.delete("/skills/{skill_id}/versions/{version_no}/files")
-async def delete_skill_version_file(skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request):
+async def delete_skill_version_file(
+    skill_id: str, version_no: int, dir_name: str, file_path: str, request: Request
+) -> JSONResponse:
     """删除用户技能版本固定目录文件。"""
     try:
         user = _get_current_user(request)
@@ -367,7 +377,7 @@ async def delete_skill_version_file(skill_id: str, version_no: int, dir_name: st
 
 
 @router.post("/skills/{skill_id}/versions/{version_no}/rollback")
-async def rollback_skill_version(skill_id: str, version_no: int, request: Request):
+async def rollback_skill_version(skill_id: str, version_no: int, request: Request) -> JSONResponse:
     """将用户技能切回指定版本。"""
     try:
         user = _get_current_user(request)
@@ -389,7 +399,7 @@ async def rollback_skill_version(skill_id: str, version_no: int, request: Reques
 
 
 @router.post("/skills/{skill_id}/favorite")
-async def favorite_skill(skill_id: str, request: Request):
+async def favorite_skill(skill_id: str, request: Request) -> JSONResponse:
     """收藏技能。"""
     try:
         user = _get_current_user(request)
@@ -411,7 +421,7 @@ async def favorite_skill(skill_id: str, request: Request):
 
 
 @router.delete("/skills/{skill_id}/favorite")
-async def unfavorite_skill(skill_id: str, request: Request):
+async def unfavorite_skill(skill_id: str, request: Request) -> JSONResponse:
     """取消收藏技能。"""
     try:
         user = _get_current_user(request)
@@ -433,7 +443,7 @@ async def unfavorite_skill(skill_id: str, request: Request):
 
 
 @router.get("/skills/{skill_name}")
-async def get_skill(skill_name: str, request: Request):
+async def get_skill(skill_name: str, request: Request) -> JSONResponse:
     """获取专家技能详情。"""
     try:
         user = _get_current_user(request)

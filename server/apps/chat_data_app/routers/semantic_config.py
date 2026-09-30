@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -55,7 +56,7 @@ from ..services.semantic.run.semantic_quality_checker import (
     get_semantic_quality_checker,
     grade_for_score,
 )
-from ..services.sql_run.parser import extract_physical_tables
+from ..services.sql_run.parser import SqlParseResult, extract_physical_tables
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
@@ -114,7 +115,7 @@ async def _get_admin_semantic_configs(
     ]
 
 
-def _history_table_parser(sql: str, source_type: str):
+def _history_table_parser(sql: str, source_type: str) -> SqlParseResult:
     return extract_physical_tables(sql, source_type=source_type)
 
 
@@ -162,7 +163,7 @@ def _build_history_learning_service() -> SemanticHistoryLearningService:
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs")
-async def list_semantic_configs(datasource_id: str, request: Request):
+async def list_semantic_configs(datasource_id: str, request: Request) -> JSONResponse:
     """获取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -182,7 +183,7 @@ async def list_semantic_configs(datasource_id: str, request: Request):
 
 
 @router.get("/datasources/{datasource_id}/my-semantic-configs")
-async def list_my_semantic_configs(datasource_id: str, request: Request):
+async def list_my_semantic_configs(datasource_id: str, request: Request) -> JSONResponse:
     """获取普通维护页可维护的个人指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -202,7 +203,7 @@ async def list_my_semantic_configs(datasource_id: str, request: Request):
 
 
 @router.get("/admin/datasources/{datasource_id}/semantic-configs")
-async def list_admin_semantic_configs(datasource_id: str, request: Request):
+async def list_admin_semantic_configs(datasource_id: str, request: Request) -> JSONResponse:
     """后台获取可维护的公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -228,7 +229,7 @@ async def _create_semantic_config_with_scope(
     *,
     scope_type: str,
     admin_manage: bool = False,
-):
+) -> JSONResponse:
     """按指定范围创建指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -281,13 +282,17 @@ async def _create_semantic_config_with_scope(
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs")
-async def create_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
+async def create_semantic_config(
+    datasource_id: str, payload: SemanticConfigCreateRequest, request: Request
+) -> JSONResponse:
     """创建个人指标集。"""
     return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="private")
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs")
-async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
+async def create_admin_semantic_config(
+    datasource_id: str, payload: SemanticConfigCreateRequest, request: Request
+) -> JSONResponse:
     """创建公共指标集。"""
     _get_current_user(request)
     return await _create_semantic_config_with_scope(
@@ -296,7 +301,7 @@ async def create_admin_semantic_config(datasource_id: str, payload: SemanticConf
 
 
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/generate-basic")
-async def generate_admin_basic_semantic_configs(datasource_id: str, request: Request):
+async def generate_admin_basic_semantic_configs(datasource_id: str, request: Request) -> JSONResponse:
     """后台按物理表批量创建公共基础模型（默认启用）。"""
     try:
         current_user = _get_current_user(request)
@@ -330,7 +335,7 @@ async def _prepare_ossie_import(
     datasource_id: str,
     payload: SemanticOssieImportRequest,
     request: Request,
-):
+) -> tuple[list[Any] | None, JSONResponse | None]:
     """Ossie 导入公共前置：鉴权、数据源校验，校验核心委托 service 层共享实现。
 
     校验口径（解析 / 请求内重名 / 同名冲突标注 / 逐模型物理校验）统一在
@@ -362,12 +367,12 @@ async def _prepare_ossie_import(
     return imports, None
 
 
-@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import/preview")
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/ossie-import/preview", response_model=None)
 async def preview_admin_ossie_semantic_import(
     datasource_id: str,
     payload: SemanticOssieImportRequest,
     request: Request,
-):
+) -> JSONResponse | list[dict[str, Any]]:
     """解析 Ossie 语义模型 YAML 并预览导入结果：逐模型返回映射草稿、警告与阻断问题，不落库。
 
     可导入的模型同时附带质量检查报告（quality 字段），导入前即可看到优化空间。
@@ -448,7 +453,7 @@ def _collect_modeled_tables(configs: list[dict[str, Any]]) -> set:
 async def check_admin_semantic_config_quality(
     datasource_id: str,
     request: Request,
-):
+) -> JSONResponse:
     """对数据源下公共语义配置执行质量检查：逐配置返回评分与问题清单，并给出数据源级汇总。
 
     与后台维护页口径一致，只检公共配置（is_public_semantic_config），
@@ -502,7 +507,7 @@ async def import_admin_ossie_semantic_configs(
     datasource_id: str,
     payload: SemanticOssieImportRequest,
     request: Request,
-):
+) -> JSONResponse:
     """导入 Ossie 语义模型 YAML 为禁用状态的公共语义配置草稿；任一模型存在阻断问题时整体不创建。
 
     同名冲突由 conflict_actions 决定：replace=覆盖同名公共配置内容（保留 config_id，
@@ -595,7 +600,7 @@ async def _learn_semantic_config_from_history_route(
     request: Request,
     *,
     admin_manage: bool = False,
-):
+) -> JSONResponse:
     """基于当前指标集的智能问数/可视化查询历史生成维护建议。"""
     try:
         current_user = _get_current_user(request)
@@ -643,7 +648,7 @@ async def learn_semantic_config_from_history(
     config_id: str,
     payload: SemanticHistoryLearningRequest,
     request: Request,
-):
+) -> JSONResponse:
     """基于个人指标集的查询历史生成维护建议。"""
     return await _learn_semantic_config_from_history_route(
         datasource_id, config_id, payload, request, admin_manage=False
@@ -656,7 +661,7 @@ async def learn_admin_semantic_config_from_history(
     config_id: str,
     payload: SemanticHistoryLearningRequest,
     request: Request,
-):
+) -> JSONResponse:
     """后台基于公共指标集的查询历史生成维护建议。"""
     _get_current_user(request)
     return await _learn_semantic_config_from_history_route(
@@ -689,7 +694,7 @@ async def _update_semantic_config(
     request: Request,
     *,
     admin_manage: bool = False,
-):
+) -> JSONResponse:
     """更新指标集。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -755,7 +760,7 @@ async def _validate_semantic_config_with_scope(
     request: Request,
     *,
     exclude_config_id: str = "",
-):
+) -> JSONResponse:
     """保存前校验（dry-run）：结构校验 + 质量/跨模型口径检查，不落库。
 
     校验方法多处统一的编辑器入口：与导入 preview / check_yaml / admin 质量报告
@@ -810,7 +815,7 @@ async def validate_semantic_config(
     payload: SemanticConfigCreateRequest,
     request: Request,
     exclude_config_id: str = "",
-):
+) -> JSONResponse:
     """个人指标集保存前校验（dry-run，不落库）。"""
     return await _validate_semantic_config_with_scope(
         datasource_id, payload, request, exclude_config_id=exclude_config_id
@@ -823,7 +828,7 @@ async def validate_admin_semantic_config(
     payload: SemanticConfigCreateRequest,
     request: Request,
     exclude_config_id: str = "",
-):
+) -> JSONResponse:
     """公共指标集保存前校验（dry-run，不落库）。"""
     _get_current_user(request)
     return await _validate_semantic_config_with_scope(
@@ -831,7 +836,9 @@ async def validate_admin_semantic_config(
     )
 
 
-async def _delete_semantic_config(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
+async def _delete_semantic_config(
+    datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False
+) -> JSONResponse:
     """删除指标集。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -865,7 +872,7 @@ async def _delete_semantic_config(datasource_id: str, config_id: str, request: R
 
 async def _toggle_semantic_config(
     datasource_id: str, config_id: str, enabled: bool, request: Request, *, admin_manage: bool = False
-):
+) -> JSONResponse:
     """切换指标集启用状态。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -908,7 +915,7 @@ async def update_semantic_config(
     config_id: str,
     payload: SemanticConfigUpdateRequest,
     request: Request,
-):
+) -> JSONResponse:
     """更新个人指标集。"""
     return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=False)
 
@@ -919,20 +926,20 @@ async def update_admin_semantic_config(
     config_id: str,
     payload: SemanticConfigUpdateRequest,
     request: Request,
-):
+) -> JSONResponse:
     """后台更新公共指标集。"""
     _get_current_user(request)
     return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=True)
 
 
 @router.delete("/datasources/{datasource_id}/semantic-configs/{config_id}")
-async def delete_semantic_config(datasource_id: str, config_id: str, request: Request):
+async def delete_semantic_config(datasource_id: str, config_id: str, request: Request) -> JSONResponse:
     """删除个人指标集。"""
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=False)
 
 
 @router.delete("/admin/datasources/{datasource_id}/semantic-configs/{config_id}")
-async def delete_admin_semantic_config(datasource_id: str, config_id: str, request: Request):
+async def delete_admin_semantic_config(datasource_id: str, config_id: str, request: Request) -> JSONResponse:
     """后台删除公共指标集。"""
     _get_current_user(request)
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
@@ -957,7 +964,7 @@ async def _batch_toggle_semantic_configs(
     request: Request,
     *,
     admin_manage: bool = False,
-):
+) -> JSONResponse:
     """批量切换指标集启用状态。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
@@ -994,13 +1001,15 @@ async def _batch_toggle_semantic_configs(
 
 
 @router.patch("/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
-async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
+async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request) -> JSONResponse:
     """切换个人指标集启用状态。"""
     return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=False)
 
 
 @router.patch("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
-async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
+async def toggle_admin_semantic_config(
+    datasource_id: str, config_id: str, enabled: bool, request: Request
+) -> JSONResponse:
     """后台切换公共指标集启用状态。"""
     _get_current_user(request)
     return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=True)
@@ -1009,7 +1018,7 @@ async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabl
 @router.patch("/datasources/{datasource_id}/semantic-configs/batch-toggle")
 async def batch_toggle_semantic_configs(
     datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request
-):
+) -> JSONResponse:
     """批量切换个人指标集启用状态。"""
     return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=False)
 
@@ -1017,7 +1026,7 @@ async def batch_toggle_semantic_configs(
 @router.patch("/admin/datasources/{datasource_id}/semantic-configs/batch-toggle")
 async def batch_toggle_admin_semantic_configs(
     datasource_id: str, payload: SemanticConfigBatchToggleRequest, request: Request
-):
+) -> JSONResponse:
     """后台批量切换公共指标集启用状态。"""
     _get_current_user(request)
     return await _batch_toggle_semantic_configs(datasource_id, payload, request, admin_manage=True)

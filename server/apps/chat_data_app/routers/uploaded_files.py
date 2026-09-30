@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -33,7 +33,9 @@ router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], res
 
 
 @router.post("/upload", operation_id="upload_chatdata_file")
-async def upload_file_api(file: UploadFile = File(...), thread_id: str = Form(...), req: Request = None):
+async def upload_file_api(
+    file: UploadFile = File(...), thread_id: str = Form(...), req: Request = None
+) -> JSONResponse:
     """
     上传文件
 
@@ -94,7 +96,7 @@ async def upload_file_api(file: UploadFile = File(...), thread_id: str = Form(..
 
 
 @router.get("/thread/{thread_id}", operation_id="list_chatdata_thread_files")
-async def list_thread_files_api(thread_id: str, req: Request = None):
+async def list_thread_files_api(thread_id: str, req: Request = None) -> JSONResponse:
     """
     获取会话下的所有文件
     """
@@ -104,7 +106,7 @@ async def list_thread_files_api(thread_id: str, req: Request = None):
 
 
 @router.get("/{file_id}", operation_id="get_chatdata_file_info")
-async def get_file_info_api(file_id: str, req: Request = None):
+async def get_file_info_api(file_id: str, req: Request = None) -> JSONResponse:
     """
     获取文件信息（用于轮询状态）
 
@@ -136,7 +138,7 @@ async def get_file_info_api(file_id: str, req: Request = None):
 
 
 @router.delete("/{file_id}", operation_id="delete_chatdata_file")
-async def delete_file_api(file_id: str, req: Request = None):
+async def delete_file_api(file_id: str, req: Request = None) -> JSONResponse:
     """
     删除文件
     """
@@ -154,7 +156,7 @@ async def delete_file_api(file_id: str, req: Request = None):
 
 
 @router.get("/{file_id}/content", operation_id="download_chatdata_file", responses=BINARY_RESPONSES)
-async def get_file_content_api(file_id: str, req: Request = None):
+async def get_file_content_api(file_id: str, req: Request = None) -> Response:
     """
     获取原始文件内容（下载）
     """

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from fastapi.responses import JSONResponse
+
 from utils.error_codes import ErrorCode
 from utils.response import business_response
 
@@ -19,7 +21,7 @@ async def _get_datasource_column_dict_response(
     datasource_id: str,
     table_name: str,
     column_name: str,
-):
+) -> JSONResponse:
     """构造单字段字典读取响应，供普通与后台权限入口复用。"""
     column_dict = await datasource_manager.get_column_dict_async(datasource_id, table_name, column_name)
     if column_dict is None:
@@ -43,7 +45,7 @@ async def _get_datasource_table_column_dicts_response(
     datasource_manager: Any,
     datasource_id: str,
     table_name: str,
-):
+) -> JSONResponse:
     """构造表字段字典读取响应，供普通与后台权限入口复用。"""
     column_dicts = await datasource_manager.get_table_column_dicts_async(datasource_id, table_name)
     if column_dicts is None:

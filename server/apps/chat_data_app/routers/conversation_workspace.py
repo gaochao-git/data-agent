@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import status as http_status
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 
 from utils.error_codes import ErrorCode
@@ -66,7 +66,7 @@ def _filter_visible_workspace_files(files: list[dict]) -> list[dict]:
 
 
 @router.get("/conversations/{conversation_id}/workspace-files")
-async def list_conversation_workspace_files(conversation_id: str, request: Request):
+async def list_conversation_workspace_files(conversation_id: str, request: Request) -> JSONResponse:
     """获取 ChatData 会话工作区文件列表。"""
     try:
         current_user = _get_current_user(request)
@@ -89,7 +89,7 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
 
 
 @router.delete("/conversations/{conversation_id}/workspace-files")
-async def delete_conversation_workspace_file(conversation_id: str, path: str, request: Request):
+async def delete_conversation_workspace_file(conversation_id: str, path: str, request: Request) -> JSONResponse:
     """删除会话工作区中的单个文件（SQL 查询结果需留存审计，不可删除）。"""
     try:
         current_user = _get_current_user(request)
@@ -126,7 +126,7 @@ async def delete_conversation_workspace_file(conversation_id: str, path: str, re
 
 
 @router.get("/conversations/{conversation_id}/workspace-files/content")
-async def read_conversation_workspace_file(conversation_id: str, path: str, request: Request):
+async def read_conversation_workspace_file(conversation_id: str, path: str, request: Request) -> JSONResponse:
     """读取 ChatData 会话工作区文本文件。"""
     try:
         current_user = _get_current_user(request)
@@ -160,7 +160,7 @@ async def read_conversation_workspace_file(conversation_id: str, path: str, requ
     operation_id="read_conversation_workspace_raw_file",
     responses=BINARY_RESPONSES,
 )
-async def read_conversation_workspace_raw_file_api(conversation_id: str, path: str, request: Request):
+async def read_conversation_workspace_raw_file_api(conversation_id: str, path: str, request: Request) -> Response:
     """读取会话工作区原始字节文件（PDF/Word 等二进制预览/下载）。"""
     try:
         current_user = _get_current_user(request)
@@ -205,7 +205,7 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
     operation_id="download_conversation_workspace_archive",
     responses=BINARY_RESPONSES,
 )
-async def download_conversation_workspace_archive(conversation_id: str, directory: str, request: Request):
+async def download_conversation_workspace_archive(conversation_id: str, directory: str, request: Request) -> Response:
     """把会话工作区的目录（顶层目录或其下子目录，UI 当前只放开 outputs）打包为 zip 下载。
 
     目录合法性由 service 层 ``normalize_archive_directory`` 单点校验（首段必须在工作区
@@ -256,7 +256,9 @@ async def download_conversation_workspace_archive(conversation_id: str, director
     "/conversations/{conversation_id}/workspace-files/office-html",
     operation_id="render_conversation_workspace_office_preview",
 )
-async def render_conversation_workspace_office_preview_api(conversation_id: str, path: str, request: Request):
+async def render_conversation_workspace_office_preview_api(
+    conversation_id: str, path: str, request: Request
+) -> JSONResponse:
     """渲染当前会话 Office 文件的受控 OfficeCLI HTML 预览。"""
     try:
         current_user = _get_current_user(request)
@@ -291,7 +293,7 @@ async def render_conversation_workspace_office_preview_api(conversation_id: str,
 
 
 @router.get("/conversations/{conversation_id}/query-results/{result_id}")
-async def get_conversation_query_result(conversation_id: str, result_id: str, request: Request):
+async def get_conversation_query_result(conversation_id: str, result_id: str, request: Request) -> JSONResponse:
     """读取当前用户会话内卸载的大查询结果。"""
     try:
         current_user = _get_current_user(request)
@@ -324,7 +326,7 @@ async def get_conversation_query_result(conversation_id: str, result_id: str, re
 @router.post("/conversations/{conversation_id}/workspace-skills/import")
 async def import_conversation_workspace_skill(
     conversation_id: str, payload: SkillImportFromWorkspaceRequest, request: Request
-):
+) -> JSONResponse:
     """把会话工作区生成的技能目录导入为用户技能草稿。"""
     try:
         current_user = _get_current_user(request)

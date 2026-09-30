@@ -6,10 +6,10 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from auth import AuthenticationError, get_forwarded_user
+from auth import AuthenticatedUser, AuthenticationError, get_forwarded_user
 
 
-def _get_current_user(request: Request):
+def _get_current_user(request: Request) -> AuthenticatedUser:
     """解析可信代理转发的当前用户，不负责 service token 校验。"""
     try:
         user = get_forwarded_user(request)

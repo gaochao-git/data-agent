@@ -4,15 +4,15 @@
 """
 
 import inspect
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi import status as http_status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from auth import AuthenticationError, get_forwarded_user
+from auth import AuthenticatedUser, AuthenticationError, get_forwarded_user
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -150,7 +150,7 @@ _completion_handlers: dict[str, Callable] = {}
 def register_agent(
     agent_id: str,
     get_graph: Callable = None,
-):
+) -> None:
     """
     注册 agent 配置
 
@@ -167,7 +167,7 @@ def register_agent(
     }
 
 
-def register_completion_handler(agent_id: str, handler: Callable):
+def register_completion_handler(agent_id: str, handler: Callable) -> None:
     """
     注册 completion 处理器
 
@@ -219,7 +219,7 @@ async def _completion_datasource_binding_response(
     conversation_id: str,
     user_id: str,
     requested_datasource_id: str,
-):
+) -> tuple[str | None, JSONResponse | None]:
     """恢复会话已有绑定，并拒绝与它冲突的请求。"""
     bound_datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
     if requested_datasource_id and bound_datasource_id and bound_datasource_id != requested_datasource_id:
@@ -265,7 +265,7 @@ def _build_completion_handler_kwargs(
 # ============ 认证辅助 ============
 
 
-def _get_current_user(request: Request):
+def _get_current_user(request: Request) -> AuthenticatedUser:
     """解析可信代理转发的当前用户，不负责 service token 校验。"""
     try:
         return get_forwarded_user(request)
@@ -296,7 +296,7 @@ router = APIRouter(prefix="/conversations", tags=["ChatData 会话"], responses=
 
 
 @router.post("")
-async def create_conversation(request: CreateConversationRequest, req: Request):
+async def create_conversation(request: CreateConversationRequest, req: Request) -> JSONResponse:
     """
     创建新会话
 
@@ -381,7 +381,7 @@ async def _list_grouped_conversations_response(
     page_size: int,
     group_key: str | None,
     cursor: str | None,
-):
+) -> JSONResponse:
     """分组视图会话查询响应。"""
     if agent_ids or not agent_id:
         return business_response(
@@ -416,7 +416,7 @@ async def list_conversations(
     view: Literal["flat", "grouped"] = Query(default="flat"),
     group_key: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
-):
+) -> JSONResponse:
     """
     获取会话列表
 
@@ -490,7 +490,7 @@ async def get_conversation_detail(
     before_sequence: int | None = Query(
         default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
     ),
-):
+) -> JSONResponse:
     """
     获取会话详情
 
@@ -540,7 +540,7 @@ async def get_conversation_detail(
 
 
 @router.put("/{conversation_id}/title")
-async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest, req: Request):
+async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest, req: Request) -> JSONResponse:
     """
     修改会话标题
 
@@ -581,7 +581,7 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
 
 
 @router.post("/{conversation_id}/title")
-async def generate_conversation_title(conversation_id: str, req: Request):
+async def generate_conversation_title(conversation_id: str, req: Request) -> JSONResponse:
     """
     自动生成会话标题
 
@@ -619,7 +619,7 @@ async def generate_conversation_title(conversation_id: str, req: Request):
 
 
 @router.post("/{conversation_id}/favorite")
-async def toggle_conversation_favorite(conversation_id: str, req: Request):
+async def toggle_conversation_favorite(conversation_id: str, req: Request) -> JSONResponse:
     """
     切换会话收藏状态
 
@@ -657,7 +657,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
         )
 
 
-def _validate_completion_request(conversation_id: str, request: CompletionRequest):
+def _validate_completion_request(conversation_id: str, request: CompletionRequest) -> JSONResponse | None:
     """校验对话请求基础参数；非法时返回错误响应。"""
     if not conversation_id:
         return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
@@ -666,7 +666,9 @@ def _validate_completion_request(conversation_id: str, request: CompletionReques
     return None
 
 
-async def _apply_completion_datasource_binding(conversation_id: str, user_id: str, options: dict[str, Any]):
+async def _apply_completion_datasource_binding(
+    conversation_id: str, user_id: str, options: dict[str, Any]
+) -> JSONResponse | None:
     """绑定会话数据源；需要拦截时返回错误响应，否则原地回填 options。"""
     requested_datasource_id = str(options.get("datasource_id") or "").strip()
     bound_datasource_id, datasource_binding_response = await _completion_datasource_binding_response(
@@ -682,7 +684,7 @@ async def _apply_completion_datasource_binding(conversation_id: str, user_id: st
 
 
 @router.post("/{conversation_id}/completion", responses=SSE_RESPONSES)
-async def completion(conversation_id: str, request: CompletionRequest, req: Request):
+async def completion(conversation_id: str, request: CompletionRequest, req: Request) -> Response:
     """
     对话（发送消息）
 
@@ -748,7 +750,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
 
 @router.post("/{conversation_id}/steer")
-async def steer(conversation_id: str, request: SteerRequest, req: Request):
+async def steer(conversation_id: str, request: SteerRequest, req: Request) -> JSONResponse:
     """向当前用户正在运行的 ChatData Agent 追加一条消息（正文 + 随行引用/附件元数据）。"""
     content = request.query.strip()
     if not content:
@@ -797,7 +799,7 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
 
 
 @router.delete("/{conversation_id}/run")
-async def cancel_active_run(conversation_id: str, req: Request, run_id: str = Query(..., min_length=1)):
+async def cancel_active_run(conversation_id: str, req: Request, run_id: str = Query(..., min_length=1)) -> JSONResponse:
     """停止当前 Agent 执行；未消费的队列消息保留给下一次 completion。"""
     try:
         user_id, username = _get_current_user_identity(req)
@@ -829,7 +831,7 @@ async def cancel_active_run(conversation_id: str, req: Request, run_id: str = Qu
 
 
 @router.get("/{conversation_id}/pending-question")
-async def get_pending_question(conversation_id: str, req: Request):
+async def get_pending_question(conversation_id: str, req: Request) -> JSONResponse:
     """读取 checkpoint 中等待当前用户回答的问题。"""
     try:
         user_id, _username = _get_current_user_identity(req)
@@ -859,7 +861,7 @@ async def _resume_question(
     question_id: str,
     answer: dict[str, Any],
     req: Request,
-):
+) -> StreamingResponse:
     user_id, username = _get_current_user_identity(req)
     existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
     if existing_agent_id != AGENT_ID:
@@ -904,7 +906,7 @@ async def answer_question(
     question_id: str,
     request: QuestionAnswerRequest,
     req: Request,
-):
+) -> Response:
     """原子领取待回答问题并恢复原 LangGraph 运行。"""
     try:
         return await _resume_question(
@@ -947,7 +949,7 @@ async def answer_question(
 
 
 @router.post("/{conversation_id}/questions/{question_id}/cancel", responses=SSE_RESPONSES)
-async def cancel_question(conversation_id: str, question_id: str, req: Request):
+async def cancel_question(conversation_id: str, question_id: str, req: Request) -> Response:
     """取消当前问题并让 Agent 自行决定如何收尾。"""
     try:
         return await _resume_question(conversation_id, question_id, {"cancelled": True, "answers": []}, req)
@@ -978,7 +980,7 @@ async def cancel_question(conversation_id: str, question_id: str, req: Request):
 
 
 @router.get("/{conversation_id}/steer")
-async def list_steer_messages(conversation_id: str, req: Request):
+async def list_steer_messages(conversation_id: str, req: Request) -> JSONResponse:
     """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""
     try:
         user_id, _username = _get_current_user_identity(req)
@@ -1008,7 +1010,7 @@ async def stream_run_events(
     conversation_id: str,
     run_id: str,
     req: Request,
-):
+) -> Response:
     """重新订阅后台 Run 的可重放 SSE 事件。"""
     try:
         user_id, _username = _get_current_user_identity(req)
@@ -1023,7 +1025,7 @@ async def stream_run_events(
 
         last_event_id = req.headers.get("Last-Event-ID") or "0-0"
 
-        async def event_stream():
+        async def event_stream() -> AsyncIterator[str]:
             async for event in agent_run_event_service.stream(
                 run_id=run_id,
                 last_event_id=last_event_id,
@@ -1059,7 +1061,7 @@ async def update_steer_message(
     message_id: str,
     request: SteerMessageUpdateRequest,
     req: Request,
-):
+) -> JSONResponse:
     """编辑排队中的追加消息内容或切换队列类型。"""
     if request.content is None and request.queue_type is None:
         return business_response(
@@ -1120,7 +1122,7 @@ async def update_steer_message(
 
 
 @router.delete("/{conversation_id}/steer/{message_id}")
-async def cancel_steer_message(conversation_id: str, message_id: str, req: Request):
+async def cancel_steer_message(conversation_id: str, message_id: str, req: Request) -> JSONResponse:
     """删除仍在排队等待注入的追加消息。"""
     try:
         user_id, username = _get_current_user_identity(req)
@@ -1165,7 +1167,7 @@ async def cancel_steer_message(conversation_id: str, message_id: str, req: Reque
 
 
 @router.get("/{conversation_id}/context")
-async def get_conversation_context(conversation_id: str, req: Request):
+async def get_conversation_context(conversation_id: str, req: Request) -> JSONResponse:
     """读取历史会话的轻量上下文。"""
     try:
         if not conversation_id:

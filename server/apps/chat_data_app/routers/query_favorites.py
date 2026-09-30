@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -37,7 +38,7 @@ async def get_query_favorites(
     query_type: str | None = None,
     limit: int = 50,
     favorite_service: Annotated[QueryFavoriteService | None, Depends(get_query_favorite_service)] = None,
-):
+) -> JSONResponse:
     """获取收藏查询卡片。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -62,7 +63,7 @@ async def create_query_favorite(
     payload: QueryFavoriteCreateRequest,
     request: Request,
     favorite_service: Annotated[QueryFavoriteService | None, Depends(get_query_favorite_service)] = None,
-):
+) -> JSONResponse:
     """创建查询收藏。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -89,7 +90,7 @@ async def update_query_favorite(
     payload: QueryFavoriteUpdateRequest,
     request: Request,
     favorite_service: Annotated[QueryFavoriteService | None, Depends(get_query_favorite_service)] = None,
-):
+) -> JSONResponse:
     """更新查询收藏。"""
     try:
         current_user = _resolve_current_user(request, None)
@@ -118,7 +119,7 @@ async def delete_query_favorite(
     favorite_id: int,
     request: Request,
     favorite_service: Annotated[QueryFavoriteService | None, Depends(get_query_favorite_service)] = None,
-):
+) -> JSONResponse:
     """删除查询收藏（软删除）。"""
     try:
         current_user = _resolve_current_user(request, None)
