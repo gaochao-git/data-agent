@@ -9,8 +9,10 @@
 CHAT_DATA_HOME/plugins/<name>/
   plugin.json                 # manifest（必须）
   skills/<skill>/SKILL.md     # manifest.skills 声明的技能目录
-  .disabled                   # 禁用标记（存在即禁用）
 ```
+
+磁盘只存内容；启停不是磁盘标记，而以 DB 表 `chat_data_plugin` 为唯一真值
+（`daos/plugin_dao.py`）。历史版本的 `.disabled` 文件已废弃，不再参与判定。
 
 ## plugin.json schema
 
@@ -38,16 +40,38 @@ CHAT_DATA_HOME/plugins/<name>/
 | `skills` | `loader.enabled_plugin_skill_sources()` → `skill_service.list_runtime_skill_sources_async()` → 会话 runtime-skills 快照 | 新会话/下一次快照重建（技能指纹变更自动触发）；与系统/用户技能同名时跳过并告警 |
 | `mcp_servers` | `loader.enabled_plugin_mcp_servers()` → `mcp/config.load_mcp_server_configs()` → agent 装配 | 下一次 agent 装配（新运行） |
 
-## 管理接口（`routers/plugins.py`，service token 保护）
+启停读取链路：`loader.refresh_plugin_state()` 从 DB 拉启用名集合写入进程内快照
+`_enabled_state`，装配/技能快照/管理列表三个入口都先 `await` 它。DB 读失败按
+fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值），因此**表不可用 = 插件静默
+不生效**，排障先看 `刷新插件启停状态失败` 日志。
 
-- `GET  /api/chatdata/admin/plugins`：列出已安装插件；
+## 管理入口
+
+前端：后台管理 → 插件（`web-vue/src/views/chat-data/components/PluginAdminPanel.vue`，
+由 `ChatDataAdminManager.vue` 挂载），支持列表分页、zip 安装、启停开关、卸载二次确认。
+
+接口（`routers/plugins.py`，service token 保护）：
+
+- `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、
   zip-slip/符号链接/解压总量防护，同名拒绝）；
-- `PUT  /api/chatdata/admin/plugins/{plugin_id}/enabled`：启用/禁用（`.disabled` 标记）；
-- `DELETE /api/chatdata/admin/plugins/{plugin_id}`：卸载（删除目录）。
+- `PUT  /api/chatdata/admin/plugins/{plugin_id}/enabled`：启用/禁用（写 DB
+  `enabled_flag`，立即影响新会话快照与新装配）；
+- `DELETE /api/chatdata/admin/plugins/{plugin_id}`：卸载（删磁盘目录 + 软删 DB 行）。
+
+安装先解包落盘再写 DB，DB 写失败回滚目录；卸载先删盘后软删 DB。重装按 `plugin_name`
+复活同一行（单列 UNIQUE + `delete_flag` 翻转），可无限次装卸循环。磁盘有目录而 DB 无行
+的"半装态"插件，在列表里审计字段留空，触发一次启停即自愈补行。
+
+## 上线前置
+
+- 建表：`chat_data_plugin` 的 DDL 在 `utils/schema.py` 的
+  `MYSQL_CHAT_DATA_PLUGIN_TABLE`，**需在业务库手工执行**（生产代码无自动建表入口）。
+- 迁移：历史版本（磁盘 `.disabled` 时代）遗留的插件目录，执行一次
+  `server/scripts/migrate_plugins_to_db.py` 把启停状态导入 DB。
 
 ## 明确不做（v1）
 
 - 不做进程内 Python 工具热插拔；工具扩展统一走 MCP（见 `agent/mcp/`）。
 - 不做插件市场与版本管理；升级 = 卸载后重装新版本 zip。
-- 不提供前端管理页面（接口先行，页面后续按后台管理手册补齐）。
+- 插件不做运行时热更新到进行中的会话：安装/启停只对新会话与下一次装配生效。

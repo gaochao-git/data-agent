@@ -6,7 +6,8 @@
 - 禁止符号链接成员（防把管理域外内容带进插件目录）；
 - manifest 必须存在且合法，``manifest.name`` 即插件目录名，目录名不一致拒绝安装。
 
-卸载直接删除插件目录；启停见 ``loader.set_plugin_enabled``。
+卸载直接删除插件目录。启停不落磁盘标记：由 ``services/plugin_service`` 经
+``daos/plugin_dao`` 写 DB 表 ``chat_data_plugin``（唯一真值，见 ``loader`` 模块 docstring）。
 """
 
 from __future__ import annotations

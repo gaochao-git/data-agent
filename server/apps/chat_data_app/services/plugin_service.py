@@ -16,10 +16,7 @@ from utils.logger import get_logger
 from utils.models import ChatDataPlugin
 
 from ..agent.mcp.manager import reset_mcp_tool_manager
-from ..agent.plugins.installer import (
-    install_plugin_from_zip_bytes,
-    uninstall_plugin as uninstall_plugin_files,
-)
+from ..agent.plugins import installer
 from ..agent.plugins.loader import (
     clear_metadata_cache,
     load_plugins_metadata,
@@ -83,7 +80,7 @@ async def install_plugin(
 
     DB 写失败时回滚已解包目录，避免磁盘与 DB 不一致。
     """
-    manifest = install_plugin_from_zip_bytes(zip_bytes)
+    manifest = installer.install_plugin_from_zip_bytes(zip_bytes)
     try:
         await PluginDao().upsert_installed(
             plugin_name=manifest.name,
@@ -188,7 +185,7 @@ async def uninstall_plugin(
     删盘成功但 DB 软删失败，会残留一条"活跃但无内容"的行——列表按磁盘扫描不会展示它，
     重装时按 plugin_name 复活同一行自愈，不影响正确性。
     """
-    manifest = uninstall_plugin_files(name)
+    manifest = installer.uninstall_plugin(name)
     await PluginDao().mark_deleted(
         plugin_name=name,
         operator_id=operator_id,

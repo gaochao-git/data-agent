@@ -40,7 +40,8 @@
 - sonar代码复杂度要控制复杂度不能大于15，控制好for循环、if-else、except分支复杂度，已有的可以不改，新的功能代码一定要控制
 - 单个方法的参数不能大于13: `python /server/apps/chat_data_app/tests/scan_cognitive_complexity.py`
 - 复杂度权威口径是 SonarQube Cognitive Complexity（S3776），与 radon 圈复杂度不是同一度量（radon 数决策点，Sonar 按嵌套加罚），radon 全绿不代表 Sonar 达标；本地按 Sonar 口径手动扫描：`cd server && python apps/chat_data_app/tests/scan_cognitive_complexity.py`（纯标准库，支持 `--target`/`--threshold`/`--top`）
-- 后端 lint：规则集与豁免见仓库根 `ruff.toml`（只开 `F`/`B`/`SIM` 三类 bug 级规则，风格类 E501/UP/I 暂不纳入），**存量必须为零**（不设 baseline）；本地跑 `python scripts/checks/ruff.py`（`--statistics` 看分布）。注意：**F401 不要用 `--fix` 批量删**——本仓存在「为测试 monkeypatch 而有意重导出」的导入，ruff 认不出来，误删会打断测试打桩；确属重导出的加 `# noqa: F401` 并写明理由
+- 后端 lint：规则集与豁免见仓库根 `ruff.toml`（bug 级 `F`/`B`/`SIM` + 格式类 `I` import 排序、`W` 行尾空白与文件末行换行；风格类 E501/UP/E402 暂不纳入），**存量必须为零**（不设 baseline）；本地跑 `python scripts/checks/ruff.py`（`--statistics` 看分布）。注意：**F401 不要用 `--fix` 批量删**——本仓存在「为测试 monkeypatch 而有意重导出」的导入，ruff 认不出来，误删会打断测试打桩；确属重导出的加 `# noqa: F401` 并写明理由。同理，`--fix` 只修格式类时必须限定规则（`--select I`），不要裸跑全规则 `--fix`
+- lint 手工对拍必须在仓库根执行：`ruff.toml` 的 `src` 按调用方 cwd 解析，换目录会让 `I` 的首方包分类漂移；门禁脚本已钉死 `cwd=REPO_ROOT`，手工复现用 `python -m ruff check --config ruff.toml --no-cache <path>`（不加 `--no-cache` 会读到旧结果，误以为已修）
 - 以上检查的唯一本地入口：`scripts/verify`（`--fast` 为改完必跑，`--all` 追加覆盖率/openapi 快照/前端单测与构建）
 
 ## 4. 代码风格
