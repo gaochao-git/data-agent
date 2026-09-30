@@ -3,9 +3,10 @@
 # 门禁脚本：scripts/checks/ruff.py；本地统一入口：scripts/verify（步骤名 ruff）。
 # 说明：server/ 下没有 pyproject.toml，故用 ruff 官方支持的独立配置文件 ruff.toml。
 #
-# 规则取舍：bug 级三类 + I/W（2026-09 扩容：import 排序 246 处、空白符 3 处，存量已一次清零）。
-# 风格/现代化类仍不纳入：E501 行长（存量 2200+，字符串/注释不可自动修，另行用 ruff format 治理）、
-# UP006/UP045 注解现代化、E402（会误伤文档允许的循环依赖惰性导入）。
+# 规则取舍：bug 级三类 + I/W（2026-09 扩容：import 排序 246 处、空白符 3 处，存量已一次清零）
+# + E7 三码（E711/E712/E722：与 None/布尔比较、裸 except，存量零、防新增，对齐 Octop 的 E 实际效果）。
+# E 类其余仍不纳入：E501 行长（存量 125 条，字符串/注释不可自动修，由 ruff format 治理）、
+# E402（会误伤文档允许的循环依赖惰性导入）、UP006/UP045 注解现代化。
 # 注意：src 按调用方 cwd 解析，手工对拍必须在仓库根执行（门禁脚本已钉死 cwd=REPO_ROOT）。
 
 line-length = 120
@@ -18,7 +19,8 @@ src = ["server"]
 # SIM = flake8-simplify：冗余分支与啰嗦写法
 # I   = isort：import 排序（2026-09 扩容）
 # W   = pycodestyle 警告：行尾空白、文件末行换行（2026-09 扩容）
-select = ["F", "B", "SIM", "I", "W"]
+# E711/E712/E722 = pycodestyle 错误中带 bug 味的三个：== None、== True/False、裸 except
+select = ["F", "B", "SIM", "I", "W", "E711", "E712", "E722"]
 
 [lint.per-file-ignores]
 # FastAPI 依赖注入的惯用写法就是 `file: UploadFile = File(...)`，此处调函数是必须的，
