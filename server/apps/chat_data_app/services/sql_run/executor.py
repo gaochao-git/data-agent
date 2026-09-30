@@ -15,6 +15,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import aiomysql
+
 from utils.alarm import (
     DB_FAIL_DATASOURCE,
     emit_dangerous_sql_alarm,
@@ -651,7 +653,7 @@ class MySQLExecutor(SQLExecutor):
         return self._pool
 
     @staticmethod
-    async def _fetch_connection_id(cursor) -> str:
+    async def _fetch_connection_id(cursor: aiomysql.DictCursor) -> str:
         """取当前 MySQL 连接 ID（用于超时 KILL 与回调透传），空结果返回空串。"""
         await cursor.execute("SELECT CONNECTION_ID()")
         connection_row = await cursor.fetchone()

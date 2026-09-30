@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.chat_data_app.daos.agent_schedule_dao import (
     SCHEDULE_RUN_STATUS_PENDING,
@@ -293,7 +294,7 @@ class AgentScheduleService:
 
     async def _resolve_conversation_binding(
         self,
-        session,
+        session: AsyncSession,
         job: ChatDataAgentSchedule,
         conversation_mode: str | None,
         conversation_id: str | None,
@@ -402,7 +403,7 @@ class AgentScheduleService:
 
     async def _apply_enabled_transition(
         self,
-        session,
+        session: AsyncSession,
         job: ChatDataAgentSchedule,
         enabled_flag: int | None,
         now: datetime,

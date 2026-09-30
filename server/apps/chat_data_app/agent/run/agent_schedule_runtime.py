@@ -23,6 +23,8 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from apps.chat_data_app import AGENT_ID
 from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentInboxService,
@@ -49,7 +51,7 @@ from apps.chat_data_app.services.runtime_config import read_bool_env, read_posit
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.database import get_session
 from utils.logger import get_logger
-from utils.models import ChatDataAgentScheduleRun
+from utils.models import ChatDataAgentSchedule, ChatDataAgentScheduleRun
 
 logger = get_logger(__name__)
 
@@ -82,7 +84,7 @@ def job_options(options_json: str | None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _build_trigger_row(job, plan_time: datetime) -> ChatDataAgentScheduleRun:
+def _build_trigger_row(job: ChatDataAgentSchedule, plan_time: datetime) -> ChatDataAgentScheduleRun:
     return ChatDataAgentScheduleRun(
         job_id=job.job_id,
         user_id=job.user_id,
@@ -220,7 +222,7 @@ class AgentScheduleRuntime:
             for job in jobs:
                 await self._plan_single_job(session, job, current, horizon)
 
-    async def _plan_single_job(self, session, job, current: datetime, horizon: datetime) -> None:
+    async def _plan_single_job(self, session: AsyncSession, job, current: datetime, horizon: datetime) -> None:
         """推进单个任务的触发计划：为窗口内每个到期时间点补触发实例。
 
         窗口外（停机/failover 期间过期）的触发点直接快进跳过，只推进游标。

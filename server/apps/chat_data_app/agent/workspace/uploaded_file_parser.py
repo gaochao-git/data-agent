@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 
 from docx import Document as _load_docx_document
+from docx.document import Document
+from docx.table import _Cell
 from markitdown import MarkItDown
 
 from apps.chat_data_app.services.setting_service import get_runtime_setting
@@ -122,7 +124,7 @@ def _table_has_merge(table) -> bool:
     return False
 
 
-def _rebuild_table_rectangular(document, table) -> None:
+def _rebuild_table_rectangular(document: Document, table) -> None:
     """将合并表重建为等尺寸普通表，合并内容按锚点重复填充。"""
     row_count = len(table.rows)
     col_count = len(table.columns)
@@ -139,7 +141,7 @@ def _rebuild_table_rectangular(document, table) -> None:
     old_tbl.getparent().remove(old_tbl)
 
 
-def _set_cell_paragraphs(cell, text: str) -> None:
+def _set_cell_paragraphs(cell: _Cell, text: str) -> None:
     """按 cell.text 的换行语义回填（\\n 对应独立段落），保持段落结构与原表一致。"""
     lines = text.split("\n")
     cell.paragraphs[0].text = lines[0]

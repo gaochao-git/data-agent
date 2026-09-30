@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.logger import get_logger
 from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel
@@ -504,7 +505,9 @@ class DataSourceDao:
             )
 
     @staticmethod
-    async def _mark_group_relations_deleted(session, group_id: str, *, update_by: str, update_by_name: str) -> None:
+    async def _mark_group_relations_deleted(
+        session: AsyncSession, group_id: str, *, update_by: str, update_by_name: str
+    ) -> None:
         """软删该分组现有表关系。"""
         await session.execute(
             update(DatasourceTableGroupRel)
@@ -551,7 +554,7 @@ class DataSourceDao:
 
     @staticmethod
     async def _insert_group_relation_rows(
-        session, relation_rows: list[dict[str, Any]], *, update_by: str, update_by_name: str
+        session: AsyncSession, relation_rows: list[dict[str, Any]], *, update_by: str, update_by_name: str
     ) -> None:
         for batch in _batch_items(relation_rows):
             stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
@@ -780,7 +783,7 @@ class DataSourceDao:
             }
         return list(rows_by_name.values())
 
-    async def _upsert_table_rows(self, session, rows: list[dict[str, Any]]) -> None:
+    async def _upsert_table_rows(self, session: AsyncSession, rows: list[dict[str, Any]]) -> None:
         for batch in _batch_items(rows):
             stmt = mysql_insert(DatasourceTable).values(batch)
             await session.execute(
@@ -796,7 +799,9 @@ class DataSourceDao:
             )
 
     @staticmethod
-    async def _load_existing_table_rows(session, group_id: str, active_table_names: list[str]) -> dict[str, Any]:
+    async def _load_existing_table_rows(
+        session: AsyncSession, group_id: str, active_table_names: list[str]
+    ) -> dict[str, Any]:
         existing_result = await session.execute(
             select(DatasourceTable)
             .where(

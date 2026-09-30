@@ -761,7 +761,7 @@ def _parse_dashboard_batch_payload(task: dict[str, Any]) -> tuple[str, str, str,
 
 
 async def _load_dashboard_batch_panels(
-    service,
+    service: Any,
     dashboard_id: str,
     user_id: str,
     panel_ids: list[str],

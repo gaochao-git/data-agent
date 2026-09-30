@@ -292,7 +292,7 @@ class HiveSyncService:
         apply_hive_socket_timeout(getattr(conn, "_transport", None), SOCKET_TIMEOUT_SECONDS)
         return conn
 
-    def _get_tables(self, conn=None) -> list[str]:
+    def _get_tables(self, conn: Any = None) -> list[str]:
         should_close = conn is None
         conn = conn or self._get_connection()
         try:

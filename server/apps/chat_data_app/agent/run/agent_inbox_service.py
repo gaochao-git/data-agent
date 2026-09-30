@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from utils.database import get_session
@@ -903,7 +904,7 @@ class AgentInboxService:
 
     async def _cancel_run(
         self,
-        session,
+        session: AsyncSession,
         run: ChatDataAgentInbox,
         now: datetime,
         user_id: str,
@@ -929,7 +930,7 @@ class AgentInboxService:
 
     async def _reap_expired_run(
         self,
-        session,
+        session: AsyncSession,
         run: ChatDataAgentInbox | None,
         now: datetime,
         user_id: str,
@@ -949,7 +950,7 @@ class AgentInboxService:
 
     async def _reap_expired_run_state(
         self,
-        session,
+        session: AsyncSession,
         run: ChatDataAgentInbox,
         now: datetime,
         user_id: str,
@@ -1058,7 +1059,7 @@ class AgentInboxService:
         if not isinstance(selected, list) or not all(isinstance(value, str) for value in selected):
             raise ValueError("selected 必须是字符串数组")
 
-    async def _claim_step_and_turn(self, session, run_id: str, now: datetime) -> list[ChatDataAgentInbox]:
+    async def _claim_step_and_turn(self, session: AsyncSession, run_id: str, now: datetime) -> list[ChatDataAgentInbox]:
         """领取一个模型轮次的输入：全部 next-step，加一条 FIFO next-turn。"""
         lease_expire_time = now + timedelta(seconds=MESSAGE_LEASE_SECONDS)
         step_rows = await self._dao.claim_messages(
